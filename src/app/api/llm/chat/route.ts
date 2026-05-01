@@ -41,7 +41,7 @@ export async function POST(request: Request) {
     return NextResponse.json(completion);
   } catch (error) {
     if (error instanceof LiteLlmError) {
-      console.error("[SceneForge] [generation] LiteLLM request failed", {
+      console.error("[SceneForge] [llm] LiteLLM request failed", {
         statusCode: error.statusCode,
         details: error.details,
       });
@@ -49,7 +49,7 @@ export async function POST(request: Request) {
       return errorResponse(error.message, error.statusCode ?? 500, error.details);
     }
 
-    console.error("[SceneForge] [generation] Unexpected LLM request failure", error);
+    console.error("[SceneForge] [llm] unexpected LLM proxy failure", error);
 
     return errorResponse("Unexpected LLM request failure.", 500);
   }

@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -11,11 +12,14 @@ import {
 } from "react";
 import type { KonvaEventObject } from "konva/lib/Node";
 import type { Group as KonvaGroup } from "konva/lib/Group";
+import type { Stage as KonvaStage } from "konva/lib/Stage";
 import type { Transformer as KonvaTransformer } from "konva/lib/shapes/Transformer";
 import { Circle, Ellipse, Group, Layer, Line, Rect, Stage, Text, Transformer } from "react-konva";
 
 import { useEditorStore } from "@/features/editor/store/editor-store";
 import type { BodyPartId, CharacterSkeleton, JointId, SceneObject, Vector2 } from "@/shared/types";
+
+export type CanvasCapture = () => string | null;
 
 export type CanvasStageProps = {
   zoom: number;
@@ -23,6 +27,7 @@ export type CanvasStageProps = {
   panMode: boolean;
   onPanChange: (pan: Vector2) => void;
   onZoomChange: (zoom: number) => void;
+  onCaptureReady?: (capture: CanvasCapture | null) => void;
 };
 
 type CanvasContextMenu = {
@@ -365,8 +370,10 @@ export function CanvasStage({
   panMode,
   onPanChange,
   onZoomChange,
+  onCaptureReady,
 }: CanvasStageProps) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const stageRef = useRef<KonvaStage>(null);
   const selectedObjectRef = useRef<KonvaGroup>(null);
   const selectedCharacterRef = useRef<KonvaGroup>(null);
   const transformerRef = useRef<KonvaTransformer>(null);
@@ -400,6 +407,17 @@ export function CanvasStage({
     () => [...objects].sort((left, right) => left.layer - right.layer),
     [objects],
   );
+  const captureCanvas = useCallback<CanvasCapture>(() => {
+    return stageRef.current?.toDataURL({ mimeType: "image/png", pixelRatio: 1 }) ?? null;
+  }, []);
+
+  useEffect(() => {
+    onCaptureReady?.(captureCanvas);
+
+    return () => {
+      onCaptureReady?.(null);
+    };
+  }, [captureCanvas, onCaptureReady]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -564,6 +582,7 @@ export function CanvasStage({
           height={stageHeight}
           onMouseDown={handleStagePointer}
           onTouchStart={handleStagePointer}
+          ref={stageRef}
           scaleX={stageScale}
           scaleY={stageScale}
           width={stageWidth}

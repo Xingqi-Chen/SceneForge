@@ -92,6 +92,41 @@ describe("createLiteLlmClient", () => {
     });
   });
 
+  it("forwards multimodal chat content unchanged", async () => {
+    const content = [
+      { type: "text" as const, text: "Use this prompt preview and canvas image." },
+      {
+        type: "image_url" as const,
+        image_url: {
+          url: "data:image/png;base64,abc123",
+          detail: "auto" as const,
+        },
+      },
+    ];
+    const fetcher: typeof fetch = async (_input, init) => {
+      expect(JSON.parse(String(init?.body)).messages).toEqual([{ role: "user", content }]);
+
+      return new Response(
+        JSON.stringify({
+          choices: [{ message: { role: "assistant", content: "polished prompt" } }],
+        }),
+        {
+          headers: { "content-type": "application/json" },
+        },
+      );
+    };
+
+    const client = createLiteLlmClient({
+      baseUrl: "http://localhost:4000",
+      defaultModel: "vision-model",
+      fetcher,
+    });
+
+    await expect(client.completeChat({ messages: [{ role: "user", content }] })).resolves.toMatchObject({
+      content: "polished prompt",
+    });
+  });
+
   it("rejects requests without a model or default model", async () => {
     const client = createLiteLlmClient({
       baseUrl: "http://localhost:4000",

@@ -1,8 +1,23 @@
 export type LlmChatRole = "system" | "user" | "assistant";
 
+export type LlmTextContentPart = {
+  type: "text";
+  text: string;
+};
+
+export type LlmImageContentPart = {
+  type: "image_url";
+  image_url: {
+    url: string;
+    detail?: "auto" | "low" | "high";
+  };
+};
+
+export type LlmChatContent = string | Array<LlmTextContentPart | LlmImageContentPart>;
+
 export type LlmChatMessage = {
   role: LlmChatRole;
-  content: string;
+  content: LlmChatContent;
 };
 
 export type LlmChatRequest = {

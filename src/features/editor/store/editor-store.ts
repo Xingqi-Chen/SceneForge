@@ -43,6 +43,9 @@ type PromptTagPatch = Partial<Omit<PromptTag, "id" | "weight">> & {
 type EditorState = {
   project: SceneForgeProject;
   selection: EditorSelection;
+  /** Last successful AI Prompt preview text; cleared when loading another project. */
+  aiGeneratedPrompt: string;
+  setAiGeneratedPrompt: (prompt: string) => void;
   setProject: (project: SceneForgeProject) => void;
   resetProject: () => void;
   selectScene: () => void;
@@ -186,8 +189,11 @@ function cloneCharacterSkeleton(character: CharacterSkeleton): CharacterSkeleton
 export const useEditorStore = create<EditorState>((set) => ({
   project: createDefaultProject(),
   selection: { kind: "scene" },
-  setProject: (project) => set({ project, selection: { kind: "scene" } }),
-  resetProject: () => set({ project: createDefaultProject(), selection: { kind: "scene" } }),
+  aiGeneratedPrompt: "",
+  setAiGeneratedPrompt: (prompt) => set({ aiGeneratedPrompt: prompt }),
+  setProject: (project) => set({ project, selection: { kind: "scene" }, aiGeneratedPrompt: "" }),
+  resetProject: () =>
+    set({ project: createDefaultProject(), selection: { kind: "scene" }, aiGeneratedPrompt: "" }),
   selectScene: () => set({ selection: { kind: "scene" } }),
   selectObject: (id) => set({ selection: { kind: "object", id } }),
   selectCharacter: (id) => set({ selection: { kind: "character", id } }),

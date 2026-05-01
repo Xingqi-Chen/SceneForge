@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -13,13 +13,21 @@ import { ExportControlsPanel } from "./ExportControlsPanel";
 import { ObjectPropertiesPanel } from "./ObjectPropertiesPanel";
 import { PromptPreviewPanel } from "./PromptPreviewPanel";
 import { PromptTagPickerPanel } from "./PromptTagPickerPanel";
+import type { CanvasCapture } from "./CanvasStage";
 
 export function EditorShell() {
+  const canvasCaptureRef = useRef<CanvasCapture | null>(null);
   const resetProject = useEditorStore((state) => state.resetProject);
   const setProject = useEditorStore((state) => state.setProject);
   const [loadState, setLoadState] = useState<"loading" | "ready">("loading");
   const [leftPanelOpen, setLeftPanelOpen] = useState(true);
   const [rightPanelOpen, setRightPanelOpen] = useState(true);
+
+  const registerCanvasCapture = useCallback((capture: CanvasCapture | null) => {
+    canvasCaptureRef.current = capture;
+  }, []);
+
+  const captureCanvas = useCallback(() => canvasCaptureRef.current?.() ?? null, []);
 
   useEffect(() => {
     let active = true;
@@ -113,7 +121,7 @@ export function EditorShell() {
               {leftPanelOpen ? <ChevronLeft className="size-5" /> : <ChevronRight className="size-5" />}
             </Button>
 
-            <CanvasViewport />
+            <CanvasViewport onCanvasCaptureReady={registerCanvasCapture} />
 
             <Button
               variant="secondary"
@@ -138,7 +146,7 @@ export function EditorShell() {
                 <div className="flex-1 overflow-y-auto custom-scrollbar p-5 flex flex-col gap-6">
                   <ObjectPropertiesPanel />
                   <div className="h-px w-full bg-slate-100 shrink-0" />
-                  <PromptPreviewPanel />
+                  <PromptPreviewPanel onCaptureCanvas={captureCanvas} />
                   <div className="h-px w-full bg-slate-100 shrink-0" />
                   <ExportControlsPanel />
                 </div>

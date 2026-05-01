@@ -23,12 +23,14 @@ function downloadText(filename: string, contents: string) {
 
 export function ExportControlsPanel() {
   const project = useEditorStore((state) => state.project);
+  const aiGeneratedPrompt = useEditorStore((state) => state.aiGeneratedPrompt);
   const [status, setStatus] = useState<ExportStatus>("idle");
 
   async function handleCopyPrompt() {
     try {
-      const { prompt } = generatePrompt(project);
-      await navigator.clipboard.writeText(prompt);
+      const { prompt: enginePrompt } = generatePrompt(project);
+      const textToCopy = aiGeneratedPrompt.trim() || enginePrompt;
+      await navigator.clipboard.writeText(textToCopy);
       setStatus("copied");
     } catch (error) {
       console.error("[SceneForge] [export] failed to copy prompt", { error });

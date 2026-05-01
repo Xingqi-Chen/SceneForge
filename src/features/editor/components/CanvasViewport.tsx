@@ -8,7 +8,7 @@ import { useEditorStore } from "@/features/editor/store/editor-store";
 import type { Vector2 } from "@/shared/types";
 import { Button } from "@/components/ui/button";
 
-import type { CanvasStageProps } from "./CanvasStage";
+import type { CanvasCapture, CanvasStageProps } from "./CanvasStage";
 
 const minZoom = 0.5;
 const maxZoom = 2;
@@ -40,7 +40,11 @@ function isEditableTarget(target: EventTarget) {
   return Boolean(element.closest("input, textarea, select, [contenteditable='true']"));
 }
 
-export function CanvasViewport() {
+type CanvasViewportProps = {
+  onCanvasCaptureReady?: (capture: CanvasCapture | null) => void;
+};
+
+export function CanvasViewport({ onCanvasCaptureReady }: CanvasViewportProps) {
   const viewportRef = useRef<HTMLElement>(null);
   const {
     bringSelectionForward,
@@ -236,6 +240,7 @@ export function CanvasViewport() {
       </div>
       <div className="relative flex flex-1 flex-col overflow-hidden rounded-2xl border border-slate-200/50 bg-slate-100/50 shadow-inner">
         <CanvasStage
+          onCaptureReady={onCanvasCaptureReady}
           onPanChange={setPan}
           onZoomChange={updateZoom}
           pan={pan}

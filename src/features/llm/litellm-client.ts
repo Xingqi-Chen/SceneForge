@@ -1,4 +1,57 @@
-import type { LlmChatRequest, LlmChatResponse, LlmChatRole, LlmTokenUsage } from "./types";
+import type {
+  LlmChatContent,
+  LlmChatMessage,
+  LlmChatRequest,
+  LlmChatResponse,
+  LlmChatRole,
+  LlmTokenUsage,
+} from "./types";
+
+const LOG_TEXT_PREVIEW_MAX = 400;
+
+function truncateForLog(text: string, max = LOG_TEXT_PREVIEW_MAX): string {
+  if (text.length <= max) {
+    return text;
+  }
+
+  return `${text.slice(0, max)}…`;
+}
+
+function summarizeContentForLog(content: LlmChatContent): string | Array<Record<string, unknown>> {
+  if (typeof content === "string") {
+    return truncateForLog(content);
+  }
+
+  return content.map((part) => {
+    if (part.type === "text") {
+      return {
+        type: "text",
+        length: part.text.length,
+        preview: truncateForLog(part.text, 320),
+      };
+    }
+
+    return {
+      type: "image_url",
+      detail: part.image_url.detail ?? "auto",
+      dataUrlChars: part.image_url.url.length,
+    };
+  });
+}
+
+/** Safe structured summary for logs (no raw image bytes). */
+export function summarizeLlmChatRequestForLog(request: LlmChatRequest): Record<string, unknown> {
+  return {
+    model: request.model ?? "(default)",
+    temperature: request.temperature,
+    maxTokens: request.maxTokens,
+    messageCount: request.messages.length,
+    messages: request.messages.map((message: LlmChatMessage) => ({
+      role: message.role,
+      content: summarizeContentForLog(message.content),
+    })),
+  };
+}
 
 type Fetcher = typeof fetch;
 
@@ -95,6 +148,11 @@ export function createLiteLlmClient(options: LiteLlmClientOptions) {
         });
       }
 
+      console.info("[SceneForge] [llm] outbound LiteLLM chat completion", {
+        ...summarizeLlmChatRequestForLog(request),
+        resolvedModel: model,
+      });
+
       const response = await fetcher(`${baseUrl}/chat/completions`, {
         method: "POST",
         headers: {
@@ -112,6 +170,10 @@ export function createLiteLlmClient(options: LiteLlmClientOptions) {
       const payload = await parseJsonResponse(response);
 
       if (!response.ok) {
+        console.info("[SceneForge] [llm] inbound LiteLLM error response", {
+          httpStatus: response.status,
+          detailsType: typeof payload,
+        });
         throw new LiteLlmError("LiteLLM chat completion request failed.", {
           statusCode: response.status,
           details: payload,
@@ -123,6 +185,10 @@ export function createLiteLlmClient(options: LiteLlmClientOptions) {
       const content = firstChoice?.message?.content;
 
       if (typeof content !== "string") {
+        console.info("[SceneForge] [llm] inbound LiteLLM malformed completion", {
+          id: completion.id,
+          model: completion.model,
+        });
         throw new LiteLlmError("LiteLLM response did not include a chat message.", {
           statusCode: 502,
           details: payload,
@@ -130,6 +196,16 @@ export function createLiteLlmClient(options: LiteLlmClientOptions) {
       }
 
       const role = isLlmChatRole(firstChoice?.message?.role) ? firstChoice.message.role : "assistant";
+
+      console.info("[SceneForge] [llm] inbound LiteLLM chat completion", {
+        id: completion.id,
+        model: completion.model,
+        role,
+        contentChars: content.length,
+        contentPreview: truncateForLog(content, 280),
+        finishReason: firstChoice?.finish_reason,
+        usage: toTokenUsage(completion.usage),
+      });
 
       return {
         id: completion.id,

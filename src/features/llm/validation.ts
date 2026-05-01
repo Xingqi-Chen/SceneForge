@@ -1,9 +1,47 @@
-import type { LlmChatMessage, LlmChatRequest, LlmChatRole } from "./types";
+import type {
+  LlmChatContent,
+  LlmChatMessage,
+  LlmChatRequest,
+  LlmChatRole,
+  LlmImageContentPart,
+  LlmTextContentPart,
+} from "./types";
 
 const chatRoles = new Set<LlmChatRole>(["system", "user", "assistant"]);
+const imageDetails = new Set<NonNullable<LlmImageContentPart["image_url"]["detail"]>>([
+  "auto",
+  "low",
+  "high",
+]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isTextContentPart(value: unknown): value is LlmTextContentPart {
+  return isRecord(value) && value.type === "text" && typeof value.text === "string" && value.text.trim().length > 0;
+}
+
+function isImageContentPart(value: unknown): value is LlmImageContentPart {
+  if (!isRecord(value) || value.type !== "image_url" || !isRecord(value.image_url)) {
+    return false;
+  }
+
+  const { url, detail } = value.image_url;
+
+  return (
+    typeof url === "string" &&
+    url.startsWith("data:image/") &&
+    (detail === undefined || imageDetails.has(detail as NonNullable<LlmImageContentPart["image_url"]["detail"]>))
+  );
+}
+
+function isChatContent(value: unknown): value is LlmChatContent {
+  if (typeof value === "string") {
+    return value.trim().length > 0;
+  }
+
+  return Array.isArray(value) && value.length > 0 && value.every((part) => isTextContentPart(part) || isImageContentPart(part));
 }
 
 function isChatMessage(value: unknown): value is LlmChatMessage {
@@ -11,7 +49,7 @@ function isChatMessage(value: unknown): value is LlmChatMessage {
     return false;
   }
 
-  return chatRoles.has(value.role as LlmChatRole) && typeof value.content === "string" && value.content.trim().length > 0;
+  return chatRoles.has(value.role as LlmChatRole) && isChatContent(value.content);
 }
 
 function isOptionalNumber(value: unknown): value is number | undefined {
