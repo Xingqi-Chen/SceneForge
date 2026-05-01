@@ -40,6 +40,19 @@ describe("editor store", () => {
   });
 
   it("updates object properties without replacing other objects", () => {
+    useEditorStore.getState().addObject({
+      kind: "rectangle",
+      name: "窗户",
+      description: "large window with soft morning light",
+      fill: "#bfdbfe",
+    });
+    useEditorStore.getState().addObject({
+      kind: "rectangle",
+      name: "桌子",
+      description: "wooden table in the foreground",
+      fill: "#92400e",
+    });
+
     const firstObject = useEditorStore.getState().project.scene.objects[0];
     const secondObject = useEditorStore.getState().project.scene.objects[1];
 
@@ -59,6 +72,13 @@ describe("editor store", () => {
   });
 
   it("duplicates, moves, and deletes the selected object", () => {
+    useEditorStore.getState().addObject({
+      kind: "rectangle",
+      name: "路灯",
+      description: "street lamp on the left",
+      fill: "#facc15",
+    });
+
     const initialObjects = useEditorStore.getState().project.scene.objects;
     const selectedObject = initialObjects[0];
 
@@ -93,6 +113,19 @@ describe("editor store", () => {
   });
 
   it("moves the selected object forward and backward by swapping layers", () => {
+    useEditorStore.getState().addObject({
+      kind: "rectangle",
+      name: "窗户",
+      description: "large window with soft morning light",
+      fill: "#bfdbfe",
+    });
+    useEditorStore.getState().addObject({
+      kind: "rectangle",
+      name: "桌子",
+      description: "wooden table in the foreground",
+      fill: "#92400e",
+    });
+
     const firstObject = useEditorStore.getState().project.scene.objects[0];
     const secondObject = useEditorStore.getState().project.scene.objects[1];
 
@@ -150,7 +183,23 @@ describe("editor store", () => {
     });
   });
 
+  it("selects a body part on a character", () => {
+    useEditorStore.getState().addCharacter();
+
+    const character = useEditorStore.getState().project.scene.characters[0];
+
+    useEditorStore.getState().selectBodyPart(character.id, "rightHand");
+
+    expect(useEditorStore.getState().selection).toEqual({
+      kind: "bodyPart",
+      characterId: character.id,
+      bodyPartId: "rightHand",
+    });
+  });
+
   it("duplicates, moves, and deletes the selected character", () => {
+    useEditorStore.getState().addCharacter();
+
     const selectedCharacter = useEditorStore.getState().project.scene.characters[0];
 
     useEditorStore.getState().selectCharacter(selectedCharacter.id);
@@ -186,6 +235,14 @@ describe("editor store", () => {
   });
 
   it("adds and removes prompt tags on objects and body parts", () => {
+    useEditorStore.getState().addObject({
+      kind: "rectangle",
+      name: "路灯",
+      description: "street lamp on the left",
+      fill: "#facc15",
+    });
+    useEditorStore.getState().addCharacter();
+
     const object = useEditorStore.getState().project.scene.objects[0];
     const character = useEditorStore.getState().project.scene.characters[0];
 
@@ -211,6 +268,19 @@ describe("editor store", () => {
     ).toEqual([expect.objectContaining({ prompt: testTag.prompt })]);
 
     const addedObjectTag = objectTags.find((tag) => tag.prompt === testTag.prompt);
+
+    useEditorStore.getState().updatePromptTag(
+      { kind: "object", id: object.id },
+      addedObjectTag?.id ?? "",
+      {
+        weight: { enabled: true, value: 1.35 },
+      },
+    );
+
+    expect(useEditorStore.getState().project.scene.objects[0].promptTags[0].weight).toEqual({
+      enabled: true,
+      value: 1.35,
+    });
 
     useEditorStore
       .getState()

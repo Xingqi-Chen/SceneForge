@@ -42,6 +42,12 @@ export function ObjectPropertiesPanel() {
   const selectedCharacter =
     selection.kind === "character"
       ? project.scene.characters.find((character) => character.id === selection.id)
+      : selection.kind === "bodyPart"
+        ? project.scene.characters.find((character) => character.id === selection.characterId)
+        : undefined;
+  const selectedBodyPart =
+    selection.kind === "bodyPart" && selectedCharacter
+      ? selectedCharacter.bodyParts.find((bodyPart) => bodyPart.id === selection.bodyPartId)
       : undefined;
 
   function updateSelectedObject(patch: Partial<SceneObject>) {
@@ -215,6 +221,11 @@ export function ObjectPropertiesPanel() {
         </div>
       ) : selectedCharacter ? (
         <div className="space-y-4 text-sm">
+          {selectedBodyPart ? (
+            <div className="rounded-xl bg-blue-50 p-3 text-xs text-blue-700">
+              当前部位：{selectedBodyPart.label}
+            </div>
+          ) : null}
           <div className="space-y-1.5">
             <FieldLabel>人物名称</FieldLabel>
             <input

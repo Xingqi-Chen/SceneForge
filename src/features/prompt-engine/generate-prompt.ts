@@ -1,11 +1,29 @@
-import type { PromptModelFormat, PromptTag, SceneForgeProject } from "@/shared/types";
+import type { BodyPartId, PromptModelFormat, PromptTag, SceneForgeProject } from "@/shared/types";
 
 import { formatPromptTag, formatPromptText } from "./formatters";
+import { appendSpatialRelationHints, inferSpatialRelationHints } from "./spatial-relations";
 
 export type GeneratedPrompt = {
   prompt: string;
   negativePrompt: string;
   parts: string[];
+};
+
+const bodyPartPromptScopes: Record<BodyPartId, string> = {
+  head: "head",
+  torso: "torso",
+  leftUpperArm: "left upper arm",
+  leftForearm: "left forearm",
+  rightUpperArm: "right upper arm",
+  rightForearm: "right forearm",
+  leftThigh: "left thigh",
+  leftShin: "left lower leg",
+  rightThigh: "right thigh",
+  rightShin: "right lower leg",
+  leftHand: "left hand",
+  rightHand: "right hand",
+  leftFoot: "left foot",
+  rightFoot: "right foot",
 };
 
 function uniquePrompts(prompts: string[]) {
@@ -16,6 +34,26 @@ function collectTags(tags: PromptTag[], format: PromptModelFormat, negative = fa
   return tags
     .filter((tag) => Boolean(tag.prompt.trim()) && Boolean(tag.negative) === negative)
     .map((tag) => formatPromptTag(tag, format));
+}
+
+function buildScopedPrompt(scopePrompt: string, scopedTags: string[]) {
+  if (!scopePrompt) {
+    return scopedTags;
+  }
+
+  if (scopedTags.length === 0) {
+    return [scopePrompt];
+  }
+
+  return [`${scopePrompt} with ${scopedTags.join(", ")}`];
+}
+
+function buildBodyPartPrompt(bodyPartPrompt: string, bodyPartTags: string[]) {
+  return bodyPartTags.map((tag) =>
+    /^(holding|gripping|wearing|pointing|touching)\b/i.test(tag)
+      ? `${bodyPartPrompt} ${tag}`
+      : `${bodyPartPrompt} with ${tag}`,
+  );
 }
 
 export function generatePrompt(project: SceneForgeProject): GeneratedPrompt {
@@ -35,13 +73,23 @@ export function generatePrompt(project: SceneForgeProject): GeneratedPrompt {
       continue;
     }
 
-    if (object.description.trim()) {
-      parts.push(formatPromptText(object.description, object.weight, settings.modelFormat));
-    } else if (object.name.trim()) {
-      parts.push(formatPromptText(object.name, object.weight, settings.modelFormat));
-    }
+    const objectPrompt = object.description.trim() || object.name.trim();
+    const objectPromptWithSpatialHints =
+      settings.includeSpatialHints && objectPrompt
+        ? appendSpatialRelationHints(
+            objectPrompt,
+            inferSpatialRelationHints(object, {
+              canvas: scene.canvas,
+              characters: scene.characters,
+            }),
+          )
+        : objectPrompt;
+    const formattedObjectPrompt = objectPrompt
+      ? formatPromptText(objectPromptWithSpatialHints, object.weight, settings.modelFormat)
+      : "";
+    const objectTags = collectTags(object.promptTags, settings.modelFormat);
 
-    parts.push(...collectTags(object.promptTags, settings.modelFormat));
+    parts.push(...buildScopedPrompt(formattedObjectPrompt, objectTags));
     negativeParts.push(...collectTags(object.promptTags, settings.modelFormat, true));
   }
 
@@ -58,7 +106,12 @@ export function generatePrompt(project: SceneForgeProject): GeneratedPrompt {
     negativeParts.push(...collectTags(character.promptTags, settings.modelFormat, true));
 
     for (const bodyPart of character.bodyParts) {
-      parts.push(...collectTags(bodyPart.promptTags, settings.modelFormat));
+      const bodyPartTags = collectTags(bodyPart.promptTags, settings.modelFormat);
+
+      if (bodyPartTags.length > 0) {
+        parts.push(...buildBodyPartPrompt(bodyPartPromptScopes[bodyPart.id], bodyPartTags));
+      }
+
       negativeParts.push(...collectTags(bodyPart.promptTags, settings.modelFormat, true));
     }
   }

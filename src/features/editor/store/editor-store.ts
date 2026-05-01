@@ -20,7 +20,8 @@ import { createDefaultProject, defaultCharacter } from "./defaults";
 export type EditorSelection =
   | { kind: "scene" }
   | { kind: "object"; id: string }
-  | { kind: "character"; id: string };
+  | { kind: "character"; id: string }
+  | { kind: "bodyPart"; characterId: string; bodyPartId: BodyPartId };
 
 export type AddSceneObjectInput = {
   kind: SceneObjectKind;
@@ -35,6 +36,10 @@ export type PromptTagTarget =
   | { kind: "character"; id: string }
   | { kind: "bodyPart"; characterId: string; bodyPartId: BodyPartId };
 
+type PromptTagPatch = Partial<Omit<PromptTag, "id" | "weight">> & {
+  weight?: Partial<PromptTag["weight"]>;
+};
+
 type EditorState = {
   project: SceneForgeProject;
   selection: EditorSelection;
@@ -43,6 +48,7 @@ type EditorState = {
   selectScene: () => void;
   selectObject: (id: string) => void;
   selectCharacter: (id: string) => void;
+  selectBodyPart: (characterId: string, bodyPartId: BodyPartId) => void;
   updateScene: (patch: Partial<Scene>) => void;
   updateProjectSettings: (patch: Partial<ProjectSettings>) => void;
   addObject: (input: AddSceneObjectInput) => void;
@@ -56,6 +62,7 @@ type EditorState = {
   updateCharacter: (id: string, patch: Partial<CharacterSkeleton>) => void;
   updateCharacterJoint: (id: string, jointId: JointId, position: Vector2) => void;
   addPromptTag: (target: PromptTagTarget, tag: PromptTag) => void;
+  updatePromptTag: (target: PromptTagTarget, tagId: string, patch: PromptTagPatch) => void;
   removePromptTag: (target: PromptTagTarget, tagId: string) => void;
 };
 
@@ -97,6 +104,18 @@ function addTagToList(tags: PromptTag[], tag: PromptTag) {
   }
 
   return [...tags, clonePromptTag(tag)];
+}
+
+function updateTagInList(tags: PromptTag[], tagId: string, patch: PromptTagPatch) {
+  return tags.map((tag) =>
+    tag.id === tagId
+      ? {
+          ...tag,
+          ...patch,
+          weight: patch.weight ? { ...tag.weight, ...patch.weight } : tag.weight,
+        }
+      : tag,
+  );
 }
 
 function createCharacter(layerOffset: number): CharacterSkeleton {
@@ -172,6 +191,8 @@ export const useEditorStore = create<EditorState>((set) => ({
   selectScene: () => set({ selection: { kind: "scene" } }),
   selectObject: (id) => set({ selection: { kind: "object", id } }),
   selectCharacter: (id) => set({ selection: { kind: "character", id } }),
+  selectBodyPart: (characterId, bodyPartId) =>
+    set({ selection: { kind: "bodyPart", characterId, bodyPartId } }),
   updateScene: (patch) =>
     set((state) => ({
       project: touchProject({
@@ -595,6 +616,71 @@ export const useEditorStore = create<EditorState>((set) => ({
               }
 
               return { ...character, promptTags: addTagToList(character.promptTags, tag) };
+            }),
+          },
+        }),
+      };
+    }),
+  updatePromptTag: (target, tagId, patch) =>
+    set((state) => {
+      if (target.kind === "scene") {
+        return {
+          project: touchProject({
+            ...state.project,
+            scene: {
+              ...state.project.scene,
+              promptTags: updateTagInList(state.project.scene.promptTags, tagId, patch),
+            },
+          }),
+        };
+      }
+
+      if (target.kind === "object") {
+        return {
+          project: touchProject({
+            ...state.project,
+            scene: {
+              ...state.project.scene,
+              objects: state.project.scene.objects.map((object) =>
+                object.id === target.id
+                  ? { ...object, promptTags: updateTagInList(object.promptTags, tagId, patch) }
+                  : object,
+              ),
+            },
+          }),
+        };
+      }
+
+      const targetCharacterId = target.kind === "bodyPart" ? target.characterId : target.id;
+
+      return {
+        project: touchProject({
+          ...state.project,
+          scene: {
+            ...state.project.scene,
+            characters: state.project.scene.characters.map((character) => {
+              if (character.id !== targetCharacterId) {
+                return character;
+              }
+
+              if (target.kind === "bodyPart") {
+                return {
+                  ...character,
+                  bodyParts: character.bodyParts.map((bodyPart) =>
+                    bodyPart.id === target.bodyPartId
+                      ? {
+                          ...bodyPart,
+                          promptTags: updateTagInList(bodyPart.promptTags, tagId, patch),
+                        }
+                      : bodyPart,
+                  ),
+                };
+              }
+
+              return {
+                ...character,
+                promptTags: updateTagInList(character.promptTags, tagId, patch),
+              };
             }),
           },
         }),

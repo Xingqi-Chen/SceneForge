@@ -15,7 +15,7 @@ import type { Transformer as KonvaTransformer } from "konva/lib/shapes/Transform
 import { Circle, Ellipse, Group, Layer, Line, Rect, Stage, Text, Transformer } from "react-konva";
 
 import { useEditorStore } from "@/features/editor/store/editor-store";
-import type { CharacterSkeleton, JointId, SceneObject, Vector2 } from "@/shared/types";
+import type { BodyPartId, CharacterSkeleton, JointId, SceneObject, Vector2 } from "@/shared/types";
 
 export type CanvasStageProps = {
   zoom: number;
@@ -25,28 +25,43 @@ export type CanvasStageProps = {
   onZoomChange: (zoom: number) => void;
 };
 
-const skeletonBones: Array<[keyof CharacterSkeleton["joints"], keyof CharacterSkeleton["joints"]]> =
-  [
-    ["neck", "leftShoulder"],
-    ["neck", "rightShoulder"],
-    ["leftShoulder", "leftElbow"],
-    ["leftElbow", "leftWrist"],
-    ["rightShoulder", "rightElbow"],
-    ["rightElbow", "rightWrist"],
-    ["neck", "hip"],
-    ["hip", "leftKnee"],
-    ["leftKnee", "leftAnkle"],
-    ["hip", "rightKnee"],
-    ["rightKnee", "rightAnkle"],
-  ];
+type CanvasContextMenu = {
+  x: number;
+  y: number;
+  target: "object" | "character";
+};
+
+const skeletonBodyPartSegments: Array<[BodyPartId, JointId, JointId]> = [
+  ["torso", "neck", "leftShoulder"],
+  ["torso", "neck", "rightShoulder"],
+  ["torso", "neck", "hip"],
+  ["leftUpperArm", "leftShoulder", "leftElbow"],
+  ["leftForearm", "leftElbow", "leftWrist"],
+  ["rightUpperArm", "rightShoulder", "rightElbow"],
+  ["rightForearm", "rightElbow", "rightWrist"],
+  ["leftThigh", "hip", "leftKnee"],
+  ["leftShin", "leftKnee", "leftAnkle"],
+  ["rightThigh", "hip", "rightKnee"],
+  ["rightShin", "rightKnee", "rightAnkle"],
+];
+
+const jointBodyPartMap: Partial<Record<JointId, BodyPartId>> = {
+  neck: "head",
+  leftWrist: "leftHand",
+  rightWrist: "rightHand",
+  leftAnkle: "leftFoot",
+  rightAnkle: "rightFoot",
+};
 
 function SceneObjectNode({
   object,
+  onContextMenu,
   panMode,
   selected,
   transformRef,
 }: {
   object: SceneObject;
+  onContextMenu: (event: KonvaEventObject<MouseEvent>) => void;
   panMode: boolean;
   selected: boolean;
   transformRef?: Ref<KonvaGroup>;
@@ -99,6 +114,7 @@ function SceneObjectNode({
       draggable={!panMode}
       id={object.id}
       onClick={handleSelect}
+      onContextMenu={onContextMenu}
       onDragEnd={handleDragEnd}
       onTap={handleSelect}
       onTransformEnd={handleTransformEnd}
@@ -153,14 +169,19 @@ function SceneObjectNode({
 
 function CharacterNode({
   character,
+  onContextMenu,
   panMode,
   selected,
+  selectedBodyPartId,
 }: {
   character: CharacterSkeleton;
+  onContextMenu: (event: KonvaEventObject<MouseEvent>) => void;
   panMode: boolean;
   selected: boolean;
+  selectedBodyPartId?: BodyPartId;
 }) {
   const selectCharacter = useEditorStore((state) => state.selectCharacter);
+  const selectBodyPart = useEditorStore((state) => state.selectBodyPart);
   const updateCharacter = useEditorStore((state) => state.updateCharacter);
   const updateCharacterJoint = useEditorStore((state) => state.updateCharacterJoint);
   const stroke = selected ? "#0f172a" : "#334155";
@@ -172,6 +193,29 @@ function CharacterNode({
 
     event.cancelBubble = true;
     selectCharacter(character.id);
+  }
+
+  function handleBodyPartSelect(
+    bodyPartId: BodyPartId,
+    event: KonvaEventObject<MouseEvent | TouchEvent>,
+  ) {
+    if (panMode) {
+      return;
+    }
+
+    event.cancelBubble = true;
+    selectBodyPart(character.id, bodyPartId);
+  }
+
+  function handleJointSelect(jointId: JointId, event: KonvaEventObject<MouseEvent | TouchEvent>) {
+    const bodyPartId = jointBodyPartMap[jointId];
+
+    if (!bodyPartId) {
+      handleSelect(event);
+      return;
+    }
+
+    handleBodyPartSelect(bodyPartId, event);
   }
 
   function handleDragEnd(event: KonvaEventObject<DragEvent>) {
@@ -205,49 +249,63 @@ function CharacterNode({
       draggable={!panMode}
       id={character.id}
       onClick={handleSelect}
+      onContextMenu={onContextMenu}
       onDragEnd={handleDragEnd}
       onTap={handleSelect}
       x={character.position.x}
       y={character.position.y}
     >
-      {skeletonBones.map(([from, to]) => (
-        <Line
-          key={`${from}-${to}`}
-          lineCap="round"
-          points={[
-            character.joints[from].x,
-            character.joints[from].y,
-            character.joints[to].x,
-            character.joints[to].y,
-          ]}
-          stroke={stroke}
-          strokeWidth={selected ? 9 : 7}
-        />
-      ))}
+      {skeletonBodyPartSegments.map(([bodyPartId, from, to]) => {
+        const selectedPart = selectedBodyPartId === bodyPartId;
+
+        return (
+          <Line
+            key={`${bodyPartId}-${from}-${to}`}
+            lineCap="round"
+            onClick={(event) => handleBodyPartSelect(bodyPartId, event)}
+            onTap={(event) => handleBodyPartSelect(bodyPartId, event)}
+            points={[
+              character.joints[from].x,
+              character.joints[from].y,
+              character.joints[to].x,
+              character.joints[to].y,
+            ]}
+            stroke={selectedPart ? "#2563eb" : stroke}
+            strokeWidth={selectedPart ? 11 : selected ? 9 : 7}
+          />
+        );
+      })}
       <Circle
         fill="#ffffff"
         radius={30}
-        stroke={stroke}
-        strokeWidth={selected ? 6 : 4}
+        onClick={(event) => handleBodyPartSelect("head", event)}
+        onTap={(event) => handleBodyPartSelect("head", event)}
+        stroke={selectedBodyPartId === "head" ? "#2563eb" : stroke}
+        strokeWidth={selectedBodyPartId === "head" ? 7 : selected ? 6 : 4}
         x={character.joints.neck.x}
         y={character.joints.neck.y - 34}
       />
-      {Object.entries(character.joints).map(([joint, position]) => (
-        <Circle
-          draggable={!panMode}
-          fill={selected ? "#0f172a" : "#ffffff"}
-          key={joint}
-          onClick={handleSelect}
-          onDragEnd={(event) => handleJointDrag(joint as JointId, event)}
-          onDragMove={(event) => handleJointDrag(joint as JointId, event)}
-          onTap={handleSelect}
-          radius={7}
-          stroke={stroke}
-          strokeWidth={3}
-          x={position.x}
-          y={position.y}
-        />
-      ))}
+      {Object.entries(character.joints).map(([joint, position]) => {
+        const jointId = joint as JointId;
+        const selectedPart = selectedBodyPartId === jointBodyPartMap[jointId];
+
+        return (
+          <Circle
+            draggable={!panMode}
+            fill={selectedPart ? "#2563eb" : selected ? "#0f172a" : "#ffffff"}
+            key={joint}
+            onClick={(event) => handleJointSelect(jointId, event)}
+            onDragEnd={(event) => handleJointDrag(jointId, event)}
+            onDragMove={(event) => handleJointDrag(jointId, event)}
+            onTap={(event) => handleJointSelect(jointId, event)}
+            radius={selectedPart ? 8 : 7}
+            stroke={selectedPart ? "#2563eb" : stroke}
+            strokeWidth={3}
+            x={position.x}
+            y={position.y}
+          />
+        );
+      })}
       <Rect
         cornerRadius={15}
         fill="#0f172a"
@@ -285,8 +343,18 @@ export function CanvasStage({
   const transformerRef = useRef<KonvaTransformer>(null);
   const lastPanPoint = useRef<Vector2 | null>(null);
   const [containerWidth, setContainerWidth] = useState(0);
+  const [contextMenu, setContextMenu] = useState<CanvasContextMenu | null>(null);
   const [panning, setPanning] = useState(false);
-  const { project, selection, selectScene } = useEditorStore();
+  const {
+    bringSelectionForward,
+    deleteSelection,
+    project,
+    selectCharacter,
+    selectObject,
+    selection,
+    selectScene,
+    sendSelectionBackward,
+  } = useEditorStore();
   const { canvas, objects, characters } = project.scene;
   const baseScale = containerWidth > 0 ? Math.min((containerWidth - 32) / canvas.width, 1) : 0.6;
   const stageScale = baseScale * zoom;
@@ -337,6 +405,8 @@ export function CanvasStage({
       return;
     }
 
+    setContextMenu(null);
+
     if (event.target === event.target.getStage()) {
       selectScene();
     }
@@ -347,7 +417,43 @@ export function CanvasStage({
       return;
     }
 
+    setContextMenu(null);
     selectScene();
+  }
+
+  function openContextMenu(
+    target: CanvasContextMenu["target"],
+    event: KonvaEventObject<MouseEvent>,
+  ) {
+    if (panMode) {
+      return;
+    }
+
+    event.evt.preventDefault();
+    event.cancelBubble = true;
+
+    const containerBounds = containerRef.current?.getBoundingClientRect();
+
+    setContextMenu({
+      target,
+      x: event.evt.clientX - (containerBounds?.left ?? 0),
+      y: event.evt.clientY - (containerBounds?.top ?? 0),
+    });
+  }
+
+  function handleObjectContextMenu(objectId: string, event: KonvaEventObject<MouseEvent>) {
+    selectObject(objectId);
+    openContextMenu("object", event);
+  }
+
+  function handleCharacterContextMenu(characterId: string, event: KonvaEventObject<MouseEvent>) {
+    selectCharacter(characterId);
+    openContextMenu("character", event);
+  }
+
+  function runContextMenuAction(action: () => void) {
+    action();
+    setContextMenu(null);
   }
 
   function handleWheel(event: ReactWheelEvent<HTMLDivElement>) {
@@ -390,9 +496,10 @@ export function CanvasStage({
 
   return (
     <div
-      className={`flex flex-1 items-center justify-center overflow-hidden rounded-2xl border border-slate-200 bg-white p-4 ${
+      className={`relative flex flex-1 items-center justify-center overflow-hidden rounded-2xl border border-slate-200 bg-white p-4 ${
         panMode || panning ? "cursor-grab" : "cursor-default"
       }`}
+      onContextMenu={(event) => event.preventDefault()}
       onMouseDown={startPan}
       onMouseLeave={stopPan}
       onMouseMove={updatePan}
@@ -440,6 +547,7 @@ export function CanvasStage({
                 <SceneObjectNode
                   key={object.id}
                   object={object}
+                  onContextMenu={(event) => handleObjectContextMenu(object.id, event)}
                   panMode={panMode}
                   selected={selected}
                   transformRef={selected ? selectedObjectRef : undefined}
@@ -450,8 +558,17 @@ export function CanvasStage({
               <CharacterNode
                 character={character}
                 key={character.id}
+                onContextMenu={(event) => handleCharacterContextMenu(character.id, event)}
                 panMode={panMode}
-                selected={selection.kind === "character" && selection.id === character.id}
+                selected={
+                  (selection.kind === "character" && selection.id === character.id) ||
+                  (selection.kind === "bodyPart" && selection.characterId === character.id)
+                }
+                selectedBodyPartId={
+                  selection.kind === "bodyPart" && selection.characterId === character.id
+                    ? selection.bodyPartId
+                    : undefined
+                }
               />
             ))}
             <Transformer
@@ -465,6 +582,36 @@ export function CanvasStage({
           </Layer>
         </Stage>
       </div>
+      {contextMenu ? (
+        <div
+          className="absolute z-10 min-w-36 overflow-hidden rounded-xl border border-slate-200 bg-white py-1 text-sm shadow-lg"
+          style={{ left: contextMenu.x, top: contextMenu.y }}
+        >
+          <button
+            className="block w-full px-3 py-2 text-left text-slate-700 hover:bg-slate-50"
+            disabled={contextMenu.target !== "object"}
+            onClick={() => runContextMenuAction(sendSelectionBackward)}
+            type="button"
+          >
+            下移一层
+          </button>
+          <button
+            className="block w-full px-3 py-2 text-left text-slate-700 hover:bg-slate-50"
+            disabled={contextMenu.target !== "object"}
+            onClick={() => runContextMenuAction(bringSelectionForward)}
+            type="button"
+          >
+            上移一层
+          </button>
+          <button
+            className="block w-full px-3 py-2 text-left text-red-600 hover:bg-red-50"
+            onClick={() => runContextMenuAction(deleteSelection)}
+            type="button"
+          >
+            删除
+          </button>
+        </div>
+      ) : null}
     </div>
   );
 }

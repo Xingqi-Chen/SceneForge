@@ -26,15 +26,7 @@ export const defaultCharacter: CharacterSkeleton = {
     {
       id: "head",
       label: "头部",
-      promptTags: [
-        {
-          id: "tag-long-hair",
-          label: "头发提示词",
-          prompt: "long flowing hair",
-          category: "body-part",
-          weight: { enabled: true, value: 1.2 },
-        },
-      ],
+      promptTags: [],
     },
     { id: "torso", label: "躯干", promptTags: [] },
     { id: "leftUpperArm", label: "左上臂", promptTags: [] },
@@ -50,15 +42,7 @@ export const defaultCharacter: CharacterSkeleton = {
     { id: "leftFoot", label: "左脚", promptTags: [] },
     { id: "rightFoot", label: "右脚", promptTags: [] },
   ],
-  promptTags: [
-    {
-      id: "tag-standing-pose",
-      label: "站姿",
-      prompt: "full body standing pose",
-      category: "character",
-      weight: { enabled: false, value: 1 },
-    },
-  ],
+  promptTags: [],
 };
 
 export const defaultScene: Scene = {
@@ -71,54 +55,9 @@ export const defaultScene: Scene = {
     aspectRatio: "16:9",
     background: "#f8fafc",
   },
-  objects: [
-    {
-      id: "object-window",
-      kind: "rectangle",
-      name: "窗户",
-      description: "large window with soft morning light",
-      position: { x: 120, y: 96 },
-      size: { width: 240, height: 180 },
-      rotation: 0,
-      layer: 1,
-      fill: "#dbeafe",
-      includeInPrompt: true,
-      weight: { enabled: false, value: 1 },
-      promptTags: [
-        {
-          id: "tag-soft-light",
-          label: "柔和光线",
-          prompt: "soft morning light",
-          category: "lighting",
-          weight: { enabled: true, value: 1.1 },
-        },
-      ],
-    },
-    {
-      id: "object-table",
-      kind: "rectangle",
-      name: "桌子",
-      description: "wooden table in the foreground",
-      position: { x: 320, y: 476 },
-      size: { width: 360, height: 92 },
-      rotation: 0,
-      layer: 2,
-      fill: "#92400e",
-      includeInPrompt: true,
-      weight: { enabled: false, value: 1 },
-      promptTags: [],
-    },
-  ],
-  characters: [defaultCharacter],
-  promptTags: [
-    {
-      id: "tag-cinematic-style",
-      label: "电影感",
-      prompt: "cinematic composition",
-      category: "style",
-      weight: { enabled: true, value: 1.15 },
-    },
-  ],
+  objects: [],
+  characters: [],
+  promptTags: [],
 };
 
 function clonePromptTag(tag: PromptTag): PromptTag {

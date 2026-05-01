@@ -55,7 +55,7 @@ export function CanvasViewport() {
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState<Vector2>({ x: 0, y: 0 });
   const [spacePressed, setSpacePressed] = useState(false);
-  const hasSelection = selection.kind !== "scene";
+  const canDuplicateOrDelete = selection.kind === "object" || selection.kind === "character";
   const canAdjustLayer = selection.kind === "object";
 
   function updateZoom(nextZoom: number) {
@@ -166,7 +166,7 @@ export function CanvasViewport() {
               重置视图
             </Button>
             <Button
-              disabled={!hasSelection}
+              disabled={!canDuplicateOrDelete}
               onClick={duplicateSelection}
               size="sm"
               type="button"
@@ -176,7 +176,7 @@ export function CanvasViewport() {
               复制
             </Button>
             <Button
-              disabled={!hasSelection}
+              disabled={!canDuplicateOrDelete}
               onClick={deleteSelection}
               size="sm"
               type="button"

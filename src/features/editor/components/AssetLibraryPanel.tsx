@@ -27,24 +27,6 @@ const assets: AssetDefinition[] = [
     description: "round scene object",
     fill: "#fde68a",
   },
-  {
-    id: "window",
-    label: "窗户",
-    type: "object",
-    kind: "rectangle",
-    name: "窗户",
-    description: "large window with soft light",
-    fill: "#bfdbfe",
-  },
-  {
-    id: "table",
-    label: "桌子",
-    type: "object",
-    kind: "rectangle",
-    name: "桌子",
-    description: "wooden table in the foreground",
-    fill: "#92400e",
-  },
   { id: "character", label: "人物骨架", type: "character" },
 ];
 

@@ -2,7 +2,7 @@ import { Tags, X } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import { useEditorStore, type PromptTagTarget } from "@/features/editor/store/editor-store";
-import type { BodyPartId, PromptTag } from "@/shared/types";
+import type { BodyPartId, PromptTag, PromptTagCategory } from "@/shared/types";
 
 const promptLibrary: PromptTag[] = [
   {
@@ -71,10 +71,40 @@ const promptLibrary: PromptTag[] = [
   },
 ];
 
+const promptCategoryOrder = [
+  "style",
+  "lighting",
+  "quality",
+  "scene",
+  "character",
+  "body-part",
+  "negative",
+] satisfies PromptTagCategory[];
+
+const promptCategoryLabels: Record<PromptTagCategory, string> = {
+  style: "风格",
+  lighting: "光照",
+  quality: "质量",
+  scene: "场景",
+  character: "人物",
+  "body-part": "身体部位",
+  negative: "负面提示",
+};
+
 type BodyPartTargetValue = BodyPartId | "character";
 
-function hasAppliedTag(tags: PromptTag[], tag: PromptTag) {
-  return tags.some(
+function groupPromptLibrary(tags: PromptTag[]) {
+  return promptCategoryOrder
+    .map((category) => ({
+      category,
+      label: promptCategoryLabels[category],
+      tags: tags.filter((tag) => tag.category === category),
+    }))
+    .filter((group) => group.tags.length > 0);
+}
+
+function findAppliedTag(tags: PromptTag[], tag: PromptTag) {
+  return tags.find(
     (appliedTag) =>
       appliedTag.prompt === tag.prompt &&
       appliedTag.category === tag.category &&
@@ -83,8 +113,17 @@ function hasAppliedTag(tags: PromptTag[], tag: PromptTag) {
 }
 
 export function PromptTagPickerPanel() {
-  const { addPromptTag, project, removePromptTag, selection } = useEditorStore();
+  const {
+    addPromptTag,
+    project,
+    removePromptTag,
+    selectBodyPart,
+    selectCharacter,
+    selection,
+    updatePromptTag,
+  } = useEditorStore();
   const [bodyPartTarget, setBodyPartTarget] = useState<BodyPartTargetValue>("character");
+  const promptLibraryGroups = useMemo(() => groupPromptLibrary(promptLibrary), []);
 
   const selectedObject =
     selection.kind === "object"
@@ -93,10 +132,14 @@ export function PromptTagPickerPanel() {
   const selectedCharacter =
     selection.kind === "character"
       ? project.scene.characters.find((character) => character.id === selection.id)
-      : undefined;
+      : selection.kind === "bodyPart"
+        ? project.scene.characters.find((character) => character.id === selection.characterId)
+        : undefined;
+  const currentBodyPartTarget =
+    selection.kind === "bodyPart" ? selection.bodyPartId : bodyPartTarget;
   const selectedBodyPart =
-    selectedCharacter && bodyPartTarget !== "character"
-      ? selectedCharacter.bodyParts.find((bodyPart) => bodyPart.id === bodyPartTarget)
+    selectedCharacter && currentBodyPartTarget !== "character"
+      ? selectedCharacter.bodyParts.find((bodyPart) => bodyPart.id === currentBodyPartTarget)
       : undefined;
 
   const tagTarget = useMemo<PromptTagTarget>(() => {
@@ -118,6 +161,27 @@ export function PromptTagPickerPanel() {
 
     return { kind: "scene" };
   }, [selectedBodyPart, selectedCharacter, selectedObject]);
+
+  function handleBodyPartTargetChange(nextTarget: BodyPartTargetValue) {
+    setBodyPartTarget(nextTarget);
+
+    if (!selectedCharacter) {
+      return;
+    }
+
+    if (nextTarget === "character") {
+      selectCharacter(selectedCharacter.id);
+      return;
+    }
+
+    selectBodyPart(selectedCharacter.id, nextTarget);
+  }
+
+  function updateTagWeightValue(tagId: string, value: number) {
+    updatePromptTag(tagTarget, tagId, {
+      weight: { value: Number.isFinite(value) ? value : 1 },
+    });
+  }
 
   const appliedTags = selectedObject
     ? selectedObject.promptTags
@@ -148,8 +212,10 @@ export function PromptTagPickerPanel() {
           {selectedCharacter ? (
             <select
               className="mt-2 h-8 w-full rounded-lg border border-slate-200 bg-white px-2 text-xs"
-              onChange={(event) => setBodyPartTarget(event.target.value as BodyPartTargetValue)}
-              value={bodyPartTarget}
+              onChange={(event) =>
+                handleBodyPartTargetChange(event.target.value as BodyPartTargetValue)
+              }
+              value={currentBodyPartTarget}
             >
               <option value="character">人物整体</option>
               {selectedCharacter.bodyParts.map((bodyPart) => (
@@ -162,24 +228,39 @@ export function PromptTagPickerPanel() {
         </div>
 
         <div>
-          <p className="mb-2 text-xs font-medium text-slate-500">点击添加到当前目标</p>
-          <div className="flex flex-wrap gap-2">
-            {promptLibrary.map((tag) => {
-              const applied = hasAppliedTag(appliedTags, tag);
+          <p className="mb-2 text-xs font-medium text-slate-500">点击选择或取消选择</p>
+          <div className="space-y-3">
+            {promptLibraryGroups.map((group) => (
+              <div key={group.category}>
+                <p className="mb-1.5 text-xs font-semibold text-slate-700">{group.label}</p>
+                <div className="flex flex-wrap gap-2">
+                  {group.tags.map((tag) => {
+                    const appliedTag = findAppliedTag(appliedTags, tag);
 
-              return (
-                <button
-                  className="rounded-full bg-slate-100 px-3 py-1 text-xs text-slate-700 hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-45"
-                  disabled={applied}
-                  key={tag.id}
-                  onClick={() => addPromptTag(tagTarget, tag)}
-                  title={tag.prompt}
-                  type="button"
-                >
-                  {tag.label}
-                </button>
-              );
-            })}
+                    return (
+                      <button
+                        aria-pressed={Boolean(appliedTag)}
+                        className={
+                          appliedTag
+                            ? "rounded-full bg-slate-950 px-3 py-1 text-xs text-white hover:bg-slate-800"
+                            : "rounded-full bg-slate-100 px-3 py-1 text-xs text-slate-700 hover:bg-slate-200"
+                        }
+                        key={tag.id}
+                        onClick={() =>
+                          appliedTag
+                            ? removePromptTag(tagTarget, appliedTag.id)
+                            : addPromptTag(tagTarget, tag)
+                        }
+                        title={tag.prompt}
+                        type="button"
+                      >
+                        {tag.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
           </div>
         </div>
 
@@ -189,21 +270,48 @@ export function PromptTagPickerPanel() {
             <div className="space-y-2">
               {appliedTags.map((tag) => (
                 <div
-                  className="flex items-start justify-between gap-2 rounded-xl border border-slate-200 p-2"
+                  className="rounded-xl border border-slate-200 p-2"
                   key={tag.id}
                 >
-                  <div>
-                    <p className="text-xs font-medium text-slate-950">{tag.label}</p>
-                    <p className="mt-0.5 text-xs leading-5 text-slate-500">{tag.prompt}</p>
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <p className="text-xs font-medium text-slate-950">{tag.label}</p>
+                      <p className="mt-0.5 text-xs leading-5 text-slate-500">{tag.prompt}</p>
+                    </div>
+                    <button
+                      aria-label={`删除 ${tag.label}`}
+                      className="rounded-full p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                      onClick={() => removePromptTag(tagTarget, tag.id)}
+                      type="button"
+                    >
+                      <X className="size-3.5" />
+                    </button>
                   </div>
-                  <button
-                    aria-label={`删除 ${tag.label}`}
-                    className="rounded-full p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
-                    onClick={() => removePromptTag(tagTarget, tag.id)}
-                    type="button"
-                  >
-                    <X className="size-3.5" />
-                  </button>
+                  <div className="mt-2 grid grid-cols-[auto_1fr] items-center gap-2 rounded-lg bg-slate-50 p-2">
+                    <label className="flex items-center gap-1.5 text-xs text-slate-600">
+                      <input
+                        checked={tag.weight.enabled}
+                        onChange={(event) =>
+                          updatePromptTag(tagTarget, tag.id, {
+                            weight: { enabled: event.target.checked },
+                          })
+                        }
+                        type="checkbox"
+                      />
+                      权重
+                    </label>
+                    <input
+                      aria-label={`${tag.label} 权重值`}
+                      className="w-full rounded-md border border-slate-200 px-2 py-1 text-xs text-slate-950 disabled:bg-slate-100 disabled:text-slate-400"
+                      disabled={!tag.weight.enabled}
+                      max={2}
+                      min={0.1}
+                      onChange={(event) => updateTagWeightValue(tag.id, event.target.valueAsNumber)}
+                      step={0.05}
+                      type="number"
+                      value={tag.weight.value}
+                    />
+                  </div>
                 </div>
               ))}
             </div>
