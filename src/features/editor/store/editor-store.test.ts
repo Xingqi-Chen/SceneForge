@@ -58,6 +58,60 @@ describe("editor store", () => {
     expect(objects[1]).toEqual(secondObject);
   });
 
+  it("duplicates, moves, and deletes the selected object", () => {
+    const initialObjects = useEditorStore.getState().project.scene.objects;
+    const selectedObject = initialObjects[0];
+
+    useEditorStore.getState().selectObject(selectedObject.id);
+    useEditorStore.getState().duplicateSelection();
+
+    const { project, selection } = useEditorStore.getState();
+    const duplicatedObject = project.scene.objects.at(-1);
+
+    expect(project.scene.objects).toHaveLength(initialObjects.length + 1);
+    expect(selection).toEqual({ kind: "object", id: duplicatedObject?.id });
+    expect(duplicatedObject).toMatchObject({
+      name: `${selectedObject.name} 副本`,
+      position: {
+        x: selectedObject.position.x + 32,
+        y: selectedObject.position.y + 32,
+      },
+    });
+    expect(duplicatedObject?.id).not.toBe(selectedObject.id);
+
+    useEditorStore.getState().moveSelectionBy({ x: 10, y: -5 });
+
+    expect(useEditorStore.getState().project.scene.objects.at(-1)?.position).toEqual({
+      x: selectedObject.position.x + 42,
+      y: selectedObject.position.y + 27,
+    });
+
+    useEditorStore.getState().deleteSelection();
+
+    expect(useEditorStore.getState().project.scene.objects).toHaveLength(initialObjects.length);
+    expect(useEditorStore.getState().selection).toEqual({ kind: "scene" });
+  });
+
+  it("moves the selected object forward and backward by swapping layers", () => {
+    const firstObject = useEditorStore.getState().project.scene.objects[0];
+    const secondObject = useEditorStore.getState().project.scene.objects[1];
+
+    useEditorStore.getState().selectObject(firstObject.id);
+    useEditorStore.getState().bringSelectionForward();
+
+    let objects = useEditorStore.getState().project.scene.objects;
+
+    expect(objects.find((object) => object.id === firstObject.id)?.layer).toBe(secondObject.layer);
+    expect(objects.find((object) => object.id === secondObject.id)?.layer).toBe(firstObject.layer);
+
+    useEditorStore.getState().sendSelectionBackward();
+
+    objects = useEditorStore.getState().project.scene.objects;
+
+    expect(objects.find((object) => object.id === firstObject.id)?.layer).toBe(firstObject.layer);
+    expect(objects.find((object) => object.id === secondObject.id)?.layer).toBe(secondObject.layer);
+  });
+
   it("updates scene and project settings", () => {
     useEditorStore.getState().updateScene({ description: "rainy cyberpunk street" });
     useEditorStore.getState().updateProjectSettings({
@@ -94,6 +148,41 @@ describe("editor store", () => {
       x: -96,
       y: 150,
     });
+  });
+
+  it("duplicates, moves, and deletes the selected character", () => {
+    const selectedCharacter = useEditorStore.getState().project.scene.characters[0];
+
+    useEditorStore.getState().selectCharacter(selectedCharacter.id);
+    useEditorStore.getState().duplicateSelection();
+
+    const duplicatedCharacter = useEditorStore.getState().project.scene.characters.at(-1);
+
+    expect(useEditorStore.getState().project.scene.characters).toHaveLength(2);
+    expect(useEditorStore.getState().selection).toEqual({
+      kind: "character",
+      id: duplicatedCharacter?.id,
+    });
+    expect(duplicatedCharacter).toMatchObject({
+      name: `${selectedCharacter.name} 副本`,
+      position: {
+        x: selectedCharacter.position.x + 48,
+        y: selectedCharacter.position.y + 24,
+      },
+    });
+    expect(duplicatedCharacter?.id).not.toBe(selectedCharacter.id);
+
+    useEditorStore.getState().moveSelectionBy({ x: -20, y: 10 });
+
+    expect(useEditorStore.getState().project.scene.characters.at(-1)?.position).toEqual({
+      x: selectedCharacter.position.x + 28,
+      y: selectedCharacter.position.y + 34,
+    });
+
+    useEditorStore.getState().deleteSelection();
+
+    expect(useEditorStore.getState().project.scene.characters).toHaveLength(1);
+    expect(useEditorStore.getState().selection).toEqual({ kind: "scene" });
   });
 
   it("adds and removes prompt tags on objects and body parts", () => {

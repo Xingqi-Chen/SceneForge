@@ -47,6 +47,11 @@ type EditorState = {
   updateProjectSettings: (patch: Partial<ProjectSettings>) => void;
   addObject: (input: AddSceneObjectInput) => void;
   updateObject: (id: string, patch: Partial<SceneObject>) => void;
+  deleteSelection: () => void;
+  duplicateSelection: () => void;
+  bringSelectionForward: () => void;
+  sendSelectionBackward: () => void;
+  moveSelectionBy: (delta: Vector2) => void;
   addCharacter: () => void;
   updateCharacter: (id: string, patch: Partial<CharacterSkeleton>) => void;
   updateCharacterJoint: (id: string, jointId: JointId, position: Vector2) => void;
@@ -117,6 +122,48 @@ function createCharacter(layerOffset: number): CharacterSkeleton {
   };
 }
 
+function getNextLayer(objects: SceneObject[]) {
+  return Math.max(0, ...objects.map((object) => object.layer)) + 1;
+}
+
+function cloneSceneObject(object: SceneObject): SceneObject {
+  return {
+    ...object,
+    id: createId("object"),
+    name: `${object.name} 副本`,
+    position: {
+      x: object.position.x + 32,
+      y: object.position.y + 32,
+    },
+    size: { ...object.size },
+    weight: { ...object.weight },
+    promptTags: object.promptTags.map(clonePromptTag),
+  };
+}
+
+function cloneCharacterSkeleton(character: CharacterSkeleton): CharacterSkeleton {
+  return {
+    ...character,
+    id: createId("character"),
+    name: `${character.name} 副本`,
+    position: {
+      x: character.position.x + 48,
+      y: character.position.y + 24,
+    },
+    joints: Object.fromEntries(
+      Object.entries(character.joints).map(([jointId, position]) => [
+        jointId,
+        { ...position },
+      ]),
+    ) as CharacterSkeleton["joints"],
+    bodyParts: character.bodyParts.map((bodyPart) => ({
+      ...bodyPart,
+      promptTags: bodyPart.promptTags.map(clonePromptTag),
+    })),
+    promptTags: character.promptTags.map(clonePromptTag),
+  };
+}
+
 export const useEditorStore = create<EditorState>((set) => ({
   project: createDefaultProject(),
   selection: { kind: "scene" },
@@ -147,8 +194,7 @@ export const useEditorStore = create<EditorState>((set) => ({
     })),
   addObject: ({ kind, name, description = "", fill = "#e2e8f0" }) =>
     set((state) => {
-      const nextLayer =
-        Math.max(0, ...state.project.scene.objects.map((object) => object.layer)) + 1;
+      const nextLayer = getNextLayer(state.project.scene.objects);
       const object: SceneObject = {
         id: createId("object"),
         kind,
@@ -187,6 +233,267 @@ export const useEditorStore = create<EditorState>((set) => ({
         },
       }),
     })),
+  deleteSelection: () =>
+    set((state) => {
+      if (state.selection.kind === "object") {
+        const selectionId = state.selection.id;
+        const objects = state.project.scene.objects.filter(
+          (object) => object.id !== selectionId,
+        );
+
+        if (objects.length === state.project.scene.objects.length) {
+          return state;
+        }
+
+        return {
+          project: touchProject({
+            ...state.project,
+            scene: {
+              ...state.project.scene,
+              objects,
+            },
+          }),
+          selection: { kind: "scene" },
+        };
+      }
+
+      if (state.selection.kind === "character") {
+        const selectionId = state.selection.id;
+        const characters = state.project.scene.characters.filter(
+          (character) => character.id !== selectionId,
+        );
+
+        if (characters.length === state.project.scene.characters.length) {
+          return state;
+        }
+
+        return {
+          project: touchProject({
+            ...state.project,
+            scene: {
+              ...state.project.scene,
+              characters,
+            },
+          }),
+          selection: { kind: "scene" },
+        };
+      }
+
+      return state;
+    }),
+  duplicateSelection: () =>
+    set((state) => {
+      if (state.selection.kind === "object") {
+        const selectionId = state.selection.id;
+        const selectedObject = state.project.scene.objects.find(
+          (object) => object.id === selectionId,
+        );
+
+        if (!selectedObject) {
+          return state;
+        }
+
+        const object = {
+          ...cloneSceneObject(selectedObject),
+          layer: getNextLayer(state.project.scene.objects),
+        };
+
+        return {
+          project: touchProject({
+            ...state.project,
+            scene: {
+              ...state.project.scene,
+              objects: [...state.project.scene.objects, object],
+            },
+          }),
+          selection: { kind: "object", id: object.id },
+        };
+      }
+
+      if (state.selection.kind === "character") {
+        const selectionId = state.selection.id;
+        const selectedCharacter = state.project.scene.characters.find(
+          (character) => character.id === selectionId,
+        );
+
+        if (!selectedCharacter) {
+          return state;
+        }
+
+        const character = cloneCharacterSkeleton(selectedCharacter);
+
+        return {
+          project: touchProject({
+            ...state.project,
+            scene: {
+              ...state.project.scene,
+              characters: [...state.project.scene.characters, character],
+            },
+          }),
+          selection: { kind: "character", id: character.id },
+        };
+      }
+
+      return state;
+    }),
+  bringSelectionForward: () =>
+    set((state) => {
+      if (state.selection.kind !== "object") {
+        return state;
+      }
+
+      const selectionId = state.selection.id;
+      const selectedObject = state.project.scene.objects.find(
+        (object) => object.id === selectionId,
+      );
+
+      if (!selectedObject) {
+        return state;
+      }
+
+      const nextObject = state.project.scene.objects
+        .filter((object) => object.layer > selectedObject.layer)
+        .sort((left, right) => left.layer - right.layer)[0];
+
+      if (!nextObject) {
+        return state;
+      }
+
+      return {
+        project: touchProject({
+          ...state.project,
+          scene: {
+            ...state.project.scene,
+            objects: state.project.scene.objects.map((object) => {
+              if (object.id === selectedObject.id) {
+                return { ...object, layer: nextObject.layer };
+              }
+
+              if (object.id === nextObject.id) {
+                return { ...object, layer: selectedObject.layer };
+              }
+
+              return object;
+            }),
+          },
+        }),
+      };
+    }),
+  sendSelectionBackward: () =>
+    set((state) => {
+      if (state.selection.kind !== "object") {
+        return state;
+      }
+
+      const selectionId = state.selection.id;
+      const selectedObject = state.project.scene.objects.find(
+        (object) => object.id === selectionId,
+      );
+
+      if (!selectedObject) {
+        return state;
+      }
+
+      const previousObject = state.project.scene.objects
+        .filter((object) => object.layer < selectedObject.layer)
+        .sort((left, right) => right.layer - left.layer)[0];
+
+      if (!previousObject) {
+        return state;
+      }
+
+      return {
+        project: touchProject({
+          ...state.project,
+          scene: {
+            ...state.project.scene,
+            objects: state.project.scene.objects.map((object) => {
+              if (object.id === selectedObject.id) {
+                return { ...object, layer: previousObject.layer };
+              }
+
+              if (object.id === previousObject.id) {
+                return { ...object, layer: selectedObject.layer };
+              }
+
+              return object;
+            }),
+          },
+        }),
+      };
+    }),
+  moveSelectionBy: (delta) =>
+    set((state) => {
+      if (state.selection.kind === "object") {
+        const selectionId = state.selection.id;
+        let moved = false;
+        const objects = state.project.scene.objects.map((object) => {
+          if (object.id !== selectionId) {
+            return object;
+          }
+
+          moved = true;
+
+          return {
+            ...object,
+            position: {
+              x: object.position.x + delta.x,
+              y: object.position.y + delta.y,
+            },
+          };
+        });
+
+        if (!moved) {
+          return state;
+        }
+
+        return {
+          project: touchProject({
+            ...state.project,
+            scene: {
+              ...state.project.scene,
+              objects,
+            },
+          }),
+        };
+      }
+
+      if (state.selection.kind === "character") {
+        const selectionId = state.selection.id;
+        let moved = false;
+        const characters = state.project.scene.characters.map((character) => {
+          if (character.id !== selectionId) {
+            return character;
+          }
+
+          moved = true;
+
+          return {
+            ...character,
+            position: {
+              x: character.position.x + delta.x,
+              y: character.position.y + delta.y,
+            },
+          };
+        });
+
+        if (!moved) {
+          return state;
+        }
+
+        return {
+          project: touchProject({
+            ...state.project,
+            scene: {
+              ...state.project.scene,
+              characters,
+            },
+          }),
+        };
+      }
+
+      return state;
+    }),
   addCharacter: () =>
     set((state) => {
       const character = createCharacter(state.project.scene.characters.length);
