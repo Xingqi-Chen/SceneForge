@@ -73,17 +73,20 @@ export function ObjectPropertiesPanel() {
   }
 
   return (
-    <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-      <div className="mb-3 flex items-center gap-2">
-        <MousePointer2 className="size-4 text-slate-500" />
-        <h2 className="text-sm font-semibold text-slate-950">对象属性</h2>
+    <section className="flex flex-col">
+      <div className="mb-4 flex items-center gap-2.5 border-b border-slate-100 pb-3 shrink-0">
+        <div className="rounded-lg bg-orange-50 p-1.5 text-orange-600">
+          <MousePointer2 className="size-4" />
+        </div>
+        <h2 className="text-[15px] font-semibold text-slate-800">对象属性</h2>
       </div>
-      {selectedObject ? (
+      <div className="overflow-y-auto pr-1 custom-scrollbar">
+        {selectedObject ? (
         <div className="space-y-4 text-sm">
           <div className="space-y-1.5">
             <FieldLabel>名称</FieldLabel>
             <input
-              className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-950 outline-none focus:border-slate-400"
+              className="w-full rounded-xl border border-slate-200/80 bg-slate-50/50 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition-all focus:border-blue-400 focus:bg-white focus:ring-4 focus:ring-blue-400/10"
               onChange={(event) => updateSelectedObject({ name: event.target.value })}
               value={selectedObject.name}
             />
@@ -91,16 +94,16 @@ export function ObjectPropertiesPanel() {
           <div className="space-y-1.5">
             <FieldLabel>场景描述</FieldLabel>
             <textarea
-              className="min-h-20 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm leading-5 text-slate-950 outline-none focus:border-slate-400"
+              className="min-h-[80px] w-full resize-none rounded-xl border border-slate-200/80 bg-slate-50/50 px-3 py-2 text-sm leading-relaxed text-slate-900 shadow-sm outline-none transition-all focus:border-blue-400 focus:bg-white focus:ring-4 focus:ring-blue-400/10"
               onChange={(event) => updateSelectedObject({ description: event.target.value })}
               value={selectedObject.description}
             />
           </div>
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
               <FieldLabel>X</FieldLabel>
               <input
-                className="w-full rounded-lg border border-slate-200 px-2 py-1.5 text-sm"
+                className="w-full rounded-xl border border-slate-200/80 bg-slate-50/50 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition-all focus:border-blue-400 focus:bg-white focus:ring-4 focus:ring-blue-400/10"
                 onChange={(event) =>
                   updateSelectedObject({
                     position: { ...selectedObject.position, x: getNumber(event) },
@@ -113,7 +116,7 @@ export function ObjectPropertiesPanel() {
             <div className="space-y-1.5">
               <FieldLabel>Y</FieldLabel>
               <input
-                className="w-full rounded-lg border border-slate-200 px-2 py-1.5 text-sm"
+                className="w-full rounded-xl border border-slate-200/80 bg-slate-50/50 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition-all focus:border-blue-400 focus:bg-white focus:ring-4 focus:ring-blue-400/10"
                 onChange={(event) =>
                   updateSelectedObject({
                     position: { ...selectedObject.position, y: getNumber(event) },
@@ -126,7 +129,7 @@ export function ObjectPropertiesPanel() {
             <div className="space-y-1.5">
               <FieldLabel>宽度</FieldLabel>
               <input
-                className="w-full rounded-lg border border-slate-200 px-2 py-1.5 text-sm"
+                className="w-full rounded-xl border border-slate-200/80 bg-slate-50/50 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition-all focus:border-blue-400 focus:bg-white focus:ring-4 focus:ring-blue-400/10"
                 min={16}
                 onChange={(event) =>
                   updateSelectedObject({
@@ -140,7 +143,7 @@ export function ObjectPropertiesPanel() {
             <div className="space-y-1.5">
               <FieldLabel>高度</FieldLabel>
               <input
-                className="w-full rounded-lg border border-slate-200 px-2 py-1.5 text-sm"
+                className="w-full rounded-xl border border-slate-200/80 bg-slate-50/50 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition-all focus:border-blue-400 focus:bg-white focus:ring-4 focus:ring-blue-400/10"
                 min={16}
                 onChange={(event) =>
                   updateSelectedObject({
@@ -154,7 +157,7 @@ export function ObjectPropertiesPanel() {
             <div className="space-y-1.5">
               <FieldLabel>旋转</FieldLabel>
               <input
-                className="w-full rounded-lg border border-slate-200 px-2 py-1.5 text-sm"
+                className="w-full rounded-xl border border-slate-200/80 bg-slate-50/50 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition-all focus:border-blue-400 focus:bg-white focus:ring-4 focus:ring-blue-400/10"
                 onChange={(event) => updateSelectedObject({ rotation: getNumber(event) })}
                 type="number"
                 value={selectedObject.rotation}
@@ -163,7 +166,7 @@ export function ObjectPropertiesPanel() {
             <div className="space-y-1.5">
               <FieldLabel>层级</FieldLabel>
               <input
-                className="w-full rounded-lg border border-slate-200 px-2 py-1.5 text-sm"
+                className="w-full rounded-xl border border-slate-200/80 bg-slate-50/50 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition-all focus:border-blue-400 focus:bg-white focus:ring-4 focus:ring-blue-400/10"
                 onChange={(event) => updateSelectedObject({ layer: getNumber(event) })}
                 type="number"
                 value={selectedObject.layer}
@@ -173,16 +176,19 @@ export function ObjectPropertiesPanel() {
           <div className="grid grid-cols-[1fr_auto] items-end gap-3">
             <div className="space-y-1.5">
               <FieldLabel>颜色</FieldLabel>
-              <input
-                className="h-10 w-full rounded-lg border border-slate-200 bg-white px-2"
-                onChange={(event) => updateSelectedObject({ fill: event.target.value })}
-                type="color"
-                value={selectedObject.fill}
-              />
+              <div className="relative overflow-hidden rounded-xl border border-slate-200/80 shadow-sm transition-all focus-within:border-blue-400 focus-within:ring-4 focus-within:ring-blue-400/10 hover:border-slate-300">
+                <input
+                  className="h-10 w-full cursor-pointer bg-transparent"
+                  onChange={(event) => updateSelectedObject({ fill: event.target.value })}
+                  type="color"
+                  value={selectedObject.fill}
+                />
+              </div>
             </div>
-            <label className="flex h-10 items-center gap-2 rounded-lg border border-slate-200 px-3 text-xs text-slate-600">
+            <label className="flex h-10 cursor-pointer items-center gap-2 rounded-xl border border-slate-200/80 bg-slate-50/50 px-4 text-xs font-medium text-slate-700 shadow-sm transition-all hover:bg-white hover:shadow">
               <input
                 checked={selectedObject.includeInPrompt}
+                className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
                 onChange={(event) =>
                   updateSelectedObject({ includeInPrompt: event.target.checked })
                 }
@@ -191,10 +197,11 @@ export function ObjectPropertiesPanel() {
               参与 Prompt
             </label>
           </div>
-          <div className="grid grid-cols-[auto_1fr] items-center gap-3 rounded-xl bg-slate-50 p-3">
-            <label className="flex items-center gap-2 text-xs text-slate-600">
+          <div className="grid grid-cols-[auto_1fr] items-center gap-3 rounded-2xl border border-slate-200/60 bg-slate-50/80 p-3.5 shadow-inner">
+            <label className="flex cursor-pointer items-center gap-2 text-xs font-medium text-slate-700">
               <input
                 checked={selectedObject.weight.enabled}
+                className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
                 onChange={(event) =>
                   updateSelectedObject({
                     weight: { ...selectedObject.weight, enabled: event.target.checked },
@@ -205,7 +212,8 @@ export function ObjectPropertiesPanel() {
               启用权重
             </label>
             <input
-              className="w-full rounded-lg border border-slate-200 px-2 py-1.5 text-sm"
+              className="w-full rounded-xl border border-slate-200/80 bg-white px-3 py-1.5 text-sm text-slate-900 shadow-sm outline-none transition-all focus:border-blue-400 focus:ring-4 focus:ring-blue-400/10 disabled:opacity-50"
+              disabled={!selectedObject.weight.enabled}
               max={2}
               min={0.1}
               onChange={(event) =>
@@ -222,14 +230,15 @@ export function ObjectPropertiesPanel() {
       ) : selectedCharacter ? (
         <div className="space-y-4 text-sm">
           {selectedBodyPart ? (
-            <div className="rounded-xl bg-blue-50 p-3 text-xs text-blue-700">
+            <div className="flex items-center gap-2 rounded-xl border border-blue-100 bg-blue-50 p-3 text-xs font-medium text-blue-700 shadow-inner">
+              <div className="h-1.5 w-1.5 rounded-full bg-blue-500" />
               当前部位：{selectedBodyPart.label}
             </div>
           ) : null}
           <div className="space-y-1.5">
             <FieldLabel>人物名称</FieldLabel>
             <input
-              className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-950 outline-none focus:border-slate-400"
+              className="w-full rounded-xl border border-slate-200/80 bg-slate-50/50 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition-all focus:border-blue-400 focus:bg-white focus:ring-4 focus:ring-blue-400/10"
               onChange={(event) => updateSelectedCharacter({ name: event.target.value })}
               value={selectedCharacter.name}
             />
@@ -237,16 +246,16 @@ export function ObjectPropertiesPanel() {
           <div className="space-y-1.5">
             <FieldLabel>人物描述</FieldLabel>
             <textarea
-              className="min-h-20 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm leading-5 text-slate-950 outline-none focus:border-slate-400"
+              className="min-h-[80px] w-full resize-none rounded-xl border border-slate-200/80 bg-slate-50/50 px-3 py-2 text-sm leading-relaxed text-slate-900 shadow-sm outline-none transition-all focus:border-blue-400 focus:bg-white focus:ring-4 focus:ring-blue-400/10"
               onChange={(event) => updateSelectedCharacter({ description: event.target.value })}
               value={selectedCharacter.description}
             />
           </div>
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
               <FieldLabel>X</FieldLabel>
               <input
-                className="w-full rounded-lg border border-slate-200 px-2 py-1.5 text-sm"
+                className="w-full rounded-xl border border-slate-200/80 bg-slate-50/50 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition-all focus:border-blue-400 focus:bg-white focus:ring-4 focus:ring-blue-400/10"
                 onChange={(event) =>
                   updateSelectedCharacter({
                     position: { ...selectedCharacter.position, x: getNumber(event) },
@@ -259,7 +268,7 @@ export function ObjectPropertiesPanel() {
             <div className="space-y-1.5">
               <FieldLabel>Y</FieldLabel>
               <input
-                className="w-full rounded-lg border border-slate-200 px-2 py-1.5 text-sm"
+                className="w-full rounded-xl border border-slate-200/80 bg-slate-50/50 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition-all focus:border-blue-400 focus:bg-white focus:ring-4 focus:ring-blue-400/10"
                 onChange={(event) =>
                   updateSelectedCharacter({
                     position: { ...selectedCharacter.position, y: getNumber(event) },
@@ -270,9 +279,10 @@ export function ObjectPropertiesPanel() {
               />
             </div>
           </div>
-          <label className="flex h-10 items-center gap-2 rounded-lg border border-slate-200 px-3 text-xs text-slate-600">
+          <label className="flex h-10 cursor-pointer items-center gap-2 rounded-xl border border-slate-200/80 bg-slate-50/50 px-4 text-xs font-medium text-slate-700 shadow-sm transition-all hover:bg-white hover:shadow">
             <input
               checked={selectedCharacter.includeInPrompt}
+              className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
               onChange={(event) =>
                 updateSelectedCharacter({ includeInPrompt: event.target.checked })
               }
@@ -286,7 +296,7 @@ export function ObjectPropertiesPanel() {
           <div className="space-y-1.5">
             <FieldLabel>场景名称</FieldLabel>
             <input
-              className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-950 outline-none focus:border-slate-400"
+              className="w-full rounded-xl border border-slate-200/80 bg-slate-50/50 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition-all focus:border-blue-400 focus:bg-white focus:ring-4 focus:ring-blue-400/10"
               onChange={(event) => updateScene({ name: event.target.value })}
               value={project.scene.name}
             />
@@ -294,16 +304,16 @@ export function ObjectPropertiesPanel() {
           <div className="space-y-1.5">
             <FieldLabel>场景描述</FieldLabel>
             <textarea
-              className="min-h-20 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm leading-5 text-slate-950 outline-none focus:border-slate-400"
+              className="min-h-[80px] w-full resize-none rounded-xl border border-slate-200/80 bg-slate-50/50 px-3 py-2 text-sm leading-relaxed text-slate-900 shadow-sm outline-none transition-all focus:border-blue-400 focus:bg-white focus:ring-4 focus:ring-blue-400/10"
               onChange={(event) => updateScene({ description: event.target.value })}
               value={project.scene.description}
             />
           </div>
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
               <FieldLabel>画布比例</FieldLabel>
               <select
-                className="h-9 w-full rounded-lg border border-slate-200 px-2 text-sm"
+                className="h-10 w-full rounded-xl border border-slate-200/80 bg-slate-50/50 px-3 text-sm text-slate-900 shadow-sm outline-none transition-all focus:border-blue-400 focus:bg-white focus:ring-4 focus:ring-blue-400/10"
                 onChange={(event) => handleAspectRatioChange(event.target.value as CanvasAspectRatio)}
                 value={project.scene.canvas.aspectRatio}
               >
@@ -315,22 +325,24 @@ export function ObjectPropertiesPanel() {
             </div>
             <div className="space-y-1.5">
               <FieldLabel>背景色</FieldLabel>
-              <input
-                className="h-9 w-full rounded-lg border border-slate-200 bg-white px-2"
-                onChange={(event) =>
-                  updateScene({
-                    canvas: { ...project.scene.canvas, background: event.target.value },
-                  })
-                }
-                type="color"
-                value={project.scene.canvas.background}
-              />
+              <div className="relative overflow-hidden rounded-xl border border-slate-200/80 shadow-sm transition-all focus-within:border-blue-400 focus-within:ring-4 focus-within:ring-blue-400/10 hover:border-slate-300">
+                <input
+                  className="h-10 w-full cursor-pointer bg-transparent"
+                  onChange={(event) =>
+                    updateScene({
+                      canvas: { ...project.scene.canvas, background: event.target.value },
+                    })
+                  }
+                  type="color"
+                  value={project.scene.canvas.background}
+                />
+              </div>
             </div>
           </div>
           <div className="space-y-1.5">
             <FieldLabel>Prompt 格式</FieldLabel>
             <select
-              className="h-9 w-full rounded-lg border border-slate-200 px-2 text-sm"
+              className="h-10 w-full rounded-xl border border-slate-200/80 bg-slate-50/50 px-3 text-sm text-slate-900 shadow-sm outline-none transition-all focus:border-blue-400 focus:bg-white focus:ring-4 focus:ring-blue-400/10"
               onChange={(event) =>
                 updateProjectSettings({ modelFormat: event.target.value as PromptModelFormat })
               }
@@ -341,9 +353,10 @@ export function ObjectPropertiesPanel() {
               <option value="midjourney">Midjourney</option>
             </select>
           </div>
-          <label className="flex h-10 items-center gap-2 rounded-lg border border-slate-200 px-3 text-xs text-slate-600">
+          <label className="flex h-10 cursor-pointer items-center gap-2 rounded-xl border border-slate-200/80 bg-slate-50/50 px-4 text-xs font-medium text-slate-700 shadow-sm transition-all hover:bg-white hover:shadow">
             <input
               checked={project.settings.includeSpatialHints}
+              className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
               onChange={(event) =>
                 updateProjectSettings({ includeSpatialHints: event.target.checked })
               }
@@ -354,13 +367,14 @@ export function ObjectPropertiesPanel() {
           <div className="space-y-1.5">
             <FieldLabel>负面提示词</FieldLabel>
             <textarea
-              className="min-h-16 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm leading-5 text-slate-950 outline-none focus:border-slate-400"
+              className="min-h-[80px] w-full resize-none rounded-xl border border-slate-200/80 bg-slate-50/50 px-3 py-2 text-sm leading-relaxed text-slate-900 shadow-sm outline-none transition-all focus:border-blue-400 focus:bg-white focus:ring-4 focus:ring-blue-400/10"
               onChange={(event) => updateProjectSettings({ negativePrompt: event.target.value })}
               value={project.settings.negativePrompt}
             />
           </div>
         </div>
       )}
+      </div>
     </section>
   );
 }

@@ -173,12 +173,14 @@ function CharacterNode({
   panMode,
   selected,
   selectedBodyPartId,
+  transformRef,
 }: {
   character: CharacterSkeleton;
   onContextMenu: (event: KonvaEventObject<MouseEvent>) => void;
   panMode: boolean;
   selected: boolean;
   selectedBodyPartId?: BodyPartId;
+  transformRef?: Ref<KonvaGroup>;
 }) {
   const selectCharacter = useEditorStore((state) => state.selectCharacter);
   const selectBodyPart = useEditorStore((state) => state.selectBodyPart);
@@ -231,6 +233,21 @@ function CharacterNode({
     });
   }
 
+  function handleTransformEnd(event: KonvaEventObject<Event>) {
+    const node = event.target;
+    const scaleX = node.scaleX();
+    const scaleY = node.scaleY();
+
+    updateCharacter(character.id, {
+      position: {
+        x: Math.round(node.x()),
+        y: Math.round(node.y()),
+      },
+      scaleX,
+      scaleY,
+    });
+  }
+
   function handleJointDrag(jointId: JointId, event: KonvaEventObject<DragEvent>) {
     if (panMode) {
       return;
@@ -238,11 +255,15 @@ function CharacterNode({
 
     event.cancelBubble = true;
     selectCharacter(character.id);
+    
     updateCharacterJoint(character.id, jointId, {
       x: Math.round(event.target.x()),
       y: Math.round(event.target.y()),
     });
   }
+
+  const maxY = Math.max(...Object.values(character.joints).map((j) => j.y));
+  const labelY = maxY + 40;
 
   return (
     <Group
@@ -252,8 +273,12 @@ function CharacterNode({
       onContextMenu={onContextMenu}
       onDragEnd={handleDragEnd}
       onTap={handleSelect}
+      onTransformEnd={handleTransformEnd}
+      ref={transformRef}
       x={character.position.x}
       y={character.position.y}
+      scaleX={character.scaleX ?? 1}
+      scaleY={character.scaleY ?? 1}
     >
       {skeletonBodyPartSegments.map(([bodyPartId, from, to]) => {
         const selectedPart = selectedBodyPartId === bodyPartId;
@@ -272,6 +297,7 @@ function CharacterNode({
             ]}
             stroke={selectedPart ? "#2563eb" : stroke}
             strokeWidth={selectedPart ? 11 : selected ? 9 : 7}
+            strokeScaleEnabled={false}
           />
         );
       })}
@@ -282,6 +308,7 @@ function CharacterNode({
         onTap={(event) => handleBodyPartSelect("head", event)}
         stroke={selectedBodyPartId === "head" ? "#2563eb" : stroke}
         strokeWidth={selectedBodyPartId === "head" ? 7 : selected ? 6 : 4}
+        strokeScaleEnabled={false}
         x={character.joints.neck.x}
         y={character.joints.neck.y - 34}
       />
@@ -301,6 +328,7 @@ function CharacterNode({
             radius={selectedPart ? 8 : 7}
             stroke={selectedPart ? "#2563eb" : stroke}
             strokeWidth={3}
+            strokeScaleEnabled={false}
             x={position.x}
             y={position.y}
           />
@@ -313,7 +341,7 @@ function CharacterNode({
         offsetX={60}
         width={120}
         x={0}
-        y={340}
+        y={labelY}
       />
       <Text
         align="center"
@@ -325,7 +353,7 @@ function CharacterNode({
         verticalAlign="middle"
         width={120}
         x={0}
-        y={340}
+        y={labelY}
       />
     </Group>
   );
@@ -340,9 +368,10 @@ export function CanvasStage({
 }: CanvasStageProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const selectedObjectRef = useRef<KonvaGroup>(null);
+  const selectedCharacterRef = useRef<KonvaGroup>(null);
   const transformerRef = useRef<KonvaTransformer>(null);
   const lastPanPoint = useRef<Vector2 | null>(null);
-  const [containerWidth, setContainerWidth] = useState(0);
+  const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
   const [contextMenu, setContextMenu] = useState<CanvasContextMenu | null>(null);
   const [panning, setPanning] = useState(false);
   const {
@@ -356,7 +385,14 @@ export function CanvasStage({
     sendSelectionBackward,
   } = useEditorStore();
   const { canvas, objects, characters } = project.scene;
-  const baseScale = containerWidth > 0 ? Math.min((containerWidth - 32) / canvas.width, 1) : 0.6;
+  const baseScale =
+    containerSize.width > 0 && containerSize.height > 0
+      ? Math.min(
+          (containerSize.width - 32) / canvas.width,
+          (containerSize.height - 32) / canvas.height,
+          1,
+        )
+      : 0.6;
   const stageScale = baseScale * zoom;
   const stageWidth = canvas.width * stageScale;
   const stageHeight = canvas.height * stageScale;
@@ -373,7 +409,10 @@ export function CanvasStage({
     }
 
     const observer = new ResizeObserver(([entry]) => {
-      setContainerWidth(entry.contentRect.width);
+      setContainerSize({
+        width: entry.contentRect.width,
+        height: entry.contentRect.height,
+      });
     });
 
     observer.observe(container);
@@ -396,9 +435,15 @@ export function CanvasStage({
       return;
     }
 
+    if ((selection.kind === "character" || selection.kind === "bodyPart") && selectedCharacterRef.current) {
+      transformer.nodes([selectedCharacterRef.current]);
+      transformer.getLayer()?.batchDraw();
+      return;
+    }
+
     transformer.nodes([]);
     transformer.getLayer()?.batchDraw();
-  }, [selection, sortedObjects]);
+  }, [selection, sortedObjects, characters]);
 
   function handleStagePointer(event: KonvaEventObject<MouseEvent | TouchEvent>) {
     if (panMode) {
@@ -457,8 +502,10 @@ export function CanvasStage({
   }
 
   function handleWheel(event: ReactWheelEvent<HTMLDivElement>) {
-    event.preventDefault();
-    onZoomChange(zoom + (event.deltaY > 0 ? -0.1 : 0.1));
+    if (event.ctrlKey || event.metaKey) {
+      event.preventDefault();
+      onZoomChange(zoom + (event.deltaY > 0 ? -0.1 : 0.1));
+    }
   }
 
   function startPan(event: ReactMouseEvent<HTMLDivElement>) {
@@ -496,7 +543,7 @@ export function CanvasStage({
 
   return (
     <div
-      className={`relative flex flex-1 items-center justify-center overflow-hidden rounded-2xl border border-slate-200 bg-white p-4 ${
+      className={`relative flex flex-1 items-center justify-center overflow-hidden w-full h-full p-4 ${
         panMode || panning ? "cursor-grab" : "cursor-default"
       }`}
       onContextMenu={(event) => event.preventDefault()}
@@ -554,30 +601,34 @@ export function CanvasStage({
                 />
               );
             })}
-            {characters.map((character) => (
-              <CharacterNode
-                character={character}
-                key={character.id}
-                onContextMenu={(event) => handleCharacterContextMenu(character.id, event)}
-                panMode={panMode}
-                selected={
-                  (selection.kind === "character" && selection.id === character.id) ||
-                  (selection.kind === "bodyPart" && selection.characterId === character.id)
-                }
-                selectedBodyPartId={
-                  selection.kind === "bodyPart" && selection.characterId === character.id
-                    ? selection.bodyPartId
-                    : undefined
-                }
-              />
-            ))}
+            {characters.map((character) => {
+              const selected =
+                (selection.kind === "character" && selection.id === character.id) ||
+                (selection.kind === "bodyPart" && selection.characterId === character.id);
+
+              return (
+                <CharacterNode
+                  character={character}
+                  key={character.id}
+                  onContextMenu={(event) => handleCharacterContextMenu(character.id, event)}
+                  panMode={panMode}
+                  selected={selected}
+                  selectedBodyPartId={
+                    selection.kind === "bodyPart" && selection.characterId === character.id
+                      ? selection.bodyPartId
+                      : undefined
+                  }
+                  transformRef={selected ? selectedCharacterRef : undefined}
+                />
+              );
+            })}
             <Transformer
               boundBoxFunc={(oldBox, newBox) =>
                 newBox.width < 16 || newBox.height < 16 ? oldBox : newBox
               }
               flipEnabled={false}
               ref={transformerRef}
-              rotateEnabled
+              rotateEnabled={selection.kind === "object"}
             />
           </Layer>
         </Stage>

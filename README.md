@@ -16,6 +16,20 @@ bun dev
 
 Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
 
+## LLM API
+
+SceneForge exposes a server-side LiteLLM chat endpoint at `POST /api/llm/chat`. It is intentionally not connected to any editor workflow yet.
+
+Configure the LiteLLM proxy with server-only environment variables:
+
+```bash
+LITELLM_BASE_URL=http://localhost:4000
+LITELLM_API_KEY=your-litellm-proxy-key
+LITELLM_DEFAULT_MODEL=your-model-name
+```
+
+The endpoint accepts `model`, `messages`, `temperature`, and `maxTokens`, then forwards the request to LiteLLM's OpenAI-compatible `/v1/chat/completions` API.
+
 You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
 
 This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.

@@ -105,6 +105,8 @@ export type CharacterSkeleton = {
   name: string;
   description: string;
   position: Vector2;
+  scaleX?: number;
+  scaleY?: number;
   joints: Record<JointId, Vector2>;
   bodyParts: CharacterBodyPart[];
   promptTags: PromptTag[];

@@ -18,7 +18,7 @@ const CanvasStage = dynamic<CanvasStageProps>(
   () => import("./CanvasStage").then((module) => module.CanvasStage),
   {
     loading: () => (
-      <div className="flex min-h-[420px] flex-1 items-center justify-center rounded-2xl border border-slate-200 bg-white text-sm text-slate-500">
+      <div className="flex min-h-[420px] flex-1 items-center justify-center text-sm text-slate-500">
         正在加载 2D 画布...
       </div>
     ),
@@ -124,7 +124,7 @@ export function CanvasViewport() {
 
   return (
     <section
-      className="flex min-h-[560px] flex-1 flex-col rounded-3xl border border-slate-200 bg-slate-100 p-4 shadow-sm outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
+      className="flex h-[calc(100vh-48px)] min-h-[640px] flex-1 flex-col rounded-3xl border border-slate-200/60 bg-white/80 p-5 shadow-sm backdrop-blur-xl outline-none transition-all focus-visible:ring-2 focus-visible:ring-blue-400/50 hover:shadow-md lg:sticky lg:top-6"
       onBlur={() => setSpacePressed(false)}
       onKeyDown={handleKeyDown}
       onKeyUp={handleKeyUp}
@@ -132,23 +132,35 @@ export function CanvasViewport() {
       ref={viewportRef}
       tabIndex={0}
     >
-      <div className="mb-4 flex flex-col justify-between gap-3 xl:flex-row xl:items-center">
-        <div>
-          <p className="text-xs font-medium uppercase tracking-[0.2em] text-slate-500">2D Canvas</p>
-          <h2 className="text-lg font-semibold text-slate-950">{project.scene.name}</h2>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="rounded-full bg-white px-3 py-1 text-xs text-slate-500">
-            {project.scene.canvas.aspectRatio} · {project.scene.canvas.width}x
-            {project.scene.canvas.height} · {Math.round(zoom * 100)}%
+      <div className="mb-5 flex flex-col justify-between gap-4 border-b border-slate-100 pb-4 xl:flex-row xl:items-center shrink-0 w-full">
+        <div className="flex items-center gap-3 shrink-0">
+          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-indigo-50 text-indigo-600 shadow-inner">
+            <BringToFront className="size-5" />
           </div>
-          <div className="flex flex-wrap gap-2">
+          <div>
+            <p className="text-[11px] font-bold uppercase tracking-[0.2em] text-indigo-500/80">2D Canvas</p>
+            <h2 className="text-base font-bold text-slate-800 whitespace-nowrap">{project.scene.name}</h2>
+          </div>
+        </div>
+        <div className="flex flex-wrap items-center gap-3 shrink-0">
+          <div className="flex items-center gap-2 rounded-xl border border-slate-200/80 bg-slate-50/80 px-3 py-1.5 text-xs font-medium text-slate-600 shadow-sm shrink-0 whitespace-nowrap">
+            <span className="flex items-center gap-1.5">
+              <span className="inline-block h-1.5 w-1.5 rounded-full bg-slate-400" />
+              {project.scene.canvas.aspectRatio}
+            </span>
+            <span className="text-slate-300">|</span>
+            <span>{project.scene.canvas.width} × {project.scene.canvas.height}</span>
+            <span className="text-slate-300">|</span>
+            <span className="text-blue-600 w-8 text-right">{Math.round(zoom * 100)}%</span>
+          </div>
+          <div className="flex flex-wrap items-center gap-1.5 rounded-xl border border-slate-200/80 bg-slate-50/50 p-1 shadow-sm shrink-0">
             <Button
               aria-label="缩小画布"
               onClick={() => updateZoom(zoom - zoomStep)}
               size="sm"
               type="button"
-              variant="secondary"
+              variant="ghost"
+              className="h-8 w-8 rounded-lg p-0 text-slate-500 hover:bg-white hover:text-slate-900 hover:shadow-sm"
             >
               <ZoomOut className="size-4" />
             </Button>
@@ -157,22 +169,32 @@ export function CanvasViewport() {
               onClick={() => updateZoom(zoom + zoomStep)}
               size="sm"
               type="button"
-              variant="secondary"
+              variant="ghost"
+              className="h-8 w-8 rounded-lg p-0 text-slate-500 hover:bg-white hover:text-slate-900 hover:shadow-sm"
             >
               <ZoomIn className="size-4" />
             </Button>
-            <Button onClick={resetView} size="sm" type="button" variant="secondary">
-              <BringToFront className="size-4" />
-              重置视图
+            <div className="mx-1 h-4 w-px bg-slate-200" />
+            <Button 
+              onClick={resetView} 
+              size="sm" 
+              type="button" 
+              variant="ghost"
+              className="h-8 rounded-lg px-2.5 text-xs text-slate-500 hover:bg-white hover:text-slate-900 hover:shadow-sm"
+            >
+              <BringToFront className="mr-1.5 size-3.5" />
+              重置
             </Button>
+            <div className="mx-1 h-4 w-px bg-slate-200" />
             <Button
               disabled={!canDuplicateOrDelete}
               onClick={duplicateSelection}
               size="sm"
               type="button"
-              variant="secondary"
+              variant="ghost"
+              className="h-8 rounded-lg px-2.5 text-xs text-slate-500 hover:bg-white hover:text-slate-900 hover:shadow-sm disabled:opacity-40"
             >
-              <Copy className="size-4" />
+              <Copy className="mr-1.5 size-3.5" />
               复制
             </Button>
             <Button
@@ -180,41 +202,47 @@ export function CanvasViewport() {
               onClick={deleteSelection}
               size="sm"
               type="button"
-              variant="secondary"
+              variant="ghost"
+              className="h-8 rounded-lg px-2.5 text-xs text-rose-500 hover:bg-rose-50 hover:text-rose-600 hover:shadow-sm disabled:opacity-40"
             >
-              <Trash2 className="size-4" />
+              <Trash2 className="mr-1.5 size-3.5" />
               删除
             </Button>
+            <div className="mx-1 h-4 w-px bg-slate-200" />
             <Button
               disabled={!canAdjustLayer}
               onClick={sendSelectionBackward}
               size="sm"
               type="button"
-              variant="secondary"
+              variant="ghost"
+              className="h-8 w-8 rounded-lg p-0 text-slate-500 hover:bg-white hover:text-slate-900 hover:shadow-sm disabled:opacity-40"
+              title="下移一层"
             >
               <MoveDown className="size-4" />
-              下移一层
             </Button>
             <Button
               disabled={!canAdjustLayer}
               onClick={bringSelectionForward}
               size="sm"
               type="button"
-              variant="secondary"
+              variant="ghost"
+              className="h-8 w-8 rounded-lg p-0 text-slate-500 hover:bg-white hover:text-slate-900 hover:shadow-sm disabled:opacity-40"
+              title="上移一层"
             >
               <MoveUp className="size-4" />
-              上移一层
             </Button>
           </div>
         </div>
       </div>
-      <CanvasStage
-        onPanChange={setPan}
-        onZoomChange={updateZoom}
-        pan={pan}
-        panMode={spacePressed}
-        zoom={zoom}
-      />
+      <div className="relative flex flex-1 flex-col overflow-hidden rounded-2xl border border-slate-200/50 bg-slate-100/50 shadow-inner">
+        <CanvasStage
+          onPanChange={setPan}
+          onZoomChange={updateZoom}
+          pan={pan}
+          panMode={spacePressed}
+          zoom={zoom}
+        />
+      </div>
     </section>
   );
 }

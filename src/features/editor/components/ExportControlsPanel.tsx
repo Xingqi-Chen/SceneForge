@@ -52,27 +52,50 @@ export function ExportControlsPanel() {
   }
 
   return (
-    <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-      <div className="mb-3 flex items-center justify-between gap-3">
-        <h2 className="text-sm font-semibold text-slate-950">导出</h2>
+    <section className="flex flex-col">
+      <div className="mb-4 flex items-center justify-between gap-3 border-b border-slate-100 pb-3 shrink-0">
+        <div className="flex items-center gap-2.5">
+          <div className="rounded-lg bg-emerald-50 p-1.5 text-emerald-600">
+            <Download className="size-4" />
+          </div>
+          <h2 className="text-[15px] font-semibold text-slate-800">导出</h2>
+        </div>
         {status !== "idle" ? (
-          <span className="text-xs text-slate-500">
+          <span className="flex items-center gap-1.5 rounded-full bg-slate-50 px-2.5 py-1 text-[11px] font-medium text-slate-500 shadow-sm border border-slate-100">
+            <span className={`inline-block h-1.5 w-1.5 rounded-full ${status === "error" ? "bg-rose-500" : "bg-emerald-500"}`} />
             {status === "copied" ? "已复制" : status === "saved" ? "已保存" : "操作失败"}
           </span>
         ) : null}
       </div>
-      <div className="grid gap-2">
-        <Button onClick={handleCopyPrompt} size="sm" type="button">
-          <Copy className="size-4" />
+      <div className="grid gap-3">
+        <Button 
+          onClick={handleCopyPrompt} 
+          size="sm" 
+          type="button"
+          className="h-10 w-full bg-slate-900 text-white shadow-sm transition-all hover:bg-slate-800 hover:shadow-md hover:-translate-y-0.5"
+        >
+          <Copy className="mr-2 size-4" />
           复制 Prompt
         </Button>
-        <div className="grid grid-cols-2 gap-2">
-          <Button onClick={handleExportJson} size="sm" type="button" variant="secondary">
-            <Download className="size-4" />
+        <div className="grid grid-cols-2 gap-3">
+          <Button 
+            onClick={handleExportJson} 
+            size="sm" 
+            type="button" 
+            variant="secondary"
+            className="h-10 border-slate-200/80 bg-slate-50/50 text-slate-700 shadow-sm transition-all hover:bg-white hover:shadow hover:-translate-y-0.5"
+          >
+            <Download className="mr-2 size-4 text-slate-400" />
             导出 JSON
           </Button>
-          <Button onClick={handleSaveProject} size="sm" type="button" variant="secondary">
-            <Save className="size-4" />
+          <Button 
+            onClick={handleSaveProject} 
+            size="sm" 
+            type="button" 
+            variant="secondary"
+            className="h-10 border-slate-200/80 bg-slate-50/50 text-slate-700 shadow-sm transition-all hover:bg-white hover:shadow hover:-translate-y-0.5"
+          >
+            <Save className="mr-2 size-4 text-slate-400" />
             保存本地
           </Button>
         </div>

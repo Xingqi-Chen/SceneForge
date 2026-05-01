@@ -44,20 +44,23 @@ export function AssetLibraryPanel() {
   }
 
   return (
-    <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-      <div className="mb-3 flex items-center gap-2">
-        <Layers className="size-4 text-slate-500" />
-        <h2 className="text-sm font-semibold text-slate-950">素材库</h2>
+    <section className="flex flex-col">
+      <div className="mb-4 flex items-center gap-2.5 border-b border-slate-100 pb-3 shrink-0">
+        <div className="rounded-lg bg-blue-50 p-1.5 text-blue-600">
+          <Layers className="size-4" />
+        </div>
+        <h2 className="text-[15px] font-semibold text-slate-800">素材库</h2>
       </div>
-      <div className="grid grid-cols-2 gap-2">
+      <div className="grid grid-cols-2 gap-3">
         {assets.map((asset) => (
           <button
-            className="rounded-xl border border-slate-200 px-3 py-2 text-left text-sm text-slate-700 hover:border-slate-300 hover:bg-slate-50"
+            className="group relative flex flex-col items-center justify-center gap-2 overflow-hidden rounded-2xl border border-slate-200/80 bg-slate-50/50 p-4 text-sm font-medium text-slate-700 shadow-sm transition-all hover:-translate-y-0.5 hover:border-blue-200 hover:bg-blue-50/50 hover:text-blue-700 hover:shadow"
             key={asset.id}
             onClick={() => handleAssetClick(asset)}
             type="button"
           >
-            {asset.label}
+            <div className="absolute inset-0 bg-gradient-to-br from-white/40 to-transparent opacity-0 transition-opacity group-hover:opacity-100" />
+            <span className="relative z-10">{asset.label}</span>
           </button>
         ))}
       </div>
