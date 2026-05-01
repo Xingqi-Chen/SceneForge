@@ -66,6 +66,7 @@ export const defaultCharacter: CharacterSkeleton = {
   name: "主角",
   description: "",
   position: { x: 420, y: 200 },
+  rotation: 0,
   includeInPrompt: true,
   joints: {
     neck: { x: 0, y: 24 },

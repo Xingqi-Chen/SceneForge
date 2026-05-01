@@ -157,6 +157,8 @@ export type CharacterSkeleton = {
   name: string;
   description: string;
   position: Vector2;
+  /** Degrees, same convention as scene objects (Konva). */
+  rotation?: number;
   scaleX?: number;
   scaleY?: number;
   joints: Record<JointId, Vector2>;

@@ -487,6 +487,7 @@ function CharacterNode({
         x: Math.round(node.x()),
         y: Math.round(node.y()),
       },
+      rotation: Math.round(node.rotation()),
       scaleX,
       scaleY,
     });
@@ -525,6 +526,7 @@ function CharacterNode({
       onTap={handleSelect}
       onTransformEnd={handleTransformEnd}
       ref={transformRef}
+      rotation={character.rotation ?? 0}
       x={character.position.x}
       y={character.position.y}
       scaleX={character.scaleX ?? 1}
@@ -1141,7 +1143,11 @@ export function CanvasStage({
               }
               flipEnabled={false}
               ref={transformerRef}
-              rotateEnabled={selection.kind === "object"}
+              rotateEnabled={
+                selection.kind === "object" ||
+                selection.kind === "character" ||
+                selection.kind === "bodyPart"
+              }
             />
           </Layer>
         </Stage>

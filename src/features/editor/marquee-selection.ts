@@ -85,15 +85,34 @@ function getCharacterLocalBounds(character: CharacterSkeleton): AxisBounds {
 
 export function getCharacterWorldBounds(character: CharacterSkeleton): AxisBounds {
   const local = getCharacterLocalBounds(character);
+  const sx = character.scaleX ?? 1;
+  const sy = character.scaleY ?? 1;
+  const rot = character.rotation ?? 0;
   const px = character.position.x;
   const py = character.position.y;
 
-  return {
-    left: local.left + px,
-    top: local.top + py,
-    right: local.right + px,
-    bottom: local.bottom + py,
-  };
+  const corners = [
+    { x: local.left, y: local.top },
+    { x: local.right, y: local.top },
+    { x: local.right, y: local.bottom },
+    { x: local.left, y: local.bottom },
+  ];
+
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+
+  for (const corner of corners) {
+    const scaled = { x: corner.x * sx, y: corner.y * sy };
+    const r = rotateLocalPoint(scaled.x, scaled.y, rot);
+    minX = Math.min(minX, px + r.x);
+    maxX = Math.max(maxX, px + r.x);
+    minY = Math.min(minY, py + r.y);
+    maxY = Math.max(maxY, py + r.y);
+  }
+
+  return { left: minX, top: minY, right: maxX, bottom: maxY };
 }
 
 export function collectMarqueeSelection(

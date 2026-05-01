@@ -55,10 +55,19 @@ function getCharacterJointPosition(
   jointId: keyof SceneForgeProject["scene"]["characters"][number]["joints"],
 ) {
   const joint = character.joints[jointId];
+  const sx = character.scaleX ?? 1;
+  const sy = character.scaleY ?? 1;
+  const rot = character.rotation ?? 0;
+  const scaled = { x: joint.x * sx, y: joint.y * sy };
+  const rad = (rot * Math.PI) / 180;
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
+  const rx = scaled.x * cos - scaled.y * sin;
+  const ry = scaled.x * sin + scaled.y * cos;
 
   return {
-    x: character.position.x + joint.x * (character.scaleX ?? 1),
-    y: character.position.y + joint.y * (character.scaleY ?? 1),
+    x: character.position.x + rx,
+    y: character.position.y + ry,
   };
 }
 
@@ -73,7 +82,7 @@ function summarizeCharacterPoseForAi(character: SceneForgeProject["scene"]["char
 
   return [
     `${character.name}: ${character.description || "character skeleton"}`,
-    `Character origin: x=${character.position.x}, y=${character.position.y}, scaleX=${character.scaleX ?? 1}, scaleY=${character.scaleY ?? 1}`,
+    `Character origin: x=${character.position.x}, y=${character.position.y}, rotation=${character.rotation ?? 0}, scaleX=${character.scaleX ?? 1}, scaleY=${character.scaleY ?? 1}`,
     `Character prompt tags: ${formatTagsForAi(character.promptTags) || "none"}`,
     `Skeleton joints (local space, for pose inference only — do not quote coordinates in output): ${joints}`,
     `Body parts and local tags: ${bodyParts || "none"}`,

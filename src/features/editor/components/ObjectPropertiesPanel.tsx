@@ -417,6 +417,15 @@ export function ObjectPropertiesPanel() {
               />
             </div>
           </div>
+          <div className="space-y-1.5">
+            <FieldLabel>旋转（度）</FieldLabel>
+            <input
+              className="w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition-all focus:border-blue-400 focus:ring-1 focus:ring-blue-400"
+              onChange={(event) => updateSelectedCharacter({ rotation: getNumber(event) })}
+              type="number"
+              value={selectedCharacter.rotation ?? 0}
+            />
+          </div>
           <label className="flex h-10 cursor-pointer items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-4 text-xs font-medium text-slate-700 transition-all hover:bg-white">
             <input
               checked={selectedCharacter.includeInPrompt}

@@ -11,6 +11,18 @@ type Bounds = {
   centerY: number;
 };
 
+const DEG2RAD = Math.PI / 180;
+
+function rotateLocalPoint(x: number, y: number, rotationDeg: number) {
+  const rad = rotationDeg * DEG2RAD;
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
+  return {
+    x: x * cos - y * sin,
+    y: x * sin + y * cos,
+  };
+}
+
 export type SpatialRelationContext = {
   canvas: CanvasConfig;
   characters: CharacterSkeleton[];
@@ -42,14 +54,24 @@ function getObjectBounds(object: SceneObject): Bounds {
 }
 
 function getCharacterBounds(character: CharacterSkeleton): Bounds | null {
-  const points = Object.values(character.joints);
+  const sx = character.scaleX ?? 1;
+  const sy = character.scaleY ?? 1;
+  const rot = character.rotation ?? 0;
+  const px = character.position.x;
+  const py = character.position.y;
+
+  const points = Object.values(character.joints).map((point) => {
+    const scaled = { x: point.x * sx, y: point.y * sy };
+    const r = rotateLocalPoint(scaled.x, scaled.y, rot);
+    return { x: px + r.x, y: py + r.y };
+  });
 
   if (points.length === 0) {
     return null;
   }
 
-  const xs = points.map((point) => character.position.x + point.x);
-  const ys = points.map((point) => character.position.y + point.y);
+  const xs = points.map((point) => point.x);
+  const ys = points.map((point) => point.y);
   const left = Math.min(...xs);
   const top = Math.min(...ys);
   const right = Math.max(...xs);

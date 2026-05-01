@@ -433,6 +433,8 @@ function sanitizeCharacter(raw: unknown): CharacterSkeleton | null {
     name: typeof raw.name === "string" ? raw.name : "人物",
     description: typeof raw.description === "string" ? raw.description : "",
     position,
+    rotation:
+      typeof raw.rotation === "number" && Number.isFinite(raw.rotation) ? raw.rotation : undefined,
     scaleX: typeof raw.scaleX === "number" && Number.isFinite(raw.scaleX) ? raw.scaleX : undefined,
     scaleY: typeof raw.scaleY === "number" && Number.isFinite(raw.scaleY) ? raw.scaleY : undefined,
     joints,
