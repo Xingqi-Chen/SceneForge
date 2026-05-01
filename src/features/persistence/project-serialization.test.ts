@@ -14,14 +14,26 @@ import {
   serializeCanvasExport,
   serializeProject,
   serializePromptLibraryExport,
+  stripPromptBindingsFromScene,
+  stripSharedPromptStateFromProject,
 } from "./project-serialization";
 
 describe("project serialization", () => {
-  it("round-trips valid project data", () => {
+  it("round-trips valid project data without embedding prompt library in project JSON", () => {
     const project = createDefaultProject();
+    project.settings.promptLibraryTags = [
+      {
+        id: "custom-1",
+        label: "测试",
+        prompt: "test",
+        category: "style",
+        weight: { enabled: false, value: 1 },
+      },
+    ];
     const serialized = serializeProject(project);
+    const parsed = parseProjectJson(serialized);
 
-    expect(parseProjectJson(serialized)).toEqual(project);
+    expect(stripSharedPromptStateFromProject(parsed)).toEqual(stripSharedPromptStateFromProject(project));
   });
 
   it("rejects invalid imported data", () => {
@@ -50,7 +62,7 @@ describe("project serialization", () => {
     const project = createDefaultProject();
     project.scene.name = "画布备份";
     const scene = importCanvasBundleFromJson(serializeCanvasExport(project));
-    expect(scene).toEqual(project.scene);
+    expect(stripPromptBindingsFromScene(scene)).toEqual(stripPromptBindingsFromScene(project.scene));
   });
 
   it("round-trips prompt library export bundle", () => {
@@ -83,7 +95,7 @@ describe("project serialization", () => {
         weight: { enabled: false, value: 1 },
       },
     ];
-    const lib = importPromptLibraryBundleFromJson(serializeProject(project));
+    const lib = importPromptLibraryBundleFromJson(serializePromptLibraryExport(project));
     expect(lib.promptLibraryTags).toEqual(project.settings.promptLibraryTags);
   });
 
@@ -204,7 +216,7 @@ describe("project serialization", () => {
       ],
     });
 
-    const imported = importProjectFromJson(serializeProject(project));
+    const imported = importProjectFromJson(JSON.stringify(project));
 
     expect(imported.scene.promptCategoryBindings).toEqual(["scene"]);
     expect(imported.scene.promptSubcategoryBindings).toEqual(["scene-weather"]);
@@ -245,20 +257,113 @@ describe("project serialization", () => {
     project.settings.promptLibraryTags = [libTag, { ...libTag }];
     project.settings.deletedBuiltInPromptLibraryTagIds = ["a", "a", "b"];
 
-    const imported = importProjectFromJson(serializeProject(project));
+    const imported = importProjectFromJson(JSON.stringify(project));
     expect(imported.scene.promptTags).toHaveLength(1);
     expect(imported.settings.promptLibraryTags).toHaveLength(1);
     expect(imported.settings.deletedBuiltInPromptLibraryTagIds).toEqual(["a", "b"]);
   });
 
-  it("getProjectContentFingerprint ignores id and timestamps", () => {
+  it("getProjectContentFingerprint ignores id, timestamps, and prompt library", () => {
     const base = createDefaultProject();
+    base.settings.promptLibraryTags = [
+      {
+        id: "only-in-base",
+        label: "L",
+        prompt: "p",
+        category: "style",
+        weight: { enabled: false, value: 1 },
+      },
+    ];
     const other: typeof base = {
       ...base,
       id: "other-id",
       createdAt: "2000-01-01T00:00:00.000Z",
       updatedAt: "2099-01-01T00:00:00.000Z",
+      settings: {
+        ...base.settings,
+        promptLibraryTags: [],
+        deletedBuiltInPromptLibraryTagIds: [],
+      },
     };
     expect(getProjectContentFingerprint(base)).toBe(getProjectContentFingerprint(other));
+  });
+
+  it("round-trips line, polygon, preset, and image-placeholder scene objects", () => {
+    const project = createDefaultProject();
+    project.scene.objects = [
+      {
+        id: "obj-line",
+        kind: "line",
+        name: "线",
+        description: "",
+        position: { x: 10, y: 20 },
+        size: { width: 100, height: 40 },
+        rotation: 0,
+        layer: 0,
+        fill: "#000000",
+        includeInPrompt: true,
+        weight: { enabled: false, value: 1 },
+        promptTags: [],
+        lineEndpoints: { x1: 0, y1: 20, x2: 100, y2: 20 },
+      },
+      {
+        id: "obj-poly",
+        kind: "polygon",
+        name: "三",
+        description: "",
+        position: { x: 0, y: 0 },
+        size: { width: 50, height: 50 },
+        rotation: 0,
+        layer: 1,
+        fill: "#00ff00",
+        includeInPrompt: true,
+        weight: { enabled: false, value: 1 },
+        promptTags: [],
+        polygonPoints: [
+          { x: 0, y: 50 },
+          { x: 25, y: 0 },
+          { x: 50, y: 50 },
+        ],
+      },
+      {
+        id: "obj-preset",
+        kind: "preset",
+        name: "树",
+        description: "tree",
+        position: { x: 5, y: 5 },
+        size: { width: 80, height: 100 },
+        rotation: 0,
+        layer: 2,
+        fill: "#006600",
+        includeInPrompt: true,
+        weight: { enabled: false, value: 1 },
+        promptTags: [],
+        presetKey: "preset-tree",
+      },
+      {
+        id: "obj-img",
+        kind: "image-placeholder",
+        name: "图",
+        description: "",
+        position: { x: 1, y: 2 },
+        size: { width: 60, height: 70 },
+        rotation: 0,
+        layer: 3,
+        fill: "#cccccc",
+        includeInPrompt: true,
+        weight: { enabled: false, value: 1 },
+        promptTags: [],
+        imageLabel: "Ref",
+      },
+    ];
+
+    const imported = importProjectFromJson(serializeProject(project));
+
+    expect(imported.scene.objects).toHaveLength(4);
+    expect(imported.scene.objects[0]?.kind).toBe("line");
+    expect(imported.scene.objects[0]?.lineEndpoints).toEqual({ x1: 0, y1: 20, x2: 100, y2: 20 });
+    expect(imported.scene.objects[1]?.polygonPoints).toHaveLength(3);
+    expect(imported.scene.objects[2]?.presetKey).toBe("preset-tree");
+    expect(imported.scene.objects[3]?.imageLabel).toBe("Ref");
   });
 });

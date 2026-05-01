@@ -17,6 +17,7 @@ import type { Transformer as KonvaTransformer } from "konva/lib/shapes/Transform
 import { Circle, Ellipse, Group, Layer, Line, Rect, Stage, Text, Transformer } from "react-konva";
 
 import { useEditorStore } from "@/features/editor/store/editor-store";
+import { defaultLineEndpoints, defaultPolygonPoints } from "@/features/editor/preset-scene-objects";
 import type { BodyPartId, CharacterSkeleton, JointId, SceneObject, Vector2 } from "@/shared/types";
 
 export type CanvasCapture = () => string | null;
@@ -101,18 +102,55 @@ function SceneObjectNode({
     node.scaleX(1);
     node.scaleY(1);
 
-    updateObject(object.id, {
+    const nextWidth = Math.max(16, Math.round(object.size.width * scaleX));
+    const nextHeight = Math.max(16, Math.round(object.size.height * scaleY));
+
+    const base = {
       position: {
         x: Math.round(node.x()),
         y: Math.round(node.y()),
       },
       rotation: Math.round(node.rotation()),
       size: {
-        width: Math.max(16, Math.round(object.size.width * scaleX)),
-        height: Math.max(16, Math.round(object.size.height * scaleY)),
+        width: nextWidth,
+        height: nextHeight,
       },
-    });
+    };
+
+    if (object.kind === "line") {
+      const le = object.lineEndpoints ?? defaultLineEndpoints(object.size.width, object.size.height);
+      updateObject(object.id, {
+        ...base,
+        lineEndpoints: {
+          x1: Math.round(le.x1 * scaleX),
+          y1: Math.round(le.y1 * scaleY),
+          x2: Math.round(le.x2 * scaleX),
+          y2: Math.round(le.y2 * scaleY),
+        },
+      });
+      return;
+    }
+
+    if (object.kind === "polygon") {
+      const pts = object.polygonPoints ?? defaultPolygonPoints(object.size.width, object.size.height);
+      updateObject(object.id, {
+        ...base,
+        polygonPoints: pts.map((point) => ({
+          x: Math.round(point.x * scaleX),
+          y: Math.round(point.y * scaleY),
+        })),
+      });
+      return;
+    }
+
+    updateObject(object.id, base);
   }
+
+  const w = object.size.width;
+  const h = object.size.height;
+  const lineEndpoints = object.lineEndpoints ?? defaultLineEndpoints(w, h);
+  const polygonPoints = object.polygonPoints ?? defaultPolygonPoints(w, h);
+  const polygonFlat = polygonPoints.flatMap((point) => [point.x, point.y]);
 
   return (
     <Group
@@ -147,6 +185,79 @@ function SceneObjectNode({
           x={object.size.width / 2}
           y={object.size.height / 2}
         />
+      ) : object.kind === "line" ? (
+        <>
+          <Rect fill="rgba(248,250,252,0.01)" height={h} onClick={handleSelect} onTap={handleSelect} width={w} />
+          <Line
+            lineCap="round"
+            listening={false}
+            points={[lineEndpoints.x1, lineEndpoints.y1, lineEndpoints.x2, lineEndpoints.y2]}
+            stroke={object.fill}
+            strokeWidth={selected ? 7 : 5}
+          />
+        </>
+      ) : object.kind === "polygon" ? (
+        <Line
+          closed
+          fill={object.fill}
+          lineJoin="round"
+          onClick={handleSelect}
+          onTap={handleSelect}
+          points={polygonFlat}
+          stroke={stroke}
+          strokeWidth={selected ? 4 : 2}
+        />
+      ) : object.kind === "image-placeholder" ? (
+        <>
+          <Rect
+            cornerRadius={12}
+            dash={[10, 6]}
+            fill="#f8fafc"
+            height={h}
+            onClick={handleSelect}
+            onTap={handleSelect}
+            stroke={stroke}
+            strokeWidth={selected ? 4 : 2}
+            width={w}
+          />
+          <Text
+            align="center"
+            fill="#64748b"
+            fontSize={18}
+            fontStyle="bold"
+            height={h}
+            listening={false}
+            text={object.imageLabel ?? "Image"}
+            verticalAlign="middle"
+            width={w}
+          />
+        </>
+      ) : object.kind === "preset" ? (
+        <>
+          <Rect
+            cornerRadius={14}
+            dash={[8, 5]}
+            fill={object.fill}
+            height={h}
+            onClick={handleSelect}
+            onTap={handleSelect}
+            opacity={0.92}
+            stroke={stroke}
+            strokeWidth={selected ? 4 : 2}
+            width={w}
+          />
+          <Text
+            align="center"
+            fill="#0f172a"
+            fontSize={20}
+            fontStyle="bold"
+            height={h}
+            listening={false}
+            text={object.name}
+            verticalAlign="middle"
+            width={w}
+          />
+        </>
       ) : (
         <Rect
           cornerRadius={16}
@@ -157,17 +268,19 @@ function SceneObjectNode({
           width={object.size.width}
         />
       )}
-      <Text
-        align="center"
-        fill="#0f172a"
-        fontSize={22}
-        fontStyle="bold"
-        height={object.size.height}
-        listening={false}
-        text={object.name}
-        verticalAlign="middle"
-        width={object.size.width}
-      />
+      {object.kind !== "preset" && object.kind !== "image-placeholder" ? (
+        <Text
+          align="center"
+          fill="#0f172a"
+          fontSize={22}
+          fontStyle="bold"
+          height={object.size.height}
+          listening={false}
+          text={object.name}
+          verticalAlign="middle"
+          width={object.size.width}
+        />
+      ) : null}
     </Group>
   );
 }

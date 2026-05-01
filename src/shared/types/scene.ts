@@ -81,6 +81,14 @@ export type SceneObjectKind =
   | "image-placeholder"
   | "preset";
 
+/** Line segment in local space (origin at object `position`, same units as `size`). */
+export type LineEndpoints = {
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+};
+
 export type SceneObject = {
   id: string;
   kind: SceneObjectKind;
@@ -96,6 +104,14 @@ export type SceneObject = {
   promptTags: PromptTag[];
   promptCategoryBindings?: PromptTagCategory[];
   promptSubcategoryBindings?: PromptTagSubcategory[];
+  /** When `kind` is `"line"`, segment endpoints in local space. Defaults to horizontal midline across `size`. */
+  lineEndpoints?: LineEndpoints;
+  /** When `kind` is `"polygon"`, closed path vertices in local space (relative to `position`). */
+  polygonPoints?: Vector2[];
+  /** When `kind` is `"preset"`, stable id of the preset from the asset library. */
+  presetKey?: string;
+  /** Short label drawn on `image-placeholder` objects. */
+  imageLabel?: string;
 };
 
 export type BodyPartId =

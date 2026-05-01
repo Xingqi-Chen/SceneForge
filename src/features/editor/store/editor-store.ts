@@ -6,6 +6,9 @@ import type {
   BodyPartId,
   CharacterSkeleton,
   JointId,
+  LineEndpoints,
+  PromptBindingState,
+  PromptBindingTargetKind,
   ProjectSettings,
   PromptTag,
   PromptTagCategory,
@@ -26,11 +29,22 @@ import {
 } from "@/features/prompt-engine/prompt-library/prompt-tag-taxonomy";
 
 import {
+  PRESET_SCENE_OBJECTS,
+  defaultLineEndpoints,
+  defaultPolygonPoints,
+} from "@/features/editor/preset-scene-objects";
+
+import {
   DEFAULT_PROMPT_CATEGORY_BINDINGS,
   DEFAULT_PROMPT_SUBCATEGORY_BINDINGS,
+  createDefaultPromptBindingState,
   createDefaultProject,
   defaultCharacter,
 } from "./defaults";
+import {
+  applyPromptBindingsToProject,
+  extractPromptBindingsFromProject,
+} from "@/features/persistence/project-serialization";
 
 export type EditorSelection =
   | { kind: "scene" }
@@ -43,6 +57,10 @@ export type AddSceneObjectInput = {
   name: string;
   description?: string;
   fill?: string;
+  presetKey?: string;
+  lineEndpoints?: LineEndpoints;
+  polygonPoints?: Vector2[];
+  imageLabel?: string;
 };
 
 export type PromptTagTarget =
@@ -57,6 +75,7 @@ type PromptTagPatch = Partial<Omit<PromptTag, "id" | "weight">> & {
 
 type EditorState = {
   project: SceneForgeProject;
+  promptBindings: PromptBindingState;
   selection: EditorSelection;
   /** Last successful AI Prompt preview text; cleared when loading another project. */
   aiGeneratedPrompt: string;
@@ -68,6 +87,7 @@ type EditorState = {
   selectCharacter: (id: string) => void;
   selectBodyPart: (characterId: string, bodyPartId: BodyPartId) => void;
   updateScene: (patch: Partial<Scene>) => void;
+  updateProjectDocument: (patch: Partial<Pick<SceneForgeProject, "name">>) => void;
   updateProjectSettings: (patch: Partial<ProjectSettings>) => void;
   addObject: (input: AddSceneObjectInput) => void;
   updateObject: (id: string, patch: Partial<SceneObject>) => void;
@@ -157,6 +177,10 @@ function normalizePromptSubcategoryBindings(
   });
 }
 
+function getPromptBindingTargetKind(target: PromptTagTarget): PromptBindingTargetKind {
+  return target.kind === "bodyPart" ? "bodyPart" : target.kind;
+}
+
 function hasPromptTag(tags: PromptTag[], tag: PromptTag) {
   return tags.some(
     (existingTag) =>
@@ -217,7 +241,7 @@ function updateTagInList(tags: PromptTag[], tagId: string, patch: PromptTagPatch
   );
 }
 
-function createCharacter(layerOffset: number): CharacterSkeleton {
+function createCharacter(layerOffset: number, bindings: PromptBindingState): CharacterSkeleton {
   return {
     ...defaultCharacter,
     id: createId("character"),
@@ -235,20 +259,12 @@ function createCharacter(layerOffset: number): CharacterSkeleton {
     bodyParts: defaultCharacter.bodyParts.map((bodyPart) => ({
       ...bodyPart,
       promptTags: bodyPart.promptTags.map(clonePromptTag),
-      promptCategoryBindings: bodyPart.promptCategoryBindings
-        ? [...bodyPart.promptCategoryBindings]
-        : [...DEFAULT_PROMPT_CATEGORY_BINDINGS.bodyPart],
-      promptSubcategoryBindings: bodyPart.promptSubcategoryBindings
-        ? [...bodyPart.promptSubcategoryBindings]
-        : [...DEFAULT_PROMPT_SUBCATEGORY_BINDINGS.bodyPart],
+      promptCategoryBindings: [...bindings.bodyPart.promptCategoryBindings],
+      promptSubcategoryBindings: [...bindings.bodyPart.promptSubcategoryBindings],
     })),
     promptTags: defaultCharacter.promptTags.map(clonePromptTag),
-    promptCategoryBindings: defaultCharacter.promptCategoryBindings
-      ? [...defaultCharacter.promptCategoryBindings]
-      : [...DEFAULT_PROMPT_CATEGORY_BINDINGS.character],
-    promptSubcategoryBindings: defaultCharacter.promptSubcategoryBindings
-      ? [...defaultCharacter.promptSubcategoryBindings]
-      : [...DEFAULT_PROMPT_SUBCATEGORY_BINDINGS.character],
+    promptCategoryBindings: [...bindings.character.promptCategoryBindings],
+    promptSubcategoryBindings: [...bindings.character.promptSubcategoryBindings],
   };
 }
 
@@ -267,6 +283,8 @@ function cloneSceneObject(object: SceneObject): SceneObject {
     },
     size: { ...object.size },
     weight: { ...object.weight },
+    lineEndpoints: object.lineEndpoints ? { ...object.lineEndpoints } : undefined,
+    polygonPoints: object.polygonPoints?.map((point) => ({ ...point })),
     promptTags: object.promptTags.map(clonePromptTag),
     promptCategoryBindings: object.promptCategoryBindings
       ? [...object.promptCategoryBindings]
@@ -313,39 +331,55 @@ function cloneCharacterSkeleton(character: CharacterSkeleton): CharacterSkeleton
 }
 
 export const useEditorStore = create<EditorState>((set) => ({
-  project: createDefaultProject(),
+  project: applyPromptBindingsToProject(createDefaultProject(), createDefaultPromptBindingState()),
+  promptBindings: createDefaultPromptBindingState(),
   selection: { kind: "scene" },
   aiGeneratedPrompt: "",
   setAiGeneratedPrompt: (prompt) => set({ aiGeneratedPrompt: prompt }),
-  setProject: (project) =>
-    set({
-      project: {
-        ...project,
-        settings: {
-          ...project.settings,
-          promptLibraryTags: project.settings.promptLibraryTags ?? [],
-          deletedBuiltInPromptLibraryTagIds:
-            project.settings.deletedBuiltInPromptLibraryTagIds ?? [],
+  setProject: (project) => {
+    const promptBindings = extractPromptBindingsFromProject(project);
+
+    return set({
+      project: applyPromptBindingsToProject(
+        {
+          ...project,
+          settings: {
+            ...project.settings,
+            promptLibraryTags: project.settings.promptLibraryTags ?? [],
+            deletedBuiltInPromptLibraryTagIds:
+              project.settings.deletedBuiltInPromptLibraryTagIds ?? [],
+          },
         },
-      },
+        promptBindings,
+      ),
+      promptBindings,
       selection: { kind: "scene" },
       aiGeneratedPrompt: "",
-    }),
+    });
+  },
   resetProject: () =>
     set((state) => {
       const nextProject = createDefaultProject();
+      const freshId = createId("project");
+      const stamp = new Date().toISOString();
 
       return {
-        project: {
-          ...nextProject,
-          settings: {
-            ...nextProject.settings,
-            ...state.project.settings,
-            promptLibraryTags: state.project.settings.promptLibraryTags ?? [],
-            deletedBuiltInPromptLibraryTagIds:
-              state.project.settings.deletedBuiltInPromptLibraryTagIds ?? [],
+        project: applyPromptBindingsToProject(
+          {
+            ...nextProject,
+            id: freshId,
+            createdAt: stamp,
+            updatedAt: stamp,
+            settings: {
+              ...nextProject.settings,
+              ...state.project.settings,
+              promptLibraryTags: state.project.settings.promptLibraryTags ?? [],
+              deletedBuiltInPromptLibraryTagIds:
+                state.project.settings.deletedBuiltInPromptLibraryTagIds ?? [],
+            },
           },
-        },
+          state.promptBindings,
+        ),
         selection: { kind: "scene" },
         aiGeneratedPrompt: "",
       };
@@ -365,6 +399,13 @@ export const useEditorStore = create<EditorState>((set) => ({
         },
       }),
     })),
+  updateProjectDocument: (patch) =>
+    set((state) => ({
+      project: touchProject({
+        ...state.project,
+        ...patch,
+      }),
+    })),
   updateProjectSettings: (patch) =>
     set((state) => ({
       project: touchProject({
@@ -375,24 +416,58 @@ export const useEditorStore = create<EditorState>((set) => ({
         },
       }),
     })),
-  addObject: ({ kind, name, description = "", fill = "#e2e8f0" }) =>
+  addObject: (input) =>
     set((state) => {
       const nextLayer = getNextLayer(state.project.scene.objects);
+      const description = input.description ?? "";
+      const fill = input.fill ?? "#e2e8f0";
+
+      let size: SceneObject["size"];
+      let lineEndpoints: LineEndpoints | undefined;
+      let polygonPoints: Vector2[] | undefined;
+      let presetKey: string | undefined;
+      let imageLabel: string | undefined;
+
+      if (input.kind === "circle") {
+        size = { width: 120, height: 120 };
+      } else if (input.kind === "ellipse") {
+        size = { width: 160, height: 100 };
+      } else if (input.kind === "line") {
+        size = { width: 200, height: 48 };
+        lineEndpoints = input.lineEndpoints ?? defaultLineEndpoints(size.width, size.height);
+      } else if (input.kind === "polygon") {
+        size = { width: 160, height: 140 };
+        polygonPoints = input.polygonPoints ?? defaultPolygonPoints(size.width, size.height);
+      } else if (input.kind === "image-placeholder") {
+        size = { width: 180, height: 140 };
+        imageLabel = input.imageLabel?.trim() || "Image";
+      } else if (input.kind === "preset") {
+        const def = PRESET_SCENE_OBJECTS.find((entry) => entry.key === input.presetKey);
+        size = def ? { ...def.size } : { width: 180, height: 120 };
+        presetKey = input.presetKey;
+      } else {
+        size = { width: 180, height: 120 };
+      }
+
       const object: SceneObject = {
         id: createId("object"),
-        kind,
-        name,
+        kind: input.kind,
+        name: input.name,
         description,
         position: { x: 160 + nextLayer * 24, y: 120 + nextLayer * 20 },
-        size: kind === "circle" ? { width: 120, height: 120 } : { width: 180, height: 120 },
+        size,
         rotation: 0,
         layer: nextLayer,
         fill,
         includeInPrompt: true,
         weight: { enabled: false, value: 1 },
         promptTags: [],
-        promptCategoryBindings: [...DEFAULT_PROMPT_CATEGORY_BINDINGS.object],
-        promptSubcategoryBindings: [...DEFAULT_PROMPT_SUBCATEGORY_BINDINGS.object],
+        promptCategoryBindings: [...state.promptBindings.object.promptCategoryBindings],
+        promptSubcategoryBindings: [...state.promptBindings.object.promptSubcategoryBindings],
+        ...(lineEndpoints ? { lineEndpoints } : {}),
+        ...(polygonPoints ? { polygonPoints: polygonPoints.map((point) => ({ ...point })) } : {}),
+        ...(presetKey ? { presetKey } : {}),
+        ...(imageLabel ? { imageLabel } : {}),
       };
 
       return {
@@ -681,7 +756,7 @@ export const useEditorStore = create<EditorState>((set) => ({
     }),
   addCharacter: () =>
     set((state) => {
-      const character = createCharacter(state.project.scene.characters.length);
+      const character = createCharacter(state.project.scene.characters.length, state.promptBindings);
 
       return {
         project: touchProject({
@@ -917,19 +992,29 @@ export const useEditorStore = create<EditorState>((set) => ({
     }),
   updatePromptCategoryBindings: (target, categories) =>
     set((state) => {
+      const bindingTarget = getPromptBindingTargetKind(target);
       const promptCategoryBindings = normalizePromptCategoryBindings(categories);
+      const promptSubcategoryBindings = normalizePromptSubcategoryBindings(
+        state.promptBindings[bindingTarget].promptSubcategoryBindings,
+        promptCategoryBindings,
+      );
+      const promptBindings = {
+        ...state.promptBindings,
+        [bindingTarget]: {
+          promptCategoryBindings,
+          promptSubcategoryBindings,
+        },
+      };
 
       if (target.kind === "scene") {
         return {
+          promptBindings,
           project: touchProject({
             ...state.project,
             scene: {
               ...state.project.scene,
               promptCategoryBindings,
-              promptSubcategoryBindings: normalizePromptSubcategoryBindings(
-                state.project.scene.promptSubcategoryBindings ?? [],
-                promptCategoryBindings,
-              ),
+              promptSubcategoryBindings,
             },
           }),
         };
@@ -937,81 +1022,66 @@ export const useEditorStore = create<EditorState>((set) => ({
 
       if (target.kind === "object") {
         return {
+          promptBindings,
           project: touchProject({
             ...state.project,
             scene: {
               ...state.project.scene,
-              objects: state.project.scene.objects.map((object) =>
-                object.id === target.id
-                  ? {
-                      ...object,
-                      promptCategoryBindings,
-                      promptSubcategoryBindings: normalizePromptSubcategoryBindings(
-                        object.promptSubcategoryBindings ?? [],
-                        promptCategoryBindings,
-                      ),
-                    }
-                  : object,
-              ),
+              objects: state.project.scene.objects.map((object) => ({
+                ...object,
+                promptCategoryBindings,
+                promptSubcategoryBindings,
+              })),
             },
           }),
         };
       }
 
-      const targetCharacterId = target.kind === "bodyPart" ? target.characterId : target.id;
-
       return {
+        promptBindings,
         project: touchProject({
           ...state.project,
           scene: {
             ...state.project.scene,
-            characters: state.project.scene.characters.map((character) => {
-              if (character.id !== targetCharacterId) {
-                return character;
-              }
-
-              if (target.kind === "bodyPart") {
-                return {
-                  ...character,
-                  bodyParts: character.bodyParts.map((bodyPart) =>
-                    bodyPart.id === target.bodyPartId
-                      ? {
-                          ...bodyPart,
-                          promptCategoryBindings,
-                          promptSubcategoryBindings: normalizePromptSubcategoryBindings(
-                            bodyPart.promptSubcategoryBindings ?? [],
-                            promptCategoryBindings,
-                          ),
-                        }
-                      : bodyPart,
-                  ),
-                };
-              }
-
-              return {
-                ...character,
-                promptCategoryBindings,
-                promptSubcategoryBindings: normalizePromptSubcategoryBindings(
-                  character.promptSubcategoryBindings ?? [],
-                  promptCategoryBindings,
-                ),
-              };
-            }),
+            characters: state.project.scene.characters.map((character) =>
+              target.kind === "bodyPart"
+                ? {
+                    ...character,
+                    bodyParts: character.bodyParts.map((bodyPart) => ({
+                      ...bodyPart,
+                      promptCategoryBindings,
+                      promptSubcategoryBindings,
+                    })),
+                  }
+                : {
+                    ...character,
+                    promptCategoryBindings,
+                    promptSubcategoryBindings,
+                  },
+            ),
           },
         }),
       };
     }),
   updatePromptSubcategoryBindings: (target, subcategories) =>
     set((state) => {
-      if (target.kind === "scene") {
-        const categories =
-          state.project.scene.promptCategoryBindings ?? DEFAULT_PROMPT_CATEGORY_BINDINGS.scene;
-        const promptSubcategoryBindings = normalizePromptSubcategoryBindings(
-          subcategories,
-          categories,
-        );
+      const bindingTarget = getPromptBindingTargetKind(target);
+      const promptCategoryBindings = state.promptBindings[bindingTarget].promptCategoryBindings;
+      const promptSubcategoryBindings = normalizePromptSubcategoryBindings(
+        subcategories,
+        promptCategoryBindings,
+      );
+      const promptBindings = {
+        ...state.promptBindings,
+        [bindingTarget]: {
+          promptCategoryBindings,
+          promptSubcategoryBindings,
+        },
+      };
 
+      if (target.kind === "scene") {
         return {
+          promptBindings,
           project: touchProject({
             ...state.project,
             scene: {
@@ -1024,77 +1094,40 @@ export const useEditorStore = create<EditorState>((set) => ({
 
       if (target.kind === "object") {
         return {
+          promptBindings,
           project: touchProject({
             ...state.project,
             scene: {
               ...state.project.scene,
-              objects: state.project.scene.objects.map((object) => {
-                if (object.id !== target.id) {
-                  return object;
-                }
-
-                const categories =
-                  object.promptCategoryBindings ?? DEFAULT_PROMPT_CATEGORY_BINDINGS.object;
-
-                return {
-                  ...object,
-                  promptSubcategoryBindings: normalizePromptSubcategoryBindings(
-                    subcategories,
-                    categories,
-                  ),
-                };
-              }),
+              objects: state.project.scene.objects.map((object) => ({
+                ...object,
+                promptSubcategoryBindings,
+              })),
             },
           }),
         };
       }
 
-      const targetCharacterId = target.kind === "bodyPart" ? target.characterId : target.id;
-
       return {
+        promptBindings,
         project: touchProject({
           ...state.project,
           scene: {
             ...state.project.scene,
-            characters: state.project.scene.characters.map((character) => {
-              if (character.id !== targetCharacterId) {
-                return character;
-              }
-
-              if (target.kind === "bodyPart") {
-                return {
-                  ...character,
-                  bodyParts: character.bodyParts.map((bodyPart) => {
-                    if (bodyPart.id !== target.bodyPartId) {
-                      return bodyPart;
-                    }
-
-                    const categories =
-                      bodyPart.promptCategoryBindings ??
-                      DEFAULT_PROMPT_CATEGORY_BINDINGS.bodyPart;
-
-                    return {
+            characters: state.project.scene.characters.map((character) =>
+              target.kind === "bodyPart"
+                ? {
+                    ...character,
+                    bodyParts: character.bodyParts.map((bodyPart) => ({
                       ...bodyPart,
-                      promptSubcategoryBindings: normalizePromptSubcategoryBindings(
-                        subcategories,
-                        categories,
-                      ),
-                    };
-                  }),
-                };
-              }
-
-              const categories =
-                character.promptCategoryBindings ?? DEFAULT_PROMPT_CATEGORY_BINDINGS.character;
-
-              return {
-                ...character,
-                promptSubcategoryBindings: normalizePromptSubcategoryBindings(
-                  subcategories,
-                  categories,
-                ),
-              };
-            }),
+                      promptSubcategoryBindings,
+                    })),
+                  }
+                : {
+                    ...character,
+                    promptSubcategoryBindings,
+                  },
+            ),
           },
         }),
       };

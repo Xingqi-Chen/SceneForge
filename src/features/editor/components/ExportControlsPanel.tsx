@@ -6,9 +6,11 @@ import { useRef, useState, type ChangeEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { useEditorStore } from "@/features/editor/store/editor-store";
 import {
+  applyPromptBindingsToScene,
   importCanvasBundleFromJson,
   importPromptLibraryBundleFromJson,
   saveProject,
+  savePromptLibrary,
   serializeCanvasExport,
   serializePromptLibraryExport,
 } from "@/features/persistence";
@@ -97,15 +99,28 @@ export function ExportControlsPanel() {
     libraryImportInputRef.current?.click();
   }
 
-  async function persistAfterImport() {
-    const nextProject = useEditorStore.getState().project;
+  async function persistAfterImport(kind: "canvas" | "library") {
     try {
-      await saveProject(nextProject);
-      console.info("[SceneForge] [persistence] imported bundle saved", { projectId: nextProject.id });
+      if (kind === "canvas") {
+        const nextProject = useEditorStore.getState().project;
+        await saveProject(nextProject);
+        console.info("[SceneForge] [persistence] imported canvas saved", { projectId: nextProject.id });
+      } else {
+        const { settings } = useEditorStore.getState().project;
+        await savePromptLibrary({
+          promptLibraryTags: settings.promptLibraryTags ?? [],
+          deletedBuiltInPromptLibraryTagIds: settings.deletedBuiltInPromptLibraryTagIds ?? [],
+        });
+        console.info("[SceneForge] [persistence] imported prompt library saved to shared file");
+      }
       setStatusDetail("");
     } catch (persistError) {
-      console.warn("[SceneForge] [persistence] import applied but save failed", { persistError });
-      setStatusDetail("内容已加载，但写入本地项目目录失败，可稍后点击「保存本地」重试。（需本机运行 Next 服务。）");
+      console.warn("[SceneForge] [persistence] import applied but persist failed", { persistError });
+      setStatusDetail(
+        kind === "canvas"
+          ? "内容已加载，但写入本地项目目录失败，可稍后点击「保存本地」重试。（需本机运行 Next 服务。）"
+          : "词库已加载，但写入共享词库文件失败，可稍后重试导入或检查本机 Next 服务。",
+      );
     }
   }
 
@@ -119,11 +134,14 @@ export function ExportControlsPanel() {
     try {
       setStatusDetail("");
       const text = await file.text();
-      const scene = importCanvasBundleFromJson(text);
+      const scene = applyPromptBindingsToScene(
+        importCanvasBundleFromJson(text),
+        useEditorStore.getState().promptBindings,
+      );
       updateScene(scene);
       selectScene();
       setStatus("canvasImported");
-      await persistAfterImport();
+      await persistAfterImport("canvas");
     } catch (error) {
       console.error("[SceneForge] [export] failed to import canvas", error);
       setStatusDetail(error instanceof Error ? error.message : "导入失败");
@@ -144,7 +162,7 @@ export function ExportControlsPanel() {
       const library = importPromptLibraryBundleFromJson(text);
       updateProjectSettings(library);
       setStatus("libraryImported");
-      await persistAfterImport();
+      await persistAfterImport("library");
     } catch (error) {
       console.error("[SceneForge] [export] failed to import prompt library", error);
       setStatusDetail(error instanceof Error ? error.message : "导入失败");
@@ -239,7 +257,7 @@ export function ExportControlsPanel() {
           <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500">画布内容</p>
           <p className="text-[11px] leading-snug text-slate-500">
             「项目名-canvas.json」含画布尺寸、场景/物体/人物及其上的 Prompt
-            标签；导入会替换当前画布，不改动项目设置与词库。亦支持旧版完整项目 JSON：只读取其中的场景字段。
+            标签；导入会替换当前画布，不改动项目设置、词库与共享绑定关系。亦支持旧版完整项目 JSON：只读取其中的场景字段。
           </p>
           <div className="grid grid-cols-2 gap-3">
             <Button
@@ -280,7 +298,7 @@ export function ExportControlsPanel() {
         <div className="space-y-1.5">
           <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Prompt 词库</p>
           <p className="text-[11px] leading-snug text-slate-500">
-            「项目名-prompt-library.json」含自定义词库条目与已隐藏的内置词条；导入会覆盖当前项目的词库数据（不自动改动已应用到画布的标签）。亦支持旧版完整项目
+            「项目名-prompt-library.json」含自定义词库条目与已隐藏的内置词条；导入会写入本机**共享词库文件**（所有项目共用，与当前打开的项目文件无关）。亦支持旧版完整项目
             JSON：只读取其中的词库字段。
           </p>
           <div className="grid grid-cols-2 gap-3">
@@ -322,7 +340,11 @@ export function ExportControlsPanel() {
         <div className="space-y-1.5">
           <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500">本地项目库</p>
           <p className="text-[11px] leading-snug text-slate-500">
-            将当前完整项目通过本机上的 Next.js 服务写入磁盘目录（默认为项目下 data/projects，可用环境变量 SCENEFORGE_PROJECTS_DIR 指定）；保存时会规范化并去掉场景内重复 id，并移除内容完全相同的其它项目记录。
+            将当前项目（画布、场景、人物、已应用到元素的标签与项目设置）写入本机目录（默认仓库内
+            data/projects，可用环境变量 SCENEFORGE_PROJECTS_DIR）。不会写入共享提示词库；词库单独保存在
+            data/prompt-library.json（可用 SCENEFORGE_PROMPT_LIBRARY_FILE 覆盖路径），词库绑定关系单独保存在
+            data/prompt-bindings.json（可用 SCENEFORGE_PROMPT_BINDINGS_FILE 覆盖路径）。保存时会规范化并去掉场景内重复
+            id，并移除内容完全相同的其它项目记录。
           </p>
           <div className="grid grid-cols-2 gap-3">
             <Button

@@ -16,6 +16,10 @@ export type SpatialRelationContext = {
   characters: CharacterSkeleton[];
 };
 
+export type SpatialRelationOptions = {
+  includeCanvasPositionHints?: boolean;
+};
+
 const skyObjectPattern = /\b(moon|sun|star|sky|cloud|clouds|bird|birds|airship|planet)\b/i;
 const windowPattern = /\b(window|窗)\b/i;
 const outdoorViewPattern =
@@ -210,11 +214,13 @@ function getCharacterRelationHint(bounds: Bounds, characters: CharacterSkeleton[
 export function inferSpatialRelationHints(
   object: SceneObject,
   { canvas, characters }: SpatialRelationContext,
+  options: SpatialRelationOptions = {},
 ) {
   const bounds = getObjectBounds(object);
+  const includeCanvasPositionHints = options.includeCanvasPositionHints ?? true;
   const hints = [
     getScaleHint(bounds, canvas),
-    getPositionHint(object, bounds, canvas),
+    includeCanvasPositionHints ? getPositionHint(object, bounds, canvas) : null,
     getCharacterRelationHint(bounds, characters),
   ];
 

@@ -1,14 +1,16 @@
 "use client";
 
 import { MousePointer2 } from "lucide-react";
-import type { ChangeEvent, ReactNode } from "react";
+import { useState, type ChangeEvent, type ReactNode } from "react";
 
+import { defaultLineEndpoints, defaultPolygonPoints } from "@/features/editor/preset-scene-objects";
 import { useEditorStore } from "@/features/editor/store/editor-store";
 import type {
   CanvasAspectRatio,
   CharacterSkeleton,
   PromptModelFormat,
   SceneObject,
+  Vector2,
 } from "@/shared/types";
 
 function FieldLabel({ children }: { children: ReactNode }) {
@@ -17,6 +19,79 @@ function FieldLabel({ children }: { children: ReactNode }) {
 
 function getNumber(event: ChangeEvent<HTMLInputElement>) {
   return Number.isFinite(event.target.valueAsNumber) ? event.target.valueAsNumber : 0;
+}
+
+function parsePolygonPointsJson(text: string): Vector2[] | null {
+  let data: unknown;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    return null;
+  }
+
+  if (!Array.isArray(data)) {
+    return null;
+  }
+
+  const points: Vector2[] = [];
+
+  for (const item of data) {
+    if (
+      item &&
+      typeof item === "object" &&
+      "x" in item &&
+      "y" in item &&
+      typeof (item as Vector2).x === "number" &&
+      typeof (item as Vector2).y === "number" &&
+      Number.isFinite((item as Vector2).x) &&
+      Number.isFinite((item as Vector2).y)
+    ) {
+      points.push({ x: (item as Vector2).x, y: (item as Vector2).y });
+    }
+  }
+
+  return points.length >= 3 ? points : null;
+}
+
+function PolygonPointsField({
+  width,
+  height,
+  points,
+  onCommit,
+}: {
+  width: number;
+  height: number;
+  points: Vector2[] | undefined;
+  onCommit: (next: Vector2[]) => void;
+}) {
+  const [value, setValue] = useState(() =>
+    JSON.stringify(points ?? defaultPolygonPoints(width, height), null, 2),
+  );
+  const [error, setError] = useState("");
+
+  return (
+    <div className="space-y-1.5">
+      <FieldLabel>多边形顶点 JSON</FieldLabel>
+      <textarea
+        className="min-h-[120px] w-full resize-y rounded-md border border-slate-200 bg-white px-3 py-2 font-mono text-xs leading-relaxed text-slate-900 outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-400"
+        spellCheck={false}
+        value={value}
+        onChange={(event) => {
+          setValue(event.target.value);
+          setError("");
+        }}
+        onBlur={() => {
+          const parsed = parsePolygonPointsJson(value);
+          if (!parsed) {
+            setError("需要至少 3 个 { \"x\", \"y\" } 顶点且为合法 JSON。");
+            return;
+          }
+          onCommit(parsed);
+        }}
+      />
+      {error ? <p className="text-xs text-red-600">{error}</p> : null}
+    </div>
+  );
 }
 
 const canvasSizes: Record<CanvasAspectRatio, { width: number; height: number }> = {
@@ -99,6 +174,64 @@ export function ObjectPropertiesPanel() {
               value={selectedObject.description}
             />
           </div>
+          {selectedObject.kind === "line" ? (
+            <div className="space-y-2 rounded-md border border-slate-100 bg-slate-50/90 p-3">
+              <div className="text-xs font-semibold text-slate-600">线段端点（局部坐标）</div>
+              <div className="grid grid-cols-2 gap-2">
+                {(
+                  ["x1", "y1", "x2", "y2"] as const
+                ).map((key) => (
+                  <div className="space-y-1" key={key}>
+                    <FieldLabel>{key.toUpperCase()}</FieldLabel>
+                    <input
+                      className="w-full rounded-md border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-900 outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-400"
+                      type="number"
+                      value={
+                        (selectedObject.lineEndpoints ??
+                          defaultLineEndpoints(selectedObject.size.width, selectedObject.size.height))[key]
+                      }
+                      onChange={(event) => {
+                        const base =
+                          selectedObject.lineEndpoints ??
+                          defaultLineEndpoints(selectedObject.size.width, selectedObject.size.height);
+                        const next = { ...base, [key]: getNumber(event) };
+                        updateSelectedObject({ lineEndpoints: next });
+                      }}
+                    />
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+          {selectedObject.kind === "polygon" ? (
+            <PolygonPointsField
+              key={`${selectedObject.id}:${JSON.stringify(selectedObject.polygonPoints ?? [])}`}
+              height={selectedObject.size.height}
+              onCommit={(next) => updateSelectedObject({ polygonPoints: next })}
+              points={selectedObject.polygonPoints}
+              width={selectedObject.size.width}
+            />
+          ) : null}
+          {selectedObject.kind === "image-placeholder" ? (
+            <div className="space-y-1.5">
+              <FieldLabel>占位标签</FieldLabel>
+              <input
+                className="w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-400"
+                value={selectedObject.imageLabel ?? "Image"}
+                onChange={(event) => updateSelectedObject({ imageLabel: event.target.value })}
+              />
+            </div>
+          ) : null}
+          {selectedObject.kind === "preset" && selectedObject.presetKey ? (
+            <div className="space-y-1.5">
+              <FieldLabel>预设 ID</FieldLabel>
+              <input
+                readOnly
+                className="w-full cursor-not-allowed rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600"
+                value={selectedObject.presetKey}
+              />
+            </div>
+          ) : null}
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
               <FieldLabel>X</FieldLabel>

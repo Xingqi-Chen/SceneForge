@@ -7,7 +7,7 @@ import { createPortal } from "react-dom";
 import { Button } from "@/components/ui/button";
 import { useEditorStore, type PromptTagTarget } from "@/features/editor/store/editor-store";
 import { getLlmProxyErrorMessage, isLlmChatResponse } from "@/features/llm";
-import { saveProject } from "@/features/persistence";
+import { saveProject, savePromptBindings, savePromptLibrary } from "@/features/persistence";
 import {
   DEFAULT_PROMPT_CATEGORY_BINDINGS,
   DEFAULT_PROMPT_SUBCATEGORY_BINDINGS,
@@ -285,6 +285,18 @@ export function PromptTagPickerPanel() {
     }
   }
 
+  async function persistPromptBindings(action: () => void, scope: string) {
+    try {
+      action();
+      await savePromptBindings(useEditorStore.getState().promptBindings);
+    } catch (error) {
+      console.error("[SceneForge] [prompt-library] failed to persist prompt binding change", {
+        error,
+        scope,
+      });
+    }
+  }
+
   async function handleTogglePromptTag(tag: PromptTag, appliedTag: PromptTag | undefined) {
     await persistCurrentProject(
       () =>
@@ -315,7 +327,7 @@ export function PromptTagPickerPanel() {
       return;
     }
 
-    await persistCurrentProject(
+    await persistPromptBindings(
       () => updatePromptCategoryBindings(tagTarget, nextCategories),
       "update-target-category-bindings",
     );
@@ -328,7 +340,7 @@ export function PromptTagPickerPanel() {
         )
       : [...currentPromptSubcategoryBindings, subcategory];
 
-    await persistCurrentProject(
+    await persistPromptBindings(
       () => updatePromptSubcategoryBindings(tagTarget, nextSubcategories),
       "update-target-subcategory-bindings",
     );
@@ -396,7 +408,10 @@ export function PromptTagPickerPanel() {
       const added = importPromptLibraryTags(parsed.tags);
       if (added > 0) {
         const nextProject = useEditorStore.getState().project;
-        await saveProject(nextProject);
+        await savePromptLibrary({
+          promptLibraryTags: nextProject.settings.promptLibraryTags ?? [],
+          deletedBuiltInPromptLibraryTagIds: nextProject.settings.deletedBuiltInPromptLibraryTagIds ?? [],
+        });
       }
 
       console.info("[SceneForge] [prompt-library] import merged into project settings", {
@@ -518,7 +533,11 @@ export function PromptTagPickerPanel() {
       }
 
       if (updatedCount > 0) {
-        await saveProject(useEditorStore.getState().project);
+        const nextProject = useEditorStore.getState().project;
+        await savePromptLibrary({
+          promptLibraryTags: nextProject.settings.promptLibraryTags ?? [],
+          deletedBuiltInPromptLibraryTagIds: nextProject.settings.deletedBuiltInPromptLibraryTagIds ?? [],
+        });
       }
 
       console.info("[SceneForge] [prompt-library] subcategory classification merged", {
@@ -585,7 +604,10 @@ export function PromptTagPickerPanel() {
       }
 
       const nextProject = useEditorStore.getState().project;
-      await saveProject(nextProject);
+      await savePromptLibrary({
+        promptLibraryTags: nextProject.settings.promptLibraryTags ?? [],
+        deletedBuiltInPromptLibraryTagIds: nextProject.settings.deletedBuiltInPromptLibraryTagIds ?? [],
+      });
 
       console.info("[SceneForge] [prompt-library] tag deleted from library", {
         tagId: pendingManageTag.id,
@@ -635,7 +657,10 @@ export function PromptTagPickerPanel() {
       }
 
       const nextProject = useEditorStore.getState().project;
-      await saveProject(nextProject);
+      await savePromptLibrary({
+        promptLibraryTags: nextProject.settings.promptLibraryTags ?? [],
+        deletedBuiltInPromptLibraryTagIds: nextProject.settings.deletedBuiltInPromptLibraryTagIds ?? [],
+      });
 
       console.info("[SceneForge] [prompt-library] tag updated in library", {
         tagId: pendingManageTag.id,

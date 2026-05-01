@@ -3,6 +3,7 @@ import type {
   PromptTag,
   PromptTagCategory,
   PromptTagSubcategory,
+  PromptBindingState,
   Scene,
   SceneForgeProject,
 } from "@/shared/types";
@@ -38,6 +39,27 @@ export const DEFAULT_PROMPT_SUBCATEGORY_BINDINGS = {
   character: [...CHARACTER_AND_BODY_PART_SUBCATEGORIES],
   bodyPart: [...CHARACTER_AND_BODY_PART_SUBCATEGORIES],
 } satisfies Record<string, PromptTagSubcategory[]>;
+
+export function createDefaultPromptBindingState(): PromptBindingState {
+  return {
+    scene: {
+      promptCategoryBindings: [...DEFAULT_PROMPT_CATEGORY_BINDINGS.scene],
+      promptSubcategoryBindings: [...DEFAULT_PROMPT_SUBCATEGORY_BINDINGS.scene],
+    },
+    object: {
+      promptCategoryBindings: [...DEFAULT_PROMPT_CATEGORY_BINDINGS.object],
+      promptSubcategoryBindings: [...DEFAULT_PROMPT_SUBCATEGORY_BINDINGS.object],
+    },
+    character: {
+      promptCategoryBindings: [...DEFAULT_PROMPT_CATEGORY_BINDINGS.character],
+      promptSubcategoryBindings: [...DEFAULT_PROMPT_SUBCATEGORY_BINDINGS.character],
+    },
+    bodyPart: {
+      promptCategoryBindings: [...DEFAULT_PROMPT_CATEGORY_BINDINGS.bodyPart],
+      promptSubcategoryBindings: [...DEFAULT_PROMPT_SUBCATEGORY_BINDINGS.bodyPart],
+    },
+  };
+}
 
 export const defaultCharacter: CharacterSkeleton = {
   id: "character-hero",
@@ -146,6 +168,8 @@ function cloneScene(scene: Scene): Scene {
       position: { ...object.position },
       size: { ...object.size },
       weight: { ...object.weight },
+      lineEndpoints: object.lineEndpoints ? { ...object.lineEndpoints } : undefined,
+      polygonPoints: object.polygonPoints?.map((point) => ({ ...point })),
       promptTags: object.promptTags.map(clonePromptTag),
       promptCategoryBindings: object.promptCategoryBindings
         ? [...object.promptCategoryBindings]

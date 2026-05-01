@@ -43,3 +43,9 @@ next-env.d.ts
 # Local SceneForge project JSON files (server-side persistence)
 /data/projects/*
 !/data/projects/.gitkeep
+
+# Shared prompt library (server-side persistence)
+/data/prompt-library.json
+
+# Shared prompt library target bindings (server-side persistence)
+/data/prompt-bindings.json

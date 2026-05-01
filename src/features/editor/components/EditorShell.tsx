@@ -4,9 +4,17 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { listProjects, loadProject } from "@/features/persistence";
+import {
+  applyPromptBindingsToProject,
+  listProjects,
+  loadProject,
+  loadPromptBindings,
+  loadPromptLibrary,
+  mergePromptLibraryIntoProject,
+} from "@/features/persistence";
 import { useEditorStore } from "@/features/editor/store/editor-store";
 
+import { ProjectMenu } from "./ProjectMenu";
 import { AssetLibraryPanel } from "./AssetLibraryPanel";
 import { CanvasViewport } from "./CanvasViewport";
 import { ExportControlsPanel } from "./ExportControlsPanel";
@@ -36,14 +44,22 @@ export function EditorShell() {
       try {
         const [latestProject] = await listProjects();
 
-        if (!latestProject) {
-          return;
-        }
+        if (latestProject) {
+          const loaded = await loadProject(latestProject.id);
 
-        const project = await loadProject(latestProject.id);
-
-        if (active && project) {
-          setProject(project);
+          if (active && loaded) {
+            setProject(loaded);
+          }
+        } else {
+          const [lib, bindings] = await Promise.all([loadPromptLibrary(), loadPromptBindings()]);
+          if (active) {
+            setProject(
+              applyPromptBindingsToProject(
+                mergePromptLibraryIntoProject(useEditorStore.getState().project, lib),
+                bindings,
+              ),
+            );
+          }
         }
       } catch (error) {
         console.warn("[SceneForge] [persistence] failed to load recent project", { error });
@@ -63,11 +79,12 @@ export function EditorShell() {
 
   return (
     <main className="h-screen w-screen overflow-hidden flex flex-col bg-slate-50 text-slate-950 font-sans selection:bg-blue-100 selection:text-blue-900">
-      <header className="h-14 border-b border-slate-200 bg-white flex items-center justify-between px-4 shrink-0 z-10">
-        <div className="flex items-center gap-4">
-          <h1 className="text-sm font-bold tracking-tight text-slate-900">
+      <header className="relative z-50 flex h-14 shrink-0 items-center justify-between border-b border-slate-200 bg-white px-4">
+        <div className="flex min-w-0 flex-1 items-center gap-4">
+          <h1 className="shrink-0 text-sm font-bold tracking-tight text-slate-900">
             SceneForge | 提示词工作台
           </h1>
+          <ProjectMenu />
         </div>
         <div className="flex items-center gap-3">
           <span className="flex items-center rounded-md border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-600">
@@ -80,7 +97,7 @@ export function EditorShell() {
         </div>
       </header>
 
-      <div className="flex flex-1 overflow-hidden relative">
+      <div className="relative z-0 flex min-h-0 flex-1 overflow-hidden">
         <div
           className={`transition-all duration-300 ease-in-out shrink-0 flex flex-col border-r border-slate-200 bg-white ${
             leftPanelOpen ? "w-[300px]" : "w-0 overflow-hidden border-r-0"

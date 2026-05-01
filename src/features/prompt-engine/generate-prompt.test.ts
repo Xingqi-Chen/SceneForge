@@ -40,6 +40,10 @@ function addSceneObject(project: SceneForgeProject, object: Partial<SceneObject>
     includeInPrompt: object.includeInPrompt ?? true,
     weight: object.weight ?? { enabled: false, value: 1 },
     promptTags: object.promptTags ?? [],
+    lineEndpoints: object.lineEndpoints,
+    polygonPoints: object.polygonPoints,
+    presetKey: object.presetKey,
+    imageLabel: object.imageLabel,
   };
 
   project.scene.objects.push(sceneObject);
@@ -162,7 +166,7 @@ describe("generatePrompt", () => {
     expect(result.negativePrompt).toContain("bad hands");
   });
 
-  it("adds upper-left sky hints for sky objects when spatial hints are enabled", () => {
+  it("uses layout constraints as the default source for canvas placement hints", () => {
     const project = createDefaultProject();
 
     addSceneObject(project, {
@@ -176,7 +180,27 @@ describe("generatePrompt", () => {
 
     const result = generatePrompt(project);
 
+    expect(result.prompt).toContain("full moon placed in the upper left");
+    expect(result.parts).not.toContain("full moon");
+    expect(result.parts).not.toContain("full moon in the upper left sky");
+  });
+
+  it("adds per-object canvas placement hints when layout constraints are disabled", () => {
+    const project = createDefaultProject();
+
+    addSceneObject(project, {
+      id: "object-moon",
+      kind: "circle",
+      name: "moon",
+      description: "full moon",
+      position: { x: 48, y: 40 },
+      size: { width: 100, height: 100 },
+    });
+
+    const result = generatePrompt(project, { includeLayoutConstraints: false });
+
     expect(result.parts).toContain("full moon in the upper left sky");
+    expect(result.prompt).not.toContain("placed in the upper left");
   });
 
   it("does not add spatial hints when spatial hints are disabled", () => {
@@ -198,7 +222,7 @@ describe("generatePrompt", () => {
     expect(result.prompt).not.toContain("upper left sky");
   });
 
-  it("adds scale and foreground hints for large lower objects", () => {
+  it("keeps scale hints while layout constraints own canvas placement", () => {
     const project = createDefaultProject();
 
     addSceneObject(project, {
@@ -211,7 +235,26 @@ describe("generatePrompt", () => {
 
     const result = generatePrompt(project);
 
-    expect(result.parts).toContain("wildflower meadow large in the foreground");
+    expect(result.parts).toContain("wildflower meadow large");
+    expect(result.prompt).toContain("wildflower meadow placed in the lower foreground");
+    expect(result.parts).not.toContain("wildflower meadow large in the foreground");
+  });
+
+  it("omits plain object prompts when global layout constraints already describe the object", () => {
+    const project = createDefaultProject();
+
+    addSceneObject(project, {
+      id: "object-table",
+      name: "Table",
+      description: "a wooden table",
+      position: { x: 520, y: 40 },
+      size: { width: 180, height: 120 },
+    });
+
+    const result = generatePrompt(project);
+
+    expect(result.prompt).toContain("a wooden table placed in the upper center");
+    expect(result.parts).not.toContain("a wooden table");
   });
 
   it("adds character-relative hints for nearby objects", () => {
@@ -270,5 +313,35 @@ describe("generatePrompt", () => {
     expect(result.prompt).toContain("small marble table placed in the lower left foreground");
     expect(result.prompt).toContain("1girl sitting on a chair placed in the right side");
     expect(result.prompt).toContain("scenic river visible outside or through the window");
+  });
+
+  it("includes line and polygon objects via descriptions like other scene objects", () => {
+    const project = createDefaultProject();
+    addSceneObject(project, {
+      id: "line-1",
+      kind: "line",
+      name: "Line",
+      description: "thin horizon outline",
+      position: { x: 0, y: 0 },
+      size: { width: 200, height: 40 },
+      lineEndpoints: { x1: 0, y1: 20, x2: 200, y2: 20 },
+    });
+    addSceneObject(project, {
+      id: "poly-1",
+      kind: "polygon",
+      name: "Poly",
+      description: "triangular shade shape",
+      position: { x: 10, y: 10 },
+      size: { width: 60, height: 50 },
+      polygonPoints: [
+        { x: 0, y: 50 },
+        { x: 30, y: 0 },
+        { x: 60, y: 50 },
+      ],
+    });
+
+    const result = generatePrompt(project);
+    expect(result.prompt).toMatch(/thin horizon outline/);
+    expect(result.prompt).toMatch(/triangular shade shape/);
   });
 });

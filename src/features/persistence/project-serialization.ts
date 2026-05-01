@@ -3,19 +3,25 @@ import type {
   CanvasConfig,
   CharacterSkeleton,
   JointId,
+  LineEndpoints,
+  PromptBindingState,
+  PromptBindingTargetKind,
   PromptTag,
   PromptTagCategory,
   PromptTagSubcategory,
   Scene,
   SceneForgeProject,
   SceneObject,
+  Vector2,
 } from "@/shared/types";
 
 import {
   DEFAULT_PROMPT_CATEGORY_BINDINGS,
   DEFAULT_PROMPT_SUBCATEGORY_BINDINGS,
+  createDefaultPromptBindingState,
   defaultCharacter,
 } from "@/features/editor/store/defaults";
+import { defaultLineEndpoints, defaultPolygonPoints } from "@/features/editor/preset-scene-objects";
 import {
   PROMPT_TAG_CATEGORY_ORDER,
   PROMPT_TAG_SUBCATEGORY_OPTIONS,
@@ -146,6 +152,71 @@ function sanitizeWeight(raw: unknown): SceneObject["weight"] {
   return { value, enabled };
 }
 
+const SCENE_OBJECT_KINDS = new Set<SceneObject["kind"]>([
+  "rectangle",
+  "circle",
+  "ellipse",
+  "polygon",
+  "line",
+  "image-placeholder",
+  "preset",
+]);
+
+function coerceSceneObjectKind(value: unknown): SceneObject["kind"] {
+  if (typeof value === "string" && SCENE_OBJECT_KINDS.has(value as SceneObject["kind"])) {
+    return value as SceneObject["kind"];
+  }
+
+  return "rectangle";
+}
+
+function sanitizeVector2Point(raw: unknown): Vector2 | null {
+  if (!isRecord(raw)) {
+    return null;
+  }
+
+  if (
+    typeof raw.x !== "number" ||
+    typeof raw.y !== "number" ||
+    !Number.isFinite(raw.x) ||
+    !Number.isFinite(raw.y)
+  ) {
+    return null;
+  }
+
+  return { x: raw.x, y: raw.y };
+}
+
+function sanitizeLineEndpoints(raw: unknown, width: number, height: number): LineEndpoints {
+  if (!isRecord(raw)) {
+    return defaultLineEndpoints(width, height);
+  }
+
+  const x1 = typeof raw.x1 === "number" && Number.isFinite(raw.x1) ? raw.x1 : 0;
+  const y1 = typeof raw.y1 === "number" && Number.isFinite(raw.y1) ? raw.y1 : 0;
+  const x2 = typeof raw.x2 === "number" && Number.isFinite(raw.x2) ? raw.x2 : width;
+  const y2 = typeof raw.y2 === "number" && Number.isFinite(raw.y2) ? raw.y2 : 0;
+
+  return { x1, y1, x2, y2 };
+}
+
+function sanitizePolygonPointsArray(raw: unknown, width: number, height: number): Vector2[] {
+  if (!Array.isArray(raw)) {
+    return defaultPolygonPoints(width, height);
+  }
+
+  const points: Vector2[] = [];
+
+  for (const entry of raw.slice(0, 48)) {
+    const point = sanitizeVector2Point(entry);
+    if (point) {
+      points.push(point);
+    }
+  }
+
+  return points.length >= 3 ? points : defaultPolygonPoints(width, height);
+}
+
 function sanitizePromptCategoryBindings(
   raw: unknown,
   fallback: PromptTagCategory[],
@@ -234,7 +305,7 @@ function sanitizeSceneObject(raw: unknown): SceneObject | null {
       ? { width: raw.size.width, height: raw.size.height }
       : { width: 120, height: 120 };
 
-  const kind = typeof raw.kind === "string" ? raw.kind : "rectangle";
+  const kind = coerceSceneObjectKind(raw.kind);
 
   const promptTags = Array.isArray(raw.promptTags) ? (raw.promptTags as SceneObject["promptTags"]) : [];
 
@@ -243,9 +314,9 @@ function sanitizeSceneObject(raw: unknown): SceneObject | null {
     DEFAULT_PROMPT_CATEGORY_BINDINGS.object,
   );
 
-  return {
+  const base: SceneObject = {
     id: raw.id,
-    kind: kind as SceneObject["kind"],
+    kind,
     name: typeof raw.name === "string" ? raw.name : "对象",
     description: typeof raw.description === "string" ? raw.description : "",
     position,
@@ -263,6 +334,33 @@ function sanitizeSceneObject(raw: unknown): SceneObject | null {
       DEFAULT_PROMPT_SUBCATEGORY_BINDINGS.object,
     ),
   };
+
+  if (kind === "line") {
+    return {
+      ...base,
+      lineEndpoints: sanitizeLineEndpoints(raw.lineEndpoints, size.width, size.height),
+    };
+  }
+
+  if (kind === "polygon") {
+    return {
+      ...base,
+      polygonPoints: sanitizePolygonPointsArray(raw.polygonPoints, size.width, size.height),
+    };
+  }
+
+  if (kind === "preset") {
+    const presetKey = typeof raw.presetKey === "string" && raw.presetKey.trim() ? raw.presetKey.trim() : undefined;
+    return presetKey ? { ...base, presetKey } : { ...base };
+  }
+
+  if (kind === "image-placeholder") {
+    const imageLabel =
+      typeof raw.imageLabel === "string" && raw.imageLabel.trim() ? raw.imageLabel.trim() : "Image";
+    return { ...base, imageLabel };
+  }
+
+  return base;
 }
 
 function sanitizeCharacter(raw: unknown): CharacterSkeleton | null {
@@ -432,6 +530,234 @@ function sanitizeSettings(settings: unknown): SceneForgeProject["settings"] {
   };
 }
 
+export type GlobalPromptLibraryState = Pick<
+  SceneForgeProject["settings"],
+  "promptLibraryTags" | "deletedBuiltInPromptLibraryTagIds"
+>;
+
+const PROMPT_BINDING_TARGETS = ["scene", "object", "character", "bodyPart"] as const;
+
+const PROMPT_BINDING_FALLBACKS = {
+  scene: {
+    categories: DEFAULT_PROMPT_CATEGORY_BINDINGS.scene,
+    subcategories: DEFAULT_PROMPT_SUBCATEGORY_BINDINGS.scene,
+  },
+  object: {
+    categories: DEFAULT_PROMPT_CATEGORY_BINDINGS.object,
+    subcategories: DEFAULT_PROMPT_SUBCATEGORY_BINDINGS.object,
+  },
+  character: {
+    categories: DEFAULT_PROMPT_CATEGORY_BINDINGS.character,
+    subcategories: DEFAULT_PROMPT_SUBCATEGORY_BINDINGS.character,
+  },
+  bodyPart: {
+    categories: DEFAULT_PROMPT_CATEGORY_BINDINGS.bodyPart,
+    subcategories: DEFAULT_PROMPT_SUBCATEGORY_BINDINGS.bodyPart,
+  },
+} satisfies Record<
+  PromptBindingTargetKind,
+  { categories: PromptTagCategory[]; subcategories: PromptTagSubcategory[] }
+>;
+
+/** Sanitize only shared prompt library fields (used by global library file API). */
+export function sanitizeGlobalPromptLibraryPayload(payload: unknown): GlobalPromptLibraryState {
+  const coerced = sanitizeSettings(
+    isRecord(payload)
+      ? {
+          modelFormat: "generic",
+          includeSpatialHints: true,
+          negativePrompt: "",
+          promptLibraryTags: payload.promptLibraryTags,
+          deletedBuiltInPromptLibraryTagIds: payload.deletedBuiltInPromptLibraryTagIds,
+        }
+      : {},
+  );
+
+  return {
+    promptLibraryTags: coerced.promptLibraryTags,
+    deletedBuiltInPromptLibraryTagIds: coerced.deletedBuiltInPromptLibraryTagIds,
+  };
+}
+
+/** Sanitize shared prompt-library binding fields (used by global binding file API). */
+export function sanitizeGlobalPromptBindingsPayload(payload: unknown): PromptBindingState {
+  const defaults = createDefaultPromptBindingState();
+
+  if (!isRecord(payload)) {
+    return defaults;
+  }
+
+  return Object.fromEntries(
+    PROMPT_BINDING_TARGETS.map((target) => {
+      const raw = isRecord(payload[target]) ? payload[target] : {};
+      const fallback = PROMPT_BINDING_FALLBACKS[target];
+      const promptCategoryBindings = sanitizePromptCategoryBindings(
+        raw.promptCategoryBindings,
+        fallback.categories,
+      );
+
+      return [
+        target,
+        {
+          promptCategoryBindings,
+          promptSubcategoryBindings: sanitizePromptSubcategoryBindings(
+            raw.promptSubcategoryBindings,
+            promptCategoryBindings,
+            fallback.subcategories,
+          ),
+        },
+      ];
+    }),
+  ) as PromptBindingState;
+}
+
+/** Project JSON on disk does not persist the shared prompt library. */
+export function stripPromptLibraryFromProject(project: SceneForgeProject): SceneForgeProject {
+  return {
+    ...project,
+    settings: {
+      ...project.settings,
+      promptLibraryTags: [],
+      deletedBuiltInPromptLibraryTagIds: [],
+    },
+  };
+}
+
+function stripSceneObjectPromptBindings(object: SceneObject): SceneObject {
+  const { promptCategoryBindings, promptSubcategoryBindings, ...rest } = object;
+  void promptCategoryBindings;
+  void promptSubcategoryBindings;
+  return rest;
+}
+
+function stripCharacterPromptBindings(character: CharacterSkeleton): CharacterSkeleton {
+  const { promptCategoryBindings, promptSubcategoryBindings, ...rest } = character;
+  void promptCategoryBindings;
+  void promptSubcategoryBindings;
+
+  return {
+    ...rest,
+    bodyParts: character.bodyParts.map((bodyPart) => {
+      const {
+        promptCategoryBindings: bodyPartCategoryBindings,
+        promptSubcategoryBindings: bodyPartSubcategoryBindings,
+        ...bodyPartRest
+      } = bodyPart;
+      void bodyPartCategoryBindings;
+      void bodyPartSubcategoryBindings;
+      return bodyPartRest;
+    }),
+  };
+}
+
+export function stripPromptBindingsFromScene(scene: Scene): Scene {
+  const { promptCategoryBindings, promptSubcategoryBindings, ...rest } = scene;
+  void promptCategoryBindings;
+  void promptSubcategoryBindings;
+
+  return {
+    ...rest,
+    objects: scene.objects.map(stripSceneObjectPromptBindings),
+    characters: scene.characters.map(stripCharacterPromptBindings),
+  };
+}
+
+/** Project JSON on disk does not persist shared prompt-library target bindings. */
+export function stripPromptBindingsFromProject(project: SceneForgeProject): SceneForgeProject {
+  return {
+    ...project,
+    scene: stripPromptBindingsFromScene(project.scene),
+  };
+}
+
+export function stripSharedPromptStateFromProject(project: SceneForgeProject): SceneForgeProject {
+  return stripPromptBindingsFromProject(stripPromptLibraryFromProject(project));
+}
+
+export function applyPromptBindingsToScene(
+  scene: Scene,
+  bindings: PromptBindingState,
+): Scene {
+  return {
+    ...scene,
+    promptCategoryBindings: [...bindings.scene.promptCategoryBindings],
+    promptSubcategoryBindings: [...bindings.scene.promptSubcategoryBindings],
+    objects: scene.objects.map((object) => ({
+      ...object,
+      promptCategoryBindings: [...bindings.object.promptCategoryBindings],
+      promptSubcategoryBindings: [...bindings.object.promptSubcategoryBindings],
+    })),
+    characters: scene.characters.map((character) => ({
+      ...character,
+      promptCategoryBindings: [...bindings.character.promptCategoryBindings],
+      promptSubcategoryBindings: [...bindings.character.promptSubcategoryBindings],
+      bodyParts: character.bodyParts.map((bodyPart) => ({
+        ...bodyPart,
+        promptCategoryBindings: [...bindings.bodyPart.promptCategoryBindings],
+        promptSubcategoryBindings: [...bindings.bodyPart.promptSubcategoryBindings],
+      })),
+    })),
+  };
+}
+
+export function applyPromptBindingsToProject(
+  project: SceneForgeProject,
+  bindings: PromptBindingState,
+): SceneForgeProject {
+  return {
+    ...project,
+    scene: applyPromptBindingsToScene(project.scene, bindings),
+  };
+}
+
+export function extractPromptBindingsFromProject(project: SceneForgeProject): PromptBindingState {
+  const object = project.scene.objects[0];
+  const character = project.scene.characters[0];
+  const bodyPart = character?.bodyParts[0];
+  const defaults = createDefaultPromptBindingState();
+
+  return sanitizeGlobalPromptBindingsPayload({
+    scene: {
+      promptCategoryBindings:
+        project.scene.promptCategoryBindings ?? defaults.scene.promptCategoryBindings,
+      promptSubcategoryBindings:
+        project.scene.promptSubcategoryBindings ?? defaults.scene.promptSubcategoryBindings,
+    },
+    object: {
+      promptCategoryBindings:
+        object?.promptCategoryBindings ?? defaults.object.promptCategoryBindings,
+      promptSubcategoryBindings:
+        object?.promptSubcategoryBindings ?? defaults.object.promptSubcategoryBindings,
+    },
+    character: {
+      promptCategoryBindings:
+        character?.promptCategoryBindings ?? defaults.character.promptCategoryBindings,
+      promptSubcategoryBindings:
+        character?.promptSubcategoryBindings ?? defaults.character.promptSubcategoryBindings,
+    },
+    bodyPart: {
+      promptCategoryBindings:
+        bodyPart?.promptCategoryBindings ?? defaults.bodyPart.promptCategoryBindings,
+      promptSubcategoryBindings:
+        bodyPart?.promptSubcategoryBindings ?? defaults.bodyPart.promptSubcategoryBindings,
+    },
+  });
+}
+
+export function mergePromptLibraryIntoProject(
+  project: SceneForgeProject,
+  library: GlobalPromptLibraryState,
+): SceneForgeProject {
+  return {
+    ...project,
+    settings: {
+      ...project.settings,
+      promptLibraryTags: library.promptLibraryTags ?? [],
+      deletedBuiltInPromptLibraryTagIds: library.deletedBuiltInPromptLibraryTagIds ?? [],
+    },
+  };
+}
+
 /**
  * 修补不信任来源的项目 JSON（缺省数组、画布默认值等），避免编辑器在 `.map` 等处崩溃。
  */
@@ -449,14 +775,14 @@ export function sanitizeImportedProject(project: SceneForgeProject): SceneForgeP
 }
 
 export function serializeProject(project: SceneForgeProject) {
-  return JSON.stringify(project, null, 2);
+  return JSON.stringify(stripSharedPromptStateFromProject(project), null, 2);
 }
 
 export function serializeCanvasExport(project: SceneForgeProject): string {
   const payload: CanvasExportFile = {
     kind: SCENEFORGE_CANVAS_EXPORT_KIND,
     version: 1,
-    scene: project.scene,
+    scene: stripPromptBindingsFromScene(project.scene),
   };
 
   return JSON.stringify(payload, null, 2);
@@ -544,7 +870,8 @@ export function importPromptLibraryBundleFromJson(
  * 用于检测「内容相同、主键不同」的重复项目（不含 id / 时间戳）。
  */
 export function getProjectContentFingerprint(project: SceneForgeProject): string {
-  const { version, name, scene, settings } = project;
+  const stripped = stripSharedPromptStateFromProject(project);
+  const { version, name, scene, settings } = stripped;
 
   return JSON.stringify({ version, name, scene, settings });
 }

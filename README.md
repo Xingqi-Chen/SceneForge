@@ -18,7 +18,7 @@ Open [http://localhost:3000](http://localhost:3000) with your browser to see the
 
 ## LLM API
 
-SceneForge exposes a server-side LiteLLM chat endpoint at `POST /api/llm/chat`. It is intentionally not connected to any editor workflow yet.
+SceneForge exposes a server-side LiteLLM chat endpoint at `POST /api/llm/chat`. The **Prompt 预览** panel can call this endpoint when you use the optional AI-assisted prompt action (optional `model` override per request). The rest of the editor works without any LLM configuration.
 
 Configure the LiteLLM proxy with server-only environment variables:
 

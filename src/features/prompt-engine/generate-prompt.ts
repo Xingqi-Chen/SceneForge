@@ -68,11 +68,31 @@ function buildBodyPartPrompt(bodyPartPrompt: string, bodyPartTags: string[]) {
   );
 }
 
+function shouldSkipPlainObjectPrompt({
+  formattedObjectPrompt,
+  objectPrompt,
+  objectTags,
+  usesGlobalLayoutConstraints,
+}: {
+  formattedObjectPrompt: string;
+  objectPrompt: string;
+  objectTags: string[];
+  usesGlobalLayoutConstraints: boolean;
+}) {
+  return (
+    usesGlobalLayoutConstraints &&
+    objectTags.length === 0 &&
+    formattedObjectPrompt.trim() === objectPrompt.trim()
+  );
+}
+
 export function generatePrompt(project: SceneForgeProject, options: GeneratePromptOptions = {}): GeneratedPrompt {
   const { scene, settings } = project;
   const parts: string[] = [];
   const negativeParts: string[] = [];
   const includeLayoutConstraints = options.includeLayoutConstraints ?? true;
+  const includeObjectCanvasPositionHints = !includeLayoutConstraints;
+  const usesGlobalLayoutConstraints = settings.includeSpatialHints && includeLayoutConstraints;
 
   if (scene.description.trim()) {
     parts.push(scene.description.trim());
@@ -83,7 +103,7 @@ export function generatePrompt(project: SceneForgeProject, options: GenerateProm
 
   parts.push(formatCanvasForPrompt(scene.canvas));
 
-  if (settings.includeSpatialHints && includeLayoutConstraints) {
+  if (usesGlobalLayoutConstraints) {
     const layoutConstraints = inferSceneLayoutConstraints(scene);
     if (layoutConstraints) {
       parts.push(layoutConstraints);
@@ -100,10 +120,16 @@ export function generatePrompt(project: SceneForgeProject, options: GenerateProm
       settings.includeSpatialHints && objectPrompt
         ? appendSpatialRelationHints(
             objectPrompt,
-            inferSpatialRelationHints(object, {
-              canvas: scene.canvas,
-              characters: scene.characters,
-            }),
+            inferSpatialRelationHints(
+              object,
+              {
+                canvas: scene.canvas,
+                characters: scene.characters,
+              },
+              {
+                includeCanvasPositionHints: includeObjectCanvasPositionHints,
+              },
+            ),
           )
         : objectPrompt;
     const formattedObjectPrompt = objectPrompt
@@ -111,7 +137,17 @@ export function generatePrompt(project: SceneForgeProject, options: GenerateProm
       : "";
     const objectTags = collectTags(object.promptTags, settings.modelFormat);
 
-    parts.push(...buildScopedPrompt(formattedObjectPrompt, objectTags));
+    if (
+      !shouldSkipPlainObjectPrompt({
+        formattedObjectPrompt,
+        objectPrompt,
+        objectTags,
+        usesGlobalLayoutConstraints,
+      })
+    ) {
+      parts.push(...buildScopedPrompt(formattedObjectPrompt, objectTags));
+    }
+
     negativeParts.push(...collectTags(object.promptTags, settings.modelFormat, true));
   }
 

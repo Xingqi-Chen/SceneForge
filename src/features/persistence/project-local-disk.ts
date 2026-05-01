@@ -3,7 +3,7 @@ import path from "node:path";
 
 import type { ProjectSummary, SceneForgeProject } from "@/shared/types";
 
-import { getProjectContentFingerprint, sanitizeImportedProject } from "./project-serialization";
+import { getProjectContentFingerprint, sanitizeImportedProject, stripSharedPromptStateFromProject } from "./project-serialization";
 
 const FILE_SUFFIX = ".json";
 
@@ -88,12 +88,13 @@ async function loadAllProjects(dir: string): Promise<SceneForgeProject[]> {
 export async function saveProjectToDisk(project: SceneForgeProject) {
   const dir = getResolvedProjectsDir();
   const normalized = sanitizeImportedProject(project);
-  const fingerprint = getProjectContentFingerprint(normalized);
+  const toWrite = stripSharedPromptStateFromProject(normalized);
+  const fingerprint = getProjectContentFingerprint(toWrite);
   const existing = await loadAllProjects(dir);
 
   const duplicateIds = existing
     .filter((entry) => {
-      if (entry.id === normalized.id) {
+      if (entry.id === toWrite.id) {
         return false;
       }
 
@@ -103,9 +104,9 @@ export async function saveProjectToDisk(project: SceneForgeProject) {
 
   await ensureProjectsDir(dir);
 
-  const fileName = projectFileName(normalized.id);
+  const fileName = projectFileName(toWrite.id);
   const fullPath = path.join(dir, fileName);
-  await fs.writeFile(fullPath, JSON.stringify(normalized), "utf8");
+  await fs.writeFile(fullPath, JSON.stringify(toWrite), "utf8");
 
   for (const id of duplicateIds) {
     try {
@@ -117,7 +118,7 @@ export async function saveProjectToDisk(project: SceneForgeProject) {
 
   if (duplicateIds.length > 0) {
     console.info("[SceneForge] [persistence] removed duplicate projects by content fingerprint", {
-      keptId: normalized.id,
+      keptId: toWrite.id,
       removedIds: duplicateIds,
     });
   }
@@ -135,6 +136,40 @@ export async function loadProjectFromDisk(projectId: string): Promise<SceneForge
   } catch (error) {
     if (error && typeof error === "object" && "code" in error && (error as NodeJS.ErrnoException).code === "ENOENT") {
       return undefined;
+    }
+
+    throw error;
+  }
+}
+
+/**
+ * Removes the project JSON file for `projectId` under the resolved projects directory.
+ * @returns `true` if a file was removed, `false` if it did not exist.
+ */
+export async function deleteProjectFromDisk(projectId: string): Promise<boolean> {
+  const trimmed = projectId.trim();
+  if (!trimmed) {
+    return false;
+  }
+
+  const dir = path.resolve(getResolvedProjectsDir());
+  const fullPath = path.resolve(path.join(dir, projectFileName(trimmed)));
+  const relative = path.relative(dir, fullPath);
+
+  if (relative.startsWith("..") || path.isAbsolute(relative)) {
+    console.warn("[SceneForge] [persistence] rejected delete outside projects directory", {
+      projectId: trimmed,
+    });
+    throw new Error("非法的项目 id。");
+  }
+
+  try {
+    await fs.unlink(fullPath);
+    console.info("[SceneForge] [persistence] deleted project file", { projectId: trimmed });
+    return true;
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error && (error as NodeJS.ErrnoException).code === "ENOENT") {
+      return false;
     }
 
     throw error;
