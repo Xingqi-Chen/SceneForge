@@ -161,6 +161,12 @@ describe("project serialization", () => {
   it("coerces target prompt category bindings on import", () => {
     const project = createDefaultProject();
     project.scene.promptCategoryBindings = ["scene", "scene", "bad" as never];
+    project.scene.promptSubcategoryBindings = [
+      "scene-weather",
+      "scene-weather",
+      "style-color",
+      "bad" as never,
+    ];
     project.scene.objects.push({
       id: "object-1",
       kind: "rectangle",
@@ -175,17 +181,25 @@ describe("project serialization", () => {
       weight: { enabled: false, value: 1 },
       promptTags: [],
       promptCategoryBindings: ["character"],
+      promptSubcategoryBindings: ["character-pose", "scene-prop"],
     });
     project.scene.characters.push({
       ...structuredClone(defaultCharacter),
       id: "character-1",
       promptCategoryBindings: [],
+      promptSubcategoryBindings: ["character-expression"],
       bodyParts: [
         {
           id: "head",
           label: "头部",
           promptTags: [],
           promptCategoryBindings: ["body-part", "negative", "body-part"],
+          promptSubcategoryBindings: [
+            "body-part-hair",
+            "negative-quality",
+            "scene-weather",
+            "body-part-hair",
+          ],
         },
       ],
     });
@@ -193,7 +207,9 @@ describe("project serialization", () => {
     const imported = importProjectFromJson(serializeProject(project));
 
     expect(imported.scene.promptCategoryBindings).toEqual(["scene"]);
+    expect(imported.scene.promptSubcategoryBindings).toEqual(["scene-weather"]);
     expect(imported.scene.objects[0]?.promptCategoryBindings).toEqual(["character"]);
+    expect(imported.scene.objects[0]?.promptSubcategoryBindings).toEqual(["character-pose"]);
     expect(imported.scene.characters[0]?.promptCategoryBindings).toEqual([
       "style",
       "lighting",
@@ -201,9 +217,16 @@ describe("project serialization", () => {
       "character",
       "negative",
     ]);
+    expect(imported.scene.characters[0]?.promptSubcategoryBindings).toEqual([
+      "character-expression",
+    ]);
     expect(imported.scene.characters[0]?.bodyParts[0]?.promptCategoryBindings).toEqual([
       "body-part",
       "negative",
+    ]);
+    expect(imported.scene.characters[0]?.bodyParts[0]?.promptSubcategoryBindings).toEqual([
+      "body-part-hair",
+      "negative-quality",
     ]);
   });
 

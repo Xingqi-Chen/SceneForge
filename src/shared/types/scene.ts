@@ -95,6 +95,7 @@ export type SceneObject = {
   weight: PromptWeight;
   promptTags: PromptTag[];
   promptCategoryBindings?: PromptTagCategory[];
+  promptSubcategoryBindings?: PromptTagSubcategory[];
 };
 
 export type BodyPartId =
@@ -132,6 +133,7 @@ export type CharacterBodyPart = {
   label: string;
   promptTags: PromptTag[];
   promptCategoryBindings?: PromptTagCategory[];
+  promptSubcategoryBindings?: PromptTagSubcategory[];
 };
 
 export type CharacterSkeleton = {
@@ -145,6 +147,7 @@ export type CharacterSkeleton = {
   bodyParts: CharacterBodyPart[];
   promptTags: PromptTag[];
   promptCategoryBindings?: PromptTagCategory[];
+  promptSubcategoryBindings?: PromptTagSubcategory[];
   includeInPrompt: boolean;
 };
 
@@ -157,4 +160,5 @@ export type Scene = {
   characters: CharacterSkeleton[];
   promptTags: PromptTag[];
   promptCategoryBindings?: PromptTagCategory[];
+  promptSubcategoryBindings?: PromptTagSubcategory[];
 };

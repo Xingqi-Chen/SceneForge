@@ -9,6 +9,7 @@ import type {
   ProjectSettings,
   PromptTag,
   PromptTagCategory,
+  PromptTagSubcategory,
   Scene,
   SceneForgeProject,
   SceneObject,
@@ -20,11 +21,13 @@ import { BUILT_IN_PROMPT_LIBRARY_TAGS } from "@/features/prompt-engine/prompt-li
 import { mergeImportedPromptLibraryTags } from "@/features/prompt-engine/prompt-library/merge-imported-prompt-library-tags";
 import {
   PROMPT_TAG_CATEGORY_ORDER,
+  PROMPT_TAG_SUBCATEGORY_OPTIONS,
   normalizePromptTagSubcategory,
 } from "@/features/prompt-engine/prompt-library/prompt-tag-taxonomy";
 
 import {
   DEFAULT_PROMPT_CATEGORY_BINDINGS,
+  DEFAULT_PROMPT_SUBCATEGORY_BINDINGS,
   createDefaultProject,
   defaultCharacter,
 } from "./defaults";
@@ -83,6 +86,10 @@ type EditorState = {
     target: PromptTagTarget,
     categories: PromptTagCategory[],
   ) => void;
+  updatePromptSubcategoryBindings: (
+    target: PromptTagTarget,
+    subcategories: PromptTagSubcategory[],
+  ) => void;
   /** Merges parsed tags into `settings.promptLibraryTags`, skipping duplicates vs built-in and existing custom entries. Returns count added. */
   importPromptLibraryTags: (incoming: Array<Omit<PromptTag, "id">>) => number;
   updatePromptLibraryTag: (tag: PromptTag) => boolean;
@@ -122,6 +129,30 @@ function normalizePromptCategoryBindings(categories: PromptTagCategory[]) {
     }
 
     seen.add(category);
+    return true;
+  });
+}
+
+function getPromptSubcategoryCategory(subcategory: PromptTagSubcategory) {
+  return PROMPT_TAG_CATEGORY_ORDER.find((category) =>
+    PROMPT_TAG_SUBCATEGORY_OPTIONS[category].includes(subcategory),
+  );
+}
+
+function normalizePromptSubcategoryBindings(
+  subcategories: PromptTagSubcategory[],
+  categories: PromptTagCategory[],
+) {
+  const categorySet = new Set(categories);
+  const seen = new Set<PromptTagSubcategory>();
+
+  return subcategories.filter((subcategory) => {
+    const category = getPromptSubcategoryCategory(subcategory);
+    if (!category || !categorySet.has(category) || seen.has(subcategory)) {
+      return false;
+    }
+
+    seen.add(subcategory);
     return true;
   });
 }
@@ -207,11 +238,17 @@ function createCharacter(layerOffset: number): CharacterSkeleton {
       promptCategoryBindings: bodyPart.promptCategoryBindings
         ? [...bodyPart.promptCategoryBindings]
         : [...DEFAULT_PROMPT_CATEGORY_BINDINGS.bodyPart],
+      promptSubcategoryBindings: bodyPart.promptSubcategoryBindings
+        ? [...bodyPart.promptSubcategoryBindings]
+        : [...DEFAULT_PROMPT_SUBCATEGORY_BINDINGS.bodyPart],
     })),
     promptTags: defaultCharacter.promptTags.map(clonePromptTag),
     promptCategoryBindings: defaultCharacter.promptCategoryBindings
       ? [...defaultCharacter.promptCategoryBindings]
       : [...DEFAULT_PROMPT_CATEGORY_BINDINGS.character],
+    promptSubcategoryBindings: defaultCharacter.promptSubcategoryBindings
+      ? [...defaultCharacter.promptSubcategoryBindings]
+      : [...DEFAULT_PROMPT_SUBCATEGORY_BINDINGS.character],
   };
 }
 
@@ -234,6 +271,9 @@ function cloneSceneObject(object: SceneObject): SceneObject {
     promptCategoryBindings: object.promptCategoryBindings
       ? [...object.promptCategoryBindings]
       : [...DEFAULT_PROMPT_CATEGORY_BINDINGS.object],
+    promptSubcategoryBindings: object.promptSubcategoryBindings
+      ? [...object.promptSubcategoryBindings]
+      : [...DEFAULT_PROMPT_SUBCATEGORY_BINDINGS.object],
   };
 }
 
@@ -258,11 +298,17 @@ function cloneCharacterSkeleton(character: CharacterSkeleton): CharacterSkeleton
       promptCategoryBindings: bodyPart.promptCategoryBindings
         ? [...bodyPart.promptCategoryBindings]
         : [...DEFAULT_PROMPT_CATEGORY_BINDINGS.bodyPart],
+      promptSubcategoryBindings: bodyPart.promptSubcategoryBindings
+        ? [...bodyPart.promptSubcategoryBindings]
+        : [...DEFAULT_PROMPT_SUBCATEGORY_BINDINGS.bodyPart],
     })),
     promptTags: character.promptTags.map(clonePromptTag),
     promptCategoryBindings: character.promptCategoryBindings
       ? [...character.promptCategoryBindings]
       : [...DEFAULT_PROMPT_CATEGORY_BINDINGS.character],
+    promptSubcategoryBindings: character.promptSubcategoryBindings
+      ? [...character.promptSubcategoryBindings]
+      : [...DEFAULT_PROMPT_SUBCATEGORY_BINDINGS.character],
   };
 }
 
@@ -346,6 +392,7 @@ export const useEditorStore = create<EditorState>((set) => ({
         weight: { enabled: false, value: 1 },
         promptTags: [],
         promptCategoryBindings: [...DEFAULT_PROMPT_CATEGORY_BINDINGS.object],
+        promptSubcategoryBindings: [...DEFAULT_PROMPT_SUBCATEGORY_BINDINGS.object],
       };
 
       return {
@@ -879,6 +926,10 @@ export const useEditorStore = create<EditorState>((set) => ({
             scene: {
               ...state.project.scene,
               promptCategoryBindings,
+              promptSubcategoryBindings: normalizePromptSubcategoryBindings(
+                state.project.scene.promptSubcategoryBindings ?? [],
+                promptCategoryBindings,
+              ),
             },
           }),
         };
@@ -891,7 +942,16 @@ export const useEditorStore = create<EditorState>((set) => ({
             scene: {
               ...state.project.scene,
               objects: state.project.scene.objects.map((object) =>
-                object.id === target.id ? { ...object, promptCategoryBindings } : object,
+                object.id === target.id
+                  ? {
+                      ...object,
+                      promptCategoryBindings,
+                      promptSubcategoryBindings: normalizePromptSubcategoryBindings(
+                        object.promptSubcategoryBindings ?? [],
+                        promptCategoryBindings,
+                      ),
+                    }
+                  : object,
               ),
             },
           }),
@@ -915,13 +975,125 @@ export const useEditorStore = create<EditorState>((set) => ({
                   ...character,
                   bodyParts: character.bodyParts.map((bodyPart) =>
                     bodyPart.id === target.bodyPartId
-                      ? { ...bodyPart, promptCategoryBindings }
+                      ? {
+                          ...bodyPart,
+                          promptCategoryBindings,
+                          promptSubcategoryBindings: normalizePromptSubcategoryBindings(
+                            bodyPart.promptSubcategoryBindings ?? [],
+                            promptCategoryBindings,
+                          ),
+                        }
                       : bodyPart,
                   ),
                 };
               }
 
-              return { ...character, promptCategoryBindings };
+              return {
+                ...character,
+                promptCategoryBindings,
+                promptSubcategoryBindings: normalizePromptSubcategoryBindings(
+                  character.promptSubcategoryBindings ?? [],
+                  promptCategoryBindings,
+                ),
+              };
+            }),
+          },
+        }),
+      };
+    }),
+  updatePromptSubcategoryBindings: (target, subcategories) =>
+    set((state) => {
+      if (target.kind === "scene") {
+        const categories =
+          state.project.scene.promptCategoryBindings ?? DEFAULT_PROMPT_CATEGORY_BINDINGS.scene;
+        const promptSubcategoryBindings = normalizePromptSubcategoryBindings(
+          subcategories,
+          categories,
+        );
+
+        return {
+          project: touchProject({
+            ...state.project,
+            scene: {
+              ...state.project.scene,
+              promptSubcategoryBindings,
+            },
+          }),
+        };
+      }
+
+      if (target.kind === "object") {
+        return {
+          project: touchProject({
+            ...state.project,
+            scene: {
+              ...state.project.scene,
+              objects: state.project.scene.objects.map((object) => {
+                if (object.id !== target.id) {
+                  return object;
+                }
+
+                const categories =
+                  object.promptCategoryBindings ?? DEFAULT_PROMPT_CATEGORY_BINDINGS.object;
+
+                return {
+                  ...object,
+                  promptSubcategoryBindings: normalizePromptSubcategoryBindings(
+                    subcategories,
+                    categories,
+                  ),
+                };
+              }),
+            },
+          }),
+        };
+      }
+
+      const targetCharacterId = target.kind === "bodyPart" ? target.characterId : target.id;
+
+      return {
+        project: touchProject({
+          ...state.project,
+          scene: {
+            ...state.project.scene,
+            characters: state.project.scene.characters.map((character) => {
+              if (character.id !== targetCharacterId) {
+                return character;
+              }
+
+              if (target.kind === "bodyPart") {
+                return {
+                  ...character,
+                  bodyParts: character.bodyParts.map((bodyPart) => {
+                    if (bodyPart.id !== target.bodyPartId) {
+                      return bodyPart;
+                    }
+
+                    const categories =
+                      bodyPart.promptCategoryBindings ??
+                      DEFAULT_PROMPT_CATEGORY_BINDINGS.bodyPart;
+
+                    return {
+                      ...bodyPart,
+                      promptSubcategoryBindings: normalizePromptSubcategoryBindings(
+                        subcategories,
+                        categories,
+                      ),
+                    };
+                  }),
+                };
+              }
+
+              const categories =
+                character.promptCategoryBindings ?? DEFAULT_PROMPT_CATEGORY_BINDINGS.character;
+
+              return {
+                ...character,
+                promptSubcategoryBindings: normalizePromptSubcategoryBindings(
+                  subcategories,
+                  categories,
+                ),
+              };
             }),
           },
         }),

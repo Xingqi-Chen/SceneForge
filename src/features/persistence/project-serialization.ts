@@ -5,6 +5,7 @@ import type {
   JointId,
   PromptTag,
   PromptTagCategory,
+  PromptTagSubcategory,
   Scene,
   SceneForgeProject,
   SceneObject,
@@ -12,10 +13,12 @@ import type {
 
 import {
   DEFAULT_PROMPT_CATEGORY_BINDINGS,
+  DEFAULT_PROMPT_SUBCATEGORY_BINDINGS,
   defaultCharacter,
 } from "@/features/editor/store/defaults";
 import {
   PROMPT_TAG_CATEGORY_ORDER,
+  PROMPT_TAG_SUBCATEGORY_OPTIONS,
   normalizePromptTagCategory,
   normalizePromptTagSubcategory,
 } from "@/features/prompt-engine/prompt-library/prompt-tag-taxonomy";
@@ -170,6 +173,44 @@ function sanitizePromptCategoryBindings(
   return categories.length > 0 ? categories : [...fallback];
 }
 
+function getPromptSubcategoryCategory(subcategory: PromptTagSubcategory) {
+  return PROMPT_TAG_CATEGORY_ORDER.find((category) =>
+    PROMPT_TAG_SUBCATEGORY_OPTIONS[category].includes(subcategory),
+  );
+}
+
+function sanitizePromptSubcategoryBindings(
+  raw: unknown,
+  categories: PromptTagCategory[],
+  fallback: PromptTagSubcategory[],
+): PromptTagSubcategory[] {
+  if (!Array.isArray(raw)) {
+    return [...fallback];
+  }
+
+  const categorySet = new Set(categories);
+  const allowed = new Set<PromptTagSubcategory>(
+    Object.values(PROMPT_TAG_SUBCATEGORY_OPTIONS).flat(),
+  );
+  const seen = new Set<PromptTagSubcategory>();
+  const subcategories = raw.filter((value): value is PromptTagSubcategory => {
+    if (typeof value !== "string" || !allowed.has(value as PromptTagSubcategory)) {
+      return false;
+    }
+
+    const subcategory = value as PromptTagSubcategory;
+    const category = getPromptSubcategoryCategory(subcategory);
+    if (!category || !categorySet.has(category) || seen.has(subcategory)) {
+      return false;
+    }
+
+    seen.add(subcategory);
+    return true;
+  });
+
+  return subcategories.length > 0 ? subcategories : [...fallback];
+}
+
 function sanitizeSceneObject(raw: unknown): SceneObject | null {
   if (!isRecord(raw) || typeof raw.id !== "string" || !raw.id) {
     return null;
@@ -197,6 +238,11 @@ function sanitizeSceneObject(raw: unknown): SceneObject | null {
 
   const promptTags = Array.isArray(raw.promptTags) ? (raw.promptTags as SceneObject["promptTags"]) : [];
 
+  const promptCategoryBindings = sanitizePromptCategoryBindings(
+    raw.promptCategoryBindings,
+    DEFAULT_PROMPT_CATEGORY_BINDINGS.object,
+  );
+
   return {
     id: raw.id,
     kind: kind as SceneObject["kind"],
@@ -210,9 +256,11 @@ function sanitizeSceneObject(raw: unknown): SceneObject | null {
     includeInPrompt: typeof raw.includeInPrompt === "boolean" ? raw.includeInPrompt : true,
     weight: sanitizeWeight(raw.weight),
     promptTags: dedupePromptTags(promptTags),
-    promptCategoryBindings: sanitizePromptCategoryBindings(
-      raw.promptCategoryBindings,
-      DEFAULT_PROMPT_CATEGORY_BINDINGS.object,
+    promptCategoryBindings,
+    promptSubcategoryBindings: sanitizePromptSubcategoryBindings(
+      raw.promptSubcategoryBindings,
+      promptCategoryBindings,
+      DEFAULT_PROMPT_SUBCATEGORY_BINDINGS.object,
     ),
   };
 }
@@ -256,18 +304,31 @@ function sanitizeCharacter(raw: unknown): CharacterSkeleton | null {
           promptTags: bodyPart.promptTags.map((tag) => ({ ...tag, weight: { ...tag.weight } })),
         }));
 
-  const bodyParts = bodyPartsRaw.map((bodyPart) => ({
-    ...bodyPart,
-    promptTags: dedupePromptTags(bodyPart.promptTags),
-    promptCategoryBindings: sanitizePromptCategoryBindings(
+  const bodyParts = bodyPartsRaw.map((bodyPart) => {
+    const promptCategoryBindings = sanitizePromptCategoryBindings(
       bodyPart.promptCategoryBindings,
       DEFAULT_PROMPT_CATEGORY_BINDINGS.bodyPart,
-    ),
-  }));
+    );
+
+    return {
+      ...bodyPart,
+      promptTags: dedupePromptTags(bodyPart.promptTags),
+      promptCategoryBindings,
+      promptSubcategoryBindings: sanitizePromptSubcategoryBindings(
+        bodyPart.promptSubcategoryBindings,
+        promptCategoryBindings,
+        DEFAULT_PROMPT_SUBCATEGORY_BINDINGS.bodyPart,
+      ),
+    };
+  });
 
   const charPromptTags = Array.isArray(raw.promptTags)
     ? (raw.promptTags as CharacterSkeleton["promptTags"])
     : [];
+  const promptCategoryBindings = sanitizePromptCategoryBindings(
+    raw.promptCategoryBindings,
+    DEFAULT_PROMPT_CATEGORY_BINDINGS.character,
+  );
 
   return {
     id: raw.id,
@@ -279,9 +340,11 @@ function sanitizeCharacter(raw: unknown): CharacterSkeleton | null {
     joints,
     bodyParts,
     promptTags: dedupePromptTags(charPromptTags),
-    promptCategoryBindings: sanitizePromptCategoryBindings(
-      raw.promptCategoryBindings,
-      DEFAULT_PROMPT_CATEGORY_BINDINGS.character,
+    promptCategoryBindings,
+    promptSubcategoryBindings: sanitizePromptSubcategoryBindings(
+      raw.promptSubcategoryBindings,
+      promptCategoryBindings,
+      DEFAULT_PROMPT_SUBCATEGORY_BINDINGS.character,
     ),
     includeInPrompt: typeof raw.includeInPrompt === "boolean" ? raw.includeInPrompt : true,
   };
@@ -298,6 +361,7 @@ function sanitizeScene(scene: unknown): Scene {
       characters: [],
       promptTags: [],
       promptCategoryBindings: [...DEFAULT_PROMPT_CATEGORY_BINDINGS.scene],
+      promptSubcategoryBindings: [...DEFAULT_PROMPT_SUBCATEGORY_BINDINGS.scene],
     };
   }
 
@@ -311,6 +375,10 @@ function sanitizeScene(scene: unknown): Scene {
     charactersRaw.map(sanitizeCharacter).filter((c): c is CharacterSkeleton => c !== null),
   );
   const scenePromptTags = Array.isArray(scene.promptTags) ? (scene.promptTags as Scene["promptTags"]) : [];
+  const promptCategoryBindings = sanitizePromptCategoryBindings(
+    scene.promptCategoryBindings,
+    DEFAULT_PROMPT_CATEGORY_BINDINGS.scene,
+  );
 
   return {
     id: typeof scene.id === "string" && scene.id ? scene.id : "scene-imported",
@@ -320,9 +388,11 @@ function sanitizeScene(scene: unknown): Scene {
     objects,
     characters,
     promptTags: dedupePromptTags(scenePromptTags),
-    promptCategoryBindings: sanitizePromptCategoryBindings(
-      scene.promptCategoryBindings,
-      DEFAULT_PROMPT_CATEGORY_BINDINGS.scene,
+    promptCategoryBindings,
+    promptSubcategoryBindings: sanitizePromptSubcategoryBindings(
+      scene.promptSubcategoryBindings,
+      promptCategoryBindings,
+      DEFAULT_PROMPT_SUBCATEGORY_BINDINGS.scene,
     ),
   };
 }

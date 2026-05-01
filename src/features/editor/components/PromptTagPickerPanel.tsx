@@ -8,7 +8,10 @@ import { Button } from "@/components/ui/button";
 import { useEditorStore, type PromptTagTarget } from "@/features/editor/store/editor-store";
 import { getLlmProxyErrorMessage, isLlmChatResponse } from "@/features/llm";
 import { saveProject } from "@/features/persistence";
-import { DEFAULT_PROMPT_CATEGORY_BINDINGS } from "@/features/editor/store/defaults";
+import {
+  DEFAULT_PROMPT_CATEGORY_BINDINGS,
+  DEFAULT_PROMPT_SUBCATEGORY_BINDINGS,
+} from "@/features/editor/store/defaults";
 import { BUILT_IN_PROMPT_LIBRARY_TAGS } from "@/features/prompt-engine/prompt-library/built-in-prompt-tags";
 import {
   buildPromptLibraryImportMessages,
@@ -105,6 +108,41 @@ function findAppliedTag(tags: PromptTag[], tag: PromptTag) {
   );
 }
 
+function filterPromptLibraryGroupsByBindings(
+  groups: ReturnType<typeof groupPromptLibrary>,
+  categoryBindings: PromptTagCategory[],
+  subcategoryBindings: PromptTagSubcategory[],
+) {
+  const categorySet = new Set(categoryBindings);
+  const subcategorySet = new Set(subcategoryBindings);
+
+  return groups
+    .filter((group) => categorySet.has(group.category))
+    .map((group) => {
+      const boundSubcategories = PROMPT_TAG_SUBCATEGORY_OPTIONS[group.category].filter(
+        (subcategory) => subcategorySet.has(subcategory),
+      );
+
+      if (boundSubcategories.length === 0) {
+        return group;
+      }
+
+      const subgroups = group.subgroups.filter(
+        (subgroup) =>
+          subgroup.subcategory !== "" &&
+          subcategorySet.has(subgroup.subcategory as PromptTagSubcategory),
+      );
+
+      return {
+        ...group,
+        tagCount: subgroups.reduce((total, subgroup) => total + subgroup.tags.length, 0),
+        uncategorizedTags: [],
+        subgroups,
+      };
+    })
+    .filter((group) => group.subgroups.length > 0);
+}
+
 export function PromptTagPickerPanel() {
   const {
     addPromptTag,
@@ -117,6 +155,7 @@ export function PromptTagPickerPanel() {
     selection,
     updatePromptCategoryBindings,
     updatePromptLibraryTag,
+    updatePromptSubcategoryBindings,
     updatePromptTag,
   } = useEditorStore();
   const [bodyPartTarget, setBodyPartTarget] = useState<BodyPartTargetValue>("character");
@@ -193,13 +232,30 @@ export function PromptTagPickerPanel() {
       : selectedCharacter
         ? (selectedCharacter.promptCategoryBindings ?? DEFAULT_PROMPT_CATEGORY_BINDINGS.character)
         : (project.scene.promptCategoryBindings ?? DEFAULT_PROMPT_CATEGORY_BINDINGS.scene);
+  const currentPromptSubcategoryBindings = selectedObject
+    ? (selectedObject.promptSubcategoryBindings ?? DEFAULT_PROMPT_SUBCATEGORY_BINDINGS.object)
+    : selectedBodyPart
+      ? (selectedBodyPart.promptSubcategoryBindings ?? DEFAULT_PROMPT_SUBCATEGORY_BINDINGS.bodyPart)
+      : selectedCharacter
+        ? (selectedCharacter.promptSubcategoryBindings ??
+          DEFAULT_PROMPT_SUBCATEGORY_BINDINGS.character)
+        : (project.scene.promptSubcategoryBindings ?? DEFAULT_PROMPT_SUBCATEGORY_BINDINGS.scene);
   const promptCategoryBindingSet = useMemo(
     () => new Set(currentPromptCategoryBindings),
     [currentPromptCategoryBindings],
   );
+  const promptSubcategoryBindingSet = useMemo(
+    () => new Set(currentPromptSubcategoryBindings),
+    [currentPromptSubcategoryBindings],
+  );
   const boundPromptLibraryGroups = useMemo(
-    () => promptLibraryGroups.filter((group) => promptCategoryBindingSet.has(group.category)),
-    [promptCategoryBindingSet, promptLibraryGroups],
+    () =>
+      filterPromptLibraryGroupsByBindings(
+        promptLibraryGroups,
+        currentPromptCategoryBindings,
+        currentPromptSubcategoryBindings,
+      ),
+    [currentPromptCategoryBindings, currentPromptSubcategoryBindings, promptLibraryGroups],
   );
 
   function handleBodyPartTargetChange(nextTarget: BodyPartTargetValue) {
@@ -262,6 +318,19 @@ export function PromptTagPickerPanel() {
     await persistCurrentProject(
       () => updatePromptCategoryBindings(tagTarget, nextCategories),
       "update-target-category-bindings",
+    );
+  }
+
+  async function handleTogglePromptSubcategoryBinding(subcategory: PromptTagSubcategory) {
+    const nextSubcategories = promptSubcategoryBindingSet.has(subcategory)
+      ? currentPromptSubcategoryBindings.filter(
+          (currentSubcategory) => currentSubcategory !== subcategory,
+        )
+      : [...currentPromptSubcategoryBindings, subcategory];
+
+    await persistCurrentProject(
+      () => updatePromptSubcategoryBindings(tagTarget, nextSubcategories),
+      "update-target-subcategory-bindings",
     );
   }
 
@@ -935,8 +1004,62 @@ export function PromptTagPickerPanel() {
                     })}
                   </div>
                   <p className="mt-2 text-[11px] leading-relaxed text-slate-500">
-                    只显示已绑定分类下的词库标签；已应用标签不会被自动删除。
+                    未绑定二级时显示整个一级分类；已绑定二级时只显示选中的二级分类。
                   </p>
+                  <div className="mt-4 space-y-3 border-t border-slate-100 pt-3">
+                    <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                      绑定二级分类
+                    </p>
+                    {PROMPT_TAG_CATEGORY_ORDER.filter((category) =>
+                      promptCategoryBindingSet.has(category),
+                    ).map((category) => {
+                      const boundSubcategories = PROMPT_TAG_SUBCATEGORY_OPTIONS[category].filter(
+                        (subcategory) => promptSubcategoryBindingSet.has(subcategory),
+                      );
+
+                      return (
+                        <div
+                          className="rounded-xl border border-slate-100 bg-slate-50/70 p-3"
+                          key={category}
+                        >
+                          <div className="mb-2 flex items-center justify-between gap-2">
+                            <p className="text-xs font-semibold text-slate-700">
+                              {PROMPT_TAG_CATEGORY_LABELS[category]}
+                            </p>
+                            <span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-medium text-slate-400">
+                              {boundSubcategories.length > 0
+                                ? `已绑定 ${boundSubcategories.length}`
+                                : "显示全部"}
+                            </span>
+                          </div>
+                          <div className="flex flex-wrap gap-2">
+                            {PROMPT_TAG_SUBCATEGORY_OPTIONS[category].map((subcategory) => {
+                              const enabled = promptSubcategoryBindingSet.has(subcategory);
+
+                              return (
+                                <button
+                                  aria-pressed={enabled}
+                                  className={
+                                    enabled
+                                      ? "rounded-full bg-slate-800 px-3 py-1.5 text-xs font-medium text-white shadow-sm transition-all hover:bg-slate-900"
+                                      : "rounded-full border border-slate-200/80 bg-white px-3 py-1.5 text-xs font-medium text-slate-500 shadow-sm transition-all hover:border-pink-200 hover:bg-pink-50 hover:text-pink-700"
+                                  }
+                                  key={subcategory}
+                                  onClick={() =>
+                                    void handleTogglePromptSubcategoryBinding(subcategory)
+                                  }
+                                  title={`切换 ${PROMPT_TAG_SUBCATEGORY_LABELS[subcategory]} 二级分类绑定`}
+                                  type="button"
+                                >
+                                  {PROMPT_TAG_SUBCATEGORY_LABELS[subcategory]}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
               </div>
 

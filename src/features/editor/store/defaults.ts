@@ -2,6 +2,7 @@ import type {
   CharacterSkeleton,
   PromptTag,
   PromptTagCategory,
+  PromptTagSubcategory,
   Scene,
   SceneForgeProject,
 } from "@/shared/types";
@@ -14,6 +15,13 @@ export const DEFAULT_PROMPT_CATEGORY_BINDINGS = {
   character: ["style", "lighting", "quality", "character", "negative"],
   bodyPart: ["body-part", "negative"],
 } satisfies Record<string, PromptTagCategory[]>;
+
+export const DEFAULT_PROMPT_SUBCATEGORY_BINDINGS = {
+  scene: [],
+  object: [],
+  character: [],
+  bodyPart: [],
+} satisfies Record<string, PromptTagSubcategory[]>;
 
 export const defaultCharacter: CharacterSkeleton = {
   id: "character-hero",
@@ -41,23 +49,25 @@ export const defaultCharacter: CharacterSkeleton = {
       label: "头部",
       promptTags: [],
       promptCategoryBindings: [...DEFAULT_PROMPT_CATEGORY_BINDINGS.bodyPart],
+      promptSubcategoryBindings: [...DEFAULT_PROMPT_SUBCATEGORY_BINDINGS.bodyPart],
     },
-    { id: "torso", label: "躯干", promptTags: [], promptCategoryBindings: [...DEFAULT_PROMPT_CATEGORY_BINDINGS.bodyPart] },
-    { id: "leftUpperArm", label: "左上臂", promptTags: [], promptCategoryBindings: [...DEFAULT_PROMPT_CATEGORY_BINDINGS.bodyPart] },
-    { id: "leftForearm", label: "左前臂", promptTags: [], promptCategoryBindings: [...DEFAULT_PROMPT_CATEGORY_BINDINGS.bodyPart] },
-    { id: "rightUpperArm", label: "右上臂", promptTags: [], promptCategoryBindings: [...DEFAULT_PROMPT_CATEGORY_BINDINGS.bodyPart] },
-    { id: "rightForearm", label: "右前臂", promptTags: [], promptCategoryBindings: [...DEFAULT_PROMPT_CATEGORY_BINDINGS.bodyPart] },
-    { id: "leftThigh", label: "左大腿", promptTags: [], promptCategoryBindings: [...DEFAULT_PROMPT_CATEGORY_BINDINGS.bodyPart] },
-    { id: "leftShin", label: "左小腿", promptTags: [], promptCategoryBindings: [...DEFAULT_PROMPT_CATEGORY_BINDINGS.bodyPart] },
-    { id: "rightThigh", label: "右大腿", promptTags: [], promptCategoryBindings: [...DEFAULT_PROMPT_CATEGORY_BINDINGS.bodyPart] },
-    { id: "rightShin", label: "右小腿", promptTags: [], promptCategoryBindings: [...DEFAULT_PROMPT_CATEGORY_BINDINGS.bodyPart] },
-    { id: "leftHand", label: "左手", promptTags: [], promptCategoryBindings: [...DEFAULT_PROMPT_CATEGORY_BINDINGS.bodyPart] },
-    { id: "rightHand", label: "右手", promptTags: [], promptCategoryBindings: [...DEFAULT_PROMPT_CATEGORY_BINDINGS.bodyPart] },
-    { id: "leftFoot", label: "左脚", promptTags: [], promptCategoryBindings: [...DEFAULT_PROMPT_CATEGORY_BINDINGS.bodyPart] },
-    { id: "rightFoot", label: "右脚", promptTags: [], promptCategoryBindings: [...DEFAULT_PROMPT_CATEGORY_BINDINGS.bodyPart] },
+    { id: "torso", label: "躯干", promptTags: [], promptCategoryBindings: [...DEFAULT_PROMPT_CATEGORY_BINDINGS.bodyPart], promptSubcategoryBindings: [...DEFAULT_PROMPT_SUBCATEGORY_BINDINGS.bodyPart] },
+    { id: "leftUpperArm", label: "左上臂", promptTags: [], promptCategoryBindings: [...DEFAULT_PROMPT_CATEGORY_BINDINGS.bodyPart], promptSubcategoryBindings: [...DEFAULT_PROMPT_SUBCATEGORY_BINDINGS.bodyPart] },
+    { id: "leftForearm", label: "左前臂", promptTags: [], promptCategoryBindings: [...DEFAULT_PROMPT_CATEGORY_BINDINGS.bodyPart], promptSubcategoryBindings: [...DEFAULT_PROMPT_SUBCATEGORY_BINDINGS.bodyPart] },
+    { id: "rightUpperArm", label: "右上臂", promptTags: [], promptCategoryBindings: [...DEFAULT_PROMPT_CATEGORY_BINDINGS.bodyPart], promptSubcategoryBindings: [...DEFAULT_PROMPT_SUBCATEGORY_BINDINGS.bodyPart] },
+    { id: "rightForearm", label: "右前臂", promptTags: [], promptCategoryBindings: [...DEFAULT_PROMPT_CATEGORY_BINDINGS.bodyPart], promptSubcategoryBindings: [...DEFAULT_PROMPT_SUBCATEGORY_BINDINGS.bodyPart] },
+    { id: "leftThigh", label: "左大腿", promptTags: [], promptCategoryBindings: [...DEFAULT_PROMPT_CATEGORY_BINDINGS.bodyPart], promptSubcategoryBindings: [...DEFAULT_PROMPT_SUBCATEGORY_BINDINGS.bodyPart] },
+    { id: "leftShin", label: "左小腿", promptTags: [], promptCategoryBindings: [...DEFAULT_PROMPT_CATEGORY_BINDINGS.bodyPart], promptSubcategoryBindings: [...DEFAULT_PROMPT_SUBCATEGORY_BINDINGS.bodyPart] },
+    { id: "rightThigh", label: "右大腿", promptTags: [], promptCategoryBindings: [...DEFAULT_PROMPT_CATEGORY_BINDINGS.bodyPart], promptSubcategoryBindings: [...DEFAULT_PROMPT_SUBCATEGORY_BINDINGS.bodyPart] },
+    { id: "rightShin", label: "右小腿", promptTags: [], promptCategoryBindings: [...DEFAULT_PROMPT_CATEGORY_BINDINGS.bodyPart], promptSubcategoryBindings: [...DEFAULT_PROMPT_SUBCATEGORY_BINDINGS.bodyPart] },
+    { id: "leftHand", label: "左手", promptTags: [], promptCategoryBindings: [...DEFAULT_PROMPT_CATEGORY_BINDINGS.bodyPart], promptSubcategoryBindings: [...DEFAULT_PROMPT_SUBCATEGORY_BINDINGS.bodyPart] },
+    { id: "rightHand", label: "右手", promptTags: [], promptCategoryBindings: [...DEFAULT_PROMPT_CATEGORY_BINDINGS.bodyPart], promptSubcategoryBindings: [...DEFAULT_PROMPT_SUBCATEGORY_BINDINGS.bodyPart] },
+    { id: "leftFoot", label: "左脚", promptTags: [], promptCategoryBindings: [...DEFAULT_PROMPT_CATEGORY_BINDINGS.bodyPart], promptSubcategoryBindings: [...DEFAULT_PROMPT_SUBCATEGORY_BINDINGS.bodyPart] },
+    { id: "rightFoot", label: "右脚", promptTags: [], promptCategoryBindings: [...DEFAULT_PROMPT_CATEGORY_BINDINGS.bodyPart], promptSubcategoryBindings: [...DEFAULT_PROMPT_SUBCATEGORY_BINDINGS.bodyPart] },
   ],
   promptTags: [],
   promptCategoryBindings: [...DEFAULT_PROMPT_CATEGORY_BINDINGS.character],
+  promptSubcategoryBindings: [...DEFAULT_PROMPT_SUBCATEGORY_BINDINGS.character],
 };
 
 export const defaultScene: Scene = {
@@ -74,6 +84,7 @@ export const defaultScene: Scene = {
   characters: [],
   promptTags: [],
   promptCategoryBindings: [...DEFAULT_PROMPT_CATEGORY_BINDINGS.scene],
+  promptSubcategoryBindings: [...DEFAULT_PROMPT_SUBCATEGORY_BINDINGS.scene],
 };
 
 function clonePromptTag(tag: PromptTag): PromptTag {
@@ -96,10 +107,16 @@ function cloneCharacter(character: CharacterSkeleton): CharacterSkeleton {
       promptCategoryBindings: bodyPart.promptCategoryBindings
         ? [...bodyPart.promptCategoryBindings]
         : undefined,
+      promptSubcategoryBindings: bodyPart.promptSubcategoryBindings
+        ? [...bodyPart.promptSubcategoryBindings]
+        : undefined,
     })),
     promptTags: character.promptTags.map(clonePromptTag),
     promptCategoryBindings: character.promptCategoryBindings
       ? [...character.promptCategoryBindings]
+      : undefined,
+    promptSubcategoryBindings: character.promptSubcategoryBindings
+      ? [...character.promptSubcategoryBindings]
       : undefined,
   };
 }
@@ -117,10 +134,16 @@ function cloneScene(scene: Scene): Scene {
       promptCategoryBindings: object.promptCategoryBindings
         ? [...object.promptCategoryBindings]
         : undefined,
+      promptSubcategoryBindings: object.promptSubcategoryBindings
+        ? [...object.promptSubcategoryBindings]
+        : undefined,
     })),
     characters: scene.characters.map(cloneCharacter),
     promptTags: scene.promptTags.map(clonePromptTag),
     promptCategoryBindings: scene.promptCategoryBindings ? [...scene.promptCategoryBindings] : undefined,
+    promptSubcategoryBindings: scene.promptSubcategoryBindings
+      ? [...scene.promptSubcategoryBindings]
+      : undefined,
   };
 }
 
