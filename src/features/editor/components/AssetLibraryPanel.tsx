@@ -50,15 +50,11 @@ const assets: AssetDefinition[] = [
 
 export function AssetLibraryPanel() {
   const addObject = useEditorStore((state) => state.addObject);
-  const selectCharacter = useEditorStore((state) => state.selectCharacter);
-  const firstCharacterId = useEditorStore((state) => state.project.scene.characters[0]?.id);
+  const addCharacter = useEditorStore((state) => state.addCharacter);
 
   function handleAssetClick(asset: AssetDefinition) {
     if (asset.type === "character") {
-      if (firstCharacterId) {
-        selectCharacter(firstCharacterId);
-      }
-
+      addCharacter();
       return;
     }
 

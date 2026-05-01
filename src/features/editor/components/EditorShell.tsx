@@ -76,7 +76,7 @@ export function EditorShell() {
             </div>
           </div>
         </header>
-        <div className="grid gap-4 lg:grid-cols-[280px_minmax(0,1fr)_360px]">
+        <div className="grid gap-4 lg:grid-cols-[280px_minmax(0,1fr)_360px] lg:items-start">
           <aside className="space-y-4">
             <AssetLibraryPanel />
             <PromptTagPickerPanel />

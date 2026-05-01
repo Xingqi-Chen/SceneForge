@@ -30,4 +30,21 @@ describe("generatePrompt", () => {
 
     expect(result.prompt).toContain("cinematic composition::1.15");
   });
+
+  it("collects body-part negative tags", () => {
+    const project = createDefaultProject();
+
+    project.scene.characters[0].bodyParts[0].promptTags.push({
+      id: "tag-bad-hands",
+      label: "手部错误",
+      prompt: "bad hands",
+      category: "negative",
+      weight: { enabled: false, value: 1 },
+      negative: true,
+    });
+
+    const result = generatePrompt(project);
+
+    expect(result.negativePrompt).toContain("bad hands");
+  });
 });

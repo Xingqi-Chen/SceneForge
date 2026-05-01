@@ -1,4 +1,4 @@
-import type { CharacterSkeleton, Scene, SceneForgeProject } from "@/shared/types";
+import type { CharacterSkeleton, PromptTag, Scene, SceneForgeProject } from "@/shared/types";
 
 const now = new Date("2026-01-01T00:00:00.000Z").toISOString();
 
@@ -121,12 +121,50 @@ export const defaultScene: Scene = {
   ],
 };
 
+function clonePromptTag(tag: PromptTag): PromptTag {
+  return {
+    ...tag,
+    weight: { ...tag.weight },
+  };
+}
+
+function cloneCharacter(character: CharacterSkeleton): CharacterSkeleton {
+  return {
+    ...character,
+    position: { ...character.position },
+    joints: Object.fromEntries(
+      Object.entries(character.joints).map(([jointId, position]) => [jointId, { ...position }]),
+    ) as CharacterSkeleton["joints"],
+    bodyParts: character.bodyParts.map((bodyPart) => ({
+      ...bodyPart,
+      promptTags: bodyPart.promptTags.map(clonePromptTag),
+    })),
+    promptTags: character.promptTags.map(clonePromptTag),
+  };
+}
+
+function cloneScene(scene: Scene): Scene {
+  return {
+    ...scene,
+    canvas: { ...scene.canvas },
+    objects: scene.objects.map((object) => ({
+      ...object,
+      position: { ...object.position },
+      size: { ...object.size },
+      weight: { ...object.weight },
+      promptTags: object.promptTags.map(clonePromptTag),
+    })),
+    characters: scene.characters.map(cloneCharacter),
+    promptTags: scene.promptTags.map(clonePromptTag),
+  };
+}
+
 export function createDefaultProject(): SceneForgeProject {
   return {
     id: "project-default",
     name: "Untitled SceneForge Project",
     version: 1,
-    scene: defaultScene,
+    scene: cloneScene(defaultScene),
     settings: {
       modelFormat: "stable-diffusion",
       includeSpatialHints: true,

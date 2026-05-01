@@ -5,7 +5,7 @@ import type { KonvaEventObject } from "konva/lib/Node";
 import { Circle, Ellipse, Group, Layer, Line, Rect, Stage, Text } from "react-konva";
 
 import { useEditorStore } from "@/features/editor/store/editor-store";
-import type { CharacterSkeleton, SceneObject } from "@/shared/types";
+import type { CharacterSkeleton, JointId, SceneObject } from "@/shared/types";
 
 const skeletonBones: Array<[keyof CharacterSkeleton["joints"], keyof CharacterSkeleton["joints"]]> =
   [
@@ -104,6 +104,8 @@ function CharacterNode({
   selected: boolean;
 }) {
   const selectCharacter = useEditorStore((state) => state.selectCharacter);
+  const updateCharacter = useEditorStore((state) => state.updateCharacter);
+  const updateCharacterJoint = useEditorStore((state) => state.updateCharacterJoint);
   const stroke = selected ? "#0f172a" : "#334155";
 
   function handleSelect(event: KonvaEventObject<MouseEvent | TouchEvent>) {
@@ -111,10 +113,34 @@ function CharacterNode({
     selectCharacter(character.id);
   }
 
+  function handleDragEnd(event: KonvaEventObject<DragEvent>) {
+    if (event.target !== event.currentTarget) {
+      return;
+    }
+
+    updateCharacter(character.id, {
+      position: {
+        x: Math.round(event.target.x()),
+        y: Math.round(event.target.y()),
+      },
+    });
+  }
+
+  function handleJointDrag(jointId: JointId, event: KonvaEventObject<DragEvent>) {
+    event.cancelBubble = true;
+    selectCharacter(character.id);
+    updateCharacterJoint(character.id, jointId, {
+      x: Math.round(event.target.x()),
+      y: Math.round(event.target.y()),
+    });
+  }
+
   return (
     <Group
+      draggable
       id={character.id}
       onClick={handleSelect}
+      onDragEnd={handleDragEnd}
       onTap={handleSelect}
       x={character.position.x}
       y={character.position.y}
@@ -143,8 +169,13 @@ function CharacterNode({
       />
       {Object.entries(character.joints).map(([joint, position]) => (
         <Circle
+          draggable
           fill={selected ? "#0f172a" : "#ffffff"}
           key={joint}
+          onClick={handleSelect}
+          onDragEnd={(event) => handleJointDrag(joint as JointId, event)}
+          onDragMove={(event) => handleJointDrag(joint as JointId, event)}
+          onTap={handleSelect}
           radius={7}
           stroke={stroke}
           strokeWidth={3}

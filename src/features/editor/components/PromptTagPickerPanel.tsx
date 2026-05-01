@@ -1,20 +1,218 @@
-import { Tags } from "lucide-react";
+import { Tags, X } from "lucide-react";
+import { useMemo, useState } from "react";
 
-const tags = ["电影感", "柔和光线", "头发提示词", "高质量", "负面提示词"];
+import { useEditorStore, type PromptTagTarget } from "@/features/editor/store/editor-store";
+import type { BodyPartId, PromptTag } from "@/shared/types";
+
+const promptLibrary: PromptTag[] = [
+  {
+    id: "library-cinematic",
+    label: "电影感",
+    prompt: "cinematic composition",
+    category: "style",
+    weight: { enabled: true, value: 1.15 },
+  },
+  {
+    id: "library-soft-light",
+    label: "柔和光线",
+    prompt: "soft light",
+    category: "lighting",
+    weight: { enabled: true, value: 1.1 },
+  },
+  {
+    id: "library-high-quality",
+    label: "高质量",
+    prompt: "high quality, detailed illustration",
+    category: "quality",
+    weight: { enabled: false, value: 1 },
+  },
+  {
+    id: "library-long-hair",
+    label: "长发",
+    prompt: "long flowing hair",
+    category: "body-part",
+    weight: { enabled: true, value: 1.2 },
+  },
+  {
+    id: "library-blue-eyes",
+    label: "蓝色眼睛",
+    prompt: "blue eyes",
+    category: "body-part",
+    weight: { enabled: false, value: 1 },
+  },
+  {
+    id: "library-holding-sword",
+    label: "手持剑",
+    prompt: "holding a sword",
+    category: "body-part",
+    weight: { enabled: false, value: 1 },
+  },
+  {
+    id: "library-standing-pose",
+    label: "自然站姿",
+    prompt: "standing naturally",
+    category: "character",
+    weight: { enabled: false, value: 1 },
+  },
+  {
+    id: "library-misty-background",
+    label: "雾气背景",
+    prompt: "misty background",
+    category: "scene",
+    weight: { enabled: false, value: 1 },
+  },
+  {
+    id: "library-negative-low-quality",
+    label: "低质量负面",
+    prompt: "low quality, blurry",
+    category: "negative",
+    weight: { enabled: false, value: 1 },
+    negative: true,
+  },
+];
+
+type BodyPartTargetValue = BodyPartId | "character";
+
+function hasAppliedTag(tags: PromptTag[], tag: PromptTag) {
+  return tags.some(
+    (appliedTag) =>
+      appliedTag.prompt === tag.prompt &&
+      appliedTag.category === tag.category &&
+      Boolean(appliedTag.negative) === Boolean(tag.negative),
+  );
+}
 
 export function PromptTagPickerPanel() {
+  const { addPromptTag, project, removePromptTag, selection } = useEditorStore();
+  const [bodyPartTarget, setBodyPartTarget] = useState<BodyPartTargetValue>("character");
+
+  const selectedObject =
+    selection.kind === "object"
+      ? project.scene.objects.find((object) => object.id === selection.id)
+      : undefined;
+  const selectedCharacter =
+    selection.kind === "character"
+      ? project.scene.characters.find((character) => character.id === selection.id)
+      : undefined;
+  const selectedBodyPart =
+    selectedCharacter && bodyPartTarget !== "character"
+      ? selectedCharacter.bodyParts.find((bodyPart) => bodyPart.id === bodyPartTarget)
+      : undefined;
+
+  const tagTarget = useMemo<PromptTagTarget>(() => {
+    if (selectedObject) {
+      return { kind: "object", id: selectedObject.id };
+    }
+
+    if (selectedCharacter) {
+      if (selectedBodyPart) {
+        return {
+          kind: "bodyPart",
+          characterId: selectedCharacter.id,
+          bodyPartId: selectedBodyPart.id,
+        };
+      }
+
+      return { kind: "character", id: selectedCharacter.id };
+    }
+
+    return { kind: "scene" };
+  }, [selectedBodyPart, selectedCharacter, selectedObject]);
+
+  const appliedTags = selectedObject
+    ? selectedObject.promptTags
+    : selectedBodyPart
+      ? selectedBodyPart.promptTags
+      : selectedCharacter
+        ? selectedCharacter.promptTags
+        : project.scene.promptTags;
+
+  const targetLabel = selectedObject
+    ? `对象：${selectedObject.name}`
+    : selectedBodyPart
+      ? `部位：${selectedBodyPart.label}`
+      : selectedCharacter
+        ? `人物：${selectedCharacter.name}`
+        : "场景";
+
   return (
     <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
       <div className="mb-3 flex items-center gap-2">
         <Tags className="size-4 text-slate-500" />
         <h2 className="text-sm font-semibold text-slate-950">Prompt 词库</h2>
       </div>
-      <div className="flex flex-wrap gap-2">
-        {tags.map((tag) => (
-          <span className="rounded-full bg-slate-100 px-3 py-1 text-xs text-slate-700" key={tag}>
-            {tag}
-          </span>
-        ))}
+      <div className="space-y-3">
+        <div className="rounded-xl bg-slate-50 p-3">
+          <p className="text-xs font-medium text-slate-500">当前目标</p>
+          <p className="mt-1 text-sm font-semibold text-slate-950">{targetLabel}</p>
+          {selectedCharacter ? (
+            <select
+              className="mt-2 h-8 w-full rounded-lg border border-slate-200 bg-white px-2 text-xs"
+              onChange={(event) => setBodyPartTarget(event.target.value as BodyPartTargetValue)}
+              value={bodyPartTarget}
+            >
+              <option value="character">人物整体</option>
+              {selectedCharacter.bodyParts.map((bodyPart) => (
+                <option key={bodyPart.id} value={bodyPart.id}>
+                  {bodyPart.label}
+                </option>
+              ))}
+            </select>
+          ) : null}
+        </div>
+
+        <div>
+          <p className="mb-2 text-xs font-medium text-slate-500">点击添加到当前目标</p>
+          <div className="flex flex-wrap gap-2">
+            {promptLibrary.map((tag) => {
+              const applied = hasAppliedTag(appliedTags, tag);
+
+              return (
+                <button
+                  className="rounded-full bg-slate-100 px-3 py-1 text-xs text-slate-700 hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-45"
+                  disabled={applied}
+                  key={tag.id}
+                  onClick={() => addPromptTag(tagTarget, tag)}
+                  title={tag.prompt}
+                  type="button"
+                >
+                  {tag.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        <div>
+          <p className="mb-2 text-xs font-medium text-slate-500">已应用标签</p>
+          {appliedTags.length > 0 ? (
+            <div className="space-y-2">
+              {appliedTags.map((tag) => (
+                <div
+                  className="flex items-start justify-between gap-2 rounded-xl border border-slate-200 p-2"
+                  key={tag.id}
+                >
+                  <div>
+                    <p className="text-xs font-medium text-slate-950">{tag.label}</p>
+                    <p className="mt-0.5 text-xs leading-5 text-slate-500">{tag.prompt}</p>
+                  </div>
+                  <button
+                    aria-label={`删除 ${tag.label}`}
+                    className="rounded-full p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                    onClick={() => removePromptTag(tagTarget, tag.id)}
+                    type="button"
+                  >
+                    <X className="size-3.5" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="rounded-xl bg-slate-50 p-3 text-xs text-slate-500">
+              还没有给当前目标添加标签。
+            </p>
+          )}
+        </div>
       </div>
     </section>
   );
