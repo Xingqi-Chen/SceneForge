@@ -529,7 +529,7 @@ type PromptTag = {
 - Konva.js / Fabric.js 用于 2D 画布
 - Three.js / React Three Fiber 用于 3D 场景
 - Tailwind CSS 或 shadcn/ui 用于 UI
-- IndexedDB / LocalStorage 用于本地草稿
+- Next.js API + 本机磁盘目录（默认 `<项目根>/data/projects`，可由环境变量配置）用于本地草稿
 - 后端 API 用于项目保存、模板同步、图像生成
 
 ### 11.2 后端架构

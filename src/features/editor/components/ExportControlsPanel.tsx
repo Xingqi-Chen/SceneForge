@@ -105,7 +105,7 @@ export function ExportControlsPanel() {
       setStatusDetail("");
     } catch (persistError) {
       console.warn("[SceneForge] [persistence] import applied but save failed", { persistError });
-      setStatusDetail("内容已加载，但写入浏览器存储失败，可稍后点击「保存本地」重试。");
+      setStatusDetail("内容已加载，但写入本地项目目录失败，可稍后点击「保存本地」重试。（需本机运行 Next 服务。）");
     }
   }
 
@@ -322,7 +322,7 @@ export function ExportControlsPanel() {
         <div className="space-y-1.5">
           <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500">本地项目库</p>
           <p className="text-[11px] leading-snug text-slate-500">
-            将当前完整项目写入浏览器 IndexedDB；保存时会规范化并去掉场景内重复 id，并移除内容完全相同的其它项目记录。
+            将当前完整项目通过本机上的 Next.js 服务写入磁盘目录（默认为项目下 data/projects，可用环境变量 SCENEFORGE_PROJECTS_DIR 指定）；保存时会规范化并去掉场景内重复 id，并移除内容完全相同的其它项目记录。
           </p>
           <div className="grid grid-cols-2 gap-3">
             <Button

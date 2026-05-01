@@ -1,84 +1,62 @@
-import { openDB, type DBSchema } from "idb";
-
 import type { ProjectSummary, SceneForgeProject } from "@/shared/types";
 
-import { getProjectContentFingerprint, sanitizeImportedProject } from "./project-serialization";
-
-const databaseName = "sceneforge-projects";
-const databaseVersion = 1;
-const projectStoreName = "projects";
-
-interface SceneForgeDatabase extends DBSchema {
-  projects: {
-    key: string;
-    value: SceneForgeProject;
-    indexes: {
-      "by-updated-at": string;
-    };
+interface ApiErrorBody {
+  error?: {
+    message?: string;
   };
 }
 
-async function getDatabase() {
-  return openDB<SceneForgeDatabase>(databaseName, databaseVersion, {
-    upgrade(database) {
-      const projectStore = database.createObjectStore(projectStoreName, {
-        keyPath: "id",
-      });
+async function readErrorMessage(response: Response): Promise<string> {
+  const text = await response.text();
+  if (!text) {
+    return response.statusText || `请求失败 (${response.status})`;
+  }
 
-      projectStore.createIndex("by-updated-at", "updatedAt");
-    },
-  });
+  try {
+    const data = JSON.parse(text) as ApiErrorBody;
+    const message = data.error?.message;
+    if (typeof message === "string" && message.length > 0) {
+      return message;
+    }
+  } catch {
+    /* ignore */
+  }
+
+  return text;
+}
+
+async function assertOk(response: Response) {
+  if (response.ok) {
+    return;
+  }
+
+  throw new Error(await readErrorMessage(response));
 }
 
 export async function saveProject(project: SceneForgeProject) {
-  const database = await getDatabase();
-  const normalized = sanitizeImportedProject(project);
-  const fingerprint = getProjectContentFingerprint(normalized);
-  const existing = await database.getAll(projectStoreName);
+  const response = await fetch("/api/projects", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(project),
+  });
 
-  const duplicateIds = existing
-    .filter((entry) => {
-      if (entry.id === normalized.id) {
-        return false;
-      }
-
-      return getProjectContentFingerprint(sanitizeImportedProject(entry)) === fingerprint;
-    })
-    .map((entry) => entry.id);
-
-  const transaction = database.transaction(projectStoreName, "readwrite");
-  const store = transaction.store;
-
-  await store.put(normalized);
-
-  for (const id of duplicateIds) {
-    store.delete(id);
-  }
-
-  await transaction.done;
-
-  if (duplicateIds.length > 0) {
-    console.info("[SceneForge] [persistence] removed duplicate projects by content fingerprint", {
-      keptId: normalized.id,
-      removedIds: duplicateIds,
-    });
-  }
+  await assertOk(response);
 }
 
-export async function loadProject(projectId: string) {
-  const database = await getDatabase();
-  return database.get(projectStoreName, projectId);
+export async function loadProject(projectId: string): Promise<SceneForgeProject | undefined> {
+  const response = await fetch(`/api/projects/item?id=${encodeURIComponent(projectId)}`);
+
+  if (response.status === 404) {
+    return undefined;
+  }
+
+  await assertOk(response);
+
+  return response.json() as Promise<SceneForgeProject>;
 }
 
 export async function listProjects(): Promise<ProjectSummary[]> {
-  const database = await getDatabase();
-  const projects = await database.getAll(projectStoreName);
-
-  return projects
-    .map((project) => ({
-      id: project.id,
-      name: project.name,
-      updatedAt: project.updatedAt,
-    }))
-    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+  const response = await fetch("/api/projects");
+  await assertOk(response);
+  return response.json() as Promise<ProjectSummary[]>;
 }

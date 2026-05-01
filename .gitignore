@@ -39,3 +39,7 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Local SceneForge project JSON files (server-side persistence)
+/data/projects/*
+!/data/projects/.gitkeep

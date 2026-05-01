@@ -6,7 +6,7 @@ alwaysApply: true
 # SceneForge Project Rules
 
 - Use the design document in `DESIGN.md` as the product source of truth. Keep changes aligned with the visual prompt editor concept: scene building, character posing, local prompt selection, and structured prompt generation.
-- Build the MVP around `Next.js`, `React`, `TypeScript`, `Konva.js`, `Zustand`, `Tailwind CSS`, `shadcn/ui`, and local persistence with `IndexedDB`.
+- Build the MVP around `Next.js`, `React`, `TypeScript`, `Konva.js`, `Zustand`, `Tailwind CSS`, `shadcn/ui`, and local persistence via Next.js route handlers writing project JSON under a configurable directory on disk (default `<repo>/data/projects`).
 - Prioritize the 2D editor first. Implement 3D with `Three.js` / `React Three Fiber` only after the 2D scene editor, character skeleton, prompt tags, and prompt generation flow are usable.
 - Keep editor state explicit and serializable. Scene objects, characters, body parts, prompt regions, and prompt tags should be represented as structured TypeScript types that can be saved, restored, and exported.
 - Separate rendering from semantics. Canvas or 3D components should render state; prompt generation should consume semantic scene data rather than reading directly from UI components.
@@ -14,14 +14,14 @@ alwaysApply: true
 - Treat prompt generation as a dedicated engine. It should support model-specific formatting for generic prompts, Stable Diffusion weights, Midjourney weights, negative prompts, and future provider adapters.
 - Prefer small, focused components for editor panels: asset library, canvas viewport, object properties, prompt tag picker, prompt preview, and export controls.
 - For 2D canvas interactions, use `Konva.js` patterns for dragging, transforming, grouping, layering, and hit detection. Avoid custom DOM-based geometry editors unless there is a clear need.
-- Persist MVP projects locally before introducing backend complexity. Add cloud sync, account systems, queues, and image generation backends only after the local editor flow is stable.
+- Persist MVP projects locally (on-disk JSON via the dev/server Next.js API) before introducing backend complexity. Add cloud sync, account systems, queues, and image generation backends only after the local editor flow is stable.
 - Keep UI copy understandable for non-expert prompt users. Prefer direct labels like "头发提示词", "场景描述", and "复制 Prompt" over implementation terms.
 - Do not over-engineer AI features early. Recommendation and auto-completion features should enhance manual editing, not replace user control.
 - Use strict TypeScript. Prefer explicit domain types, discriminated unions, and typed helpers over `any`, loosely shaped objects, or duplicated inline types.
 - Keep files organized by feature when practical, for example `editor`, `prompt-engine`, `persistence`, `ui`, and `shared`. Avoid large catch-all utility files.
 - Prefer pure functions for transformations such as prompt formatting, spatial relation inference, validation, import, and export. Keep side effects at the app boundary.
 - Components should be functional React components. Extract reusable editor behavior into hooks when it has stateful logic or subscriptions.
-- Keep server/client boundaries clear in Next.js. Browser-only editor code, canvas code, IndexedDB access, and drag interactions must stay in client components.
+- Keep server/client boundaries clear in Next.js. Browser-only editor code, canvas code, client-side fetch to persistence APIs, and drag interactions must stay in client components.
 - Validate persisted and imported project data before using it. Treat local files, JSON imports, and future API responses as untrusted input.
 - Do not store secrets, API keys, provider tokens, or user credentials in source code or client-visible environment variables.
 - Add focused tests for prompt generation, serialization, spatial relation inference, and other deterministic business logic. UI-heavy canvas behavior can be covered with smaller interaction tests when practical.
