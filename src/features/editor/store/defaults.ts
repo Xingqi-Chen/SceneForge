@@ -5,7 +5,7 @@ const now = new Date("2026-01-01T00:00:00.000Z").toISOString();
 export const defaultCharacter: CharacterSkeleton = {
   id: "character-hero",
   name: "主角",
-  description: "standing character pose",
+  description: "",
   position: { x: 420, y: 200 },
   includeInPrompt: true,
   joints: {
@@ -48,7 +48,7 @@ export const defaultCharacter: CharacterSkeleton = {
 export const defaultScene: Scene = {
   id: "scene-default",
   name: "SceneForge 画布",
-  description: "场景描述",
+  description: "",
   canvas: {
     width: 1280,
     height: 720,
@@ -108,6 +108,8 @@ export function createDefaultProject(): SceneForgeProject {
       modelFormat: "generic",
       includeSpatialHints: true,
       negativePrompt: "low quality, blurry, extra fingers",
+      promptLibraryTags: [],
+      deletedBuiltInPromptLibraryTagIds: [],
     },
     createdAt: now,
     updatedAt: now,

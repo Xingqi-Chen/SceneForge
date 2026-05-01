@@ -15,7 +15,6 @@ const assets: AssetDefinition[] = [
     type: "object",
     kind: "rectangle",
     name: "矩形",
-    description: "simple rectangular scene object",
     fill: "#e2e8f0",
   },
   {
@@ -24,7 +23,6 @@ const assets: AssetDefinition[] = [
     type: "object",
     kind: "circle",
     name: "圆形",
-    description: "round scene object",
     fill: "#fde68a",
   },
   { id: "character", label: "人物骨架", type: "character" },

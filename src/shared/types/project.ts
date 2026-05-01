@@ -1,4 +1,4 @@
-import type { Scene } from "./scene";
+import type { PromptTag, Scene } from "./scene";
 
 export type PromptModelFormat = "generic" | "stable-diffusion" | "midjourney";
 
@@ -6,6 +6,10 @@ export type ProjectSettings = {
   modelFormat: PromptModelFormat;
   includeSpatialHints: boolean;
   negativePrompt: string;
+  /** User-imported prompt library entries (persisted with the project). */
+  promptLibraryTags: PromptTag[];
+  /** Built-in prompt library entries hidden by the user. */
+  deletedBuiltInPromptLibraryTagIds: string[];
 };
 
 export type SceneForgeProject = {

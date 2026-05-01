@@ -158,7 +158,147 @@ describe("editor store", () => {
     expect(project.settings).toMatchObject({
       modelFormat: "midjourney",
       negativePrompt: "washed out",
+      promptLibraryTags: [],
+      deletedBuiltInPromptLibraryTagIds: [],
     });
+  });
+
+  it("imports prompt library tags into project settings", () => {
+    const added = useEditorStore.getState().importPromptLibraryTags([
+      {
+        label: "雨景",
+        prompt: "heavy rain on cobblestones",
+        category: "scene",
+        weight: { enabled: false, value: 1 },
+      },
+    ]);
+
+    expect(added).toBe(1);
+    expect(useEditorStore.getState().project.settings.promptLibraryTags).toEqual([
+      expect.objectContaining({
+        label: "雨景",
+        prompt: "heavy rain on cobblestones",
+        category: "scene",
+      }),
+    ]);
+
+    const secondPass = useEditorStore.getState().importPromptLibraryTags([
+      {
+        label: "重复",
+        prompt: "heavy rain on cobblestones",
+        category: "scene",
+        weight: { enabled: false, value: 1 },
+      },
+    ]);
+
+    expect(secondPass).toBe(0);
+    expect(useEditorStore.getState().project.settings.promptLibraryTags).toHaveLength(1);
+  });
+
+  it("deletes custom and built-in prompt library tags from project settings", () => {
+    useEditorStore.getState().importPromptLibraryTags([
+      {
+        label: "雨景",
+        prompt: "heavy rain on cobblestones",
+        category: "scene",
+        weight: { enabled: false, value: 1 },
+      },
+    ]);
+
+    const customTagId = useEditorStore.getState().project.settings.promptLibraryTags[0]?.id;
+    const customTag = useEditorStore.getState().project.settings.promptLibraryTags[0];
+    expect(customTag).toBeDefined();
+    if (!customTag) {
+      throw new Error("Expected imported tag.");
+    }
+
+    useEditorStore.getState().addPromptTag({ kind: "scene" }, customTag);
+    expect(useEditorStore.getState().project.scene.promptTags).toContainEqual(
+      expect.objectContaining({ prompt: "heavy rain on cobblestones" }),
+    );
+
+    expect(useEditorStore.getState().deletePromptLibraryTag(customTagId ?? "")).toBe(true);
+    expect(useEditorStore.getState().project.settings.promptLibraryTags).toHaveLength(0);
+    expect(useEditorStore.getState().project.scene.promptTags).not.toContainEqual(
+      expect.objectContaining({ prompt: "heavy rain on cobblestones" }),
+    );
+
+    useEditorStore.getState().addPromptTag(
+      { kind: "scene" },
+      {
+        id: "library-blue-eyes",
+        label: "蓝色眼睛",
+        prompt: "blue eyes",
+        category: "body-part",
+        weight: { enabled: false, value: 1 },
+      },
+    );
+    expect(useEditorStore.getState().deletePromptLibraryTag("library-blue-eyes")).toBe(true);
+    expect(useEditorStore.getState().project.settings.deletedBuiltInPromptLibraryTagIds).toContain(
+      "library-blue-eyes",
+    );
+    expect(useEditorStore.getState().project.scene.promptTags).not.toContainEqual(
+      expect.objectContaining({ prompt: "blue eyes" }),
+    );
+  });
+
+  it("updates custom prompt library tags", () => {
+    useEditorStore.getState().importPromptLibraryTags([
+      {
+        label: "雨景",
+        prompt: "heavy rain on cobblestones",
+        category: "scene",
+        weight: { enabled: false, value: 1 },
+      },
+    ]);
+
+    const tag = useEditorStore.getState().project.settings.promptLibraryTags[0];
+    expect(tag).toBeDefined();
+    if (!tag) {
+      throw new Error("Expected imported tag.");
+    }
+
+    expect(
+      useEditorStore.getState().updatePromptLibraryTag({
+        ...tag,
+        label: "强雨",
+        prompt: "heavy rain",
+        category: "scene",
+      }),
+    ).toBe(true);
+
+    expect(useEditorStore.getState().project.settings.promptLibraryTags[0]).toEqual(
+      expect.objectContaining({
+        id: tag.id,
+        label: "强雨",
+        prompt: "heavy rain",
+        category: "scene",
+      }),
+    );
+  });
+
+  it("updates built-in prompt library tags by hiding the original and adding a custom copy", () => {
+    expect(
+      useEditorStore.getState().updatePromptLibraryTag({
+        id: "library-blue-eyes",
+        label: "青色眼睛",
+        prompt: "cyan eyes",
+        category: "body-part",
+        weight: { enabled: false, value: 1 },
+      }),
+    ).toBe(true);
+
+    const { deletedBuiltInPromptLibraryTagIds, promptLibraryTags } =
+      useEditorStore.getState().project.settings;
+
+    expect(deletedBuiltInPromptLibraryTagIds).toContain("library-blue-eyes");
+    expect(promptLibraryTags).toContainEqual(
+      expect.objectContaining({
+        label: "青色眼睛",
+        prompt: "cyan eyes",
+        category: "body-part",
+      }),
+    );
   });
 
   it("adds a character and updates a joint", () => {
@@ -171,6 +311,7 @@ describe("editor store", () => {
 
     expect(project.scene.characters).toHaveLength(initialCharacterCount + 1);
     expect(selection).toEqual({ kind: "character", id: character?.id });
+    expect(character?.description).toBe("");
 
     useEditorStore.getState().updateCharacterJoint(character?.id ?? "", "leftWrist", {
       x: -96,

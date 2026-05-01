@@ -6,7 +6,7 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { useEditorStore } from "@/features/editor/store/editor-store";
 import { generatePrompt } from "@/features/prompt-engine";
-import type { LlmChatResponse } from "@/features/llm";
+import { getLlmProxyErrorMessage, isLlmChatResponse } from "@/features/llm";
 import type { SceneForgeProject } from "@/shared/types";
 
 type AiGenerationStatus = "idle" | "loading" | "success" | "error";
@@ -14,22 +14,6 @@ type AiGenerationStatus = "idle" | "loading" | "success" | "error";
 type PromptPreviewPanelProps = {
   onCaptureCanvas?: () => string | null;
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isLlmChatResponse(value: unknown): value is LlmChatResponse {
-  return isRecord(value) && typeof value.content === "string";
-}
-
-function getErrorMessage(value: unknown) {
-  if (isRecord(value) && isRecord(value.error) && typeof value.error.message === "string") {
-    return value.error.message;
-  }
-
-  return "AI 生成失败，请检查 LiteLLM 配置或稍后重试。";
-}
 
 function formatTagsForAi(tags: SceneForgeProject["scene"]["promptTags"]) {
   return tags
@@ -241,7 +225,7 @@ export function PromptPreviewPanel({ onCaptureCanvas }: PromptPreviewPanelProps)
         console.info("[SceneForge] [llm] client inbound /api/llm/chat error", {
           httpStatus: response.status,
         });
-        throw new Error(getErrorMessage(payload));
+        throw new Error(getLlmProxyErrorMessage(payload));
       }
 
       if (!isLlmChatResponse(payload)) {

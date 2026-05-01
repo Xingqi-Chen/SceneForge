@@ -15,6 +15,9 @@ import type {
   Vector2,
 } from "@/shared/types";
 
+import { BUILT_IN_PROMPT_LIBRARY_TAGS } from "@/features/prompt-engine/prompt-library/built-in-prompt-tags";
+import { mergeImportedPromptLibraryTags } from "@/features/prompt-engine/prompt-library/merge-imported-prompt-library-tags";
+
 import { createDefaultProject, defaultCharacter } from "./defaults";
 
 export type EditorSelection =
@@ -67,6 +70,10 @@ type EditorState = {
   addPromptTag: (target: PromptTagTarget, tag: PromptTag) => void;
   updatePromptTag: (target: PromptTagTarget, tagId: string, patch: PromptTagPatch) => void;
   removePromptTag: (target: PromptTagTarget, tagId: string) => void;
+  /** Merges parsed tags into `settings.promptLibraryTags`, skipping duplicates vs built-in and existing custom entries. Returns count added. */
+  importPromptLibraryTags: (incoming: Array<Omit<PromptTag, "id">>) => number;
+  updatePromptLibraryTag: (tag: PromptTag) => boolean;
+  deletePromptLibraryTag: (tagId: string) => boolean;
 };
 
 function createId(prefix: string) {
@@ -101,12 +108,43 @@ function hasPromptTag(tags: PromptTag[], tag: PromptTag) {
   );
 }
 
+function isSameSemanticPromptTag(left: PromptTag, right: PromptTag) {
+  return (
+    left.prompt === right.prompt &&
+    left.category === right.category &&
+    Boolean(left.negative) === Boolean(right.negative)
+  );
+}
+
 function addTagToList(tags: PromptTag[], tag: PromptTag) {
   if (hasPromptTag(tags, tag)) {
     return tags;
   }
 
   return [...tags, clonePromptTag(tag)];
+}
+
+function removeSemanticTagFromList(tags: PromptTag[], tagToRemove: PromptTag) {
+  return tags.filter((tag) => !isSameSemanticPromptTag(tag, tagToRemove));
+}
+
+function removeSemanticTagFromScene(scene: Scene, tagToRemove: PromptTag): Scene {
+  return {
+    ...scene,
+    promptTags: removeSemanticTagFromList(scene.promptTags, tagToRemove),
+    objects: scene.objects.map((object) => ({
+      ...object,
+      promptTags: removeSemanticTagFromList(object.promptTags, tagToRemove),
+    })),
+    characters: scene.characters.map((character) => ({
+      ...character,
+      promptTags: removeSemanticTagFromList(character.promptTags, tagToRemove),
+      bodyParts: character.bodyParts.map((bodyPart) => ({
+        ...bodyPart,
+        promptTags: removeSemanticTagFromList(bodyPart.promptTags, tagToRemove),
+      })),
+    })),
+  };
 }
 
 function updateTagInList(tags: PromptTag[], tagId: string, patch: PromptTagPatch) {
@@ -191,7 +229,20 @@ export const useEditorStore = create<EditorState>((set) => ({
   selection: { kind: "scene" },
   aiGeneratedPrompt: "",
   setAiGeneratedPrompt: (prompt) => set({ aiGeneratedPrompt: prompt }),
-  setProject: (project) => set({ project, selection: { kind: "scene" }, aiGeneratedPrompt: "" }),
+  setProject: (project) =>
+    set({
+      project: {
+        ...project,
+        settings: {
+          ...project.settings,
+          promptLibraryTags: project.settings.promptLibraryTags ?? [],
+          deletedBuiltInPromptLibraryTagIds:
+            project.settings.deletedBuiltInPromptLibraryTagIds ?? [],
+        },
+      },
+      selection: { kind: "scene" },
+      aiGeneratedPrompt: "",
+    }),
   resetProject: () =>
     set({ project: createDefaultProject(), selection: { kind: "scene" }, aiGeneratedPrompt: "" }),
   selectScene: () => set({ selection: { kind: "scene" } }),
@@ -757,4 +808,157 @@ export const useEditorStore = create<EditorState>((set) => ({
         }),
       };
     }),
+  importPromptLibraryTags: (incoming) => {
+    let addedCount = 0;
+
+    set((state) => {
+      const existing = state.project.settings.promptLibraryTags ?? [];
+      const { next, addedCount: added } = mergeImportedPromptLibraryTags(
+        BUILT_IN_PROMPT_LIBRARY_TAGS,
+        existing,
+        incoming,
+        () => createId("lib"),
+      );
+
+      addedCount = added;
+
+      if (added === 0) {
+        return state;
+      }
+
+      return {
+        project: touchProject({
+          ...state.project,
+          settings: {
+            ...state.project.settings,
+            promptLibraryTags: next,
+          },
+        }),
+      };
+    });
+
+    return addedCount;
+  },
+  updatePromptLibraryTag: (tag) => {
+    let updated = false;
+
+    set((state) => {
+      const existingCustomTags = state.project.settings.promptLibraryTags ?? [];
+      const customTagExists = existingCustomTags.some((existingTag) => existingTag.id === tag.id);
+      const normalizedTag: PromptTag = {
+        ...tag,
+        label: tag.label.trim() || tag.prompt.trim().slice(0, 48) || "未命名",
+        prompt: tag.prompt.trim(),
+        negative: tag.category === "negative" ? true : Boolean(tag.negative),
+        weight: { ...tag.weight },
+      };
+
+      if (!normalizedTag.prompt) {
+        return state;
+      }
+
+      if (customTagExists) {
+        updated = true;
+
+        return {
+          project: touchProject({
+            ...state.project,
+            settings: {
+              ...state.project.settings,
+              promptLibraryTags: existingCustomTags.map((existingTag) =>
+                existingTag.id === tag.id ? normalizedTag : existingTag,
+              ),
+            },
+          }),
+        };
+      }
+
+      const builtInTag = BUILT_IN_PROMPT_LIBRARY_TAGS.find(
+        (existingTag) => existingTag.id === tag.id,
+      );
+      if (!builtInTag) {
+        return state;
+      }
+
+      const existingHiddenBuiltIns = state.project.settings.deletedBuiltInPromptLibraryTagIds ?? [];
+      const nextHiddenBuiltIns = existingHiddenBuiltIns.includes(builtInTag.id)
+        ? existingHiddenBuiltIns
+        : [...existingHiddenBuiltIns, builtInTag.id];
+
+      updated = true;
+
+      return {
+        project: touchProject({
+          ...state.project,
+          settings: {
+            ...state.project.settings,
+            deletedBuiltInPromptLibraryTagIds: nextHiddenBuiltIns,
+            promptLibraryTags: [
+              ...existingCustomTags,
+              { ...normalizedTag, id: createId("lib") },
+            ],
+          },
+        }),
+      };
+    });
+
+    return updated;
+  },
+  deletePromptLibraryTag: (tagId) => {
+    let deleted = false;
+
+    set((state) => {
+      const builtInTag = BUILT_IN_PROMPT_LIBRARY_TAGS.find((tag) => tag.id === tagId);
+      const customTag = (state.project.settings.promptLibraryTags ?? []).find(
+        (tag) => tag.id === tagId,
+      );
+      const tagToDelete = builtInTag ?? customTag;
+      const existingHiddenBuiltIns = state.project.settings.deletedBuiltInPromptLibraryTagIds ?? [];
+
+      if (!tagToDelete) {
+        return state;
+      }
+
+      if (builtInTag) {
+        if (existingHiddenBuiltIns.includes(tagId)) {
+          return state;
+        }
+
+        deleted = true;
+
+        return {
+          project: touchProject({
+            ...state.project,
+            scene: removeSemanticTagFromScene(state.project.scene, tagToDelete),
+            settings: {
+              ...state.project.settings,
+              deletedBuiltInPromptLibraryTagIds: [...existingHiddenBuiltIns, tagId],
+            },
+          }),
+        };
+      }
+
+      const existingCustomTags = state.project.settings.promptLibraryTags ?? [];
+      const nextCustomTags = existingCustomTags.filter((tag) => tag.id !== tagId);
+
+      if (nextCustomTags.length === existingCustomTags.length) {
+        return state;
+      }
+
+      deleted = true;
+
+      return {
+        project: touchProject({
+          ...state.project,
+          scene: removeSemanticTagFromScene(state.project.scene, tagToDelete),
+          settings: {
+            ...state.project.settings,
+            promptLibraryTags: nextCustomTags,
+          },
+        }),
+      };
+    });
+
+    return deleted;
+  },
 }));
