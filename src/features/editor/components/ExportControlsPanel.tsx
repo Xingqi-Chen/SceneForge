@@ -200,10 +200,10 @@ export function ExportControlsPanel() {
       />
       <div className="mb-4 flex items-center justify-between gap-3 border-b border-slate-100 pb-3 shrink-0">
         <div className="flex items-center gap-2.5">
-          <div className="rounded-lg bg-emerald-50 p-1.5 text-emerald-600">
+          <div className="rounded-md bg-emerald-50 p-1.5 text-emerald-600">
             <Download className="size-4" />
           </div>
-          <h2 className="text-[15px] font-semibold text-slate-800">导出</h2>
+          <h2 className="text-[15px] font-semibold text-slate-800">导出与保存</h2>
         </div>
         {status !== "idle" ? (
           <span className="flex max-w-[55%] flex-col items-end gap-0.5 text-right">
@@ -229,7 +229,7 @@ export function ExportControlsPanel() {
           size="sm"
           title="复制当前用于生成的正面提示词（优先 AI 编辑区，否则为引擎拼接）。"
           type="button"
-          className="h-10 w-full bg-slate-900 text-white shadow-sm transition-all hover:bg-slate-800 hover:shadow-md hover:-translate-y-0.5"
+          className="h-10 w-full rounded-md bg-slate-900 text-white transition-all hover:bg-slate-800"
         >
           <Copy className="mr-2 size-4" />
           复制 Prompt
@@ -248,7 +248,7 @@ export function ExportControlsPanel() {
               title="下载画布专用 JSON（场景结构，不含词库与项目设置）。"
               type="button"
               variant="secondary"
-              className="h-auto min-h-10 flex-col gap-0.5 border-slate-200/80 bg-slate-50/50 py-2 text-slate-700 shadow-sm transition-all hover:bg-white hover:shadow hover:-translate-y-0.5"
+              className="h-auto min-h-10 flex-col gap-0.5 rounded-md border-slate-200 bg-slate-50 py-2 text-slate-700 transition-all hover:bg-slate-100"
             >
               <span className="flex items-center text-sm font-medium">
                 <Download className="mr-2 size-4 shrink-0 text-slate-400" />
@@ -264,7 +264,7 @@ export function ExportControlsPanel() {
               title="选择本应用导出的画布 JSON；导入后替换当前场景。"
               type="button"
               variant="secondary"
-              className="h-auto min-h-10 flex-col gap-0.5 border-slate-200/80 bg-slate-50/50 py-2 text-slate-700 shadow-sm transition-all hover:bg-white hover:shadow hover:-translate-y-0.5"
+              className="h-auto min-h-10 flex-col gap-0.5 rounded-md border-slate-200 bg-slate-50 py-2 text-slate-700 transition-all hover:bg-slate-100"
             >
               <span className="flex items-center text-sm font-medium">
                 <Upload className="mr-2 size-4 shrink-0 text-slate-400" />
@@ -290,7 +290,7 @@ export function ExportControlsPanel() {
               title="下载词库专用 JSON（自定义词条与隐藏内置 id）。"
               type="button"
               variant="secondary"
-              className="h-auto min-h-10 flex-col gap-0.5 border-slate-200/80 bg-slate-50/50 py-2 text-slate-700 shadow-sm transition-all hover:bg-white hover:shadow hover:-translate-y-0.5"
+              className="h-auto min-h-10 flex-col gap-0.5 rounded-md border-slate-200 bg-slate-50 py-2 text-slate-700 transition-all hover:bg-slate-100"
             >
               <span className="flex items-center text-sm font-medium">
                 <Download className="mr-2 size-4 shrink-0 text-slate-400" />
@@ -306,7 +306,7 @@ export function ExportControlsPanel() {
               title="选择本应用导出的词库 JSON；导入后覆盖当前词库。"
               type="button"
               variant="secondary"
-              className="h-auto min-h-10 flex-col gap-0.5 border-slate-200/80 bg-slate-50/50 py-2 text-slate-700 shadow-sm transition-all hover:bg-white hover:shadow hover:-translate-y-0.5"
+              className="h-auto min-h-10 flex-col gap-0.5 rounded-md border-slate-200 bg-slate-50 py-2 text-slate-700 transition-all hover:bg-slate-100"
             >
               <span className="flex items-center text-sm font-medium">
                 <Upload className="mr-2 size-4 shrink-0 text-slate-400" />
@@ -324,22 +324,24 @@ export function ExportControlsPanel() {
           <p className="text-[11px] leading-snug text-slate-500">
             将当前完整项目写入浏览器 IndexedDB；保存时会规范化并去掉场景内重复 id，并移除内容完全相同的其它项目记录。
           </p>
-          <Button
-            onClick={handleSaveProject}
-            size="sm"
-            title="写入本机浏览器内的项目库；先规范化并去重 id，再在同一事务内写入当前项目，最后移除内容指纹相同的其它项目。"
-            type="button"
-            variant="secondary"
-            className="h-auto min-h-10 flex-col gap-0.5 border-slate-200/80 bg-slate-50/50 py-2 text-slate-700 shadow-sm transition-all hover:bg-white hover:shadow hover:-translate-y-0.5"
-          >
-            <span className="flex items-center text-sm font-medium">
-              <Save className="mr-2 size-4 shrink-0 text-slate-400" />
-              保存本地
-            </span>
-            <span className="w-full text-center text-[10px] font-normal leading-tight text-slate-500">
-              浏览器内项目库
-            </span>
-          </Button>
+          <div className="grid grid-cols-2 gap-3">
+            <Button
+              onClick={handleSaveProject}
+              size="sm"
+              title="写入本机浏览器内的项目库；先规范化并去重 id，再在同一事务内写入当前项目，最后移除内容指纹相同的其它项目。"
+              type="button"
+              variant="secondary"
+              className="col-span-2 h-auto min-h-10 flex-col gap-0.5 rounded-md border-slate-200 bg-slate-50 py-2 text-slate-700 transition-all hover:bg-slate-100"
+            >
+              <span className="flex items-center text-sm font-medium">
+                <Save className="mr-2 size-4 shrink-0 text-slate-400" />
+                保存本地
+              </span>
+              <span className="w-full text-center text-[10px] font-normal leading-tight text-slate-500">
+                浏览器内项目库
+              </span>
+            </Button>
+          </div>
         </div>
       </div>
     </section>

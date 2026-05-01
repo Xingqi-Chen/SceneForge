@@ -694,17 +694,17 @@ export function PromptTagPickerPanel() {
     <section className="flex flex-col flex-1">
       <div className="mb-4 flex items-center justify-between gap-3 border-b border-slate-100 pb-3 shrink-0">
         <div className="flex items-center gap-2.5">
-          <div className="rounded-lg bg-pink-50 p-1.5 text-pink-600">
+          <div className="rounded-md bg-pink-50 p-1.5 text-pink-600">
             <Tags className="size-4" />
           </div>
-          <h2 className="text-[15px] font-semibold text-slate-800">Prompt 词库</h2>
+          <h2 className="text-[15px] font-semibold text-slate-800">提示词库</h2>
         </div>
         <Button
-          aria-label="打开 Prompt 词库设置"
-          className="h-8 rounded-lg border-slate-200 bg-white px-2.5 text-slate-500 shadow-sm hover:bg-slate-50 hover:text-slate-800"
+          aria-label="打开提示词库设置"
+          className="h-8 rounded-md border-slate-200 bg-white px-2.5 text-slate-500 hover:bg-slate-50 hover:text-slate-800"
           onClick={() => setIsSettingsOpen(true)}
           size="sm"
-          title="Prompt 词库设置"
+          title="提示词库设置"
           type="button"
           variant="secondary"
         >
@@ -712,12 +712,12 @@ export function PromptTagPickerPanel() {
         </Button>
       </div>
       <div className="space-y-5 overflow-y-auto pr-1 custom-scrollbar">
-        <div className="rounded-2xl border border-slate-200/80 bg-slate-50/80 p-4 shadow-sm">
+        <div className="rounded-md border border-slate-200 bg-slate-50 p-4">
           <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500">当前目标</p>
           <p className="mt-1.5 text-sm font-bold text-slate-800">{targetLabel}</p>
           {selectedCharacter ? (
             <select
-              className="mt-3 h-9 w-full rounded-xl border border-slate-200/80 bg-white px-3 text-xs text-slate-700 shadow-sm outline-none transition-all focus:border-blue-400 focus:ring-4 focus:ring-blue-400/10"
+              className="mt-3 h-9 w-full rounded-md border border-slate-200 bg-white px-3 text-xs text-slate-700 outline-none transition-all focus:border-blue-400 focus:ring-1 focus:ring-blue-400"
               onChange={(event) =>
                 handleBodyPartTargetChange(event.target.value as BodyPartTargetValue)
               }
@@ -746,7 +746,7 @@ export function PromptTagPickerPanel() {
                 <div className="mb-2 flex items-center gap-2">
                   <button
                     aria-expanded={!isCollapsed}
-                    className="flex min-w-0 flex-1 items-center justify-between rounded-xl px-2 py-1.5 text-left text-xs font-semibold text-slate-700 transition-all hover:bg-slate-50"
+                    className="flex min-w-0 flex-1 items-center justify-between rounded-md px-2 py-1.5 text-left text-xs font-semibold text-slate-700 transition-all hover:bg-slate-100"
                     onClick={() => togglePromptCategory(group.category)}
                     type="button"
                   >
@@ -764,7 +764,7 @@ export function PromptTagPickerPanel() {
                   </button>
                   {group.uncategorizedTags.length > 0 ? (
                     <Button
-                      className="h-7 shrink-0 rounded-lg border-pink-100 bg-pink-50 px-2 text-[11px] text-pink-600 shadow-sm hover:bg-pink-100 disabled:opacity-60"
+                      className="h-7 shrink-0 rounded-md border-pink-100 bg-pink-50 px-2 text-[11px] text-pink-600 hover:bg-pink-100 disabled:opacity-60"
                       disabled={isClassifying}
                       onClick={() =>
                         void handleClassifyUncategorizedTags(
@@ -803,7 +803,7 @@ export function PromptTagPickerPanel() {
                     <div key={subgroupKey}>
                       <button
                         aria-expanded={!isSubgroupCollapsed}
-                        className="mb-2 flex w-full items-center justify-between rounded-lg px-2 py-1 text-left text-[11px] font-medium text-slate-400 transition-all hover:bg-slate-50 hover:text-slate-600"
+                        className="mb-2 flex w-full items-center justify-between rounded-md px-2 py-1 text-left text-[11px] font-medium text-slate-400 transition-all hover:bg-slate-100 hover:text-slate-600"
                         onClick={() => togglePromptSubcategory(subgroupKey)}
                         type="button"
                       >
@@ -865,8 +865,8 @@ export function PromptTagPickerPanel() {
               </div>
               );
             }) : (
-              <div className="rounded-2xl border border-dashed border-slate-200/80 bg-slate-50/50 p-5 text-center">
-                <p className="text-xs text-slate-500">
+            <div className="rounded-md border border-dashed border-slate-200 bg-slate-50 p-5 text-center">
+              <p className="text-xs text-slate-500">
                   当前目标没有可显示的绑定分类，请在上方启用至少一个一级分类。
                 </p>
               </div>
@@ -880,7 +880,7 @@ export function PromptTagPickerPanel() {
             <div className="space-y-3">
               {appliedTags.map((tag) => (
                 <div
-                  className="group relative overflow-hidden rounded-2xl border border-slate-200/80 bg-white p-3 shadow-sm transition-all hover:border-blue-200 hover:shadow-md"
+                  className="group relative overflow-hidden rounded-md border border-slate-200 bg-white p-3 transition-all hover:border-blue-300"
                   key={tag.id}
                 >
                   <div className="flex items-start justify-between gap-3">
@@ -897,7 +897,7 @@ export function PromptTagPickerPanel() {
                       <X className="size-3.5" />
                     </button>
                   </div>
-                  <div className="mt-3 grid grid-cols-[auto_1fr] items-center gap-3 rounded-xl bg-slate-50/80 p-2.5 shadow-inner">
+                  <div className="mt-3 grid grid-cols-[auto_1fr] items-center gap-3 rounded-md bg-slate-50 p-2.5">
                     <label className="flex cursor-pointer items-center gap-2 text-xs font-medium text-slate-700">
                       <input
                         checked={tag.weight.enabled}
@@ -913,7 +913,7 @@ export function PromptTagPickerPanel() {
                     </label>
                     <input
                       aria-label={`${tag.label} 权重值`}
-                      className="w-full rounded-lg border border-slate-200/80 bg-white px-2.5 py-1.5 text-xs text-slate-900 shadow-sm outline-none transition-all focus:border-blue-400 focus:ring-2 focus:ring-blue-400/10 disabled:opacity-50"
+                      className="w-full rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-900 outline-none transition-all focus:border-blue-400 focus:ring-1 focus:ring-blue-400 disabled:opacity-50"
                       disabled={!tag.weight.enabled}
                       max={2}
                       min={0.1}
@@ -929,7 +929,7 @@ export function PromptTagPickerPanel() {
               ))}
             </div>
           ) : (
-            <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-slate-200/80 bg-slate-50/50 p-6 text-center">
+            <div className="flex flex-col items-center justify-center rounded-md border border-dashed border-slate-200 bg-slate-50 p-6 text-center">
               <Tags className="mb-2 size-6 text-slate-300" />
               <p className="text-xs text-slate-500">
                 还没有给当前目标添加标签。
@@ -944,9 +944,9 @@ export function PromptTagPickerPanel() {
           className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4 backdrop-blur-sm"
           role="dialog"
         >
-          <div className="flex max-h-[90vh] w-full max-w-xl flex-col overflow-hidden rounded-3xl border border-white/60 bg-white shadow-2xl">
-            <div className="flex items-start gap-3 border-b border-slate-100 bg-pink-50/70 p-5">
-              <div className="rounded-2xl bg-white p-2 text-pink-600 shadow-sm">
+          <div className="flex max-h-[90vh] w-full max-w-xl flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xl">
+            <div className="flex items-start gap-3 border-b border-slate-100 bg-pink-50 p-5">
+              <div className="rounded-md bg-white p-2 text-pink-600">
                 <Settings className="size-5" />
               </div>
               <div className="min-w-0 flex-1">
@@ -965,12 +965,12 @@ export function PromptTagPickerPanel() {
               </button>
             </div>
             <div className="space-y-5 overflow-y-auto p-5 custom-scrollbar">
-              <div className="rounded-2xl border border-slate-200/80 bg-slate-50/80 p-4 shadow-sm">
+              <div className="rounded-md border border-slate-200 bg-slate-50 p-4">
                 <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
                   当前目标
                 </p>
                 <p className="mt-1.5 text-sm font-bold text-slate-800">{targetLabel}</p>
-                <div className="mt-3 rounded-xl border border-white/80 bg-white/70 p-3 shadow-inner">
+                <div className="mt-3 rounded-md border border-slate-200 bg-white p-3">
                   <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
                     绑定一级分类
                   </p>
@@ -1019,7 +1019,7 @@ export function PromptTagPickerPanel() {
 
                       return (
                         <div
-                          className="rounded-xl border border-slate-100 bg-slate-50/70 p-3"
+                          className="rounded-md border border-slate-200 bg-slate-50 p-3"
                           key={category}
                         >
                           <div className="mb-2 flex items-center justify-between gap-2">
@@ -1063,15 +1063,15 @@ export function PromptTagPickerPanel() {
                 </div>
               </div>
 
-              <div className="rounded-2xl border border-pink-100/80 bg-pink-50/20 p-4 shadow-sm">
+              <div className="rounded-md border border-pink-100 bg-pink-50 p-4">
                 <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
-                  从文本导入
+                  智能导入
                 </p>
                 <p className="mt-1 text-xs leading-relaxed text-slate-600">
                   粘贴整段 Prompt（可含逗号换行、引号块、LoRA 行等）。将通过 AI 拆分、分类并写入当前项目的词库。
                 </p>
                 <textarea
-                  className="mt-3 min-h-[120px] w-full resize-y rounded-xl border border-slate-200/80 bg-white px-3 py-2.5 text-xs leading-relaxed text-slate-800 shadow-inner outline-none transition-all placeholder:text-slate-400 focus:border-pink-300 focus:ring-2 focus:ring-pink-200/40 disabled:opacity-60"
+                  className="mt-3 min-h-[120px] w-full resize-y rounded-md border border-slate-200 bg-white px-3 py-2.5 text-xs leading-relaxed text-slate-800 outline-none transition-all placeholder:text-slate-400 focus:border-pink-400 focus:ring-1 focus:ring-pink-400 disabled:opacity-60"
                   disabled={importStatus === "loading"}
                   onChange={(event) => {
                     setImportDraft(event.target.value);
@@ -1083,7 +1083,7 @@ export function PromptTagPickerPanel() {
                   value={importDraft}
                 />
                 <Button
-                  className="mt-3 h-9 w-full gap-2 rounded-xl bg-pink-600 text-xs font-medium text-white shadow-sm hover:bg-pink-700 disabled:opacity-60"
+                  className="mt-3 h-9 w-full gap-2 rounded-md bg-pink-600 text-xs font-medium text-white hover:bg-pink-700 disabled:opacity-60"
                   disabled={importStatus === "loading"}
                   onClick={() => void handleImportPromptLibrary()}
                   size="sm"
@@ -1114,9 +1114,9 @@ export function PromptTagPickerPanel() {
           className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4 backdrop-blur-sm"
           role="dialog"
         >
-          <div className="w-full max-w-md overflow-hidden rounded-3xl border border-white/60 bg-white shadow-2xl">
-            <div className="flex items-start gap-3 border-b border-slate-100 bg-pink-50/70 p-5">
-              <div className="rounded-2xl bg-white p-2 text-pink-600 shadow-sm">
+          <div className="w-full max-w-md overflow-hidden rounded-md border border-slate-200 bg-white shadow-2xl">
+            <div className="flex items-start gap-3 border-b border-slate-100 bg-pink-50 p-5">
+              <div className="rounded-md bg-white p-2 text-pink-600">
                 <Tags className="size-5" />
               </div>
               <div className="min-w-0 flex-1">
@@ -1132,7 +1132,7 @@ export function PromptTagPickerPanel() {
                   Label
                 </span>
                 <input
-                  className="mt-2 h-10 w-full rounded-xl border border-slate-200/80 bg-white px-3 text-sm text-slate-800 shadow-sm outline-none transition-all focus:border-pink-300 focus:ring-2 focus:ring-pink-200/40 disabled:opacity-60"
+                  className="mt-2 h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-800 outline-none transition-all focus:border-pink-400 focus:ring-1 focus:ring-pink-400 disabled:opacity-60"
                   disabled={manageStatus === "loading"}
                   onChange={(event) =>
                     setManageDraft((draft) => ({ ...draft, label: event.target.value }))
@@ -1145,7 +1145,7 @@ export function PromptTagPickerPanel() {
                   Prompt
                 </span>
                 <textarea
-                  className="mt-2 min-h-[82px] w-full resize-y rounded-xl border border-slate-200/80 bg-white px-3 py-2.5 text-sm leading-relaxed text-slate-800 shadow-sm outline-none transition-all focus:border-pink-300 focus:ring-2 focus:ring-pink-200/40 disabled:opacity-60"
+                  className="mt-2 min-h-[82px] w-full resize-y rounded-md border border-slate-200 bg-white px-3 py-2.5 text-sm leading-relaxed text-slate-800 outline-none transition-all focus:border-pink-400 focus:ring-1 focus:ring-pink-400 disabled:opacity-60"
                   disabled={manageStatus === "loading"}
                   onChange={(event) =>
                     setManageDraft((draft) => ({ ...draft, prompt: event.target.value }))
@@ -1159,7 +1159,7 @@ export function PromptTagPickerPanel() {
                     分类
                   </span>
                   <select
-                    className="mt-2 h-10 w-full rounded-xl border border-slate-200/80 bg-white px-3 text-sm text-slate-800 shadow-sm outline-none transition-all focus:border-pink-300 focus:ring-2 focus:ring-pink-200/40 disabled:opacity-60"
+                    className="mt-2 h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-800 outline-none transition-all focus:border-pink-400 focus:ring-1 focus:ring-pink-400 disabled:opacity-60"
                     disabled={manageStatus === "loading"}
                     onChange={(event) =>
                       setManageDraft((draft) => {
@@ -1191,7 +1191,7 @@ export function PromptTagPickerPanel() {
                     二级分类
                   </span>
                   <select
-                    className="mt-2 h-10 w-full rounded-xl border border-slate-200/80 bg-white px-3 text-sm text-slate-800 shadow-sm outline-none transition-all focus:border-pink-300 focus:ring-2 focus:ring-pink-200/40 disabled:opacity-60"
+                    className="mt-2 h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-800 outline-none transition-all focus:border-pink-400 focus:ring-1 focus:ring-pink-400 disabled:opacity-60"
                     disabled={manageStatus === "loading"}
                     onChange={(event) =>
                       setManageDraft((draft) => ({
@@ -1209,7 +1209,7 @@ export function PromptTagPickerPanel() {
                     ))}
                   </select>
                 </label>
-                <label className="flex h-10 items-center gap-2 rounded-xl border border-slate-200/80 bg-slate-50/70 px-3 text-xs font-medium text-slate-700">
+                <label className="flex h-10 items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 text-xs font-medium text-slate-700">
                   <input
                     checked={manageDraft.category === "negative" || manageDraft.negative}
                     className="h-3.5 w-3.5 rounded border-slate-300 text-pink-600 focus:ring-pink-500"
@@ -1227,7 +1227,7 @@ export function PromptTagPickerPanel() {
               ) : null}
               <div className="grid grid-cols-[auto_1fr_1fr] gap-3">
                 <Button
-                  className="h-10 rounded-xl border-rose-100 bg-rose-50 px-4 text-rose-600 shadow-sm hover:bg-rose-100"
+                  className="h-10 rounded-md border-rose-100 bg-rose-50 px-4 text-rose-600 hover:bg-rose-100"
                   disabled={manageStatus === "loading"}
                   onClick={() => void confirmDeletePromptLibraryTag()}
                   type="button"
@@ -1236,7 +1236,7 @@ export function PromptTagPickerPanel() {
                   删除
                 </Button>
                 <Button
-                  className="h-10 rounded-xl border-slate-200/80 bg-slate-50/80 text-slate-700 shadow-sm hover:bg-white"
+                  className="h-10 rounded-md border-slate-200 bg-slate-50 text-slate-700 hover:bg-white"
                   disabled={manageStatus === "loading"}
                   onClick={() => {
                     setPendingManageTag(null);
@@ -1249,7 +1249,7 @@ export function PromptTagPickerPanel() {
                   取消
                 </Button>
                 <Button
-                  className="h-10 rounded-xl bg-pink-600 text-white shadow-sm hover:bg-pink-700 disabled:opacity-60"
+                  className="h-10 rounded-md bg-pink-600 text-white hover:bg-pink-700 disabled:opacity-60"
                   disabled={manageStatus === "loading"}
                   onClick={() => void handleUpdatePromptLibraryTag()}
                   type="button"

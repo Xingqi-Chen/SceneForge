@@ -44,15 +44,15 @@ export function AssetLibraryPanel() {
   return (
     <section className="flex flex-col">
       <div className="mb-4 flex items-center gap-2.5 border-b border-slate-100 pb-3 shrink-0">
-        <div className="rounded-lg bg-blue-50 p-1.5 text-blue-600">
+        <div className="rounded-md bg-blue-50 p-1.5 text-blue-600">
           <Layers className="size-4" />
         </div>
-        <h2 className="text-[15px] font-semibold text-slate-800">素材库</h2>
+        <h2 className="text-[15px] font-semibold text-slate-800">元素库</h2>
       </div>
       <div className="grid grid-cols-2 gap-3">
         {assets.map((asset) => (
           <button
-            className="group relative flex flex-col items-center justify-center gap-2 overflow-hidden rounded-2xl border border-slate-200/80 bg-slate-50/50 p-4 text-sm font-medium text-slate-700 shadow-sm transition-all hover:-translate-y-0.5 hover:border-blue-200 hover:bg-blue-50/50 hover:text-blue-700 hover:shadow"
+            className="group relative flex flex-col items-center justify-center gap-2 overflow-hidden rounded-md border border-slate-200 bg-white p-4 text-sm font-medium text-slate-700 transition-all hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700"
             key={asset.id}
             onClick={() => handleAssetClick(asset)}
             type="button"

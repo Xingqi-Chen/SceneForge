@@ -283,15 +283,15 @@ export function PromptPreviewPanel({ onCaptureCanvas }: PromptPreviewPanelProps)
     <section className="flex flex-col">
       <div className="mb-4 flex items-center justify-between gap-3 border-b border-slate-100 pb-3 shrink-0">
         <div className="flex items-center gap-2.5">
-          <div className="rounded-lg bg-purple-50 p-1.5 text-purple-600">
+          <div className="rounded-md bg-purple-50 p-1.5 text-purple-600">
             <Palette className="size-4" />
           </div>
-          <h2 className="text-[15px] font-semibold text-slate-800">Prompt 预览</h2>
+          <h2 className="text-[15px] font-semibold text-slate-800">提示词预览</h2>
         </div>
         <div className="flex items-center gap-2">
           <Button
             aria-pressed={useLayoutConstraints}
-            className={`h-8 rounded-lg px-3 text-xs shadow-sm transition-all disabled:opacity-60 ${
+            className={`h-8 rounded-md px-3 text-xs transition-all disabled:opacity-60 ${
               useLayoutConstraints
                 ? "border-purple-200 bg-purple-50 text-purple-700 hover:bg-purple-100"
                 : "border-slate-200 bg-white text-slate-500 hover:bg-slate-50"
@@ -306,7 +306,7 @@ export function PromptPreviewPanel({ onCaptureCanvas }: PromptPreviewPanelProps)
             {useLayoutConstraints ? "布局约束开" : "布局约束"}
           </Button>
           <Button
-            className="h-8 rounded-lg bg-purple-600 px-3 text-xs text-white shadow-sm transition-all hover:bg-purple-700 hover:shadow-md disabled:opacity-60"
+            className="h-8 rounded-md bg-purple-600 px-3 text-xs text-white transition-all hover:bg-purple-700 disabled:opacity-60"
             disabled={aiStatus === "loading"}
             onClick={handleGenerateAiPrompt}
             size="sm"
@@ -320,7 +320,7 @@ export function PromptPreviewPanel({ onCaptureCanvas }: PromptPreviewPanelProps)
       <div className="space-y-4">
         <div>
           <p className="mb-2 text-[11px] font-bold uppercase tracking-wider text-slate-500">Prompt</p>
-          <div className="relative rounded-2xl border border-slate-200/80 bg-slate-50/50 p-4 shadow-inner">
+          <div className="relative rounded-md border border-slate-200 bg-slate-50 p-4">
             <p className="text-sm leading-relaxed text-slate-700 break-words">
               {generatedPrompt.prompt || <span className="text-slate-400 italic">暂无提示词...</span>}
             </p>
@@ -335,12 +335,12 @@ export function PromptPreviewPanel({ onCaptureCanvas }: PromptPreviewPanelProps)
               </span>
             ) : null}
           </div>
-          <div className="relative rounded-2xl border border-purple-100/80 bg-purple-50/30 p-4 shadow-inner">
+          <div className="relative rounded-md border border-purple-200 bg-purple-50 p-4">
             {aiStatus === "error" ? (
               <p className="mb-2 text-sm leading-relaxed text-rose-600">{aiError}</p>
             ) : null}
             <textarea
-              className="min-h-[120px] w-full resize-y rounded-xl border border-purple-200/60 bg-white/80 px-3 py-2.5 text-sm leading-relaxed text-slate-700 shadow-inner outline-none transition-all placeholder:text-slate-400 placeholder:italic focus:border-purple-300 focus:bg-white focus:ring-2 focus:ring-purple-200/50 disabled:cursor-not-allowed disabled:opacity-75"
+              className="min-h-[120px] w-full resize-y rounded-md border border-purple-200 bg-white px-3 py-2.5 text-sm leading-relaxed text-slate-700 outline-none transition-all placeholder:text-slate-400 placeholder:italic focus:border-purple-400 focus:ring-1 focus:ring-purple-400 disabled:cursor-not-allowed disabled:opacity-75"
               disabled={aiStatus === "loading"}
               onChange={(event) => setAiGeneratedPrompt(event.target.value)}
               placeholder={
@@ -356,7 +356,7 @@ export function PromptPreviewPanel({ onCaptureCanvas }: PromptPreviewPanelProps)
         </div>
         <div>
           <p className="mb-2 text-[11px] font-bold uppercase tracking-wider text-slate-500">Negative Prompt</p>
-          <div className="relative rounded-2xl border border-rose-100/80 bg-rose-50/30 p-4 shadow-inner">
+          <div className="relative rounded-md border border-rose-200 bg-rose-50 p-4">
             <p className="text-sm leading-relaxed text-slate-700 break-words">
               {generatedPrompt.negativePrompt || <span className="text-slate-400 italic">未设置负面提示词</span>}
             </p>
