@@ -1,14 +1,28 @@
 import { describe, expect, it } from "vitest";
 
-import { parseLlmPromptLibraryImportContent } from "./parse-llm-prompt-library-import";
+import {
+  buildPromptLibrarySubcategoryMessages,
+  parseLlmPromptLibraryImportContent,
+  parseLlmPromptLibrarySubcategoryContent,
+} from "./parse-llm-prompt-library-import";
 
 describe("parseLlmPromptLibraryImportContent", () => {
   it("parses valid items array", () => {
     const result = parseLlmPromptLibraryImportContent(
       JSON.stringify({
         items: [
-          { label: "名作", prompt: "masterpiece", category: "quality" },
-          { label: "LoRA", prompt: "<lora:Alpaca_Carlesi_Style:1>", category: "style" },
+          {
+            label: "名作",
+            prompt: "masterpiece",
+            category: "quality",
+            subcategory: "quality-finish",
+          },
+          {
+            label: "LoRA",
+            prompt: "<lora:Alpaca_Carlesi_Style:1>",
+            category: "style",
+            subcategory: "style-rendering",
+          },
         ],
       }),
     );
@@ -17,8 +31,30 @@ describe("parseLlmPromptLibraryImportContent", () => {
     if (result.ok) {
       expect(result.tags).toHaveLength(2);
       expect(result.tags[0]?.category).toBe("quality");
+      expect(result.tags[0]?.subcategory).toBe("quality-finish");
       expect(result.tags[0]?.negative).toBe(false);
       expect(result.tags[1]?.prompt).toBe("<lora:Alpaca_Carlesi_Style:1>");
+    }
+  });
+
+  it("drops subcategories that do not belong to the selected category", () => {
+    const result = parseLlmPromptLibraryImportContent(
+      JSON.stringify({
+        items: [
+          {
+            label: "蓝眼",
+            prompt: "blue eyes",
+            category: "body-part",
+            subcategory: "scene-weather",
+          },
+        ],
+      }),
+    );
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.tags[0]?.category).toBe("body-part");
+      expect(result.tags[0]?.subcategory).toBeUndefined();
     }
   });
 
@@ -139,5 +175,53 @@ describe("parseLlmPromptLibraryImportContent", () => {
   it("rejects missing items", () => {
     const result = parseLlmPromptLibraryImportContent(JSON.stringify({ foo: [] }));
     expect(result.ok).toBe(false);
+  });
+});
+
+describe("parseLlmPromptLibrarySubcategoryContent", () => {
+  it("parses valid subcategory assignments", () => {
+    const result = parseLlmPromptLibrarySubcategoryContent(
+      JSON.stringify({
+        items: [
+          { id: "a", subcategory: "body-part-hair" },
+          { id: "b", subcategory: "body-part-eyes" },
+        ],
+      }),
+      "body-part",
+    );
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.assignments).toEqual([
+        { id: "a", subcategory: "body-part-hair" },
+        { id: "b", subcategory: "body-part-eyes" },
+      ]);
+    }
+  });
+
+  it("drops assignments with subcategories outside the current category", () => {
+    const result = parseLlmPromptLibrarySubcategoryContent(
+      JSON.stringify({
+        items: [
+          { id: "a", subcategory: "scene-weather" },
+          { id: "b", subcategory: "body-part-hands" },
+        ],
+      }),
+      "body-part",
+    );
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.assignments).toEqual([{ id: "b", subcategory: "body-part-hands" }]);
+    }
+  });
+
+  it("builds subcategory classification messages with existing ids", () => {
+    const messages = buildPromptLibrarySubcategoryMessages("scene", [
+      { id: "tag-1", label: "雨天", prompt: "rainy day" },
+    ]);
+
+    expect(messages[0]?.content).toContain("scene-weather");
+    expect(messages[1]?.content).toContain("tag-1");
   });
 });

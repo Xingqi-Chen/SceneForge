@@ -1,16 +1,11 @@
-import type { PromptTag, PromptTagCategory } from "@/shared/types";
-
-const allowedCategories: PromptTagCategory[] = [
-  "style",
-  "lighting",
-  "quality",
-  "scene",
-  "character",
-  "body-part",
-  "negative",
-];
-
-const categorySet = new Set<PromptTagCategory>(allowedCategories);
+import {
+  PROMPT_TAG_CATEGORY_ORDER,
+  PROMPT_TAG_SUBCATEGORY_LABELS,
+  PROMPT_TAG_SUBCATEGORY_OPTIONS,
+  normalizePromptTagCategory,
+  normalizePromptTagSubcategory,
+} from "./prompt-tag-taxonomy";
+import type { PromptTag, PromptTagCategory, PromptTagSubcategory } from "@/shared/types";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -24,18 +19,6 @@ function extractJsonPayload(text: string): string {
   }
 
   return trimmed;
-}
-
-function isPromptTagCategory(value: unknown): value is PromptTagCategory {
-  return typeof value === "string" && categorySet.has(value as PromptTagCategory);
-}
-
-function normalizeCategory(value: unknown): PromptTagCategory {
-  if (isPromptTagCategory(value)) {
-    return value;
-  }
-
-  return "style";
 }
 
 function trimPromptToken(value: string) {
@@ -131,6 +114,7 @@ function splitPromptTokens(value: string) {
 function createPromptTag(
   prompt: string,
   category: PromptTagCategory,
+  subcategory: PromptTagSubcategory | undefined,
   negative: boolean,
   labelFallback?: string,
 ): Omit<PromptTag, "id"> | null {
@@ -148,6 +132,7 @@ function createPromptTag(
     label,
     prompt: normalizedPrompt,
     category,
+    ...(subcategory ? { subcategory } : {}),
     negative,
     weight: parsed.weight,
   };
@@ -164,18 +149,28 @@ function parseItem(value: unknown): Array<Omit<PromptTag, "id">> {
   }
 
   const labelRaw = typeof value.label === "string" ? value.label.trim() : "";
-  const category = normalizeCategory(value.category);
+  const category = normalizePromptTagCategory(value.category);
+  const subcategory = normalizePromptTagSubcategory(category, value.subcategory);
   const negative = category === "negative" ? true : Boolean(value.negative);
   const tokens = splitPromptTokens(prompt);
   const labelFallback = tokens.length === 1 ? labelRaw : undefined;
 
   return tokens
-    .map((token) => createPromptTag(token, category, negative, labelFallback))
+    .map((token) => createPromptTag(token, category, subcategory, negative, labelFallback))
     .filter((tag): tag is Omit<PromptTag, "id"> => Boolean(tag));
 }
 
 export type ParseLlmPromptLibraryImportResult =
   | { ok: true; tags: Array<Omit<PromptTag, "id">> }
+  | { ok: false; error: string };
+
+export type PromptLibrarySubcategoryAssignment = {
+  id: string;
+  subcategory: PromptTagSubcategory;
+};
+
+export type ParseLlmPromptLibrarySubcategoryResult =
+  | { ok: true; assignments: PromptLibrarySubcategoryAssignment[] }
   | { ok: false; error: string };
 
 export function parseLlmPromptLibraryImportContent(content: string): ParseLlmPromptLibraryImportResult {
@@ -210,8 +205,59 @@ export function parseLlmPromptLibraryImportContent(content: string): ParseLlmPro
   return { ok: true, tags };
 }
 
+export function parseLlmPromptLibrarySubcategoryContent(
+  content: string,
+  category: PromptTagCategory,
+): ParseLlmPromptLibrarySubcategoryResult {
+  const jsonText = extractJsonPayload(content);
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(jsonText) as unknown;
+  } catch {
+    return { ok: false, error: "无法解析 AI 返回的 JSON。" };
+  }
+
+  if (!isRecord(parsed)) {
+    return { ok: false, error: "JSON 顶层必须是对象。" };
+  }
+
+  const items = parsed.items;
+  if (!Array.isArray(items)) {
+    return { ok: false, error: 'JSON 必须包含 "items" 数组。' };
+  }
+
+  const assignments: PromptLibrarySubcategoryAssignment[] = [];
+
+  for (const item of items) {
+    if (!isRecord(item) || typeof item.id !== "string") {
+      continue;
+    }
+
+    const subcategory = normalizePromptTagSubcategory(category, item.subcategory);
+    if (!subcategory) {
+      continue;
+    }
+
+    assignments.push({ id: item.id, subcategory });
+  }
+
+  if (assignments.length === 0) {
+    return { ok: false, error: "AI 未返回任何有效二级分类。" };
+  }
+
+  return { ok: true, assignments };
+}
+
 export function buildPromptLibraryImportMessages(rawPromptText: string) {
-  const categoryList = allowedCategories.join(", ");
+  const categoryList = PROMPT_TAG_CATEGORY_ORDER.join(", ");
+  const subcategoryList = PROMPT_TAG_CATEGORY_ORDER.map((category) => {
+    const values = PROMPT_TAG_SUBCATEGORY_OPTIONS[category]
+      .map((subcategory) => `${subcategory} (${PROMPT_TAG_SUBCATEGORY_LABELS[subcategory]})`)
+      .join(", ");
+
+    return `- ${category}: ${values}`;
+  }).join("\n");
 
   return [
     {
@@ -228,6 +274,7 @@ export function buildPromptLibraryImportMessages(rawPromptText: string) {
         `- label: short display title, prefer concise Chinese when it fits the content.`,
         `- prompt: one atomic prompt token to store, never a comma-separated list.`,
         `- category: one of: ${categoryList}.`,
+        "- subcategory: choose one allowed subcategory for that category, or omit it only when uncertain.",
         "Use category \"negative\" only for negative-prompt style content; set that category for such entries.",
         "Use \"style\" for overall rendering, film grain, candid style, contrast, aesthetic wording.",
         "Use \"quality\" for tags like masterpiece, best quality, 8k, absurdres, detailed.",
@@ -235,13 +282,48 @@ export function buildPromptLibraryImportMessages(rawPromptText: string) {
         "Use \"character\" for identity, clothing role, pose at character level when not a single body part.",
         "Use \"body-part\" for anatomy-focused descriptors (hair, eyes, breasts, hands, etc.) when they are the main focus of that chunk.",
         "Use \"lighting\" for light and shadow descriptions.",
+        "Allowed subcategories:",
+        subcategoryList,
         "Respond with JSON ONLY (no markdown fences, no commentary) in this exact shape:",
-        '{"items":[{"label":"...","prompt":"...","category":"quality"}]}',
+        '{"items":[{"label":"...","prompt":"...","category":"quality","subcategory":"quality-detail"}]}',
       ].join("\n"),
     },
     {
       role: "user" as const,
       content: rawPromptText.trim(),
+    },
+  ];
+}
+
+export function buildPromptLibrarySubcategoryMessages(
+  category: PromptTagCategory,
+  tags: Pick<PromptTag, "id" | "label" | "prompt">[],
+) {
+  const subcategoryList = PROMPT_TAG_SUBCATEGORY_OPTIONS[category]
+    .map((subcategory) => `${subcategory} (${PROMPT_TAG_SUBCATEGORY_LABELS[subcategory]})`)
+    .join(", ");
+  const items = tags.map((tag) => ({
+    id: tag.id,
+    label: tag.label,
+    prompt: tag.prompt,
+  }));
+
+  return [
+    {
+      role: "system" as const,
+      content: [
+        "You classify existing SceneForge prompt-library tags into one allowed subcategory.",
+        "Do not rewrite labels, prompts, ids, or categories. Return only a JSON object.",
+        `All items already belong to category "${category}".`,
+        `Allowed subcategories for this category: ${subcategoryList}.`,
+        "Choose the best subcategory from the allowed list for each item. If uncertain, choose the closest useful option.",
+        "Respond with JSON ONLY (no markdown fences, no commentary) in this exact shape:",
+        '{"items":[{"id":"existing-id","subcategory":"allowed-subcategory"}]}',
+      ].join("\n"),
+    },
+    {
+      role: "user" as const,
+      content: JSON.stringify({ category, items }),
     },
   ];
 }

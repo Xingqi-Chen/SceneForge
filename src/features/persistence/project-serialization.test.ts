@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { createDefaultProject } from "@/features/editor/store/defaults";
+import { createDefaultProject, defaultCharacter } from "@/features/editor/store/defaults";
 import { serializePromptExport } from "@/features/prompt-engine";
 
 import {
@@ -61,6 +61,7 @@ describe("project serialization", () => {
         label: "测试",
         prompt: "test",
         category: "style",
+        subcategory: "style-rendering",
         weight: { enabled: false, value: 1 },
       },
     ];
@@ -78,11 +79,42 @@ describe("project serialization", () => {
         label: "L",
         prompt: "p",
         category: "style",
+        subcategory: "style-color",
         weight: { enabled: false, value: 1 },
       },
     ];
     const lib = importPromptLibraryBundleFromJson(serializeProject(project));
     expect(lib.promptLibraryTags).toEqual(project.settings.promptLibraryTags);
+  });
+
+  it("keeps valid prompt library subcategories and drops invalid ones", () => {
+    const json = JSON.stringify({
+      kind: SCENEFORGE_PROMPT_LIBRARY_EXPORT_KIND,
+      version: 1,
+      promptLibraryTags: [
+        {
+          id: "valid",
+          label: "雨天",
+          prompt: "rainy day",
+          category: "scene",
+          subcategory: "scene-weather",
+          weight: { value: 1, enabled: false },
+        },
+        {
+          id: "invalid",
+          label: "错位",
+          prompt: "blue eyes",
+          category: "body-part",
+          subcategory: "scene-weather",
+          weight: { value: 1, enabled: false },
+        },
+      ],
+      deletedBuiltInPromptLibraryTagIds: [],
+    });
+
+    const lib = importPromptLibraryBundleFromJson(json);
+    expect(lib.promptLibraryTags[0]?.subcategory).toBe("scene-weather");
+    expect(lib.promptLibraryTags[1]?.subcategory).toBeUndefined();
   });
 
   it("importCanvasBundleFromJson extracts scene from full project JSON", () => {
@@ -124,6 +156,55 @@ describe("project serialization", () => {
     expect(imported.scene.characters).toEqual([]);
     expect(imported.scene.promptTags).toEqual([]);
     expect(Array.isArray(imported.settings.promptLibraryTags)).toBe(true);
+  });
+
+  it("coerces target prompt category bindings on import", () => {
+    const project = createDefaultProject();
+    project.scene.promptCategoryBindings = ["scene", "scene", "bad" as never];
+    project.scene.objects.push({
+      id: "object-1",
+      kind: "rectangle",
+      name: "对象",
+      description: "",
+      position: { x: 0, y: 0 },
+      size: { width: 120, height: 120 },
+      rotation: 0,
+      layer: 1,
+      fill: "#e2e8f0",
+      includeInPrompt: true,
+      weight: { enabled: false, value: 1 },
+      promptTags: [],
+      promptCategoryBindings: ["character"],
+    });
+    project.scene.characters.push({
+      ...structuredClone(defaultCharacter),
+      id: "character-1",
+      promptCategoryBindings: [],
+      bodyParts: [
+        {
+          id: "head",
+          label: "头部",
+          promptTags: [],
+          promptCategoryBindings: ["body-part", "negative", "body-part"],
+        },
+      ],
+    });
+
+    const imported = importProjectFromJson(serializeProject(project));
+
+    expect(imported.scene.promptCategoryBindings).toEqual(["scene"]);
+    expect(imported.scene.objects[0]?.promptCategoryBindings).toEqual(["character"]);
+    expect(imported.scene.characters[0]?.promptCategoryBindings).toEqual([
+      "style",
+      "lighting",
+      "quality",
+      "character",
+      "negative",
+    ]);
+    expect(imported.scene.characters[0]?.bodyParts[0]?.promptCategoryBindings).toEqual([
+      "body-part",
+      "negative",
+    ]);
   });
 
   it("dedupes duplicate ids in scene and settings on import", () => {

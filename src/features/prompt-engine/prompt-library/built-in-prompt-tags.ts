@@ -6,6 +6,7 @@ export const BUILT_IN_PROMPT_LIBRARY_TAGS: PromptTag[] = [
     label: "电影感",
     prompt: "cinematic composition",
     category: "style",
+    subcategory: "style-composition",
     weight: { enabled: true, value: 1.15 },
   },
   {
@@ -13,6 +14,7 @@ export const BUILT_IN_PROMPT_LIBRARY_TAGS: PromptTag[] = [
     label: "柔和光线",
     prompt: "soft light",
     category: "lighting",
+    subcategory: "lighting-mood",
     weight: { enabled: true, value: 1.1 },
   },
   {
@@ -20,6 +22,7 @@ export const BUILT_IN_PROMPT_LIBRARY_TAGS: PromptTag[] = [
     label: "高质量",
     prompt: "high quality, detailed illustration",
     category: "quality",
+    subcategory: "quality-finish",
     weight: { enabled: false, value: 1 },
   },
   {
@@ -27,6 +30,7 @@ export const BUILT_IN_PROMPT_LIBRARY_TAGS: PromptTag[] = [
     label: "长发",
     prompt: "long flowing hair",
     category: "body-part",
+    subcategory: "body-part-hair",
     weight: { enabled: true, value: 1.2 },
   },
   {
@@ -34,6 +38,7 @@ export const BUILT_IN_PROMPT_LIBRARY_TAGS: PromptTag[] = [
     label: "蓝色眼睛",
     prompt: "blue eyes",
     category: "body-part",
+    subcategory: "body-part-eyes",
     weight: { enabled: false, value: 1 },
   },
   {
@@ -41,6 +46,7 @@ export const BUILT_IN_PROMPT_LIBRARY_TAGS: PromptTag[] = [
     label: "手持剑",
     prompt: "holding a sword",
     category: "body-part",
+    subcategory: "body-part-hands",
     weight: { enabled: false, value: 1 },
   },
   {
@@ -48,6 +54,7 @@ export const BUILT_IN_PROMPT_LIBRARY_TAGS: PromptTag[] = [
     label: "自然站姿",
     prompt: "standing naturally",
     category: "character",
+    subcategory: "character-pose",
     weight: { enabled: false, value: 1 },
   },
   {
@@ -55,6 +62,7 @@ export const BUILT_IN_PROMPT_LIBRARY_TAGS: PromptTag[] = [
     label: "雾气背景",
     prompt: "misty background",
     category: "scene",
+    subcategory: "scene-background",
     weight: { enabled: false, value: 1 },
   },
   {
@@ -62,6 +70,7 @@ export const BUILT_IN_PROMPT_LIBRARY_TAGS: PromptTag[] = [
     label: "低质量负面",
     prompt: "low quality, blurry",
     category: "negative",
+    subcategory: "negative-quality",
     weight: { enabled: false, value: 1 },
     negative: true,
   },

@@ -27,6 +27,7 @@ export type PromptTag = {
   label: string;
   prompt: string;
   category: PromptTagCategory;
+  subcategory?: PromptTagSubcategory;
   weight: PromptWeight;
   negative?: boolean;
 };
@@ -39,6 +40,37 @@ export type PromptTagCategory =
   | "body-part"
   | "quality"
   | "negative";
+
+export type PromptTagSubcategory =
+  | "style-rendering"
+  | "style-camera"
+  | "style-composition"
+  | "style-color"
+  | "lighting-source"
+  | "lighting-mood"
+  | "lighting-shadow"
+  | "quality-detail"
+  | "quality-resolution"
+  | "quality-finish"
+  | "scene-environment"
+  | "scene-weather"
+  | "scene-background"
+  | "scene-prop"
+  | "character-subject"
+  | "character-clothing"
+  | "character-pose"
+  | "character-expression"
+  | "character-accessory"
+  | "body-part-hair"
+  | "body-part-eyes"
+  | "body-part-face"
+  | "body-part-hands"
+  | "body-part-legs"
+  | "body-part-body"
+  | "negative-quality"
+  | "negative-anatomy"
+  | "negative-artifact"
+  | "negative-composition";
 
 export type SceneObjectKind =
   | "rectangle"
@@ -62,6 +94,7 @@ export type SceneObject = {
   includeInPrompt: boolean;
   weight: PromptWeight;
   promptTags: PromptTag[];
+  promptCategoryBindings?: PromptTagCategory[];
 };
 
 export type BodyPartId =
@@ -98,6 +131,7 @@ export type CharacterBodyPart = {
   id: BodyPartId;
   label: string;
   promptTags: PromptTag[];
+  promptCategoryBindings?: PromptTagCategory[];
 };
 
 export type CharacterSkeleton = {
@@ -110,6 +144,7 @@ export type CharacterSkeleton = {
   joints: Record<JointId, Vector2>;
   bodyParts: CharacterBodyPart[];
   promptTags: PromptTag[];
+  promptCategoryBindings?: PromptTagCategory[];
   includeInPrompt: boolean;
 };
 
@@ -121,4 +156,5 @@ export type Scene = {
   objects: SceneObject[];
   characters: CharacterSkeleton[];
   promptTags: PromptTag[];
+  promptCategoryBindings?: PromptTagCategory[];
 };

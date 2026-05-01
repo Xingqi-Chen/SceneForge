@@ -22,6 +22,7 @@ export type LlmChatMessage = {
 
 export type LlmChatRequest = {
   model?: string;
+  purpose?: "prompt-library-classification";
   messages: LlmChatMessage[];
   temperature?: number;
   maxTokens?: number;

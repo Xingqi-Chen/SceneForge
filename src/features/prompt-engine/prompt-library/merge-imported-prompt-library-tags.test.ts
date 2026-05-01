@@ -14,6 +14,7 @@ describe("mergeImportedPromptLibraryTags", () => {
           label: "测试",
           prompt: "unique token xyz",
           category: "scene",
+          subcategory: "scene-environment",
           weight: { enabled: false, value: 1 },
         },
       ],
@@ -24,6 +25,7 @@ describe("mergeImportedPromptLibraryTags", () => {
     expect(next).toHaveLength(1);
     expect(next[0]?.id).toBe("id-1");
     expect(next[0]?.prompt).toBe("unique token xyz");
+    expect(next[0]?.subcategory).toBe("scene-environment");
   });
 
   it("skips duplicates against built-in", () => {

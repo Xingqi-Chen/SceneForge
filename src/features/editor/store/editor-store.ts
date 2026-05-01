@@ -8,6 +8,7 @@ import type {
   JointId,
   ProjectSettings,
   PromptTag,
+  PromptTagCategory,
   Scene,
   SceneForgeProject,
   SceneObject,
@@ -17,8 +18,16 @@ import type {
 
 import { BUILT_IN_PROMPT_LIBRARY_TAGS } from "@/features/prompt-engine/prompt-library/built-in-prompt-tags";
 import { mergeImportedPromptLibraryTags } from "@/features/prompt-engine/prompt-library/merge-imported-prompt-library-tags";
+import {
+  PROMPT_TAG_CATEGORY_ORDER,
+  normalizePromptTagSubcategory,
+} from "@/features/prompt-engine/prompt-library/prompt-tag-taxonomy";
 
-import { createDefaultProject, defaultCharacter } from "./defaults";
+import {
+  DEFAULT_PROMPT_CATEGORY_BINDINGS,
+  createDefaultProject,
+  defaultCharacter,
+} from "./defaults";
 
 export type EditorSelection =
   | { kind: "scene" }
@@ -70,6 +79,10 @@ type EditorState = {
   addPromptTag: (target: PromptTagTarget, tag: PromptTag) => void;
   updatePromptTag: (target: PromptTagTarget, tagId: string, patch: PromptTagPatch) => void;
   removePromptTag: (target: PromptTagTarget, tagId: string) => void;
+  updatePromptCategoryBindings: (
+    target: PromptTagTarget,
+    categories: PromptTagCategory[],
+  ) => void;
   /** Merges parsed tags into `settings.promptLibraryTags`, skipping duplicates vs built-in and existing custom entries. Returns count added. */
   importPromptLibraryTags: (incoming: Array<Omit<PromptTag, "id">>) => number;
   updatePromptLibraryTag: (tag: PromptTag) => boolean;
@@ -97,6 +110,20 @@ function clonePromptTag(tag: PromptTag): PromptTag {
     id: createId("tag"),
     weight: { ...tag.weight },
   };
+}
+
+function normalizePromptCategoryBindings(categories: PromptTagCategory[]) {
+  const validCategories = new Set<PromptTagCategory>(PROMPT_TAG_CATEGORY_ORDER);
+  const seen = new Set<PromptTagCategory>();
+
+  return categories.filter((category) => {
+    if (!validCategories.has(category) || seen.has(category)) {
+      return false;
+    }
+
+    seen.add(category);
+    return true;
+  });
 }
 
 function hasPromptTag(tags: PromptTag[], tag: PromptTag) {
@@ -177,8 +204,14 @@ function createCharacter(layerOffset: number): CharacterSkeleton {
     bodyParts: defaultCharacter.bodyParts.map((bodyPart) => ({
       ...bodyPart,
       promptTags: bodyPart.promptTags.map(clonePromptTag),
+      promptCategoryBindings: bodyPart.promptCategoryBindings
+        ? [...bodyPart.promptCategoryBindings]
+        : [...DEFAULT_PROMPT_CATEGORY_BINDINGS.bodyPart],
     })),
     promptTags: defaultCharacter.promptTags.map(clonePromptTag),
+    promptCategoryBindings: defaultCharacter.promptCategoryBindings
+      ? [...defaultCharacter.promptCategoryBindings]
+      : [...DEFAULT_PROMPT_CATEGORY_BINDINGS.character],
   };
 }
 
@@ -198,6 +231,9 @@ function cloneSceneObject(object: SceneObject): SceneObject {
     size: { ...object.size },
     weight: { ...object.weight },
     promptTags: object.promptTags.map(clonePromptTag),
+    promptCategoryBindings: object.promptCategoryBindings
+      ? [...object.promptCategoryBindings]
+      : [...DEFAULT_PROMPT_CATEGORY_BINDINGS.object],
   };
 }
 
@@ -219,8 +255,14 @@ function cloneCharacterSkeleton(character: CharacterSkeleton): CharacterSkeleton
     bodyParts: character.bodyParts.map((bodyPart) => ({
       ...bodyPart,
       promptTags: bodyPart.promptTags.map(clonePromptTag),
+      promptCategoryBindings: bodyPart.promptCategoryBindings
+        ? [...bodyPart.promptCategoryBindings]
+        : [...DEFAULT_PROMPT_CATEGORY_BINDINGS.bodyPart],
     })),
     promptTags: character.promptTags.map(clonePromptTag),
+    promptCategoryBindings: character.promptCategoryBindings
+      ? [...character.promptCategoryBindings]
+      : [...DEFAULT_PROMPT_CATEGORY_BINDINGS.character],
   };
 }
 
@@ -303,6 +345,7 @@ export const useEditorStore = create<EditorState>((set) => ({
         includeInPrompt: true,
         weight: { enabled: false, value: 1 },
         promptTags: [],
+        promptCategoryBindings: [...DEFAULT_PROMPT_CATEGORY_BINDINGS.object],
       };
 
       return {
@@ -825,6 +868,65 @@ export const useEditorStore = create<EditorState>((set) => ({
         }),
       };
     }),
+  updatePromptCategoryBindings: (target, categories) =>
+    set((state) => {
+      const promptCategoryBindings = normalizePromptCategoryBindings(categories);
+
+      if (target.kind === "scene") {
+        return {
+          project: touchProject({
+            ...state.project,
+            scene: {
+              ...state.project.scene,
+              promptCategoryBindings,
+            },
+          }),
+        };
+      }
+
+      if (target.kind === "object") {
+        return {
+          project: touchProject({
+            ...state.project,
+            scene: {
+              ...state.project.scene,
+              objects: state.project.scene.objects.map((object) =>
+                object.id === target.id ? { ...object, promptCategoryBindings } : object,
+              ),
+            },
+          }),
+        };
+      }
+
+      const targetCharacterId = target.kind === "bodyPart" ? target.characterId : target.id;
+
+      return {
+        project: touchProject({
+          ...state.project,
+          scene: {
+            ...state.project.scene,
+            characters: state.project.scene.characters.map((character) => {
+              if (character.id !== targetCharacterId) {
+                return character;
+              }
+
+              if (target.kind === "bodyPart") {
+                return {
+                  ...character,
+                  bodyParts: character.bodyParts.map((bodyPart) =>
+                    bodyPart.id === target.bodyPartId
+                      ? { ...bodyPart, promptCategoryBindings }
+                      : bodyPart,
+                  ),
+                };
+              }
+
+              return { ...character, promptCategoryBindings };
+            }),
+          },
+        }),
+      };
+    }),
   importPromptLibraryTags: (incoming) => {
     let addedCount = 0;
 
@@ -867,6 +969,7 @@ export const useEditorStore = create<EditorState>((set) => ({
         label: tag.label.trim() || tag.prompt.trim().slice(0, 48) || "未命名",
         prompt: tag.prompt.trim(),
         negative: tag.category === "negative" ? true : Boolean(tag.negative),
+        subcategory: normalizePromptTagSubcategory(tag.category, tag.subcategory),
         weight: { ...tag.weight },
       };
 

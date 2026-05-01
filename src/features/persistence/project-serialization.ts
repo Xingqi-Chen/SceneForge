@@ -4,12 +4,21 @@ import type {
   CharacterSkeleton,
   JointId,
   PromptTag,
+  PromptTagCategory,
   Scene,
   SceneForgeProject,
   SceneObject,
 } from "@/shared/types";
 
-import { defaultCharacter } from "@/features/editor/store/defaults";
+import {
+  DEFAULT_PROMPT_CATEGORY_BINDINGS,
+  defaultCharacter,
+} from "@/features/editor/store/defaults";
+import {
+  PROMPT_TAG_CATEGORY_ORDER,
+  normalizePromptTagCategory,
+  normalizePromptTagSubcategory,
+} from "@/features/prompt-engine/prompt-library/prompt-tag-taxonomy";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -38,16 +47,6 @@ function dedupeById<T extends { id: string }>(items: T[]): T[] {
   return result;
 }
 
-const PROMPT_TAG_CATEGORY_SET = new Set<PromptTag["category"]>([
-  "style",
-  "lighting",
-  "scene",
-  "character",
-  "body-part",
-  "quality",
-  "negative",
-]);
-
 /** 将不信任来源的单条词库标签修补为安全结构；无法识别则丢弃。 */
 function sanitizePromptLibraryTagEntry(raw: unknown): PromptTag | null {
   if (!isRecord(raw)) {
@@ -59,10 +58,8 @@ function sanitizePromptLibraryTagEntry(raw: unknown): PromptTag | null {
     return null;
   }
 
-  const categoryCandidate = typeof raw.category === "string" ? raw.category : "style";
-  const category: PromptTag["category"] = PROMPT_TAG_CATEGORY_SET.has(categoryCandidate as PromptTag["category"])
-    ? (categoryCandidate as PromptTag["category"])
-    : "style";
+  const category = normalizePromptTagCategory(raw.category);
+  const subcategory = normalizePromptTagSubcategory(category, raw.subcategory);
 
   const weightRaw = raw.weight;
   const w = isRecord(weightRaw) ? weightRaw : undefined;
@@ -74,6 +71,7 @@ function sanitizePromptLibraryTagEntry(raw: unknown): PromptTag | null {
     label: typeof raw.label === "string" ? raw.label : "标签",
     prompt: typeof raw.prompt === "string" ? raw.prompt : "",
     category,
+    ...(subcategory ? { subcategory } : {}),
     weight: { value, enabled },
   };
 
@@ -145,6 +143,33 @@ function sanitizeWeight(raw: unknown): SceneObject["weight"] {
   return { value, enabled };
 }
 
+function sanitizePromptCategoryBindings(
+  raw: unknown,
+  fallback: PromptTagCategory[],
+): PromptTagCategory[] {
+  if (!Array.isArray(raw)) {
+    return [...fallback];
+  }
+
+  const allowed = new Set<PromptTagCategory>(PROMPT_TAG_CATEGORY_ORDER);
+  const seen = new Set<PromptTagCategory>();
+  const categories = raw.filter((value): value is PromptTagCategory => {
+    if (typeof value !== "string" || !allowed.has(value as PromptTagCategory)) {
+      return false;
+    }
+
+    const category = value as PromptTagCategory;
+    if (seen.has(category)) {
+      return false;
+    }
+
+    seen.add(category);
+    return true;
+  });
+
+  return categories.length > 0 ? categories : [...fallback];
+}
+
 function sanitizeSceneObject(raw: unknown): SceneObject | null {
   if (!isRecord(raw) || typeof raw.id !== "string" || !raw.id) {
     return null;
@@ -185,6 +210,10 @@ function sanitizeSceneObject(raw: unknown): SceneObject | null {
     includeInPrompt: typeof raw.includeInPrompt === "boolean" ? raw.includeInPrompt : true,
     weight: sanitizeWeight(raw.weight),
     promptTags: dedupePromptTags(promptTags),
+    promptCategoryBindings: sanitizePromptCategoryBindings(
+      raw.promptCategoryBindings,
+      DEFAULT_PROMPT_CATEGORY_BINDINGS.object,
+    ),
   };
 }
 
@@ -230,6 +259,10 @@ function sanitizeCharacter(raw: unknown): CharacterSkeleton | null {
   const bodyParts = bodyPartsRaw.map((bodyPart) => ({
     ...bodyPart,
     promptTags: dedupePromptTags(bodyPart.promptTags),
+    promptCategoryBindings: sanitizePromptCategoryBindings(
+      bodyPart.promptCategoryBindings,
+      DEFAULT_PROMPT_CATEGORY_BINDINGS.bodyPart,
+    ),
   }));
 
   const charPromptTags = Array.isArray(raw.promptTags)
@@ -246,6 +279,10 @@ function sanitizeCharacter(raw: unknown): CharacterSkeleton | null {
     joints,
     bodyParts,
     promptTags: dedupePromptTags(charPromptTags),
+    promptCategoryBindings: sanitizePromptCategoryBindings(
+      raw.promptCategoryBindings,
+      DEFAULT_PROMPT_CATEGORY_BINDINGS.character,
+    ),
     includeInPrompt: typeof raw.includeInPrompt === "boolean" ? raw.includeInPrompt : true,
   };
 }
@@ -260,6 +297,7 @@ function sanitizeScene(scene: unknown): Scene {
       objects: [],
       characters: [],
       promptTags: [],
+      promptCategoryBindings: [...DEFAULT_PROMPT_CATEGORY_BINDINGS.scene],
     };
   }
 
@@ -282,6 +320,10 @@ function sanitizeScene(scene: unknown): Scene {
     objects,
     characters,
     promptTags: dedupePromptTags(scenePromptTags),
+    promptCategoryBindings: sanitizePromptCategoryBindings(
+      scene.promptCategoryBindings,
+      DEFAULT_PROMPT_CATEGORY_BINDINGS.scene,
+    ),
   };
 }
 

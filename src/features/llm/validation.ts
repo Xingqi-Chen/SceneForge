@@ -60,6 +60,10 @@ function isOptionalString(value: unknown): value is string | undefined {
   return value === undefined || (typeof value === "string" && value.trim().length > 0);
 }
 
+function isOptionalPurpose(value: unknown): value is LlmChatRequest["purpose"] {
+  return value === undefined || value === "prompt-library-classification";
+}
+
 export function isLlmChatRequest(value: unknown): value is LlmChatRequest {
   if (!isRecord(value)) {
     return false;
@@ -70,6 +74,7 @@ export function isLlmChatRequest(value: unknown): value is LlmChatRequest {
     value.messages.length > 0 &&
     value.messages.every(isChatMessage) &&
     isOptionalString(value.model) &&
+    isOptionalPurpose(value.purpose) &&
     isOptionalNumber(value.temperature) &&
     isOptionalNumber(value.maxTokens)
   );

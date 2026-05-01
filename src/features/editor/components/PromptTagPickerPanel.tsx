@@ -1,6 +1,6 @@
 "use client";
 
-import { Loader2, Sparkles, Tags, X } from "lucide-react";
+import { ChevronRight, Loader2, Settings, Sparkles, Tags, X } from "lucide-react";
 import { useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 
@@ -8,52 +8,92 @@ import { Button } from "@/components/ui/button";
 import { useEditorStore, type PromptTagTarget } from "@/features/editor/store/editor-store";
 import { getLlmProxyErrorMessage, isLlmChatResponse } from "@/features/llm";
 import { saveProject } from "@/features/persistence";
+import { DEFAULT_PROMPT_CATEGORY_BINDINGS } from "@/features/editor/store/defaults";
 import { BUILT_IN_PROMPT_LIBRARY_TAGS } from "@/features/prompt-engine/prompt-library/built-in-prompt-tags";
 import {
   buildPromptLibraryImportMessages,
+  buildPromptLibrarySubcategoryMessages,
   parseLlmPromptLibraryImportContent,
+  parseLlmPromptLibrarySubcategoryContent,
 } from "@/features/prompt-engine/prompt-library/parse-llm-prompt-library-import";
-import type { BodyPartId, PromptTag, PromptTagCategory } from "@/shared/types";
-
-const promptCategoryOrder = [
-  "style",
-  "lighting",
-  "quality",
-  "scene",
-  "character",
-  "body-part",
-  "negative",
-] satisfies PromptTagCategory[];
-
-const promptCategoryLabels: Record<PromptTagCategory, string> = {
-  style: "风格",
-  lighting: "光照",
-  quality: "质量",
-  scene: "场景",
-  character: "人物",
-  "body-part": "身体部位",
-  negative: "负面提示",
-};
+import {
+  PROMPT_TAG_CATEGORY_LABELS,
+  PROMPT_TAG_CATEGORY_ORDER,
+  PROMPT_TAG_SUBCATEGORY_LABELS,
+  PROMPT_TAG_SUBCATEGORY_OPTIONS,
+  normalizePromptTagSubcategory,
+} from "@/features/prompt-engine/prompt-library/prompt-tag-taxonomy";
+import type { BodyPartId, PromptTag, PromptTagCategory, PromptTagSubcategory } from "@/shared/types";
 
 type BodyPartTargetValue = BodyPartId | "character";
 
 type ImportUiStatus = "idle" | "loading" | "success" | "error";
 type ManageUiStatus = "idle" | "loading" | "error";
+type ClassifyUiStatus = "loading" | "success" | "error";
 type PromptLibraryTagDraft = {
   label: string;
   prompt: string;
   category: PromptTagCategory;
+  subcategory: PromptTagSubcategory | "";
   negative: boolean;
 };
 
+type CollapsedPromptCategories = Partial<Record<PromptTagCategory, boolean>>;
+type CollapsedPromptSubcategories = Record<string, boolean>;
+type ClassifyCategoryState = Partial<
+  Record<PromptTagCategory, { status: ClassifyUiStatus; message: string }>
+>;
+
+const MAX_CLASSIFICATION_TAGS_PER_REQUEST = 10;
+
+function chunkPromptTags(tags: PromptTag[], chunkSize: number) {
+  const chunks: PromptTag[][] = [];
+
+  for (let start = 0; start < tags.length; start += chunkSize) {
+    chunks.push(tags.slice(start, start + chunkSize));
+  }
+
+  return chunks;
+}
+
+function createCollapsedPromptCategories(): CollapsedPromptCategories {
+  return Object.fromEntries(
+    PROMPT_TAG_CATEGORY_ORDER.map((category) => [category, true]),
+  ) as CollapsedPromptCategories;
+}
+
+function getPromptSubcategoryKey(
+  category: PromptTagCategory,
+  subcategory: string,
+) {
+  return `${category}:${subcategory || "uncategorized"}`;
+}
+
 function groupPromptLibrary(tags: PromptTag[]) {
-  return promptCategoryOrder
-    .map((category) => ({
-      category,
-      label: promptCategoryLabels[category],
-      tags: tags.filter((tag) => tag.category === category),
-    }))
-    .filter((group) => group.tags.length > 0);
+  return PROMPT_TAG_CATEGORY_ORDER
+    .map((category) => {
+      const categoryTags = tags.filter((tag) => tag.category === category);
+
+      return {
+        category,
+        label: PROMPT_TAG_CATEGORY_LABELS[category],
+        tagCount: categoryTags.length,
+        uncategorizedTags: categoryTags.filter((tag) => !tag.subcategory),
+        subgroups: [
+          ...PROMPT_TAG_SUBCATEGORY_OPTIONS[category].map((subcategory) => ({
+            subcategory,
+            label: PROMPT_TAG_SUBCATEGORY_LABELS[subcategory],
+            tags: categoryTags.filter((tag) => tag.subcategory === subcategory),
+          })),
+          {
+            subcategory: "",
+            label: "未分类",
+            tags: categoryTags.filter((tag) => !tag.subcategory),
+          },
+        ].filter((group) => group.tags.length > 0),
+      };
+    })
+    .filter((group) => group.subgroups.length > 0);
 }
 
 function findAppliedTag(tags: PromptTag[], tag: PromptTag) {
@@ -75,6 +115,7 @@ export function PromptTagPickerPanel() {
     selectBodyPart,
     selectCharacter,
     selection,
+    updatePromptCategoryBindings,
     updatePromptLibraryTag,
     updatePromptTag,
   } = useEditorStore();
@@ -83,13 +124,21 @@ export function PromptTagPickerPanel() {
   const [importStatus, setImportStatus] = useState<ImportUiStatus>("idle");
   const [importError, setImportError] = useState("");
   const [importFeedback, setImportFeedback] = useState("");
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [manageStatus, setManageStatus] = useState<ManageUiStatus>("idle");
   const [manageError, setManageError] = useState("");
   const [pendingManageTag, setPendingManageTag] = useState<PromptTag | null>(null);
+  const [collapsedCategories, setCollapsedCategories] = useState<CollapsedPromptCategories>(
+    createCollapsedPromptCategories,
+  );
+  const [collapsedSubcategories, setCollapsedSubcategories] =
+    useState<CollapsedPromptSubcategories>({});
+  const [classifyCategoryState, setClassifyCategoryState] = useState<ClassifyCategoryState>({});
   const [manageDraft, setManageDraft] = useState<PromptLibraryTagDraft>({
     label: "",
     prompt: "",
     category: "style",
+    subcategory: "",
     negative: false,
   });
 
@@ -137,6 +186,21 @@ export function PromptTagPickerPanel() {
 
     return { kind: "scene" };
   }, [selectedBodyPart, selectedCharacter, selectedObject]);
+  const currentPromptCategoryBindings = selectedObject
+    ? (selectedObject.promptCategoryBindings ?? DEFAULT_PROMPT_CATEGORY_BINDINGS.object)
+    : selectedBodyPart
+      ? (selectedBodyPart.promptCategoryBindings ?? DEFAULT_PROMPT_CATEGORY_BINDINGS.bodyPart)
+      : selectedCharacter
+        ? (selectedCharacter.promptCategoryBindings ?? DEFAULT_PROMPT_CATEGORY_BINDINGS.character)
+        : (project.scene.promptCategoryBindings ?? DEFAULT_PROMPT_CATEGORY_BINDINGS.scene);
+  const promptCategoryBindingSet = useMemo(
+    () => new Set(currentPromptCategoryBindings),
+    [currentPromptCategoryBindings],
+  );
+  const boundPromptLibraryGroups = useMemo(
+    () => promptLibraryGroups.filter((group) => promptCategoryBindingSet.has(group.category)),
+    [promptCategoryBindingSet, promptLibraryGroups],
+  );
 
   function handleBodyPartTargetChange(nextTarget: BodyPartTargetValue) {
     setBodyPartTarget(nextTarget);
@@ -181,6 +245,24 @@ export function PromptTagPickerPanel() {
 
   async function handleUpdateAppliedTag(tagId: string, patch: Parameters<typeof updatePromptTag>[2]) {
     await persistCurrentProject(() => updatePromptTag(tagTarget, tagId, patch), "update-applied-tag");
+  }
+
+  async function handleTogglePromptCategoryBinding(category: PromptTagCategory) {
+    const nextCategories = promptCategoryBindingSet.has(category)
+      ? currentPromptCategoryBindings.filter((currentCategory) => currentCategory !== category)
+      : PROMPT_TAG_CATEGORY_ORDER.filter(
+          (currentCategory) =>
+            promptCategoryBindingSet.has(currentCategory) || currentCategory === category,
+        );
+
+    if (nextCategories.length === 0) {
+      return;
+    }
+
+    await persistCurrentProject(
+      () => updatePromptCategoryBindings(tagTarget, nextCategories),
+      "update-target-category-bindings",
+    );
   }
 
   async function handleUpdateTagWeightValue(tagId: string, value: number) {
@@ -268,12 +350,149 @@ export function PromptTagPickerPanel() {
     }
   }
 
+  async function handleClassifyUncategorizedTags(
+    category: PromptTagCategory,
+    tags: PromptTag[],
+  ) {
+    if (tags.length === 0) {
+      setClassifyCategoryState((current) => ({
+        ...current,
+        [category]: { status: "error", message: "当前大类没有未分类词条。" },
+      }));
+      return;
+    }
+
+    setClassifyCategoryState((current) => ({
+      ...current,
+      [category]: { status: "loading", message: "AI 分类中..." },
+    }));
+
+    try {
+      const tagBatches = chunkPromptTags(tags, MAX_CLASSIFICATION_TAGS_PER_REQUEST);
+      const assignments = [];
+
+      for (const [batchIndex, tagBatch] of tagBatches.entries()) {
+        setClassifyCategoryState((current) => ({
+          ...current,
+          [category]: {
+            status: "loading",
+            message: `AI 分类中... ${batchIndex + 1}/${tagBatches.length}`,
+          },
+        }));
+
+        const messages = buildPromptLibrarySubcategoryMessages(category, tagBatch);
+
+        console.info("[SceneForge] [prompt-library] client outbound /api/llm/chat subcategory", {
+          category,
+          batchIndex,
+          batchCount: tagBatches.length,
+          tagCount: tagBatch.length,
+          messageCount: messages.length,
+        });
+
+        const response = await fetch("/api/llm/chat", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({
+            purpose: "prompt-library-classification",
+            messages,
+            temperature: 0.1,
+            maxTokens: 3000,
+          }),
+        });
+
+        const payload: unknown = await response.json();
+
+        if (!response.ok) {
+          console.info("[SceneForge] [prompt-library] client inbound /api/llm/chat subcategory error", {
+            category,
+            batchIndex,
+            httpStatus: response.status,
+          });
+          throw new Error(getLlmProxyErrorMessage(payload));
+        }
+
+        if (!isLlmChatResponse(payload)) {
+          console.info("[SceneForge] [prompt-library] client inbound subcategory invalid response shape", {
+            category,
+            batchIndex,
+            httpStatus: response.status,
+          });
+          throw new Error("AI 返回格式不正确。");
+        }
+
+        const parsed = parseLlmPromptLibrarySubcategoryContent(payload.content, category);
+        if (!parsed.ok) {
+          throw new Error(parsed.error);
+        }
+
+        assignments.push(...parsed.assignments);
+      }
+
+      const assignmentById = new Map(
+        assignments.map((assignment) => [assignment.id, assignment.subcategory]),
+      );
+      let updatedCount = 0;
+
+      for (const tag of tags) {
+        const subcategory = assignmentById.get(tag.id);
+        if (!subcategory) {
+          continue;
+        }
+
+        const updated = updatePromptLibraryTag({ ...tag, subcategory });
+        if (updated) {
+          updatedCount += 1;
+        }
+      }
+
+      if (updatedCount > 0) {
+        await saveProject(useEditorStore.getState().project);
+      }
+
+      console.info("[SceneForge] [prompt-library] subcategory classification merged", {
+        category,
+        requestedCount: tags.length,
+        batchCount: tagBatches.length,
+        assignmentCount: assignments.length,
+        updatedCount,
+        persisted: updatedCount > 0,
+      });
+
+      setClassifyCategoryState((current) => ({
+        ...current,
+        [category]: {
+          status: "success",
+          message:
+            updatedCount > 0
+              ? `已分类 ${updatedCount} 条未分类词条。`
+              : "AI 返回的分类没有更新任何词条。",
+        },
+      }));
+    } catch (error) {
+      console.error("[SceneForge] [prompt-library] subcategory classification failed", {
+        category,
+        error,
+      });
+      setClassifyCategoryState((current) => ({
+        ...current,
+        [category]: {
+          status: "error",
+          message: error instanceof Error ? error.message : "AI 分类失败，请稍后重试。",
+        },
+      }));
+    }
+  }
+
   function requestManagePromptLibraryTag(tag: PromptTag) {
     setPendingManageTag(tag);
     setManageDraft({
       label: tag.label,
       prompt: tag.prompt,
       category: tag.category,
+      subcategory: tag.subcategory ?? "",
       negative: Boolean(tag.negative),
     });
     setManageStatus("idle");
@@ -332,11 +551,13 @@ export function PromptTagPickerPanel() {
 
     try {
       const category = manageDraft.category;
+      const subcategory = normalizePromptTagSubcategory(category, manageDraft.subcategory);
       const updated = updatePromptLibraryTag({
         ...pendingManageTag,
         label: label || prompt.slice(0, 48),
         prompt,
         category,
+        ...(subcategory ? { subcategory } : { subcategory: undefined }),
         negative: category === "negative" ? true : manageDraft.negative,
       });
 
@@ -362,6 +583,28 @@ export function PromptTagPickerPanel() {
     }
   }
 
+  function togglePromptCategory(category: PromptTagCategory) {
+    setCollapsedCategories((current) => ({
+      ...current,
+      [category]: !current[category],
+    }));
+  }
+
+  function isPromptSubcategoryCollapsed(key: string) {
+    return collapsedSubcategories[key] ?? true;
+  }
+
+  function togglePromptSubcategory(key: string) {
+    setCollapsedSubcategories((current) => {
+      const isCollapsed = current[key] ?? true;
+
+      return {
+        ...current,
+        [key]: !isCollapsed,
+      };
+    });
+  }
+
   const appliedTags = selectedObject
     ? selectedObject.promptTags
     : selectedBodyPart
@@ -380,11 +623,24 @@ export function PromptTagPickerPanel() {
 
   return (
     <section className="flex flex-col flex-1">
-      <div className="mb-4 flex items-center gap-2.5 border-b border-slate-100 pb-3 shrink-0">
-        <div className="rounded-lg bg-pink-50 p-1.5 text-pink-600">
-          <Tags className="size-4" />
+      <div className="mb-4 flex items-center justify-between gap-3 border-b border-slate-100 pb-3 shrink-0">
+        <div className="flex items-center gap-2.5">
+          <div className="rounded-lg bg-pink-50 p-1.5 text-pink-600">
+            <Tags className="size-4" />
+          </div>
+          <h2 className="text-[15px] font-semibold text-slate-800">Prompt 词库</h2>
         </div>
-        <h2 className="text-[15px] font-semibold text-slate-800">Prompt 词库</h2>
+        <Button
+          aria-label="打开 Prompt 词库设置"
+          className="h-8 rounded-lg border-slate-200 bg-white px-2.5 text-slate-500 shadow-sm hover:bg-slate-50 hover:text-slate-800"
+          onClick={() => setIsSettingsOpen(true)}
+          size="sm"
+          title="Prompt 词库设置"
+          type="button"
+          variant="secondary"
+        >
+          <Settings className="size-3.5" />
+        </Button>
       </div>
       <div className="space-y-5 overflow-y-auto pr-1 custom-scrollbar">
         <div className="rounded-2xl border border-slate-200/80 bg-slate-50/80 p-4 shadow-sm">
@@ -408,89 +664,144 @@ export function PromptTagPickerPanel() {
           ) : null}
         </div>
 
-        <div className="rounded-2xl border border-pink-100/80 bg-pink-50/20 p-4 shadow-sm">
-          <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500">从文本导入</p>
-          <p className="mt-1 text-xs leading-relaxed text-slate-600">
-            粘贴整段 Prompt（可含逗号换行、引号块、LoRA 行等）。将通过 AI 拆分、分类并写入当前项目的词库。
-          </p>
-          <textarea
-            className="mt-3 min-h-[100px] w-full resize-y rounded-xl border border-slate-200/80 bg-white px-3 py-2.5 text-xs leading-relaxed text-slate-800 shadow-inner outline-none transition-all placeholder:text-slate-400 focus:border-pink-300 focus:ring-2 focus:ring-pink-200/40 disabled:opacity-60"
-            disabled={importStatus === "loading"}
-            onChange={(event) => {
-              setImportDraft(event.target.value);
-              setImportStatus("idle");
-              setImportError("");
-              setImportFeedback("");
-            }}
-            placeholder="在此粘贴需要解析的 Prompt 文本…"
-            value={importDraft}
-          />
-          <Button
-            className="mt-3 h-9 w-full gap-2 rounded-xl bg-pink-600 text-xs font-medium text-white shadow-sm hover:bg-pink-700 disabled:opacity-60"
-            disabled={importStatus === "loading"}
-            onClick={() => void handleImportPromptLibrary()}
-            size="sm"
-            type="button"
-          >
-            {importStatus === "loading" ? (
-              <Loader2 className="size-3.5 animate-spin" />
-            ) : (
-              <Sparkles className="size-3.5" />
-            )}
-            {importStatus === "loading" ? "解析中…" : "AI 解析并导入词库"}
-          </Button>
-          {importStatus === "error" ? (
-            <p className="mt-2 text-xs leading-relaxed text-rose-600">{importError}</p>
-          ) : null}
-          {importStatus === "success" && importFeedback ? (
-            <p className="mt-2 text-xs leading-relaxed text-emerald-700">{importFeedback}</p>
-          ) : null}
-        </div>
-
         <div>
           <p className="mb-3 text-[11px] font-bold uppercase tracking-wider text-slate-500">点击选择或取消选择</p>
           <div className="space-y-4">
-            {promptLibraryGroups.map((group) => (
+            {boundPromptLibraryGroups.length > 0 ? boundPromptLibraryGroups.map((group) => {
+              const isCollapsed = Boolean(collapsedCategories[group.category]);
+              const classifyState = classifyCategoryState[group.category];
+              const isClassifying = classifyState?.status === "loading";
+
+              return (
               <div key={group.category}>
-                <p className="mb-2 text-xs font-semibold text-slate-700">{group.label}</p>
-                <div className="flex flex-wrap gap-2">
-                  {group.tags.map((tag) => {
-                    const appliedTag = findAppliedTag(appliedTags, tag);
+                <div className="mb-2 flex items-center gap-2">
+                  <button
+                    aria-expanded={!isCollapsed}
+                    className="flex min-w-0 flex-1 items-center justify-between rounded-xl px-2 py-1.5 text-left text-xs font-semibold text-slate-700 transition-all hover:bg-slate-50"
+                    onClick={() => togglePromptCategory(group.category)}
+                    type="button"
+                  >
+                    <span className="flex items-center gap-1.5">
+                      <ChevronRight
+                        className={`size-3.5 text-slate-400 transition-transform ${
+                          isCollapsed ? "" : "rotate-90"
+                        }`}
+                      />
+                      {group.label}
+                    </span>
+                    <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-500">
+                      {group.tagCount}
+                    </span>
+                  </button>
+                  {group.uncategorizedTags.length > 0 ? (
+                    <Button
+                      className="h-7 shrink-0 rounded-lg border-pink-100 bg-pink-50 px-2 text-[11px] text-pink-600 shadow-sm hover:bg-pink-100 disabled:opacity-60"
+                      disabled={isClassifying}
+                      onClick={() =>
+                        void handleClassifyUncategorizedTags(
+                          group.category,
+                          group.uncategorizedTags,
+                        )
+                      }
+                      title={`让 AI 为 ${group.label} 中 ${group.uncategorizedTags.length} 条未分类词条选择二级分类`}
+                      type="button"
+                      variant="secondary"
+                    >
+                      {isClassifying ? <Loader2 className="mr-1 size-3 animate-spin" /> : null}
+                      AI 分类 {group.uncategorizedTags.length}
+                    </Button>
+                  ) : null}
+                </div>
+                {classifyState && classifyState.status !== "loading" ? (
+                  <p
+                    className={`mb-2 px-2 text-[11px] leading-relaxed ${
+                      classifyState.status === "error" ? "text-rose-600" : "text-emerald-700"
+                    }`}
+                  >
+                    {classifyState.message}
+                  </p>
+                ) : null}
+                {isCollapsed ? null : (
+                  <div className="space-y-3">
+                  {group.subgroups.map((subgroup) => {
+                    const subgroupKey = getPromptSubcategoryKey(
+                      group.category,
+                      subgroup.subcategory,
+                    );
+                    const isSubgroupCollapsed = isPromptSubcategoryCollapsed(subgroupKey);
 
                     return (
-                      <span className="relative inline-flex" key={tag.id}>
-                        <button
-                          aria-pressed={Boolean(appliedTag)}
-                          className={
-                            appliedTag
-                              ? "rounded-full bg-slate-800 px-3 py-1.5 pr-6 text-xs font-medium text-white shadow-sm transition-all hover:bg-slate-900 hover:shadow"
-                              : "rounded-full border border-slate-200/80 bg-slate-50/80 px-3 py-1.5 pr-6 text-xs font-medium text-slate-600 shadow-sm transition-all hover:border-slate-300 hover:bg-white hover:text-slate-900 hover:shadow"
-                          }
-                          onClick={() => void handleTogglePromptTag(tag, appliedTag)}
-                          title={tag.prompt}
-                          type="button"
-                        >
-                          {tag.label}
-                        </button>
-                        <button
-                          aria-label={`从词库删除 ${tag.label}`}
-                          className={
-                            appliedTag
-                              ? "absolute right-1 top-0.5 rounded-full p-0.5 text-white/50 transition-all hover:bg-white/10 hover:text-white"
-                              : "absolute right-1 top-0.5 rounded-full p-0.5 text-slate-400 transition-all hover:bg-rose-50 hover:text-rose-500"
-                          }
-                          onClick={() => requestManagePromptLibraryTag(tag)}
-                          title={`编辑或删除 ${tag.label}`}
-                          type="button"
-                        >
-                          <X className="size-3" />
-                        </button>
-                      </span>
+                    <div key={subgroupKey}>
+                      <button
+                        aria-expanded={!isSubgroupCollapsed}
+                        className="mb-2 flex w-full items-center justify-between rounded-lg px-2 py-1 text-left text-[11px] font-medium text-slate-400 transition-all hover:bg-slate-50 hover:text-slate-600"
+                        onClick={() => togglePromptSubcategory(subgroupKey)}
+                        type="button"
+                      >
+                        <span className="flex items-center gap-1.5">
+                          <ChevronRight
+                            className={`size-3 text-slate-300 transition-transform ${
+                              isSubgroupCollapsed ? "" : "rotate-90"
+                            }`}
+                          />
+                          {subgroup.label}
+                        </span>
+                        <span className="rounded-full bg-slate-50 px-1.5 py-0.5 text-[10px] text-slate-400">
+                          {subgroup.tags.length}
+                        </span>
+                      </button>
+                      {isSubgroupCollapsed ? null : (
+                        <div className="flex flex-wrap gap-2">
+                        {subgroup.tags.map((tag) => {
+                          const appliedTag = findAppliedTag(appliedTags, tag);
+
+                          return (
+                            <span className="relative inline-flex" key={tag.id}>
+                              <button
+                                aria-pressed={Boolean(appliedTag)}
+                                className={
+                                  appliedTag
+                                    ? "rounded-full bg-slate-800 px-3 py-1.5 pr-6 text-xs font-medium text-white shadow-sm transition-all hover:bg-slate-900 hover:shadow"
+                                    : "rounded-full border border-slate-200/80 bg-slate-50/80 px-3 py-1.5 pr-6 text-xs font-medium text-slate-600 shadow-sm transition-all hover:border-slate-300 hover:bg-white hover:text-slate-900 hover:shadow"
+                                }
+                                onClick={() => void handleTogglePromptTag(tag, appliedTag)}
+                                title={tag.prompt}
+                                type="button"
+                              >
+                                {tag.label}
+                              </button>
+                              <button
+                                aria-label={`从词库删除 ${tag.label}`}
+                                className={
+                                  appliedTag
+                                    ? "absolute right-1 top-0.5 rounded-full p-0.5 text-white/50 transition-all hover:bg-white/10 hover:text-white"
+                                    : "absolute right-1 top-0.5 rounded-full p-0.5 text-slate-400 transition-all hover:bg-rose-50 hover:text-rose-500"
+                                }
+                                onClick={() => requestManagePromptLibraryTag(tag)}
+                                title={`编辑或删除 ${tag.label}`}
+                                type="button"
+                              >
+                                <X className="size-3" />
+                              </button>
+                            </span>
+                          );
+                        })}
+                        </div>
+                      )}
+                    </div>
                     );
                   })}
-                </div>
+                  </div>
+                )}
               </div>
-            ))}
+              );
+            }) : (
+              <div className="rounded-2xl border border-dashed border-slate-200/80 bg-slate-50/50 p-5 text-center">
+                <p className="text-xs text-slate-500">
+                  当前目标没有可显示的绑定分类，请在上方启用至少一个一级分类。
+                </p>
+              </div>
+            )}
           </div>
         </div>
 
@@ -558,6 +869,122 @@ export function PromptTagPickerPanel() {
           )}
         </div>
       </div>
+      {isSettingsOpen && typeof document !== "undefined" ? createPortal(
+        <div
+          aria-modal="true"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4 backdrop-blur-sm"
+          role="dialog"
+        >
+          <div className="flex max-h-[90vh] w-full max-w-xl flex-col overflow-hidden rounded-3xl border border-white/60 bg-white shadow-2xl">
+            <div className="flex items-start gap-3 border-b border-slate-100 bg-pink-50/70 p-5">
+              <div className="rounded-2xl bg-white p-2 text-pink-600 shadow-sm">
+                <Settings className="size-5" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <h3 className="text-base font-bold text-slate-900">Prompt 词库设置</h3>
+                <p className="mt-1 text-xs leading-relaxed text-slate-500">
+                  管理当前目标可用的一级分类，并从已有 Prompt 文本导入词库。
+                </p>
+              </div>
+              <button
+                aria-label="关闭 Prompt 词库设置"
+                className="rounded-full bg-white/80 p-1.5 text-slate-400 shadow-sm transition-all hover:bg-white hover:text-slate-700"
+                onClick={() => setIsSettingsOpen(false)}
+                type="button"
+              >
+                <X className="size-4" />
+              </button>
+            </div>
+            <div className="space-y-5 overflow-y-auto p-5 custom-scrollbar">
+              <div className="rounded-2xl border border-slate-200/80 bg-slate-50/80 p-4 shadow-sm">
+                <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                  当前目标
+                </p>
+                <p className="mt-1.5 text-sm font-bold text-slate-800">{targetLabel}</p>
+                <div className="mt-3 rounded-xl border border-white/80 bg-white/70 p-3 shadow-inner">
+                  <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                    绑定一级分类
+                  </p>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {PROMPT_TAG_CATEGORY_ORDER.map((category) => {
+                      const enabled = promptCategoryBindingSet.has(category);
+                      const isOnlyEnabledCategory =
+                        enabled && currentPromptCategoryBindings.length === 1;
+
+                      return (
+                        <button
+                          aria-pressed={enabled}
+                          className={
+                            enabled
+                              ? "rounded-full bg-pink-600 px-3 py-1.5 text-xs font-medium text-white shadow-sm transition-all hover:bg-pink-700 disabled:cursor-not-allowed disabled:opacity-60"
+                              : "rounded-full border border-slate-200/80 bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-500 shadow-sm transition-all hover:border-pink-200 hover:bg-pink-50 hover:text-pink-700"
+                          }
+                          disabled={isOnlyEnabledCategory}
+                          key={category}
+                          onClick={() => void handleTogglePromptCategoryBinding(category)}
+                          title={
+                            isOnlyEnabledCategory
+                              ? "当前目标至少需要绑定一个一级分类"
+                              : `切换 ${PROMPT_TAG_CATEGORY_LABELS[category]} 分类绑定`
+                          }
+                          type="button"
+                        >
+                          {PROMPT_TAG_CATEGORY_LABELS[category]}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <p className="mt-2 text-[11px] leading-relaxed text-slate-500">
+                    只显示已绑定分类下的词库标签；已应用标签不会被自动删除。
+                  </p>
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-pink-100/80 bg-pink-50/20 p-4 shadow-sm">
+                <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                  从文本导入
+                </p>
+                <p className="mt-1 text-xs leading-relaxed text-slate-600">
+                  粘贴整段 Prompt（可含逗号换行、引号块、LoRA 行等）。将通过 AI 拆分、分类并写入当前项目的词库。
+                </p>
+                <textarea
+                  className="mt-3 min-h-[120px] w-full resize-y rounded-xl border border-slate-200/80 bg-white px-3 py-2.5 text-xs leading-relaxed text-slate-800 shadow-inner outline-none transition-all placeholder:text-slate-400 focus:border-pink-300 focus:ring-2 focus:ring-pink-200/40 disabled:opacity-60"
+                  disabled={importStatus === "loading"}
+                  onChange={(event) => {
+                    setImportDraft(event.target.value);
+                    setImportStatus("idle");
+                    setImportError("");
+                    setImportFeedback("");
+                  }}
+                  placeholder="在此粘贴需要解析的 Prompt 文本…"
+                  value={importDraft}
+                />
+                <Button
+                  className="mt-3 h-9 w-full gap-2 rounded-xl bg-pink-600 text-xs font-medium text-white shadow-sm hover:bg-pink-700 disabled:opacity-60"
+                  disabled={importStatus === "loading"}
+                  onClick={() => void handleImportPromptLibrary()}
+                  size="sm"
+                  type="button"
+                >
+                  {importStatus === "loading" ? (
+                    <Loader2 className="size-3.5 animate-spin" />
+                  ) : (
+                    <Sparkles className="size-3.5" />
+                  )}
+                  {importStatus === "loading" ? "解析中…" : "AI 解析并导入词库"}
+                </Button>
+                {importStatus === "error" ? (
+                  <p className="mt-2 text-xs leading-relaxed text-rose-600">{importError}</p>
+                ) : null}
+                {importStatus === "success" && importFeedback ? (
+                  <p className="mt-2 text-xs leading-relaxed text-emerald-700">{importFeedback}</p>
+                ) : null}
+              </div>
+            </div>
+          </div>
+        </div>,
+        document.body,
+      ) : null}
       {pendingManageTag && typeof document !== "undefined" ? createPortal(
         <div
           aria-modal="true"
@@ -603,7 +1030,7 @@ export function PromptTagPickerPanel() {
                   value={manageDraft.prompt}
                 />
               </label>
-              <div className="grid grid-cols-[1fr_auto] items-end gap-3">
+              <div className="grid grid-cols-[1fr_1fr_auto] items-end gap-3">
                 <label className="block">
                   <span className="text-xs font-bold uppercase tracking-wider text-slate-500">
                     分类
@@ -612,18 +1039,49 @@ export function PromptTagPickerPanel() {
                     className="mt-2 h-10 w-full rounded-xl border border-slate-200/80 bg-white px-3 text-sm text-slate-800 shadow-sm outline-none transition-all focus:border-pink-300 focus:ring-2 focus:ring-pink-200/40 disabled:opacity-60"
                     disabled={manageStatus === "loading"}
                     onChange={(event) =>
-                      setManageDraft((draft) => ({
-                        ...draft,
-                        category: event.target.value as PromptTagCategory,
-                        negative:
-                          event.target.value === "negative" ? true : draft.negative,
-                      }))
+                      setManageDraft((draft) => {
+                        const category = event.target.value as PromptTagCategory;
+                        const subcategory = normalizePromptTagSubcategory(
+                          category,
+                          draft.subcategory,
+                        );
+
+                        return {
+                          ...draft,
+                          category,
+                          subcategory: subcategory ?? "",
+                          negative: category === "negative" ? true : draft.negative,
+                        };
+                      })
                     }
                     value={manageDraft.category}
                   >
-                    {promptCategoryOrder.map((category) => (
+                    {PROMPT_TAG_CATEGORY_ORDER.map((category) => (
                       <option key={category} value={category}>
-                        {promptCategoryLabels[category]}
+                        {PROMPT_TAG_CATEGORY_LABELS[category]}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="block">
+                  <span className="text-xs font-bold uppercase tracking-wider text-slate-500">
+                    二级分类
+                  </span>
+                  <select
+                    className="mt-2 h-10 w-full rounded-xl border border-slate-200/80 bg-white px-3 text-sm text-slate-800 shadow-sm outline-none transition-all focus:border-pink-300 focus:ring-2 focus:ring-pink-200/40 disabled:opacity-60"
+                    disabled={manageStatus === "loading"}
+                    onChange={(event) =>
+                      setManageDraft((draft) => ({
+                        ...draft,
+                        subcategory: event.target.value as PromptTagSubcategory | "",
+                      }))
+                    }
+                    value={manageDraft.subcategory}
+                  >
+                    <option value="">未分类</option>
+                    {PROMPT_TAG_SUBCATEGORY_OPTIONS[manageDraft.category].map((subcategory) => (
+                      <option key={subcategory} value={subcategory}>
+                        {PROMPT_TAG_SUBCATEGORY_LABELS[subcategory]}
                       </option>
                     ))}
                   </select>

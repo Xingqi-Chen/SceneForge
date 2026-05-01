@@ -1,5 +1,7 @@
 import type { PromptTag } from "@/shared/types";
 
+import { normalizePromptTagSubcategory } from "./prompt-tag-taxonomy";
+
 function sameSemanticTag(
   left: Pick<PromptTag, "prompt" | "category" | "negative">,
   right: Pick<PromptTag, "prompt" | "category" | "negative">,
@@ -28,6 +30,7 @@ function normalizeIncomingTag(tag: Omit<PromptTag, "id">): Omit<PromptTag, "id">
     label,
     prompt: tag.prompt.trim(),
     category: tag.category,
+    subcategory: normalizePromptTagSubcategory(tag.category, tag.subcategory),
     negative,
     weight,
   };
