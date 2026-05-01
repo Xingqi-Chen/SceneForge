@@ -1,4 +1,4 @@
-import type { BodyPartId, PromptModelFormat, PromptTag, SceneForgeProject } from "@/shared/types";
+import type { BodyPartId, CanvasConfig, PromptModelFormat, PromptTag, SceneForgeProject } from "@/shared/types";
 
 import { formatPromptTag, formatPromptText } from "./formatters";
 import { appendSpatialRelationHints, inferSpatialRelationHints } from "./spatial-relations";
@@ -25,6 +25,10 @@ const bodyPartPromptScopes: Record<BodyPartId, string> = {
   leftFoot: "left foot",
   rightFoot: "right foot",
 };
+
+function formatCanvasForPrompt(canvas: CanvasConfig): string {
+  return `${canvas.aspectRatio} aspect ratio, ${canvas.width}x${canvas.height} pixels`;
+}
 
 function uniquePrompts(prompts: string[]) {
   return Array.from(new Set(prompts.filter(Boolean)));
@@ -67,6 +71,8 @@ export function generatePrompt(project: SceneForgeProject): GeneratedPrompt {
 
   parts.push(...collectTags(scene.promptTags, settings.modelFormat));
   negativeParts.push(...collectTags(scene.promptTags, settings.modelFormat, true));
+
+  parts.push(formatCanvasForPrompt(scene.canvas));
 
   for (const object of scene.objects) {
     if (!object.includeInPrompt) {

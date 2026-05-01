@@ -56,6 +56,15 @@ function addDefaultCharacter(project: SceneForgeProject) {
 }
 
 describe("generatePrompt", () => {
+  it("includes canvas aspect ratio and pixel dimensions", () => {
+    const project = createDefaultProject();
+    const result = generatePrompt(project);
+
+    expect(result.parts).toContain("16:9 aspect ratio, 1280x720 pixels");
+    expect(result.prompt).toMatch(/16:9 aspect ratio/);
+    expect(result.prompt).toMatch(/1280x720 pixels/);
+  });
+
   it("builds a stable diffusion prompt from semantic scene data", () => {
     const project = createDefaultProject();
     project.settings.modelFormat = "stable-diffusion";
