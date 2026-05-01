@@ -1,0 +1,138 @@
+import type { CharacterSkeleton, Scene, SceneForgeProject } from "@/shared/types";
+
+const now = new Date("2026-01-01T00:00:00.000Z").toISOString();
+
+export const defaultCharacter: CharacterSkeleton = {
+  id: "character-hero",
+  name: "主角",
+  description: "standing character pose",
+  position: { x: 420, y: 200 },
+  includeInPrompt: true,
+  joints: {
+    neck: { x: 0, y: 24 },
+    leftShoulder: { x: -36, y: 48 },
+    rightShoulder: { x: 36, y: 48 },
+    leftElbow: { x: -64, y: 108 },
+    rightElbow: { x: 64, y: 108 },
+    leftWrist: { x: -72, y: 168 },
+    rightWrist: { x: 72, y: 168 },
+    hip: { x: 0, y: 148 },
+    leftKnee: { x: -28, y: 228 },
+    rightKnee: { x: 28, y: 228 },
+    leftAnkle: { x: -32, y: 308 },
+    rightAnkle: { x: 32, y: 308 },
+  },
+  bodyParts: [
+    {
+      id: "head",
+      label: "头部",
+      promptTags: [
+        {
+          id: "tag-long-hair",
+          label: "头发提示词",
+          prompt: "long flowing hair",
+          category: "body-part",
+          weight: { enabled: true, value: 1.2 },
+        },
+      ],
+    },
+    { id: "torso", label: "躯干", promptTags: [] },
+    { id: "leftUpperArm", label: "左上臂", promptTags: [] },
+    { id: "leftForearm", label: "左前臂", promptTags: [] },
+    { id: "rightUpperArm", label: "右上臂", promptTags: [] },
+    { id: "rightForearm", label: "右前臂", promptTags: [] },
+    { id: "leftThigh", label: "左大腿", promptTags: [] },
+    { id: "leftShin", label: "左小腿", promptTags: [] },
+    { id: "rightThigh", label: "右大腿", promptTags: [] },
+    { id: "rightShin", label: "右小腿", promptTags: [] },
+    { id: "leftHand", label: "左手", promptTags: [] },
+    { id: "rightHand", label: "右手", promptTags: [] },
+    { id: "leftFoot", label: "左脚", promptTags: [] },
+    { id: "rightFoot", label: "右脚", promptTags: [] },
+  ],
+  promptTags: [
+    {
+      id: "tag-standing-pose",
+      label: "站姿",
+      prompt: "full body standing pose",
+      category: "character",
+      weight: { enabled: false, value: 1 },
+    },
+  ],
+};
+
+export const defaultScene: Scene = {
+  id: "scene-default",
+  name: "SceneForge 画布",
+  description: "场景描述",
+  canvas: {
+    width: 1280,
+    height: 720,
+    aspectRatio: "16:9",
+    background: "#f8fafc",
+  },
+  objects: [
+    {
+      id: "object-window",
+      kind: "rectangle",
+      name: "窗户",
+      description: "large window with soft morning light",
+      position: { x: 120, y: 96 },
+      size: { width: 240, height: 180 },
+      rotation: 0,
+      layer: 1,
+      fill: "#dbeafe",
+      includeInPrompt: true,
+      weight: { enabled: false, value: 1 },
+      promptTags: [
+        {
+          id: "tag-soft-light",
+          label: "柔和光线",
+          prompt: "soft morning light",
+          category: "lighting",
+          weight: { enabled: true, value: 1.1 },
+        },
+      ],
+    },
+    {
+      id: "object-table",
+      kind: "rectangle",
+      name: "桌子",
+      description: "wooden table in the foreground",
+      position: { x: 320, y: 476 },
+      size: { width: 360, height: 92 },
+      rotation: 0,
+      layer: 2,
+      fill: "#92400e",
+      includeInPrompt: true,
+      weight: { enabled: false, value: 1 },
+      promptTags: [],
+    },
+  ],
+  characters: [defaultCharacter],
+  promptTags: [
+    {
+      id: "tag-cinematic-style",
+      label: "电影感",
+      prompt: "cinematic composition",
+      category: "style",
+      weight: { enabled: true, value: 1.15 },
+    },
+  ],
+};
+
+export function createDefaultProject(): SceneForgeProject {
+  return {
+    id: "project-default",
+    name: "Untitled SceneForge Project",
+    version: 1,
+    scene: defaultScene,
+    settings: {
+      modelFormat: "stable-diffusion",
+      includeSpatialHints: true,
+      negativePrompt: "low quality, blurry, extra fingers",
+    },
+    createdAt: now,
+    updatedAt: now,
+  };
+}
