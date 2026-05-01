@@ -42,7 +42,6 @@ type PromptLibraryTagDraft = {
 };
 
 type CollapsedPromptCategories = Partial<Record<PromptTagCategory, boolean>>;
-type CollapsedPromptSubcategories = Record<string, boolean>;
 type ClassifyCategoryState = Partial<
   Record<PromptTagCategory, { status: ClassifyUiStatus; message: string }>
 >;
@@ -170,8 +169,10 @@ export function PromptTagPickerPanel() {
   const [collapsedCategories, setCollapsedCategories] = useState<CollapsedPromptCategories>(
     createCollapsedPromptCategories,
   );
-  const [collapsedSubcategories, setCollapsedSubcategories] =
-    useState<CollapsedPromptSubcategories>({});
+  /** At most one secondary subgroup expanded at a time (accordion). */
+  const [expandedPromptSubcategoryKey, setExpandedPromptSubcategoryKey] = useState<string | null>(
+    null,
+  );
   const [classifyCategoryState, setClassifyCategoryState] = useState<ClassifyCategoryState>({});
   const [manageDraft, setManageDraft] = useState<PromptLibraryTagDraft>({
     label: "",
@@ -711,18 +712,11 @@ export function PromptTagPickerPanel() {
   }
 
   function isPromptSubcategoryCollapsed(key: string) {
-    return collapsedSubcategories[key] ?? true;
+    return expandedPromptSubcategoryKey !== key;
   }
 
   function togglePromptSubcategory(key: string) {
-    setCollapsedSubcategories((current) => {
-      const isCollapsed = current[key] ?? true;
-
-      return {
-        ...current,
-        [key]: !isCollapsed,
-      };
-    });
+    setExpandedPromptSubcategoryKey((current) => (current === key ? null : key));
   }
 
   const appliedTags = multiSelection
