@@ -244,7 +244,24 @@ export const useEditorStore = create<EditorState>((set) => ({
       aiGeneratedPrompt: "",
     }),
   resetProject: () =>
-    set({ project: createDefaultProject(), selection: { kind: "scene" }, aiGeneratedPrompt: "" }),
+    set((state) => {
+      const nextProject = createDefaultProject();
+
+      return {
+        project: {
+          ...nextProject,
+          settings: {
+            ...nextProject.settings,
+            ...state.project.settings,
+            promptLibraryTags: state.project.settings.promptLibraryTags ?? [],
+            deletedBuiltInPromptLibraryTagIds:
+              state.project.settings.deletedBuiltInPromptLibraryTagIds ?? [],
+          },
+        },
+        selection: { kind: "scene" },
+        aiGeneratedPrompt: "",
+      };
+    }),
   selectScene: () => set({ selection: { kind: "scene" } }),
   selectObject: (id) => set({ selection: { kind: "object", id } }),
   selectCharacter: (id) => set({ selection: { kind: "character", id } }),

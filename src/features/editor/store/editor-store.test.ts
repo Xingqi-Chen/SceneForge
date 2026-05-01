@@ -163,6 +163,42 @@ describe("editor store", () => {
     });
   });
 
+  it("resets the 2D scene without clearing the prompt library", () => {
+    useEditorStore.getState().importPromptLibraryTags([
+      {
+        label: "雨景",
+        prompt: "heavy rain on cobblestones",
+        category: "scene",
+        weight: { enabled: false, value: 1 },
+      },
+    ]);
+    expect(useEditorStore.getState().deletePromptLibraryTag("library-blue-eyes")).toBe(true);
+    useEditorStore.getState().addObject({
+      kind: "rectangle",
+      name: "路灯",
+      description: "street lamp on the left",
+    });
+    useEditorStore.getState().addPromptTag({ kind: "scene" }, testTag);
+    useEditorStore.getState().setAiGeneratedPrompt("generated prompt");
+
+    useEditorStore.getState().resetProject();
+
+    const { aiGeneratedPrompt, project, selection } = useEditorStore.getState();
+
+    expect(project.scene.objects).toHaveLength(0);
+    expect(project.scene.promptTags).toHaveLength(0);
+    expect(project.settings.promptLibraryTags).toContainEqual(
+      expect.objectContaining({
+        label: "雨景",
+        prompt: "heavy rain on cobblestones",
+        category: "scene",
+      }),
+    );
+    expect(project.settings.deletedBuiltInPromptLibraryTagIds).toContain("library-blue-eyes");
+    expect(selection).toEqual({ kind: "scene" });
+    expect(aiGeneratedPrompt).toBe("");
+  });
+
   it("imports prompt library tags into project settings", () => {
     const added = useEditorStore.getState().importPromptLibraryTags([
       {
