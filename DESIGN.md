@@ -674,17 +674,12 @@ long hair::1.2
 - 模板设置
 - 生成历史
 
-### 14.2 导出格式
+### 14.2 文件导入导出（MVP）
 
-支持导出：
+- 画布 JSON：场景、物体、人物骨架与画布上的 Prompt 标签。
+- 词库 JSON：自定义词库与隐藏的内置词条 id。
 
-- Prompt 文本
-- Negative Prompt 文本
-- JSON 项目文件
-- 场景截图
-- 分层数据
-- ComfyUI 工作流参数
-- Stable Diffusion WebUI 参数
+其它格式（如完整项目 JSON、ComfyUI 参数等）列入后续版本。
 
 ## 15. MVP 范围
 

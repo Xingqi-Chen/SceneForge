@@ -2,6 +2,8 @@ import { openDB, type DBSchema } from "idb";
 
 import type { ProjectSummary, SceneForgeProject } from "@/shared/types";
 
+import { getProjectContentFingerprint, sanitizeImportedProject } from "./project-serialization";
+
 const databaseName = "sceneforge-projects";
 const databaseVersion = 1;
 const projectStoreName = "projects";
@@ -30,7 +32,37 @@ async function getDatabase() {
 
 export async function saveProject(project: SceneForgeProject) {
   const database = await getDatabase();
-  await database.put(projectStoreName, project);
+  const normalized = sanitizeImportedProject(project);
+  const fingerprint = getProjectContentFingerprint(normalized);
+  const existing = await database.getAll(projectStoreName);
+
+  const duplicateIds = existing
+    .filter((entry) => {
+      if (entry.id === normalized.id) {
+        return false;
+      }
+
+      return getProjectContentFingerprint(sanitizeImportedProject(entry)) === fingerprint;
+    })
+    .map((entry) => entry.id);
+
+  const transaction = database.transaction(projectStoreName, "readwrite");
+  const store = transaction.store;
+
+  await store.put(normalized);
+
+  for (const id of duplicateIds) {
+    store.delete(id);
+  }
+
+  await transaction.done;
+
+  if (duplicateIds.length > 0) {
+    console.info("[SceneForge] [persistence] removed duplicate projects by content fingerprint", {
+      keptId: normalized.id,
+      removedIds: duplicateIds,
+    });
+  }
 }
 
 export async function loadProject(projectId: string) {

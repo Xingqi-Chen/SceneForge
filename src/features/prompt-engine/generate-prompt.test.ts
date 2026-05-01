@@ -70,6 +70,7 @@ describe("generatePrompt", () => {
     project.settings.modelFormat = "stable-diffusion";
     addTableObject(project);
     const character = addDefaultCharacter(project);
+    project.scene.description = "场景描述";
 
     character.bodyParts[0].promptTags.push({
       id: "tag-long-hair",
