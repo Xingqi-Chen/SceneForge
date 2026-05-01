@@ -10,6 +10,7 @@ import {
   importPromptLibraryBundleFromJson,
   isSceneForgeProject,
   parseProjectJson,
+  SCENEFORGE_PROMPT_LIBRARY_EXPORT_KIND,
   serializeCanvasExport,
   serializeProject,
   serializePromptLibraryExport,
@@ -67,6 +68,45 @@ describe("project serialization", () => {
     const lib = importPromptLibraryBundleFromJson(serializePromptLibraryExport(project));
     expect(lib.promptLibraryTags).toEqual(project.settings.promptLibraryTags);
     expect(lib.deletedBuiltInPromptLibraryTagIds).toEqual(["builtin-a"]);
+  });
+
+  it("importPromptLibraryBundleFromJson extracts library from full project JSON", () => {
+    const project = createDefaultProject();
+    project.settings.promptLibraryTags = [
+      {
+        id: "x",
+        label: "L",
+        prompt: "p",
+        category: "style",
+        weight: { enabled: false, value: 1 },
+      },
+    ];
+    const lib = importPromptLibraryBundleFromJson(serializeProject(project));
+    expect(lib.promptLibraryTags).toEqual(project.settings.promptLibraryTags);
+  });
+
+  it("importCanvasBundleFromJson extracts scene from full project JSON", () => {
+    const project = createDefaultProject();
+    project.scene.name = "从完整项目来";
+    const scene = importCanvasBundleFromJson(serializeProject(project));
+    expect(scene.name).toBe("从完整项目来");
+  });
+
+  it("importPromptLibraryBundleFromJson accepts version as string and skips junk entries", () => {
+    const json = JSON.stringify({
+      kind: SCENEFORGE_PROMPT_LIBRARY_EXPORT_KIND,
+      version: "1",
+      promptLibraryTags: [
+        null,
+        { id: "keep", label: "OK", prompt: "p", category: "style", weight: { value: 1, enabled: false } },
+        { id: "keep", label: "Dup id", prompt: "p2", category: "scene", weight: { value: 1, enabled: false } },
+      ],
+      deletedBuiltInPromptLibraryTagIds: [],
+    });
+    const lib = importPromptLibraryBundleFromJson(json);
+    expect(lib.promptLibraryTags).toHaveLength(1);
+    expect(lib.promptLibraryTags[0]?.id).toBe("keep");
+    expect(lib.promptLibraryTags[0]?.label).toBe("OK");
   });
 
   it("importProjectFromJson coerces missing scene arrays", () => {

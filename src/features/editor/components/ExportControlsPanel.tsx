@@ -125,7 +125,7 @@ export function ExportControlsPanel() {
       setStatus("canvasImported");
       await persistAfterImport();
     } catch (error) {
-      console.error("[SceneForge] [export] failed to import canvas", { error });
+      console.error("[SceneForge] [export] failed to import canvas", error);
       setStatusDetail(error instanceof Error ? error.message : "导入失败");
       setStatus("error");
     }
@@ -146,7 +146,7 @@ export function ExportControlsPanel() {
       setStatus("libraryImported");
       await persistAfterImport();
     } catch (error) {
-      console.error("[SceneForge] [export] failed to import prompt library", { error });
+      console.error("[SceneForge] [export] failed to import prompt library", error);
       setStatusDetail(error instanceof Error ? error.message : "导入失败");
       setStatus("error");
     }
@@ -159,7 +159,7 @@ export function ExportControlsPanel() {
       console.info("[SceneForge] [persistence] project saved", { projectId: project.id });
       setStatus("saved");
     } catch (error) {
-      console.error("[SceneForge] [persistence] failed to save project", { error });
+      console.error("[SceneForge] [persistence] failed to save project", error);
       setStatusDetail(error instanceof Error ? error.message : "");
       setStatus("error");
     }
@@ -239,7 +239,7 @@ export function ExportControlsPanel() {
           <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500">画布内容</p>
           <p className="text-[11px] leading-snug text-slate-500">
             「项目名-canvas.json」含画布尺寸、场景/物体/人物及其上的 Prompt
-            标签；导入会替换当前画布，不改动项目设置与词库。
+            标签；导入会替换当前画布，不改动项目设置与词库。亦支持旧版完整项目 JSON：只读取其中的场景字段。
           </p>
           <div className="grid grid-cols-2 gap-3">
             <Button
@@ -280,7 +280,8 @@ export function ExportControlsPanel() {
         <div className="space-y-1.5">
           <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Prompt 词库</p>
           <p className="text-[11px] leading-snug text-slate-500">
-            「项目名-prompt-library.json」含自定义词库条目与已隐藏的内置词条；导入会覆盖当前项目的词库数据（不自动改动已应用到画布的标签）。
+            「项目名-prompt-library.json」含自定义词库条目与已隐藏的内置词条；导入会覆盖当前项目的词库数据（不自动改动已应用到画布的标签）。亦支持旧版完整项目
+            JSON：只读取其中的词库字段。
           </p>
           <div className="grid grid-cols-2 gap-3">
             <Button

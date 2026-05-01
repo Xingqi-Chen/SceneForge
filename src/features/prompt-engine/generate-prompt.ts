@@ -1,12 +1,20 @@
 import type { BodyPartId, CanvasConfig, PromptModelFormat, PromptTag, SceneForgeProject } from "@/shared/types";
 
 import { formatPromptTag, formatPromptText } from "./formatters";
-import { appendSpatialRelationHints, inferSpatialRelationHints } from "./spatial-relations";
+import {
+  appendSpatialRelationHints,
+  inferSceneLayoutConstraints,
+  inferSpatialRelationHints,
+} from "./spatial-relations";
 
 export type GeneratedPrompt = {
   prompt: string;
   negativePrompt: string;
   parts: string[];
+};
+
+export type GeneratePromptOptions = {
+  includeLayoutConstraints?: boolean;
 };
 
 const bodyPartPromptScopes: Record<BodyPartId, string> = {
@@ -60,10 +68,11 @@ function buildBodyPartPrompt(bodyPartPrompt: string, bodyPartTags: string[]) {
   );
 }
 
-export function generatePrompt(project: SceneForgeProject): GeneratedPrompt {
+export function generatePrompt(project: SceneForgeProject, options: GeneratePromptOptions = {}): GeneratedPrompt {
   const { scene, settings } = project;
   const parts: string[] = [];
   const negativeParts: string[] = [];
+  const includeLayoutConstraints = options.includeLayoutConstraints ?? true;
 
   if (scene.description.trim()) {
     parts.push(scene.description.trim());
@@ -73,6 +82,13 @@ export function generatePrompt(project: SceneForgeProject): GeneratedPrompt {
   negativeParts.push(...collectTags(scene.promptTags, settings.modelFormat, true));
 
   parts.push(formatCanvasForPrompt(scene.canvas));
+
+  if (settings.includeSpatialHints && includeLayoutConstraints) {
+    const layoutConstraints = inferSceneLayoutConstraints(scene);
+    if (layoutConstraints) {
+      parts.push(layoutConstraints);
+    }
+  }
 
   for (const object of scene.objects) {
     if (!object.includeInPrompt) {

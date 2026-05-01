@@ -6,6 +6,7 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { useEditorStore } from "@/features/editor/store/editor-store";
 import { generatePrompt } from "@/features/prompt-engine";
+import { inferSceneLayoutConstraints } from "@/features/prompt-engine/spatial-relations";
 import { getLlmProxyErrorMessage, isLlmChatResponse } from "@/features/llm";
 import type { SceneForgeProject } from "@/shared/types";
 
@@ -109,8 +110,11 @@ function summarizeObjectCharacterRelations(project: SceneForgeProject) {
   });
 }
 
-function summarizeSceneForAi(project: SceneForgeProject) {
+function summarizeSceneForAi(project: SceneForgeProject, includeHardLayoutConstraints: boolean) {
   const { scene } = project;
+  const layoutConstraints = includeHardLayoutConstraints && project.settings.includeSpatialHints
+    ? inferSceneLayoutConstraints(scene)
+    : null;
   const objects = scene.objects
     .filter((object) => object.includeInPrompt)
     .map(
@@ -132,6 +136,7 @@ function summarizeSceneForAi(project: SceneForgeProject) {
     `Canvas: ${scene.canvas.width}x${scene.canvas.height}, background ${scene.canvas.background}`,
     scene.description ? `Description: ${scene.description}` : null,
     `Scene prompt tags: ${formatTagsForAi(scene.promptTags) || "none"}`,
+    layoutConstraints ? `Hard layout constraints:\n${layoutConstraints}` : null,
     objects.length > 0 ? `Objects:\n${objects.join("\n")}` : "Objects: none",
     characters.length > 0 ? `Characters:\n${characters.join("\n\n")}` : "Characters: none",
     objectCharacterRelations.length > 0
@@ -148,6 +153,7 @@ export function PromptPreviewPanel({ onCaptureCanvas }: PromptPreviewPanelProps)
   const setAiGeneratedPrompt = useEditorStore((state) => state.setAiGeneratedPrompt);
   const [aiStatus, setAiStatus] = useState<AiGenerationStatus>("idle");
   const [aiError, setAiError] = useState("");
+  const [useLayoutConstraints, setUseLayoutConstraints] = useState(false);
   const generatedPrompt = generatePrompt(project);
 
   async function handleGenerateAiPrompt() {
@@ -163,30 +169,51 @@ export function PromptPreviewPanel({ onCaptureCanvas }: PromptPreviewPanelProps)
     setAiError("");
 
     try {
-      const structuredSummary = summarizeSceneForAi(project);
+      const promptForAi = generatePrompt(project, {
+        includeLayoutConstraints: useLayoutConstraints,
+      });
+      const structuredSummary = summarizeSceneForAi(project, useLayoutConstraints);
+      const layoutConstraints = useLayoutConstraints && project.settings.includeSpatialHints
+        ? inferSceneLayoutConstraints(project.scene)
+        : null;
+      const systemPrompt = useLayoutConstraints
+        ? "You are SceneForge's visual prompt assistant. Produce ONE concise image-generation prompt (Stable Diffusion-style: comma-separated tags and short phrases; anime-friendly).\n\nPrioritize the canvas screenshot, the prompt preview, and the hard layout constraints. The hard layout constraints are composition requirements, not optional metadata.\n\nRules:\n- Preserve object placement from the canvas: viewer-left/right, foreground/background, beside/near, behind/in front of, and visible-through-window relationships must remain in the final prompt.\n- Describe pose, expression, and props in natural, artistic language (e.g. leaning on a wall, dynamic stance, one arm raised). Never echo raw coordinates, pixel math, or awkward joint-vs-joint alignment phrases (e.g. do not write \"wrist level with neck\", \"ankle left of other ankle\", \"horizontally aligned with neck\").\n- Skeleton notes in the summary are hints only; infer a plausible pose from the image, do not transcribe joint tuples.\n- Merge duplicates; keep token economy; preserve style and subject tags from the preview when they matter.\n- Return only the final prompt text (no markdown, no labels like \"Prompt:\")."
+        : "You are SceneForge's visual prompt assistant. Produce ONE concise image-generation prompt (Stable Diffusion-style: comma-separated tags and short phrases; anime-friendly).\n\nPrioritize the canvas screenshot and the user's prompt preview over structured metadata.\n\nRules:\n- Describe pose, expression, and props in natural, artistic language (e.g. leaning on a wall, dynamic stance, one arm raised). Never echo raw coordinates, pixel math, or awkward joint-vs-joint alignment phrases (e.g. do not write \"wrist level with neck\", \"ankle left of other ankle\", \"horizontally aligned with neck\").\n- Spatial hints: use simple viewer-left/right, foreground/background, beside/near — not anatomical ruler language.\n- Skeleton notes in the summary are hints only; infer a plausible pose from the image, do not transcribe joint tuples.\n- Merge duplicates; keep token economy; preserve style and subject tags from the preview when they matter.\n- Return only the final prompt text (no markdown, no labels like \"Prompt:\").";
+      const userText = [
+        "Generate a stronger positive prompt from the preview + screenshot below.",
+        useLayoutConstraints
+          ? "Order of trust: (1) hard layout constraints and canvas image, (2) prompt preview, (3) character/object descriptions and prompt tags."
+          : "Order of trust: (1) canvas image and prompt preview, (2) character/object descriptions and prompt tags, (3) coarse layout hints in the structured summary.",
+        useLayoutConstraints
+          ? "Rewrite the layout constraints naturally, but keep every important placement relationship."
+          : "Do not paste structured-summary wording verbatim if it reads like geometry homework.",
+        useLayoutConstraints
+          ? "Do not paste coordinate wording or structured-summary wording verbatim if it reads like geometry homework."
+          : null,
+        "",
+        `Prompt preview: ${promptForAi.prompt || "(empty)"}`,
+        `Negative prompt from project (reference only; your reply must be the positive prompt text only): ${promptForAi.negativePrompt || "(none)"}`,
+        useLayoutConstraints ? "" : null,
+        useLayoutConstraints ? "Hard layout constraints (must be preserved in the final prompt):" : null,
+        useLayoutConstraints ? layoutConstraints || "(none)" : null,
+        "",
+        "Structured scene summary (reference only):",
+        structuredSummary,
+      ]
+        .filter((line): line is string => line !== null)
+        .join("\n");
       const requestBody = {
         messages: [
           {
             role: "system" as const,
-            content:
-              "You are SceneForge's visual prompt assistant. Produce ONE concise image-generation prompt (Stable Diffusion–style: comma-separated tags and short phrases; anime-friendly).\n\nPrioritize the canvas screenshot and the user's prompt preview over structured metadata.\n\nRules:\n- Describe pose, expression, and props in natural, artistic language (e.g. leaning on a wall, dynamic stance, one arm raised). Never echo raw coordinates, pixel math, or awkward joint-vs-joint alignment phrases (e.g. do not write \"wrist level with neck\", \"ankle left of other ankle\", \"horizontally aligned with neck\").\n- Spatial hints: use simple viewer-left/right, foreground/background, beside/near — not anatomical ruler language.\n- Skeleton notes in the summary are hints only; infer a plausible pose from the image, do not transcribe joint tuples.\n- Merge duplicates; keep token economy; preserve style and subject tags from the preview when they matter.\n- Return only the final prompt text (no markdown, no labels like \"Prompt:\").",
+            content: systemPrompt,
           },
           {
             role: "user" as const,
             content: [
               {
                 type: "text" as const,
-                text: [
-                  "Generate a stronger positive prompt from the preview + screenshot below.",
-                  "Order of trust: (1) canvas image and prompt preview, (2) character/object descriptions and prompt tags, (3) coarse layout hints in the structured summary.",
-                  "Do not paste structured-summary wording verbatim if it reads like geometry homework.",
-                  "",
-                  `Prompt preview: ${generatedPrompt.prompt || "(empty)"}`,
-                  `Negative prompt from project (reference only; your reply must be the positive prompt text only): ${generatedPrompt.negativePrompt || "(none)"}`,
-                  "",
-                  "Structured scene summary (reference only):",
-                  structuredSummary,
-                ].join("\n"),
+                text: userText,
               },
               {
                 type: "image_url" as const,
@@ -206,7 +233,8 @@ export function PromptPreviewPanel({ onCaptureCanvas }: PromptPreviewPanelProps)
         temperature: requestBody.temperature,
         maxTokens: requestBody.maxTokens,
         messageCount: requestBody.messages.length,
-        promptPreviewChars: (generatedPrompt.prompt ?? "").length,
+        layoutConstraintsEnabled: useLayoutConstraints,
+        promptPreviewChars: (promptForAi.prompt ?? "").length,
         structuredSummaryChars: structuredSummary.length,
         canvasImageDataUrlChars: canvasImage.length,
       });
@@ -260,16 +288,34 @@ export function PromptPreviewPanel({ onCaptureCanvas }: PromptPreviewPanelProps)
           </div>
           <h2 className="text-[15px] font-semibold text-slate-800">Prompt 预览</h2>
         </div>
-        <Button
-          className="h-8 rounded-lg bg-purple-600 px-3 text-xs text-white shadow-sm transition-all hover:bg-purple-700 hover:shadow-md disabled:opacity-60"
-          disabled={aiStatus === "loading"}
-          onClick={handleGenerateAiPrompt}
-          size="sm"
-          type="button"
-        >
-          <Sparkles className="size-3.5" />
-          {aiStatus === "loading" ? "生成中..." : "AI 生成"}
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            aria-pressed={useLayoutConstraints}
+            className={`h-8 rounded-lg px-3 text-xs shadow-sm transition-all disabled:opacity-60 ${
+              useLayoutConstraints
+                ? "border-purple-200 bg-purple-50 text-purple-700 hover:bg-purple-100"
+                : "border-slate-200 bg-white text-slate-500 hover:bg-slate-50"
+            }`}
+            disabled={aiStatus === "loading"}
+            onClick={() => setUseLayoutConstraints((enabled) => !enabled)}
+            size="sm"
+            title="开启后，AI 生成会把画布布局作为必须保留的构图约束；关闭时不额外传入全局布局约束。"
+            type="button"
+            variant="secondary"
+          >
+            {useLayoutConstraints ? "布局约束开" : "布局约束"}
+          </Button>
+          <Button
+            className="h-8 rounded-lg bg-purple-600 px-3 text-xs text-white shadow-sm transition-all hover:bg-purple-700 hover:shadow-md disabled:opacity-60"
+            disabled={aiStatus === "loading"}
+            onClick={handleGenerateAiPrompt}
+            size="sm"
+            type="button"
+          >
+            <Sparkles className="size-3.5" />
+            {aiStatus === "loading" ? "生成中..." : "AI 生成"}
+          </Button>
+        </div>
       </div>
       <div className="space-y-4">
         <div>

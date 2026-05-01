@@ -230,4 +230,45 @@ describe("generatePrompt", () => {
 
     expect(result.parts).toContain("glowing lantern near the character");
   });
+
+  it("adds a global layout constraint from canvas placement", () => {
+    const project = createDefaultProject();
+    const character = addDefaultCharacter(project);
+    character.description = "1girl sitting on a chair";
+    character.position = { x: 900, y: 260 };
+
+    addSceneObject(project, {
+      id: "object-window",
+      name: "Window",
+      description: "large window",
+      position: { x: 300, y: 120 },
+      size: { width: 560, height: 320 },
+    });
+    addSceneObject(project, {
+      id: "object-table",
+      name: "Table",
+      description: "small marble table",
+      position: { x: 120, y: 500 },
+      size: { width: 220, height: 120 },
+    });
+    addSceneObject(project, {
+      id: "object-river",
+      name: "River",
+      description: "scenic river",
+      position: { x: 180, y: 80 },
+      size: { width: 520, height: 100 },
+    });
+
+    const result = generatePrompt(project);
+
+    expect(result.parts).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("layout constraint: composition must follow the 2D canvas layout"),
+      ]),
+    );
+    expect(result.prompt).toContain("large window placed in the center");
+    expect(result.prompt).toContain("small marble table placed in the lower left foreground");
+    expect(result.prompt).toContain("1girl sitting on a chair placed in the right side");
+    expect(result.prompt).toContain("scenic river visible outside or through the window");
+  });
 });

@@ -21,7 +21,13 @@ function dedupeById<T extends { id: string }>(items: T[]): T[] {
   const result: T[] = [];
 
   for (const item of items) {
-    if (!item.id || seen.has(item.id)) {
+    if (
+      item == null ||
+      typeof item !== "object" ||
+      typeof item.id !== "string" ||
+      !item.id ||
+      seen.has(item.id)
+    ) {
       continue;
     }
 
@@ -30,6 +36,56 @@ function dedupeById<T extends { id: string }>(items: T[]): T[] {
   }
 
   return result;
+}
+
+const PROMPT_TAG_CATEGORY_SET = new Set<PromptTag["category"]>([
+  "style",
+  "lighting",
+  "scene",
+  "character",
+  "body-part",
+  "quality",
+  "negative",
+]);
+
+/** 将不信任来源的单条词库标签修补为安全结构；无法识别则丢弃。 */
+function sanitizePromptLibraryTagEntry(raw: unknown): PromptTag | null {
+  if (!isRecord(raw)) {
+    return null;
+  }
+
+  const id = typeof raw.id === "string" && raw.id.trim() ? raw.id : null;
+  if (!id) {
+    return null;
+  }
+
+  const categoryCandidate = typeof raw.category === "string" ? raw.category : "style";
+  const category: PromptTag["category"] = PROMPT_TAG_CATEGORY_SET.has(categoryCandidate as PromptTag["category"])
+    ? (categoryCandidate as PromptTag["category"])
+    : "style";
+
+  const weightRaw = raw.weight;
+  const w = isRecord(weightRaw) ? weightRaw : undefined;
+  const value = typeof w?.value === "number" && Number.isFinite(w.value) ? w.value : 1;
+  const enabled = typeof w?.enabled === "boolean" ? w.enabled : false;
+
+  const tag: PromptTag = {
+    id,
+    label: typeof raw.label === "string" ? raw.label : "标签",
+    prompt: typeof raw.prompt === "string" ? raw.prompt : "",
+    category,
+    weight: { value, enabled },
+  };
+
+  if (typeof raw.negative === "boolean") {
+    tag.negative = raw.negative;
+  }
+
+  return tag;
+}
+
+function isExportBundleVersion(value: unknown): boolean {
+  return value === 1 || value === "1";
 }
 
 function dedupePromptTags(tags: PromptTag[]): PromptTag[] {
@@ -247,9 +303,10 @@ function sanitizeSettings(settings: unknown): SceneForgeProject["settings"] {
       ? modelFormat
       : "generic";
 
-  const libraryTags = Array.isArray(settings.promptLibraryTags)
-    ? (settings.promptLibraryTags as SceneForgeProject["settings"]["promptLibraryTags"])
-    : [];
+  const libraryTagsRaw = Array.isArray(settings.promptLibraryTags) ? settings.promptLibraryTags : [];
+  const libraryTags = dedupeById(
+    libraryTagsRaw.map(sanitizePromptLibraryTagEntry).filter((tag): tag is PromptTag => tag !== null),
+  );
   const deletedBuiltIns = Array.isArray(settings.deletedBuiltInPromptLibraryTagIds)
     ? (settings.deletedBuiltInPromptLibraryTagIds as string[]).filter((id) => typeof id === "string")
     : [];
@@ -258,7 +315,7 @@ function sanitizeSettings(settings: unknown): SceneForgeProject["settings"] {
     modelFormat: mf,
     includeSpatialHints: typeof settings.includeSpatialHints === "boolean" ? settings.includeSpatialHints : true,
     negativePrompt: typeof settings.negativePrompt === "string" ? settings.negativePrompt : "",
-    promptLibraryTags: dedupeById(libraryTags),
+    promptLibraryTags: libraryTags,
     deletedBuiltInPromptLibraryTagIds: [...new Set(deletedBuiltIns)],
   };
 }
@@ -295,6 +352,7 @@ export function serializeCanvasExport(project: SceneForgeProject): string {
 
 /**
  * 从「导出画布 JSON」生成的文件恢复场景；不含项目设置与词库。
+ * 若为完整 SceneForge 项目 JSON（旧版备份），则仅读取其中的 `scene`。
  */
 export function importCanvasBundleFromJson(json: string): Scene {
   let parsed: unknown;
@@ -304,7 +362,11 @@ export function importCanvasBundleFromJson(json: string): Scene {
     throw new Error("文件不是有效的 JSON。");
   }
 
-  if (!isRecord(parsed) || parsed.kind !== SCENEFORGE_CANVAS_EXPORT_KIND || parsed.version !== 1) {
+  if (isSceneForgeProject(parsed)) {
+    return sanitizeScene(parsed.scene);
+  }
+
+  if (!isRecord(parsed) || parsed.kind !== SCENEFORGE_CANVAS_EXPORT_KIND || !isExportBundleVersion(parsed.version)) {
     throw new Error("不是有效的 SceneForge 画布文件。");
   }
 
@@ -324,6 +386,7 @@ export function serializePromptLibraryExport(project: SceneForgeProject): string
 
 /**
  * 从「导出词库 JSON」生成的文件恢复自定义词库与隐藏的内置词条 id；不含画布与已应用到场景的引用。
+ * 若为完整 SceneForge 项目 JSON（旧版备份），则仅读取其中的词库字段。
  */
 export function importPromptLibraryBundleFromJson(
   json: string,
@@ -335,7 +398,19 @@ export function importPromptLibraryBundleFromJson(
     throw new Error("文件不是有效的 JSON。");
   }
 
-  if (!isRecord(parsed) || parsed.kind !== SCENEFORGE_PROMPT_LIBRARY_EXPORT_KIND || parsed.version !== 1) {
+  if (isSceneForgeProject(parsed)) {
+    const normalized = sanitizeImportedProject(parsed);
+    return {
+      promptLibraryTags: normalized.settings.promptLibraryTags,
+      deletedBuiltInPromptLibraryTagIds: normalized.settings.deletedBuiltInPromptLibraryTagIds,
+    };
+  }
+
+  if (
+    !isRecord(parsed) ||
+    parsed.kind !== SCENEFORGE_PROMPT_LIBRARY_EXPORT_KIND ||
+    !isExportBundleVersion(parsed.version)
+  ) {
     throw new Error("不是有效的 SceneForge 词库文件。");
   }
 
