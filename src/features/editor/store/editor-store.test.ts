@@ -467,4 +467,115 @@ describe("editor store", () => {
       expect.objectContaining({ prompt: testTag.prompt }),
     );
   });
+
+  it("supports multi-select move and delete", () => {
+    useEditorStore.getState().addObject({
+      kind: "rectangle",
+      name: "a",
+      fill: "#ffffff",
+    });
+    useEditorStore.getState().addObject({
+      kind: "rectangle",
+      name: "b",
+      fill: "#ffffff",
+    });
+
+    const objectsBefore = useEditorStore.getState().project.scene.objects;
+    const [first, second] = objectsBefore;
+
+    useEditorStore.getState().selectMultiple([first.id, second.id], []);
+
+    expect(useEditorStore.getState().selection).toEqual({
+      kind: "multiple",
+      objectIds: [first.id, second.id],
+      characterIds: [],
+    });
+
+    useEditorStore.getState().moveSelectionBy({ x: 10, y: -5 });
+
+    const afterMove = useEditorStore.getState().project.scene.objects;
+    expect(afterMove[0].position).toEqual({
+      x: first.position.x + 10,
+      y: first.position.y - 5,
+    });
+    expect(afterMove[1].position).toEqual({
+      x: second.position.x + 10,
+      y: second.position.y - 5,
+    });
+
+    useEditorStore.getState().deleteSelection();
+
+    expect(useEditorStore.getState().project.scene.objects).toHaveLength(0);
+    expect(useEditorStore.getState().selection.kind).toBe("scene");
+  });
+
+  it("setMultiSelectionPositions updates multiple object positions at once", () => {
+    useEditorStore.getState().addObject({
+      kind: "rectangle",
+      name: "a",
+      fill: "#ffffff",
+    });
+    useEditorStore.getState().addObject({
+      kind: "rectangle",
+      name: "b",
+      fill: "#ffffff",
+    });
+
+    const [first, second] = useEditorStore.getState().project.scene.objects;
+    useEditorStore.getState().selectMultiple([first.id, second.id], []);
+
+    useEditorStore.getState().setMultiSelectionPositions({
+      objects: {
+        [first.id]: { x: 100, y: 200 },
+        [second.id]: { x: 300, y: 400 },
+      },
+      characters: {},
+    });
+
+    const objs = useEditorStore.getState().project.scene.objects;
+    expect(objs.find((o) => o.id === first.id)?.position).toEqual({ x: 100, y: 200 });
+    expect(objs.find((o) => o.id === second.id)?.position).toEqual({ x: 300, y: 400 });
+  });
+
+  it("normalizes selectMultiple to single-object selection when only one id", () => {
+    useEditorStore.getState().addObject({
+      kind: "rectangle",
+      name: "solo",
+      fill: "#ffffff",
+    });
+
+    const objectId = useEditorStore.getState().project.scene.objects[0].id;
+
+    useEditorStore.getState().selectMultiple([objectId], []);
+
+    expect(useEditorStore.getState().selection).toEqual({ kind: "object", id: objectId });
+  });
+
+  it("ctrl-style toggle merges and splits multi-selection", () => {
+    useEditorStore.getState().addObject({
+      kind: "rectangle",
+      name: "a",
+      fill: "#ffffff",
+    });
+    useEditorStore.getState().addObject({
+      kind: "rectangle",
+      name: "b",
+      fill: "#ffffff",
+    });
+
+    const [a, b] = useEditorStore.getState().project.scene.objects;
+
+    useEditorStore.getState().selectObject(a.id);
+    useEditorStore.getState().toggleObjectInSelection(b.id);
+
+    expect(useEditorStore.getState().selection).toEqual({
+      kind: "multiple",
+      objectIds: [a.id, b.id],
+      characterIds: [],
+    });
+
+    useEditorStore.getState().toggleObjectInSelection(a.id);
+
+    expect(useEditorStore.getState().selection).toEqual({ kind: "object", id: b.id });
+  });
 });

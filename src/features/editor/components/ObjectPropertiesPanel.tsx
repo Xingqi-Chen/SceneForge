@@ -156,7 +156,12 @@ export function ObjectPropertiesPanel() {
         <h2 className="text-[15px] font-semibold text-slate-800">属性面板</h2>
       </div>
       <div className="overflow-y-auto pr-1 custom-scrollbar">
-        {selectedObject ? (
+        {selection.kind === "multiple" ? (
+          <div className="rounded-md border border-slate-100 bg-slate-50 px-3 py-3 text-sm leading-relaxed text-slate-600">
+            已选中 {selection.objectIds.length} 个场景对象、{selection.characterIds.length}{" "}
+            个角色。空白处拖拽可框选；按住 Ctrl（Mac：⌘）点击可追加或取消选中；多选时在任一选中项上按住左键拖拽可整体移动（亦可使用方向键微调）。选中单个对象后可编辑详细属性。
+          </div>
+        ) : selectedObject ? (
         <div className="space-y-4 text-sm">
           <div className="space-y-1.5">
             <FieldLabel>名称</FieldLabel>

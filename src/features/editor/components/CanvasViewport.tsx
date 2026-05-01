@@ -59,7 +59,11 @@ export function CanvasViewport({ onCanvasCaptureReady }: CanvasViewportProps) {
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState<Vector2>({ x: 0, y: 0 });
   const [spacePressed, setSpacePressed] = useState(false);
-  const canDuplicateOrDelete = selection.kind === "object" || selection.kind === "character";
+  const canDuplicateOrDelete =
+    selection.kind === "object" ||
+    selection.kind === "character" ||
+    (selection.kind === "multiple" &&
+      (selection.objectIds.length > 0 || selection.characterIds.length > 0));
   const canAdjustLayer = selection.kind === "object";
 
   function updateZoom(nextZoom: number) {

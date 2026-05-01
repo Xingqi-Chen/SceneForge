@@ -50,7 +50,8 @@ export type EditorSelection =
   | { kind: "scene" }
   | { kind: "object"; id: string }
   | { kind: "character"; id: string }
-  | { kind: "bodyPart"; characterId: string; bodyPartId: BodyPartId };
+  | { kind: "bodyPart"; characterId: string; bodyPartId: BodyPartId }
+  | { kind: "multiple"; objectIds: string[]; characterIds: string[] };
 
 export type AddSceneObjectInput = {
   kind: SceneObjectKind;
@@ -86,6 +87,12 @@ type EditorState = {
   selectObject: (id: string) => void;
   selectCharacter: (id: string) => void;
   selectBodyPart: (characterId: string, bodyPartId: BodyPartId) => void;
+  /** Box selection: pass scene-space hit ids; empty lists clear to scene selection. */
+  selectMultiple: (objectIds: string[], characterIds: string[]) => void;
+  /** Ctrl/Cmd+click: add/remove a scene object from the current selection. */
+  toggleObjectInSelection: (objectId: string) => void;
+  /** Ctrl/Cmd+click: add/remove a character from the current selection. */
+  toggleCharacterInSelection: (characterId: string) => void;
   updateScene: (patch: Partial<Scene>) => void;
   updateProjectDocument: (patch: Partial<Pick<SceneForgeProject, "name">>) => void;
   updateProjectSettings: (patch: Partial<ProjectSettings>) => void;
@@ -96,6 +103,11 @@ type EditorState = {
   bringSelectionForward: () => void;
   sendSelectionBackward: () => void;
   moveSelectionBy: (delta: Vector2) => void;
+  /** Batch positions during multi-select drag (must match current `multiple` selection ids). */
+  setMultiSelectionPositions: (payload: {
+    objects: Record<string, Vector2>;
+    characters: Record<string, Vector2>;
+  }) => void;
   addCharacter: () => void;
   updateCharacter: (id: string, patch: Partial<CharacterSkeleton>) => void;
   updateCharacterJoint: (id: string, jointId: JointId, position: Vector2) => void;
@@ -295,6 +307,29 @@ function cloneSceneObject(object: SceneObject): SceneObject {
   };
 }
 
+function selectionFromIds(objectIds: string[], characterIds: string[]): EditorSelection {
+  const objectIdList = [...new Set(objectIds)];
+  const characterIdList = [...new Set(characterIds)];
+
+  if (objectIdList.length === 0 && characterIdList.length === 0) {
+    return { kind: "scene" };
+  }
+
+  if (objectIdList.length === 1 && characterIdList.length === 0) {
+    return { kind: "object", id: objectIdList[0] };
+  }
+
+  if (objectIdList.length === 0 && characterIdList.length === 1) {
+    return { kind: "character", id: characterIdList[0] };
+  }
+
+  return {
+    kind: "multiple",
+    objectIds: objectIdList,
+    characterIds: characterIdList,
+  };
+}
+
 function cloneCharacterSkeleton(character: CharacterSkeleton): CharacterSkeleton {
   return {
     ...character,
@@ -389,6 +424,78 @@ export const useEditorStore = create<EditorState>((set) => ({
   selectCharacter: (id) => set({ selection: { kind: "character", id } }),
   selectBodyPart: (characterId, bodyPartId) =>
     set({ selection: { kind: "bodyPart", characterId, bodyPartId } }),
+  selectMultiple: (objectIds, characterIds) =>
+    set(() => ({
+      selection: selectionFromIds(objectIds, characterIds),
+    })),
+  toggleObjectInSelection: (id: string) =>
+    set((state) => {
+      const sel = state.selection;
+      if (sel.kind === "object") {
+        if (sel.id === id) {
+          return { selection: { kind: "scene" } };
+        }
+
+        return { selection: selectionFromIds([sel.id, id], []) };
+      }
+
+      if (sel.kind === "multiple") {
+        const next = new Set(sel.objectIds);
+        if (next.has(id)) {
+          next.delete(id);
+        } else {
+          next.add(id);
+        }
+
+        return { selection: selectionFromIds([...next], sel.characterIds) };
+      }
+
+      if (sel.kind === "character") {
+        return { selection: selectionFromIds([id], [sel.id]) };
+      }
+
+      if (sel.kind === "bodyPart") {
+        return { selection: selectionFromIds([id], [sel.characterId]) };
+      }
+
+      return { selection: selectionFromIds([id], []) };
+    }),
+  toggleCharacterInSelection: (characterId: string) =>
+    set((state) => {
+      const sel = state.selection;
+      if (sel.kind === "character") {
+        if (sel.id === characterId) {
+          return { selection: { kind: "scene" } };
+        }
+
+        return { selection: selectionFromIds([], [sel.id, characterId]) };
+      }
+
+      if (sel.kind === "bodyPart") {
+        if (sel.characterId === characterId) {
+          return { selection: { kind: "scene" } };
+        }
+
+        return { selection: selectionFromIds([], [sel.characterId, characterId]) };
+      }
+
+      if (sel.kind === "object") {
+        return { selection: selectionFromIds([sel.id], [characterId]) };
+      }
+
+      if (sel.kind === "multiple") {
+        const next = new Set(sel.characterIds);
+        if (next.has(characterId)) {
+          next.delete(characterId);
+        } else {
+          next.add(characterId);
+        }
+
+        return { selection: selectionFromIds(sel.objectIds, [...next]) };
+      }
+
+      return { selection: selectionFromIds([], [characterId]) };
+    }),
   updateScene: (patch) =>
     set((state) => ({
       project: touchProject({
@@ -539,6 +646,34 @@ export const useEditorStore = create<EditorState>((set) => ({
         };
       }
 
+      if (state.selection.kind === "multiple") {
+        const idObject = new Set(state.selection.objectIds);
+        const idCharacter = new Set(state.selection.characterIds);
+        const objects = state.project.scene.objects.filter((object) => !idObject.has(object.id));
+        const characters = state.project.scene.characters.filter(
+          (character) => !idCharacter.has(character.id),
+        );
+
+        if (
+          objects.length === state.project.scene.objects.length &&
+          characters.length === state.project.scene.characters.length
+        ) {
+          return state;
+        }
+
+        return {
+          project: touchProject({
+            ...state.project,
+            scene: {
+              ...state.project.scene,
+              objects,
+              characters,
+            },
+          }),
+          selection: { kind: "scene" },
+        };
+      }
+
       return state;
     }),
   duplicateSelection: () =>
@@ -591,6 +726,58 @@ export const useEditorStore = create<EditorState>((set) => ({
             },
           }),
           selection: { kind: "character", id: character.id },
+        };
+      }
+
+      if (state.selection.kind === "multiple") {
+        let objects = [...state.project.scene.objects];
+        let characters = [...state.project.scene.characters];
+        const newObjectIds: string[] = [];
+        const newCharacterIds: string[] = [];
+
+        for (const id of state.selection.objectIds) {
+          const selectedObject = objects.find((object) => object.id === id);
+          if (!selectedObject) {
+            continue;
+          }
+
+          const object = {
+            ...cloneSceneObject(selectedObject),
+            layer: getNextLayer(objects),
+          };
+          objects = [...objects, object];
+          newObjectIds.push(object.id);
+        }
+
+        for (const id of state.selection.characterIds) {
+          const selectedCharacter = characters.find((character) => character.id === id);
+          if (!selectedCharacter) {
+            continue;
+          }
+
+          const character = cloneCharacterSkeleton(selectedCharacter);
+          characters = [...characters, character];
+          newCharacterIds.push(character.id);
+        }
+
+        if (newObjectIds.length === 0 && newCharacterIds.length === 0) {
+          return state;
+        }
+
+        return {
+          project: touchProject({
+            ...state.project,
+            scene: {
+              ...state.project.scene,
+              objects,
+              characters,
+            },
+          }),
+          selection: {
+            kind: "multiple",
+            objectIds: newObjectIds,
+            characterIds: newCharacterIds,
+          },
         };
       }
 
@@ -752,7 +939,121 @@ export const useEditorStore = create<EditorState>((set) => ({
         };
       }
 
+      if (state.selection.kind === "multiple") {
+        const idObject = new Set(state.selection.objectIds);
+        const idCharacter = new Set(state.selection.characterIds);
+        let moved = false;
+
+        const objects = state.project.scene.objects.map((object) => {
+          if (!idObject.has(object.id)) {
+            return object;
+          }
+
+          moved = true;
+
+          return {
+            ...object,
+            position: {
+              x: object.position.x + delta.x,
+              y: object.position.y + delta.y,
+            },
+          };
+        });
+
+        const characters = state.project.scene.characters.map((character) => {
+          if (!idCharacter.has(character.id)) {
+            return character;
+          }
+
+          moved = true;
+
+          return {
+            ...character,
+            position: {
+              x: character.position.x + delta.x,
+              y: character.position.y + delta.y,
+            },
+          };
+        });
+
+        if (!moved) {
+          return state;
+        }
+
+        return {
+          project: touchProject({
+            ...state.project,
+            scene: {
+              ...state.project.scene,
+              objects,
+              characters,
+            },
+          }),
+        };
+      }
+
       return state;
+    }),
+  setMultiSelectionPositions: (payload) =>
+    set((state) => {
+      if (state.selection.kind !== "multiple") {
+        return state;
+      }
+
+      const allowedObjects = new Set(state.selection.objectIds);
+      const allowedCharacters = new Set(state.selection.characterIds);
+      let changed = false;
+
+      const objects = state.project.scene.objects.map((object) => {
+        if (!allowedObjects.has(object.id)) {
+          return object;
+        }
+
+        const next = payload.objects[object.id];
+        if (!next) {
+          return object;
+        }
+
+        changed = true;
+
+        return {
+          ...object,
+          position: { x: next.x, y: next.y },
+        };
+      });
+
+      const characters = state.project.scene.characters.map((character) => {
+        if (!allowedCharacters.has(character.id)) {
+          return character;
+        }
+
+        const next = payload.characters[character.id];
+        if (!next) {
+          return character;
+        }
+
+        changed = true;
+
+        return {
+          ...character,
+          position: { x: next.x, y: next.y },
+        };
+      });
+
+      if (!changed) {
+        return state;
+      }
+
+      return {
+        project: touchProject({
+          ...state.project,
+          scene: {
+            ...state.project.scene,
+            objects,
+            characters,
+          },
+        }),
+      };
     }),
   addCharacter: () =>
     set((state) => {

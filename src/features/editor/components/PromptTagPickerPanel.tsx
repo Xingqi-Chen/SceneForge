@@ -189,6 +189,8 @@ export function PromptTagPickerPanel() {
   }, [project.settings.deletedBuiltInPromptLibraryTagIds, project.settings.promptLibraryTags]);
   const promptLibraryGroups = useMemo(() => groupPromptLibrary(allLibraryTags), [allLibraryTags]);
 
+  const multiSelection = selection.kind === "multiple";
+
   const selectedObject =
     selection.kind === "object"
       ? project.scene.objects.find((object) => object.id === selection.id)
@@ -207,6 +209,10 @@ export function PromptTagPickerPanel() {
       : undefined;
 
   const tagTarget = useMemo<PromptTagTarget>(() => {
+    if (multiSelection) {
+      return { kind: "scene" };
+    }
+
     if (selectedObject) {
       return { kind: "object", id: selectedObject.id };
     }
@@ -224,7 +230,7 @@ export function PromptTagPickerPanel() {
     }
 
     return { kind: "scene" };
-  }, [selectedBodyPart, selectedCharacter, selectedObject]);
+  }, [multiSelection, selectedBodyPart, selectedCharacter, selectedObject]);
   const currentPromptCategoryBindings = selectedObject
     ? (selectedObject.promptCategoryBindings ?? DEFAULT_PROMPT_CATEGORY_BINDINGS.object)
     : selectedBodyPart
@@ -298,6 +304,10 @@ export function PromptTagPickerPanel() {
   }
 
   async function handleTogglePromptTag(tag: PromptTag, appliedTag: PromptTag | undefined) {
+    if (multiSelection) {
+      return;
+    }
+
     await persistCurrentProject(
       () =>
         appliedTag
@@ -308,14 +318,26 @@ export function PromptTagPickerPanel() {
   }
 
   async function handleRemoveAppliedTag(tagId: string) {
+    if (multiSelection) {
+      return;
+    }
+
     await persistCurrentProject(() => removePromptTag(tagTarget, tagId), "remove-applied-tag");
   }
 
   async function handleUpdateAppliedTag(tagId: string, patch: Parameters<typeof updatePromptTag>[2]) {
+    if (multiSelection) {
+      return;
+    }
+
     await persistCurrentProject(() => updatePromptTag(tagTarget, tagId, patch), "update-applied-tag");
   }
 
   async function handleTogglePromptCategoryBinding(category: PromptTagCategory) {
+    if (multiSelection) {
+      return;
+    }
+
     const nextCategories = promptCategoryBindingSet.has(category)
       ? currentPromptCategoryBindings.filter((currentCategory) => currentCategory !== category)
       : PROMPT_TAG_CATEGORY_ORDER.filter(
@@ -334,6 +356,10 @@ export function PromptTagPickerPanel() {
   }
 
   async function handleTogglePromptSubcategoryBinding(subcategory: PromptTagSubcategory) {
+    if (multiSelection) {
+      return;
+    }
+
     const nextSubcategories = promptSubcategoryBindingSet.has(subcategory)
       ? currentPromptSubcategoryBindings.filter(
           (currentSubcategory) => currentSubcategory !== subcategory,
@@ -699,21 +725,25 @@ export function PromptTagPickerPanel() {
     });
   }
 
-  const appliedTags = selectedObject
-    ? selectedObject.promptTags
-    : selectedBodyPart
-      ? selectedBodyPart.promptTags
-      : selectedCharacter
-        ? selectedCharacter.promptTags
-        : project.scene.promptTags;
+  const appliedTags = multiSelection
+    ? []
+    : selectedObject
+      ? selectedObject.promptTags
+      : selectedBodyPart
+        ? selectedBodyPart.promptTags
+        : selectedCharacter
+          ? selectedCharacter.promptTags
+          : project.scene.promptTags;
 
-  const targetLabel = selectedObject
-    ? `对象：${selectedObject.name}`
-    : selectedBodyPart
-      ? `部位：${selectedBodyPart.label}`
-      : selectedCharacter
-        ? `人物：${selectedCharacter.name}`
-        : "场景";
+  const targetLabel = multiSelection
+    ? `框选（${selection.objectIds.length + selection.characterIds.length} 项）`
+    : selectedObject
+      ? `对象：${selectedObject.name}`
+      : selectedBodyPart
+        ? `部位：${selectedBodyPart.label}`
+        : selectedCharacter
+          ? `人物：${selectedCharacter.name}`
+          : "场景";
 
   return (
     <section className="flex flex-col flex-1">
@@ -739,23 +769,34 @@ export function PromptTagPickerPanel() {
       <div className="space-y-5 overflow-y-auto pr-1 custom-scrollbar">
         <div className="rounded-md border border-slate-200 bg-slate-50 p-4">
           <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500">当前目标</p>
-          <p className="mt-1.5 text-sm font-bold text-slate-800">{targetLabel}</p>
-          {selectedCharacter ? (
-            <select
-              className="mt-3 h-9 w-full rounded-md border border-slate-200 bg-white px-3 text-xs text-slate-700 outline-none transition-all focus:border-blue-400 focus:ring-1 focus:ring-blue-400"
-              onChange={(event) =>
-                handleBodyPartTargetChange(event.target.value as BodyPartTargetValue)
-              }
-              value={currentBodyPartTarget}
-            >
-              <option value="character">人物整体</option>
-              {selectedCharacter.bodyParts.map((bodyPart) => (
-                <option key={bodyPart.id} value={bodyPart.id}>
-                  {bodyPart.label}
-                </option>
-              ))}
-            </select>
-          ) : null}
+          {multiSelection ? (
+            <>
+              <p className="mt-1.5 text-sm font-bold text-slate-800">{targetLabel}</p>
+              <p className="mt-2 text-xs leading-relaxed text-slate-600">
+                多选模式下无法为画布目标切换或编辑词条。请单击选中单个场景、对象或人物后再使用提示词库。
+              </p>
+            </>
+          ) : (
+            <>
+              <p className="mt-1.5 text-sm font-bold text-slate-800">{targetLabel}</p>
+              {selectedCharacter ? (
+                <select
+                  className="mt-3 h-9 w-full rounded-md border border-slate-200 bg-white px-3 text-xs text-slate-700 outline-none transition-all focus:border-blue-400 focus:ring-1 focus:ring-blue-400"
+                  onChange={(event) =>
+                    handleBodyPartTargetChange(event.target.value as BodyPartTargetValue)
+                  }
+                  value={currentBodyPartTarget}
+                >
+                  <option value="character">人物整体</option>
+                  {selectedCharacter.bodyParts.map((bodyPart) => (
+                    <option key={bodyPart.id} value={bodyPart.id}>
+                      {bodyPart.label}
+                    </option>
+                  ))}
+                </select>
+              ) : null}
+            </>
+          )}
         </div>
 
         <div>

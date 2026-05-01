@@ -12,13 +12,18 @@ import {
 } from "react";
 import type { KonvaEventObject } from "konva/lib/Node";
 import type { Group as KonvaGroup } from "konva/lib/Group";
+import type { Layer as KonvaLayer } from "konva/lib/Layer";
 import type { Stage as KonvaStage } from "konva/lib/Stage";
 import type { Transformer as KonvaTransformer } from "konva/lib/shapes/Transformer";
 import { Circle, Ellipse, Group, Layer, Line, Rect, Stage, Text, Transformer } from "react-konva";
 
-import { useEditorStore } from "@/features/editor/store/editor-store";
+import { type EditorSelection, useEditorStore } from "@/features/editor/store/editor-store";
 import { defaultLineEndpoints, defaultPolygonPoints } from "@/features/editor/preset-scene-objects";
 import type { BodyPartId, CharacterSkeleton, JointId, SceneObject, Vector2 } from "@/shared/types";
+import {
+  collectMarqueeSelection,
+  normalizeMarqueeRect,
+} from "@/features/editor/marquee-selection";
 
 export type CanvasCapture = () => string | null;
 
@@ -36,6 +41,51 @@ type CanvasContextMenu = {
   y: number;
   target: "object" | "character";
 };
+
+type MultiDragSnapshot = {
+  primaryKind: "object" | "character";
+  primaryId: string;
+  objectStarts: Record<string, Vector2>;
+  characterStarts: Record<string, Vector2>;
+};
+
+function computeMultiDragPayload(
+  snapshot: MultiDragSnapshot,
+  primaryKind: "object" | "character",
+  primaryId: string,
+  x: number,
+  y: number,
+  selection: EditorSelection,
+): { objects: Record<string, Vector2>; characters: Record<string, Vector2> } | null {
+  if (selection.kind !== "multiple") {
+    return null;
+  }
+
+  if (snapshot.primaryKind !== primaryKind || snapshot.primaryId !== primaryId) {
+    return null;
+  }
+
+  const start =
+    primaryKind === "object"
+      ? snapshot.objectStarts[primaryId]
+      : snapshot.characterStarts[primaryId];
+
+  const delta = { x: x - start.x, y: y - start.y };
+  const objects: Record<string, Vector2> = {};
+  const characters: Record<string, Vector2> = {};
+
+  for (const id of selection.objectIds) {
+    const s = snapshot.objectStarts[id];
+    objects[id] = { x: s.x + delta.x, y: s.y + delta.y };
+  }
+
+  for (const id of selection.characterIds) {
+    const s = snapshot.characterStarts[id];
+    characters[id] = { x: s.x + delta.x, y: s.y + delta.y };
+  }
+
+  return { objects, characters };
+}
 
 const skeletonBodyPartSegments: Array<[BodyPartId, JointId, JointId]> = [
   ["torso", "neck", "leftShoulder"],
@@ -59,20 +109,63 @@ const jointBodyPartMap: Partial<Record<JointId, BodyPartId>> = {
   rightAnkle: "rightFoot",
 };
 
+function isObjectSelected(selection: EditorSelection, objectId: string) {
+  if (selection.kind === "object") {
+    return selection.id === objectId;
+  }
+
+  if (selection.kind === "multiple") {
+    return selection.objectIds.includes(objectId);
+  }
+
+  return false;
+}
+
+function isCharacterScopeSelected(selection: EditorSelection, characterId: string) {
+  if (selection.kind === "character") {
+    return selection.id === characterId;
+  }
+
+  if (selection.kind === "bodyPart") {
+    return selection.characterId === characterId;
+  }
+
+  if (selection.kind === "multiple") {
+    return selection.characterIds.includes(characterId);
+  }
+
+  return false;
+}
+
+function isMultiSelectModifier(event: KonvaEventObject<MouseEvent | TouchEvent>) {
+  const native = event.evt;
+  return (
+    ("ctrlKey" in native && native.ctrlKey === true) ||
+    ("metaKey" in native && native.metaKey === true)
+  );
+}
+
 function SceneObjectNode({
   object,
   onContextMenu,
   panMode,
   selected,
   transformRef,
+  multiDrag,
 }: {
   object: SceneObject;
   onContextMenu: (event: KonvaEventObject<MouseEvent>) => void;
   panMode: boolean;
   selected: boolean;
   transformRef?: Ref<KonvaGroup>;
+  multiDrag?: {
+    onDragStart: () => void;
+    onDragMove: (event: KonvaEventObject<DragEvent>) => void;
+    onDragEnd: (event: KonvaEventObject<DragEvent>) => void;
+  };
 }) {
   const selectObject = useEditorStore((state) => state.selectObject);
+  const toggleObjectInSelection = useEditorStore((state) => state.toggleObjectInSelection);
   const updateObject = useEditorStore((state) => state.updateObject);
   const stroke = selected ? "#0f172a" : "#cbd5e1";
 
@@ -82,6 +175,12 @@ function SceneObjectNode({
     }
 
     event.cancelBubble = true;
+
+    if (isMultiSelectModifier(event)) {
+      toggleObjectInSelection(object.id);
+      return;
+    }
+
     selectObject(object.id);
   }
 
@@ -158,7 +257,9 @@ function SceneObjectNode({
       id={object.id}
       onClick={handleSelect}
       onContextMenu={onContextMenu}
-      onDragEnd={handleDragEnd}
+      onDragEnd={multiDrag ? multiDrag.onDragEnd : handleDragEnd}
+      onDragMove={multiDrag?.onDragMove}
+      onDragStart={multiDrag?.onDragStart}
       onTap={handleSelect}
       onTransformEnd={handleTransformEnd}
       ref={transformRef}
@@ -292,6 +393,7 @@ function CharacterNode({
   selected,
   selectedBodyPartId,
   transformRef,
+  multiDrag,
 }: {
   character: CharacterSkeleton;
   onContextMenu: (event: KonvaEventObject<MouseEvent>) => void;
@@ -299,9 +401,15 @@ function CharacterNode({
   selected: boolean;
   selectedBodyPartId?: BodyPartId;
   transformRef?: Ref<KonvaGroup>;
+  multiDrag?: {
+    onDragStart: () => void;
+    onDragMove: (event: KonvaEventObject<DragEvent>) => void;
+    onDragEnd: (event: KonvaEventObject<DragEvent>) => void;
+  };
 }) {
   const selectCharacter = useEditorStore((state) => state.selectCharacter);
   const selectBodyPart = useEditorStore((state) => state.selectBodyPart);
+  const toggleCharacterInSelection = useEditorStore((state) => state.toggleCharacterInSelection);
   const updateCharacter = useEditorStore((state) => state.updateCharacter);
   const updateCharacterJoint = useEditorStore((state) => state.updateCharacterJoint);
   const stroke = selected ? "#0f172a" : "#334155";
@@ -312,6 +420,12 @@ function CharacterNode({
     }
 
     event.cancelBubble = true;
+
+    if (isMultiSelectModifier(event)) {
+      toggleCharacterInSelection(character.id);
+      return;
+    }
+
     selectCharacter(character.id);
   }
 
@@ -324,10 +438,22 @@ function CharacterNode({
     }
 
     event.cancelBubble = true;
+
+    if (isMultiSelectModifier(event)) {
+      toggleCharacterInSelection(character.id);
+      return;
+    }
+
     selectBodyPart(character.id, bodyPartId);
   }
 
   function handleJointSelect(jointId: JointId, event: KonvaEventObject<MouseEvent | TouchEvent>) {
+    if (isMultiSelectModifier(event)) {
+      event.cancelBubble = true;
+      toggleCharacterInSelection(character.id);
+      return;
+    }
+
     const bodyPartId = jointBodyPartMap[jointId];
 
     if (!bodyPartId) {
@@ -389,7 +515,13 @@ function CharacterNode({
       id={character.id}
       onClick={handleSelect}
       onContextMenu={onContextMenu}
-      onDragEnd={handleDragEnd}
+      onDragEnd={
+        multiDrag
+          ? multiDrag.onDragEnd
+          : handleDragEnd
+      }
+      onDragMove={multiDrag?.onDragMove}
+      onDragStart={multiDrag?.onDragStart}
       onTap={handleSelect}
       onTransformEnd={handleTransformEnd}
       ref={transformRef}
@@ -487,18 +619,27 @@ export function CanvasStage({
 }: CanvasStageProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<KonvaStage>(null);
+  const layerRef = useRef<KonvaLayer>(null);
   const selectedObjectRef = useRef<KonvaGroup>(null);
   const selectedCharacterRef = useRef<KonvaGroup>(null);
   const transformerRef = useRef<KonvaTransformer>(null);
   const lastPanPoint = useRef<Vector2 | null>(null);
+  const multiDragSnapshotRef = useRef<MultiDragSnapshot | null>(null);
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
   const [contextMenu, setContextMenu] = useState<CanvasContextMenu | null>(null);
   const [panning, setPanning] = useState(false);
+  const [marqueeDrag, setMarqueeDrag] = useState<{
+    x1: number;
+    y1: number;
+    x2: number;
+    y2: number;
+  } | null>(null);
   const {
     bringSelectionForward,
     deleteSelection,
     project,
     selectCharacter,
+    selectMultiple,
     selectObject,
     selection,
     selectScene,
@@ -520,6 +661,132 @@ export function CanvasStage({
     () => [...objects].sort((left, right) => left.layer - right.layer),
     [objects],
   );
+
+  const setMultiSelectionPositions = useEditorStore((s) => s.setMultiSelectionPositions);
+
+  const beginMultiDragForObject = useCallback((objectId: string) => {
+    const state = useEditorStore.getState();
+    if (state.selection.kind !== "multiple" || !state.selection.objectIds.includes(objectId)) {
+      multiDragSnapshotRef.current = null;
+      return;
+    }
+
+    const sel = state.selection;
+    const { objects: sceneObjects, characters: sceneCharacters } = state.project.scene;
+
+    multiDragSnapshotRef.current = {
+      primaryKind: "object",
+      primaryId: objectId,
+      objectStarts: Object.fromEntries(
+        sel.objectIds.map((id) => {
+          const o = sceneObjects.find((x) => x.id === id)!;
+          return [id, { x: o.position.x, y: o.position.y }];
+        }),
+      ),
+      characterStarts: Object.fromEntries(
+        sel.characterIds.map((id) => {
+          const c = sceneCharacters.find((x) => x.id === id)!;
+          return [id, { x: c.position.x, y: c.position.y }];
+        }),
+      ),
+    };
+  }, []);
+
+  const beginMultiDragForCharacter = useCallback((characterId: string) => {
+    const state = useEditorStore.getState();
+    if (
+      state.selection.kind !== "multiple" ||
+      !state.selection.characterIds.includes(characterId)
+    ) {
+      multiDragSnapshotRef.current = null;
+      return;
+    }
+
+    const sel = state.selection;
+    const { objects: sceneObjects, characters: sceneCharacters } = state.project.scene;
+
+    multiDragSnapshotRef.current = {
+      primaryKind: "character",
+      primaryId: characterId,
+      objectStarts: Object.fromEntries(
+        sel.objectIds.map((id) => {
+          const o = sceneObjects.find((x) => x.id === id)!;
+          return [id, { x: o.position.x, y: o.position.y }];
+        }),
+      ),
+      characterStarts: Object.fromEntries(
+        sel.characterIds.map((id) => {
+          const c = sceneCharacters.find((x) => x.id === id)!;
+          return [id, { x: c.position.x, y: c.position.y }];
+        }),
+      ),
+    };
+  }, []);
+
+  const applyMultiDragForObject = useCallback(
+    (objectId: string, event: KonvaEventObject<DragEvent>) => {
+      const snap = multiDragSnapshotRef.current;
+      if (!snap) {
+        return;
+      }
+
+      const state = useEditorStore.getState();
+      const node = event.target;
+      const payload = computeMultiDragPayload(
+        snap,
+        "object",
+        objectId,
+        Math.round(node.x()),
+        Math.round(node.y()),
+        state.selection,
+      );
+
+      if (payload) {
+        setMultiSelectionPositions(payload);
+      }
+    },
+    [setMultiSelectionPositions],
+  );
+
+  const applyMultiDragForCharacter = useCallback(
+    (characterId: string, event: KonvaEventObject<DragEvent>) => {
+      const snap = multiDragSnapshotRef.current;
+      if (!snap) {
+        return;
+      }
+
+      const state = useEditorStore.getState();
+      const node = event.target;
+      const payload = computeMultiDragPayload(
+        snap,
+        "character",
+        characterId,
+        Math.round(node.x()),
+        Math.round(node.y()),
+        state.selection,
+      );
+
+      if (payload) {
+        setMultiSelectionPositions(payload);
+      }
+    },
+    [setMultiSelectionPositions],
+  );
+
+  const endMultiObjectDrag = useCallback((objectId: string) => {
+    const snap = multiDragSnapshotRef.current;
+    if (snap?.primaryKind === "object" && snap.primaryId === objectId) {
+      multiDragSnapshotRef.current = null;
+    }
+  }, []);
+
+  const endMultiCharacterDrag = useCallback((characterId: string) => {
+    const snap = multiDragSnapshotRef.current;
+    if (snap?.primaryKind === "character" && snap.primaryId === characterId) {
+      multiDragSnapshotRef.current = null;
+    }
+  }, []);
+
   const captureCanvas = useCallback<CanvasCapture>(() => {
     return stageRef.current?.toDataURL({ mimeType: "image/png", pixelRatio: 1 }) ?? null;
   }, []);
@@ -588,14 +855,74 @@ export function CanvasStage({
     }
   }
 
-  function handleCanvasPointer() {
-    if (panMode) {
-      return;
-    }
+  const handleCanvasBgMouseDown = useCallback(
+    (event: KonvaEventObject<MouseEvent>) => {
+      if (panMode || event.evt.button !== 0) {
+        return;
+      }
 
-    setContextMenu(null);
-    selectScene();
-  }
+      const pos = event.target.getRelativePointerPosition();
+      if (!pos) {
+        return;
+      }
+
+      event.cancelBubble = true;
+      setContextMenu(null);
+
+      setMarqueeDrag({ x1: pos.x, y1: pos.y, x2: pos.x, y2: pos.y });
+
+      function onMove() {
+        const stage = stageRef.current;
+        const layer = layerRef.current;
+        if (!stage || !layer) {
+          return;
+        }
+
+        const pointer = stage.getPointerPosition();
+        if (!pointer) {
+          return;
+        }
+
+        const local = layer.getAbsoluteTransform().copy().invert().point(pointer);
+        setMarqueeDrag((current) =>
+          current ? { ...current, x2: local.x, y2: local.y } : current,
+        );
+      }
+
+      function onUp() {
+        window.removeEventListener("mousemove", onMove);
+        window.removeEventListener("mouseup", onUp);
+
+        setMarqueeDrag((current) => {
+          if (!current) {
+            return current;
+          }
+
+          const box = normalizeMarqueeRect(current.x1, current.y1, current.x2, current.y2);
+          const width = box.right - box.left;
+          const height = box.bottom - box.top;
+          const threshold = 4;
+
+          queueMicrotask(() => {
+            // Avoid updating Zustand (and subscribers like PromptTagPickerPanel) synchronously inside React's setState updater.
+            if (width < threshold && height < threshold) {
+              selectScene();
+            } else {
+              const scene = useEditorStore.getState().project.scene;
+              const hit = collectMarqueeSelection(scene.objects, scene.characters, box);
+              selectMultiple(hit.objectIds, hit.characterIds);
+            }
+          });
+
+          return null;
+        });
+      }
+
+      window.addEventListener("mousemove", onMove);
+      window.addEventListener("mouseup", onUp);
+    },
+    [panMode, selectMultiple, selectScene],
+  );
 
   function openContextMenu(
     target: CanvasContextMenu["target"],
@@ -675,7 +1002,7 @@ export function CanvasStage({
   return (
     <div
       className={`relative flex flex-1 items-center justify-center overflow-hidden w-full h-full p-4 ${
-        panMode || panning ? "cursor-grab" : "cursor-default"
+        panMode || panning ? "cursor-grab" : marqueeDrag ? "cursor-crosshair" : "cursor-default"
       }`}
       onContextMenu={(event) => event.preventDefault()}
       onMouseDown={startPan}
@@ -700,12 +1027,11 @@ export function CanvasStage({
           scaleY={stageScale}
           width={stageWidth}
         >
-          <Layer>
+          <Layer ref={layerRef}>
             <Rect
               fill={canvas.background}
               height={canvas.height}
-              onClick={handleCanvasPointer}
-              onTap={handleCanvasPointer}
+              onMouseDown={handleCanvasBgMouseDown}
               width={canvas.width}
             />
             <Rect
@@ -720,28 +1046,54 @@ export function CanvasStage({
               y={32}
             />
             {sortedObjects.map((object) => {
-              const selected = selection.kind === "object" && selection.id === object.id;
+              const selected = isObjectSelected(selection, object.id);
 
               return (
                 <SceneObjectNode
                   key={object.id}
+                  multiDrag={
+                    selection.kind === "multiple" && selection.objectIds.includes(object.id)
+                      ? {
+                          onDragEnd: (event) => {
+                            applyMultiDragForObject(object.id, event);
+                            endMultiObjectDrag(object.id);
+                          },
+                          onDragMove: (event) => applyMultiDragForObject(object.id, event),
+                          onDragStart: () => beginMultiDragForObject(object.id),
+                        }
+                      : undefined
+                  }
                   object={object}
                   onContextMenu={(event) => handleObjectContextMenu(object.id, event)}
                   panMode={panMode}
                   selected={selected}
-                  transformRef={selected ? selectedObjectRef : undefined}
+                  transformRef={
+                    selection.kind === "object" && selection.id === object.id
+                      ? selectedObjectRef
+                      : undefined
+                  }
                 />
               );
             })}
             {characters.map((character) => {
-              const selected =
-                (selection.kind === "character" && selection.id === character.id) ||
-                (selection.kind === "bodyPart" && selection.characterId === character.id);
+              const selected = isCharacterScopeSelected(selection, character.id);
 
               return (
                 <CharacterNode
                   character={character}
                   key={character.id}
+                  multiDrag={
+                    selection.kind === "multiple" && selection.characterIds.includes(character.id)
+                      ? {
+                          onDragEnd: (event) => {
+                            applyMultiDragForCharacter(character.id, event);
+                            endMultiCharacterDrag(character.id);
+                          },
+                          onDragMove: (event) => applyMultiDragForCharacter(character.id, event),
+                          onDragStart: () => beginMultiDragForCharacter(character.id),
+                        }
+                      : undefined
+                  }
                   onContextMenu={(event) => handleCharacterContextMenu(character.id, event)}
                   panMode={panMode}
                   selected={selected}
@@ -750,10 +1102,39 @@ export function CanvasStage({
                       ? selection.bodyPartId
                       : undefined
                   }
-                  transformRef={selected ? selectedCharacterRef : undefined}
+                  transformRef={
+                    (selection.kind === "character" && selection.id === character.id) ||
+                    (selection.kind === "bodyPart" && selection.characterId === character.id)
+                      ? selectedCharacterRef
+                      : undefined
+                  }
                 />
               );
             })}
+            {marqueeDrag ? (
+              (() => {
+                const box = normalizeMarqueeRect(
+                  marqueeDrag.x1,
+                  marqueeDrag.y1,
+                  marqueeDrag.x2,
+                  marqueeDrag.y2,
+                );
+
+                return (
+                  <Rect
+                    dash={[6, 4]}
+                    fill="rgba(37, 99, 235, 0.08)"
+                    height={box.bottom - box.top}
+                    listening={false}
+                    stroke="#2563eb"
+                    strokeWidth={1}
+                    width={box.right - box.left}
+                    x={box.left}
+                    y={box.top}
+                  />
+                );
+              })()
+            ) : null}
             <Transformer
               boundBoxFunc={(oldBox, newBox) =>
                 newBox.width < 16 || newBox.height < 16 ? oldBox : newBox
