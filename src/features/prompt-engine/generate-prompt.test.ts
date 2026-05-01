@@ -58,6 +58,7 @@ function addDefaultCharacter(project: SceneForgeProject) {
 describe("generatePrompt", () => {
   it("builds a stable diffusion prompt from semantic scene data", () => {
     const project = createDefaultProject();
+    project.settings.modelFormat = "stable-diffusion";
     addTableObject(project);
     const character = addDefaultCharacter(project);
 

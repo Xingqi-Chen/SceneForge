@@ -306,17 +306,22 @@ export function PromptPreviewPanel({ onCaptureCanvas }: PromptPreviewPanelProps)
             ) : null}
           </div>
           <div className="relative rounded-2xl border border-purple-100/80 bg-purple-50/30 p-4 shadow-inner">
-            <p className="text-sm leading-relaxed text-slate-700 break-words">
-              {aiStatus === "loading" ? (
-                <span className="text-slate-400 italic">正在基于画布和当前 Prompt 生成...</span>
-              ) : aiStatus === "error" ? (
-                <span className="text-rose-500">{aiError}</span>
-              ) : aiPrompt ? (
-                aiPrompt
-              ) : (
-                <span className="text-slate-400 italic">点击 AI 生成后显示结果</span>
-              )}
-            </p>
+            {aiStatus === "error" ? (
+              <p className="mb-2 text-sm leading-relaxed text-rose-600">{aiError}</p>
+            ) : null}
+            <textarea
+              className="min-h-[120px] w-full resize-y rounded-xl border border-purple-200/60 bg-white/80 px-3 py-2.5 text-sm leading-relaxed text-slate-700 shadow-inner outline-none transition-all placeholder:text-slate-400 placeholder:italic focus:border-purple-300 focus:bg-white focus:ring-2 focus:ring-purple-200/50 disabled:cursor-not-allowed disabled:opacity-75"
+              disabled={aiStatus === "loading"}
+              onChange={(event) => setAiGeneratedPrompt(event.target.value)}
+              placeholder={
+                aiStatus === "loading"
+                  ? "正在基于画布和当前 Prompt 生成..."
+                  : "点击「AI 生成」或在此直接编辑"
+              }
+              rows={6}
+              spellCheck={false}
+              value={aiPrompt}
+            />
           </div>
         </div>
         <div>

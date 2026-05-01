@@ -105,7 +105,7 @@ export function createDefaultProject(): SceneForgeProject {
     version: 1,
     scene: cloneScene(defaultScene),
     settings: {
-      modelFormat: "stable-diffusion",
+      modelFormat: "generic",
       includeSpatialHints: true,
       negativePrompt: "low quality, blurry, extra fingers",
     },
