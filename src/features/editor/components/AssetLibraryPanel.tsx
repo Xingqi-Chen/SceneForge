@@ -201,6 +201,9 @@ export function AssetLibraryPanel() {
   const addObject = useEditorStore((state) => state.addObject);
   const addCharacter = useEditorStore((state) => state.addCharacter);
   const setSceneMode = useEditorStore((state) => state.setSceneMode);
+  const sceneMode = useEditorStore((state) => state.project.scene.mode);
+  const is2d = sceneMode === "2d";
+  const is3d = sceneMode === "3d";
 
   function handleAssetClick(asset: AssetDefinition) {
     if (asset.type === "character") {
@@ -231,78 +234,89 @@ export function AssetLibraryPanel() {
         <div className="rounded-md bg-blue-50 p-1.5 text-blue-600">
           <Layers className="size-4" />
         </div>
-        <h2 className="text-[15px] font-semibold text-slate-800">元素库</h2>
+        <div className="min-w-0 flex-1">
+          <h2 className="text-[15px] font-semibold text-slate-800">元素库</h2>
+          <p className="mt-0.5 text-[11px] leading-snug text-slate-500">
+            {is2d ? "当前为 2D 画布：仅显示平面与预设场景。" : "当前为 3D 画布：仅显示 3D 基础体。"}
+          </p>
+        </div>
       </div>
 
-      <LibrarySection title="基础形状">
-        <div className="grid grid-cols-2 gap-3">
-          {shapeAssets.map((asset) => (
-            <button
-              className="group relative flex flex-col items-center justify-center gap-2 overflow-hidden rounded-md border border-slate-200 bg-white p-4 text-sm font-medium text-slate-700 transition-all hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700"
-              key={asset.id}
-              onClick={() => handleAssetClick(asset)}
-              type="button"
-            >
-              <div className="absolute inset-0 bg-gradient-to-br from-white/40 to-transparent opacity-0 transition-opacity group-hover:opacity-100" />
-              <span className="relative z-10">{asset.label}</span>
-            </button>
-          ))}
-          <button
-            className="group relative flex flex-col items-center justify-center gap-2 overflow-hidden rounded-md border border-slate-200 bg-white p-4 text-sm font-medium text-slate-700 transition-all hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700"
-            type="button"
-            onClick={() => handleAssetClick({ id: "character", label: "人物骨架", type: "character" })}
-          >
-            <div className="absolute inset-0 bg-gradient-to-br from-white/40 to-transparent opacity-0 transition-opacity group-hover:opacity-100" />
-            <span className="relative z-10">人物骨架</span>
-          </button>
-        </div>
-      </LibrarySection>
+      {is2d ? (
+        <>
+          <LibrarySection title="基础形状">
+            <div className="grid grid-cols-2 gap-3">
+              {shapeAssets.map((asset) => (
+                <button
+                  className="group relative flex flex-col items-center justify-center gap-2 overflow-hidden rounded-md border border-slate-200 bg-white p-4 text-sm font-medium text-slate-700 transition-all hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700"
+                  key={asset.id}
+                  onClick={() => handleAssetClick(asset)}
+                  type="button"
+                >
+                  <div className="absolute inset-0 bg-gradient-to-br from-white/40 to-transparent opacity-0 transition-opacity group-hover:opacity-100" />
+                  <span className="relative z-10">{asset.label}</span>
+                </button>
+              ))}
+              <button
+                className="group relative flex flex-col items-center justify-center gap-2 overflow-hidden rounded-md border border-slate-200 bg-white p-4 text-sm font-medium text-slate-700 transition-all hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700"
+                type="button"
+                onClick={() => handleAssetClick({ id: "character", label: "人物骨架", type: "character" })}
+              >
+                <div className="absolute inset-0 bg-gradient-to-br from-white/40 to-transparent opacity-0 transition-opacity group-hover:opacity-100" />
+                <span className="relative z-10">人物骨架</span>
+              </button>
+            </div>
+          </LibrarySection>
 
-      <div className="my-4 h-px w-full shrink-0 bg-slate-100" />
+          <div className="my-4 h-px w-full shrink-0 bg-slate-100" />
+        </>
+      ) : null}
 
-      <LibrarySection title="3D 基础体">
-        <p className="mb-2 text-[10px] leading-snug text-slate-400">
-          用基础几何体搭建简化 3D 舞台；位置、旋转和缩放可在右侧属性面板调整。
-        </p>
-        <div className="grid grid-cols-2 gap-3">
-          {threeDAssets.map((asset) => (
-            <button
-              className="group relative flex flex-col items-center justify-center gap-2 overflow-hidden rounded-md border border-slate-200 bg-white p-4 text-sm font-medium text-slate-700 transition-all hover:border-indigo-300 hover:bg-indigo-50 hover:text-indigo-700"
-              key={asset.id}
-              onClick={() => handleAssetClick(asset)}
-              type="button"
-            >
-              <div className="absolute inset-0 bg-gradient-to-br from-white/40 to-transparent opacity-0 transition-opacity group-hover:opacity-100" />
-              <span className="relative z-10">{asset.label}</span>
-            </button>
-          ))}
-        </div>
-      </LibrarySection>
+      {is3d ? (
+        <LibrarySection title="3D 基础体">
+          <p className="mb-2 text-[10px] leading-snug text-slate-400">
+            用基础几何体搭建简化 3D 舞台；位置、旋转和缩放可在右侧属性面板调整。
+          </p>
+          <div className="grid grid-cols-2 gap-3">
+            {threeDAssets.map((asset) => (
+              <button
+                className="group relative flex flex-col items-center justify-center gap-2 overflow-hidden rounded-md border border-slate-200 bg-white p-4 text-sm font-medium text-slate-700 transition-all hover:border-indigo-300 hover:bg-indigo-50 hover:text-indigo-700"
+                key={asset.id}
+                onClick={() => handleAssetClick(asset)}
+                type="button"
+              >
+                <div className="absolute inset-0 bg-gradient-to-br from-white/40 to-transparent opacity-0 transition-opacity group-hover:opacity-100" />
+                <span className="relative z-10">{asset.label}</span>
+              </button>
+            ))}
+          </div>
+        </LibrarySection>
+      ) : null}
 
-      <div className="my-4 h-px w-full shrink-0 bg-slate-100" />
+      {is2d ? (
+        <LibrarySection title="预设场景">
+          <p className="mb-2 text-[10px] leading-snug text-slate-400">
+            按常见二次元插画布景分类；描述为英文便于生成与导出衔接。
+          </p>
+          <div className="flex max-h-[min(480px,52vh)] flex-col gap-3 overflow-y-auto pr-0.5">
+            {PRESET_SCENE_CATEGORY_ORDER.map((cat) => {
+              const inCategory = presetLibraryAssets.filter((asset) => asset.category === cat.id);
+              if (inCategory.length === 0) {
+                return null;
+              }
 
-      <LibrarySection title="预设场景">
-        <p className="mb-2 text-[10px] leading-snug text-slate-400">
-          按常见二次元插画布景分类；描述为英文便于生成与导出衔接。
-        </p>
-        <div className="flex max-h-[min(480px,52vh)] flex-col gap-3 overflow-y-auto pr-0.5">
-          {PRESET_SCENE_CATEGORY_ORDER.map((cat) => {
-            const inCategory = presetLibraryAssets.filter((asset) => asset.category === cat.id);
-            if (inCategory.length === 0) {
-              return null;
-            }
-
-            return (
-              <PresetCategorySection
-                key={cat.id}
-                label={cat.label}
-                assets={inCategory}
-                onAssetClick={handleAssetClick}
-              />
-            );
-          })}
-        </div>
-      </LibrarySection>
+              return (
+                <PresetCategorySection
+                  key={cat.id}
+                  label={cat.label}
+                  assets={inCategory}
+                  onAssetClick={handleAssetClick}
+                />
+              );
+            })}
+          </div>
+        </LibrarySection>
+      ) : null}
     </section>
   );
 }

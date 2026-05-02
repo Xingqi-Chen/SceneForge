@@ -1,7 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { BringToFront, Copy, MoveDown, MoveUp, Trash2, ZoomIn, ZoomOut } from "lucide-react";
+import { BringToFront, Copy, MoveDown, MoveUp, Trash2, ZoomIn, ZoomOut, Maximize } from "lucide-react";
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 
 import { type EditorSelection, useEditorStore } from "@/features/editor/store/editor-store";
@@ -26,7 +26,7 @@ const CanvasStage = dynamic<CanvasStageProps>(
   },
 );
 
-const ThreeViewport = dynamic(
+const ThreeViewport = dynamic<{ onCaptureReady?: (capture: CanvasCapture | null) => void }>(
   () => import("./ThreeViewport").then((module) => module.ThreeViewport),
   {
     loading: () => (
@@ -77,6 +77,7 @@ export function CanvasViewport({ onCanvasCaptureReady }: CanvasViewportProps) {
     deleteSelection,
     duplicateSelection,
     moveSelectionBy,
+    moveSelectionIn3DBy,
     project,
     selectMultiple,
     selectScene,
@@ -120,8 +121,10 @@ export function CanvasViewport({ onCanvasCaptureReady }: CanvasViewportProps) {
     const commandPressed = event.ctrlKey || event.metaKey;
 
     if (event.code === "Space") {
-      event.preventDefault();
-      setSpacePressed(true);
+      if (!is3DMode) {
+        event.preventDefault();
+        setSpacePressed(true);
+      }
       return;
     }
 
@@ -174,37 +177,48 @@ export function CanvasViewport({ onCanvasCaptureReady }: CanvasViewportProps) {
       return;
     }
 
-    if (commandPressed && (key === "+" || key === "=")) {
+    if (!is3DMode && commandPressed && (key === "+" || key === "=")) {
       event.preventDefault();
       updateZoom(zoom + zoomStep);
       return;
     }
 
-    if (commandPressed && key === "-") {
+    if (!is3DMode && commandPressed && key === "-") {
       event.preventDefault();
       updateZoom(zoom - zoomStep);
       return;
     }
 
-    if (commandPressed && key === "0") {
+    if (!is3DMode && commandPressed && key === "0") {
       event.preventDefault();
       resetView();
       return;
     }
 
-    if (commandPressed && key === "]") {
+    if (!is3DMode && commandPressed && key === "]") {
       event.preventDefault();
       bringSelectionForward();
       return;
     }
 
-    if (commandPressed && key === "[") {
+    if (!is3DMode && commandPressed && key === "[") {
       event.preventDefault();
       sendSelectionBackward();
       return;
     }
 
     const moveDistance = event.shiftKey ? 10 : 1;
+
+    if (is3DMode && (event.key === "PageUp" || event.key === "PageDown")) {
+      event.preventDefault();
+      moveSelectionIn3DBy({
+        x: 0,
+        y: event.key === "PageUp" ? moveDistance * 0.1 : -moveDistance * 0.1,
+        z: 0,
+      });
+      return;
+    }
+
     const movement: Record<string, Vector2> = {
       ArrowUp: { x: 0, y: -moveDistance },
       ArrowDown: { x: 0, y: moveDistance },
@@ -220,7 +234,7 @@ export function CanvasViewport({ onCanvasCaptureReady }: CanvasViewportProps) {
   }
 
   function handleKeyUp(event: KeyboardEvent<HTMLElement>) {
-    if (event.code === "Space") {
+    if (!is3DMode && event.code === "Space") {
       event.preventDefault();
       setSpacePressed(false);
     }
@@ -229,7 +243,11 @@ export function CanvasViewport({ onCanvasCaptureReady }: CanvasViewportProps) {
   return (
     <section
       className="flex h-full flex-1 flex-col outline-none bg-slate-50"
-      onBlur={() => setSpacePressed(false)}
+      onBlur={() => {
+        if (!is3DMode) {
+          setSpacePressed(false);
+        }
+      }}
       onKeyDown={handleKeyDown}
       onKeyUp={handleKeyUp}
       onMouseDown={focusViewport}
@@ -245,50 +263,62 @@ export function CanvasViewport({ onCanvasCaptureReady }: CanvasViewportProps) {
             <h2 className="text-sm font-bold text-slate-800 whitespace-nowrap">{project.scene.name}</h2>
             <p className="text-[11px] text-slate-500">
               {is3DMode
-                ? "3D 模式：鼠标拖拽旋转视角 · 滚轮缩放 · 方向键移动选中基础体"
+                ? "3D 模式：1/2/3 切换工具 · 方向键移动 · PageUp/PageDown 升降 · F 聚焦"
                 : "Ctrl/Cmd+Z 撤回 · Ctrl/Cmd+A 全选 · Ctrl/Cmd+C/V 复制粘贴 · 方向键移动"}
             </p>
           </div>
         </div>
         <div className="flex items-center gap-3">
-          <div className="flex items-center gap-1 rounded-md border border-slate-200 bg-white p-0.5 text-xs font-medium shadow-sm">
-            <Button
-              className="h-7 rounded px-2 text-xs"
-              onClick={() => setSceneMode("2d")}
-              size="sm"
-              type="button"
-              variant={is3DMode ? "ghost" : "primary"}
+          <div className="flex items-center p-0.5 rounded-lg border border-slate-200 bg-white shadow-sm">
+            <button
+              onClick={() => {
+                setSpacePressed(false);
+                setSceneMode("2d");
+              }}
+              className={`flex h-7 items-center justify-center rounded-md px-3 text-xs font-medium transition-colors ${!is3DMode ? "bg-slate-900 text-white shadow-sm" : "text-slate-600 hover:text-slate-900 hover:bg-slate-100"}`}
             >
               2D
-            </Button>
-            <Button
-              className="h-7 rounded px-2 text-xs"
-              onClick={() => setSceneMode("3d")}
-              size="sm"
-              type="button"
-              variant={is3DMode ? "primary" : "ghost"}
+            </button>
+            <button
+              onClick={() => {
+                setSpacePressed(false);
+                setSceneMode("3d");
+              }}
+              className={`flex h-7 items-center justify-center rounded-md px-3 text-xs font-medium transition-colors ${is3DMode ? "bg-slate-900 text-white shadow-sm" : "text-slate-600 hover:text-slate-900 hover:bg-slate-100"}`}
             >
               3D
-            </Button>
+            </button>
           </div>
-          <div className="flex items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-600">
-            <span className="flex items-center gap-1.5">
-              <span className="inline-block h-1.5 w-1.5 rounded-full bg-slate-400" />
-              {project.scene.canvas.aspectRatio}
-            </span>
-            <span className="text-slate-300">|</span>
-            <span>{project.scene.canvas.width} × {project.scene.canvas.height}</span>
-            <span className="text-slate-300">|</span>
-            <span className="text-blue-600 w-8 text-right">{Math.round(zoom * 100)}%</span>
+          <div className="flex h-8 shrink-0 items-center gap-3 rounded-md border border-slate-200 bg-white px-3 text-xs font-medium shadow-sm">
+            <div className="flex shrink-0 items-center gap-1.5 text-slate-600">
+              <span className="inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-slate-400" />
+              <span className="whitespace-nowrap">{project.scene.canvas.aspectRatio}</span>
+            </div>
+            <div className="h-3 w-px shrink-0 bg-slate-200" />
+            <div className="shrink-0 whitespace-nowrap text-slate-600">
+              {project.scene.canvas.width} × {project.scene.canvas.height}
+            </div>
+            {!is3DMode ? (
+              <>
+                <div className="h-3 w-px shrink-0 bg-slate-200" />
+                <div className="shrink-0 whitespace-nowrap text-blue-600">{Math.round(zoom * 100)}%</div>
+              </>
+            ) : (
+              <>
+                <div className="h-3 w-px shrink-0 bg-slate-200" />
+                <div className="shrink-0 whitespace-nowrap text-slate-400">2D 缩放独立</div>
+              </>
+            )}
           </div>
-          <div className="flex items-center gap-1 rounded-md border border-slate-200 bg-white p-0.5 shadow-sm">
+          {!is3DMode ? (
+          <div className="flex h-8 items-center rounded-md border border-slate-200 bg-white p-0.5 shadow-sm">
             <Button
               aria-label="缩小画布"
               onClick={() => updateZoom(zoom - zoomStep)}
               size="sm"
               type="button"
               variant="ghost"
-              className="h-7 w-7 rounded p-0 text-slate-500 hover:bg-slate-50 hover:text-slate-900"
+              className="flex h-7 w-7 shrink-0 items-center justify-center rounded p-0 text-slate-500 hover:bg-slate-50 hover:text-slate-900"
             >
               <ZoomOut className="size-3.5" />
             </Button>
@@ -298,31 +328,33 @@ export function CanvasViewport({ onCanvasCaptureReady }: CanvasViewportProps) {
               size="sm"
               type="button"
               variant="ghost"
-              className="h-7 w-7 rounded p-0 text-slate-500 hover:bg-slate-50 hover:text-slate-900"
+              className="flex h-7 w-7 shrink-0 items-center justify-center rounded p-0 text-slate-500 hover:bg-slate-50 hover:text-slate-900"
             >
               <ZoomIn className="size-3.5" />
             </Button>
-            <div className="mx-0.5 h-3 w-px bg-slate-200" />
+            <div className="mx-1 h-3 w-px shrink-0 bg-slate-200" />
             <Button 
               onClick={resetView} 
               size="sm" 
               type="button" 
               variant="ghost"
-              className="h-7 rounded px-2 text-xs text-slate-500 hover:bg-slate-50 hover:text-slate-900"
+              className="flex h-7 shrink-0 items-center justify-center gap-1.5 rounded px-2 text-xs font-medium whitespace-nowrap text-slate-500 hover:bg-slate-50 hover:text-slate-900"
             >
-              <BringToFront className="mr-1 size-3" />
-              重置
+              <Maximize className="size-3.5 shrink-0" />
+              重置视图
             </Button>
-            <div className="mx-0.5 h-3 w-px bg-slate-200" />
+          </div>
+          ) : null}
+          <div className="flex h-8 items-center rounded-md border border-slate-200 bg-white p-0.5 shadow-sm">
             <Button
               disabled={!canDuplicateOrDelete}
               onClick={() => duplicateSelection()}
               size="sm"
               type="button"
               variant="ghost"
-              className="h-7 rounded px-2 text-xs text-slate-500 hover:bg-slate-50 hover:text-slate-900 disabled:opacity-40"
+              className="flex h-7 shrink-0 items-center justify-center gap-1.5 rounded px-2 text-xs font-medium whitespace-nowrap text-slate-500 hover:bg-slate-50 hover:text-slate-900 disabled:opacity-40"
             >
-              <Copy className="mr-1 size-3" />
+              <Copy className="size-3.5 shrink-0" />
               复制
             </Button>
             <Button
@@ -331,22 +363,22 @@ export function CanvasViewport({ onCanvasCaptureReady }: CanvasViewportProps) {
               size="sm"
               type="button"
               variant="ghost"
-              className="h-7 rounded px-2 text-xs text-rose-500 hover:bg-rose-50 hover:text-rose-600 disabled:opacity-40"
+              className="flex h-7 shrink-0 items-center justify-center gap-1.5 rounded px-2 text-xs font-medium whitespace-nowrap text-rose-500 hover:bg-rose-50 hover:text-rose-600 disabled:opacity-40"
             >
-              <Trash2 className="mr-1 size-3" />
+              <Trash2 className="size-3.5 shrink-0" />
               删除
             </Button>
-            <div className="mx-0.5 h-3 w-px bg-slate-200" />
+            <div className="mx-1 h-3 w-px shrink-0 bg-slate-200" />
             <Button
               disabled={!canAdjustLayer}
               onClick={sendSelectionBackward}
               size="sm"
               type="button"
               variant="ghost"
-              className="h-7 w-7 rounded p-0 text-slate-500 hover:bg-slate-50 hover:text-slate-900 disabled:opacity-40"
+              className="flex h-7 w-7 shrink-0 items-center justify-center rounded p-0 text-slate-500 hover:bg-slate-50 hover:text-slate-900 disabled:opacity-40"
               title="下移一层"
             >
-              <MoveDown className="size-3.5" />
+              <MoveDown className="size-3.5 shrink-0" />
             </Button>
             <Button
               disabled={!canAdjustLayer}
@@ -354,17 +386,17 @@ export function CanvasViewport({ onCanvasCaptureReady }: CanvasViewportProps) {
               size="sm"
               type="button"
               variant="ghost"
-              className="h-7 w-7 rounded p-0 text-slate-500 hover:bg-slate-50 hover:text-slate-900 disabled:opacity-40"
+              className="flex h-7 w-7 shrink-0 items-center justify-center rounded p-0 text-slate-500 hover:bg-slate-50 hover:text-slate-900 disabled:opacity-40"
               title="上移一层"
             >
-              <MoveUp className="size-3.5" />
+              <MoveUp className="size-3.5 shrink-0" />
             </Button>
           </div>
         </div>
       </div>
       <div className="relative flex flex-1 flex-col overflow-hidden bg-[radial-gradient(#e5e7eb_1px,transparent_1px)] [background-size:16px_16px]">
         {is3DMode ? (
-          <ThreeViewport />
+          <ThreeViewport onCaptureReady={onCanvasCaptureReady} />
         ) : (
           <CanvasStage
             onCaptureReady={onCanvasCaptureReady}

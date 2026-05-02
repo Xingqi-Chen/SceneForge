@@ -43,6 +43,21 @@ describe("project serialization", () => {
     );
   });
 
+  it("clamps imported 3D scene config to viewport-safe ranges", () => {
+    const project = createDefaultProject();
+    project.scene.three.camera.fov = 500;
+    project.scene.three.lighting.ambientIntensity = -1;
+    project.scene.three.lighting.directionalIntensity = 9;
+    project.scene.three.grid = { size: 0, divisions: 2.6 };
+
+    const imported = importProjectFromJson(JSON.stringify(project));
+
+    expect(imported.scene.three.camera.fov).toBe(100);
+    expect(imported.scene.three.lighting.ambientIntensity).toBe(0);
+    expect(imported.scene.three.lighting.directionalIntensity).toBe(3);
+    expect(imported.scene.three.grid).toEqual({ size: 2, divisions: 3 });
+  });
+
   it("importProjectFromJson rejects prompt export files", () => {
     const promptJson = serializePromptExport(createDefaultProject(), "");
     expect(() => importProjectFromJson(promptJson)).toThrow("导入词库 JSON");
@@ -371,6 +386,12 @@ describe("project serialization", () => {
     const project = createDefaultProject();
     project.scene.mode = "3d";
     project.scene.three.camera.position = { x: 7, y: 6, z: 8 };
+    project.scene.three.camera.target = { x: 0, y: 1.2, z: -1 };
+    project.scene.three.camera.fov = 52;
+    project.scene.three.lighting.ambientIntensity = 0.35;
+    project.scene.three.lighting.directionalIntensity = 1.7;
+    project.scene.three.lighting.directionalPosition = { x: -3, y: 9, z: 2 };
+    project.scene.three.grid = { size: 18, divisions: 9 };
     project.scene.objects = [
       {
         id: "obj-cube",
@@ -396,7 +417,19 @@ describe("project serialization", () => {
     const imported = importProjectFromJson(serializeProject(project));
 
     expect(imported.scene.mode).toBe("3d");
-    expect(imported.scene.three.camera.position).toEqual({ x: 7, y: 6, z: 8 });
+    expect(imported.scene.three).toMatchObject({
+      camera: {
+        position: { x: 7, y: 6, z: 8 },
+        target: { x: 0, y: 1.2, z: -1 },
+        fov: 52,
+      },
+      lighting: {
+        ambientIntensity: 0.35,
+        directionalIntensity: 1.7,
+        directionalPosition: { x: -3, y: 9, z: 2 },
+      },
+      grid: { size: 18, divisions: 9 },
+    });
     expect(imported.scene.objects[0]?.kind).toBe("cube");
     expect(imported.scene.objects[0]?.transform3D).toEqual({
       position: { x: 1, y: 0.5, z: -2 },

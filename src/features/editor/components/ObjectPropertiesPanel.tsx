@@ -9,6 +9,7 @@ import type {
   CanvasAspectRatio,
   CharacterSkeleton,
   PromptModelFormat,
+  Scene3DConfig,
   SceneObject,
   SceneObject3DTransform,
   Vector2,
@@ -21,6 +22,14 @@ function FieldLabel({ children }: { children: ReactNode }) {
 
 function getNumber(event: ChangeEvent<HTMLInputElement>) {
   return Number.isFinite(event.target.valueAsNumber) ? event.target.valueAsNumber : 0;
+}
+
+function clampNumber(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function getClampedNumber(event: ChangeEvent<HTMLInputElement>, min: number, max: number) {
+  return clampNumber(getNumber(event), min, max);
 }
 
 function is3DSceneObject(object: SceneObject) {
@@ -194,6 +203,56 @@ export function ObjectPropertiesPanel() {
         ...project.scene.canvas,
         ...canvasSizes[aspectRatio],
         aspectRatio,
+      },
+    });
+  }
+
+  function updateScene3DCameraVector(
+    key: keyof Pick<Scene3DConfig["camera"], "position" | "target">,
+    axis: keyof Vector3,
+    value: number,
+  ) {
+    updateScene({
+      three: {
+        ...project.scene.three,
+        camera: {
+          ...project.scene.three.camera,
+          [key]: {
+            ...project.scene.three.camera[key],
+            [axis]: value,
+          },
+        },
+      },
+    });
+  }
+
+  function updateScene3DLightingPosition(axis: keyof Vector3, value: number) {
+    updateScene({
+      three: {
+        ...project.scene.three,
+        lighting: {
+          ...project.scene.three.lighting,
+          directionalPosition: {
+            ...project.scene.three.lighting.directionalPosition,
+            [axis]: value,
+          },
+        },
+      },
+    });
+  }
+
+  function updateScene3DConfig(patch: Partial<Scene3DConfig>) {
+    updateScene({
+      three: {
+        ...project.scene.three,
+        ...patch,
+        camera: patch.camera
+          ? { ...project.scene.three.camera, ...patch.camera }
+          : project.scene.three.camera,
+        lighting: patch.lighting
+          ? { ...project.scene.three.lighting, ...patch.lighting }
+          : project.scene.three.lighting,
+        grid: patch.grid ? { ...project.scene.three.grid, ...patch.grid } : project.scene.three.grid,
       },
     });
   }
@@ -598,6 +657,136 @@ export function ObjectPropertiesPanel() {
             />
             启用空间提示
           </label>
+          {project.scene.mode === "3d" ? (
+            <div className="space-y-3 rounded-md border border-indigo-100 bg-indigo-50/70 p-3">
+              <div>
+                <div className="text-xs font-semibold text-indigo-700">3D 场景配置</div>
+                <p className="mt-1 text-[11px] leading-relaxed text-indigo-700/80">
+                  这些设置会随项目保存；拖动 3D 视口调整相机后，也会同步到这里。
+                </p>
+              </div>
+              <div className="space-y-1.5">
+                <FieldLabel>相机位置</FieldLabel>
+                <Vector3Fields
+                  labels={["X", "Y", "Z"]}
+                  onChange={(axis, value) => updateScene3DCameraVector("position", axis, value)}
+                  value={project.scene.three.camera.position}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <FieldLabel>相机目标</FieldLabel>
+                <Vector3Fields
+                  labels={["X", "Y", "Z"]}
+                  onChange={(axis, value) => updateScene3DCameraVector("target", axis, value)}
+                  value={project.scene.three.camera.target}
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <FieldLabel>视角 FOV</FieldLabel>
+                  <input
+                    className="w-full rounded-md border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-900 outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-400"
+                    max={100}
+                    min={15}
+                    onChange={(event) =>
+                      updateScene3DConfig({
+                        camera: {
+                          ...project.scene.three.camera,
+                          fov: getClampedNumber(event, 15, 100),
+                        },
+                      })
+                    }
+                    type="number"
+                    value={project.scene.three.camera.fov}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <FieldLabel>环境光</FieldLabel>
+                  <input
+                    className="w-full rounded-md border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-900 outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-400"
+                    max={2}
+                    min={0}
+                    onChange={(event) =>
+                      updateScene3DConfig({
+                        lighting: {
+                          ...project.scene.three.lighting,
+                          ambientIntensity: getClampedNumber(event, 0, 2),
+                        },
+                      })
+                    }
+                    step={0.05}
+                    type="number"
+                    value={project.scene.three.lighting.ambientIntensity}
+                  />
+                </div>
+              </div>
+              <div className="space-y-1.5">
+                <FieldLabel>方向光位置</FieldLabel>
+                <Vector3Fields
+                  labels={["X", "Y", "Z"]}
+                  onChange={updateScene3DLightingPosition}
+                  value={project.scene.three.lighting.directionalPosition}
+                />
+              </div>
+              <div className="grid grid-cols-3 gap-3">
+                <div className="space-y-1.5">
+                  <FieldLabel>方向光</FieldLabel>
+                  <input
+                    className="w-full rounded-md border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-900 outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-400"
+                    max={3}
+                    min={0}
+                    onChange={(event) =>
+                      updateScene3DConfig({
+                        lighting: {
+                          ...project.scene.three.lighting,
+                          directionalIntensity: getClampedNumber(event, 0, 3),
+                        },
+                      })
+                    }
+                    step={0.05}
+                    type="number"
+                    value={project.scene.three.lighting.directionalIntensity}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <FieldLabel>网格尺寸</FieldLabel>
+                  <input
+                    className="w-full rounded-md border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-900 outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-400"
+                    min={2}
+                    onChange={(event) =>
+                      updateScene3DConfig({
+                        grid: {
+                          ...project.scene.three.grid,
+                          size: getClampedNumber(event, 2, 100),
+                        },
+                      })
+                    }
+                    max={100}
+                    type="number"
+                    value={project.scene.three.grid.size}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <FieldLabel>网格分段</FieldLabel>
+                  <input
+                    className="w-full rounded-md border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-900 outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-400"
+                    min={2}
+                    onChange={(event) =>
+                      updateScene3DConfig({
+                        grid: {
+                          ...project.scene.three.grid,
+                          divisions: Math.round(getClampedNumber(event, 2, 100)),
+                        },
+                      })
+                    }
+                    max={100}
+                    type="number"
+                    value={project.scene.three.grid.divisions}
+                  />
+                </div>
+              </div>
+            </div>
+          ) : null}
           <div className="space-y-1.5">
             <FieldLabel>负面提示词</FieldLabel>
               <textarea

@@ -268,6 +268,110 @@ describe("editor store", () => {
       y: 0.75,
       z: -1,
     });
+
+    useEditorStore.getState().setObject3DTransform(addedObject.id, {
+      position: { x: -1, y: 1.25, z: 3 },
+      rotation: { x: 10, y: 25, z: -5 },
+      scale: { x: 1.2, y: 0.8, z: 2 },
+    });
+
+    expect(useEditorStore.getState().project.scene.objects[0].transform3D).toEqual({
+      position: { x: -1, y: 1.25, z: 3 },
+      rotation: { x: 10, y: 25, z: -5 },
+      scale: { x: 1.2, y: 0.8, z: 2 },
+    });
+
+    useEditorStore.getState().updateScene({
+      three: {
+        ...useEditorStore.getState().project.scene.three,
+        camera: {
+          position: { x: 4, y: 3, z: 5 },
+          target: { x: 0, y: 1, z: 0 },
+          fov: 55,
+        },
+        lighting: {
+          ambientIntensity: 0.4,
+          directionalIntensity: 1.8,
+          directionalPosition: { x: -2, y: 6, z: 3 },
+        },
+        grid: { size: 16, divisions: 8 },
+      },
+    });
+
+    expect(useEditorStore.getState().project.scene.three).toMatchObject({
+      camera: {
+        position: { x: 4, y: 3, z: 5 },
+        target: { x: 0, y: 1, z: 0 },
+        fov: 55,
+      },
+      lighting: {
+        ambientIntensity: 0.4,
+        directionalIntensity: 1.8,
+        directionalPosition: { x: -2, y: 6, z: 3 },
+      },
+      grid: { size: 16, divisions: 8 },
+    });
+  });
+
+  it("moves selected 3D primitives across the ground plane and vertical axis", () => {
+    useEditorStore.getState().setSceneMode("3d");
+    useEditorStore.getState().addObject({
+      kind: "cube",
+      name: "立方体",
+    });
+    useEditorStore.getState().addObject({
+      kind: "sphere",
+      name: "球体",
+    });
+
+    const [cube, sphere] = useEditorStore.getState().project.scene.objects;
+
+    useEditorStore.getState().selectObject(cube.id);
+    useEditorStore.getState().moveSelectionBy({ x: 10, y: -5 });
+    useEditorStore.getState().moveSelectionIn3DBy({ x: 0, y: 0.25, z: 0 });
+
+    expect(useEditorStore.getState().project.scene.objects[0].transform3D?.position).toEqual({
+      x: -1,
+      y: 0.75,
+      z: -0.5,
+    });
+
+    useEditorStore.getState().selectMultiple([cube.id, sphere.id], []);
+    useEditorStore.getState().moveSelectionBy({ x: -5, y: 10 });
+    useEditorStore.getState().moveSelectionIn3DBy({ x: 0, y: -0.2, z: 0 });
+
+    expect(useEditorStore.getState().project.scene.objects[0].transform3D?.position).toEqual({
+      x: -1.5,
+      y: 0.55,
+      z: 0.5,
+    });
+    expect(useEditorStore.getState().project.scene.objects[1].transform3D?.position).toEqual({
+      x: -1.5,
+      y: 0.3,
+      z: 1,
+    });
+  });
+
+  it("snaps 3D primitives to the ground in 3D mode", () => {
+    useEditorStore.getState().setSceneMode("3d");
+    useEditorStore.getState().addObject({
+      kind: "cube",
+      name: "立方体",
+      transform3D: {
+        position: { x: 2, y: 3, z: -1 },
+        rotation: { x: 0, y: 0, z: 0 },
+        scale: { x: 1, y: 1, z: 1 },
+      },
+    });
+
+    const cube = useEditorStore.getState().project.scene.objects[0];
+    useEditorStore.getState().snapObjectToGround(cube.id);
+
+    expect(useEditorStore.getState().project.scene.objects[0].transform3D?.position).toEqual({
+      x: 2,
+      y: 0.5,
+      z: -1,
+    });
   });
 
   it("resets the 2D scene without clearing the prompt library", () => {
@@ -684,5 +788,60 @@ describe("editor store", () => {
     useEditorStore.getState().toggleObjectInSelection(a.id);
 
     expect(useEditorStore.getState().selection).toEqual({ kind: "object", id: b.id });
+  });
+
+  it("drops 3D-only selection when switching to 2D mode", () => {
+    useEditorStore.getState().setSceneMode("3d");
+    useEditorStore.getState().addObject({
+      kind: "cube",
+      name: "立方体",
+      fill: "#60a5fa",
+    });
+    const cubeId = useEditorStore.getState().project.scene.objects[0]?.id;
+    expect(cubeId).toBeDefined();
+    if (!cubeId) {
+      throw new Error("Expected cube.");
+    }
+
+    useEditorStore.getState().selectObject(cubeId);
+    useEditorStore.getState().setSceneMode("2d");
+
+    expect(useEditorStore.getState().selection).toEqual({ kind: "scene" });
+  });
+
+  it("drops 2D-only selection when switching to 3D mode", () => {
+    useEditorStore.getState().addObject({
+      kind: "rectangle",
+      name: "rect",
+      fill: "#ffffff",
+    });
+    const rectId = useEditorStore.getState().project.scene.objects[0]?.id;
+    expect(rectId).toBeDefined();
+    if (!rectId) {
+      throw new Error("Expected rectangle.");
+    }
+
+    useEditorStore.getState().selectObject(rectId);
+    useEditorStore.getState().setSceneMode("3d");
+
+    expect(useEditorStore.getState().selection).toEqual({ kind: "scene" });
+  });
+
+  it("rejects selectObject when object is not on the active viewport", () => {
+    useEditorStore.getState().setSceneMode("3d");
+    useEditorStore.getState().addObject({
+      kind: "rectangle",
+      name: "rect",
+      fill: "#ffffff",
+    });
+    const rectId = useEditorStore.getState().project.scene.objects[0]?.id;
+    expect(rectId).toBeDefined();
+    if (!rectId) {
+      throw new Error("Expected rectangle.");
+    }
+
+    useEditorStore.getState().selectObject(rectId);
+
+    expect(useEditorStore.getState().selection).toEqual({ kind: "scene" });
   });
 });

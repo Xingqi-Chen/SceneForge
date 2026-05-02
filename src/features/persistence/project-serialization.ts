@@ -205,6 +205,14 @@ function sanitizeVector3Point(raw: unknown, fallback: Vector3): Vector3 {
   };
 }
 
+function sanitizeNumberInRange(raw: unknown, fallback: number, min: number, max: number): number {
+  if (typeof raw !== "number" || !Number.isFinite(raw)) {
+    return fallback;
+  }
+
+  return Math.min(max, Math.max(min, raw));
+}
+
 function sanitizeScene3DConfig(raw: unknown): Scene["three"] {
   const fallback = defaultScene.three;
 
@@ -232,28 +240,31 @@ function sanitizeScene3DConfig(raw: unknown): Scene["three"] {
     camera: {
       position: sanitizeVector3Point(camera.position, fallback.camera.position),
       target: sanitizeVector3Point(camera.target, fallback.camera.target),
-      fov: typeof camera.fov === "number" && Number.isFinite(camera.fov) ? camera.fov : fallback.camera.fov,
+      fov: sanitizeNumberInRange(camera.fov, fallback.camera.fov, 15, 100),
     },
     lighting: {
-      ambientIntensity:
-        typeof lighting.ambientIntensity === "number" && Number.isFinite(lighting.ambientIntensity)
-          ? lighting.ambientIntensity
-          : fallback.lighting.ambientIntensity,
-      directionalIntensity:
-        typeof lighting.directionalIntensity === "number" && Number.isFinite(lighting.directionalIntensity)
-          ? lighting.directionalIntensity
-          : fallback.lighting.directionalIntensity,
+      ambientIntensity: sanitizeNumberInRange(
+        lighting.ambientIntensity,
+        fallback.lighting.ambientIntensity,
+        0,
+        2,
+      ),
+      directionalIntensity: sanitizeNumberInRange(
+        lighting.directionalIntensity,
+        fallback.lighting.directionalIntensity,
+        0,
+        3,
+      ),
       directionalPosition: sanitizeVector3Point(
         lighting.directionalPosition,
         fallback.lighting.directionalPosition,
       ),
     },
     grid: {
-      size: typeof grid.size === "number" && Number.isFinite(grid.size) ? grid.size : fallback.grid.size,
-      divisions:
-        typeof grid.divisions === "number" && Number.isFinite(grid.divisions)
-          ? grid.divisions
-          : fallback.grid.divisions,
+      size: sanitizeNumberInRange(grid.size, fallback.grid.size, 2, 100),
+      divisions: Math.round(
+        sanitizeNumberInRange(grid.divisions, fallback.grid.divisions, 2, 100),
+      ),
     },
   };
 }

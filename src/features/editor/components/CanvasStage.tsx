@@ -19,6 +19,7 @@ import { Circle, Ellipse, Group, Layer, Line, Rect, Stage, Text, Transformer } f
 
 import { type EditorSelection, useEditorStore } from "@/features/editor/store/editor-store";
 import { defaultLineEndpoints, defaultPolygonPoints } from "@/features/editor/preset-scene-objects";
+import { sceneObjectsVisibleOn2DCanvas } from "@/features/editor/scene-viewport-objects";
 import type { BodyPartId, CharacterSkeleton, JointId, SceneObject, Vector2 } from "@/shared/types";
 import {
   collectMarqueeSelection,
@@ -648,6 +649,7 @@ export function CanvasStage({
     sendSelectionBackward,
   } = useEditorStore();
   const { canvas, objects, characters } = project.scene;
+  const objectsOn2dCanvas = useMemo(() => sceneObjectsVisibleOn2DCanvas(objects), [objects]);
   const baseScale =
     containerSize.width > 0 && containerSize.height > 0
       ? Math.min(
@@ -660,8 +662,8 @@ export function CanvasStage({
   const stageWidth = canvas.width * stageScale;
   const stageHeight = canvas.height * stageScale;
   const sortedObjects = useMemo(
-    () => [...objects].sort((left, right) => left.layer - right.layer),
-    [objects],
+    () => [...objectsOn2dCanvas].sort((left, right) => left.layer - right.layer),
+    [objectsOn2dCanvas],
   );
 
   const setMultiSelectionPositions = useEditorStore((s) => s.setMultiSelectionPositions);
@@ -911,7 +913,11 @@ export function CanvasStage({
               selectScene();
             } else {
               const scene = useEditorStore.getState().project.scene;
-              const hit = collectMarqueeSelection(scene.objects, scene.characters, box);
+              const hit = collectMarqueeSelection(
+                sceneObjectsVisibleOn2DCanvas(scene.objects),
+                scene.characters,
+                box,
+              );
               selectMultiple(hit.objectIds, hit.characterIds);
             }
           });

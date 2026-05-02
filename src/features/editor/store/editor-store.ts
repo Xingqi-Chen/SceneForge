@@ -48,6 +48,8 @@ import {
   applyPromptBindingsToProject,
   extractPromptBindingsFromProject,
 } from "@/features/persistence/project-serialization";
+import { isThreeDViewportPrimitive } from "@/features/editor/scene-viewport-objects";
+import { is3DPrimitiveObject, snapTransformToGround } from "@/features/editor/three-placement";
 
 export type EditorSelection =
   | { kind: "scene" }
@@ -113,11 +115,15 @@ type EditorState = {
   addObject: (input: AddSceneObjectInput) => void;
   updateObject: (id: string, patch: Partial<SceneObject>) => void;
   updateObject3DTransform: (id: string, patch: Partial<SceneObject3DTransform>) => void;
+  setObject3DTransform: (id: string, transform: SceneObject3DTransform) => void;
+  /** 3D 模式：双击物体落地（包围盒底对齐 y=0）。 */
+  snapObjectToGround: (objectId: string) => void;
   deleteSelection: () => void;
   duplicateSelection: (selectionOverride?: EditorSelection) => void;
   bringSelectionForward: () => void;
   sendSelectionBackward: () => void;
   moveSelectionBy: (delta: Vector2) => void;
+  moveSelectionIn3DBy: (delta: Vector3) => void;
   /** Batch positions during multi-select drag (must match current `multiple` selection ids). */
   setMultiSelectionPositions: (payload: {
     objects: Record<string, Vector2>;
@@ -348,6 +354,20 @@ function merge3DTransform(
   };
 }
 
+function move3DTransform(
+  transform: SceneObject3DTransform,
+  delta: Vector3,
+): SceneObject3DTransform {
+  return {
+    ...transform,
+    position: {
+      x: transform.position.x + delta.x,
+      y: transform.position.y + delta.y,
+      z: transform.position.z + delta.z,
+    },
+  };
+}
+
 function cloneSceneObject(object: SceneObject): SceneObject {
   const transform3D = object.transform3D
     ? {
@@ -401,6 +421,49 @@ function selectionFromIds(objectIds: string[], characterIds: string[]): EditorSe
     objectIds: objectIdList,
     characterIds: characterIdList,
   };
+}
+
+function objectVisibleInSceneMode(object: SceneObject, mode: SceneMode): boolean {
+  const prim = isThreeDViewportPrimitive(object);
+
+  return mode === "2d" ? !prim : prim;
+}
+
+function sanitizeSelectionForSceneMode(
+  selection: EditorSelection,
+  scene: Scene,
+  mode: SceneMode,
+): EditorSelection {
+  if (selection.kind === "scene") {
+    return selection;
+  }
+
+  if (selection.kind === "bodyPart" || selection.kind === "character") {
+    return mode === "3d" ? { kind: "scene" } : selection;
+  }
+
+  if (selection.kind === "object") {
+    const object = scene.objects.find((object) => object.id === selection.id);
+
+    if (!object || !objectVisibleInSceneMode(object, mode)) {
+      return { kind: "scene" };
+    }
+
+    return selection;
+  }
+
+  if (selection.kind === "multiple") {
+    const objectIds = selection.objectIds.filter((id) => {
+      const object = scene.objects.find((object) => object.id === id);
+
+      return object && objectVisibleInSceneMode(object, mode);
+    });
+    const characterIds = mode === "2d" ? selection.characterIds : [];
+
+    return selectionFromIds(objectIds, characterIds);
+  }
+
+  return selection;
 }
 
 function cloneCharacterSkeleton(character: CharacterSkeleton): CharacterSkeleton {
@@ -457,7 +520,11 @@ export const useEditorStore = create<EditorState>((set) => ({
         return {
           project: previous.project,
           promptBindings: previous.promptBindings,
-          selection: previous.selection,
+          selection: sanitizeSelectionForSceneMode(
+            previous.selection,
+            previous.project.scene,
+            previous.project.scene.mode,
+          ),
           aiGeneratedPrompt: previous.aiGeneratedPrompt,
           undoStack: state.undoStack.slice(0, -1),
         };
@@ -515,103 +582,167 @@ export const useEditorStore = create<EditorState>((set) => ({
       };
     }),
   selectScene: () => set({ selection: { kind: "scene" } }),
-  selectObject: (id) => set({ selection: { kind: "object", id } }),
-  selectCharacter: (id) => set({ selection: { kind: "character", id } }),
+  selectObject: (id) =>
+    set((state) => {
+      const object = state.project.scene.objects.find((object) => object.id === id);
+      const mode = state.project.scene.mode;
+
+      if (!object || !objectVisibleInSceneMode(object, mode)) {
+        return { selection: { kind: "scene" } };
+      }
+
+      return { selection: { kind: "object", id } };
+    }),
+  selectCharacter: (id) =>
+    set((state) => {
+      if (state.project.scene.mode === "3d") {
+        return { selection: { kind: "scene" } };
+      }
+
+      return { selection: { kind: "character", id } };
+    }),
   selectBodyPart: (characterId, bodyPartId) =>
-    set({ selection: { kind: "bodyPart", characterId, bodyPartId } }),
+    set((state) => {
+      if (state.project.scene.mode === "3d") {
+        return { selection: { kind: "scene" } };
+      }
+
+      return { selection: { kind: "bodyPart", characterId, bodyPartId } };
+    }),
   selectMultiple: (objectIds, characterIds) =>
-    set(() => ({
-      selection: selectionFromIds(objectIds, characterIds),
-    })),
+    set((state) => {
+      const scene = state.project.scene;
+      const mode = scene.mode;
+      const filteredObjectIds = objectIds.filter((objectId) => {
+        const object = scene.objects.find((object) => object.id === objectId);
+
+        return object && objectVisibleInSceneMode(object, mode);
+      });
+      const filteredCharacterIds = mode === "2d" ? characterIds : [];
+
+      return {
+        selection: selectionFromIds(filteredObjectIds, filteredCharacterIds),
+      };
+    }),
   toggleObjectInSelection: (id: string) =>
     set((state) => {
+      const scene = state.project.scene;
+      const mode = scene.mode;
+      const targetObject = scene.objects.find((object) => object.id === id);
+
+      if (!targetObject || !objectVisibleInSceneMode(targetObject, mode)) {
+        return {};
+      }
+
       const sel = state.selection;
+      let next: EditorSelection;
+
       if (sel.kind === "object") {
         if (sel.id === id) {
-          return { selection: { kind: "scene" } };
-        }
-
-        return { selection: selectionFromIds([sel.id, id], []) };
-      }
-
-      if (sel.kind === "multiple") {
-        const next = new Set(sel.objectIds);
-        if (next.has(id)) {
-          next.delete(id);
+          next = { kind: "scene" };
         } else {
-          next.add(id);
+          next = selectionFromIds([sel.id, id], []);
+        }
+      } else if (sel.kind === "multiple") {
+        const nextObjects = new Set(sel.objectIds);
+
+        if (nextObjects.has(id)) {
+          nextObjects.delete(id);
+        } else {
+          nextObjects.add(id);
         }
 
-        return { selection: selectionFromIds([...next], sel.characterIds) };
+        next = selectionFromIds([...nextObjects], sel.characterIds);
+      } else if (sel.kind === "character") {
+        next = selectionFromIds([id], [sel.id]);
+      } else if (sel.kind === "bodyPart") {
+        next = selectionFromIds([id], [sel.characterId]);
+      } else {
+        next = selectionFromIds([id], []);
       }
 
-      if (sel.kind === "character") {
-        return { selection: selectionFromIds([id], [sel.id]) };
-      }
-
-      if (sel.kind === "bodyPart") {
-        return { selection: selectionFromIds([id], [sel.characterId]) };
-      }
-
-      return { selection: selectionFromIds([id], []) };
+      return {
+        selection: sanitizeSelectionForSceneMode(next, scene, mode),
+      };
     }),
   toggleCharacterInSelection: (characterId: string) =>
     set((state) => {
+      if (state.project.scene.mode === "3d") {
+        return {};
+      }
+
+      const scene = state.project.scene;
+      const mode = scene.mode;
       const sel = state.selection;
+      let next: EditorSelection;
+
       if (sel.kind === "character") {
         if (sel.id === characterId) {
-          return { selection: { kind: "scene" } };
-        }
-
-        return { selection: selectionFromIds([], [sel.id, characterId]) };
-      }
-
-      if (sel.kind === "bodyPart") {
-        if (sel.characterId === characterId) {
-          return { selection: { kind: "scene" } };
-        }
-
-        return { selection: selectionFromIds([], [sel.characterId, characterId]) };
-      }
-
-      if (sel.kind === "object") {
-        return { selection: selectionFromIds([sel.id], [characterId]) };
-      }
-
-      if (sel.kind === "multiple") {
-        const next = new Set(sel.characterIds);
-        if (next.has(characterId)) {
-          next.delete(characterId);
+          next = { kind: "scene" };
         } else {
-          next.add(characterId);
+          next = selectionFromIds([], [sel.id, characterId]);
+        }
+      } else if (sel.kind === "bodyPart") {
+        if (sel.characterId === characterId) {
+          next = { kind: "scene" };
+        } else {
+          next = selectionFromIds([], [sel.characterId, characterId]);
+        }
+      } else if (sel.kind === "object") {
+        next = selectionFromIds([sel.id], [characterId]);
+      } else if (sel.kind === "multiple") {
+        const nextCharacters = new Set(sel.characterIds);
+
+        if (nextCharacters.has(characterId)) {
+          nextCharacters.delete(characterId);
+        } else {
+          nextCharacters.add(characterId);
         }
 
-        return { selection: selectionFromIds(sel.objectIds, [...next]) };
+        next = selectionFromIds(sel.objectIds, [...nextCharacters]);
+      } else {
+        next = selectionFromIds([], [characterId]);
       }
 
-      return { selection: selectionFromIds([], [characterId]) };
+      return {
+        selection: sanitizeSelectionForSceneMode(next, scene, mode),
+      };
     }),
   updateScene: (patch) =>
-    set((state) => ({
-      project: touchProject({
-        ...state.project,
-        scene: {
-          ...state.project.scene,
-          ...patch,
-        },
-      }),
-    })),
+    set((state) => {
+      const nextScene: Scene = {
+        ...state.project.scene,
+        ...patch,
+      };
+
+      const nextSelection =
+        patch.mode !== undefined
+          ? sanitizeSelectionForSceneMode(state.selection, nextScene, nextScene.mode)
+          : state.selection;
+
+      return {
+        project: touchProject({
+          ...state.project,
+          scene: nextScene,
+        }),
+        selection: nextSelection,
+      };
+    }),
   setSceneMode: (mode) =>
-    set((state) => ({
-      project: touchProject({
-        ...state.project,
-        scene: {
-          ...state.project.scene,
-          mode,
-        },
-      }),
-      selection: { kind: "scene" },
-    })),
+    set((state) => {
+      const nextScene = {
+        ...state.project.scene,
+        mode,
+      };
+
+      return {
+        project: touchProject({
+          ...state.project,
+          scene: nextScene,
+        }),
+        selection: sanitizeSelectionForSceneMode(state.selection, nextScene, mode),
+      };
+    }),
   updateProjectDocument: (patch) =>
     set((state) => ({
       project: touchProject({
@@ -741,6 +872,61 @@ export const useEditorStore = create<EditorState>((set) => ({
         },
       }),
     })),
+  setObject3DTransform: (id, transform) =>
+    set((state) => ({
+      project: touchProject({
+        ...state.project,
+        scene: {
+          ...state.project.scene,
+          objects: state.project.scene.objects.map((object) =>
+            object.id === id
+              ? {
+                  ...object,
+                  transform3D: {
+                    position: { ...transform.position },
+                    rotation: { ...transform.rotation },
+                    scale: { ...transform.scale },
+                  },
+                }
+              : object,
+          ),
+        },
+      }),
+    })),
+  snapObjectToGround: (objectId) =>
+    set((state) => {
+      if (state.project.scene.mode !== "3d") {
+        return state;
+      }
+
+      const target = state.project.scene.objects.find((object) => object.id === objectId);
+      if (!target?.transform3D || !is3DPrimitiveObject(target)) {
+        return state;
+      }
+
+      const snapped = snapTransformToGround(target.kind, target.transform3D);
+
+      return {
+        project: touchProject({
+          ...state.project,
+          scene: {
+            ...state.project.scene,
+            objects: state.project.scene.objects.map((object) =>
+              object.id === objectId
+                ? {
+                    ...object,
+                    transform3D: {
+                      position: { ...snapped.position },
+                      rotation: { ...snapped.rotation },
+                      scale: { ...snapped.scale },
+                    },
+                  }
+                : object,
+            ),
+          },
+        }),
+      };
+    }),
   deleteSelection: () =>
     set((state) => {
       if (state.selection.kind === "object") {
@@ -928,6 +1114,10 @@ export const useEditorStore = create<EditorState>((set) => ({
     }),
   bringSelectionForward: () =>
     set((state) => {
+      if (state.project.scene.mode !== "2d") {
+        return state;
+      }
+
       if (state.selection.kind !== "object") {
         return state;
       }
@@ -971,6 +1161,10 @@ export const useEditorStore = create<EditorState>((set) => ({
     }),
   sendSelectionBackward: () =>
     set((state) => {
+      if (state.project.scene.mode !== "2d") {
+        return state;
+      }
+
       if (state.selection.kind !== "object") {
         return state;
       }
@@ -1027,14 +1221,11 @@ export const useEditorStore = create<EditorState>((set) => ({
           if (state.project.scene.mode === "3d" && object.transform3D) {
             return {
               ...object,
-              transform3D: {
-                ...object.transform3D,
-                position: {
-                  ...object.transform3D.position,
-                  x: object.transform3D.position.x + delta.x * 0.1,
-                  z: object.transform3D.position.z + delta.y * 0.1,
-                },
-              },
+              transform3D: move3DTransform(object.transform3D, {
+                x: delta.x * 0.1,
+                y: 0,
+                z: delta.y * 0.1,
+              }),
             };
           }
 
@@ -1111,14 +1302,11 @@ export const useEditorStore = create<EditorState>((set) => ({
           if (state.project.scene.mode === "3d" && object.transform3D) {
             return {
               ...object,
-              transform3D: {
-                ...object.transform3D,
-                position: {
-                  ...object.transform3D.position,
-                  x: object.transform3D.position.x + delta.x * 0.1,
-                  z: object.transform3D.position.z + delta.y * 0.1,
-                },
-              },
+              transform3D: move3DTransform(object.transform3D, {
+                x: delta.x * 0.1,
+                y: 0,
+                z: delta.y * 0.1,
+              }),
             };
           }
 
@@ -1158,6 +1346,77 @@ export const useEditorStore = create<EditorState>((set) => ({
               ...state.project.scene,
               objects,
               characters,
+            },
+          }),
+        };
+      }
+
+      return state;
+    }),
+  moveSelectionIn3DBy: (delta) =>
+    set((state) => {
+      if (state.project.scene.mode !== "3d") {
+        return state;
+      }
+
+      if (state.selection.kind === "object") {
+        const selectionId = state.selection.id;
+        let moved = false;
+        const objects = state.project.scene.objects.map((object) => {
+          if (object.id !== selectionId || !object.transform3D) {
+            return object;
+          }
+
+          moved = true;
+
+          return {
+            ...object,
+            transform3D: move3DTransform(object.transform3D, delta),
+          };
+        });
+
+        if (!moved) {
+          return state;
+        }
+
+        return {
+          project: touchProject({
+            ...state.project,
+            scene: {
+              ...state.project.scene,
+              objects,
+            },
+          }),
+        };
+      }
+
+      if (state.selection.kind === "multiple") {
+        const idObject = new Set(state.selection.objectIds);
+        let moved = false;
+
+        const objects = state.project.scene.objects.map((object) => {
+          if (!idObject.has(object.id) || !object.transform3D) {
+            return object;
+          }
+
+          moved = true;
+
+          return {
+            ...object,
+            transform3D: move3DTransform(object.transform3D, delta),
+          };
+        });
+
+        if (!moved) {
+          return state;
+        }
+
+        return {
+          project: touchProject({
+            ...state.project,
+            scene: {
+              ...state.project.scene,
+              objects,
             },
           }),
         };
