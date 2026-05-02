@@ -5,6 +5,7 @@ import {
   forwardRef,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -25,7 +26,7 @@ import {
 import { MathUtils, Raycaster, WebGLRenderer, type Group, type Object3D } from "three";
 import type { OrbitControls as OrbitControlsImpl, TransformControls as TransformControlsImpl } from "three-stdlib";
 
-import { Trash2 } from "lucide-react";
+import { ChevronDown, ChevronUp, Trash2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { CharacterStickFigure } from "@/features/editor/stick-figure-3d/CharacterStickFigure";
@@ -39,6 +40,28 @@ import type { CanvasCapture } from "./CanvasStage";
 
 const DEG2RAD = Math.PI / 180;
 const canvasGlProps = { preserveDrawingBuffer: true };
+
+const VIEWPORT_HINTS_EXPANDED_KEY = "sceneforge.threeViewport.hintsExpanded";
+
+function readStoredViewportHintsExpanded(): boolean | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  try {
+    const raw = window.localStorage.getItem(VIEWPORT_HINTS_EXPANDED_KEY);
+    if (raw === "0" || raw === "false") {
+      return false;
+    }
+    if (raw === "1" || raw === "true") {
+      return true;
+    }
+  } catch {
+    // ignore quota / private mode
+  }
+
+  return null;
+}
 
 /**
  * drei TransformControls 在拖拽时会关掉默认 OrbitControls；若控件在 dragging 卸载（重叠物体抢点击导致换选、Strict Mode 等），
@@ -964,6 +987,25 @@ function ThreeViewportWeb({
   const [transformMode, setTransformMode] = useState<TransformMode>("translate");
   const [mannequinGizmoEnabled, setMannequinGizmoEnabled] = useState(false);
   const [objectContextMenu, setObjectContextMenu] = useState<{ x: number; y: number } | null>(null);
+  const [viewportHintsExpanded, setViewportHintsExpanded] = useState(true);
+
+  /* eslint-disable react-hooks/set-state-in-effect -- one-time hydrate from localStorage (see VIEWPORT_HINTS_EXPANDED_KEY) */
+  useLayoutEffect(() => {
+    const stored = readStoredViewportHintsExpanded();
+    if (stored !== null) {
+      setViewportHintsExpanded(stored);
+    }
+  }, []);
+  /* eslint-enable react-hooks/set-state-in-effect */
+
+  const persistViewportHintsExpanded = useCallback((expanded: boolean) => {
+    setViewportHintsExpanded(expanded);
+    try {
+      window.localStorage.setItem(VIEWPORT_HINTS_EXPANDED_KEY, expanded ? "1" : "0");
+    } catch {
+      // ignore quota / private mode
+    }
+  }, []);
 
   const selectionSyncKey =
     selection.kind === "character"
@@ -1165,14 +1207,47 @@ function ThreeViewportWeb({
           重置相机
         </Button>
       </div>
-      <div className="pointer-events-none absolute bottom-4 left-4 z-10 rounded-lg border border-white/10 bg-slate-900/75 px-3 py-2 text-[11px] leading-relaxed text-slate-300 shadow-lg">
-        1/2/3 切换 gizmo；方向键移动，PageUp/PageDown 升降；F 聚焦选中，Home 重置相机。
-        <br />
-        选中整个人物时可直接拖动 Gizmo 移动/旋转；点选肢体后请打开「人体 Gizmo」再拖动整体；拖拽 IK 控制点调整姿态（普通拖拽：沿当前视图平面移动；按住 Shift：上下拖动调整前后深度；同一次拖拽中可按下/松开 Shift 切换模式）；Alt+拖拽头部可俯仰/转头；四肢骨长由 IK 固定不拉伸；与 2D 关节独立。
-        <br />
-        拖动空白处旋转视角并保存；当前工具：
-        {transformModeOptions.find((option) => option.mode === transformMode)?.label}
-      </div>
+      {viewportHintsExpanded ? (
+        <div className="pointer-events-auto absolute bottom-4 right-4 z-10 max-w-[min(28rem,calc(100%-2rem))] overflow-hidden rounded-lg border border-white/10 bg-slate-900/75 shadow-lg">
+          <div className="flex items-center justify-between gap-2 border-b border-white/10 px-2 py-1">
+            <span className="px-1 text-[11px] font-medium text-slate-200">3D 操作提示</span>
+            <Button
+              aria-expanded
+              aria-label="收起操作提示"
+              className="h-7 shrink-0 px-2 text-slate-300 hover:bg-white/10 hover:text-slate-100"
+              onClick={() => persistViewportHintsExpanded(false)}
+              size="sm"
+              type="button"
+              variant="ghost"
+            >
+              <ChevronDown className="size-4" />
+            </Button>
+          </div>
+          <div className="px-3 py-2 text-[11px] leading-relaxed text-slate-300">
+            1/2/3 切换 gizmo；方向键移动，PageUp/PageDown 升降；F 聚焦选中，Home 重置相机。
+            <br />
+            选中整个人物时可直接拖动 Gizmo 移动/旋转；点选肢体后请打开「人体 Gizmo」再拖动整体；拖拽 IK 控制点调整姿态（普通拖拽：沿当前视图平面移动；按住 Shift：上下拖动调整前后深度；同一次拖拽中可按下/松开 Shift 切换模式）；Alt+拖拽头部可俯仰/转头；四肢骨长由 IK 固定不拉伸；与 2D 关节独立。
+            <br />
+            拖动空白处旋转视角并保存；当前工具：
+            {transformModeOptions.find((option) => option.mode === transformMode)?.label}
+          </div>
+        </div>
+      ) : (
+        <div className="pointer-events-auto absolute bottom-4 right-4 z-10">
+          <Button
+            aria-expanded={false}
+            aria-label="展开操作提示"
+            className="h-8 gap-1 rounded-lg border border-white/10 bg-slate-900/85 px-2.5 text-xs text-slate-200 shadow-lg backdrop-blur hover:bg-slate-800/90"
+            onClick={() => persistViewportHintsExpanded(true)}
+            size="sm"
+            type="button"
+            variant="ghost"
+          >
+            <ChevronUp className="size-3.5" />
+            操作提示
+          </Button>
+        </div>
+      )}
       <WebGLCanvasBoundary onWebGLError={onWebGLError}>
         <Canvas gl={canvasGlProps} onPointerMissed={handleCanvasPointerMissed}>
           <CaptureBridge onCaptureReady={onCaptureReady} />
