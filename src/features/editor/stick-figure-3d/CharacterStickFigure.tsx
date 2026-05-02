@@ -79,6 +79,7 @@ export function CharacterStickFigure({
   onOpenContextMenu,
   selected,
   selectedBodyPartId,
+  shouldIgnoreSelectionPointerEvent,
   shouldIgnorePoseControlPointerDown,
   setOrbitEnabled,
 }: {
@@ -88,6 +89,7 @@ export function CharacterStickFigure({
   onOpenContextMenu?: (clientX: number, clientY: number) => void;
   selected: boolean;
   selectedBodyPartId?: BodyPartId;
+  shouldIgnoreSelectionPointerEvent?: (event: ThreeEvent<MouseEvent>) => boolean;
   shouldIgnorePoseControlPointerDown?: (event: ThreeEvent<PointerEvent>) => boolean;
   setOrbitEnabled?: (enabled: boolean) => void;
 }) {
@@ -190,6 +192,11 @@ export function CharacterStickFigure({
   );
 
   function handleSelect(event: ThreeEvent<MouseEvent>) {
+    if (shouldIgnoreSelectionPointerEvent?.(event)) {
+      event.stopPropagation();
+      return;
+    }
+
     onCloseContextMenu?.();
     event.stopPropagation();
     selectCharacter(character.id);
@@ -221,6 +228,17 @@ export function CharacterStickFigure({
     pose.joints.head.z - pivot.z,
   ];
 
+  function handleSelectBodyPart(id: BodyPartId, event: ThreeEvent<MouseEvent>) {
+    if (shouldIgnoreSelectionPointerEvent?.(event)) {
+      event.stopPropagation();
+      return;
+    }
+
+    onCloseContextMenu?.();
+    selectCharacter(character.id);
+    selectBodyPart(character.id, id);
+  }
+
   return (
     <group
       onClick={handleSelect}
@@ -236,11 +254,7 @@ export function CharacterStickFigure({
         headColor={headColor}
         jointColor={jointColor}
         limbColor={jointColor}
-        onSelectBodyPart={(id) => {
-          onCloseContextMenu?.();
-          selectCharacter(character.id);
-          selectBodyPart(character.id, id);
-        }}
+        onSelectBodyPart={handleSelectBodyPart}
         pose={pose}
         selectedBodyPartId={selectedBodyPartId}
         torsoColor={clothingColor}

@@ -108,8 +108,15 @@ type TransformControlsPickerHost = {
   };
 };
 
+type RegisteredTransformControls = {
+  controls: TransformControlsImpl;
+  enabled: boolean;
+};
+
+type ThreeRayEvent = Pick<ThreeEvent<PointerEvent>, "camera" | "ray">;
+
 function hasTransformControlsPickerHit(
-  event: ThreeEvent<PointerEvent>,
+  event: ThreeRayEvent,
   controls: TransformControlsImpl | null,
   mode: TransformMode,
 ) {
@@ -370,12 +377,14 @@ function SceneObjectMesh({
   selected,
   onCloseContextMenu,
   onOpenContextMenu,
+  shouldIgnoreSelectionPointerEvent,
 }: {
   groupRef?: Ref<Group>;
   object: SceneObject;
   selected: boolean;
   onCloseContextMenu?: () => void;
   onOpenContextMenu?: (clientX: number, clientY: number) => void;
+  shouldIgnoreSelectionPointerEvent?: (event: ThreeRayEvent) => boolean;
 }) {
   const selectObject = useEditorStore((state) => state.selectObject);
   const snapObjectToGround = useEditorStore((state) => state.snapObjectToGround);
@@ -386,6 +395,11 @@ function SceneObjectMesh({
   }
 
   function handleSelect(event: ThreeEvent<MouseEvent>) {
+    if (shouldIgnoreSelectionPointerEvent?.(event)) {
+      event.stopPropagation();
+      return;
+    }
+
     onCloseContextMenu?.();
     event.stopPropagation();
     selectObject(object.id);
@@ -393,6 +407,11 @@ function SceneObjectMesh({
 
   function handlePointerDown(event: ThreeEvent<PointerEvent>) {
     if (event.button === 2) {
+      event.stopPropagation();
+      return;
+    }
+
+    if (shouldIgnoreSelectionPointerEvent?.(event)) {
       event.stopPropagation();
       return;
     }
@@ -454,15 +473,19 @@ function TransformableSceneObject({
   object,
   onCloseContextMenu,
   onOpenContextMenu,
+  onRegisterTransformControls,
   onTransformEnd,
   selected,
+  shouldIgnoreSelectionPointerEvent,
 }: {
   mode: TransformMode;
   object: SceneObject;
   onCloseContextMenu?: () => void;
   onOpenContextMenu?: (clientX: number, clientY: number) => void;
+  onRegisterTransformControls?: (key: string, controls: TransformControlsImpl | null, enabled?: boolean) => void;
   onTransformEnd: (object: SceneObject, group: Group | null) => void;
   selected: boolean;
+  shouldIgnoreSelectionPointerEvent?: (event: ThreeRayEvent) => boolean;
 }) {
   const groupRef = useRef<Group | null>(null);
   const [controlObject, setControlObject] = useState<Group | null>(null);
@@ -470,6 +493,18 @@ function TransformableSceneObject({
     groupRef.current = group;
     setControlObject(group);
   }, []);
+  const transformControlsKey = `object:${object.id}`;
+  const setTransformControlsRef = useCallback(
+    (controls: TransformControlsImpl | null) => {
+      onRegisterTransformControls?.(transformControlsKey, controls, true);
+    },
+    [onRegisterTransformControls, transformControlsKey],
+  );
+
+  useEffect(
+    () => () => onRegisterTransformControls?.(transformControlsKey, null),
+    [onRegisterTransformControls, transformControlsKey],
+  );
 
   if (!selected) {
     return (
@@ -478,6 +513,7 @@ function TransformableSceneObject({
         selected={false}
         onCloseContextMenu={onCloseContextMenu}
         onOpenContextMenu={onOpenContextMenu}
+        shouldIgnoreSelectionPointerEvent={shouldIgnoreSelectionPointerEvent}
       />
     );
   }
@@ -490,11 +526,13 @@ function TransformableSceneObject({
         selected
         onCloseContextMenu={onCloseContextMenu}
         onOpenContextMenu={onOpenContextMenu}
+        shouldIgnoreSelectionPointerEvent={shouldIgnoreSelectionPointerEvent}
       />
       <TransformControlsWithOrbitRestore
         mode={mode}
         object={controlObject ?? undefined}
         onMouseUp={() => onTransformEnd(object, groupRef.current)}
+        ref={setTransformControlsRef}
         size={0.82}
         space="world"
       />
@@ -507,20 +545,24 @@ function TransformableCharacterMannequin({
   mode,
   onCloseContextMenu,
   onOpenContextMenu,
+  onRegisterTransformControls,
   onTransformEnd,
   selected,
   selectedBodyPartId,
   setOrbitEnabled,
+  shouldIgnoreSelectionPointerEvent,
   transformGizmoEnabled,
 }: {
   character: CharacterSkeleton;
   mode: TransformMode;
   onCloseContextMenu?: () => void;
   onOpenContextMenu?: (clientX: number, clientY: number) => void;
+  onRegisterTransformControls?: (key: string, controls: TransformControlsImpl | null, enabled?: boolean) => void;
   onTransformEnd: (character: CharacterSkeleton, group: Group | null) => void;
   selected: boolean;
   selectedBodyPartId?: BodyPartId;
   setOrbitEnabled?: (enabled: boolean) => void;
+  shouldIgnoreSelectionPointerEvent?: (event: ThreeRayEvent) => boolean;
   transformGizmoEnabled: boolean;
 }) {
   const groupRef = useRef<Group | null>(null);
@@ -530,11 +572,27 @@ function TransformableCharacterMannequin({
     groupRef.current = group;
     setControlObject(group);
   }, []);
+  const transformControlsKey = `character:${character.id}`;
+  const setTransformControlsRef = useCallback(
+    (controls: TransformControlsImpl | null) => {
+      transformControlsRef.current = controls;
+      onRegisterTransformControls?.(transformControlsKey, controls, transformGizmoEnabled);
+    },
+    [onRegisterTransformControls, transformControlsKey, transformGizmoEnabled],
+  );
   const shouldIgnorePoseControlPointerDown = useCallback(
     (event: ThreeEvent<PointerEvent>) =>
       transformGizmoEnabled && hasTransformControlsPickerHit(event, transformControlsRef.current, mode),
     [mode, transformGizmoEnabled],
   );
+
+  useEffect(
+    () => () => onRegisterTransformControls?.(transformControlsKey, null),
+    [onRegisterTransformControls, transformControlsKey],
+  );
+  useEffect(() => {
+    onRegisterTransformControls?.(transformControlsKey, transformControlsRef.current, transformGizmoEnabled);
+  }, [onRegisterTransformControls, transformControlsKey, transformGizmoEnabled]);
 
   if (!selected) {
     return (
@@ -545,6 +603,7 @@ function TransformableCharacterMannequin({
         setOrbitEnabled={setOrbitEnabled}
         onCloseContextMenu={onCloseContextMenu}
         onOpenContextMenu={onOpenContextMenu}
+        shouldIgnoreSelectionPointerEvent={shouldIgnoreSelectionPointerEvent}
       />
     );
   }
@@ -557,6 +616,7 @@ function TransformableCharacterMannequin({
         selectedBodyPartId={selectedBodyPartId}
         selected
         shouldIgnorePoseControlPointerDown={shouldIgnorePoseControlPointerDown}
+        shouldIgnoreSelectionPointerEvent={shouldIgnoreSelectionPointerEvent}
         setOrbitEnabled={setOrbitEnabled}
         onCloseContextMenu={onCloseContextMenu}
         onOpenContextMenu={onOpenContextMenu}
@@ -566,7 +626,7 @@ function TransformableCharacterMannequin({
         mode={mode}
         object={controlObject ?? undefined}
         onMouseUp={() => onTransformEnd(character, groupRef.current)}
-        ref={transformControlsRef}
+        ref={setTransformControlsRef}
         size={0.82}
         space="world"
       />
@@ -976,6 +1036,7 @@ function ThreeViewportWeb({
     [sceneCharacters],
   );
   const orbitControlsRef = useRef<OrbitControlsImpl | null>(null);
+  const transformControlsRegistryRef = useRef(new Map<string, RegisteredTransformControls>());
   const containerRef = useRef<HTMLDivElement>(null);
   const setOrbitEnabled = useCallback((enabled: boolean) => {
     const controls = orbitControlsRef.current;
@@ -1076,6 +1137,26 @@ function ThreeViewportWeb({
 
     setObjectContextMenu({ x: clientX - rect.left, y: clientY - rect.top });
   }, []);
+  const registerTransformControls = useCallback((key: string, controls: TransformControlsImpl | null, enabled = true) => {
+    if (controls) {
+      transformControlsRegistryRef.current.set(key, { controls, enabled });
+      return;
+    }
+
+    transformControlsRegistryRef.current.delete(key);
+  }, []);
+  const shouldIgnoreSelectionPointerEvent = useCallback(
+    (event: ThreeRayEvent) => {
+      for (const { controls, enabled } of transformControlsRegistryRef.current.values()) {
+        if (enabled && hasTransformControlsPickerHit(event, controls, transformMode)) {
+          return true;
+        }
+      }
+
+      return false;
+    },
+    [transformMode],
+  );
 
   const handleCanvasPointerMissed = useCallback(() => {
     closeObjectContextMenu();
@@ -1305,8 +1386,10 @@ function ThreeViewportWeb({
               object={object}
               onCloseContextMenu={closeObjectContextMenu}
               onOpenContextMenu={openObjectContextMenu}
+              onRegisterTransformControls={registerTransformControls}
               onTransformEnd={handleTransformEnd}
               selected={objectSelected(selection, object.id)}
+              shouldIgnoreSelectionPointerEvent={shouldIgnoreSelectionPointerEvent}
             />
           ))}
           {characters.map((character) => (
@@ -1316,10 +1399,12 @@ function ThreeViewportWeb({
               mode={transformMode}
               onCloseContextMenu={closeObjectContextMenu}
               onOpenContextMenu={openObjectContextMenu}
+              onRegisterTransformControls={registerTransformControls}
               onTransformEnd={handleCharacterTransformEnd}
               selected={characterScopeSelected(selection, character.id)}
               selectedBodyPartId={selectedCharacterBodyPart(selection, character.id)}
               setOrbitEnabled={setOrbitEnabled}
+              shouldIgnoreSelectionPointerEvent={shouldIgnoreSelectionPointerEvent}
               transformGizmoEnabled={mannequinGizmoEnabled}
             />
           ))}

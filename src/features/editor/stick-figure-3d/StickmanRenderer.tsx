@@ -1,12 +1,15 @@
 "use client";
 
 import { useMemo } from "react";
+import { type ThreeEvent } from "@react-three/fiber";
 import { Quaternion, Vector3 as ThreeVector3 } from "three";
 
 import type { BodyPartId } from "@/shared/types";
 import type { StickFigurePoseV1 } from "@/shared/types/stick-figure-pose";
 
 const Y_UP = new ThreeVector3(0, 1, 0);
+
+type SelectionClickEvent = ThreeEvent<MouseEvent>;
 
 function boneQuat(from: ThreeVector3, to: ThreeVector3): Quaternion {
   const dir = new ThreeVector3().subVectors(to, from);
@@ -33,7 +36,7 @@ function StickCapsuleLimb({
   color: string;
   selected: boolean;
   bodyPartId: BodyPartId;
-  onSelectBodyPart?: (id: BodyPartId) => void;
+  onSelectBodyPart?: (id: BodyPartId, event: SelectionClickEvent) => void;
 }) {
   const [fromX, fromY, fromZ] = from;
   const [toX, toY, toZ] = to;
@@ -52,7 +55,7 @@ function StickCapsuleLimb({
       castShadow
       onClick={(e) => {
         e.stopPropagation();
-        onSelectBodyPart?.(bodyPartId);
+        onSelectBodyPart?.(bodyPartId, e);
       }}
       position={position}
       quaternion={quat}
@@ -81,14 +84,14 @@ function StickJointSphere({
   radius: number;
   color: string;
   selected: boolean;
-  onSelect?: () => void;
+  onSelect?: (event: SelectionClickEvent) => void;
 }) {
   return (
     <mesh
       castShadow
       onClick={(e) => {
         e.stopPropagation();
-        onSelect?.();
+        onSelect?.(e);
       }}
       position={position}
       receiveShadow
@@ -109,7 +112,7 @@ export type StickmanRendererProps = {
   pose: StickFigurePoseV1;
   selectedBodyPartId?: BodyPartId;
   focusWholeCharacter: boolean;
-  onSelectBodyPart?: (id: BodyPartId) => void;
+  onSelectBodyPart?: (id: BodyPartId, event: SelectionClickEvent) => void;
   /** Joint spheres for torso / shoulders / hips (not elbows/knees). */
   jointColor: string;
   limbColor: string;
@@ -218,14 +221,14 @@ export function StickmanRenderer({
 
       <StickJointSphere
         color={jointColor}
-        onSelect={() => onSelectBodyPart?.("torso")}
+        onSelect={(event) => onSelectBodyPart?.("torso", event)}
         position={p("pelvis")}
         radius={0.095}
         selected={partSel("torso")}
       />
       <StickJointSphere
         color={jointColor}
-        onSelect={() => onSelectBodyPart?.("torso")}
+        onSelect={(event) => onSelectBodyPart?.("torso", event)}
         position={p("chest")}
         radius={0.085}
         selected={partSel("torso")}
@@ -259,7 +262,7 @@ export function StickmanRenderer({
         castShadow
         onClick={(e) => {
           e.stopPropagation();
-          onSelectBodyPart?.("head");
+          onSelectBodyPart?.("head", e);
         }}
         position={p("head")}
         receiveShadow
@@ -278,7 +281,7 @@ export function StickmanRenderer({
         castShadow
         onClick={(e) => {
           e.stopPropagation();
-          onSelectBodyPart?.("leftHand");
+          onSelectBodyPart?.("leftHand", e);
         }}
         position={p("leftHand")}
         receiveShadow
@@ -296,7 +299,7 @@ export function StickmanRenderer({
         castShadow
         onClick={(e) => {
           e.stopPropagation();
-          onSelectBodyPart?.("rightHand");
+          onSelectBodyPart?.("rightHand", e);
         }}
         position={p("rightHand")}
         receiveShadow
@@ -315,7 +318,7 @@ export function StickmanRenderer({
         castShadow
         onClick={(e) => {
           e.stopPropagation();
-          onSelectBodyPart?.("leftFoot");
+          onSelectBodyPart?.("leftFoot", e);
         }}
         position={[j.leftFoot.x, j.leftFoot.y - 0.03, j.leftFoot.z + 0.04]}
         receiveShadow
@@ -331,7 +334,7 @@ export function StickmanRenderer({
         castShadow
         onClick={(e) => {
           e.stopPropagation();
-          onSelectBodyPart?.("rightFoot");
+          onSelectBodyPart?.("rightFoot", e);
         }}
         position={[j.rightFoot.x, j.rightFoot.y - 0.03, j.rightFoot.z + 0.04]}
         receiveShadow
