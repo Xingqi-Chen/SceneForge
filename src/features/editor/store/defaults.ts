@@ -77,6 +77,8 @@ export const defaultCharacter: CharacterSkeleton = {
   includeInPrompt: true,
   joints: {
     neck: { x: 0, y: 24 },
+    /** 颈与髋之间的躯干中点（创作平面坐标）。 */
+    spine: { x: 0, y: 86 },
     leftShoulder: { x: -36, y: 48 },
     rightShoulder: { x: 36, y: 48 },
     leftElbow: { x: -64, y: 108 },

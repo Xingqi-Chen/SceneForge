@@ -41,7 +41,7 @@ const mannequinHipY = 1.07;
 const mannequinNeckY = 1.82;
 const jointScaleX = 0.011;
 const jointScaleY = (mannequinNeckY - mannequinHipY) / (148 - 24);
-const headRadius = 0.25;
+const headRadius = 0.185;
 const handRadius = 0.095;
 const footSize: [number, number, number] = [0.22, 0.11, 0.36];
 
@@ -141,6 +141,7 @@ export function getCharacterMannequinPose(character: CharacterSkeleton): Charact
   const leftShoulder = joints.leftShoulder;
   const rightShoulder = joints.rightShoulder;
   const neck = joints.neck;
+  const spine = joints.spine;
   const hip = joints.hip;
   const shoulderCenter = {
     x: (leftShoulder.x + rightShoulder.x) / 2,
@@ -155,7 +156,8 @@ export function getCharacterMannequinPose(character: CharacterSkeleton): Charact
   const spineSpan = Math.max(0.18, spineCeiling - pelvisTop);
   const split01 = 0.44;
   const abdomenTop = pelvisTop + spineSpan * split01;
-  const abdomenCenterY = (pelvisTop + abdomenTop) / 2;
+  const abdomenCenterYBase = (pelvisTop + abdomenTop) / 2;
+  const abdomenCenterY = spine.y * 0.52 + abdomenCenterYBase * 0.48;
   const chestCenterY = (abdomenTop + spineCeiling) / 2;
   const abdomenH = Math.max(0.14, abdomenTop - pelvisTop);
   const chestH = Math.max(0.22, spineCeiling - abdomenTop);
@@ -177,7 +179,7 @@ export function getCharacterMannequinPose(character: CharacterSkeleton): Charact
     joints,
     segments,
     head: {
-      position: [neck.x, neck.y + 0.3, neck.z + 0.02],
+      position: [neck.x, neck.y + 0.22, neck.z + 0.015],
       radius: headRadius,
     },
     torso: {
@@ -186,7 +188,11 @@ export function getCharacterMannequinPose(character: CharacterSkeleton): Charact
         size: [pelvisW, pelvisH, pelvisD],
       },
       abdomen: {
-        position: [shoulderCenter.x * 0.35 + hip.x * 0.65, abdomenCenterY, abdomenZ],
+        position: [
+          shoulderCenter.x * 0.3 + hip.x * 0.5 + spine.x * 0.2,
+          abdomenCenterY,
+          abdomenZ,
+        ],
         size: [abdomenW, abdomenH, abdomenD],
       },
       chest: {

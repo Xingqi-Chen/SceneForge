@@ -169,6 +169,8 @@ export type BodyPartId =
 
 export type JointId =
   | "neck"
+  /** 躯干中点（颈—髋之间），用于 2D/3D 脊柱弯曲与低模躯干分段。 */
+  | "spine"
   | "leftShoulder"
   | "rightShoulder"
   | "leftElbow"

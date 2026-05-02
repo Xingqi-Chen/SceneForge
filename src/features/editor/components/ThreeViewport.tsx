@@ -672,12 +672,19 @@ function MannequinCapsuleLimb({
 }
 
 function mannequinSegmentUsesTorsoSelection(segment: { bodyPartId: BodyPartId; from: JointId; to: JointId }) {
-  return segment.bodyPartId === "torso" && segment.from === "neck" && segment.to !== "hip";
+  return (
+    segment.bodyPartId === "torso" &&
+    segment.from === "neck" &&
+    (segment.to === "leftShoulder" || segment.to === "rightShoulder")
+  );
 }
 
-/** 颈—髋主躯干棍（与锁骨段区分）。 */
+/** 颈—脊柱—髋主躯干分段（与锁骨段区分）。 */
 function mannequinSegmentIsTorsoSpine(segment: { bodyPartId: BodyPartId; from: JointId; to: JointId }) {
-  return segment.bodyPartId === "torso" && segment.from === "neck" && segment.to === "hip";
+  return (
+    segment.bodyPartId === "torso" &&
+    ((segment.from === "neck" && segment.to === "spine") || (segment.from === "spine" && segment.to === "hip"))
+  );
 }
 
 function mannequinCapsuleRadiusForSegment(bodyPartId: BodyPartId): number {
@@ -1044,11 +1051,11 @@ function CharacterMannequinMesh({
       />
       <MannequinCapsuleLimb
         color={mannequinPalette.skin}
-        height={Math.max(0.12, pose.head.position[1] - pose.joints.neck.y - pose.head.radius * 0.55)}
+        height={Math.max(0.1, pose.head.position[1] - pose.joints.neck.y - pose.head.radius * 0.55)}
         kind="skin"
         onSelect={(event) => handleBodyPartSelect("head", event)}
-        position={[pose.joints.neck.x, pose.joints.neck.y + 0.08, pose.joints.neck.z]}
-        radius={0.092}
+        position={[pose.joints.neck.x, pose.joints.neck.y + 0.06, pose.joints.neck.z]}
+        radius={0.078}
         selected={isPartSelected("head") || focusWholeCharacter}
       />
       <MannequinJoint
@@ -1064,6 +1071,13 @@ function CharacterMannequinMesh({
         position={[pose.joints.hip.x, pose.joints.hip.y, pose.joints.hip.z]}
         radius={0.095}
         selected={jointDragSelected("hip")}
+      />
+      <MannequinJoint
+        color={jointColor}
+        jointDrag={{ jointId: "spine", onPointerDown: handleJointPointerDown }}
+        position={[pose.joints.spine.x, pose.joints.spine.y, pose.joints.spine.z]}
+        radius={0.085}
+        selected={jointDragSelected("spine")}
       />
 
       <MannequinJoint

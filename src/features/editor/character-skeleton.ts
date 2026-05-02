@@ -3,7 +3,8 @@ import type { BodyPartId, JointId } from "@/shared/types";
 export const CHARACTER_SKELETON_BODY_PART_SEGMENTS = [
   ["torso", "neck", "leftShoulder"],
   ["torso", "neck", "rightShoulder"],
-  ["torso", "neck", "hip"],
+  ["torso", "neck", "spine"],
+  ["torso", "spine", "hip"],
   ["leftUpperArm", "leftShoulder", "leftElbow"],
   ["leftForearm", "leftElbow", "leftWrist"],
   ["rightUpperArm", "rightShoulder", "rightElbow"],
@@ -16,6 +17,7 @@ export const CHARACTER_SKELETON_BODY_PART_SEGMENTS = [
 
 export const CHARACTER_JOINT_BODY_PART_MAP: Partial<Record<JointId, BodyPartId>> = {
   neck: "head",
+  spine: "torso",
   leftWrist: "leftHand",
   rightWrist: "rightHand",
   leftAnkle: "leftFoot",

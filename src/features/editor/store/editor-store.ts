@@ -42,6 +42,7 @@ import {
   defaultLineEndpoints,
   defaultPolygonPoints,
 } from "@/features/editor/preset-scene-objects";
+import { getCharacter3DPosePresetById } from "@/features/editor/character-3d-pose-presets";
 import { snapCharacterTransformToMannequinGround } from "@/features/editor/character-mannequin-pose";
 
 import {
@@ -146,6 +147,8 @@ type EditorState = {
   updateCharacterJoint: (id: string, jointId: JointId, position: Vector2) => void;
   /** 3D 低模姿态：更新 `joints3D`（与 2D `joints` 独立）。首次写入时从默认平面克隆再应用。 */
   updateCharacterJoint3D: (id: string, jointId: JointId, position: Vector3) => void;
+  /** 3D 模式：应用内置人体姿态预设，并在人物参与 3D 舞台时自动对齐脚底落点。 */
+  applyCharacter3DPosePreset: (characterId: string, presetId: string) => void;
   addPromptTag: (target: PromptTagTarget, tag: PromptTag) => void;
   updatePromptTag: (target: PromptTagTarget, tagId: string, patch: PromptTagPatch) => void;
   removePromptTag: (target: PromptTagTarget, tagId: string) => void;
@@ -1818,6 +1821,54 @@ export const useEditorStore = create<EditorState>((set) => ({
         },
       }),
     })),
+  applyCharacter3DPosePreset: (characterId, presetId) =>
+    set((state) => {
+      const preset = getCharacter3DPosePresetById(presetId);
+      if (!preset) {
+        console.warn("[SceneForge] [editor] unknown 3D pose preset", presetId);
+
+        return state;
+      }
+
+      const mode = state.project.scene.mode;
+      const characters = state.project.scene.characters.map((character) => {
+        if (character.id !== characterId) {
+          return character;
+        }
+
+        const built = preset.buildJoints3D();
+        const joints3D = Object.fromEntries(
+          (Object.keys(built) as JointId[]).map((key) => [key, { ...built[key] }]),
+        ) as NonNullable<CharacterSkeleton["joints3D"]>;
+
+        const withPose: CharacterSkeleton = { ...character, joints3D };
+
+        if (mode === "3d" && characterAppearsInThreeViewport(withPose)) {
+          const snapped = snapCharacterTransformToMannequinGround(withPose, getCharacter3DTransform(character));
+
+          return {
+            ...withPose,
+            transform3D: {
+              position: { ...snapped.position },
+              rotation: { ...snapped.rotation },
+              scale: { ...snapped.scale },
+            },
+          };
+        }
+
+        return withPose;
+      });
+
+      return {
+        project: touchProject({
+          ...state.project,
+          scene: {
+            ...state.project.scene,
+            characters,
+          },
+        }),
+      };
+    }),
   addPromptTag: (target, tag) =>
     set((state) => {
       if (target.kind === "scene") {

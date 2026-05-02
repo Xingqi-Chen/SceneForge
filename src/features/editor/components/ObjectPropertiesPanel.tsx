@@ -3,6 +3,7 @@
 import { MousePointer2 } from "lucide-react";
 import { useState, type ChangeEvent, type ReactNode } from "react";
 
+import { CHARACTER_3D_POSE_PRESETS } from "@/features/editor/character-3d-pose-presets";
 import { defaultLineEndpoints, defaultPolygonPoints } from "@/features/editor/preset-scene-objects";
 import { useEditorStore } from "@/features/editor/store/editor-store";
 import type {
@@ -153,6 +154,7 @@ export function ObjectPropertiesPanel() {
     updateObject3DTransform,
     updateProjectSettings,
     updateScene,
+    applyCharacter3DPosePreset,
   } = useEditorStore();
   const selectedObject =
     selection.kind === "object"
@@ -590,6 +592,21 @@ export function ObjectPropertiesPanel() {
                   onChange={(axis, value) => updateSelectedCharacter3DTransform("scale", axis, value)}
                   value={selectedCharacter.transform3D?.scale ?? { x: 1, y: 1, z: 1 }}
                 />
+              </div>
+              <div className="space-y-1.5">
+                <FieldLabel>姿态预设</FieldLabel>
+                <div className="grid max-h-52 grid-cols-2 gap-1.5 overflow-y-auto overscroll-contain pr-0.5">
+                  {CHARACTER_3D_POSE_PRESETS.map((preset) => (
+                    <button
+                      className="rounded-md border border-indigo-200/80 bg-white px-2 py-1.5 text-left text-[11px] font-medium text-indigo-800 shadow-sm transition-colors hover:border-indigo-300 hover:bg-indigo-50/80"
+                      key={preset.id}
+                      onClick={() => applyCharacter3DPosePreset(selectedCharacter.id, preset.id)}
+                      type="button"
+                    >
+                      {preset.label}
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
           ) : null}
