@@ -237,7 +237,7 @@ export function AssetLibraryPanel() {
         <div className="min-w-0 flex-1">
           <h2 className="text-[15px] font-semibold text-slate-800">元素库</h2>
           <p className="mt-0.5 text-[11px] leading-snug text-slate-500">
-            {is2d ? "当前为 2D 画布：仅显示平面与预设场景。" : "当前为 3D 画布：仅显示 3D 基础体。"}
+            {is2d ? "当前为 2D 画布：仅显示平面与预设场景。" : "当前为 3D 画布：显示 3D 基础体与预设场景占位。"}
           </p>
         </div>
       </div>
@@ -273,38 +273,44 @@ export function AssetLibraryPanel() {
       ) : null}
 
       {is3d ? (
-        <LibrarySection title="3D 基础体">
-          <p className="mb-2 text-[10px] leading-snug text-slate-400">
-            用低模人体与基础几何体搭建简化 3D 舞台；位置、旋转和缩放可在右侧属性面板调整。
-          </p>
-          <div className="grid grid-cols-2 gap-3">
-            <button
-              className="group relative flex flex-col items-center justify-center gap-2 overflow-hidden rounded-md border border-slate-200 bg-white p-4 text-sm font-medium text-slate-700 transition-all hover:border-indigo-300 hover:bg-indigo-50 hover:text-indigo-700"
-              onClick={() => handleAssetClick({ id: "character", label: "3D 人体", type: "character" })}
-              type="button"
-            >
-              <div className="absolute inset-0 bg-gradient-to-br from-white/40 to-transparent opacity-0 transition-opacity group-hover:opacity-100" />
-              <span className="relative z-10">3D 人体</span>
-            </button>
-            {threeDAssets.map((asset) => (
+        <>
+          <LibrarySection title="3D 基础体">
+            <p className="mb-2 text-[10px] leading-snug text-slate-400">
+              用低模人体与基础几何体搭建简化 3D 舞台；位置、旋转和缩放可在右侧属性面板调整。
+            </p>
+            <div className="grid grid-cols-2 gap-3">
               <button
                 className="group relative flex flex-col items-center justify-center gap-2 overflow-hidden rounded-md border border-slate-200 bg-white p-4 text-sm font-medium text-slate-700 transition-all hover:border-indigo-300 hover:bg-indigo-50 hover:text-indigo-700"
-                key={asset.id}
-                onClick={() => handleAssetClick(asset)}
+                onClick={() => handleAssetClick({ id: "character", label: "3D 人体", type: "character" })}
                 type="button"
               >
                 <div className="absolute inset-0 bg-gradient-to-br from-white/40 to-transparent opacity-0 transition-opacity group-hover:opacity-100" />
-                <span className="relative z-10">{asset.label}</span>
+                <span className="relative z-10">3D 人体</span>
               </button>
-            ))}
-          </div>
-        </LibrarySection>
+              {threeDAssets.map((asset) => (
+                <button
+                  className="group relative flex flex-col items-center justify-center gap-2 overflow-hidden rounded-md border border-slate-200 bg-white p-4 text-sm font-medium text-slate-700 transition-all hover:border-indigo-300 hover:bg-indigo-50 hover:text-indigo-700"
+                  key={asset.id}
+                  onClick={() => handleAssetClick(asset)}
+                  type="button"
+                >
+                  <div className="absolute inset-0 bg-gradient-to-br from-white/40 to-transparent opacity-0 transition-opacity group-hover:opacity-100" />
+                  <span className="relative z-10">{asset.label}</span>
+                </button>
+              ))}
+            </div>
+          </LibrarySection>
+
+          <div className="my-4 h-px w-full shrink-0 bg-slate-100" />
+        </>
       ) : null}
 
-      {is2d ? (
+      {is2d || is3d ? (
         <LibrarySection title="预设场景">
           <p className="mb-2 text-[10px] leading-snug text-slate-400">
-            按常见二次元插画布景分类；描述为英文便于生成与导出衔接。
+            {is3d
+              ? "与 2D 相同的分类与英文描述；视口中为长方体占位，便于摆 3D 布局并参与提示词。"
+              : "按常见二次元插画布景分类；描述为英文便于生成与导出衔接。"}
           </p>
           <div className="flex max-h-[min(480px,52vh)] flex-col gap-3 overflow-y-auto pr-0.5">
             {PRESET_SCENE_CATEGORY_ORDER.map((cat) => {

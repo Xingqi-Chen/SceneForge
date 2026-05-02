@@ -10,7 +10,8 @@ export function isThreeDViewportPrimitive(object: SceneObject): boolean {
       (object.kind === "cube" ||
         object.kind === "sphere" ||
         object.kind === "cylinder" ||
-        object.kind === "plane"),
+        object.kind === "plane" ||
+        object.kind === "preset"),
   );
 }
 

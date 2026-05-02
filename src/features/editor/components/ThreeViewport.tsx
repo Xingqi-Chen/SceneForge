@@ -481,11 +481,13 @@ function SceneObjectMesh({
           <meshBasicMaterial color="#2563eb" wireframe />
         </mesh>
       ) : null}
-      <Html center distanceFactor={9} position={[0, object.kind === "plane" ? 0.05 : 0.9, 0]}>
-        <div className="pointer-events-none rounded bg-white/85 px-2 py-0.5 text-[11px] font-semibold text-slate-800 shadow-sm ring-1 ring-slate-200">
-          {object.name}
-        </div>
-      </Html>
+      {selected ? (
+        <Html center distanceFactor={14} position={[0, object.kind === "plane" ? 0.05 : 0.9, 0]} zIndexRange={[40, 0]}>
+          <div className="pointer-events-none max-w-[min(7rem,28vw)] truncate rounded-md bg-slate-950/78 px-1.5 py-px text-[9px] font-medium leading-tight text-slate-100 shadow-sm ring-1 ring-white/12">
+            {object.name}
+          </div>
+        </Html>
+      ) : null}
     </group>
   );
 }
@@ -1220,11 +1222,13 @@ function CharacterMannequinMesh({
       {focusWholeCharacter ? (
         <MannequinSelectionHalo maxY={pose.bounds.maxY} minY={pose.bounds.minY} />
       ) : null}
-      <Html center distanceFactor={9} position={[0, pose.bounds.maxY + 0.28, 0]}>
-        <div className="pointer-events-none rounded bg-white/85 px-2 py-0.5 text-[11px] font-semibold text-slate-800 shadow-sm ring-1 ring-slate-200">
-          {character.name}
-        </div>
-      </Html>
+      {focusWholeCharacter ? (
+        <Html center distanceFactor={14} position={[0, pose.bounds.maxY + 0.22, 0]} zIndexRange={[40, 0]}>
+          <div className="pointer-events-none max-w-[min(7rem,28vw)] truncate rounded-md bg-slate-950/78 px-1.5 py-px text-[9px] font-medium leading-tight text-slate-100 shadow-sm ring-1 ring-white/12">
+            {character.name}
+          </div>
+        </Html>
+      ) : null}
     </group>
   );
 }
@@ -1295,13 +1299,17 @@ function TransformableCharacterMannequin({
 
 function getCssPrimitiveClass(object: SceneObject, selected: boolean) {
   const base =
-    "absolute flex items-center justify-center border text-[11px] font-semibold text-white shadow-xl transition-all";
+    "absolute flex items-center justify-center border text-[9px] font-semibold text-white shadow-xl transition-all";
   const selectedClass = selected
     ? "border-blue-300 ring-4 ring-blue-400/40"
     : "border-white/25 ring-1 ring-black/20";
 
   if (object.kind === "sphere") {
     return `${base} ${selectedClass} rounded-full`;
+  }
+
+  if (object.kind === "preset") {
+    return `${base} ${selectedClass} rounded-lg`;
   }
 
   if (object.kind === "cylinder") {
@@ -1444,7 +1452,7 @@ function Css3DViewport({
       <div className="absolute left-1/2 top-1/2 h-[64%] w-[72%] -translate-x-1/2 -translate-y-1/2 rotate-x-[58deg] rotate-z-[-35deg] rounded-2xl border border-slate-500/30 bg-slate-800/25 shadow-2xl" />
       {objects.length === 0 && characters.length === 0 ? (
         <div className="absolute left-1/2 top-1/2 z-10 -translate-x-1/2 -translate-y-1/2 rounded-lg border border-white/10 bg-slate-900/85 px-4 py-3 text-sm text-slate-200">
-          从左侧添加「3D 人体」或 3D 基础体
+          从左侧添加「3D 人体」、基础体或预设场景
         </div>
       ) : null}
       {objects.map((object) => {
@@ -1473,18 +1481,23 @@ function Css3DViewport({
             style={getCssPrimitiveStyle(object)}
             type="button"
           >
-            <span className="max-w-[92px] truncate drop-shadow">{object.name}</span>
+            {selected ? (
+              <span className="max-w-[min(5.5rem,26vw)] truncate px-0.5 text-[9px] leading-tight drop-shadow">
+                {object.name}
+              </span>
+            ) : null}
           </button>
         );
       })}
       {characters.map((character) => {
         const selected = characterScopeSelected(selection, character.id);
+        const showCharacterName = characterSelected(selection, character.id);
 
         return (
           <button
             aria-label={`选择 ${character.name}`}
             className={[
-              "absolute flex items-center justify-center rounded-full border text-[11px] font-semibold text-white shadow-xl transition-all",
+              "absolute flex items-center justify-center rounded-full border text-[9px] font-semibold text-white shadow-xl transition-all",
               selected
                 ? "border-blue-300 bg-blue-500 ring-4 ring-blue-400/40"
                 : "border-white/25 bg-slate-500 ring-1 ring-black/20",
@@ -1508,7 +1521,11 @@ function Css3DViewport({
             style={getCssCharacterStyle(character)}
             type="button"
           >
-            <span className="max-w-[92px] truncate drop-shadow">{character.name}</span>
+            {showCharacterName ? (
+              <span className="max-w-[min(5.5rem,26vw)] truncate px-0.5 text-[9px] leading-tight drop-shadow">
+                {character.name}
+              </span>
+            ) : null}
           </button>
         );
       })}

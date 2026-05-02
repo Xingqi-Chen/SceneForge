@@ -10,7 +10,13 @@ import type { SceneObject, SceneObject3DTransform, SceneObjectKind, Vector3 as V
 const DEG2RAD = Math.PI / 180;
 
 function isPrimitive3DKind(kind: SceneObjectKind): boolean {
-  return kind === "cube" || kind === "sphere" || kind === "cylinder" || kind === "plane";
+  return (
+    kind === "cube" ||
+    kind === "sphere" ||
+    kind === "cylinder" ||
+    kind === "plane" ||
+    kind === "preset"
+  );
 }
 
 /** 与 ThreeViewport.PrimitiveGeometry 尺寸一致（未缩放时的本地 AABB）。 */

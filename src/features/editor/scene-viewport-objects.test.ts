@@ -34,12 +34,28 @@ function makePrimitive(id: string, kind: "cube" | "sphere" | "cylinder" | "plane
   };
 }
 
+function makePreset3d(id: string): SceneObject {
+  return {
+    ...makeRect(id),
+    id,
+    kind: "preset",
+    name: "desk",
+    presetKey: "preset-table",
+    transform3D: {
+      position: { x: 0, y: 0.5, z: 0 },
+      rotation: { x: 0, y: 0, z: 0 },
+      scale: { x: 2, y: 0.8, z: 0.5 },
+    },
+  };
+}
+
 describe("scene-viewport-objects", () => {
   it("flags 3D primitives with transform3D", () => {
     expect(isThreeDViewportPrimitive(makePrimitive("cube", "cube"))).toBe(true);
     expect(isThreeDViewportPrimitive(makePrimitive("sphere", "sphere"))).toBe(true);
     expect(isThreeDViewportPrimitive(makePrimitive("cylinder", "cylinder"))).toBe(true);
     expect(isThreeDViewportPrimitive(makePrimitive("plane", "plane"))).toBe(true);
+    expect(isThreeDViewportPrimitive(makePreset3d("preset-a"))).toBe(true);
     expect(isThreeDViewportPrimitive(makeRect("b"))).toBe(false);
   });
 
@@ -50,7 +66,11 @@ describe("scene-viewport-objects", () => {
   });
 
   it("excludes 3D primitives from 2D canvas list", () => {
-    const list = sceneObjectsVisibleOn2DCanvas([makeRect("r"), makePrimitive("c", "cube")]);
+    const list = sceneObjectsVisibleOn2DCanvas([
+      makeRect("r"),
+      makePrimitive("c", "cube"),
+      makePreset3d("p"),
+    ]);
     expect(list.map((o) => o.id)).toEqual(["r"]);
   });
 });

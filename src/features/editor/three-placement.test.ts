@@ -53,4 +53,14 @@ describe("three-placement", () => {
 
     expect(computeWorldBounds("plane", t).min.y).toBeCloseTo(0, 5);
   });
+
+  it("grounds preset placeholders like unit cubes", () => {
+    const t = snapTransformToGround("preset", {
+      position: { x: 0, y: 1, z: 0 },
+      rotation: { x: 0, y: 0, z: 0 },
+      scale: { x: 2, y: 1, z: 0.5 },
+    });
+
+    expect(computeWorldBounds("preset", t).min.y).toBeCloseTo(0, 5);
+  });
 });

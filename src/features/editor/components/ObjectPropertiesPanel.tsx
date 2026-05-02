@@ -318,11 +318,25 @@ export function ObjectPropertiesPanel() {
           {is3DSceneObject(selectedObject) ? (
             <div className="space-y-3 rounded-md border border-indigo-100 bg-indigo-50/70 p-3">
               <div>
-                <div className="text-xs font-semibold text-indigo-700">3D 基础体</div>
+                <div className="text-xs font-semibold text-indigo-700">
+                  {selectedObject.kind === "preset" ? "3D 预设占位" : "3D 基础体"}
+                </div>
                 <p className="mt-1 text-[11px] leading-relaxed text-indigo-700/80">
-                  使用右侧数值调整位置、旋转和缩放；视口内可点击选中并用鼠标轨道查看。
+                  {selectedObject.kind === "preset"
+                    ? "与 2D 同一套语义与英文描述；视口内为长方体占位，便于摆布局。"
+                    : "使用右侧数值调整位置、旋转和缩放；视口内可点击选中并用鼠标轨道查看。"}
                 </p>
               </div>
+              {selectedObject.kind === "preset" && selectedObject.presetKey ? (
+                <div className="space-y-1.5">
+                  <FieldLabel>预设 ID</FieldLabel>
+                  <input
+                    readOnly
+                    className="w-full cursor-not-allowed rounded-md border border-indigo-200 bg-white/80 px-2 py-1.5 text-xs text-slate-600"
+                    value={selectedObject.presetKey}
+                  />
+                </div>
+              ) : null}
               <div className="space-y-1.5">
                 <FieldLabel>位置</FieldLabel>
                 <Vector3Fields

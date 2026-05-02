@@ -41,6 +41,7 @@ import {
   PRESET_SCENE_OBJECTS,
   defaultLineEndpoints,
   defaultPolygonPoints,
+  presetSceneObject3DScale,
 } from "@/features/editor/preset-scene-objects";
 import { getCharacter3DPosePresetById } from "@/features/editor/character-3d-pose-presets";
 import { snapCharacterTransformToMannequinGround } from "@/features/editor/character-mannequin-pose";
@@ -895,6 +896,15 @@ export const useEditorStore = create<EditorState>((set) => ({
         const def = PRESET_SCENE_OBJECTS.find((entry) => entry.key === input.presetKey);
         size = def ? { ...def.size } : { width: 180, height: 120 };
         presetKey = input.presetKey;
+        if (state.project.scene.mode === "3d") {
+          const threeIndex = state.project.scene.objects.filter((object) => object.transform3D).length;
+          const base = createDefault3DTransform("cube", threeIndex);
+          const scaled: SceneObject3DTransform = {
+            ...base,
+            scale: presetSceneObject3DScale(size),
+          };
+          transform3D = snapTransformToGround("cube", scaled);
+        }
       } else {
         size = { width: 180, height: 120 };
       }

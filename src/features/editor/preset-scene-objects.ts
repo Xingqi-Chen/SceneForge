@@ -1,4 +1,4 @@
-import type { SceneObjectKind, Vector2 } from "@/shared/types";
+import type { SceneObjectKind, Vector2, Vector3 } from "@/shared/types";
 
 export const PRESET_SCENE_CATEGORY_ORDER = [
   { id: "indoor", label: "室内家居" },
@@ -576,6 +576,21 @@ export const PRESET_SCENE_OBJECTS: PresetSceneObjectDefinition[] = [
     category: "props",
   },
 ];
+
+const PRESET_3D_PIXEL_TO_WORLD = 0.01;
+
+/**
+ * Maps 2D preset layout box (pixels) to `boxGeometry` scale in world units
+ * (matches ThreeViewport unit cube mesh before transform).
+ */
+export function presetSceneObject3DScale(size: { width: number; height: number }): Vector3 {
+  const minAxis = 0.08;
+  const x = Math.max(minAxis, size.width * PRESET_3D_PIXEL_TO_WORLD);
+  const y = Math.max(minAxis, size.height * PRESET_3D_PIXEL_TO_WORLD);
+  const z = Math.max(0.14, Math.min(size.width, size.height) * PRESET_3D_PIXEL_TO_WORLD * 0.42);
+
+  return { x, y, z };
+}
 
 export function defaultLineEndpoints(width: number, height: number) {
   return {
