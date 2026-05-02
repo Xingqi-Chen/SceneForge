@@ -48,6 +48,7 @@ type PoseControlsProps = {
   pose: StickFigurePoseV1;
   rootGroupRef: RefObject<Group | null>;
   setOrbitEnabled?: (enabled: boolean) => void;
+  shouldIgnorePointerDown?: (event: ThreeEvent<PointerEvent>) => boolean;
 };
 
 type DragMode = "plane" | "depth";
@@ -62,7 +63,13 @@ type DragSession = {
   viewportRect: { left: number; top: number; width: number; height: number };
 };
 
-export function PoseControls({ character, pose, rootGroupRef, setOrbitEnabled }: PoseControlsProps) {
+export function PoseControls({
+  character,
+  pose,
+  rootGroupRef,
+  setOrbitEnabled,
+  shouldIgnorePointerDown,
+}: PoseControlsProps) {
   const dragControlRef = useRef<StickDragControlId | null>(null);
   const dragSessionRef = useRef<DragSession | null>(null);
   const listenersRef = useRef<{ move: (ev: PointerEvent) => void; up: (ev: PointerEvent) => void } | null>(null);
@@ -196,6 +203,9 @@ export function PoseControls({ character, pose, rootGroupRef, setOrbitEnabled }:
       if (event.button !== 0) {
         return;
       }
+      if (shouldIgnorePointerDown?.(event)) {
+        return;
+      }
       event.stopPropagation();
       selectCharacter(character.id);
       selectBodyPart(character.id, controlToBodyPart(controlId));
@@ -275,32 +285,42 @@ export function PoseControls({ character, pose, rootGroupRef, setOrbitEnabled }:
         t.setPointerCapture(event.pointerId);
       }
     },
-    [applyPointer, camera, character.id, endDrag, gl.domElement, rootGroupRef, selectBodyPart, selectCharacter, setOrbitEnabled],
+    [
+      applyPointer,
+      camera,
+      character.id,
+      endDrag,
+      gl.domElement,
+      rootGroupRef,
+      selectBodyPart,
+      selectCharacter,
+      setOrbitEnabled,
+      shouldIgnorePointerDown,
+    ],
   );
 
   const j = pose.joints;
-  const pad = 0.11;
+  const controls = [
+    ["pelvis", j.pelvis, 0.13],
+    ["chest", j.chest, 0.12],
+    ["head", j.head, 0.12],
+    ["leftHand", j.leftHand, 0.085],
+    ["rightHand", j.rightHand, 0.085],
+    ["leftFoot", j.leftFoot, 0.095],
+    ["rightFoot", j.rightFoot, 0.095],
+  ] as const;
 
   return (
     <>
-      {(
-        [
-          ["pelvis", j.pelvis, 0.1],
-          ["chest", j.chest, 0.09],
-          ["head", j.head, 0.1],
-          ["leftHand", j.leftHand, 0.09],
-          ["rightHand", j.rightHand, 0.09],
-          ["leftFoot", j.leftFoot, 0.09],
-          ["rightFoot", j.rightFoot, 0.09],
-        ] as const
-      ).map(([id, pos, r]) => (
+      {controls.map(([id, pos, hitRadius]) => (
         <mesh
           key={id}
+          onClick={(e) => e.stopPropagation()}
           onPointerDown={(e) => onControlPointerDown(id, e)}
           position={[pos.x, pos.y, pos.z]}
           visible={false}
         >
-          <sphereGeometry args={[r + pad, 12, 12]} />
+          <sphereGeometry args={[hitRadius, 12, 12]} />
           <meshBasicMaterial depthWrite={false} opacity={0} transparent />
         </mesh>
       ))}

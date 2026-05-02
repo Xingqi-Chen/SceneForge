@@ -79,6 +79,7 @@ export function CharacterStickFigure({
   onOpenContextMenu,
   selected,
   selectedBodyPartId,
+  shouldIgnorePoseControlPointerDown,
   setOrbitEnabled,
 }: {
   character: CharacterSkeleton;
@@ -87,6 +88,7 @@ export function CharacterStickFigure({
   onOpenContextMenu?: (clientX: number, clientY: number) => void;
   selected: boolean;
   selectedBodyPartId?: BodyPartId;
+  shouldIgnorePoseControlPointerDown?: (event: ThreeEvent<PointerEvent>) => boolean;
   setOrbitEnabled?: (enabled: boolean) => void;
 }) {
   const rootGroupRef = useRef<Group | null>(null);
@@ -256,7 +258,13 @@ export function CharacterStickFigure({
           <meshBasicMaterial opacity={0} transparent />
         </mesh>
       </group>
-      <PoseControls character={character} pose={pose} rootGroupRef={rootGroupRef} setOrbitEnabled={setOrbitEnabled} />
+      <PoseControls
+        character={character}
+        pose={pose}
+        rootGroupRef={rootGroupRef}
+        setOrbitEnabled={setOrbitEnabled}
+        shouldIgnorePointerDown={shouldIgnorePoseControlPointerDown}
+      />
       {focusWholeCharacter ? <StickSelectionHalo maxY={bounds.maxY} minY={bounds.minY} /> : null}
       {focusWholeCharacter ? (
         <Html center distanceFactor={14} position={[0, bounds.maxY + 0.22, 0]} zIndexRange={[40, 0]}>

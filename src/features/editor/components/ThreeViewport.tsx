@@ -2,6 +2,7 @@
 
 import {
   Component,
+  forwardRef,
   useCallback,
   useEffect,
   useMemo,
@@ -21,8 +22,8 @@ import {
   PerspectiveCamera,
   TransformControls,
 } from "@react-three/drei";
-import { MathUtils, WebGLRenderer, type Group } from "three";
-import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
+import { MathUtils, Raycaster, WebGLRenderer, type Group, type Object3D } from "three";
+import type { OrbitControls as OrbitControlsImpl, TransformControls as TransformControlsImpl } from "three-stdlib";
 
 import { Trash2 } from "lucide-react";
 
@@ -43,20 +44,22 @@ const canvasGlProps = { preserveDrawingBuffer: true };
  * drei TransformControls 在拖拽时会关掉默认 OrbitControls；若控件在 dragging 卸载（重叠物体抢点击导致换选、Strict Mode 等），
  * detach() 不会触发 dragging-changed(false)，轨道会一直禁用。卸载时强制恢复。
  */
-function TransformControlsWithOrbitRestore(props: ComponentProps<typeof TransformControls>) {
-  const defaultControls = useThree((state) => state.controls);
+const TransformControlsWithOrbitRestore = forwardRef<TransformControlsImpl, ComponentProps<typeof TransformControls>>(
+  function TransformControlsWithOrbitRestore(props, ref) {
+    const defaultControls = useThree((state) => state.controls);
 
-  useEffect(() => {
-    return () => {
-      const ctrl = defaultControls as { enabled?: boolean } | undefined;
-      if (ctrl && typeof ctrl.enabled === "boolean") {
-        ctrl.enabled = true;
-      }
-    };
-  }, [defaultControls]);
+    useEffect(() => {
+      return () => {
+        const ctrl = defaultControls as { enabled?: boolean } | undefined;
+        if (ctrl && typeof ctrl.enabled === "boolean") {
+          ctrl.enabled = true;
+        }
+      };
+    }, [defaultControls]);
 
-  return <TransformControls {...props} />;
-}
+    return <TransformControls ref={ref} {...props} />;
+  },
+);
 
 type WebGLStatus = "checking" | "available" | "unavailable";
 type TransformMode = "translate" | "rotate" | "scale";
@@ -75,6 +78,30 @@ const transformModeShortcuts: Record<string, TransformMode> = {
   Numpad2: "rotate",
   Numpad3: "scale",
 };
+
+type TransformControlsPickerHost = {
+  gizmo?: {
+    picker?: Partial<Record<TransformMode, Object3D>>;
+  };
+};
+
+function hasTransformControlsPickerHit(
+  event: ThreeEvent<PointerEvent>,
+  controls: TransformControlsImpl | null,
+  mode: TransformMode,
+) {
+  const picker = (controls as unknown as TransformControlsPickerHost | null)?.gizmo?.picker?.[mode];
+
+  if (!picker) {
+    return false;
+  }
+
+  const raycaster = new Raycaster();
+  raycaster.ray.copy(event.ray);
+  raycaster.camera = event.camera;
+
+  return raycaster.intersectObject(picker, true).length > 0;
+}
 
 function isWebGLContextError(value: unknown) {
   const message =
@@ -474,11 +501,17 @@ function TransformableCharacterMannequin({
   transformGizmoEnabled: boolean;
 }) {
   const groupRef = useRef<Group | null>(null);
+  const transformControlsRef = useRef<TransformControlsImpl | null>(null);
   const [controlObject, setControlObject] = useState<Group | null>(null);
   const setGroupRef = useCallback((group: Group | null) => {
     groupRef.current = group;
     setControlObject(group);
   }, []);
+  const shouldIgnorePoseControlPointerDown = useCallback(
+    (event: ThreeEvent<PointerEvent>) =>
+      transformGizmoEnabled && hasTransformControlsPickerHit(event, transformControlsRef.current, mode),
+    [mode, transformGizmoEnabled],
+  );
 
   if (!selected) {
     return (
@@ -500,6 +533,7 @@ function TransformableCharacterMannequin({
         groupRef={setGroupRef}
         selectedBodyPartId={selectedBodyPartId}
         selected
+        shouldIgnorePoseControlPointerDown={shouldIgnorePoseControlPointerDown}
         setOrbitEnabled={setOrbitEnabled}
         onCloseContextMenu={onCloseContextMenu}
         onOpenContextMenu={onOpenContextMenu}
@@ -509,6 +543,7 @@ function TransformableCharacterMannequin({
         mode={mode}
         object={controlObject ?? undefined}
         onMouseUp={() => onTransformEnd(character, groupRef.current)}
+        ref={transformControlsRef}
         size={0.82}
         space="world"
       />
