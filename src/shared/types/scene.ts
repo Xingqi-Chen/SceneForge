@@ -1,3 +1,5 @@
+import type { StickFigurePoseV1 } from "./stick-figure-pose";
+
 export type Vector2 = {
   x: number;
   y: number;
@@ -211,9 +213,11 @@ export type CharacterSkeleton = {
   joints: Record<JointId, Vector2>;
   /**
    * 3D 低模人体姿态：x/y 与 2D `joints` 同创作平面语义；`z` 为人体根局部空间深度（米），与 2D 独立。
-   * 未设置时使用编辑器内置默认 T 型姿态，不会随 2D `joints` 变化。
+   * 旧版 mannequin；新项目使用 `stickFigurePose3D`。加载时若仅有此项会迁移为 stick pose。
    */
   joints3D?: Record<JointId, Vector3>;
+  /** 3D 火柴人 / 关节人姿态（根局部米、Y 上），含 IK 解算后的全关节位置。 */
+  stickFigurePose3D?: StickFigurePoseV1;
   /**
    * 头部相对颈关节（`neck`）的欧拉角，单位度，旋转顺序 XYZ，与 3D 根节点 `transform3D.rotation` 约定一致。
    * 仅影响 3D 低模头部网格；未设置视为 0,0,0。

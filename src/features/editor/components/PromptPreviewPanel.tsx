@@ -9,6 +9,10 @@ import { generatePrompt } from "@/features/prompt-engine";
 import { inferSceneLayoutConstraints } from "@/features/prompt-engine/spatial-relations";
 import { getLlmProxyErrorMessage, isLlmChatResponse } from "@/features/llm";
 import type { SceneForgeProject } from "@/shared/types";
+import { characterAppearsInThreeViewport } from "@/shared/utils/character-space";
+
+import { getCharacterStickFigurePose } from "@/features/editor/stick-figure-3d/get-character-stick-pose";
+import { stickFigurePoseToPromptSnippet } from "@/features/editor/stick-figure-3d/PromptExporter";
 
 type AiGenerationStatus = "idle" | "loading" | "success" | "error";
 
@@ -71,7 +75,10 @@ function getCharacterJointPosition(
   };
 }
 
-function summarizeCharacterPoseForAi(character: SceneForgeProject["scene"]["characters"][number]) {
+function summarizeCharacterPoseForAi(
+  character: SceneForgeProject["scene"]["characters"][number],
+  scene: SceneForgeProject["scene"],
+) {
   const joints = Object.entries(character.joints)
     .map(([jointId, position]) => `${jointId}: (${position.x},${position.y})`)
     .join("; ");
@@ -80,13 +87,19 @@ function summarizeCharacterPoseForAi(character: SceneForgeProject["scene"]["char
     .map((bodyPart) => `${bodyPart.label}: ${formatTagsForAi(bodyPart.promptTags) || "no prompt tags"}`)
     .join("; ");
 
-  return [
+  const lines = [
     `${character.name}: ${character.description || "character skeleton"}`,
     `Character origin: x=${character.position.x}, y=${character.position.y}, rotation=${character.rotation ?? 0}, scaleX=${character.scaleX ?? 1}, scaleY=${character.scaleY ?? 1}`,
     `Character prompt tags: ${formatTagsForAi(character.promptTags) || "none"}`,
     `Skeleton joints (local space, for pose inference only — do not quote coordinates in output): ${joints}`,
     `Body parts and local tags: ${bodyParts || "none"}`,
-  ].join("\n");
+  ];
+  if (scene.mode === "3d" && characterAppearsInThreeViewport(character)) {
+    const pose = getCharacterStickFigurePose(character);
+    lines.push(`3D stick pose hint: ${stickFigurePoseToPromptSnippet(pose)}`);
+  }
+
+  return lines.join("\n");
 }
 
 function summarizeObjectCharacterRelations(project: SceneForgeProject) {
@@ -137,7 +150,7 @@ function summarizeSceneForAi(project: SceneForgeProject, includeHardLayoutConstr
     );
   const characters = scene.characters
     .filter((character) => character.includeInPrompt)
-    .map(summarizeCharacterPoseForAi);
+    .map((character) => summarizeCharacterPoseForAi(character, scene));
   const objectCharacterRelations = summarizeObjectCharacterRelations(project);
 
   return [

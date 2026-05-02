@@ -1,9 +1,10 @@
 "use client";
 
 import { MousePointer2 } from "lucide-react";
-import { useState, type ChangeEvent, type ReactNode } from "react";
+import { useRef, useState, type ChangeEvent, type ReactNode } from "react";
 
-import { CHARACTER_3D_POSE_PRESETS } from "@/features/editor/character-3d-pose-presets";
+import { STICK_FIGURE_POSE_PRESETS } from "@/features/editor/stick-figure-3d/PosePresets";
+import { exportStickPoseJsonString, importStickPoseFromJsonString } from "@/features/editor/stick-figure-3d/stick-pose-json";
 import { defaultLineEndpoints, defaultPolygonPoints } from "@/features/editor/preset-scene-objects";
 import { useEditorStore } from "@/features/editor/store/editor-store";
 import type {
@@ -145,6 +146,7 @@ const canvasSizes: Record<CanvasAspectRatio, { width: number; height: number }> 
 };
 
 export function ObjectPropertiesPanel() {
+  const stickPoseFileInputRef = useRef<HTMLInputElement>(null);
   const {
     project,
     selection,
@@ -580,20 +582,62 @@ export function ObjectPropertiesPanel() {
               <div>
                 <div className="text-xs font-semibold text-indigo-700">3D 人体</div>
                 <p className="mt-1 text-[11px] leading-relaxed text-indigo-700/80">
-                  调整低模人体在 3D 舞台中的根位置、朝向和整体比例。拖拽关节球可在正面调整肢体（默认）；按住 Shift 拖拽同一关节可在深度方向（局部 Z）微调；选中头部后可在下方微调头部转动，或在视口按住 Alt 在头部拖拽。工具栏「锁肢长」或下方选项可锁死四肢骨段长度，拖拽肘/膝等时仅绕对端摆动。与 2D 画布的骨骼拖拽彼此独立。
+                  调整火柴人在 3D 舞台中的根位置、朝向和整体比例。拖拽骨盆、胸、头与手脚的 IK
+                  控制点摆姿（默认在正面平面）；按住 Shift 可在深度方向（局部 Z）微调同一控制点。选中头部后可在下方微调头部转动，或在视口按住 Alt
+                  在头部拖拽。四肢骨长由 IK 固定、不会拉伸。与 2D 画布的骨骼拖拽彼此独立。
                 </p>
               </div>
-              <label className="flex cursor-pointer items-center gap-2 rounded-md border border-indigo-200/80 bg-white px-2.5 py-2 text-[11px] font-medium text-indigo-900 shadow-sm">
-                <input
-                  checked={Boolean(selectedCharacter.limbLengthLocked3D)}
-                  className="h-4 w-4 shrink-0 rounded border-indigo-300 text-indigo-600 focus:ring-indigo-500"
-                  onChange={(event) =>
-                    updateSelectedCharacter({ limbLengthLocked3D: event.target.checked })
-                  }
-                  type="checkbox"
-                />
-                <span>锁死四肢骨长（拖拽肩/肘/腕、膝/踝链关节时保持骨段长度）</span>
-              </label>
+              <div className="space-y-1.5">
+                <FieldLabel>姿态 JSON</FieldLabel>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    className="rounded-md border border-indigo-200/80 bg-white px-2.5 py-1.5 text-[11px] font-medium text-indigo-800 shadow-sm transition-colors hover:bg-indigo-50/80"
+                    onClick={() => {
+                      if (!selectedCharacter) {
+                        return;
+                      }
+                      const blob = new Blob([exportStickPoseJsonString(selectedCharacter)], {
+                        type: "application/json",
+                      });
+                      const url = URL.createObjectURL(blob);
+                      const a = document.createElement("a");
+                      a.href = url;
+                      a.download = `${selectedCharacter.name || "pose"}-stick-pose.json`;
+                      a.click();
+                      URL.revokeObjectURL(url);
+                    }}
+                    type="button"
+                  >
+                    导出姿态 JSON
+                  </button>
+                  <button
+                    className="rounded-md border border-indigo-200/80 bg-white px-2.5 py-1.5 text-[11px] font-medium text-indigo-800 shadow-sm transition-colors hover:bg-indigo-50/80"
+                    onClick={() => stickPoseFileInputRef.current?.click()}
+                    type="button"
+                  >
+                    导入姿态 JSON
+                  </button>
+                  <input
+                    accept="application/json,.json"
+                    className="hidden"
+                    onChange={async (event) => {
+                      const file = event.target.files?.[0];
+                      event.target.value = "";
+                      if (!file || !selectedCharacter) {
+                        return;
+                      }
+                      const text = await file.text();
+                      const pose = importStickPoseFromJsonString(text);
+                      if (!pose) {
+                        return;
+                      }
+                      updateSelectedCharacter({ stickFigurePose3D: pose });
+                    }}
+                    ref={stickPoseFileInputRef}
+                    type="file"
+                  />
+                </div>
+              </div>
               <div className="space-y-1.5">
                 <FieldLabel>位置</FieldLabel>
                 <Vector3Fields
@@ -621,7 +665,7 @@ export function ObjectPropertiesPanel() {
               <div className="space-y-1.5">
                 <FieldLabel>姿态预设</FieldLabel>
                 <div className="grid max-h-52 grid-cols-2 gap-1.5 overflow-y-auto overscroll-contain pr-0.5">
-                  {CHARACTER_3D_POSE_PRESETS.map((preset) => (
+                  {STICK_FIGURE_POSE_PRESETS.map((preset) => (
                     <button
                       className="rounded-md border border-indigo-200/80 bg-white px-2 py-1.5 text-left text-[11px] font-medium text-indigo-800 shadow-sm transition-colors hover:border-indigo-300 hover:bg-indigo-50/80"
                       key={preset.id}

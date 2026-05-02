@@ -43,16 +43,19 @@ import {
   defaultPolygonPoints,
   presetSceneObject3DScale,
 } from "@/features/editor/preset-scene-objects";
-import { getCharacter3DPosePresetById } from "@/features/editor/character-3d-pose-presets";
-import { snapCharacterTransformToMannequinGround } from "@/features/editor/character-mannequin-pose";
+import { getStickFigurePosePresetById } from "@/features/editor/stick-figure-3d/PosePresets";
+import { snapCharacterTransformToStickFigureGround } from "@/features/editor/stick-figure-3d/snap-stick-figure-ground";
+import { cloneStickFigurePose } from "@/features/editor/stick-figure-3d/stick-figure-pose-io";
+import { getCharacterStickFigurePose } from "@/features/editor/stick-figure-3d/get-character-stick-pose";
+import { mergeTargets, solveStickFigurePose, stickPoseToTargets, type StickFigureSolveTargets } from "@/features/editor/stick-figure-3d/solveStickFigurePose";
 
 import {
   DEFAULT_PROMPT_CATEGORY_BINDINGS,
   DEFAULT_PROMPT_SUBCATEGORY_BINDINGS,
   createDefaultPromptBindingState,
+  createDefaultStickFigurePoseV1,
   createDefaultProject,
   defaultCharacter,
-  defaultCharacterMannequinJoints3D,
 } from "./defaults";
 import {
   applyPromptBindingsToProject,
@@ -146,8 +149,14 @@ type EditorState = {
   /** 3D 模式：双击人物落地（根位置 y 对齐到地面）。 */
   snapCharacterToGround: (characterId: string) => void;
   updateCharacterJoint: (id: string, jointId: JointId, position: Vector2) => void;
-  /** 3D 低模姿态：更新 `joints3D`（与 2D `joints` 独立）。首次写入时从默认平面克隆再应用。 */
-  updateCharacterJoint3D: (id: string, jointId: JointId, position: Vector3) => void;
+  /** 3D 火柴人：按 IK 控制点增量更新姿态（根局部米）。 */
+  updateCharacterStickFigureTargets: (id: string, patch: Partial<StickFigureSolveTargets>) => void;
+  /**
+   * 与 `endStickFigurePoseDrag` 配对：在 IK 控制点按下时调用，拖拽期间不往 undo 栈逐帧压快照，
+   * 松手后一次入栈，避免卡顿与栈膨胀。
+   */
+  beginStickFigurePoseDrag: () => void;
+  endStickFigurePoseDrag: () => void;
   /** 3D 模式：应用内置人体姿态预设，并在人物参与 3D 舞台时自动对齐脚底落点。 */
   applyCharacter3DPosePreset: (characterId: string, presetId: string) => void;
   addPromptTag: (target: PromptTagTarget, tag: PromptTag) => void;
@@ -184,6 +193,10 @@ function touchProject(project: SceneForgeProject): SceneForgeProject {
 
 const maxUndoSteps = 50;
 let suppressUndoHistory = false;
+
+/** When set, `updateCharacterStickFigureTargets` runs without pushing undo until `endStickFigurePoseDrag`. */
+let stickFigurePoseDragUndoBaseline: EditorHistorySnapshot | null = null;
+let stickFigurePoseDragSuppressUndo = false;
 
 function withoutUndoHistory<T>(operation: () => T): T {
   suppressUndoHistory = true;
@@ -335,6 +348,9 @@ function createCharacter(
     promptTags: defaultCharacter.promptTags.map(clonePromptTag),
     promptCategoryBindings: [...bindings.character.promptCategoryBindings],
     promptSubcategoryBindings: [...bindings.character.promptSubcategoryBindings],
+    ...(characterSpace === "3d"
+      ? { stickFigurePose3D: cloneStickFigurePose(createDefaultStickFigurePoseV1()) }
+      : {}),
   };
 }
 
@@ -1051,8 +1067,8 @@ export const useEditorStore = create<EditorState>((set) => ({
           return character;
         }
 
-        const transform = snapCharacterTransformToMannequinGround(
-          character,
+        const transform = snapCharacterTransformToStickFigureGround(
+          getCharacterStickFigurePose(character),
           getCharacter3DTransform(character),
         );
         changed = true;
@@ -1797,7 +1813,7 @@ export const useEditorStore = create<EditorState>((set) => ({
         },
       }),
     })),
-  updateCharacterJoint3D: (id, jointId, position) =>
+  updateCharacterStickFigureTargets: (id, patch) =>
     set((state) => ({
       project: touchProject({
         ...state.project,
@@ -1807,33 +1823,51 @@ export const useEditorStore = create<EditorState>((set) => ({
             if (character.id !== id) {
               return character;
             }
-
-            const joints3D = Object.fromEntries(
-              (Object.keys(defaultCharacterMannequinJoints3D) as JointId[]).map((key) => {
-                if (key === jointId) {
-                  return [key, { ...position }];
-                }
-
-                const existing = character.joints3D?.[key];
-
-                return [
-                  key,
-                  existing ? { ...existing } : { ...defaultCharacterMannequinJoints3D[key] },
-                ];
-              }),
-            ) as NonNullable<CharacterSkeleton["joints3D"]>;
-
+            const prev = getCharacterStickFigurePose(character);
+            const targets = mergeTargets(stickPoseToTargets(prev), patch);
+            const poles = character.stickFigurePose3D?.poles ?? prev.poles;
+            const pose = solveStickFigurePose(targets, prev, poles);
             return {
               ...character,
-              joints3D,
+              stickFigurePose3D: cloneStickFigurePose(pose),
             };
           }),
         },
       }),
     })),
+  beginStickFigurePoseDrag: () => {
+    if (stickFigurePoseDragSuppressUndo) {
+      return;
+    }
+    const s = useEditorStore.getState();
+    stickFigurePoseDragUndoBaseline = {
+      project: s.project,
+      promptBindings: s.promptBindings,
+      selection: s.selection,
+      aiGeneratedPrompt: s.aiGeneratedPrompt,
+    };
+    stickFigurePoseDragSuppressUndo = true;
+  },
+  endStickFigurePoseDrag: () => {
+    stickFigurePoseDragSuppressUndo = false;
+    const baseline = stickFigurePoseDragUndoBaseline;
+    stickFigurePoseDragUndoBaseline = null;
+    if (!baseline) {
+      return;
+    }
+    const cur = useEditorStore.getState();
+    if (cur.project === baseline.project) {
+      return;
+    }
+    withoutUndoHistory(() => {
+      useEditorStore.setState((state) => ({
+        undoStack: [...state.undoStack, baseline].slice(-maxUndoSteps),
+      }));
+    });
+  },
   applyCharacter3DPosePreset: (characterId, presetId) =>
     set((state) => {
-      const preset = getCharacter3DPosePresetById(presetId);
+      const preset = getStickFigurePosePresetById(presetId);
       if (!preset) {
         console.warn("[SceneForge] [editor] unknown 3D pose preset", presetId);
 
@@ -1846,15 +1880,14 @@ export const useEditorStore = create<EditorState>((set) => ({
           return character;
         }
 
-        const built = preset.buildJoints3D();
-        const joints3D = Object.fromEntries(
-          (Object.keys(built) as JointId[]).map((key) => [key, { ...built[key] }]),
-        ) as NonNullable<CharacterSkeleton["joints3D"]>;
-
-        const withPose: CharacterSkeleton = { ...character, joints3D };
+        const stickFigurePose3D = cloneStickFigurePose(preset.buildPose());
+        const withPose: CharacterSkeleton = { ...character, stickFigurePose3D };
 
         if (mode === "3d" && characterAppearsInThreeViewport(withPose)) {
-          const snapped = snapCharacterTransformToMannequinGround(withPose, getCharacter3DTransform(character));
+          const snapped = snapCharacterTransformToStickFigureGround(
+            stickFigurePose3D,
+            getCharacter3DTransform(character),
+          );
 
           return {
             ...withPose,
@@ -2371,7 +2404,7 @@ export const useEditorStore = create<EditorState>((set) => ({
 }));
 
 useEditorStore.subscribe((state, previousState) => {
-  if (suppressUndoHistory || state.project === previousState.project) {
+  if (suppressUndoHistory || stickFigurePoseDragSuppressUndo || state.project === previousState.project) {
     return;
   }
 

@@ -1,8 +1,13 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
-import type { PromptTag } from "@/shared/types";
+import type { CharacterSkeleton, PromptTag } from "@/shared/types";
 
-import { createDefaultProject, defaultCharacterMannequinJointPlane } from "./defaults";
+import { cloneStickFigurePose } from "@/features/editor/stick-figure-3d/stick-figure-pose-io";
+import { getCharacterStickFigurePose } from "@/features/editor/stick-figure-3d/get-character-stick-pose";
+import { mergeTargets, solveStickFigurePose, stickPoseToTargets } from "@/features/editor/stick-figure-3d/solveStickFigurePose";
+import { stickFigureBoundsMinY } from "@/features/editor/stick-figure-3d/snap-stick-figure-ground";
+
+import { createDefaultProject, createDefaultStickFigurePoseV1 } from "./defaults";
 import { useEditorStore } from "./editor-store";
 
 const testTag: PromptTag = {
@@ -12,6 +17,12 @@ const testTag: PromptTag = {
   category: "lighting",
   weight: { enabled: false, value: 1 },
 };
+
+function stickGroundSnapY(character: CharacterSkeleton): number {
+  const pose = getCharacterStickFigurePose(character);
+  const scaledMinY = stickFigureBoundsMinY(pose) * (character.transform3D?.scale.y ?? 1);
+  return Math.abs(scaledMinY) < 0.01 ? 0 : Number((-scaledMinY).toFixed(3));
+}
 
 describe("editor store", () => {
   beforeEach(() => {
@@ -668,9 +679,10 @@ describe("editor store", () => {
 
     useEditorStore.getState().snapCharacterToGround(character.id);
 
-    expect(useEditorStore.getState().project.scene.characters[0].transform3D?.position).toEqual({
+    const snapped = useEditorStore.getState().project.scene.characters[0];
+    expect(snapped.transform3D?.position).toEqual({
       x: 2,
-      y: 0,
+      y: stickGroundSnapY(snapped),
       z: -1.5,
     });
 
@@ -680,7 +692,7 @@ describe("editor store", () => {
     expect(duplicatedCharacter?.characterSpace).toBe("3d");
     expect(duplicatedCharacter?.transform3D?.position).toEqual({
       x: 2.6,
-      y: 0,
+      y: stickGroundSnapY(duplicatedCharacter!),
       z: -0.9,
     });
     expect(useEditorStore.getState().selection).toEqual({
@@ -710,21 +722,60 @@ describe("editor store", () => {
     expect(useEditorStore.getState().selection).toEqual({ kind: "scene" });
   });
 
-  it("snaps posed 3D characters by their mannequin bounds", () => {
+  it("snaps posed 3D characters by their stick figure bounds", () => {
     useEditorStore.getState().setSceneMode("3d");
     useEditorStore.getState().addCharacter();
 
     const character = useEditorStore.getState().project.scene.characters[0];
+    const base = createDefaultStickFigurePoseV1();
+    const targets = mergeTargets(stickPoseToTargets(base), {
+      leftFoot: { ...base.joints.leftFoot, y: -0.18 },
+      rightFoot: { ...base.joints.rightFoot, y: -0.18 },
+    });
+    const lowPose = solveStickFigurePose(targets, base, undefined);
     useEditorStore.getState().updateCharacter(character.id, {
-      joints3D: {
-        ...defaultCharacterMannequinJointPlane,
-        leftAnkle: { x: -32, y: 360, z: 0.04 },
-        rightAnkle: { x: 32, y: 360, z: 0.04 },
-      },
+      stickFigurePose3D: cloneStickFigurePose(lowPose),
     });
     useEditorStore.getState().snapCharacterToGround(character.id);
 
-    expect(useEditorStore.getState().project.scene.characters[0].transform3D?.position.y).toBeGreaterThan(0);
+    const snapped = useEditorStore.getState().project.scene.characters[0];
+    expect(snapped.transform3D?.position.y ?? 0).toBeCloseTo(stickGroundSnapY(snapped), 2);
+  });
+
+  it("coalesces 3D stick pose drag into a single undo stack entry", () => {
+    useEditorStore.getState().setSceneMode("3d");
+    useEditorStore.getState().addCharacter();
+    const characterId = useEditorStore.getState().project.scene.characters[0].id;
+    const hand = getCharacterStickFigurePose(useEditorStore.getState().project.scene.characters[0]).joints.leftHand;
+    const undoLenBeforeDrag = useEditorStore.getState().undoStack.length;
+
+    useEditorStore.getState().beginStickFigurePoseDrag();
+    useEditorStore.getState().updateCharacterStickFigureTargets(characterId, {
+      leftHand: { ...hand, x: hand.x + 0.02 },
+    });
+    useEditorStore.getState().updateCharacterStickFigureTargets(characterId, {
+      leftHand: { ...hand, x: hand.x + 0.05 },
+    });
+    useEditorStore.getState().endStickFigurePoseDrag();
+
+    expect(useEditorStore.getState().undoStack.length).toBe(undoLenBeforeDrag + 1);
+  });
+
+  it("records separate undo entries for stick pose updates without drag coalesce", () => {
+    useEditorStore.getState().setSceneMode("3d");
+    useEditorStore.getState().addCharacter();
+    const characterId = useEditorStore.getState().project.scene.characters[0].id;
+    const hand = getCharacterStickFigurePose(useEditorStore.getState().project.scene.characters[0]).joints.leftHand;
+    const undoLenBefore = useEditorStore.getState().undoStack.length;
+
+    useEditorStore.getState().updateCharacterStickFigureTargets(characterId, {
+      leftHand: { ...hand, x: hand.x + 0.02 },
+    });
+    useEditorStore.getState().updateCharacterStickFigureTargets(characterId, {
+      leftHand: { ...hand, x: hand.x + 0.05 },
+    });
+
+    expect(useEditorStore.getState().undoStack.length).toBe(undoLenBefore + 2);
   });
 
   it("adds and removes prompt tags on objects and body parts", () => {

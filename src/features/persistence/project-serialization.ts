@@ -20,10 +20,13 @@ import {
   DEFAULT_PROMPT_CATEGORY_BINDINGS,
   DEFAULT_PROMPT_SUBCATEGORY_BINDINGS,
   createDefaultPromptBindingState,
+  createDefaultStickFigurePoseV1,
   defaultCharacter,
   defaultCharacterMannequinJoints3D,
   defaultScene,
 } from "@/features/editor/store/defaults";
+import { migrateAuthoringJoints3DToStickFigure } from "@/features/editor/stick-figure-3d/migrate-legacy-joints3d";
+import { sanitizeStickFigurePoseV1 } from "@/features/editor/stick-figure-3d/stick-figure-pose-io";
 import { defaultLineEndpoints, defaultPolygonPoints } from "@/features/editor/preset-scene-objects";
 import {
   PROMPT_TAG_CATEGORY_ORDER,
@@ -602,6 +605,19 @@ function sanitizeCharacter(raw: unknown): CharacterSkeleton | null {
   const limbLengthLocked3D =
     typeof raw.limbLengthLocked3D === "boolean" ? raw.limbLengthLocked3D : undefined;
 
+  const defaultStick = createDefaultStickFigurePoseV1();
+  const stickRaw = raw.stickFigurePose3D;
+  let stickFigurePose3D: CharacterSkeleton["stickFigurePose3D"] | undefined;
+  let joints3DOut: CharacterSkeleton["joints3D"] | undefined = joints3D;
+
+  if (isRecord(stickRaw) && stickRaw.version === 1) {
+    stickFigurePose3D = sanitizeStickFigurePoseV1(stickRaw, defaultStick);
+    joints3DOut = undefined;
+  } else if (joints3D) {
+    stickFigurePose3D = migrateAuthoringJoints3DToStickFigure(joints3D);
+    joints3DOut = undefined;
+  }
+
   return {
     id: raw.id,
     name: typeof raw.name === "string" ? raw.name : "人物",
@@ -614,7 +630,8 @@ function sanitizeCharacter(raw: unknown): CharacterSkeleton | null {
     scaleX: typeof raw.scaleX === "number" && Number.isFinite(raw.scaleX) ? raw.scaleX : undefined,
     scaleY: typeof raw.scaleY === "number" && Number.isFinite(raw.scaleY) ? raw.scaleY : undefined,
     joints,
-    ...(joints3D ? { joints3D } : {}),
+    ...(joints3DOut ? { joints3D: joints3DOut } : {}),
+    ...(stickFigurePose3D ? { stickFigurePose3D } : {}),
     ...(headRotation3D ? { headRotation3D } : {}),
     ...(limbLengthLocked3D !== undefined ? { limbLengthLocked3D } : {}),
     bodyParts,
@@ -960,7 +977,29 @@ export function sanitizeImportedProject(project: SceneForgeProject): SceneForgeP
 }
 
 export function serializeProject(project: SceneForgeProject) {
-  return JSON.stringify(stripSharedPromptStateFromProject(project), null, 2);
+  const stripped = stripSharedPromptStateFromProject(project);
+  return JSON.stringify(
+    {
+      ...stripped,
+      scene: stripLegacyMannequinJoints3DFromScene(stripped.scene),
+    },
+    null,
+    2,
+  );
+}
+
+function stripLegacyMannequinJoints3DFromScene(scene: Scene): Scene {
+  return {
+    ...scene,
+    characters: scene.characters.map((character) => {
+      if (!character.stickFigurePose3D) {
+        return character;
+      }
+      const { joints3D, ...rest } = character;
+      void joints3D;
+      return rest;
+    }),
+  };
 }
 
 export function serializeCanvasExport(project: SceneForgeProject): string {

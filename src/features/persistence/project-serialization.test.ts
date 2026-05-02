@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { createDefaultProject, defaultCharacter } from "@/features/editor/store/defaults";
+import { createDefaultProject, defaultCharacter, defaultCharacterMannequinJoints3D } from "@/features/editor/store/defaults";
 import { serializePromptExport } from "@/features/prompt-engine";
 
 import {
@@ -471,5 +471,29 @@ describe("project serialization", () => {
       rotation: { x: 0, y: 45, z: 0 },
       scale: { x: 1.5, y: 1, z: 1 },
     });
+  });
+
+  it("migrates legacy character joints3D to stickFigurePose3D on import", () => {
+    const base = createDefaultProject();
+    const payload = {
+      ...base,
+      scene: {
+        ...base.scene,
+        characters: [
+          {
+            ...defaultCharacter,
+            id: "char-migrate",
+            name: "迁移",
+            characterSpace: "3d" as const,
+            joints3D: { ...defaultCharacterMannequinJoints3D },
+          },
+        ],
+      },
+    };
+    const imported = importProjectFromJson(JSON.stringify(payload));
+    const ch = imported.scene.characters[0];
+    expect(ch?.stickFigurePose3D?.version).toBe(1);
+    expect(Number.isFinite(ch?.stickFigurePose3D?.joints.pelvis.y)).toBe(true);
+    expect(ch?.joints3D).toBeUndefined();
   });
 });

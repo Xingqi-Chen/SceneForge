@@ -7,8 +7,12 @@ import type {
   PromptBindingState,
   Scene,
   SceneForgeProject,
+  StickFigurePoseV1,
   Vector3,
 } from "@/shared/types";
+
+import { cloneStickFigurePose } from "@/features/editor/stick-figure-3d/stick-figure-pose-io";
+import { migrateAuthoringJoints3DToStickFigure } from "@/features/editor/stick-figure-3d/migrate-legacy-joints3d";
 
 const now = new Date("2026-01-01T00:00:00.000Z").toISOString();
 
@@ -137,6 +141,12 @@ export const defaultCharacterMannequinJoints3D: Record<JointId, Vector3> = Objec
 /** @deprecated 使用 `defaultCharacterMannequinJoints3D`（现为 Vector3）。 */
 export const defaultCharacterMannequinJointPlane = defaultCharacterMannequinJoints3D;
 
+const defaultStickFigurePoseTemplate = migrateAuthoringJoints3DToStickFigure(defaultCharacterMannequinJoints3D);
+
+export function createDefaultStickFigurePoseV1(): StickFigurePoseV1 {
+  return cloneStickFigurePose(defaultStickFigurePoseTemplate);
+}
+
 export const defaultScene: Scene = {
   id: "scene-default",
   name: "SceneForge 画布",
@@ -196,6 +206,9 @@ function cloneCharacter(character: CharacterSkeleton): CharacterSkeleton {
       ? (Object.fromEntries(
           Object.entries(character.joints3D).map(([jointId, position]) => [jointId, { ...position }]),
         ) as CharacterSkeleton["joints3D"])
+      : undefined,
+    stickFigurePose3D: character.stickFigurePose3D
+      ? cloneStickFigurePose(character.stickFigurePose3D)
       : undefined,
     bodyParts: character.bodyParts.map((bodyPart) => ({
       ...bodyPart,
