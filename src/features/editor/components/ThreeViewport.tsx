@@ -549,7 +549,7 @@ const mannequinPalette = {
   selectedClothing: "#7dd3fc",
   selectedJoint: "#38bdf8",
   clothing: "#b8c4d4",
-  /** 骨盆区：略深于腰腹，与 RoundedBox 高光搭配更清晰。 */
+  /** 骨盆区（属性面板等仍可用）。 */
   pelvis: "#5a6a82",
   torsoMid: "#8b9ab0",
   joint: "#6b7c94",
@@ -675,8 +675,15 @@ function mannequinSegmentUsesTorsoSelection(segment: { bodyPartId: BodyPartId; f
   return segment.bodyPartId === "torso" && segment.from === "neck" && segment.to !== "hip";
 }
 
+/** 颈—髋主躯干棍（与锁骨段区分）。 */
+function mannequinSegmentIsTorsoSpine(segment: { bodyPartId: BodyPartId; from: JointId; to: JointId }) {
+  return segment.bodyPartId === "torso" && segment.from === "neck" && segment.to === "hip";
+}
+
 function mannequinCapsuleRadiusForSegment(bodyPartId: BodyPartId): number {
   switch (bodyPartId) {
+    case "torso":
+      return 0.088;
     case "leftThigh":
     case "rightThigh":
       return 0.1;
@@ -974,8 +981,7 @@ function CharacterMannequinMesh({
       window.addEventListener("pointerup", onUp);
       window.addEventListener("pointercancel", onUp);
 
-      applyJointDragFromPointer(event.clientX, event.clientY, jointId);
-
+      /** 不在 pointerdown 上写关节：仅点击时射线与 z=0 交点与当前关节不一致会误更新。 */
       const captureTarget = event.nativeEvent.target;
 
       if (captureTarget instanceof Element && "setPointerCapture" in captureTarget) {
@@ -1052,48 +1058,6 @@ function CharacterMannequinMesh({
         radius={0.07}
         selected={jointDragSelected("neck")}
       />
-      <MannequinRoundedBox
-        args={pose.torso.pelvis.size}
-        color={
-          isPartSelected("torso")
-            ? mannequinPalette.selectedClothing
-            : focusWholeCharacter
-              ? mannequinPalette.selectedJoint
-              : mannequinPalette.pelvis
-        }
-        kind="fabric"
-        onSelect={(event) => handleBodyPartSelect("torso", event)}
-        position={pose.torso.pelvis.position}
-        selected={isPartSelected("torso") || focusWholeCharacter}
-      />
-      <MannequinRoundedBox
-        args={pose.torso.abdomen.size}
-        color={
-          isPartSelected("torso")
-            ? mannequinPalette.selectedClothing
-            : focusWholeCharacter
-              ? mannequinPalette.selectedClothing
-              : mannequinPalette.torsoMid
-        }
-        kind="fabric"
-        onSelect={(event) => handleBodyPartSelect("torso", event)}
-        position={pose.torso.abdomen.position}
-        selected={isPartSelected("torso") || focusWholeCharacter}
-      />
-      <MannequinRoundedBox
-        args={pose.torso.chest.size}
-        color={
-          isPartSelected("torso")
-            ? mannequinPalette.selectedClothing
-            : focusWholeCharacter
-              ? mannequinPalette.selectedClothing
-              : clothingColor
-        }
-        kind="fabric"
-        onSelect={(event) => handleBodyPartSelect("torso", event)}
-        position={pose.torso.chest.position}
-        selected={isPartSelected("torso") || focusWholeCharacter}
-      />
       <MannequinJoint
         color={jointColor}
         jointDrag={{ jointId: "hip", onPointerDown: handleJointPointerDown }}
@@ -1116,47 +1080,50 @@ function CharacterMannequinMesh({
         radius={0.1}
         selected={jointDragSelected("rightShoulder")}
       />
-      {pose.segments
-        .filter(
-          (segment) =>
-            segment.bodyPartId !== "torso" || mannequinSegmentUsesTorsoSelection(segment),
-        )
-        .map((segment) => {
-          const segmentSelected = isPartSelected(
-            mannequinSegmentUsesTorsoSelection(segment) ? "torso" : segment.bodyPartId,
-          );
-          const useClavicleStyle = mannequinSegmentUsesTorsoSelection(segment);
-          const limbRadius = useClavicleStyle ? 0.046 : mannequinCapsuleRadiusForSegment(segment.bodyPartId);
+      {pose.segments.map((segment) => {
+        const segmentSelected = isPartSelected(
+          segment.bodyPartId === "torso" ? "torso" : segment.bodyPartId,
+        );
+        const useClavicleStyle = mannequinSegmentUsesTorsoSelection(segment);
+        const useSpineStyle = mannequinSegmentIsTorsoSpine(segment);
 
-          const segmentKind: MannequinSurfaceKind = useClavicleStyle ? "fabric" : "accent";
+        let limbRadius: number;
+        let segmentKind: MannequinSurfaceKind;
+        let segmentColor: string;
 
-          return (
-            <MannequinCapsuleLimb
-              boneQuaternion={mannequinBoneQuaternion(pose.joints, segment.from, segment.to)}
-              color={
-                segmentSelected
-                  ? useClavicleStyle
-                    ? mannequinPalette.selectedClothing
-                    : mannequinPalette.selectedJoint
-                  : useClavicleStyle
-                    ? mannequinPalette.torsoMid
-                    : jointColor
-              }
-              height={segment.height}
-              key={`${segment.bodyPartId}-${segment.from}-${segment.to}`}
-              kind={segmentKind}
-              onSelect={(event) =>
-                handleBodyPartSelect(
-                  mannequinSegmentUsesTorsoSelection(segment) ? "torso" : segment.bodyPartId,
-                  event,
-                )
-              }
-              position={segment.position}
-              radius={limbRadius}
-              selected={segmentSelected || focusWholeCharacter}
-            />
-          );
-        })}
+        if (useSpineStyle) {
+          limbRadius = mannequinCapsuleRadiusForSegment("torso");
+          segmentKind = "fabric";
+          segmentColor = segmentSelected ? mannequinPalette.selectedClothing : clothingColor;
+        } else if (useClavicleStyle) {
+          limbRadius = 0.046;
+          segmentKind = "fabric";
+          segmentColor = segmentSelected ? mannequinPalette.selectedClothing : mannequinPalette.torsoMid;
+        } else {
+          limbRadius = mannequinCapsuleRadiusForSegment(segment.bodyPartId);
+          segmentKind = "accent";
+          segmentColor = segmentSelected ? mannequinPalette.selectedJoint : jointColor;
+        }
+
+        return (
+          <MannequinCapsuleLimb
+            boneQuaternion={mannequinBoneQuaternion(pose.joints, segment.from, segment.to)}
+            color={segmentColor}
+            height={segment.height}
+            key={`${segment.bodyPartId}-${segment.from}-${segment.to}`}
+            kind={segmentKind}
+            onSelect={(event) =>
+              handleBodyPartSelect(
+                segment.bodyPartId === "torso" ? "torso" : segment.bodyPartId,
+                event,
+              )
+            }
+            position={segment.position}
+            radius={limbRadius}
+            selected={segmentSelected || focusWholeCharacter}
+          />
+        );
+      })}
       <MannequinJoint
         color={jointColor}
         jointDrag={{ jointId: "leftElbow", onPointerDown: handleJointPointerDown }}

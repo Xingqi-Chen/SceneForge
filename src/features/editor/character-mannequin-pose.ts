@@ -170,7 +170,8 @@ export function getCharacterMannequinPose(character: CharacterSkeleton): Charact
   const abdomenD = 0.33;
   const pelvisD = 0.36;
 
-  const footY = Math.min(joints.leftAnkle.y, joints.rightAnkle.y) - 0.025;
+  /** 每只脚单独跟对应踝关节，避免共用 min(踝 Y) 时在拖动一侧踝时另一只脚与小腿脱节。 */
+  const footAnkleDrop = 0.025;
 
   const pose: CharacterMannequinPose = {
     joints,
@@ -199,11 +200,11 @@ export function getCharacterMannequinPose(character: CharacterSkeleton): Charact
     },
     feet: {
       leftFoot: {
-        position: [joints.leftAnkle.x, footY, joints.leftAnkle.z + 0.14],
+        position: [joints.leftAnkle.x, joints.leftAnkle.y - footAnkleDrop, joints.leftAnkle.z + 0.14],
         size: footSize,
       },
       rightFoot: {
-        position: [joints.rightAnkle.x, footY, joints.rightAnkle.z + 0.14],
+        position: [joints.rightAnkle.x, joints.rightAnkle.y - footAnkleDrop, joints.rightAnkle.z + 0.14],
         size: footSize,
       },
     },
