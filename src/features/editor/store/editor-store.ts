@@ -74,13 +74,22 @@ type PromptTagPatch = Partial<Omit<PromptTag, "id" | "weight">> & {
   weight?: Partial<PromptTag["weight"]>;
 };
 
+type EditorHistorySnapshot = {
+  project: SceneForgeProject;
+  promptBindings: PromptBindingState;
+  selection: EditorSelection;
+  aiGeneratedPrompt: string;
+};
+
 type EditorState = {
   project: SceneForgeProject;
   promptBindings: PromptBindingState;
   selection: EditorSelection;
+  undoStack: EditorHistorySnapshot[];
   /** Last successful AI Prompt preview text; cleared when loading another project. */
   aiGeneratedPrompt: string;
   setAiGeneratedPrompt: (prompt: string) => void;
+  undo: () => void;
   setProject: (project: SceneForgeProject) => void;
   resetProject: () => void;
   selectScene: () => void;
@@ -99,7 +108,7 @@ type EditorState = {
   addObject: (input: AddSceneObjectInput) => void;
   updateObject: (id: string, patch: Partial<SceneObject>) => void;
   deleteSelection: () => void;
-  duplicateSelection: () => void;
+  duplicateSelection: (selectionOverride?: EditorSelection) => void;
   bringSelectionForward: () => void;
   sendSelectionBackward: () => void;
   moveSelectionBy: (delta: Vector2) => void;
@@ -141,6 +150,19 @@ function touchProject(project: SceneForgeProject): SceneForgeProject {
     ...project,
     updatedAt: new Date().toISOString(),
   };
+}
+
+const maxUndoSteps = 50;
+let suppressUndoHistory = false;
+
+function withoutUndoHistory<T>(operation: () => T): T {
+  suppressUndoHistory = true;
+
+  try {
+    return operation();
+  } finally {
+    suppressUndoHistory = false;
+  }
 }
 
 function clonePromptTag(tag: PromptTag): PromptTag {
@@ -369,28 +391,50 @@ export const useEditorStore = create<EditorState>((set) => ({
   project: applyPromptBindingsToProject(createDefaultProject(), createDefaultPromptBindingState()),
   promptBindings: createDefaultPromptBindingState(),
   selection: { kind: "scene" },
+  undoStack: [],
   aiGeneratedPrompt: "",
   setAiGeneratedPrompt: (prompt) => set({ aiGeneratedPrompt: prompt }),
+  undo: () =>
+    withoutUndoHistory(() =>
+      set((state) => {
+        const previous = state.undoStack.at(-1);
+
+        if (!previous) {
+          return state;
+        }
+
+        return {
+          project: previous.project,
+          promptBindings: previous.promptBindings,
+          selection: previous.selection,
+          aiGeneratedPrompt: previous.aiGeneratedPrompt,
+          undoStack: state.undoStack.slice(0, -1),
+        };
+      }),
+    ),
   setProject: (project) => {
     const promptBindings = extractPromptBindingsFromProject(project);
 
-    return set({
-      project: applyPromptBindingsToProject(
-        {
-          ...project,
-          settings: {
-            ...project.settings,
-            promptLibraryTags: project.settings.promptLibraryTags ?? [],
-            deletedBuiltInPromptLibraryTagIds:
-              project.settings.deletedBuiltInPromptLibraryTagIds ?? [],
+    return withoutUndoHistory(() =>
+      set({
+        project: applyPromptBindingsToProject(
+          {
+            ...project,
+            settings: {
+              ...project.settings,
+              promptLibraryTags: project.settings.promptLibraryTags ?? [],
+              deletedBuiltInPromptLibraryTagIds:
+                project.settings.deletedBuiltInPromptLibraryTagIds ?? [],
+            },
           },
-        },
+          promptBindings,
+        ),
         promptBindings,
-      ),
-      promptBindings,
-      selection: { kind: "scene" },
-      aiGeneratedPrompt: "",
-    });
+        selection: { kind: "scene" },
+        undoStack: [],
+        aiGeneratedPrompt: "",
+      }),
+    );
   },
   resetProject: () =>
     set((state) => {
@@ -676,10 +720,12 @@ export const useEditorStore = create<EditorState>((set) => ({
 
       return state;
     }),
-  duplicateSelection: () =>
+  duplicateSelection: (selectionOverride) =>
     set((state) => {
-      if (state.selection.kind === "object") {
-        const selectionId = state.selection.id;
+      const selection = selectionOverride ?? state.selection;
+
+      if (selection.kind === "object") {
+        const selectionId = selection.id;
         const selectedObject = state.project.scene.objects.find(
           (object) => object.id === selectionId,
         );
@@ -705,8 +751,8 @@ export const useEditorStore = create<EditorState>((set) => ({
         };
       }
 
-      if (state.selection.kind === "character") {
-        const selectionId = state.selection.id;
+      if (selection.kind === "character") {
+        const selectionId = selection.id;
         const selectedCharacter = state.project.scene.characters.find(
           (character) => character.id === selectionId,
         );
@@ -729,13 +775,13 @@ export const useEditorStore = create<EditorState>((set) => ({
         };
       }
 
-      if (state.selection.kind === "multiple") {
+      if (selection.kind === "multiple") {
         let objects = [...state.project.scene.objects];
         let characters = [...state.project.scene.characters];
         const newObjectIds: string[] = [];
         const newCharacterIds: string[] = [];
 
-        for (const id of state.selection.objectIds) {
+        for (const id of selection.objectIds) {
           const selectedObject = objects.find((object) => object.id === id);
           if (!selectedObject) {
             continue;
@@ -749,7 +795,7 @@ export const useEditorStore = create<EditorState>((set) => ({
           newObjectIds.push(object.id);
         }
 
-        for (const id of state.selection.characterIds) {
+        for (const id of selection.characterIds) {
           const selectedCharacter = characters.find((character) => character.id === id);
           if (!selectedCharacter) {
             continue;
@@ -1588,3 +1634,22 @@ export const useEditorStore = create<EditorState>((set) => ({
     return deleted;
   },
 }));
+
+useEditorStore.subscribe((state, previousState) => {
+  if (suppressUndoHistory || state.project === previousState.project) {
+    return;
+  }
+
+  const snapshot: EditorHistorySnapshot = {
+    project: previousState.project,
+    promptBindings: previousState.promptBindings,
+    selection: previousState.selection,
+    aiGeneratedPrompt: previousState.aiGeneratedPrompt,
+  };
+
+  withoutUndoHistory(() => {
+    useEditorStore.setState({
+      undoStack: [...state.undoStack, snapshot].slice(-maxUndoSteps),
+    });
+  });
+});

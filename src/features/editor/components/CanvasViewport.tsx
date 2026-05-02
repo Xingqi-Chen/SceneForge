@@ -4,7 +4,7 @@ import dynamic from "next/dynamic";
 import { BringToFront, Copy, MoveDown, MoveUp, Trash2, ZoomIn, ZoomOut } from "lucide-react";
 import { useRef, useState, type KeyboardEvent } from "react";
 
-import { useEditorStore } from "@/features/editor/store/editor-store";
+import { type EditorSelection, useEditorStore } from "@/features/editor/store/editor-store";
 import type { Vector2 } from "@/shared/types";
 import { Button } from "@/components/ui/button";
 
@@ -40,30 +40,42 @@ function isEditableTarget(target: EventTarget) {
   return Boolean(element.closest("input, textarea, select, [contenteditable='true']"));
 }
 
+function isCopyableSelection(selection: EditorSelection) {
+  return (
+    selection.kind === "object" ||
+    selection.kind === "character" ||
+    (selection.kind === "multiple" &&
+      (selection.objectIds.length > 0 || selection.characterIds.length > 0))
+  );
+}
+
+function shortcutKey(event: KeyboardEvent<HTMLElement>) {
+  return event.key.toLowerCase();
+}
+
 type CanvasViewportProps = {
   onCanvasCaptureReady?: (capture: CanvasCapture | null) => void;
 };
 
 export function CanvasViewport({ onCanvasCaptureReady }: CanvasViewportProps) {
   const viewportRef = useRef<HTMLElement>(null);
+  const copiedSelectionRef = useRef<EditorSelection | null>(null);
   const {
     bringSelectionForward,
     deleteSelection,
     duplicateSelection,
     moveSelectionBy,
     project,
+    selectMultiple,
     selectScene,
     selection,
     sendSelectionBackward,
+    undo,
   } = useEditorStore();
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState<Vector2>({ x: 0, y: 0 });
   const [spacePressed, setSpacePressed] = useState(false);
-  const canDuplicateOrDelete =
-    selection.kind === "object" ||
-    selection.kind === "character" ||
-    (selection.kind === "multiple" &&
-      (selection.objectIds.length > 0 || selection.characterIds.length > 0));
+  const canDuplicateOrDelete = isCopyableSelection(selection);
   const canAdjustLayer = selection.kind === "object";
 
   function updateZoom(nextZoom: number) {
@@ -84,6 +96,9 @@ export function CanvasViewport({ onCanvasCaptureReady }: CanvasViewportProps) {
       return;
     }
 
+    const key = shortcutKey(event);
+    const commandPressed = event.ctrlKey || event.metaKey;
+
     if (event.code === "Space") {
       event.preventDefault();
       setSpacePressed(true);
@@ -96,15 +111,76 @@ export function CanvasViewport({ onCanvasCaptureReady }: CanvasViewportProps) {
       return;
     }
 
+    if (commandPressed && !event.shiftKey && key === "z") {
+      event.preventDefault();
+      undo();
+      return;
+    }
+
+    if (commandPressed && key === "a") {
+      event.preventDefault();
+      selectMultiple(
+        project.scene.objects.map((object) => object.id),
+        project.scene.characters.map((character) => character.id),
+      );
+      return;
+    }
+
+    if (commandPressed && key === "c") {
+      if (isCopyableSelection(selection)) {
+        event.preventDefault();
+        copiedSelectionRef.current = selection;
+      }
+      return;
+    }
+
+    if (commandPressed && key === "v") {
+      if (copiedSelectionRef.current) {
+        event.preventDefault();
+        duplicateSelection(copiedSelectionRef.current);
+      }
+      return;
+    }
+
     if (event.key === "Delete" || event.key === "Backspace") {
       event.preventDefault();
       deleteSelection();
       return;
     }
 
-    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "d") {
+    if (commandPressed && key === "d") {
       event.preventDefault();
       duplicateSelection();
+      return;
+    }
+
+    if (commandPressed && (key === "+" || key === "=")) {
+      event.preventDefault();
+      updateZoom(zoom + zoomStep);
+      return;
+    }
+
+    if (commandPressed && key === "-") {
+      event.preventDefault();
+      updateZoom(zoom - zoomStep);
+      return;
+    }
+
+    if (commandPressed && key === "0") {
+      event.preventDefault();
+      resetView();
+      return;
+    }
+
+    if (commandPressed && key === "]") {
+      event.preventDefault();
+      bringSelectionForward();
+      return;
+    }
+
+    if (commandPressed && key === "[") {
+      event.preventDefault();
+      sendSelectionBackward();
       return;
     }
 
@@ -147,6 +223,9 @@ export function CanvasViewport({ onCanvasCaptureReady }: CanvasViewportProps) {
           </div>
           <div>
             <h2 className="text-sm font-bold text-slate-800 whitespace-nowrap">{project.scene.name}</h2>
+            <p className="text-[11px] text-slate-500">
+              Ctrl/Cmd+Z 撤回 · Ctrl/Cmd+A 全选 · Ctrl/Cmd+C/V 复制粘贴 · 方向键移动
+            </p>
           </div>
         </div>
         <div className="flex items-center gap-3">
@@ -195,7 +274,7 @@ export function CanvasViewport({ onCanvasCaptureReady }: CanvasViewportProps) {
             <div className="mx-0.5 h-3 w-px bg-slate-200" />
             <Button
               disabled={!canDuplicateOrDelete}
-              onClick={duplicateSelection}
+              onClick={() => duplicateSelection()}
               size="sm"
               type="button"
               variant="ghost"

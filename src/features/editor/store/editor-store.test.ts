@@ -112,6 +112,82 @@ describe("editor store", () => {
     expect(useEditorStore.getState().selection).toEqual({ kind: "scene" });
   });
 
+  it("duplicates a previously copied selection even after the active selection changes", () => {
+    useEditorStore.getState().addObject({
+      kind: "rectangle",
+      name: "窗户",
+      description: "large window with soft morning light",
+      fill: "#bfdbfe",
+    });
+    useEditorStore.getState().addObject({
+      kind: "rectangle",
+      name: "桌子",
+      description: "wooden table in the foreground",
+      fill: "#92400e",
+    });
+
+    const [firstObject, secondObject] = useEditorStore.getState().project.scene.objects;
+
+    useEditorStore.getState().selectObject(firstObject.id);
+    const copiedSelection = useEditorStore.getState().selection;
+    useEditorStore.getState().selectObject(secondObject.id);
+    useEditorStore.getState().duplicateSelection(copiedSelection);
+
+    const { project, selection } = useEditorStore.getState();
+    const duplicatedObject = project.scene.objects.at(-1);
+
+    expect(project.scene.objects).toHaveLength(3);
+    expect(selection).toEqual({ kind: "object", id: duplicatedObject?.id });
+    expect(duplicatedObject).toMatchObject({
+      name: `${firstObject.name} 副本`,
+      position: {
+        x: firstObject.position.x + 32,
+        y: firstObject.position.y + 32,
+      },
+    });
+  });
+
+  it("undoes the latest canvas edit and restores the previous selection", () => {
+    useEditorStore.getState().addObject({
+      kind: "rectangle",
+      name: "路灯",
+      description: "street lamp on the left",
+      fill: "#facc15",
+    });
+
+    const addedObject = useEditorStore.getState().project.scene.objects[0];
+    expect(useEditorStore.getState().selection).toEqual({ kind: "object", id: addedObject.id });
+
+    useEditorStore.getState().undo();
+
+    expect(useEditorStore.getState().project.scene.objects).toHaveLength(0);
+    expect(useEditorStore.getState().selection).toEqual({ kind: "scene" });
+  });
+
+  it("does not add selection-only changes to the undo stack", () => {
+    useEditorStore.getState().addObject({
+      kind: "rectangle",
+      name: "路灯",
+      description: "street lamp on the left",
+      fill: "#facc15",
+    });
+    useEditorStore.getState().addObject({
+      kind: "rectangle",
+      name: "桌子",
+      description: "wooden table in the foreground",
+      fill: "#92400e",
+    });
+
+    const [firstObject, secondObject] = useEditorStore.getState().project.scene.objects;
+
+    useEditorStore.getState().selectObject(firstObject.id);
+    useEditorStore.getState().selectObject(secondObject.id);
+    useEditorStore.getState().undo();
+
+    expect(useEditorStore.getState().project.scene.objects).toHaveLength(1);
+    expect(useEditorStore.getState().project.scene.objects[0].id).toBe(firstObject.id);
+  });
+
   it("moves the selected object forward and backward by swapping layers", () => {
     useEditorStore.getState().addObject({
       kind: "rectangle",
