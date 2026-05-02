@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { createDefaultProject, defaultCharacter, defaultCharacterMannequinJoints3D } from "@/features/editor/store/defaults";
 import { serializePromptExport } from "@/features/prompt-engine";
+import { isThreeDViewportPrimitive, sceneObjectsVisibleOn2DCanvas } from "@/features/editor/scene-viewport-objects";
 
 import {
   getProjectContentFingerprint,
@@ -471,6 +472,44 @@ describe("project serialization", () => {
       rotation: { x: 0, y: 45, z: 0 },
       scale: { x: 1.5, y: 1, z: 1 },
     });
+  });
+
+  it("round-trips 3D preset transforms so they stay in the 3D viewport", () => {
+    const project = createDefaultProject();
+    project.scene.mode = "3d";
+    project.scene.objects = [
+      {
+        id: "obj-preset-3d",
+        kind: "preset",
+        name: "桌子",
+        description: "table",
+        position: { x: 0, y: 0 },
+        size: { width: 160, height: 80 },
+        rotation: 0,
+        layer: 0,
+        fill: "#a16207",
+        includeInPrompt: true,
+        weight: { enabled: false, value: 1 },
+        promptTags: [],
+        presetKey: "preset-table",
+        transform3D: {
+          position: { x: 2, y: 0.4, z: -1 },
+          rotation: { x: 0, y: 30, z: 0 },
+          scale: { x: 1.6, y: 0.8, z: 0.8 },
+        },
+      },
+    ];
+
+    const imported = importProjectFromJson(serializeProject(project));
+    const object = imported.scene.objects[0];
+
+    expect(object?.transform3D).toEqual({
+      position: { x: 2, y: 0.4, z: -1 },
+      rotation: { x: 0, y: 30, z: 0 },
+      scale: { x: 1.6, y: 0.8, z: 0.8 },
+    });
+    expect(object && isThreeDViewportPrimitive(object)).toBe(true);
+    expect(sceneObjectsVisibleOn2DCanvas(imported.scene.objects)).toHaveLength(0);
   });
 
   it("migrates legacy character joints3D to stickFigurePose3D on import", () => {

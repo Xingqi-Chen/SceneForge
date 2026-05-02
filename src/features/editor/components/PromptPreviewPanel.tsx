@@ -20,6 +20,12 @@ type PromptPreviewPanelProps = {
   onCaptureCanvas?: () => string | null;
 };
 
+type AiGenerationConstraints = {
+  layout: boolean;
+  pose: boolean;
+  visual: boolean;
+};
+
 function formatTagsForAi(tags: SceneForgeProject["scene"]["promptTags"]) {
   return tags
     .map((tag) => tag.prompt.trim())
@@ -169,6 +175,118 @@ function summarizeSceneForAi(project: SceneForgeProject, includeHardLayoutConstr
     .join("\n");
 }
 
+function summarizeCameraForAi(project: SceneForgeProject) {
+  const { scene } = project;
+
+  if (scene.mode !== "3d") {
+    return "2D canvas view: preserve the screenshot framing, crop, and apparent viewing angle.";
+  }
+
+  const { camera } = scene.three;
+
+  return [
+    "3D camera view metadata (reference only — do not quote coordinates in output):",
+    `camera position: x=${camera.position.x}, y=${camera.position.y}, z=${camera.position.z}`,
+    `camera target: x=${camera.target.x}, y=${camera.target.y}, z=${camera.target.z}`,
+    `field of view: ${camera.fov}`,
+    "Use this metadata together with the screenshot to infer natural terms such as low angle, high angle, side view, three-quarter view, close-up, or wide shot.",
+  ].join("\n");
+}
+
+function getConstraintButtonClass(enabled: boolean) {
+  return `h-8 min-w-0 whitespace-nowrap rounded-md px-2 text-xs transition-all disabled:opacity-60 ${
+    enabled
+      ? "border-purple-200 bg-purple-50 text-purple-700 hover:bg-purple-100"
+      : "border-slate-200 bg-white text-slate-500 hover:bg-slate-50"
+  }`;
+}
+
+function buildAiSystemPrompt(constraints: AiGenerationConstraints) {
+  const priority = [
+    constraints.layout ? "hard layout constraints" : null,
+    constraints.pose ? "the character pose in the screenshot" : null,
+    constraints.visual ? "the current camera angle / shot perspective" : null,
+    "the canvas screenshot",
+    "the user's prompt preview",
+  ]
+    .filter(Boolean)
+    .join(", ");
+  const rules = [
+    constraints.layout
+      ? "Preserve object placement from the canvas: viewer-left/right, foreground/background, beside/near, behind/in front of, and visible-through-window relationships must remain in the final prompt."
+      : "Spatial hints: use simple viewer-left/right, foreground/background, beside/near — not anatomical ruler language.",
+    constraints.pose
+      ? "ACTION CONSTRAINT: strongly preserve the character pose from the screenshot. Describe limb direction, body lean, hand/foot placement, silhouette, and balance as naturally as possible so the generated image recreates the pose."
+      : null,
+    constraints.visual
+      ? "VISUAL CONSTRAINT: strongly preserve the current camera view. Describe the shot angle, perspective, framing, distance, and lens feel in natural image-prompt language so the generated image recreates the screenshot viewpoint."
+      : null,
+    "Describe pose, expression, and props in natural, artistic language (e.g. leaning on a wall, dynamic stance, one arm raised). Never echo raw coordinates, pixel math, or awkward joint-vs-joint alignment phrases (e.g. do not write \"wrist level with neck\", \"ankle left of other ankle\", \"horizontally aligned with neck\").",
+    "Skeleton notes in the summary are hints only; infer a plausible pose from the image, do not transcribe joint tuples.",
+    "Merge duplicates; keep token economy; preserve style and subject tags from the preview when they matter.",
+    "Return only the final prompt text (no markdown, no labels like \"Prompt:\").",
+  ].filter(Boolean);
+
+  return [
+    "You are SceneForge's visual prompt assistant. Produce ONE concise image-generation prompt (Stable Diffusion-style: comma-separated tags and short phrases; anime-friendly).",
+    "",
+    `Prioritize ${priority}.`,
+    constraints.layout
+      ? "The hard layout constraints are composition requirements, not optional metadata."
+      : "Prioritize the canvas screenshot and the user's prompt preview over structured metadata.",
+    "",
+    "Rules:",
+    ...rules.map((rule) => `- ${rule}`),
+  ].join("\n");
+}
+
+function buildAiUserText({
+  constraints,
+  layoutConstraints,
+  promptForAi,
+  project,
+  structuredSummary,
+}: {
+  constraints: AiGenerationConstraints;
+  layoutConstraints: string | null;
+  promptForAi: ReturnType<typeof generatePrompt>;
+  project: SceneForgeProject;
+  structuredSummary: string;
+}) {
+  return [
+    "Generate a stronger positive prompt from the preview + screenshot below.",
+    constraints.layout || constraints.pose || constraints.visual
+      ? `Order of trust: (1) enabled hard constraints and canvas image, (2) prompt preview, (3) character/object descriptions and prompt tags.`
+      : "Order of trust: (1) canvas image and prompt preview, (2) character/object descriptions and prompt tags, (3) coarse layout hints in the structured summary.",
+    constraints.layout
+      ? "Rewrite the layout constraints naturally, but keep every important placement relationship."
+      : "Do not paste structured-summary wording verbatim if it reads like geometry homework.",
+    constraints.pose
+      ? "Action constraint is enabled: the final prompt must strongly emphasize recreating the character's pose from the screenshot. Prefer natural pose words over coordinates."
+      : null,
+    constraints.visual
+      ? "Visual constraint is enabled: the final prompt must strongly emphasize recreating the screenshot's camera angle, framing, and perspective."
+      : null,
+    constraints.layout
+      ? "Do not paste coordinate wording or structured-summary wording verbatim if it reads like geometry homework."
+      : null,
+    "",
+    `Prompt preview: ${promptForAi.prompt || "(empty)"}`,
+    `Negative prompt from project (reference only; your reply must be the positive prompt text only): ${promptForAi.negativePrompt || "(none)"}`,
+    constraints.layout ? "" : null,
+    constraints.layout ? "Hard layout constraints (must be preserved in the final prompt):" : null,
+    constraints.layout ? layoutConstraints || "(none)" : null,
+    constraints.visual ? "" : null,
+    constraints.visual ? "Current camera / screenshot view (must be preserved in the final prompt):" : null,
+    constraints.visual ? summarizeCameraForAi(project) : null,
+    "",
+    "Structured scene summary (reference only):",
+    structuredSummary,
+  ]
+    .filter((line): line is string => line !== null)
+    .join("\n");
+}
+
 export function PromptPreviewPanel({ onCaptureCanvas }: PromptPreviewPanelProps) {
   const project = useEditorStore((state) => state.project);
   const aiPrompt = useEditorStore((state) => state.aiGeneratedPrompt);
@@ -176,6 +294,8 @@ export function PromptPreviewPanel({ onCaptureCanvas }: PromptPreviewPanelProps)
   const [aiStatus, setAiStatus] = useState<AiGenerationStatus>("idle");
   const [aiError, setAiError] = useState("");
   const [useLayoutConstraints, setUseLayoutConstraints] = useState(false);
+  const [usePoseConstraints, setUsePoseConstraints] = useState(false);
+  const [useVisualConstraints, setUseVisualConstraints] = useState(false);
   const generatedPrompt = generatePrompt(project);
 
   async function handleGenerateAiPrompt() {
@@ -194,36 +314,23 @@ export function PromptPreviewPanel({ onCaptureCanvas }: PromptPreviewPanelProps)
       const promptForAi = generatePrompt(project, {
         includeLayoutConstraints: useLayoutConstraints,
       });
+      const constraints: AiGenerationConstraints = {
+        layout: useLayoutConstraints,
+        pose: usePoseConstraints,
+        visual: useVisualConstraints,
+      };
       const structuredSummary = summarizeSceneForAi(project, useLayoutConstraints);
       const layoutConstraints = useLayoutConstraints && project.settings.includeSpatialHints
         ? inferSceneLayoutConstraints(project.scene)
         : null;
-      const systemPrompt = useLayoutConstraints
-        ? "You are SceneForge's visual prompt assistant. Produce ONE concise image-generation prompt (Stable Diffusion-style: comma-separated tags and short phrases; anime-friendly).\n\nPrioritize the canvas screenshot, the prompt preview, and the hard layout constraints. The hard layout constraints are composition requirements, not optional metadata.\n\nRules:\n- Preserve object placement from the canvas: viewer-left/right, foreground/background, beside/near, behind/in front of, and visible-through-window relationships must remain in the final prompt.\n- Describe pose, expression, and props in natural, artistic language (e.g. leaning on a wall, dynamic stance, one arm raised). Never echo raw coordinates, pixel math, or awkward joint-vs-joint alignment phrases (e.g. do not write \"wrist level with neck\", \"ankle left of other ankle\", \"horizontally aligned with neck\").\n- Skeleton notes in the summary are hints only; infer a plausible pose from the image, do not transcribe joint tuples.\n- Merge duplicates; keep token economy; preserve style and subject tags from the preview when they matter.\n- Return only the final prompt text (no markdown, no labels like \"Prompt:\")."
-        : "You are SceneForge's visual prompt assistant. Produce ONE concise image-generation prompt (Stable Diffusion-style: comma-separated tags and short phrases; anime-friendly).\n\nPrioritize the canvas screenshot and the user's prompt preview over structured metadata.\n\nRules:\n- Describe pose, expression, and props in natural, artistic language (e.g. leaning on a wall, dynamic stance, one arm raised). Never echo raw coordinates, pixel math, or awkward joint-vs-joint alignment phrases (e.g. do not write \"wrist level with neck\", \"ankle left of other ankle\", \"horizontally aligned with neck\").\n- Spatial hints: use simple viewer-left/right, foreground/background, beside/near — not anatomical ruler language.\n- Skeleton notes in the summary are hints only; infer a plausible pose from the image, do not transcribe joint tuples.\n- Merge duplicates; keep token economy; preserve style and subject tags from the preview when they matter.\n- Return only the final prompt text (no markdown, no labels like \"Prompt:\").";
-      const userText = [
-        "Generate a stronger positive prompt from the preview + screenshot below.",
-        useLayoutConstraints
-          ? "Order of trust: (1) hard layout constraints and canvas image, (2) prompt preview, (3) character/object descriptions and prompt tags."
-          : "Order of trust: (1) canvas image and prompt preview, (2) character/object descriptions and prompt tags, (3) coarse layout hints in the structured summary.",
-        useLayoutConstraints
-          ? "Rewrite the layout constraints naturally, but keep every important placement relationship."
-          : "Do not paste structured-summary wording verbatim if it reads like geometry homework.",
-        useLayoutConstraints
-          ? "Do not paste coordinate wording or structured-summary wording verbatim if it reads like geometry homework."
-          : null,
-        "",
-        `Prompt preview: ${promptForAi.prompt || "(empty)"}`,
-        `Negative prompt from project (reference only; your reply must be the positive prompt text only): ${promptForAi.negativePrompt || "(none)"}`,
-        useLayoutConstraints ? "" : null,
-        useLayoutConstraints ? "Hard layout constraints (must be preserved in the final prompt):" : null,
-        useLayoutConstraints ? layoutConstraints || "(none)" : null,
-        "",
-        "Structured scene summary (reference only):",
+      const systemPrompt = buildAiSystemPrompt(constraints);
+      const userText = buildAiUserText({
+        constraints,
+        layoutConstraints,
+        promptForAi,
+        project,
         structuredSummary,
-      ]
-        .filter((line): line is string => line !== null)
-        .join("\n");
+      });
       const requestBody = {
         messages: [
           {
@@ -256,6 +363,8 @@ export function PromptPreviewPanel({ onCaptureCanvas }: PromptPreviewPanelProps)
         maxTokens: requestBody.maxTokens,
         messageCount: requestBody.messages.length,
         layoutConstraintsEnabled: useLayoutConstraints,
+        poseConstraintsEnabled: usePoseConstraints,
+        visualConstraintsEnabled: useVisualConstraints,
         promptPreviewChars: (promptForAi.prompt ?? "").length,
         structuredSummaryChars: structuredSummary.length,
         canvasImageDataUrlChars: canvasImage.length,
@@ -303,21 +412,17 @@ export function PromptPreviewPanel({ onCaptureCanvas }: PromptPreviewPanelProps)
 
   return (
     <section className="flex flex-col">
-      <div className="mb-4 flex items-center justify-between gap-3 border-b border-slate-100 pb-3 shrink-0">
-        <div className="flex items-center gap-2.5">
+      <div className="mb-4 flex flex-col gap-3 border-b border-slate-100 pb-3 shrink-0">
+        <div className="flex shrink-0 items-center gap-2.5">
           <div className="rounded-md bg-purple-50 p-1.5 text-purple-600">
             <Palette className="size-4" />
           </div>
           <h2 className="text-[15px] font-semibold text-slate-800">提示词预览</h2>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="grid w-full grid-cols-[repeat(3,minmax(0,1fr))_auto] items-center gap-2">
           <Button
             aria-pressed={useLayoutConstraints}
-            className={`h-8 rounded-md px-3 text-xs transition-all disabled:opacity-60 ${
-              useLayoutConstraints
-                ? "border-purple-200 bg-purple-50 text-purple-700 hover:bg-purple-100"
-                : "border-slate-200 bg-white text-slate-500 hover:bg-slate-50"
-            }`}
+            className={getConstraintButtonClass(useLayoutConstraints)}
             disabled={aiStatus === "loading"}
             onClick={() => setUseLayoutConstraints((enabled) => !enabled)}
             size="sm"
@@ -325,10 +430,34 @@ export function PromptPreviewPanel({ onCaptureCanvas }: PromptPreviewPanelProps)
             type="button"
             variant="secondary"
           >
-            {useLayoutConstraints ? "布局约束开" : "布局约束"}
+            布局约束
           </Button>
           <Button
-            className="h-8 rounded-md bg-purple-600 px-3 text-xs text-white transition-all hover:bg-purple-700 disabled:opacity-60"
+            aria-pressed={usePoseConstraints}
+            className={getConstraintButtonClass(usePoseConstraints)}
+            disabled={aiStatus === "loading"}
+            onClick={() => setUsePoseConstraints((enabled) => !enabled)}
+            size="sm"
+            title="开启后，AI 生成会强关注截图中的人物姿势，尽可能还原角色的动作、肢体方向与身体重心。"
+            type="button"
+            variant="secondary"
+          >
+            动作约束
+          </Button>
+          <Button
+            aria-pressed={useVisualConstraints}
+            className={getConstraintButtonClass(useVisualConstraints)}
+            disabled={aiStatus === "loading"}
+            onClick={() => setUseVisualConstraints((enabled) => !enabled)}
+            size="sm"
+            title="开启后，AI 生成会强关注当前相机拍摄角度，尽可能还原截图的视角、构图和透视。"
+            type="button"
+            variant="secondary"
+          >
+            视觉约束
+          </Button>
+          <Button
+            className="h-8 shrink-0 whitespace-nowrap rounded-md bg-purple-600 px-3 text-xs text-white transition-all hover:bg-purple-700 disabled:opacity-60"
             disabled={aiStatus === "loading"}
             onClick={handleGenerateAiPrompt}
             size="sm"

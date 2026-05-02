@@ -489,7 +489,11 @@ function sanitizeSceneObject(raw: unknown): SceneObject | null {
 
   if (kind === "preset") {
     const presetKey = typeof raw.presetKey === "string" && raw.presetKey.trim() ? raw.presetKey.trim() : undefined;
-    return presetKey ? { ...base, presetKey } : { ...base };
+    const transform3D = isRecord(raw.transform3D)
+      ? { transform3D: sanitizeObject3DTransform(raw.transform3D) }
+      : {};
+
+    return presetKey ? { ...base, presetKey, ...transform3D } : { ...base, ...transform3D };
   }
 
   if (kind === "image-placeholder") {
