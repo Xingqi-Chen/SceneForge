@@ -44,6 +44,7 @@ function addSceneObject(project: SceneForgeProject, object: Partial<SceneObject>
     polygonPoints: object.polygonPoints,
     presetKey: object.presetKey,
     imageLabel: object.imageLabel,
+    transform3D: object.transform3D,
   };
 
   project.scene.objects.push(sceneObject);
@@ -343,5 +344,26 @@ describe("generatePrompt", () => {
     const result = generatePrompt(project);
     expect(result.prompt).toMatch(/thin horizon outline/);
     expect(result.prompt).toMatch(/triangular shade shape/);
+  });
+
+  it("adds conservative 3D stage placement hints for primitive objects", () => {
+    const project = createDefaultProject();
+    project.scene.mode = "3d";
+    addSceneObject(project, {
+      id: "cube-1",
+      kind: "cube",
+      name: "stone block",
+      description: "ancient stone block",
+      transform3D: {
+        position: { x: 2, y: 0.5, z: 2 },
+        rotation: { x: 0, y: 0, z: 0 },
+        scale: { x: 1.8, y: 1, z: 1 },
+      },
+    });
+
+    const result = generatePrompt(project);
+
+    expect(result.prompt).toContain("layout constraint: composition must follow the 3D stage arrangement");
+    expect(result.prompt).toContain("ancient stone block prominent in the foreground on the right");
   });
 });

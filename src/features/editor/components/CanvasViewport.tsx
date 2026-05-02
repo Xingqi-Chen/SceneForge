@@ -2,7 +2,7 @@
 
 import dynamic from "next/dynamic";
 import { BringToFront, Copy, MoveDown, MoveUp, Trash2, ZoomIn, ZoomOut } from "lucide-react";
-import { useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 
 import { type EditorSelection, useEditorStore } from "@/features/editor/store/editor-store";
 import type { Vector2 } from "@/shared/types";
@@ -20,6 +20,18 @@ const CanvasStage = dynamic<CanvasStageProps>(
     loading: () => (
       <div className="flex min-h-[420px] flex-1 items-center justify-center text-sm text-slate-500">
         正在加载 2D 画布...
+      </div>
+    ),
+    ssr: false,
+  },
+);
+
+const ThreeViewport = dynamic(
+  () => import("./ThreeViewport").then((module) => module.ThreeViewport),
+  {
+    loading: () => (
+      <div className="flex min-h-[420px] flex-1 items-center justify-center bg-slate-950 text-sm text-slate-300">
+        正在加载 3D 视口...
       </div>
     ),
     ssr: false,
@@ -70,13 +82,21 @@ export function CanvasViewport({ onCanvasCaptureReady }: CanvasViewportProps) {
     selectScene,
     selection,
     sendSelectionBackward,
+    setSceneMode,
     undo,
   } = useEditorStore();
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState<Vector2>({ x: 0, y: 0 });
   const [spacePressed, setSpacePressed] = useState(false);
   const canDuplicateOrDelete = isCopyableSelection(selection);
-  const canAdjustLayer = selection.kind === "object";
+  const is3DMode = project.scene.mode === "3d";
+  const canAdjustLayer = selection.kind === "object" && !is3DMode;
+
+  useEffect(() => {
+    if (is3DMode) {
+      onCanvasCaptureReady?.(null);
+    }
+  }, [is3DMode, onCanvasCaptureReady]);
 
   function updateZoom(nextZoom: number) {
     setZoom(clampZoom(nextZoom));
@@ -224,11 +244,33 @@ export function CanvasViewport({ onCanvasCaptureReady }: CanvasViewportProps) {
           <div>
             <h2 className="text-sm font-bold text-slate-800 whitespace-nowrap">{project.scene.name}</h2>
             <p className="text-[11px] text-slate-500">
-              Ctrl/Cmd+Z 撤回 · Ctrl/Cmd+A 全选 · Ctrl/Cmd+C/V 复制粘贴 · 方向键移动
+              {is3DMode
+                ? "3D 模式：鼠标拖拽旋转视角 · 滚轮缩放 · 方向键移动选中基础体"
+                : "Ctrl/Cmd+Z 撤回 · Ctrl/Cmd+A 全选 · Ctrl/Cmd+C/V 复制粘贴 · 方向键移动"}
             </p>
           </div>
         </div>
         <div className="flex items-center gap-3">
+          <div className="flex items-center gap-1 rounded-md border border-slate-200 bg-white p-0.5 text-xs font-medium shadow-sm">
+            <Button
+              className="h-7 rounded px-2 text-xs"
+              onClick={() => setSceneMode("2d")}
+              size="sm"
+              type="button"
+              variant={is3DMode ? "ghost" : "primary"}
+            >
+              2D
+            </Button>
+            <Button
+              className="h-7 rounded px-2 text-xs"
+              onClick={() => setSceneMode("3d")}
+              size="sm"
+              type="button"
+              variant={is3DMode ? "primary" : "ghost"}
+            >
+              3D
+            </Button>
+          </div>
           <div className="flex items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-600">
             <span className="flex items-center gap-1.5">
               <span className="inline-block h-1.5 w-1.5 rounded-full bg-slate-400" />
@@ -321,14 +363,18 @@ export function CanvasViewport({ onCanvasCaptureReady }: CanvasViewportProps) {
         </div>
       </div>
       <div className="relative flex flex-1 flex-col overflow-hidden bg-[radial-gradient(#e5e7eb_1px,transparent_1px)] [background-size:16px_16px]">
-        <CanvasStage
-          onCaptureReady={onCanvasCaptureReady}
-          onPanChange={setPan}
-          onZoomChange={updateZoom}
-          pan={pan}
-          panMode={spacePressed}
-          zoom={zoom}
-        />
+        {is3DMode ? (
+          <ThreeViewport />
+        ) : (
+          <CanvasStage
+            onCaptureReady={onCanvasCaptureReady}
+            onPanChange={setPan}
+            onZoomChange={updateZoom}
+            pan={pan}
+            panMode={spacePressed}
+            zoom={zoom}
+          />
+        )}
       </div>
     </section>
   );

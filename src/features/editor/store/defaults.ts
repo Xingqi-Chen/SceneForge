@@ -113,11 +113,28 @@ export const defaultScene: Scene = {
   id: "scene-default",
   name: "SceneForge 画布",
   description: "",
+  mode: "2d",
   canvas: {
     width: 1280,
     height: 720,
     aspectRatio: "16:9",
     background: "#f8fafc",
+  },
+  three: {
+    camera: {
+      position: { x: 6, y: 5, z: 7 },
+      target: { x: 0, y: 0.8, z: 0 },
+      fov: 45,
+    },
+    lighting: {
+      ambientIntensity: 0.65,
+      directionalIntensity: 1.1,
+      directionalPosition: { x: 5, y: 8, z: 4 },
+    },
+    grid: {
+      size: 12,
+      divisions: 12,
+    },
   },
   objects: [],
   characters: [],
@@ -169,6 +186,13 @@ function cloneScene(scene: Scene): Scene {
       position: { ...object.position },
       size: { ...object.size },
       weight: { ...object.weight },
+      transform3D: object.transform3D
+        ? {
+            position: { ...object.transform3D.position },
+            rotation: { ...object.transform3D.rotation },
+            scale: { ...object.transform3D.scale },
+          }
+        : undefined,
       lineEndpoints: object.lineEndpoints ? { ...object.lineEndpoints } : undefined,
       polygonPoints: object.polygonPoints?.map((point) => ({ ...point })),
       promptTags: object.promptTags.map(clonePromptTag),
@@ -179,6 +203,19 @@ function cloneScene(scene: Scene): Scene {
         ? [...object.promptSubcategoryBindings]
         : undefined,
     })),
+    three: {
+      camera: {
+        position: { ...scene.three.camera.position },
+        target: { ...scene.three.camera.target },
+        fov: scene.three.camera.fov,
+      },
+      lighting: {
+        ambientIntensity: scene.three.lighting.ambientIntensity,
+        directionalIntensity: scene.three.lighting.directionalIntensity,
+        directionalPosition: { ...scene.three.lighting.directionalPosition },
+      },
+      grid: { ...scene.three.grid },
+    },
     characters: scene.characters.map(cloneCharacter),
     promptTags: scene.promptTags.map(clonePromptTag),
     promptCategoryBindings: scene.promptCategoryBindings ? [...scene.promptCategoryBindings] : undefined,

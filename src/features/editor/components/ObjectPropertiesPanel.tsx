@@ -10,7 +10,9 @@ import type {
   CharacterSkeleton,
   PromptModelFormat,
   SceneObject,
+  SceneObject3DTransform,
   Vector2,
+  Vector3,
 } from "@/shared/types";
 
 function FieldLabel({ children }: { children: ReactNode }) {
@@ -19,6 +21,37 @@ function FieldLabel({ children }: { children: ReactNode }) {
 
 function getNumber(event: ChangeEvent<HTMLInputElement>) {
   return Number.isFinite(event.target.valueAsNumber) ? event.target.valueAsNumber : 0;
+}
+
+function is3DSceneObject(object: SceneObject) {
+  return Boolean(object.transform3D);
+}
+
+function Vector3Fields({
+  labels,
+  onChange,
+  value,
+}: {
+  labels: [string, string, string];
+  onChange: (axis: keyof Vector3, value: number) => void;
+  value: Vector3;
+}) {
+  return (
+    <div className="grid grid-cols-3 gap-2">
+      {(["x", "y", "z"] as const).map((axis, index) => (
+        <div className="space-y-1" key={axis}>
+          <FieldLabel>{labels[index]}</FieldLabel>
+          <input
+            className="w-full rounded-md border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-900 outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-400"
+            onChange={(event) => onChange(axis, getNumber(event))}
+            step={0.1}
+            type="number"
+            value={value[axis]}
+          />
+        </div>
+      ))}
+    </div>
+  );
 }
 
 function parsePolygonPointsJson(text: string): Vector2[] | null {
@@ -107,6 +140,7 @@ export function ObjectPropertiesPanel() {
     selection,
     updateCharacter,
     updateObject,
+    updateObject3DTransform,
     updateProjectSettings,
     updateScene,
   } = useEditorStore();
@@ -135,6 +169,23 @@ export function ObjectPropertiesPanel() {
     if (selectedCharacter) {
       updateCharacter(selectedCharacter.id, patch);
     }
+  }
+
+  function updateSelectedObject3DTransform(
+    key: keyof SceneObject3DTransform,
+    axis: keyof Vector3,
+    value: number,
+  ) {
+    if (!selectedObject?.transform3D) {
+      return;
+    }
+
+    updateObject3DTransform(selectedObject.id, {
+      [key]: {
+        ...selectedObject.transform3D[key],
+        [axis]: value,
+      },
+    });
   }
 
   function handleAspectRatioChange(aspectRatio: CanvasAspectRatio) {
@@ -179,7 +230,41 @@ export function ObjectPropertiesPanel() {
               value={selectedObject.description}
             />
           </div>
-          {selectedObject.kind === "line" ? (
+          {is3DSceneObject(selectedObject) ? (
+            <div className="space-y-3 rounded-md border border-indigo-100 bg-indigo-50/70 p-3">
+              <div>
+                <div className="text-xs font-semibold text-indigo-700">3D 基础体</div>
+                <p className="mt-1 text-[11px] leading-relaxed text-indigo-700/80">
+                  使用右侧数值调整位置、旋转和缩放；视口内可点击选中并用鼠标轨道查看。
+                </p>
+              </div>
+              <div className="space-y-1.5">
+                <FieldLabel>位置</FieldLabel>
+                <Vector3Fields
+                  labels={["X", "Y", "Z"]}
+                  onChange={(axis, value) => updateSelectedObject3DTransform("position", axis, value)}
+                  value={selectedObject.transform3D?.position ?? { x: 0, y: 0, z: 0 }}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <FieldLabel>旋转（度）</FieldLabel>
+                <Vector3Fields
+                  labels={["X", "Y", "Z"]}
+                  onChange={(axis, value) => updateSelectedObject3DTransform("rotation", axis, value)}
+                  value={selectedObject.transform3D?.rotation ?? { x: 0, y: 0, z: 0 }}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <FieldLabel>缩放</FieldLabel>
+                <Vector3Fields
+                  labels={["X", "Y", "Z"]}
+                  onChange={(axis, value) => updateSelectedObject3DTransform("scale", axis, value)}
+                  value={selectedObject.transform3D?.scale ?? { x: 1, y: 1, z: 1 }}
+                />
+              </div>
+            </div>
+          ) : null}
+          {!is3DSceneObject(selectedObject) && selectedObject.kind === "line" ? (
             <div className="space-y-2 rounded-md border border-slate-100 bg-slate-50/90 p-3">
               <div className="text-xs font-semibold text-slate-600">线段端点（局部坐标）</div>
               <div className="grid grid-cols-2 gap-2">
@@ -208,7 +293,7 @@ export function ObjectPropertiesPanel() {
               </div>
             </div>
           ) : null}
-          {selectedObject.kind === "polygon" ? (
+          {!is3DSceneObject(selectedObject) && selectedObject.kind === "polygon" ? (
             <PolygonPointsField
               key={`${selectedObject.id}:${JSON.stringify(selectedObject.polygonPoints ?? [])}`}
               height={selectedObject.size.height}
@@ -217,7 +302,7 @@ export function ObjectPropertiesPanel() {
               width={selectedObject.size.width}
             />
           ) : null}
-          {selectedObject.kind === "image-placeholder" ? (
+          {!is3DSceneObject(selectedObject) && selectedObject.kind === "image-placeholder" ? (
             <div className="space-y-1.5">
               <FieldLabel>占位标签</FieldLabel>
               <input
@@ -227,7 +312,7 @@ export function ObjectPropertiesPanel() {
               />
             </div>
           ) : null}
-          {selectedObject.kind === "preset" && selectedObject.presetKey ? (
+          {!is3DSceneObject(selectedObject) && selectedObject.kind === "preset" && selectedObject.presetKey ? (
             <div className="space-y-1.5">
               <FieldLabel>预设 ID</FieldLabel>
               <input
@@ -237,6 +322,7 @@ export function ObjectPropertiesPanel() {
               />
             </div>
           ) : null}
+          {!is3DSceneObject(selectedObject) ? (
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
               <FieldLabel>X</FieldLabel>
@@ -311,6 +397,7 @@ export function ObjectPropertiesPanel() {
               />
             </div>
           </div>
+          ) : null}
           <div className="grid grid-cols-[1fr_auto] items-end gap-3">
             <div className="space-y-1.5">
               <FieldLabel>颜色</FieldLabel>

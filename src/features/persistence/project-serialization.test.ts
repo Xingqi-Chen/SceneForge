@@ -366,4 +366,42 @@ describe("project serialization", () => {
     expect(imported.scene.objects[2]?.presetKey).toBe("preset-tree");
     expect(imported.scene.objects[3]?.imageLabel).toBe("Ref");
   });
+
+  it("round-trips 3D scene mode and primitive transforms", () => {
+    const project = createDefaultProject();
+    project.scene.mode = "3d";
+    project.scene.three.camera.position = { x: 7, y: 6, z: 8 };
+    project.scene.objects = [
+      {
+        id: "obj-cube",
+        kind: "cube",
+        name: "立方体",
+        description: "blue cube",
+        position: { x: 0, y: 0 },
+        size: { width: 120, height: 120 },
+        rotation: 0,
+        layer: 0,
+        fill: "#60a5fa",
+        includeInPrompt: true,
+        weight: { enabled: false, value: 1 },
+        promptTags: [],
+        transform3D: {
+          position: { x: 1, y: 0.5, z: -2 },
+          rotation: { x: 0, y: 45, z: 0 },
+          scale: { x: 1.5, y: 1, z: 1 },
+        },
+      },
+    ];
+
+    const imported = importProjectFromJson(serializeProject(project));
+
+    expect(imported.scene.mode).toBe("3d");
+    expect(imported.scene.three.camera.position).toEqual({ x: 7, y: 6, z: 8 });
+    expect(imported.scene.objects[0]?.kind).toBe("cube");
+    expect(imported.scene.objects[0]?.transform3D).toEqual({
+      position: { x: 1, y: 0.5, z: -2 },
+      rotation: { x: 0, y: 45, z: 0 },
+      scale: { x: 1.5, y: 1, z: 1 },
+    });
+  });
 });

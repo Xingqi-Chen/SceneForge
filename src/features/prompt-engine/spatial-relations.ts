@@ -53,6 +53,37 @@ function getObjectBounds(object: SceneObject): Bounds {
   };
 }
 
+function get3DObjectSpatialHints(object: SceneObject) {
+  const transform = object.transform3D;
+
+  if (!transform) {
+    return [];
+  }
+
+  const hints: string[] = [];
+  const maxScale = Math.max(transform.scale.x, transform.scale.y, transform.scale.z);
+
+  if (maxScale >= 2.5) {
+    hints.push("large");
+  } else if (maxScale >= 1.6) {
+    hints.push("prominent");
+  }
+
+  if (transform.position.z <= -1.5) {
+    hints.push("in the background");
+  } else if (transform.position.z >= 1.5) {
+    hints.push("in the foreground");
+  }
+
+  if (transform.position.x <= -1.5) {
+    hints.push("on the left");
+  } else if (transform.position.x >= 1.5) {
+    hints.push("on the right");
+  }
+
+  return hints;
+}
+
 function getCharacterBounds(character: CharacterSkeleton): Bounds | null {
   const sx = character.scaleX ?? 1;
   const sy = character.scaleY ?? 1;
@@ -238,6 +269,10 @@ export function inferSpatialRelationHints(
   { canvas, characters }: SpatialRelationContext,
   options: SpatialRelationOptions = {},
 ) {
+  if (object.transform3D) {
+    return get3DObjectSpatialHints(object);
+  }
+
   const bounds = getObjectBounds(object);
   const includeCanvasPositionHints = options.includeCanvasPositionHints ?? true;
   const hints = [
@@ -363,6 +398,23 @@ export function inferSceneLayoutConstraints(scene: Scene) {
 
   if (objects.length === 0 && characters.length === 0) {
     return null;
+  }
+
+  if (scene.mode === "3d") {
+    const constraints = [
+      "layout constraint: composition must follow the 3D stage arrangement",
+      "keep foreground, background, left, and right placement from the 3D scene",
+    ];
+
+    objects
+      .filter((object) => object.transform3D)
+      .forEach((object) => {
+        const hints = get3DObjectSpatialHints(object);
+        const objectName = getObjectPromptName(object);
+        constraints.push(hints.length > 0 ? `${objectName} ${hints.join(" ")}` : `${objectName} near the center`);
+      });
+
+    return Array.from(new Set(constraints)).join(", ");
   }
 
   const constraints: string[] = [

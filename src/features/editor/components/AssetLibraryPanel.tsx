@@ -75,6 +75,41 @@ const shapeAssets: ShapeAssetDefinition[] = [
   },
 ];
 
+const threeDAssets: ShapeAssetDefinition[] = [
+  {
+    id: "cube",
+    label: "立方体",
+    type: "object",
+    kind: "cube",
+    name: "立方体",
+    fill: "#60a5fa",
+  },
+  {
+    id: "sphere",
+    label: "球体",
+    type: "object",
+    kind: "sphere",
+    name: "球体",
+    fill: "#fbbf24",
+  },
+  {
+    id: "cylinder",
+    label: "圆柱",
+    type: "object",
+    kind: "cylinder",
+    name: "圆柱",
+    fill: "#34d399",
+  },
+  {
+    id: "plane",
+    label: "平面",
+    type: "object",
+    kind: "plane",
+    name: "平面",
+    fill: "#94a3b8",
+  },
+];
+
 const presetLibraryAssets: PresetLibraryAsset[] = PRESET_SCENE_OBJECTS.map((preset) => ({
   id: preset.key,
   label: preset.label,
@@ -165,6 +200,7 @@ function PresetCategorySection({
 export function AssetLibraryPanel() {
   const addObject = useEditorStore((state) => state.addObject);
   const addCharacter = useEditorStore((state) => state.addCharacter);
+  const setSceneMode = useEditorStore((state) => state.setSceneMode);
 
   function handleAssetClick(asset: AssetDefinition) {
     if (asset.type === "character") {
@@ -175,6 +211,15 @@ export function AssetLibraryPanel() {
     if ("input" in asset) {
       addObject(asset.input);
       return;
+    }
+
+    if (
+      asset.kind === "cube" ||
+      asset.kind === "sphere" ||
+      asset.kind === "cylinder" ||
+      asset.kind === "plane"
+    ) {
+      setSceneMode("3d");
     }
 
     addObject(asset);
@@ -210,6 +255,27 @@ export function AssetLibraryPanel() {
             <div className="absolute inset-0 bg-gradient-to-br from-white/40 to-transparent opacity-0 transition-opacity group-hover:opacity-100" />
             <span className="relative z-10">人物骨架</span>
           </button>
+        </div>
+      </LibrarySection>
+
+      <div className="my-4 h-px w-full shrink-0 bg-slate-100" />
+
+      <LibrarySection title="3D 基础体">
+        <p className="mb-2 text-[10px] leading-snug text-slate-400">
+          用基础几何体搭建简化 3D 舞台；位置、旋转和缩放可在右侧属性面板调整。
+        </p>
+        <div className="grid grid-cols-2 gap-3">
+          {threeDAssets.map((asset) => (
+            <button
+              className="group relative flex flex-col items-center justify-center gap-2 overflow-hidden rounded-md border border-slate-200 bg-white p-4 text-sm font-medium text-slate-700 transition-all hover:border-indigo-300 hover:bg-indigo-50 hover:text-indigo-700"
+              key={asset.id}
+              onClick={() => handleAssetClick(asset)}
+              type="button"
+            >
+              <div className="absolute inset-0 bg-gradient-to-br from-white/40 to-transparent opacity-0 transition-opacity group-hover:opacity-100" />
+              <span className="relative z-10">{asset.label}</span>
+            </button>
+          ))}
         </div>
       </LibrarySection>
 

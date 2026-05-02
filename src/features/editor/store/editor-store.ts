@@ -15,9 +15,12 @@ import type {
   PromptTagSubcategory,
   Scene,
   SceneForgeProject,
+  SceneMode,
   SceneObject,
+  SceneObject3DTransform,
   SceneObjectKind,
   Vector2,
+  Vector3,
 } from "@/shared/types";
 
 import { BUILT_IN_PROMPT_LIBRARY_TAGS } from "@/features/prompt-engine/prompt-library/built-in-prompt-tags";
@@ -62,6 +65,7 @@ export type AddSceneObjectInput = {
   lineEndpoints?: LineEndpoints;
   polygonPoints?: Vector2[];
   imageLabel?: string;
+  transform3D?: SceneObject3DTransform;
 };
 
 export type PromptTagTarget =
@@ -103,10 +107,12 @@ type EditorState = {
   /** Ctrl/Cmd+click: add/remove a character from the current selection. */
   toggleCharacterInSelection: (characterId: string) => void;
   updateScene: (patch: Partial<Scene>) => void;
+  setSceneMode: (mode: SceneMode) => void;
   updateProjectDocument: (patch: Partial<Pick<SceneForgeProject, "name">>) => void;
   updateProjectSettings: (patch: Partial<ProjectSettings>) => void;
   addObject: (input: AddSceneObjectInput) => void;
   updateObject: (id: string, patch: Partial<SceneObject>) => void;
+  updateObject3DTransform: (id: string, patch: Partial<SceneObject3DTransform>) => void;
   deleteSelection: () => void;
   duplicateSelection: (selectionOverride?: EditorSelection) => void;
   bringSelectionForward: () => void;
@@ -306,7 +312,51 @@ function getNextLayer(objects: SceneObject[]) {
   return Math.max(0, ...objects.map((object) => object.layer)) + 1;
 }
 
+function is3DObjectKind(kind: SceneObjectKind) {
+  return kind === "cube" || kind === "sphere" || kind === "cylinder" || kind === "plane";
+}
+
+function offsetVector3(position: Vector3, offset = 0.6): Vector3 {
+  return {
+    x: position.x + offset,
+    y: position.y,
+    z: position.z + offset,
+  };
+}
+
+function createDefault3DTransform(kind: SceneObjectKind, index: number): SceneObject3DTransform {
+  const baseY = kind === "plane" ? 0 : 0.5;
+  const spread = index % 5;
+
+  return {
+    position: { x: -2 + spread, y: baseY, z: Math.floor(index / 5) * 1.25 },
+    rotation: { x: 0, y: 0, z: 0 },
+    scale: kind === "plane" ? { x: 2, y: 1, z: 2 } : { x: 1, y: 1, z: 1 },
+  };
+}
+
+function merge3DTransform(
+  current: SceneObject3DTransform | undefined,
+  patch: Partial<SceneObject3DTransform>,
+): SceneObject3DTransform {
+  const base = current ?? createDefault3DTransform("cube", 0);
+
+  return {
+    position: patch.position ? { ...base.position, ...patch.position } : { ...base.position },
+    rotation: patch.rotation ? { ...base.rotation, ...patch.rotation } : { ...base.rotation },
+    scale: patch.scale ? { ...base.scale, ...patch.scale } : { ...base.scale },
+  };
+}
+
 function cloneSceneObject(object: SceneObject): SceneObject {
+  const transform3D = object.transform3D
+    ? {
+        position: offsetVector3(object.transform3D.position),
+        rotation: { ...object.transform3D.rotation },
+        scale: { ...object.transform3D.scale },
+      }
+    : undefined;
+
   return {
     ...object,
     id: createId("object"),
@@ -317,6 +367,7 @@ function cloneSceneObject(object: SceneObject): SceneObject {
     },
     size: { ...object.size },
     weight: { ...object.weight },
+    transform3D,
     lineEndpoints: object.lineEndpoints ? { ...object.lineEndpoints } : undefined,
     polygonPoints: object.polygonPoints?.map((point) => ({ ...point })),
     promptTags: object.promptTags.map(clonePromptTag),
@@ -550,6 +601,17 @@ export const useEditorStore = create<EditorState>((set) => ({
         },
       }),
     })),
+  setSceneMode: (mode) =>
+    set((state) => ({
+      project: touchProject({
+        ...state.project,
+        scene: {
+          ...state.project.scene,
+          mode,
+        },
+      }),
+      selection: { kind: "scene" },
+    })),
   updateProjectDocument: (patch) =>
     set((state) => ({
       project: touchProject({
@@ -578,8 +640,17 @@ export const useEditorStore = create<EditorState>((set) => ({
       let polygonPoints: Vector2[] | undefined;
       let presetKey: string | undefined;
       let imageLabel: string | undefined;
+      let transform3D: SceneObject3DTransform | undefined;
 
-      if (input.kind === "circle") {
+      if (is3DObjectKind(input.kind)) {
+        size = { width: 120, height: 120 };
+        transform3D =
+          input.transform3D ??
+          createDefault3DTransform(
+            input.kind,
+            state.project.scene.objects.filter((object) => object.transform3D).length,
+          );
+      } else if (input.kind === "circle") {
         size = { width: 120, height: 120 };
       } else if (input.kind === "ellipse") {
         size = { width: 160, height: 100 };
@@ -619,6 +690,15 @@ export const useEditorStore = create<EditorState>((set) => ({
         ...(polygonPoints ? { polygonPoints: polygonPoints.map((point) => ({ ...point })) } : {}),
         ...(presetKey ? { presetKey } : {}),
         ...(imageLabel ? { imageLabel } : {}),
+        ...(transform3D
+          ? {
+              transform3D: {
+                position: { ...transform3D.position },
+                rotation: { ...transform3D.rotation },
+                scale: { ...transform3D.scale },
+              },
+            }
+          : {}),
       };
 
       return {
@@ -640,6 +720,23 @@ export const useEditorStore = create<EditorState>((set) => ({
           ...state.project.scene,
           objects: state.project.scene.objects.map((object) =>
             object.id === id ? { ...object, ...patch } : object,
+          ),
+        },
+      }),
+    })),
+  updateObject3DTransform: (id, patch) =>
+    set((state) => ({
+      project: touchProject({
+        ...state.project,
+        scene: {
+          ...state.project.scene,
+          objects: state.project.scene.objects.map((object) =>
+            object.id === id
+              ? {
+                  ...object,
+                  transform3D: merge3DTransform(object.transform3D, patch),
+                }
+              : object,
           ),
         },
       }),
@@ -927,6 +1024,20 @@ export const useEditorStore = create<EditorState>((set) => ({
 
           moved = true;
 
+          if (state.project.scene.mode === "3d" && object.transform3D) {
+            return {
+              ...object,
+              transform3D: {
+                ...object.transform3D,
+                position: {
+                  ...object.transform3D.position,
+                  x: object.transform3D.position.x + delta.x * 0.1,
+                  z: object.transform3D.position.z + delta.y * 0.1,
+                },
+              },
+            };
+          }
+
           return {
             ...object,
             position: {
@@ -996,6 +1107,20 @@ export const useEditorStore = create<EditorState>((set) => ({
           }
 
           moved = true;
+
+          if (state.project.scene.mode === "3d" && object.transform3D) {
+            return {
+              ...object,
+              transform3D: {
+                ...object.transform3D,
+                position: {
+                  ...object.transform3D.position,
+                  x: object.transform3D.position.x + delta.x * 0.1,
+                  z: object.transform3D.position.z + delta.y * 0.1,
+                },
+              },
+            };
+          }
 
           return {
             ...object,

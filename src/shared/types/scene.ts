@@ -3,6 +3,12 @@ export type Vector2 = {
   y: number;
 };
 
+export type Vector3 = {
+  x: number;
+  y: number;
+  z: number;
+};
+
 export type Size2D = {
   width: number;
   height: number;
@@ -79,7 +85,36 @@ export type SceneObjectKind =
   | "polygon"
   | "line"
   | "image-placeholder"
-  | "preset";
+  | "preset"
+  | "cube"
+  | "sphere"
+  | "cylinder"
+  | "plane";
+
+export type SceneMode = "2d" | "3d";
+
+export type Scene3DConfig = {
+  camera: {
+    position: Vector3;
+    target: Vector3;
+    fov: number;
+  };
+  lighting: {
+    ambientIntensity: number;
+    directionalIntensity: number;
+    directionalPosition: Vector3;
+  };
+  grid: {
+    size: number;
+    divisions: number;
+  };
+};
+
+export type SceneObject3DTransform = {
+  position: Vector3;
+  rotation: Vector3;
+  scale: Vector3;
+};
 
 /** Line segment in local space (origin at object `position`, same units as `size`). */
 export type LineEndpoints = {
@@ -112,6 +147,8 @@ export type SceneObject = {
   presetKey?: string;
   /** Short label drawn on `image-placeholder` objects. */
   imageLabel?: string;
+  /** 3D transform used by primitive 3D scene objects. 2D objects continue to use `position`, `size`, and `rotation`. */
+  transform3D?: SceneObject3DTransform;
 };
 
 export type BodyPartId =
@@ -173,7 +210,9 @@ export type Scene = {
   id: string;
   name: string;
   description: string;
+  mode: SceneMode;
   canvas: CanvasConfig;
+  three: Scene3DConfig;
   objects: SceneObject[];
   characters: CharacterSkeleton[];
   promptTags: PromptTag[];

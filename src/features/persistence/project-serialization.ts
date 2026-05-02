@@ -13,6 +13,7 @@ import type {
   SceneForgeProject,
   SceneObject,
   Vector2,
+  Vector3,
 } from "@/shared/types";
 
 import {
@@ -20,6 +21,7 @@ import {
   DEFAULT_PROMPT_SUBCATEGORY_BINDINGS,
   createDefaultPromptBindingState,
   defaultCharacter,
+  defaultScene,
 } from "@/features/editor/store/defaults";
 import { defaultLineEndpoints, defaultPolygonPoints } from "@/features/editor/preset-scene-objects";
 import {
@@ -160,6 +162,10 @@ const SCENE_OBJECT_KINDS = new Set<SceneObject["kind"]>([
   "line",
   "image-placeholder",
   "preset",
+  "cube",
+  "sphere",
+  "cylinder",
+  "plane",
 ]);
 
 function coerceSceneObjectKind(value: unknown): SceneObject["kind"] {
@@ -185,6 +191,89 @@ function sanitizeVector2Point(raw: unknown): Vector2 | null {
   }
 
   return { x: raw.x, y: raw.y };
+}
+
+function sanitizeVector3Point(raw: unknown, fallback: Vector3): Vector3 {
+  if (!isRecord(raw)) {
+    return { ...fallback };
+  }
+
+  return {
+    x: typeof raw.x === "number" && Number.isFinite(raw.x) ? raw.x : fallback.x,
+    y: typeof raw.y === "number" && Number.isFinite(raw.y) ? raw.y : fallback.y,
+    z: typeof raw.z === "number" && Number.isFinite(raw.z) ? raw.z : fallback.z,
+  };
+}
+
+function sanitizeScene3DConfig(raw: unknown): Scene["three"] {
+  const fallback = defaultScene.three;
+
+  if (!isRecord(raw)) {
+    return {
+      camera: {
+        position: { ...fallback.camera.position },
+        target: { ...fallback.camera.target },
+        fov: fallback.camera.fov,
+      },
+      lighting: {
+        ambientIntensity: fallback.lighting.ambientIntensity,
+        directionalIntensity: fallback.lighting.directionalIntensity,
+        directionalPosition: { ...fallback.lighting.directionalPosition },
+      },
+      grid: { ...fallback.grid },
+    };
+  }
+
+  const camera = isRecord(raw.camera) ? raw.camera : {};
+  const lighting = isRecord(raw.lighting) ? raw.lighting : {};
+  const grid = isRecord(raw.grid) ? raw.grid : {};
+
+  return {
+    camera: {
+      position: sanitizeVector3Point(camera.position, fallback.camera.position),
+      target: sanitizeVector3Point(camera.target, fallback.camera.target),
+      fov: typeof camera.fov === "number" && Number.isFinite(camera.fov) ? camera.fov : fallback.camera.fov,
+    },
+    lighting: {
+      ambientIntensity:
+        typeof lighting.ambientIntensity === "number" && Number.isFinite(lighting.ambientIntensity)
+          ? lighting.ambientIntensity
+          : fallback.lighting.ambientIntensity,
+      directionalIntensity:
+        typeof lighting.directionalIntensity === "number" && Number.isFinite(lighting.directionalIntensity)
+          ? lighting.directionalIntensity
+          : fallback.lighting.directionalIntensity,
+      directionalPosition: sanitizeVector3Point(
+        lighting.directionalPosition,
+        fallback.lighting.directionalPosition,
+      ),
+    },
+    grid: {
+      size: typeof grid.size === "number" && Number.isFinite(grid.size) ? grid.size : fallback.grid.size,
+      divisions:
+        typeof grid.divisions === "number" && Number.isFinite(grid.divisions)
+          ? grid.divisions
+          : fallback.grid.divisions,
+    },
+  };
+}
+
+function sanitizeObject3DTransform(raw: unknown): SceneObject["transform3D"] {
+  const fallback = {
+    position: { x: 0, y: 0.5, z: 0 },
+    rotation: { x: 0, y: 0, z: 0 },
+    scale: { x: 1, y: 1, z: 1 },
+  };
+
+  if (!isRecord(raw)) {
+    return fallback;
+  }
+
+  return {
+    position: sanitizeVector3Point(raw.position, fallback.position),
+    rotation: sanitizeVector3Point(raw.rotation, fallback.rotation),
+    scale: sanitizeVector3Point(raw.scale, fallback.scale),
+  };
 }
 
 function sanitizeLineEndpoints(raw: unknown, width: number, height: number): LineEndpoints {
@@ -360,6 +449,10 @@ function sanitizeSceneObject(raw: unknown): SceneObject | null {
     return { ...base, imageLabel };
   }
 
+  if (kind === "cube" || kind === "sphere" || kind === "cylinder" || kind === "plane") {
+    return { ...base, transform3D: sanitizeObject3DTransform(raw.transform3D) };
+  }
+
   return base;
 }
 
@@ -456,7 +549,9 @@ function sanitizeScene(scene: unknown): Scene {
       id: "scene-imported",
       name: "SceneForge 画布",
       description: "",
+      mode: "2d",
       canvas: sanitizeCanvas(undefined),
+      three: sanitizeScene3DConfig(undefined),
       objects: [],
       characters: [],
       promptTags: [],
@@ -484,7 +579,9 @@ function sanitizeScene(scene: unknown): Scene {
     id: typeof scene.id === "string" && scene.id ? scene.id : "scene-imported",
     name: typeof scene.name === "string" ? scene.name : "SceneForge 画布",
     description: typeof scene.description === "string" ? scene.description : "",
+    mode: scene.mode === "3d" ? "3d" : "2d",
     canvas: sanitizeCanvas(scene.canvas),
+    three: sanitizeScene3DConfig(scene.three),
     objects,
     characters,
     promptTags: dedupePromptTags(scenePromptTags),

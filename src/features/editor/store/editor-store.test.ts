@@ -239,6 +239,37 @@ describe("editor store", () => {
     });
   });
 
+  it("switches to 3D mode, adds a primitive, and updates its transform", () => {
+    useEditorStore.getState().setSceneMode("3d");
+    useEditorStore.getState().addObject({
+      kind: "cube",
+      name: "立方体",
+      fill: "#60a5fa",
+    });
+
+    const addedObject = useEditorStore.getState().project.scene.objects[0];
+
+    expect(useEditorStore.getState().project.scene.mode).toBe("3d");
+    expect(addedObject).toMatchObject({
+      kind: "cube",
+      transform3D: {
+        position: expect.objectContaining({ y: 0.5 }),
+        rotation: { x: 0, y: 0, z: 0 },
+        scale: { x: 1, y: 1, z: 1 },
+      },
+    });
+
+    useEditorStore.getState().updateObject3DTransform(addedObject.id, {
+      position: { x: 2, y: 0.75, z: -1 },
+    });
+
+    expect(useEditorStore.getState().project.scene.objects[0].transform3D?.position).toEqual({
+      x: 2,
+      y: 0.75,
+      z: -1,
+    });
+  });
+
   it("resets the 2D scene without clearing the prompt library", () => {
     useEditorStore.getState().importPromptLibraryTags([
       {
