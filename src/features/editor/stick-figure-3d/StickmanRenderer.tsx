@@ -54,8 +54,12 @@ function StickCapsuleLimb({
     <mesh
       castShadow
       onClick={(e) => {
+        if (!onSelectBodyPart) {
+          return;
+        }
+
         e.stopPropagation();
-        onSelectBodyPart?.(bodyPartId, e);
+        onSelectBodyPart(bodyPartId, e);
       }}
       position={position}
       quaternion={quat}
@@ -90,8 +94,12 @@ function StickJointSphere({
     <mesh
       castShadow
       onClick={(e) => {
+        if (!onSelect) {
+          return;
+        }
+
         e.stopPropagation();
-        onSelect?.(e);
+        onSelect(e);
       }}
       position={position}
       receiveShadow
