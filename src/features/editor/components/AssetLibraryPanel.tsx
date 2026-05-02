@@ -275,9 +275,17 @@ export function AssetLibraryPanel() {
       {is3d ? (
         <LibrarySection title="3D 基础体">
           <p className="mb-2 text-[10px] leading-snug text-slate-400">
-            用基础几何体搭建简化 3D 舞台；位置、旋转和缩放可在右侧属性面板调整。
+            用低模人体与基础几何体搭建简化 3D 舞台；位置、旋转和缩放可在右侧属性面板调整。
           </p>
           <div className="grid grid-cols-2 gap-3">
+            <button
+              className="group relative flex flex-col items-center justify-center gap-2 overflow-hidden rounded-md border border-slate-200 bg-white p-4 text-sm font-medium text-slate-700 transition-all hover:border-indigo-300 hover:bg-indigo-50 hover:text-indigo-700"
+              onClick={() => handleAssetClick({ id: "character", label: "3D 人体", type: "character" })}
+              type="button"
+            >
+              <div className="absolute inset-0 bg-gradient-to-br from-white/40 to-transparent opacity-0 transition-opacity group-hover:opacity-100" />
+              <span className="relative z-10">3D 人体</span>
+            </button>
             {threeDAssets.map((asset) => (
               <button
                 className="group relative flex flex-col items-center justify-center gap-2 overflow-hidden rounded-md border border-slate-200 bg-white p-4 text-sm font-medium text-slate-700 transition-all hover:border-indigo-300 hover:bg-indigo-50 hover:text-indigo-700"

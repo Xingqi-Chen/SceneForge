@@ -366,4 +366,32 @@ describe("generatePrompt", () => {
     expect(result.prompt).toContain("layout constraint: composition must follow the 3D stage arrangement");
     expect(result.prompt).toContain("ancient stone block prominent in the foreground on the right");
   });
+
+  it("adds 3D stage placement hints for characters and nearby objects", () => {
+    const project = createDefaultProject();
+    project.scene.mode = "3d";
+    const character = addDefaultCharacter(project);
+    character.description = "hero character";
+    character.transform3D = {
+      position: { x: -2, y: 0, z: 2 },
+      rotation: { x: 0, y: 0, z: 0 },
+      scale: { x: 1, y: 1, z: 1 },
+    };
+    addSceneObject(project, {
+      id: "cube-1",
+      kind: "cube",
+      name: "sword pedestal",
+      description: "stone sword pedestal",
+      transform3D: {
+        position: { x: -2.2, y: 0.5, z: 2.4 },
+        rotation: { x: 0, y: 0, z: 0 },
+        scale: { x: 1, y: 1, z: 1 },
+      },
+    });
+
+    const result = generatePrompt(project);
+
+    expect(result.prompt).toContain("hero character in the foreground on the left");
+    expect(result.prompt).toContain("stone sword pedestal near hero character");
+  });
 });

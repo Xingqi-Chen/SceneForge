@@ -4,6 +4,7 @@ import {
   Component,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type ComponentProps,
@@ -19,10 +20,12 @@ import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
 import { Trash2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { getCharacterMannequinPose } from "@/features/editor/character-mannequin-pose";
 import { useEditorStore } from "@/features/editor/store/editor-store";
 import { defaultScene } from "@/features/editor/store/defaults";
 import { isThreeDViewportPrimitive } from "@/features/editor/scene-viewport-objects";
-import type { SceneObject, SceneObject3DTransform, Vector3 } from "@/shared/types";
+import type { BodyPartId, CharacterSkeleton, SceneObject, SceneObject3DTransform, Vector3 } from "@/shared/types";
+import { characterAppearsInThreeViewport } from "@/shared/utils/character-space";
 
 import type { CanvasCapture } from "./CanvasStage";
 
@@ -191,10 +194,41 @@ function objectSelected(selection: ReturnType<typeof useEditorStore.getState>["s
   return false;
 }
 
+function characterSelected(selection: ReturnType<typeof useEditorStore.getState>["selection"], id: string) {
+  if (selection.kind === "character") {
+    return selection.id === id;
+  }
+
+  if (selection.kind === "multiple") {
+    return selection.characterIds.includes(id);
+  }
+
+  return false;
+}
+
+function characterScopeSelected(selection: ReturnType<typeof useEditorStore.getState>["selection"], id: string) {
+  return characterSelected(selection, id) || (selection.kind === "bodyPart" && selection.characterId === id);
+}
+
+function selectedCharacterBodyPart(
+  selection: ReturnType<typeof useEditorStore.getState>["selection"],
+  id: string,
+) {
+  return selection.kind === "bodyPart" && selection.characterId === id ? selection.bodyPartId : undefined;
+}
+
 function rotationRadians(transform: SceneObject3DTransform, object: SceneObject) {
   const baseX = object.kind === "plane" ? -90 : 0;
   return [
     (transform.rotation.x + baseX) * DEG2RAD,
+    transform.rotation.y * DEG2RAD,
+    transform.rotation.z * DEG2RAD,
+  ] as const;
+}
+
+function characterRotationRadians(transform: SceneObject3DTransform) {
+  return [
+    transform.rotation.x * DEG2RAD,
     transform.rotation.y * DEG2RAD,
     transform.rotation.z * DEG2RAD,
   ] as const;
@@ -212,6 +246,16 @@ function roundVector3(vector: Vector3): Vector3 {
   };
 }
 
+function characterTransform(character: CharacterSkeleton): SceneObject3DTransform {
+  return (
+    character.transform3D ?? {
+      position: { x: 0, y: 0, z: 0 },
+      rotation: { x: 0, y: 0, z: 0 },
+      scale: { x: 1, y: 1, z: 1 },
+    }
+  );
+}
+
 function transformFromGroup(group: Group, object: SceneObject): SceneObject3DTransform {
   const baseX = object.kind === "plane" ? -90 : 0;
 
@@ -223,6 +267,26 @@ function transformFromGroup(group: Group, object: SceneObject): SceneObject3DTra
     },
     rotation: {
       x: roundTransformNumber(MathUtils.radToDeg(group.rotation.x) - baseX),
+      y: roundTransformNumber(MathUtils.radToDeg(group.rotation.y)),
+      z: roundTransformNumber(MathUtils.radToDeg(group.rotation.z)),
+    },
+    scale: {
+      x: roundTransformNumber(Math.max(0.05, group.scale.x)),
+      y: roundTransformNumber(Math.max(0.05, group.scale.y)),
+      z: roundTransformNumber(Math.max(0.05, group.scale.z)),
+    },
+  };
+}
+
+function characterTransformFromGroup(group: Group): SceneObject3DTransform {
+  return {
+    position: {
+      x: roundTransformNumber(group.position.x),
+      y: roundTransformNumber(group.position.y),
+      z: roundTransformNumber(group.position.z),
+    },
+    rotation: {
+      x: roundTransformNumber(MathUtils.radToDeg(group.rotation.x)),
       y: roundTransformNumber(MathUtils.radToDeg(group.rotation.y)),
       z: roundTransformNumber(MathUtils.radToDeg(group.rotation.z)),
     },
@@ -386,6 +450,364 @@ function TransformableSceneObject({
   );
 }
 
+type ThreeTuple = [number, number, number];
+
+const mannequinPalette = {
+  selectedClothing: "#60a5fa",
+  selectedJoint: "#2563eb",
+  clothing: "#cbd5e1",
+  joint: "#64748b",
+  skin: "#f8c8a5",
+  shadow: "#475569",
+  sole: "#1e293b",
+};
+
+function MannequinMaterial({
+  color,
+  selected,
+  roughness = 0.66,
+}: {
+  color: string;
+  selected: boolean;
+  roughness?: number;
+}) {
+  return (
+    <meshStandardMaterial
+      color={color}
+      emissive={selected ? "#1d4ed8" : "#000000"}
+      emissiveIntensity={selected ? 0.08 : 0}
+      roughness={roughness}
+    />
+  );
+}
+
+function MannequinSegment({
+  color,
+  height,
+  onSelect,
+  position,
+  radiusBottom,
+  radiusTop,
+  rotation = [0, 0, 0],
+  selected,
+}: {
+  color: string;
+  height: number;
+  onSelect?: (event: ThreeEvent<MouseEvent>) => void;
+  position: ThreeTuple;
+  radiusBottom: number;
+  radiusTop: number;
+  rotation?: ThreeTuple;
+  selected: boolean;
+}) {
+  return (
+    <mesh
+      onClick={onSelect}
+      onPointerDown={(event) => {
+        if (event.button === 0 && onSelect) {
+          event.stopPropagation();
+        }
+      }}
+      position={position}
+      rotation={rotation}
+    >
+      <cylinderGeometry args={[radiusTop, radiusBottom, height, 12]} />
+      <MannequinMaterial color={color} selected={selected} />
+    </mesh>
+  );
+}
+
+function MannequinJoint({
+  color,
+  onSelect,
+  position,
+  radius,
+  selected,
+}: {
+  color: string;
+  onSelect?: (event: ThreeEvent<MouseEvent>) => void;
+  position: ThreeTuple;
+  radius: number;
+  selected: boolean;
+}) {
+  return (
+    <mesh
+      onClick={onSelect}
+      onPointerDown={(event) => {
+        if (event.button === 0 && onSelect) {
+          event.stopPropagation();
+        }
+      }}
+      position={position}
+    >
+      <sphereGeometry args={[radius, 16, 12]} />
+      <MannequinMaterial color={color} roughness={0.62} selected={selected} />
+    </mesh>
+  );
+}
+
+function MannequinBox({
+  args,
+  color,
+  onSelect,
+  position,
+  rotation = [0, 0, 0],
+  selected,
+}: {
+  args: ThreeTuple;
+  color: string;
+  onSelect?: (event: ThreeEvent<MouseEvent>) => void;
+  position: ThreeTuple;
+  rotation?: ThreeTuple;
+  selected: boolean;
+}) {
+  return (
+    <mesh
+      onClick={onSelect}
+      onPointerDown={(event) => {
+        if (event.button === 0 && onSelect) {
+          event.stopPropagation();
+        }
+      }}
+      position={position}
+      rotation={rotation}
+    >
+      <boxGeometry args={args} />
+      <MannequinMaterial color={color} selected={selected} />
+    </mesh>
+  );
+}
+
+function MannequinSelectionHalo() {
+  return (
+    <group>
+      <mesh position={[0, 1.18, 0]}>
+        <boxGeometry args={[1.34, 2.36, 0.72]} />
+        <meshBasicMaterial color="#2563eb" transparent opacity={0.42} wireframe />
+      </mesh>
+      <mesh position={[0, 0.03, 0]} rotation={[Math.PI / 2, 0, 0]}>
+        <ringGeometry args={[0.5, 0.64, 40]} />
+        <meshBasicMaterial color="#60a5fa" transparent opacity={0.55} />
+      </mesh>
+    </group>
+  );
+}
+
+function CharacterMannequinMesh({
+  character,
+  groupRef,
+  onCloseContextMenu,
+  onOpenContextMenu,
+  selected,
+  selectedBodyPartId,
+}: {
+  character: CharacterSkeleton;
+  groupRef?: Ref<Group>;
+  onCloseContextMenu?: () => void;
+  onOpenContextMenu?: (clientX: number, clientY: number) => void;
+  selected: boolean;
+  selectedBodyPartId?: BodyPartId;
+}) {
+  const selectCharacter = useEditorStore((state) => state.selectCharacter);
+  const selectBodyPart = useEditorStore((state) => state.selectBodyPart);
+  const snapCharacterToGround = useEditorStore((state) => state.snapCharacterToGround);
+  const transform = characterTransform(character);
+  const pose = getCharacterMannequinPose(character);
+  /** 与 2D 一致：仅整人选中时躯干/四肢用「整选」配色；选中某一部位时只突出该部位。 */
+  const focusWholeCharacter = selected && selectedBodyPartId === undefined;
+  const clothingColor = focusWholeCharacter ? mannequinPalette.selectedClothing : mannequinPalette.clothing;
+  const jointColor = focusWholeCharacter ? mannequinPalette.selectedJoint : mannequinPalette.joint;
+  const isPartSelected = (bodyPartId: BodyPartId) => selectedBodyPartId === bodyPartId;
+
+  function handleSelect(event: ThreeEvent<MouseEvent>) {
+    onCloseContextMenu?.();
+    event.stopPropagation();
+    selectCharacter(character.id);
+  }
+
+  function handleContextMenu(event: ThreeEvent<MouseEvent>) {
+    event.stopPropagation();
+    event.nativeEvent.preventDefault();
+    selectCharacter(character.id);
+    onOpenContextMenu?.(event.clientX, event.clientY);
+  }
+
+  function handleSnapToGround(event: ThreeEvent<MouseEvent>) {
+    event.stopPropagation();
+    snapCharacterToGround(character.id);
+  }
+
+  function handleBodyPartSelect(bodyPartId: BodyPartId, event: ThreeEvent<MouseEvent>) {
+    onCloseContextMenu?.();
+    event.stopPropagation();
+    selectBodyPart(character.id, bodyPartId);
+  }
+
+  return (
+    <group
+      onClick={handleSelect}
+      onContextMenu={handleContextMenu}
+      onDoubleClick={handleSnapToGround}
+      position={[transform.position.x, transform.position.y, transform.position.z]}
+      ref={groupRef}
+      rotation={characterRotationRadians(transform)}
+      scale={[transform.scale.x, transform.scale.y, transform.scale.z]}
+    >
+      <MannequinJoint
+        color={mannequinPalette.skin}
+        onSelect={(event) => handleBodyPartSelect("head", event)}
+        position={pose.head.position}
+        radius={pose.head.radius}
+        selected={isPartSelected("head") || focusWholeCharacter}
+      />
+      <MannequinSegment
+        color={mannequinPalette.skin}
+        height={Math.max(0.12, pose.head.position[1] - pose.joints.neck.y - pose.head.radius * 0.55)}
+        onSelect={(event) => handleBodyPartSelect("head", event)}
+        position={[pose.joints.neck.x, pose.joints.neck.y + 0.08, 0]}
+        radiusBottom={0.09}
+        radiusTop={0.1}
+        selected={isPartSelected("head") || focusWholeCharacter}
+      />
+      <MannequinBox
+        args={pose.torso.size}
+        color={isPartSelected("torso") ? mannequinPalette.selectedClothing : clothingColor}
+        onSelect={(event) => handleBodyPartSelect("torso", event)}
+        position={pose.torso.position}
+        selected={isPartSelected("torso") || focusWholeCharacter}
+      />
+      <MannequinBox
+        args={pose.torso.waistSize}
+        color={isPartSelected("torso") ? mannequinPalette.selectedJoint : mannequinPalette.shadow}
+        onSelect={(event) => handleBodyPartSelect("torso", event)}
+        position={pose.torso.waistPosition}
+        selected={isPartSelected("torso") || focusWholeCharacter}
+      />
+
+      <MannequinJoint color={jointColor} position={[pose.joints.leftShoulder.x, pose.joints.leftShoulder.y, 0]} radius={0.1} selected={focusWholeCharacter} />
+      <MannequinJoint color={jointColor} position={[pose.joints.rightShoulder.x, pose.joints.rightShoulder.y, 0]} radius={0.1} selected={focusWholeCharacter} />
+      {pose.segments
+        .filter((segment) => segment.bodyPartId !== "torso")
+        .map((segment) => {
+          const segmentSelected = isPartSelected(segment.bodyPartId);
+
+          return (
+            <MannequinSegment
+              color={segmentSelected ? mannequinPalette.selectedJoint : jointColor}
+              height={segment.height}
+              key={`${segment.bodyPartId}-${segment.from}-${segment.to}`}
+              onSelect={(event) => handleBodyPartSelect(segment.bodyPartId, event)}
+              position={segment.position}
+              radiusBottom={segment.bodyPartId.endsWith("Shin") || segment.bodyPartId.endsWith("Forearm") ? 0.065 : 0.08}
+              radiusTop={segment.bodyPartId.endsWith("Shin") || segment.bodyPartId.endsWith("Forearm") ? 0.075 : 0.095}
+              rotation={segment.rotation}
+              selected={segmentSelected || focusWholeCharacter}
+            />
+          );
+        })}
+      <MannequinJoint color={jointColor} position={[pose.joints.leftElbow.x, pose.joints.leftElbow.y, pose.joints.leftElbow.z]} radius={0.085} selected={focusWholeCharacter} />
+      <MannequinJoint color={jointColor} position={[pose.joints.rightElbow.x, pose.joints.rightElbow.y, pose.joints.rightElbow.z]} radius={0.085} selected={focusWholeCharacter} />
+      <MannequinJoint color={jointColor} position={[pose.joints.leftKnee.x, pose.joints.leftKnee.y, pose.joints.leftKnee.z]} radius={0.09} selected={focusWholeCharacter} />
+      <MannequinJoint color={jointColor} position={[pose.joints.rightKnee.x, pose.joints.rightKnee.y, pose.joints.rightKnee.z]} radius={0.09} selected={focusWholeCharacter} />
+      <MannequinJoint
+        color={isPartSelected("leftHand") ? mannequinPalette.selectedJoint : mannequinPalette.skin}
+        onSelect={(event) => handleBodyPartSelect("leftHand", event)}
+        position={pose.hands.leftHand.position}
+        radius={pose.hands.leftHand.radius}
+        selected={isPartSelected("leftHand") || focusWholeCharacter}
+      />
+      <MannequinJoint
+        color={isPartSelected("rightHand") ? mannequinPalette.selectedJoint : mannequinPalette.skin}
+        onSelect={(event) => handleBodyPartSelect("rightHand", event)}
+        position={pose.hands.rightHand.position}
+        radius={pose.hands.rightHand.radius}
+        selected={isPartSelected("rightHand") || focusWholeCharacter}
+      />
+      <MannequinBox
+        args={pose.feet.leftFoot.size}
+        color={isPartSelected("leftFoot") ? mannequinPalette.selectedJoint : mannequinPalette.sole}
+        onSelect={(event) => handleBodyPartSelect("leftFoot", event)}
+        position={pose.feet.leftFoot.position}
+        selected={isPartSelected("leftFoot") || focusWholeCharacter}
+      />
+      <MannequinBox
+        args={pose.feet.rightFoot.size}
+        color={isPartSelected("rightFoot") ? mannequinPalette.selectedJoint : mannequinPalette.sole}
+        onSelect={(event) => handleBodyPartSelect("rightFoot", event)}
+        position={pose.feet.rightFoot.position}
+        selected={isPartSelected("rightFoot") || focusWholeCharacter}
+      />
+
+      {focusWholeCharacter ? <MannequinSelectionHalo /> : null}
+      <Html center distanceFactor={9} position={[0, pose.bounds.maxY + 0.28, 0]}>
+        <div className="pointer-events-none rounded bg-white/85 px-2 py-0.5 text-[11px] font-semibold text-slate-800 shadow-sm ring-1 ring-slate-200">
+          {character.name}
+        </div>
+      </Html>
+    </group>
+  );
+}
+
+function TransformableCharacterMannequin({
+  character,
+  mode,
+  onCloseContextMenu,
+  onOpenContextMenu,
+  onTransformEnd,
+  selected,
+  selectedBodyPartId,
+  transformGizmoEnabled,
+}: {
+  character: CharacterSkeleton;
+  mode: TransformMode;
+  onCloseContextMenu?: () => void;
+  onOpenContextMenu?: (clientX: number, clientY: number) => void;
+  onTransformEnd: (character: CharacterSkeleton, group: Group | null) => void;
+  selected: boolean;
+  selectedBodyPartId?: BodyPartId;
+  transformGizmoEnabled: boolean;
+}) {
+  const groupRef = useRef<Group | null>(null);
+  const [controlObject, setControlObject] = useState<Group | null>(null);
+  const setGroupRef = useCallback((group: Group | null) => {
+    groupRef.current = group;
+    setControlObject(group);
+  }, []);
+
+  if (!selected) {
+    return (
+      <CharacterMannequinMesh
+        character={character}
+        selectedBodyPartId={selectedBodyPartId}
+        selected={false}
+        onCloseContextMenu={onCloseContextMenu}
+        onOpenContextMenu={onOpenContextMenu}
+      />
+    );
+  }
+
+  return (
+    <>
+      <CharacterMannequinMesh
+        character={character}
+        groupRef={setGroupRef}
+        selectedBodyPartId={selectedBodyPartId}
+        selected
+        onCloseContextMenu={onCloseContextMenu}
+        onOpenContextMenu={onOpenContextMenu}
+      />
+      <TransformControlsWithOrbitRestore
+        enabled={transformGizmoEnabled}
+        mode={mode}
+        object={controlObject ?? undefined}
+        onMouseUp={() => onTransformEnd(character, groupRef.current)}
+        size={0.82}
+        space="world"
+      />
+    </>
+  );
+}
+
 function getCssPrimitiveClass(object: SceneObject, selected: boolean) {
   const base =
     "absolute flex items-center justify-center border text-[11px] font-semibold text-white shadow-xl transition-all";
@@ -439,18 +861,44 @@ function getCssPrimitiveStyle(object: SceneObject): CSSProperties {
   };
 }
 
+function getCssCharacterStyle(character: CharacterSkeleton): CSSProperties {
+  const transform = characterTransform(character);
+  const width = Math.max(44, 58 * transform.scale.x);
+  const height = Math.max(96, 136 * transform.scale.y);
+  const left = 50 + transform.position.x * 8;
+  const top = 54 + transform.position.z * 7 - transform.position.y * 6;
+
+  return {
+    height,
+    left: `${left}%`,
+    top: `${top}%`,
+    transform: [
+      "translate(-50%, -50%)",
+      "rotateX(58deg)",
+      "rotateZ(-35deg)",
+      `rotateY(${transform.rotation.y}deg)`,
+      `rotateZ(${transform.rotation.z}deg)`,
+    ].join(" "),
+    width,
+  };
+}
+
 function Css3DViewport({
+  characters,
   objects,
   selection,
   selectScene,
 }: {
+  characters: CharacterSkeleton[];
   objects: SceneObject[];
   selection: ReturnType<typeof useEditorStore.getState>["selection"];
   selectScene: () => void;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const selectObject = useEditorStore((state) => state.selectObject);
+  const selectCharacter = useEditorStore((state) => state.selectCharacter);
   const snapObjectToGround = useEditorStore((state) => state.snapObjectToGround);
+  const snapCharacterToGround = useEditorStore((state) => state.snapCharacterToGround);
   const deleteSelection = useEditorStore((state) => state.deleteSelection);
   const [objectContextMenu, setObjectContextMenu] = useState<{ x: number; y: number } | null>(null);
 
@@ -509,9 +957,9 @@ function Css3DViewport({
       </div>
       <div className="absolute inset-0 bg-[linear-gradient(rgba(148,163,184,0.16)_1px,transparent_1px),linear-gradient(90deg,rgba(148,163,184,0.16)_1px,transparent_1px)] [background-size:48px_48px]" />
       <div className="absolute left-1/2 top-1/2 h-[64%] w-[72%] -translate-x-1/2 -translate-y-1/2 rotate-x-[58deg] rotate-z-[-35deg] rounded-2xl border border-slate-500/30 bg-slate-800/25 shadow-2xl" />
-      {objects.length === 0 ? (
+      {objects.length === 0 && characters.length === 0 ? (
         <div className="absolute left-1/2 top-1/2 z-10 -translate-x-1/2 -translate-y-1/2 rounded-lg border border-white/10 bg-slate-900/85 px-4 py-3 text-sm text-slate-200">
-          从左侧「3D 基础体」添加立方体、球体、圆柱或平面
+          从左侧添加「3D 人体」或 3D 基础体
         </div>
       ) : null}
       {objects.map((object) => {
@@ -541,6 +989,41 @@ function Css3DViewport({
             type="button"
           >
             <span className="max-w-[92px] truncate drop-shadow">{object.name}</span>
+          </button>
+        );
+      })}
+      {characters.map((character) => {
+        const selected = characterScopeSelected(selection, character.id);
+
+        return (
+          <button
+            aria-label={`选择 ${character.name}`}
+            className={[
+              "absolute flex items-center justify-center rounded-full border text-[11px] font-semibold text-white shadow-xl transition-all",
+              selected
+                ? "border-blue-300 bg-blue-500 ring-4 ring-blue-400/40"
+                : "border-white/25 bg-slate-500 ring-1 ring-black/20",
+            ].join(" ")}
+            key={character.id}
+            onDoubleClick={(event) => {
+              event.stopPropagation();
+              snapCharacterToGround(character.id);
+            }}
+            onContextMenu={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              selectCharacter(character.id);
+              openObjectContextMenu(event.clientX, event.clientY);
+            }}
+            onMouseDown={(event) => {
+              event.stopPropagation();
+              closeObjectContextMenu();
+              selectCharacter(character.id);
+            }}
+            style={getCssCharacterStyle(character)}
+            type="button"
+          >
+            <span className="max-w-[92px] truncate drop-shadow">{character.name}</span>
           </button>
         );
       })}
@@ -627,6 +1110,7 @@ function focusThreeSelectionFromStore() {
   const store = useEditorStore.getState();
   const { selection } = store;
   const objects = store.project.scene.objects.filter(isThreeDViewportPrimitive);
+  const characters = store.project.scene.characters.filter(characterAppearsInThreeViewport);
   const three = store.project.scene.three;
 
   let focusPoint: Vector3 | null = null;
@@ -634,23 +1118,32 @@ function focusThreeSelectionFromStore() {
   if (selection.kind === "object") {
     focusPoint =
       objects.find((object) => object.id === selection.id)?.transform3D?.position ?? null;
+  } else if (selection.kind === "character" || selection.kind === "bodyPart") {
+    const characterId = selection.kind === "character" ? selection.id : selection.characterId;
+    const character = characters.find((character) => character.id === characterId);
+    focusPoint = character ? characterTransform(character).position : null;
   } else if (selection.kind === "multiple") {
     const selectedObjects = objects.filter((object) => selection.objectIds.includes(object.id));
+    const selectedCharacters = characters.filter((character) => selection.characterIds.includes(character.id));
+    const selectedTransforms = [
+      ...selectedObjects.map((object) => object.transform3D?.position).filter((point): point is Vector3 => Boolean(point)),
+      ...selectedCharacters.map((character) => characterTransform(character).position),
+    ];
 
-    if (selectedObjects.length > 0) {
-      const total = selectedObjects.reduce(
+    if (selectedTransforms.length > 0) {
+      const total = selectedTransforms.reduce(
         (point, object) => ({
-          x: point.x + (object.transform3D?.position.x ?? 0),
-          y: point.y + (object.transform3D?.position.y ?? 0),
-          z: point.z + (object.transform3D?.position.z ?? 0),
+          x: point.x + object.x,
+          y: point.y + object.y,
+          z: point.z + object.z,
         }),
         { x: 0, y: 0, z: 0 },
       );
 
       focusPoint = {
-        x: total.x / selectedObjects.length,
-        y: total.y / selectedObjects.length,
-        z: total.z / selectedObjects.length,
+        x: total.x / selectedTransforms.length,
+        y: total.y / selectedTransforms.length,
+        z: total.z / selectedTransforms.length,
       };
     }
   }
@@ -689,14 +1182,68 @@ function ThreeViewportWeb({
   onCaptureReady,
   onWebGLError,
 }: ThreeViewportProps & { onWebGLError: () => void }) {
-  const { project, selectScene, selection, setObject3DTransform, updateScene } = useEditorStore();
+  const { project, selectScene, selection, setCharacter3DTransform, setObject3DTransform, updateScene } =
+    useEditorStore();
   const deleteSelection = useEditorStore((state) => state.deleteSelection);
   const { three } = project.scene;
   const objects = project.scene.objects.filter(isThreeDViewportPrimitive);
+  const characters = useMemo(
+    () => project.scene.characters.filter(characterAppearsInThreeViewport),
+    [project.scene.characters],
+  );
   const orbitControlsRef = useRef<OrbitControlsImpl | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [transformMode, setTransformMode] = useState<TransformMode>("translate");
+  const [mannequinGizmoEnabled, setMannequinGizmoEnabled] = useState(false);
   const [objectContextMenu, setObjectContextMenu] = useState<{ x: number; y: number } | null>(null);
+
+  const selectionSyncKey =
+    selection.kind === "character"
+      ? `character:${selection.id}`
+      : selection.kind === "bodyPart"
+        ? `bodyPart:${selection.characterId}:${selection.bodyPartId}`
+        : selection.kind === "multiple"
+          ? `multiple:${[...selection.characterIds].sort().join(",")}|${[...selection.objectIds].sort().join(",")}`
+          : selection.kind === "object"
+            ? `object:${selection.id}`
+            : selection.kind;
+
+  const showMannequinGizmoToggle =
+    characters.length > 0 &&
+    (selection.kind === "character" ||
+      selection.kind === "bodyPart" ||
+      (selection.kind === "multiple" && selection.characterIds.length > 0));
+
+  /* eslint-disable react-hooks/set-state-in-effect -- default 人体 Gizmo from selection (see selectionSyncKey); intentional UI sync */
+  useEffect(() => {
+    const inCharacterScope =
+      selection.kind === "character" ||
+      selection.kind === "bodyPart" ||
+      (selection.kind === "multiple" && selection.characterIds.length > 0);
+
+    if (!inCharacterScope) {
+      setMannequinGizmoEnabled(false);
+      return;
+    }
+
+    if (selection.kind === "bodyPart") {
+      setMannequinGizmoEnabled(false);
+      return;
+    }
+
+    if (selection.kind === "character") {
+      setMannequinGizmoEnabled(true);
+      return;
+    }
+
+    if (selection.kind === "multiple") {
+      const onlyOneCharacter =
+        selection.characterIds.length === 1 && selection.objectIds.length === 0;
+      setMannequinGizmoEnabled(onlyOneCharacter);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `selectionSyncKey` encodes `selection`; avoids re-running on unrelated store updates
+  }, [selectionSyncKey]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   const resetCamera = useCallback(() => {
     resetThreeCameraFromStore();
@@ -800,11 +1347,19 @@ function ThreeViewportWeb({
     setObject3DTransform(object.id, raw);
   }
 
+  function handleCharacterTransformEnd(character: CharacterSkeleton, group: Group | null) {
+    if (!group) {
+      return;
+    }
+
+    setCharacter3DTransform(character.id, characterTransformFromGroup(group));
+  }
+
   return (
     <div className="relative h-full w-full bg-slate-950" ref={containerRef}>
-      {objects.length === 0 ? (
+      {objects.length === 0 && characters.length === 0 ? (
         <div className="pointer-events-none absolute left-1/2 top-6 z-10 -translate-x-1/2 rounded-full border border-white/10 bg-slate-900/80 px-4 py-2 text-xs text-slate-200 shadow-lg">
-          从左侧「3D 基础体」添加立方体、球体、圆柱或平面
+          从左侧添加「3D 人体」或 3D 基础体
         </div>
       ) : null}
       <div className="absolute left-4 top-4 z-10 flex items-center gap-2 rounded-xl border border-white/10 bg-slate-900/85 p-1.5 shadow-xl backdrop-blur">
@@ -821,6 +1376,18 @@ function ThreeViewportWeb({
           </Button>
         ))}
         <div className="mx-1 h-4 w-px bg-white/10" />
+        {showMannequinGizmoToggle ? (
+          <Button
+            className="h-7 rounded-lg px-2.5 text-xs"
+            onClick={() => setMannequinGizmoEnabled((value) => !value)}
+            size="sm"
+            type="button"
+            variant={mannequinGizmoEnabled ? "primary" : "ghost"}
+          >
+            人体 Gizmo
+          </Button>
+        ) : null}
+        {showMannequinGizmoToggle ? <div className="mx-1 h-4 w-px bg-white/10" /> : null}
         <Button
           className="h-7 rounded-lg px-2.5 text-xs text-slate-200 hover:bg-white/10"
           onClick={resetCamera}
@@ -833,6 +1400,8 @@ function ThreeViewportWeb({
       </div>
       <div className="pointer-events-none absolute bottom-4 left-4 z-10 rounded-lg border border-white/10 bg-slate-900/75 px-3 py-2 text-[11px] leading-relaxed text-slate-300 shadow-lg">
         1/2/3 切换 gizmo；方向键移动，PageUp/PageDown 升降；F 聚焦选中，Home 重置相机。
+        <br />
+        选中整个人物时可直接拖动 Gizmo 移动/旋转；点选肢体后请打开「人体 Gizmo」再拖动整体。
         <br />
         拖动空白处旋转视角并保存；当前工具：
         {transformModeOptions.find((option) => option.mode === transformMode)?.label}
@@ -877,6 +1446,19 @@ function ThreeViewportWeb({
               onOpenContextMenu={openObjectContextMenu}
               onTransformEnd={handleTransformEnd}
               selected={objectSelected(selection, object.id)}
+            />
+          ))}
+          {characters.map((character) => (
+            <TransformableCharacterMannequin
+              key={character.id}
+              character={character}
+              mode={transformMode}
+              onCloseContextMenu={closeObjectContextMenu}
+              onOpenContextMenu={openObjectContextMenu}
+              onTransformEnd={handleCharacterTransformEnd}
+              selected={characterScopeSelected(selection, character.id)}
+              selectedBodyPartId={selectedCharacterBodyPart(selection, character.id)}
+              transformGizmoEnabled={mannequinGizmoEnabled}
             />
           ))}
           <OrbitControls
@@ -929,6 +1511,10 @@ function ThreeViewportWeb({
 export function ThreeViewport({ onCaptureReady }: ThreeViewportProps) {
   const { project, selectScene, selection } = useEditorStore();
   const objects = project.scene.objects.filter(isThreeDViewportPrimitive);
+  const characters = useMemo(
+    () => project.scene.characters.filter(characterAppearsInThreeViewport),
+    [project.scene.characters],
+  );
   const [webGLStatus, setWebGLStatus] = useState<WebGLStatus>("checking");
 
   useEffect(() => {
@@ -1016,7 +1602,14 @@ export function ThreeViewport({ onCaptureReady }: ThreeViewportProps) {
   }
 
   if (webGLStatus === "unavailable") {
-    return <Css3DViewport objects={objects} selectScene={selectScene} selection={selection} />;
+    return (
+      <Css3DViewport
+        characters={characters}
+        objects={objects}
+        selectScene={selectScene}
+        selection={selection}
+      />
+    );
   }
 
   return (

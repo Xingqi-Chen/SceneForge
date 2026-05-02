@@ -5,7 +5,12 @@ import { BringToFront, Copy, MoveDown, MoveUp, Trash2, ZoomIn, ZoomOut, Maximize
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 
 import { type EditorSelection, useEditorStore } from "@/features/editor/store/editor-store";
+import { isThreeDViewportPrimitive, sceneObjectsVisibleOn2DCanvas } from "@/features/editor/scene-viewport-objects";
 import type { Vector2 } from "@/shared/types";
+import {
+  characterAppearsInThreeViewport,
+  characterAppearsOn2dCanvas,
+} from "@/shared/utils/character-space";
 import { Button } from "@/components/ui/button";
 
 import type { CanvasCapture, CanvasStageProps } from "./CanvasStage";
@@ -142,10 +147,16 @@ export function CanvasViewport({ onCanvasCaptureReady }: CanvasViewportProps) {
 
     if (commandPressed && key === "a") {
       event.preventDefault();
-      selectMultiple(
-        project.scene.objects.map((object) => object.id),
-        project.scene.characters.map((character) => character.id),
-      );
+      const { scene } = project;
+      const objectIds =
+        scene.mode === "2d"
+          ? sceneObjectsVisibleOn2DCanvas(scene.objects).map((object) => object.id)
+          : scene.objects.filter(isThreeDViewportPrimitive).map((object) => object.id);
+      const characterIds =
+        scene.mode === "2d"
+          ? scene.characters.filter(characterAppearsOn2dCanvas).map((c) => c.id)
+          : scene.characters.filter(characterAppearsInThreeViewport).map((c) => c.id);
+      selectMultiple(objectIds, characterIds);
       return;
     }
 

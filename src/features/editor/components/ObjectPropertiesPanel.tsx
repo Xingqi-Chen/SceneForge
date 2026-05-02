@@ -148,6 +148,7 @@ export function ObjectPropertiesPanel() {
     project,
     selection,
     updateCharacter,
+    updateCharacter3DTransform,
     updateObject,
     updateObject3DTransform,
     updateProjectSettings,
@@ -192,6 +193,29 @@ export function ObjectPropertiesPanel() {
     updateObject3DTransform(selectedObject.id, {
       [key]: {
         ...selectedObject.transform3D[key],
+        [axis]: value,
+      },
+    });
+  }
+
+  function updateSelectedCharacter3DTransform(
+    key: keyof SceneObject3DTransform,
+    axis: keyof Vector3,
+    value: number,
+  ) {
+    if (!selectedCharacter) {
+      return;
+    }
+
+    const transform = selectedCharacter.transform3D ?? {
+      position: { x: 0, y: 0, z: 0 },
+      rotation: { x: 0, y: 0, z: 0 },
+      scale: { x: 1, y: 1, z: 1 },
+    };
+
+    updateCharacter3DTransform(selectedCharacter.id, {
+      [key]: {
+        ...transform[key],
         [axis]: value,
       },
     });
@@ -535,6 +559,40 @@ export function ObjectPropertiesPanel() {
               value={selectedCharacter.description}
             />
           </div>
+          {project.scene.mode === "3d" ? (
+            <div className="space-y-3 rounded-md border border-indigo-100 bg-indigo-50/70 p-3">
+              <div>
+                <div className="text-xs font-semibold text-indigo-700">3D 人体</div>
+                <p className="mt-1 text-[11px] leading-relaxed text-indigo-700/80">
+                  调整低模人体在 3D 舞台中的根位置、朝向和整体比例。
+                </p>
+              </div>
+              <div className="space-y-1.5">
+                <FieldLabel>位置</FieldLabel>
+                <Vector3Fields
+                  labels={["X", "Y", "Z"]}
+                  onChange={(axis, value) => updateSelectedCharacter3DTransform("position", axis, value)}
+                  value={selectedCharacter.transform3D?.position ?? { x: 0, y: 0, z: 0 }}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <FieldLabel>旋转（度）</FieldLabel>
+                <Vector3Fields
+                  labels={["X", "Y", "Z"]}
+                  onChange={(axis, value) => updateSelectedCharacter3DTransform("rotation", axis, value)}
+                  value={selectedCharacter.transform3D?.rotation ?? { x: 0, y: 0, z: 0 }}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <FieldLabel>缩放</FieldLabel>
+                <Vector3Fields
+                  labels={["X", "Y", "Z"]}
+                  onChange={(axis, value) => updateSelectedCharacter3DTransform("scale", axis, value)}
+                  value={selectedCharacter.transform3D?.scale ?? { x: 1, y: 1, z: 1 }}
+                />
+              </div>
+            </div>
+          ) : null}
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
               <FieldLabel>X</FieldLabel>

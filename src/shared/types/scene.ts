@@ -189,16 +189,29 @@ export type CharacterBodyPart = {
   promptSubcategoryBindings?: PromptTagSubcategory[];
 };
 
+/** 人体所属编辑视口；缺省表示旧数据，2D 与 3D 中都会显示。 */
+export type CharacterSpace = "2d" | "3d";
+
 export type CharacterSkeleton = {
   id: string;
   name: string;
   description: string;
+  /** 若设置，则限制该人物仅参与对应视口的展示与选择。 */
+  characterSpace?: CharacterSpace;
   position: Vector2;
+  /** 3D root transform for the low-poly mannequin in 3D scene mode. */
+  transform3D?: SceneObject3DTransform;
   /** Degrees, same convention as scene objects (Konva). */
   rotation?: number;
   scaleX?: number;
   scaleY?: number;
+  /** 2D 画布关节（Konva）；仅由 2D 模式下的关节拖拽更新。 */
   joints: Record<JointId, Vector2>;
+  /**
+   * 3D 低模人体姿态用的关节平面（与 `joints` 同坐标语义，但独立存储）。
+   * 未设置时使用编辑器内置默认 T 型姿态，不会随 2D `joints` 变化。
+   */
+  joints3D?: Record<JointId, Vector2>;
   bodyParts: CharacterBodyPart[];
   promptTags: PromptTag[];
   promptCategoryBindings?: PromptTagCategory[];

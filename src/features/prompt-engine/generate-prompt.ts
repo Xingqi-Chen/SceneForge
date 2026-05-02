@@ -6,6 +6,10 @@ import {
   inferSceneLayoutConstraints,
   inferSpatialRelationHints,
 } from "./spatial-relations";
+import {
+  characterAppearsInThreeViewport,
+  characterAppearsOn2dCanvas,
+} from "@/shared/utils/character-space";
 
 export type GeneratedPrompt = {
   prompt: string;
@@ -93,6 +97,10 @@ export function generatePrompt(project: SceneForgeProject, options: GenerateProm
   const includeLayoutConstraints = options.includeLayoutConstraints ?? true;
   const includeObjectCanvasPositionHints = !includeLayoutConstraints;
   const usesGlobalLayoutConstraints = settings.includeSpatialHints && includeLayoutConstraints;
+  const charactersForSpatialHints =
+    scene.mode === "3d"
+      ? scene.characters.filter(characterAppearsInThreeViewport)
+      : scene.characters.filter(characterAppearsOn2dCanvas);
 
   if (scene.description.trim()) {
     parts.push(scene.description.trim());
@@ -124,7 +132,7 @@ export function generatePrompt(project: SceneForgeProject, options: GenerateProm
               object,
               {
                 canvas: scene.canvas,
-                characters: scene.characters,
+                characters: charactersForSpatialHints,
               },
               {
                 includeCanvasPositionHints: includeObjectCanvasPositionHints,

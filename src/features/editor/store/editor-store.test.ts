@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import type { PromptTag } from "@/shared/types";
 
-import { createDefaultProject } from "./defaults";
+import { createDefaultProject, defaultCharacterMannequinJointPlane } from "./defaults";
 import { useEditorStore } from "./editor-store";
 
 const testTag: PromptTag = {
@@ -559,6 +559,7 @@ describe("editor store", () => {
     expect(project.scene.characters).toHaveLength(initialCharacterCount + 1);
     expect(selection).toEqual({ kind: "character", id: character?.id });
     expect(character?.description).toBe("");
+    expect(character?.characterSpace).toBe("2d");
 
     useEditorStore.getState().updateCharacterJoint(character?.id ?? "", "leftWrist", {
       x: -96,
@@ -585,6 +586,22 @@ describe("editor store", () => {
     });
   });
 
+  it("selects a body part on a character in 3D mode", () => {
+    useEditorStore.getState().setSceneMode("3d");
+    useEditorStore.getState().addCharacter();
+
+    const character = useEditorStore.getState().project.scene.characters[0];
+    expect(character.characterSpace).toBe("3d");
+
+    useEditorStore.getState().selectBodyPart(character.id, "leftThigh");
+
+    expect(useEditorStore.getState().selection).toEqual({
+      kind: "bodyPart",
+      characterId: character.id,
+      bodyPartId: "leftThigh",
+    });
+  });
+
   it("duplicates, moves, and deletes the selected character", () => {
     useEditorStore.getState().addCharacter();
 
@@ -602,6 +619,7 @@ describe("editor store", () => {
     });
     expect(duplicatedCharacter).toMatchObject({
       name: `${selectedCharacter.name} 副本`,
+      characterSpace: "2d",
       position: {
         x: selectedCharacter.position.x + 48,
         y: selectedCharacter.position.y + 24,
@@ -620,6 +638,93 @@ describe("editor store", () => {
 
     expect(useEditorStore.getState().project.scene.characters).toHaveLength(1);
     expect(useEditorStore.getState().selection).toEqual({ kind: "scene" });
+  });
+
+  it("selects and moves characters in 3D mode", () => {
+    useEditorStore.getState().setSceneMode("3d");
+    useEditorStore.getState().addCharacter();
+
+    const character = useEditorStore.getState().project.scene.characters[0];
+
+    expect(useEditorStore.getState().selection).toEqual({ kind: "character", id: character.id });
+    expect(character.characterSpace).toBe("3d");
+    expect(character.transform3D).toEqual({
+      position: { x: -1.5, y: 0, z: 0 },
+      rotation: { x: 0, y: 0, z: 0 },
+      scale: { x: 1, y: 1, z: 1 },
+    });
+
+    useEditorStore.getState().updateCharacter3DTransform(character.id, {
+      position: { x: 1, y: 2, z: -1 },
+    });
+    useEditorStore.getState().moveSelectionBy({ x: 10, y: -5 });
+    useEditorStore.getState().moveSelectionIn3DBy({ x: 0, y: 0.25, z: 0 });
+
+    expect(useEditorStore.getState().project.scene.characters[0].transform3D?.position).toEqual({
+      x: 2,
+      y: 2.25,
+      z: -1.5,
+    });
+
+    useEditorStore.getState().snapCharacterToGround(character.id);
+
+    expect(useEditorStore.getState().project.scene.characters[0].transform3D?.position).toEqual({
+      x: 2,
+      y: 0,
+      z: -1.5,
+    });
+
+    useEditorStore.getState().duplicateSelection();
+
+    const duplicatedCharacter = useEditorStore.getState().project.scene.characters.at(-1);
+    expect(duplicatedCharacter?.characterSpace).toBe("3d");
+    expect(duplicatedCharacter?.transform3D?.position).toEqual({
+      x: 2.6,
+      y: 0,
+      z: -0.9,
+    });
+    expect(useEditorStore.getState().selection).toEqual({
+      kind: "character",
+      id: duplicatedCharacter?.id,
+    });
+  });
+
+  it("does not select a 3D-only character after switching to 2D mode", () => {
+    useEditorStore.getState().setSceneMode("3d");
+    useEditorStore.getState().addCharacter();
+    const id = useEditorStore.getState().project.scene.characters[0].id;
+
+    useEditorStore.getState().setSceneMode("2d");
+    useEditorStore.getState().selectCharacter(id);
+
+    expect(useEditorStore.getState().selection).toEqual({ kind: "scene" });
+  });
+
+  it("does not select a 2D-only character after switching to 3D mode", () => {
+    useEditorStore.getState().addCharacter();
+    const id = useEditorStore.getState().project.scene.characters[0].id;
+
+    useEditorStore.getState().setSceneMode("3d");
+    useEditorStore.getState().selectCharacter(id);
+
+    expect(useEditorStore.getState().selection).toEqual({ kind: "scene" });
+  });
+
+  it("snaps posed 3D characters by their mannequin bounds", () => {
+    useEditorStore.getState().setSceneMode("3d");
+    useEditorStore.getState().addCharacter();
+
+    const character = useEditorStore.getState().project.scene.characters[0];
+    useEditorStore.getState().updateCharacter(character.id, {
+      joints3D: {
+        ...defaultCharacterMannequinJointPlane,
+        leftAnkle: { x: -32, y: 360 },
+        rightAnkle: { x: 32, y: 360 },
+      },
+    });
+    useEditorStore.getState().snapCharacterToGround(character.id);
+
+    expect(useEditorStore.getState().project.scene.characters[0].transform3D?.position.y).toBeGreaterThan(0);
   });
 
   it("adds and removes prompt tags on objects and body parts", () => {

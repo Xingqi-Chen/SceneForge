@@ -18,9 +18,14 @@ import type { Transformer as KonvaTransformer } from "konva/lib/shapes/Transform
 import { Circle, Ellipse, Group, Layer, Line, Rect, Stage, Text, Transformer } from "react-konva";
 
 import { type EditorSelection, useEditorStore } from "@/features/editor/store/editor-store";
+import {
+  CHARACTER_JOINT_BODY_PART_MAP,
+  CHARACTER_SKELETON_BODY_PART_SEGMENTS,
+} from "@/features/editor/character-skeleton";
 import { defaultLineEndpoints, defaultPolygonPoints } from "@/features/editor/preset-scene-objects";
 import { sceneObjectsVisibleOn2DCanvas } from "@/features/editor/scene-viewport-objects";
 import type { BodyPartId, CharacterSkeleton, JointId, SceneObject, Vector2 } from "@/shared/types";
+import { characterAppearsOn2dCanvas } from "@/shared/utils/character-space";
 import {
   collectMarqueeSelection,
   normalizeMarqueeRect,
@@ -87,28 +92,6 @@ function computeMultiDragPayload(
 
   return { objects, characters };
 }
-
-const skeletonBodyPartSegments: Array<[BodyPartId, JointId, JointId]> = [
-  ["torso", "neck", "leftShoulder"],
-  ["torso", "neck", "rightShoulder"],
-  ["torso", "neck", "hip"],
-  ["leftUpperArm", "leftShoulder", "leftElbow"],
-  ["leftForearm", "leftElbow", "leftWrist"],
-  ["rightUpperArm", "rightShoulder", "rightElbow"],
-  ["rightForearm", "rightElbow", "rightWrist"],
-  ["leftThigh", "hip", "leftKnee"],
-  ["leftShin", "leftKnee", "leftAnkle"],
-  ["rightThigh", "hip", "rightKnee"],
-  ["rightShin", "rightKnee", "rightAnkle"],
-];
-
-const jointBodyPartMap: Partial<Record<JointId, BodyPartId>> = {
-  neck: "head",
-  leftWrist: "leftHand",
-  rightWrist: "rightHand",
-  leftAnkle: "leftFoot",
-  rightAnkle: "rightFoot",
-};
 
 function isObjectSelected(selection: EditorSelection, objectId: string) {
   if (selection.kind === "object") {
@@ -413,7 +396,9 @@ function CharacterNode({
   const toggleCharacterInSelection = useEditorStore((state) => state.toggleCharacterInSelection);
   const updateCharacter = useEditorStore((state) => state.updateCharacter);
   const updateCharacterJoint = useEditorStore((state) => state.updateCharacterJoint);
-  const stroke = selected ? "#0f172a" : "#334155";
+  /** 仅「选中整个人物」时用深色粗线；选中某一部位时其余肢体保持未选中外观，避免躯干仍像整选高亮。 */
+  const focusWholeCharacter = selected && selectedBodyPartId === undefined;
+  const defaultStroke = focusWholeCharacter ? "#0f172a" : "#334155";
 
   function handleSelect(event: KonvaEventObject<MouseEvent | TouchEvent>) {
     if (panMode) {
@@ -455,7 +440,7 @@ function CharacterNode({
       return;
     }
 
-    const bodyPartId = jointBodyPartMap[jointId];
+    const bodyPartId = CHARACTER_JOINT_BODY_PART_MAP[jointId];
 
     if (!bodyPartId) {
       handleSelect(event);
@@ -533,12 +518,13 @@ function CharacterNode({
       scaleX={character.scaleX ?? 1}
       scaleY={character.scaleY ?? 1}
     >
-      {skeletonBodyPartSegments.map(([bodyPartId, from, to]) => {
+      {CHARACTER_SKELETON_BODY_PART_SEGMENTS.map(([bodyPartId, from, to]) => {
         const selectedPart = selectedBodyPartId === bodyPartId;
 
         return (
           <Line
             key={`${bodyPartId}-${from}-${to}`}
+            hitStrokeWidth={28}
             lineCap="round"
             onClick={(event) => handleBodyPartSelect(bodyPartId, event)}
             onTap={(event) => handleBodyPartSelect(bodyPartId, event)}
@@ -548,38 +534,40 @@ function CharacterNode({
               character.joints[to].x,
               character.joints[to].y,
             ]}
-            stroke={selectedPart ? "#2563eb" : stroke}
-            strokeWidth={selectedPart ? 11 : selected ? 9 : 7}
+            stroke={selectedPart ? "#2563eb" : defaultStroke}
+            strokeWidth={selectedPart ? 11 : focusWholeCharacter ? 9 : 7}
             strokeScaleEnabled={false}
           />
         );
       })}
       <Circle
         fill="#ffffff"
+        hitStrokeWidth={24}
         radius={30}
         onClick={(event) => handleBodyPartSelect("head", event)}
         onTap={(event) => handleBodyPartSelect("head", event)}
-        stroke={selectedBodyPartId === "head" ? "#2563eb" : stroke}
-        strokeWidth={selectedBodyPartId === "head" ? 7 : selected ? 6 : 4}
+        stroke={selectedBodyPartId === "head" ? "#2563eb" : defaultStroke}
+        strokeWidth={selectedBodyPartId === "head" ? 7 : focusWholeCharacter ? 6 : 4}
         strokeScaleEnabled={false}
         x={character.joints.neck.x}
         y={character.joints.neck.y - 34}
       />
       {Object.entries(character.joints).map(([joint, position]) => {
         const jointId = joint as JointId;
-        const selectedPart = selectedBodyPartId === jointBodyPartMap[jointId];
+        const selectedPart = selectedBodyPartId === CHARACTER_JOINT_BODY_PART_MAP[jointId];
 
         return (
           <Circle
             draggable={!panMode}
-            fill={selectedPart ? "#2563eb" : selected ? "#0f172a" : "#ffffff"}
+            fill={selectedPart ? "#2563eb" : focusWholeCharacter ? "#0f172a" : "#ffffff"}
+            hitStrokeWidth={18}
             key={joint}
             onClick={(event) => handleJointSelect(jointId, event)}
             onDragEnd={(event) => handleJointDrag(jointId, event)}
             onDragMove={(event) => handleJointDrag(jointId, event)}
             onTap={(event) => handleJointSelect(jointId, event)}
             radius={selectedPart ? 8 : 7}
-            stroke={selectedPart ? "#2563eb" : stroke}
+            stroke={selectedPart ? "#2563eb" : defaultStroke}
             strokeWidth={3}
             strokeScaleEnabled={false}
             x={position.x}
@@ -649,6 +637,10 @@ export function CanvasStage({
     sendSelectionBackward,
   } = useEditorStore();
   const { canvas, objects, characters } = project.scene;
+  const charactersOn2dCanvas = useMemo(
+    () => characters.filter(characterAppearsOn2dCanvas),
+    [characters],
+  );
   const objectsOn2dCanvas = useMemo(() => sceneObjectsVisibleOn2DCanvas(objects), [objects]);
   const baseScale =
     containerSize.width > 0 && containerSize.height > 0
@@ -837,7 +829,7 @@ export function CanvasStage({
       return;
     }
 
-    if ((selection.kind === "character" || selection.kind === "bodyPart") && selectedCharacterRef.current) {
+    if (selection.kind === "character" && selectedCharacterRef.current) {
       transformer.nodes([selectedCharacterRef.current]);
       transformer.getLayer()?.batchDraw();
       return;
@@ -915,7 +907,7 @@ export function CanvasStage({
               const scene = useEditorStore.getState().project.scene;
               const hit = collectMarqueeSelection(
                 sceneObjectsVisibleOn2DCanvas(scene.objects),
-                scene.characters,
+                scene.characters.filter(characterAppearsOn2dCanvas),
                 box,
               );
               selectMultiple(hit.objectIds, hit.characterIds);
@@ -1083,7 +1075,7 @@ export function CanvasStage({
                 />
               );
             })}
-            {characters.map((character) => {
+            {charactersOn2dCanvas.map((character) => {
               const selected = isCharacterScopeSelected(selection, character.id);
 
               return (
@@ -1111,8 +1103,7 @@ export function CanvasStage({
                       : undefined
                   }
                   transformRef={
-                    (selection.kind === "character" && selection.id === character.id) ||
-                    (selection.kind === "bodyPart" && selection.characterId === character.id)
+                    selection.kind === "character" && selection.id === character.id
                       ? selectedCharacterRef
                       : undefined
                   }
@@ -1144,6 +1135,7 @@ export function CanvasStage({
               })()
             ) : null}
             <Transformer
+              borderEnabled={selection.kind !== "character"}
               boundBoxFunc={(oldBox, newBox) =>
                 newBox.width < 16 || newBox.height < 16 ? oldBox : newBox
               }

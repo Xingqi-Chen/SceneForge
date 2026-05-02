@@ -21,6 +21,7 @@ import {
   DEFAULT_PROMPT_SUBCATEGORY_BINDINGS,
   createDefaultPromptBindingState,
   defaultCharacter,
+  defaultCharacterMannequinJointPlane,
   defaultScene,
 } from "@/features/editor/store/defaults";
 import { defaultLineEndpoints, defaultPolygonPoints } from "@/features/editor/preset-scene-objects";
@@ -287,6 +288,20 @@ function sanitizeObject3DTransform(raw: unknown): SceneObject["transform3D"] {
   };
 }
 
+function sanitizeCharacter3DTransform(raw: unknown): CharacterSkeleton["transform3D"] {
+  const fallback = defaultCharacter.transform3D;
+
+  if (!isRecord(raw) || !fallback) {
+    return undefined;
+  }
+
+  return {
+    position: sanitizeVector3Point(raw.position, fallback.position),
+    rotation: sanitizeVector3Point(raw.rotation, fallback.rotation),
+    scale: sanitizeVector3Point(raw.scale, fallback.scale),
+  };
+}
+
 function sanitizeLineEndpoints(raw: unknown, width: number, height: number): LineEndpoints {
   if (!isRecord(raw)) {
     return defaultLineEndpoints(width, height);
@@ -498,6 +513,26 @@ function sanitizeCharacter(raw: unknown): CharacterSkeleton | null {
     }),
   ) as CharacterSkeleton["joints"];
 
+  const joints3DSource = isRecord(raw.joints3D) ? raw.joints3D : undefined;
+  const joints3D: CharacterSkeleton["joints3D"] | undefined = joints3DSource
+    ? (Object.fromEntries(
+        (Object.keys(defaultCharacter.joints) as JointId[]).map((jointId) => {
+          const j = joints3DSource[jointId];
+          if (
+            isRecord(j) &&
+            typeof j.x === "number" &&
+            typeof j.y === "number" &&
+            Number.isFinite(j.x) &&
+            Number.isFinite(j.y)
+          ) {
+            return [jointId, { x: j.x, y: j.y }];
+          }
+
+          return [jointId, { ...defaultCharacterMannequinJointPlane[jointId] }];
+        }),
+      ) as CharacterSkeleton["joints3D"])
+    : undefined;
+
   const bodyPartsRaw =
     Array.isArray(raw.bodyParts) && raw.bodyParts.length > 0
       ? (raw.bodyParts as CharacterSkeleton["bodyParts"])
@@ -532,16 +567,23 @@ function sanitizeCharacter(raw: unknown): CharacterSkeleton | null {
     DEFAULT_PROMPT_CATEGORY_BINDINGS.character,
   );
 
+  const characterSpaceRaw = raw.characterSpace;
+  const characterSpace: CharacterSkeleton["characterSpace"] | undefined =
+    characterSpaceRaw === "2d" || characterSpaceRaw === "3d" ? characterSpaceRaw : undefined;
+
   return {
     id: raw.id,
     name: typeof raw.name === "string" ? raw.name : "人物",
     description: typeof raw.description === "string" ? raw.description : "",
     position,
+    ...(characterSpace ? { characterSpace } : {}),
+    transform3D: sanitizeCharacter3DTransform(raw.transform3D),
     rotation:
       typeof raw.rotation === "number" && Number.isFinite(raw.rotation) ? raw.rotation : undefined,
     scaleX: typeof raw.scaleX === "number" && Number.isFinite(raw.scaleX) ? raw.scaleX : undefined,
     scaleY: typeof raw.scaleY === "number" && Number.isFinite(raw.scaleY) ? raw.scaleY : undefined,
     joints,
+    ...(joints3D ? { joints3D } : {}),
     bodyParts,
     promptTags: dedupePromptTags(charPromptTags),
     promptCategoryBindings,

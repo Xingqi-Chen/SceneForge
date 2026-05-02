@@ -5,6 +5,7 @@ import { create } from "zustand";
 import type {
   BodyPartId,
   CharacterSkeleton,
+  CharacterSpace,
   JointId,
   LineEndpoints,
   PromptBindingState,
@@ -23,6 +24,11 @@ import type {
   Vector3,
 } from "@/shared/types";
 
+import {
+  characterAppearsInThreeViewport,
+  characterAppearsOn2dCanvas,
+} from "@/shared/utils/character-space";
+
 import { BUILT_IN_PROMPT_LIBRARY_TAGS } from "@/features/prompt-engine/prompt-library/built-in-prompt-tags";
 import { mergeImportedPromptLibraryTags } from "@/features/prompt-engine/prompt-library/merge-imported-prompt-library-tags";
 import {
@@ -36,6 +42,7 @@ import {
   defaultLineEndpoints,
   defaultPolygonPoints,
 } from "@/features/editor/preset-scene-objects";
+import { snapCharacterTransformToMannequinGround } from "@/features/editor/character-mannequin-pose";
 
 import {
   DEFAULT_PROMPT_CATEGORY_BINDINGS,
@@ -131,6 +138,10 @@ type EditorState = {
   }) => void;
   addCharacter: () => void;
   updateCharacter: (id: string, patch: Partial<CharacterSkeleton>) => void;
+  updateCharacter3DTransform: (id: string, patch: Partial<SceneObject3DTransform>) => void;
+  setCharacter3DTransform: (id: string, transform: SceneObject3DTransform) => void;
+  /** 3D 模式：双击人物落地（根位置 y 对齐到地面）。 */
+  snapCharacterToGround: (characterId: string) => void;
   updateCharacterJoint: (id: string, jointId: JointId, position: Vector2) => void;
   addPromptTag: (target: PromptTagTarget, tag: PromptTag) => void;
   updatePromptTag: (target: PromptTagTarget, tagId: string, patch: PromptTagPatch) => void;
@@ -287,15 +298,21 @@ function updateTagInList(tags: PromptTag[], tagId: string, patch: PromptTagPatch
   );
 }
 
-function createCharacter(layerOffset: number, bindings: PromptBindingState): CharacterSkeleton {
+function createCharacter(
+  layerOffset: number,
+  bindings: PromptBindingState,
+  characterSpace: CharacterSpace,
+): CharacterSkeleton {
   return {
     ...defaultCharacter,
     id: createId("character"),
     name: `人物 ${layerOffset + 1}`,
+    characterSpace,
     position: {
       x: defaultCharacter.position.x + layerOffset * 48,
       y: defaultCharacter.position.y,
     },
+    transform3D: createDefaultCharacter3DTransform(layerOffset),
     joints: Object.fromEntries(
       Object.entries(defaultCharacter.joints).map(([jointId, position]) => [
         jointId,
@@ -341,11 +358,38 @@ function createDefault3DTransform(kind: SceneObjectKind, index: number): SceneOb
   };
 }
 
+function createDefaultCharacter3DTransform(index: number): SceneObject3DTransform {
+  const spread = index % 5;
+
+  return {
+    position: { x: -1.5 + spread * 0.75, y: 0, z: Math.floor(index / 5) * 1.25 },
+    rotation: { x: 0, y: 0, z: 0 },
+    scale: { x: 1, y: 1, z: 1 },
+  };
+}
+
 function merge3DTransform(
   current: SceneObject3DTransform | undefined,
   patch: Partial<SceneObject3DTransform>,
 ): SceneObject3DTransform {
   const base = current ?? createDefault3DTransform("cube", 0);
+
+  return {
+    position: patch.position ? { ...base.position, ...patch.position } : { ...base.position },
+    rotation: patch.rotation ? { ...base.rotation, ...patch.rotation } : { ...base.rotation },
+    scale: patch.scale ? { ...base.scale, ...patch.scale } : { ...base.scale },
+  };
+}
+
+function getCharacter3DTransform(character: CharacterSkeleton): SceneObject3DTransform {
+  return character.transform3D ?? createDefaultCharacter3DTransform(0);
+}
+
+function mergeCharacter3DTransform(
+  current: SceneObject3DTransform | undefined,
+  patch: Partial<SceneObject3DTransform>,
+): SceneObject3DTransform {
+  const base = current ?? createDefaultCharacter3DTransform(0);
 
   return {
     position: patch.position ? { ...base.position, ...patch.position } : { ...base.position },
@@ -429,6 +473,10 @@ function objectVisibleInSceneMode(object: SceneObject, mode: SceneMode): boolean
   return mode === "2d" ? !prim : prim;
 }
 
+function characterVisibleInEditorMode(character: CharacterSkeleton, mode: SceneMode): boolean {
+  return mode === "2d" ? characterAppearsOn2dCanvas(character) : characterAppearsInThreeViewport(character);
+}
+
 function sanitizeSelectionForSceneMode(
   selection: EditorSelection,
   scene: Scene,
@@ -438,8 +486,24 @@ function sanitizeSelectionForSceneMode(
     return selection;
   }
 
-  if (selection.kind === "bodyPart" || selection.kind === "character") {
-    return mode === "3d" ? { kind: "scene" } : selection;
+  if (selection.kind === "bodyPart") {
+    const character = scene.characters.find((item) => item.id === selection.characterId);
+
+    if (!character || !characterVisibleInEditorMode(character, mode)) {
+      return { kind: "scene" };
+    }
+
+    return selection;
+  }
+
+  if (selection.kind === "character") {
+    const character = scene.characters.find((item) => item.id === selection.id);
+
+    if (!character || !characterVisibleInEditorMode(character, mode)) {
+      return { kind: "scene" };
+    }
+
+    return selection;
   }
 
   if (selection.kind === "object") {
@@ -458,7 +522,11 @@ function sanitizeSelectionForSceneMode(
 
       return object && objectVisibleInSceneMode(object, mode);
     });
-    const characterIds = mode === "2d" ? selection.characterIds : [];
+    const characterIds = selection.characterIds.filter((id) => {
+      const character = scene.characters.find((item) => item.id === id);
+
+      return Boolean(character && characterVisibleInEditorMode(character, mode));
+    });
 
     return selectionFromIds(objectIds, characterIds);
   }
@@ -475,12 +543,23 @@ function cloneCharacterSkeleton(character: CharacterSkeleton): CharacterSkeleton
       x: character.position.x + 48,
       y: character.position.y + 24,
     },
+    transform3D: {
+      ...getCharacter3DTransform(character),
+      position: offsetVector3(getCharacter3DTransform(character).position),
+      rotation: { ...getCharacter3DTransform(character).rotation },
+      scale: { ...getCharacter3DTransform(character).scale },
+    },
     joints: Object.fromEntries(
       Object.entries(character.joints).map(([jointId, position]) => [
         jointId,
         { ...position },
       ]),
     ) as CharacterSkeleton["joints"],
+    joints3D: character.joints3D
+      ? (Object.fromEntries(
+          Object.entries(character.joints3D).map(([jointId, position]) => [jointId, { ...position }]),
+        ) as CharacterSkeleton["joints3D"])
+      : undefined,
     bodyParts: character.bodyParts.map((bodyPart) => ({
       ...bodyPart,
       promptTags: bodyPart.promptTags.map(clonePromptTag),
@@ -595,7 +674,10 @@ export const useEditorStore = create<EditorState>((set) => ({
     }),
   selectCharacter: (id) =>
     set((state) => {
-      if (state.project.scene.mode === "3d") {
+      const character = state.project.scene.characters.find((item) => item.id === id);
+      const mode = state.project.scene.mode;
+
+      if (!character || !characterVisibleInEditorMode(character, mode)) {
         return { selection: { kind: "scene" } };
       }
 
@@ -603,7 +685,10 @@ export const useEditorStore = create<EditorState>((set) => ({
     }),
   selectBodyPart: (characterId, bodyPartId) =>
     set((state) => {
-      if (state.project.scene.mode === "3d") {
+      const character = state.project.scene.characters.find((item) => item.id === characterId);
+      const mode = state.project.scene.mode;
+
+      if (!character || !characterVisibleInEditorMode(character, mode)) {
         return { selection: { kind: "scene" } };
       }
 
@@ -618,7 +703,11 @@ export const useEditorStore = create<EditorState>((set) => ({
 
         return object && objectVisibleInSceneMode(object, mode);
       });
-      const filteredCharacterIds = mode === "2d" ? characterIds : [];
+      const filteredCharacterIds = characterIds.filter((characterId) => {
+        const character = scene.characters.find((item) => item.id === characterId);
+
+        return Boolean(character && characterVisibleInEditorMode(character, mode));
+      });
 
       return {
         selection: selectionFromIds(filteredObjectIds, filteredCharacterIds),
@@ -667,11 +756,13 @@ export const useEditorStore = create<EditorState>((set) => ({
     }),
   toggleCharacterInSelection: (characterId: string) =>
     set((state) => {
-      if (state.project.scene.mode === "3d") {
+      const scene = state.project.scene;
+      const targetCharacter = scene.characters.find((character) => character.id === characterId);
+
+      if (!targetCharacter || !characterVisibleInEditorMode(targetCharacter, scene.mode)) {
         return {};
       }
 
-      const scene = state.project.scene;
       const mode = scene.mode;
       const sel = state.selection;
       let next: EditorSelection;
@@ -923,6 +1014,53 @@ export const useEditorStore = create<EditorState>((set) => ({
                   }
                 : object,
             ),
+          },
+        }),
+      };
+    }),
+  snapCharacterToGround: (characterId) =>
+    set((state) => {
+      if (state.project.scene.mode !== "3d") {
+        return state;
+      }
+
+      const target = state.project.scene.characters.find((character) => character.id === characterId);
+      if (!target || !characterAppearsInThreeViewport(target)) {
+        return state;
+      }
+
+      let changed = false;
+      const characters = state.project.scene.characters.map((character) => {
+        if (character.id !== characterId) {
+          return character;
+        }
+
+        const transform = snapCharacterTransformToMannequinGround(
+          character,
+          getCharacter3DTransform(character),
+        );
+        changed = true;
+
+        return {
+          ...character,
+          transform3D: {
+            position: { ...transform.position },
+            rotation: { ...transform.rotation },
+            scale: { ...transform.scale },
+          },
+        };
+      });
+
+      if (!changed) {
+        return state;
+      }
+
+      return {
+        project: touchProject({
+          ...state.project,
+          scene: {
+            ...state.project.scene,
+            characters,
           },
         }),
       };
@@ -1263,6 +1401,17 @@ export const useEditorStore = create<EditorState>((set) => ({
 
           moved = true;
 
+          if (state.project.scene.mode === "3d") {
+            return {
+              ...character,
+              transform3D: move3DTransform(getCharacter3DTransform(character), {
+                x: delta.x * 0.1,
+                y: 0,
+                z: delta.y * 0.1,
+              }),
+            };
+          }
+
           return {
             ...character,
             position: {
@@ -1325,6 +1474,17 @@ export const useEditorStore = create<EditorState>((set) => ({
           }
 
           moved = true;
+
+          if (state.project.scene.mode === "3d") {
+            return {
+              ...character,
+              transform3D: move3DTransform(getCharacter3DTransform(character), {
+                x: delta.x * 0.1,
+                y: 0,
+                z: delta.y * 0.1,
+              }),
+            };
+          }
 
           return {
             ...character,
@@ -1390,8 +1550,40 @@ export const useEditorStore = create<EditorState>((set) => ({
         };
       }
 
+      if (state.selection.kind === "character") {
+        const selectionId = state.selection.id;
+        let moved = false;
+        const characters = state.project.scene.characters.map((character) => {
+          if (character.id !== selectionId) {
+            return character;
+          }
+
+          moved = true;
+
+          return {
+            ...character,
+            transform3D: move3DTransform(getCharacter3DTransform(character), delta),
+          };
+        });
+
+        if (!moved) {
+          return state;
+        }
+
+        return {
+          project: touchProject({
+            ...state.project,
+            scene: {
+              ...state.project.scene,
+              characters,
+            },
+          }),
+        };
+      }
+
       if (state.selection.kind === "multiple") {
         const idObject = new Set(state.selection.objectIds);
+        const idCharacter = new Set(state.selection.characterIds);
         let moved = false;
 
         const objects = state.project.scene.objects.map((object) => {
@@ -1407,6 +1599,19 @@ export const useEditorStore = create<EditorState>((set) => ({
           };
         });
 
+        const characters = state.project.scene.characters.map((character) => {
+          if (!idCharacter.has(character.id)) {
+            return character;
+          }
+
+          moved = true;
+
+          return {
+            ...character,
+            transform3D: move3DTransform(getCharacter3DTransform(character), delta),
+          };
+        });
+
         if (!moved) {
           return state;
         }
@@ -1417,6 +1622,7 @@ export const useEditorStore = create<EditorState>((set) => ({
             scene: {
               ...state.project.scene,
               objects,
+              characters,
             },
           }),
         };
@@ -1487,7 +1693,12 @@ export const useEditorStore = create<EditorState>((set) => ({
     }),
   addCharacter: () =>
     set((state) => {
-      const character = createCharacter(state.project.scene.characters.length, state.promptBindings);
+      const characterSpace: CharacterSpace = state.project.scene.mode === "3d" ? "3d" : "2d";
+      const character = createCharacter(
+        state.project.scene.characters.length,
+        state.promptBindings,
+        characterSpace,
+      );
 
       return {
         project: touchProject({
@@ -1508,6 +1719,44 @@ export const useEditorStore = create<EditorState>((set) => ({
           ...state.project.scene,
           characters: state.project.scene.characters.map((character) =>
             character.id === id ? { ...character, ...patch } : character,
+          ),
+        },
+      }),
+    })),
+  updateCharacter3DTransform: (id, patch) =>
+    set((state) => ({
+      project: touchProject({
+        ...state.project,
+        scene: {
+          ...state.project.scene,
+          characters: state.project.scene.characters.map((character) =>
+            character.id === id
+              ? {
+                  ...character,
+                  transform3D: mergeCharacter3DTransform(character.transform3D, patch),
+                }
+              : character,
+          ),
+        },
+      }),
+    })),
+  setCharacter3DTransform: (id, transform) =>
+    set((state) => ({
+      project: touchProject({
+        ...state.project,
+        scene: {
+          ...state.project.scene,
+          characters: state.project.scene.characters.map((character) =>
+            character.id === id
+              ? {
+                  ...character,
+                  transform3D: {
+                    position: { ...transform.position },
+                    rotation: { ...transform.rotation },
+                    scale: { ...transform.scale },
+                  },
+                }
+              : character,
           ),
         },
       }),

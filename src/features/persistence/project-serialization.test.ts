@@ -58,6 +58,41 @@ describe("project serialization", () => {
     expect(imported.scene.three.grid).toEqual({ size: 2, divisions: 3 });
   });
 
+  it("round-trips and sanitizes character 3D transforms", () => {
+    const project = createDefaultProject();
+    project.scene.characters.push({
+      ...structuredClone(defaultCharacter),
+      id: "character-3d",
+      transform3D: {
+        position: { x: 2, y: 0, z: -1 },
+        rotation: { x: 0, y: 45, z: 0 },
+        scale: { x: 1.2, y: 1.2, z: 1.2 },
+      },
+    });
+
+    const imported = importProjectFromJson(serializeProject(project));
+
+    expect(imported.scene.characters[0].transform3D).toEqual({
+      position: { x: 2, y: 0, z: -1 },
+      rotation: { x: 0, y: 45, z: 0 },
+      scale: { x: 1.2, y: 1.2, z: 1.2 },
+    });
+
+    const raw = JSON.parse(serializeProject(project));
+    raw.scene.characters[0].transform3D = {
+      position: { x: "bad", y: 3, z: Number.NaN },
+      rotation: { x: 10, y: "bad", z: 20 },
+      scale: { x: 2, y: null, z: 3 },
+    };
+
+    const sanitized = importProjectFromJson(JSON.stringify(raw));
+    expect(sanitized.scene.characters[0].transform3D).toEqual({
+      position: { x: 0, y: 3, z: 0 },
+      rotation: { x: 10, y: 0, z: 20 },
+      scale: { x: 2, y: 1, z: 3 },
+    });
+  });
+
   it("importProjectFromJson rejects prompt export files", () => {
     const promptJson = serializePromptExport(createDefaultProject(), "");
     expect(() => importProjectFromJson(promptJson)).toThrow("导入词库 JSON");

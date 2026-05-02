@@ -1,11 +1,13 @@
 import type {
   CharacterSkeleton,
+  JointId,
   PromptTag,
   PromptTagCategory,
   PromptTagSubcategory,
   PromptBindingState,
   Scene,
   SceneForgeProject,
+  Vector2,
 } from "@/shared/types";
 
 const now = new Date("2026-01-01T00:00:00.000Z").toISOString();
@@ -66,6 +68,11 @@ export const defaultCharacter: CharacterSkeleton = {
   name: "主角",
   description: "",
   position: { x: 420, y: 200 },
+  transform3D: {
+    position: { x: 0, y: 0, z: 0 },
+    rotation: { x: 0, y: 0, z: 0 },
+    scale: { x: 1, y: 1, z: 1 },
+  },
   rotation: 0,
   includeInPrompt: true,
   joints: {
@@ -108,6 +115,14 @@ export const defaultCharacter: CharacterSkeleton = {
   promptCategoryBindings: [...DEFAULT_PROMPT_CATEGORY_BINDINGS.character],
   promptSubcategoryBindings: [...DEFAULT_PROMPT_SUBCATEGORY_BINDINGS.character],
 };
+
+/** 3D mannequin 在 `joints3D` 未设置时的默认关节平面（与初始 `joints` 几何一致，但不随 2D `joints` 更新）。 */
+export const defaultCharacterMannequinJointPlane: Record<JointId, Vector2> = Object.fromEntries(
+  (Object.keys(defaultCharacter.joints) as JointId[]).map((jointId) => [
+    jointId,
+    { ...defaultCharacter.joints[jointId] },
+  ]),
+) as Record<JointId, Vector2>;
 
 export const defaultScene: Scene = {
   id: "scene-default",
@@ -154,9 +169,21 @@ function cloneCharacter(character: CharacterSkeleton): CharacterSkeleton {
   return {
     ...character,
     position: { ...character.position },
+    transform3D: character.transform3D
+      ? {
+          position: { ...character.transform3D.position },
+          rotation: { ...character.transform3D.rotation },
+          scale: { ...character.transform3D.scale },
+        }
+      : undefined,
     joints: Object.fromEntries(
       Object.entries(character.joints).map(([jointId, position]) => [jointId, { ...position }]),
     ) as CharacterSkeleton["joints"],
+    joints3D: character.joints3D
+      ? (Object.fromEntries(
+          Object.entries(character.joints3D).map(([jointId, position]) => [jointId, { ...position }]),
+        ) as CharacterSkeleton["joints3D"])
+      : undefined,
     bodyParts: character.bodyParts.map((bodyPart) => ({
       ...bodyPart,
       promptTags: bodyPart.promptTags.map(clonePromptTag),

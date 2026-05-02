@@ -1,4 +1,8 @@
 import type { CanvasConfig, CharacterSkeleton, Scene, SceneObject } from "@/shared/types";
+import {
+  characterAppearsInThreeViewport,
+  characterAppearsOn2dCanvas,
+} from "@/shared/utils/character-space";
 
 type Bounds = {
   left: number;
@@ -82,6 +86,59 @@ function get3DObjectSpatialHints(object: SceneObject) {
   }
 
   return hints;
+}
+
+function get3DCharacterSpatialHints(character: CharacterSkeleton) {
+  const transform = character.transform3D;
+
+  if (!transform) {
+    return [];
+  }
+
+  const hints: string[] = [];
+  const maxScale = Math.max(transform.scale.x, transform.scale.y, transform.scale.z);
+
+  if (maxScale >= 1.6) {
+    hints.push("prominent");
+  }
+
+  if (transform.position.z <= -1.5) {
+    hints.push("in the background");
+  } else if (transform.position.z >= 1.5) {
+    hints.push("in the foreground");
+  }
+
+  if (transform.position.x <= -1.5) {
+    hints.push("on the left");
+  } else if (transform.position.x >= 1.5) {
+    hints.push("on the right");
+  }
+
+  return hints;
+}
+
+function get3DObjectCharacterRelation(object: SceneObject, character: CharacterSkeleton) {
+  const objectTransform = object.transform3D;
+  const characterTransform = character.transform3D;
+
+  if (!objectTransform || !characterTransform) {
+    return null;
+  }
+
+  const horizontalThreshold = 0.8;
+  const depthThreshold = 0.8;
+  const dx = objectTransform.position.x - characterTransform.position.x;
+  const dz = objectTransform.position.z - characterTransform.position.z;
+
+  if (Math.abs(dx) <= horizontalThreshold && Math.abs(dz) <= depthThreshold) {
+    return "near";
+  }
+
+  if (Math.abs(dx) >= Math.abs(dz)) {
+    return dx < 0 ? "left of" : "right of";
+  }
+
+  return dz < 0 ? "behind" : "in front of";
 }
 
 function getCharacterBounds(character: CharacterSkeleton): Bounds | null {
@@ -394,7 +451,11 @@ function getWindowViewConstraints(objects: SceneObject[]) {
 
 export function inferSceneLayoutConstraints(scene: Scene) {
   const objects = scene.objects.filter((object) => object.includeInPrompt);
-  const characters = scene.characters.filter((character) => character.includeInPrompt);
+  const charactersIncluded = scene.characters.filter((character) => character.includeInPrompt);
+  const characters =
+    scene.mode === "3d"
+      ? charactersIncluded.filter(characterAppearsInThreeViewport)
+      : charactersIncluded.filter(characterAppearsOn2dCanvas);
 
   if (objects.length === 0 && characters.length === 0) {
     return null;
@@ -413,6 +474,30 @@ export function inferSceneLayoutConstraints(scene: Scene) {
         const objectName = getObjectPromptName(object);
         constraints.push(hints.length > 0 ? `${objectName} ${hints.join(" ")}` : `${objectName} near the center`);
       });
+
+    characters
+      .filter((character) => character.transform3D)
+      .forEach((character, index) => {
+        const hints = get3DCharacterSpatialHints(character);
+        const characterName = getCharacterPromptName(character, index, characters.length);
+        constraints.push(
+          hints.length > 0 ? `${characterName} ${hints.join(" ")}` : `${characterName} near the center`,
+        );
+      });
+
+    for (const character of characters.filter((character) => character.transform3D)) {
+      const characterName = getCharacterPromptName(character, characters.indexOf(character), characters.length);
+
+      objects
+        .filter((object) => object.transform3D)
+        .forEach((object) => {
+          const relation = get3DObjectCharacterRelation(object, character);
+
+          if (relation) {
+            constraints.push(`${getObjectPromptName(object)} ${relation} ${characterName}`);
+          }
+        });
+    }
 
     return Array.from(new Set(constraints)).join(", ");
   }
