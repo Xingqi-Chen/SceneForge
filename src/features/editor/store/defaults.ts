@@ -7,7 +7,7 @@ import type {
   PromptBindingState,
   Scene,
   SceneForgeProject,
-  Vector2,
+  Vector3,
 } from "@/shared/types";
 
 const now = new Date("2026-01-01T00:00:00.000Z").toISOString();
@@ -116,13 +116,22 @@ export const defaultCharacter: CharacterSkeleton = {
   promptSubcategoryBindings: [...DEFAULT_PROMPT_SUBCATEGORY_BINDINGS.character],
 };
 
-/** 3D mannequin 在 `joints3D` 未设置时的默认关节平面（与初始 `joints` 几何一致，但不随 2D `joints` 更新）。 */
-export const defaultCharacterMannequinJointPlane: Record<JointId, Vector2> = Object.fromEntries(
-  (Object.keys(defaultCharacter.joints) as JointId[]).map((jointId) => [
-    jointId,
-    { ...defaultCharacter.joints[jointId] },
-  ]),
-) as Record<JointId, Vector2>;
+/** 与旧版 `to3DJointFromPlane` 手腕/脚踝附加局部深度一致（米）。 */
+const MANNEQUIN_DEFAULT_Z_WRIST_ANKLE = 0.04;
+
+/** 3D mannequin 在 `joints3D` 未设置时的默认姿态（x/y 与初始 `joints` 几何一致；z 为局部深度米）。 */
+export const defaultCharacterMannequinJoints3D: Record<JointId, Vector3> = Object.fromEntries(
+  (Object.keys(defaultCharacter.joints) as JointId[]).map((jointId) => {
+    const { x, y } = defaultCharacter.joints[jointId];
+    const z =
+      jointId.endsWith("Wrist") || jointId.endsWith("Ankle") ? MANNEQUIN_DEFAULT_Z_WRIST_ANKLE : 0;
+
+    return [jointId, { x, y, z }];
+  }),
+) as Record<JointId, Vector3>;
+
+/** @deprecated 使用 `defaultCharacterMannequinJoints3D`（现为 Vector3）。 */
+export const defaultCharacterMannequinJointPlane = defaultCharacterMannequinJoints3D;
 
 export const defaultScene: Scene = {
   id: "scene-default",

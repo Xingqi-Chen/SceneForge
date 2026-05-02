@@ -13,23 +13,116 @@ import {
   type Ref,
 } from "react";
 import { Canvas, useThree, type ThreeEvent } from "@react-three/fiber";
-import { Grid, Html, OrbitControls, PerspectiveCamera, TransformControls } from "@react-three/drei";
-import { MathUtils, WebGLRenderer, type Group } from "three";
+import {
+  ContactShadows,
+  Grid,
+  Html,
+  OrbitControls,
+  PerspectiveCamera,
+  RoundedBox,
+  TransformControls,
+} from "@react-three/drei";
+import {
+  BackSide,
+  MathUtils,
+  Matrix4,
+  Plane,
+  Quaternion as ThreeQuaternion,
+  Ray,
+  Raycaster,
+  Vector2 as ThreeVector2,
+  Vector3 as ThreeVector3,
+  WebGLRenderer,
+  type Group,
+} from "three";
 import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
 
 import { Trash2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { getCharacterMannequinPose } from "@/features/editor/character-mannequin-pose";
+import { CHARACTER_JOINT_BODY_PART_MAP } from "@/features/editor/character-skeleton";
+import { getCharacterMannequinPose, mannequinPlaneCoordsFromLocalXY } from "@/features/editor/character-mannequin-pose";
 import { useEditorStore } from "@/features/editor/store/editor-store";
-import { defaultScene } from "@/features/editor/store/defaults";
+import { defaultCharacterMannequinJoints3D, defaultScene } from "@/features/editor/store/defaults";
 import { isThreeDViewportPrimitive } from "@/features/editor/scene-viewport-objects";
-import type { BodyPartId, CharacterSkeleton, SceneObject, SceneObject3DTransform, Vector3 } from "@/shared/types";
+import type { BodyPartId, CharacterSkeleton, JointId, SceneObject, SceneObject3DTransform, Vector3 } from "@/shared/types";
 import { characterAppearsInThreeViewport } from "@/shared/utils/character-space";
 
 import type { CanvasCapture } from "./CanvasStage";
 
 const DEG2RAD = Math.PI / 180;
+
+const MANNEQUIN_BONE_UP = new ThreeVector3(0, 1, 0);
+
+/** 关节连线方向对齐胶囊本地 Y 轴，避免欧拉角在斜骨上的不稳定扭转。 */
+function mannequinBoneQuaternion(
+  joints: Record<JointId, Vector3>,
+  from: JointId,
+  to: JointId,
+): ThreeQuaternion {
+  const a = joints[from];
+  const b = joints[to];
+  const dir = new ThreeVector3(b.x - a.x, b.y - a.y, b.z - a.z);
+  const len = dir.length();
+
+  if (len < 1e-8) {
+    return new ThreeQuaternion();
+  }
+
+  dir.multiplyScalar(1 / len);
+
+  return new ThreeQuaternion().setFromUnitVectors(MANNEQUIN_BONE_UP, dir);
+}
+
+const MANNEQUIN_DRAG_PLANE = new Plane(new ThreeVector3(0, 0, 1), 0);
+const MANNEQUIN_PLANE_DOT_EPS = 0.025;
+
+function assignRef<T>(ref: Ref<T> | undefined, value: T | null) {
+  if (!ref) {
+    return;
+  }
+
+  if (typeof ref === "function") {
+    ref(value);
+  } else {
+    ref.current = value;
+  }
+}
+
+/** Ray vs character-root local plane z=0 (正面投影拖拽关节)。 */
+function localHitOnMannequinPlane(worldRay: Ray, group: Group): ThreeVector3 | null {
+  group.updateMatrixWorld(true);
+  const inverse = new Matrix4().copy(group.matrixWorld).invert();
+  const origin = worldRay.origin.clone().applyMatrix4(inverse);
+  const direction = worldRay.direction.clone().transformDirection(inverse);
+
+  if (Math.abs(direction.z) < MANNEQUIN_PLANE_DOT_EPS) {
+    return null;
+  }
+
+  const ray = new Ray(origin, direction);
+  const hit = new ThreeVector3();
+
+  return ray.intersectPlane(MANNEQUIN_DRAG_PLANE, hit) ? hit : null;
+}
+
+/** Ray vs character-root horizontal plane y = planeY（Shift+拖拽时改局部 Z）。 */
+function localHitOnHorizontalPlane(worldRay: Ray, group: Group, planeY: number): ThreeVector3 | null {
+  group.updateMatrixWorld(true);
+  const inverse = new Matrix4().copy(group.matrixWorld).invert();
+  const origin = worldRay.origin.clone().applyMatrix4(inverse);
+  const direction = worldRay.direction.clone().transformDirection(inverse);
+
+  if (Math.abs(direction.y) < MANNEQUIN_PLANE_DOT_EPS) {
+    return null;
+  }
+
+  const ray = new Ray(origin, direction);
+  const hit = new ThreeVector3();
+  const horizontalPlane = new Plane(new ThreeVector3(0, 1, 0), -planeY);
+
+  return ray.intersectPlane(horizontalPlane, hit) ? hit : null;
+}
 
 /**
  * drei TransformControls 在拖拽时会关掉默认 OrbitControls；若控件在 dragging 卸载（重叠物体抢点击导致换选、Strict Mode 等），
@@ -453,53 +546,113 @@ function TransformableSceneObject({
 type ThreeTuple = [number, number, number];
 
 const mannequinPalette = {
-  selectedClothing: "#60a5fa",
-  selectedJoint: "#2563eb",
-  clothing: "#cbd5e1",
-  joint: "#64748b",
-  skin: "#f8c8a5",
+  selectedClothing: "#7dd3fc",
+  selectedJoint: "#38bdf8",
+  clothing: "#b8c4d4",
+  /** 骨盆区：略深于腰腹，与 RoundedBox 高光搭配更清晰。 */
+  pelvis: "#5a6a82",
+  torsoMid: "#8b9ab0",
+  joint: "#6b7c94",
+  skin: "#e8b09a",
   shadow: "#475569",
-  sole: "#1e293b",
+  sole: "#172033",
 };
 
-function MannequinMaterial({
+/** 肢体胶囊径向 / 高度分段：在观感与面数之间折中。 */
+const MANNEQUIN_CAPSULE_RADIAL = 7;
+const MANNEQUIN_CAPSULE_HEIGHT = 12;
+const MANNEQUIN_JOINT_SPHERE = [13, 10] as const;
+
+type MannequinSurfaceKind = "skin" | "fabric" | "accent" | "sole";
+
+function MannequinSurfaceMaterial({
   color,
   selected,
-  roughness = 0.66,
+  kind = "fabric",
 }: {
   color: string;
   selected: boolean;
-  roughness?: number;
+  kind?: MannequinSurfaceKind;
 }) {
+  const emissive = selected ? "#0c4a6e" : "#000000";
+  const emissiveIntensity = selected ? (kind === "skin" ? 0.055 : kind === "sole" ? 0.04 : 0.09) : 0;
+
+  if (kind === "skin") {
+    return (
+      <meshPhysicalMaterial
+        clearcoat={0.28}
+        clearcoatRoughness={0.42}
+        color={color}
+        emissive={emissive}
+        emissiveIntensity={emissiveIntensity}
+        metalness={0}
+        roughness={0.5}
+      />
+    );
+  }
+
+  if (kind === "sole") {
+    return (
+      <meshStandardMaterial
+        color={color}
+        emissive={emissive}
+        emissiveIntensity={emissiveIntensity}
+        metalness={0.06}
+        roughness={0.78}
+      />
+    );
+  }
+
+  if (kind === "accent") {
+    return (
+      <meshStandardMaterial
+        color={color}
+        emissive={emissive}
+        emissiveIntensity={emissiveIntensity}
+        metalness={0.14}
+        roughness={0.52}
+      />
+    );
+  }
+
   return (
     <meshStandardMaterial
       color={color}
-      emissive={selected ? "#1d4ed8" : "#000000"}
-      emissiveIntensity={selected ? 0.08 : 0}
-      roughness={roughness}
+      emissive={emissive}
+      emissiveIntensity={emissiveIntensity}
+      metalness={0.04}
+      roughness={0.64}
     />
   );
 }
 
-function MannequinSegment({
+/** 胶囊肢体：与 Unity 人形上 capsule collider 分段观感一致。 */
+function MannequinCapsuleLimb({
   color,
   height,
+  kind = "accent",
   onSelect,
   position,
-  radiusBottom,
-  radiusTop,
+  radius,
   rotation = [0, 0, 0],
+  boneQuaternion,
   selected,
 }: {
   color: string;
   height: number;
+  kind?: MannequinSurfaceKind;
   onSelect?: (event: ThreeEvent<MouseEvent>) => void;
   position: ThreeTuple;
-  radiusBottom: number;
-  radiusTop: number;
+  radius: number;
   rotation?: ThreeTuple;
+  /** 若提供，优先于 `rotation`（用于骨骼段，避免欧拉角万向节问题）。 */
+  boneQuaternion?: ThreeQuaternion;
   selected: boolean;
 }) {
+  const maxRadius = height > 1e-6 ? height * 0.499 : radius;
+  const fitRadius = Math.min(radius, maxRadius);
+  const cylLen = Math.max(0, height - 2 * fitRadius);
+
   return (
     <mesh
       onClick={onSelect}
@@ -509,46 +662,88 @@ function MannequinSegment({
         }
       }}
       position={position}
-      rotation={rotation}
+      quaternion={boneQuaternion}
+      rotation={boneQuaternion ? undefined : rotation}
     >
-      <cylinderGeometry args={[radiusTop, radiusBottom, height, 12]} />
-      <MannequinMaterial color={color} selected={selected} />
+      <capsuleGeometry args={[fitRadius, cylLen, MANNEQUIN_CAPSULE_RADIAL, MANNEQUIN_CAPSULE_HEIGHT]} />
+      <MannequinSurfaceMaterial color={color} kind={kind} selected={selected} />
     </mesh>
   );
+}
+
+function mannequinSegmentUsesTorsoSelection(segment: { bodyPartId: BodyPartId; from: JointId; to: JointId }) {
+  return segment.bodyPartId === "torso" && segment.from === "neck" && segment.to !== "hip";
+}
+
+function mannequinCapsuleRadiusForSegment(bodyPartId: BodyPartId): number {
+  switch (bodyPartId) {
+    case "leftThigh":
+    case "rightThigh":
+      return 0.1;
+    case "leftUpperArm":
+    case "rightUpperArm":
+      return 0.088;
+    case "leftShin":
+    case "rightShin":
+      return 0.074;
+    case "leftForearm":
+    case "rightForearm":
+      return 0.068;
+    default:
+      return 0.078;
+  }
 }
 
 function MannequinJoint({
   color,
+  jointDrag,
+  kind = "accent",
   onSelect,
   position,
   radius,
+  scale = [1, 1, 1],
   selected,
 }: {
   color: string;
+  jointDrag?: {
+    jointId: JointId;
+    onPointerDown: (jointId: JointId, event: ThreeEvent<PointerEvent>) => void;
+  };
+  kind?: MannequinSurfaceKind;
   onSelect?: (event: ThreeEvent<MouseEvent>) => void;
   position: ThreeTuple;
   radius: number;
+  scale?: ThreeTuple;
   selected: boolean;
 }) {
   return (
     <mesh
       onClick={onSelect}
       onPointerDown={(event) => {
+        if (event.button === 0 && jointDrag) {
+          event.stopPropagation();
+          jointDrag.onPointerDown(jointDrag.jointId, event);
+          return;
+        }
+
         if (event.button === 0 && onSelect) {
           event.stopPropagation();
         }
       }}
       position={position}
+      scale={scale}
     >
-      <sphereGeometry args={[radius, 16, 12]} />
-      <MannequinMaterial color={color} roughness={0.62} selected={selected} />
+      <sphereGeometry args={[radius, MANNEQUIN_JOINT_SPHERE[0], MANNEQUIN_JOINT_SPHERE[1]]} />
+      <MannequinSurfaceMaterial color={color} kind={kind} selected={selected} />
     </mesh>
   );
 }
 
-function MannequinBox({
+function MannequinRoundedBox({
   args,
   color,
+  cornerRadius,
+  kind = "fabric",
   onSelect,
   position,
   rotation = [0, 0, 0],
@@ -556,13 +751,21 @@ function MannequinBox({
 }: {
   args: ThreeTuple;
   color: string;
+  /** 未指定时按尺寸比例估算圆角。 */
+  cornerRadius?: number;
+  kind?: MannequinSurfaceKind;
   onSelect?: (event: ThreeEvent<MouseEvent>) => void;
   position: ThreeTuple;
   rotation?: ThreeTuple;
   selected: boolean;
 }) {
+  const [w, h, d] = args;
+  const autoRadius = Math.min(w, h, d) * 0.11;
+  const radius = Math.min(cornerRadius ?? autoRadius, Math.min(w, h, d) * 0.22, 0.085);
+
   return (
-    <mesh
+    <RoundedBox
+      args={[w, h, d]}
       onClick={onSelect}
       onPointerDown={(event) => {
         if (event.button === 0 && onSelect) {
@@ -570,28 +773,52 @@ function MannequinBox({
         }
       }}
       position={position}
+      radius={radius}
       rotation={rotation}
+      smoothness={3}
     >
-      <boxGeometry args={args} />
-      <MannequinMaterial color={color} selected={selected} />
-    </mesh>
+      <MannequinSurfaceMaterial color={color} kind={kind} selected={selected} />
+    </RoundedBox>
   );
 }
 
-function MannequinSelectionHalo() {
+function MannequinSelectionHalo({ maxY, minY }: { maxY: number; minY: number }) {
+  const pad = 0.14;
+  const height = Math.max(0.85, maxY - minY + pad * 2);
+  const midY = (minY + maxY) / 2;
+  const ringY = minY + 0.035;
+
   return (
     <group>
-      <mesh position={[0, 1.18, 0]}>
-        <boxGeometry args={[1.34, 2.36, 0.72]} />
-        <meshBasicMaterial color="#2563eb" transparent opacity={0.42} wireframe />
+      <mesh position={[0, midY, 0]}>
+        <cylinderGeometry args={[0.44, 0.58, height, 36, 1, true]} />
+        <meshBasicMaterial
+          color="#38bdf8"
+          depthWrite={false}
+          opacity={0.09}
+          side={BackSide}
+          transparent
+        />
       </mesh>
-      <mesh position={[0, 0.03, 0]} rotation={[Math.PI / 2, 0, 0]}>
-        <ringGeometry args={[0.5, 0.64, 40]} />
-        <meshBasicMaterial color="#60a5fa" transparent opacity={0.55} />
+      <mesh position={[0, ringY, 0]} rotation={[Math.PI / 2, 0, 0]}>
+        <ringGeometry args={[0.48, 0.62, 40]} />
+        <meshBasicMaterial color="#7dd3fc" depthWrite={false} opacity={0.42} transparent />
       </mesh>
     </group>
   );
 }
+
+/** 关节球高亮对应肢体部位（与线段 bodyPartId 一致）。 */
+const JOINT_ID_TO_BODY_PART: Partial<Record<JointId, BodyPartId>> = {
+  ...CHARACTER_JOINT_BODY_PART_MAP,
+  leftShoulder: "leftUpperArm",
+  rightShoulder: "rightUpperArm",
+  leftElbow: "leftForearm",
+  rightElbow: "rightForearm",
+  leftKnee: "leftShin",
+  rightKnee: "rightShin",
+  hip: "torso",
+};
 
 function CharacterMannequinMesh({
   character,
@@ -600,6 +827,7 @@ function CharacterMannequinMesh({
   onOpenContextMenu,
   selected,
   selectedBodyPartId,
+  setOrbitEnabled,
 }: {
   character: CharacterSkeleton;
   groupRef?: Ref<Group>;
@@ -607,10 +835,27 @@ function CharacterMannequinMesh({
   onOpenContextMenu?: (clientX: number, clientY: number) => void;
   selected: boolean;
   selectedBodyPartId?: BodyPartId;
+  setOrbitEnabled?: (enabled: boolean) => void;
 }) {
+  const rootGroupRef = useRef<Group | null>(null);
+  const assignRootRef = useCallback(
+    (node: Group | null) => {
+      rootGroupRef.current = node;
+      assignRef(groupRef, node);
+    },
+    [groupRef],
+  );
+
+  const dragJointRef = useRef<JointId | null>(null);
+  const jointDragModeRef = useRef<"depth" | "xy">("xy");
+  const dragListenersRef = useRef<{ move: (ev: PointerEvent) => void; up: (ev: PointerEvent) => void } | null>(null);
+
   const selectCharacter = useEditorStore((state) => state.selectCharacter);
   const selectBodyPart = useEditorStore((state) => state.selectBodyPart);
   const snapCharacterToGround = useEditorStore((state) => state.snapCharacterToGround);
+  const updateCharacterJoint3D = useEditorStore((state) => state.updateCharacterJoint3D);
+  const { camera, gl } = useThree();
+
   const transform = characterTransform(character);
   const pose = getCharacterMannequinPose(character);
   /** 与 2D 一致：仅整人选中时躯干/四肢用「整选」配色；选中某一部位时只突出该部位。 */
@@ -618,6 +863,135 @@ function CharacterMannequinMesh({
   const clothingColor = focusWholeCharacter ? mannequinPalette.selectedClothing : mannequinPalette.clothing;
   const jointColor = focusWholeCharacter ? mannequinPalette.selectedJoint : mannequinPalette.joint;
   const isPartSelected = (bodyPartId: BodyPartId) => selectedBodyPartId === bodyPartId;
+
+  const jointDragSelected = useCallback(
+    (jointId: JointId) => {
+      const part = JOINT_ID_TO_BODY_PART[jointId];
+      if (part) {
+        return selectedBodyPartId === part || focusWholeCharacter;
+      }
+
+      return focusWholeCharacter;
+    },
+    [focusWholeCharacter, selectedBodyPartId],
+  );
+
+  const applyJointDragFromPointer = useCallback(
+    (clientX: number, clientY: number, jointId: JointId) => {
+      const group = rootGroupRef.current;
+
+      if (!group) {
+        return;
+      }
+
+      const rect = gl.domElement.getBoundingClientRect();
+      const ndcX = ((clientX - rect.left) / rect.width) * 2 - 1;
+      const ndcY = -((clientY - rect.top) / rect.height) * 2 + 1;
+      const raycaster = new Raycaster();
+      raycaster.setFromCamera(new ThreeVector2(ndcX, ndcY), camera);
+      const authoring = character.joints3D ?? defaultCharacterMannequinJoints3D;
+      const baseJoint = authoring[jointId];
+
+      if (jointDragModeRef.current === "depth") {
+        const jointLocalY = pose.joints[jointId].y;
+        const hit = localHitOnHorizontalPlane(raycaster.ray, group, jointLocalY);
+
+        if (!hit) {
+          return;
+        }
+
+        updateCharacterJoint3D(character.id, jointId, { ...baseJoint, z: hit.z });
+        return;
+      }
+
+      const local = localHitOnMannequinPlane(raycaster.ray, group);
+
+      if (!local) {
+        return;
+      }
+
+      const xy = mannequinPlaneCoordsFromLocalXY(authoring, local.x, local.y);
+      updateCharacterJoint3D(character.id, jointId, { x: xy.x, y: xy.y, z: baseJoint.z });
+    },
+    [camera, character, gl.domElement, pose, updateCharacterJoint3D],
+  );
+
+  const endJointDrag = useCallback(() => {
+    dragJointRef.current = null;
+
+    if (dragListenersRef.current) {
+      window.removeEventListener("pointermove", dragListenersRef.current.move);
+      window.removeEventListener("pointerup", dragListenersRef.current.up);
+      window.removeEventListener("pointercancel", dragListenersRef.current.up);
+      dragListenersRef.current = null;
+    }
+
+    setOrbitEnabled?.(true);
+  }, [setOrbitEnabled]);
+
+  useEffect(() => {
+    return () => {
+      if (dragJointRef.current) {
+        endJointDrag();
+      }
+    };
+  }, [endJointDrag]);
+
+  const handleJointPointerDown = useCallback(
+    (jointId: JointId, event: ThreeEvent<PointerEvent>) => {
+      if (event.button !== 0) {
+        return;
+      }
+
+      onCloseContextMenu?.();
+      event.stopPropagation();
+      endJointDrag();
+      jointDragModeRef.current = event.nativeEvent.shiftKey ? "depth" : "xy";
+      selectCharacter(character.id);
+      const mapped = CHARACTER_JOINT_BODY_PART_MAP[jointId];
+
+      if (mapped) {
+        selectBodyPart(character.id, mapped);
+      }
+
+      dragJointRef.current = jointId;
+      setOrbitEnabled?.(false);
+
+      const onMove = (ev: PointerEvent) => {
+        if (dragJointRef.current !== jointId) {
+          return;
+        }
+
+        applyJointDragFromPointer(ev.clientX, ev.clientY, jointId);
+      };
+
+      const onUp = () => {
+        endJointDrag();
+      };
+
+      dragListenersRef.current = { move: onMove, up: onUp };
+      window.addEventListener("pointermove", onMove);
+      window.addEventListener("pointerup", onUp);
+      window.addEventListener("pointercancel", onUp);
+
+      applyJointDragFromPointer(event.clientX, event.clientY, jointId);
+
+      const captureTarget = event.nativeEvent.target;
+
+      if (captureTarget instanceof Element && "setPointerCapture" in captureTarget) {
+        captureTarget.setPointerCapture(event.pointerId);
+      }
+    },
+    [
+      applyJointDragFromPointer,
+      character.id,
+      endJointDrag,
+      onCloseContextMenu,
+      selectBodyPart,
+      selectCharacter,
+      setOrbitEnabled,
+    ],
+  );
 
   function handleSelect(event: ThreeEvent<MouseEvent>) {
     onCloseContextMenu?.();
@@ -649,68 +1023,172 @@ function CharacterMannequinMesh({
       onContextMenu={handleContextMenu}
       onDoubleClick={handleSnapToGround}
       position={[transform.position.x, transform.position.y, transform.position.z]}
-      ref={groupRef}
+      ref={assignRootRef}
       rotation={characterRotationRadians(transform)}
       scale={[transform.scale.x, transform.scale.y, transform.scale.z]}
     >
       <MannequinJoint
         color={mannequinPalette.skin}
+        kind="skin"
         onSelect={(event) => handleBodyPartSelect("head", event)}
         position={pose.head.position}
         radius={pose.head.radius}
+        scale={[1.05, 1.08, 0.94]}
         selected={isPartSelected("head") || focusWholeCharacter}
       />
-      <MannequinSegment
+      <MannequinCapsuleLimb
         color={mannequinPalette.skin}
         height={Math.max(0.12, pose.head.position[1] - pose.joints.neck.y - pose.head.radius * 0.55)}
+        kind="skin"
         onSelect={(event) => handleBodyPartSelect("head", event)}
-        position={[pose.joints.neck.x, pose.joints.neck.y + 0.08, 0]}
-        radiusBottom={0.09}
-        radiusTop={0.1}
+        position={[pose.joints.neck.x, pose.joints.neck.y + 0.08, pose.joints.neck.z]}
+        radius={0.092}
         selected={isPartSelected("head") || focusWholeCharacter}
       />
-      <MannequinBox
-        args={pose.torso.size}
-        color={isPartSelected("torso") ? mannequinPalette.selectedClothing : clothingColor}
+      <MannequinJoint
+        color={jointColor}
+        jointDrag={{ jointId: "neck", onPointerDown: handleJointPointerDown }}
+        position={[pose.joints.neck.x, pose.joints.neck.y, pose.joints.neck.z]}
+        radius={0.07}
+        selected={jointDragSelected("neck")}
+      />
+      <MannequinRoundedBox
+        args={pose.torso.pelvis.size}
+        color={
+          isPartSelected("torso")
+            ? mannequinPalette.selectedClothing
+            : focusWholeCharacter
+              ? mannequinPalette.selectedJoint
+              : mannequinPalette.pelvis
+        }
+        kind="fabric"
         onSelect={(event) => handleBodyPartSelect("torso", event)}
-        position={pose.torso.position}
+        position={pose.torso.pelvis.position}
         selected={isPartSelected("torso") || focusWholeCharacter}
       />
-      <MannequinBox
-        args={pose.torso.waistSize}
-        color={isPartSelected("torso") ? mannequinPalette.selectedJoint : mannequinPalette.shadow}
+      <MannequinRoundedBox
+        args={pose.torso.abdomen.size}
+        color={
+          isPartSelected("torso")
+            ? mannequinPalette.selectedClothing
+            : focusWholeCharacter
+              ? mannequinPalette.selectedClothing
+              : mannequinPalette.torsoMid
+        }
+        kind="fabric"
         onSelect={(event) => handleBodyPartSelect("torso", event)}
-        position={pose.torso.waistPosition}
+        position={pose.torso.abdomen.position}
         selected={isPartSelected("torso") || focusWholeCharacter}
+      />
+      <MannequinRoundedBox
+        args={pose.torso.chest.size}
+        color={
+          isPartSelected("torso")
+            ? mannequinPalette.selectedClothing
+            : focusWholeCharacter
+              ? mannequinPalette.selectedClothing
+              : clothingColor
+        }
+        kind="fabric"
+        onSelect={(event) => handleBodyPartSelect("torso", event)}
+        position={pose.torso.chest.position}
+        selected={isPartSelected("torso") || focusWholeCharacter}
+      />
+      <MannequinJoint
+        color={jointColor}
+        jointDrag={{ jointId: "hip", onPointerDown: handleJointPointerDown }}
+        position={[pose.joints.hip.x, pose.joints.hip.y, pose.joints.hip.z]}
+        radius={0.095}
+        selected={jointDragSelected("hip")}
       />
 
-      <MannequinJoint color={jointColor} position={[pose.joints.leftShoulder.x, pose.joints.leftShoulder.y, 0]} radius={0.1} selected={focusWholeCharacter} />
-      <MannequinJoint color={jointColor} position={[pose.joints.rightShoulder.x, pose.joints.rightShoulder.y, 0]} radius={0.1} selected={focusWholeCharacter} />
+      <MannequinJoint
+        color={jointColor}
+        jointDrag={{ jointId: "leftShoulder", onPointerDown: handleJointPointerDown }}
+        position={[pose.joints.leftShoulder.x, pose.joints.leftShoulder.y, pose.joints.leftShoulder.z]}
+        radius={0.1}
+        selected={jointDragSelected("leftShoulder")}
+      />
+      <MannequinJoint
+        color={jointColor}
+        jointDrag={{ jointId: "rightShoulder", onPointerDown: handleJointPointerDown }}
+        position={[pose.joints.rightShoulder.x, pose.joints.rightShoulder.y, pose.joints.rightShoulder.z]}
+        radius={0.1}
+        selected={jointDragSelected("rightShoulder")}
+      />
       {pose.segments
-        .filter((segment) => segment.bodyPartId !== "torso")
+        .filter(
+          (segment) =>
+            segment.bodyPartId !== "torso" || mannequinSegmentUsesTorsoSelection(segment),
+        )
         .map((segment) => {
-          const segmentSelected = isPartSelected(segment.bodyPartId);
+          const segmentSelected = isPartSelected(
+            mannequinSegmentUsesTorsoSelection(segment) ? "torso" : segment.bodyPartId,
+          );
+          const useClavicleStyle = mannequinSegmentUsesTorsoSelection(segment);
+          const limbRadius = useClavicleStyle ? 0.046 : mannequinCapsuleRadiusForSegment(segment.bodyPartId);
+
+          const segmentKind: MannequinSurfaceKind = useClavicleStyle ? "fabric" : "accent";
 
           return (
-            <MannequinSegment
-              color={segmentSelected ? mannequinPalette.selectedJoint : jointColor}
+            <MannequinCapsuleLimb
+              boneQuaternion={mannequinBoneQuaternion(pose.joints, segment.from, segment.to)}
+              color={
+                segmentSelected
+                  ? useClavicleStyle
+                    ? mannequinPalette.selectedClothing
+                    : mannequinPalette.selectedJoint
+                  : useClavicleStyle
+                    ? mannequinPalette.torsoMid
+                    : jointColor
+              }
               height={segment.height}
               key={`${segment.bodyPartId}-${segment.from}-${segment.to}`}
-              onSelect={(event) => handleBodyPartSelect(segment.bodyPartId, event)}
+              kind={segmentKind}
+              onSelect={(event) =>
+                handleBodyPartSelect(
+                  mannequinSegmentUsesTorsoSelection(segment) ? "torso" : segment.bodyPartId,
+                  event,
+                )
+              }
               position={segment.position}
-              radiusBottom={segment.bodyPartId.endsWith("Shin") || segment.bodyPartId.endsWith("Forearm") ? 0.065 : 0.08}
-              radiusTop={segment.bodyPartId.endsWith("Shin") || segment.bodyPartId.endsWith("Forearm") ? 0.075 : 0.095}
-              rotation={segment.rotation}
+              radius={limbRadius}
               selected={segmentSelected || focusWholeCharacter}
             />
           );
         })}
-      <MannequinJoint color={jointColor} position={[pose.joints.leftElbow.x, pose.joints.leftElbow.y, pose.joints.leftElbow.z]} radius={0.085} selected={focusWholeCharacter} />
-      <MannequinJoint color={jointColor} position={[pose.joints.rightElbow.x, pose.joints.rightElbow.y, pose.joints.rightElbow.z]} radius={0.085} selected={focusWholeCharacter} />
-      <MannequinJoint color={jointColor} position={[pose.joints.leftKnee.x, pose.joints.leftKnee.y, pose.joints.leftKnee.z]} radius={0.09} selected={focusWholeCharacter} />
-      <MannequinJoint color={jointColor} position={[pose.joints.rightKnee.x, pose.joints.rightKnee.y, pose.joints.rightKnee.z]} radius={0.09} selected={focusWholeCharacter} />
+      <MannequinJoint
+        color={jointColor}
+        jointDrag={{ jointId: "leftElbow", onPointerDown: handleJointPointerDown }}
+        position={[pose.joints.leftElbow.x, pose.joints.leftElbow.y, pose.joints.leftElbow.z]}
+        radius={0.085}
+        selected={jointDragSelected("leftElbow")}
+      />
+      <MannequinJoint
+        color={jointColor}
+        jointDrag={{ jointId: "rightElbow", onPointerDown: handleJointPointerDown }}
+        position={[pose.joints.rightElbow.x, pose.joints.rightElbow.y, pose.joints.rightElbow.z]}
+        radius={0.085}
+        selected={jointDragSelected("rightElbow")}
+      />
+      <MannequinJoint
+        color={jointColor}
+        jointDrag={{ jointId: "leftKnee", onPointerDown: handleJointPointerDown }}
+        position={[pose.joints.leftKnee.x, pose.joints.leftKnee.y, pose.joints.leftKnee.z]}
+        radius={0.09}
+        selected={jointDragSelected("leftKnee")}
+      />
+      <MannequinJoint
+        color={jointColor}
+        jointDrag={{ jointId: "rightKnee", onPointerDown: handleJointPointerDown }}
+        position={[pose.joints.rightKnee.x, pose.joints.rightKnee.y, pose.joints.rightKnee.z]}
+        radius={0.09}
+        selected={jointDragSelected("rightKnee")}
+      />
       <MannequinJoint
         color={isPartSelected("leftHand") ? mannequinPalette.selectedJoint : mannequinPalette.skin}
+        jointDrag={{ jointId: "leftWrist", onPointerDown: handleJointPointerDown }}
+        kind="skin"
         onSelect={(event) => handleBodyPartSelect("leftHand", event)}
         position={pose.hands.leftHand.position}
         radius={pose.hands.leftHand.radius}
@@ -718,27 +1196,49 @@ function CharacterMannequinMesh({
       />
       <MannequinJoint
         color={isPartSelected("rightHand") ? mannequinPalette.selectedJoint : mannequinPalette.skin}
+        jointDrag={{ jointId: "rightWrist", onPointerDown: handleJointPointerDown }}
+        kind="skin"
         onSelect={(event) => handleBodyPartSelect("rightHand", event)}
         position={pose.hands.rightHand.position}
         radius={pose.hands.rightHand.radius}
         selected={isPartSelected("rightHand") || focusWholeCharacter}
       />
-      <MannequinBox
+      <MannequinJoint
+        color={jointColor}
+        jointDrag={{ jointId: "leftAnkle", onPointerDown: handleJointPointerDown }}
+        position={[pose.joints.leftAnkle.x, pose.joints.leftAnkle.y, pose.joints.leftAnkle.z]}
+        radius={0.08}
+        selected={jointDragSelected("leftAnkle")}
+      />
+      <MannequinJoint
+        color={jointColor}
+        jointDrag={{ jointId: "rightAnkle", onPointerDown: handleJointPointerDown }}
+        position={[pose.joints.rightAnkle.x, pose.joints.rightAnkle.y, pose.joints.rightAnkle.z]}
+        radius={0.08}
+        selected={jointDragSelected("rightAnkle")}
+      />
+      <MannequinRoundedBox
         args={pose.feet.leftFoot.size}
         color={isPartSelected("leftFoot") ? mannequinPalette.selectedJoint : mannequinPalette.sole}
+        cornerRadius={0.032}
+        kind="sole"
         onSelect={(event) => handleBodyPartSelect("leftFoot", event)}
         position={pose.feet.leftFoot.position}
         selected={isPartSelected("leftFoot") || focusWholeCharacter}
       />
-      <MannequinBox
+      <MannequinRoundedBox
         args={pose.feet.rightFoot.size}
         color={isPartSelected("rightFoot") ? mannequinPalette.selectedJoint : mannequinPalette.sole}
+        cornerRadius={0.032}
+        kind="sole"
         onSelect={(event) => handleBodyPartSelect("rightFoot", event)}
         position={pose.feet.rightFoot.position}
         selected={isPartSelected("rightFoot") || focusWholeCharacter}
       />
 
-      {focusWholeCharacter ? <MannequinSelectionHalo /> : null}
+      {focusWholeCharacter ? (
+        <MannequinSelectionHalo maxY={pose.bounds.maxY} minY={pose.bounds.minY} />
+      ) : null}
       <Html center distanceFactor={9} position={[0, pose.bounds.maxY + 0.28, 0]}>
         <div className="pointer-events-none rounded bg-white/85 px-2 py-0.5 text-[11px] font-semibold text-slate-800 shadow-sm ring-1 ring-slate-200">
           {character.name}
@@ -756,6 +1256,7 @@ function TransformableCharacterMannequin({
   onTransformEnd,
   selected,
   selectedBodyPartId,
+  setOrbitEnabled,
   transformGizmoEnabled,
 }: {
   character: CharacterSkeleton;
@@ -765,6 +1266,7 @@ function TransformableCharacterMannequin({
   onTransformEnd: (character: CharacterSkeleton, group: Group | null) => void;
   selected: boolean;
   selectedBodyPartId?: BodyPartId;
+  setOrbitEnabled?: (enabled: boolean) => void;
   transformGizmoEnabled: boolean;
 }) {
   const groupRef = useRef<Group | null>(null);
@@ -780,6 +1282,7 @@ function TransformableCharacterMannequin({
         character={character}
         selectedBodyPartId={selectedBodyPartId}
         selected={false}
+        setOrbitEnabled={setOrbitEnabled}
         onCloseContextMenu={onCloseContextMenu}
         onOpenContextMenu={onOpenContextMenu}
       />
@@ -793,6 +1296,7 @@ function TransformableCharacterMannequin({
         groupRef={setGroupRef}
         selectedBodyPartId={selectedBodyPartId}
         selected
+        setOrbitEnabled={setOrbitEnabled}
         onCloseContextMenu={onCloseContextMenu}
         onOpenContextMenu={onOpenContextMenu}
       />
@@ -1193,6 +1697,13 @@ function ThreeViewportWeb({
   );
   const orbitControlsRef = useRef<OrbitControlsImpl | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const setOrbitEnabled = useCallback((enabled: boolean) => {
+    const controls = orbitControlsRef.current;
+
+    if (controls) {
+      controls.enabled = enabled;
+    }
+  }, []);
   const [transformMode, setTransformMode] = useState<TransformMode>("translate");
   const [mannequinGizmoEnabled, setMannequinGizmoEnabled] = useState(false);
   const [objectContextMenu, setObjectContextMenu] = useState<{ x: number; y: number } | null>(null);
@@ -1401,7 +1912,7 @@ function ThreeViewportWeb({
       <div className="pointer-events-none absolute bottom-4 left-4 z-10 rounded-lg border border-white/10 bg-slate-900/75 px-3 py-2 text-[11px] leading-relaxed text-slate-300 shadow-lg">
         1/2/3 切换 gizmo；方向键移动，PageUp/PageDown 升降；F 聚焦选中，Home 重置相机。
         <br />
-        选中整个人物时可直接拖动 Gizmo 移动/旋转；点选肢体后请打开「人体 Gizmo」再拖动整体。
+        选中整个人物时可直接拖动 Gizmo 移动/旋转；点选肢体后请打开「人体 Gizmo」再拖动整体；拖拽关节球调整姿态（Shift+拖拽改前后深度）；与 2D 关节独立。
         <br />
         拖动空白处旋转视角并保存；当前工具：
         {transformModeOptions.find((option) => option.mode === transformMode)?.label}
@@ -1418,14 +1929,33 @@ function ThreeViewportWeb({
             position={[three.camera.position.x, three.camera.position.y, three.camera.position.z]}
           />
           <color args={["#0f172a"]} attach="background" />
+          <hemisphereLight color="#94a3b8" groundColor="#1e293b" intensity={0.42} />
           <ambientLight intensity={three.lighting.ambientIntensity} />
           <directionalLight
-            intensity={three.lighting.directionalIntensity}
+            intensity={three.lighting.directionalIntensity * 0.88}
             position={[
               three.lighting.directionalPosition.x,
               three.lighting.directionalPosition.y,
               three.lighting.directionalPosition.z,
             ]}
+          />
+          <directionalLight
+            intensity={three.lighting.directionalIntensity * 0.32}
+            position={[
+              -three.lighting.directionalPosition.x * 0.6,
+              three.lighting.directionalPosition.y * 0.55,
+              -three.lighting.directionalPosition.z * 0.85,
+            ]}
+          />
+          <ContactShadows
+            blur={2.2}
+            far={4.5}
+            frames={Infinity}
+            opacity={0.2}
+            position={[0, 0.01, 0]}
+            resolution={220}
+            scale={14}
+            color="#0f172a"
           />
           <Grid
             args={[three.grid.size, three.grid.size]}
@@ -1458,6 +1988,7 @@ function ThreeViewportWeb({
               onTransformEnd={handleCharacterTransformEnd}
               selected={characterScopeSelected(selection, character.id)}
               selectedBodyPartId={selectedCharacterBodyPart(selection, character.id)}
+              setOrbitEnabled={setOrbitEnabled}
               transformGizmoEnabled={mannequinGizmoEnabled}
             />
           ))}

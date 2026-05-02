@@ -564,7 +564,7 @@ export function ObjectPropertiesPanel() {
               <div>
                 <div className="text-xs font-semibold text-indigo-700">3D 人体</div>
                 <p className="mt-1 text-[11px] leading-relaxed text-indigo-700/80">
-                  调整低模人体在 3D 舞台中的根位置、朝向和整体比例。
+                  调整低模人体在 3D 舞台中的根位置、朝向和整体比例。拖拽关节球可在正面调整肢体（默认）；按住 Shift 拖拽同一关节可在深度方向（局部 Z）微调，与 2D 画布的骨骼拖拽彼此独立。
                 </p>
               </div>
               <div className="space-y-1.5">

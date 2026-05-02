@@ -50,6 +50,7 @@ import {
   createDefaultPromptBindingState,
   createDefaultProject,
   defaultCharacter,
+  defaultCharacterMannequinJoints3D,
 } from "./defaults";
 import {
   applyPromptBindingsToProject,
@@ -143,6 +144,8 @@ type EditorState = {
   /** 3D 模式：双击人物落地（根位置 y 对齐到地面）。 */
   snapCharacterToGround: (characterId: string) => void;
   updateCharacterJoint: (id: string, jointId: JointId, position: Vector2) => void;
+  /** 3D 低模姿态：更新 `joints3D`（与 2D `joints` 独立）。首次写入时从默认平面克隆再应用。 */
+  updateCharacterJoint3D: (id: string, jointId: JointId, position: Vector3) => void;
   addPromptTag: (target: PromptTagTarget, tag: PromptTag) => void;
   updatePromptTag: (target: PromptTagTarget, tagId: string, patch: PromptTagPatch) => void;
   removePromptTag: (target: PromptTagTarget, tagId: string) => void;
@@ -1778,6 +1781,40 @@ export const useEditorStore = create<EditorState>((set) => ({
                 }
               : character,
           ),
+        },
+      }),
+    })),
+  updateCharacterJoint3D: (id, jointId, position) =>
+    set((state) => ({
+      project: touchProject({
+        ...state.project,
+        scene: {
+          ...state.project.scene,
+          characters: state.project.scene.characters.map((character) => {
+            if (character.id !== id) {
+              return character;
+            }
+
+            const joints3D = Object.fromEntries(
+              (Object.keys(defaultCharacterMannequinJoints3D) as JointId[]).map((key) => {
+                if (key === jointId) {
+                  return [key, { ...position }];
+                }
+
+                const existing = character.joints3D?.[key];
+
+                return [
+                  key,
+                  existing ? { ...existing } : { ...defaultCharacterMannequinJoints3D[key] },
+                ];
+              }),
+            ) as NonNullable<CharacterSkeleton["joints3D"]>;
+
+            return {
+              ...character,
+              joints3D,
+            };
+          }),
         },
       }),
     })),

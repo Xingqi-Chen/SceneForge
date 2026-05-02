@@ -208,10 +208,10 @@ export type CharacterSkeleton = {
   /** 2D 画布关节（Konva）；仅由 2D 模式下的关节拖拽更新。 */
   joints: Record<JointId, Vector2>;
   /**
-   * 3D 低模人体姿态用的关节平面（与 `joints` 同坐标语义，但独立存储）。
+   * 3D 低模人体姿态：x/y 与 2D `joints` 同创作平面语义；`z` 为人体根局部空间深度（米），与 2D 独立。
    * 未设置时使用编辑器内置默认 T 型姿态，不会随 2D `joints` 变化。
    */
-  joints3D?: Record<JointId, Vector2>;
+  joints3D?: Record<JointId, Vector3>;
   bodyParts: CharacterBodyPart[];
   promptTags: PromptTag[];
   promptCategoryBindings?: PromptTagCategory[];

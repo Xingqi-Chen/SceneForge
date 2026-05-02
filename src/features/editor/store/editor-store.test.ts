@@ -718,8 +718,8 @@ describe("editor store", () => {
     useEditorStore.getState().updateCharacter(character.id, {
       joints3D: {
         ...defaultCharacterMannequinJointPlane,
-        leftAnkle: { x: -32, y: 360 },
-        rightAnkle: { x: 32, y: 360 },
+        leftAnkle: { x: -32, y: 360, z: 0.04 },
+        rightAnkle: { x: 32, y: 360, z: 0.04 },
       },
     });
     useEditorStore.getState().snapCharacterToGround(character.id);

@@ -21,7 +21,7 @@ import {
   DEFAULT_PROMPT_SUBCATEGORY_BINDINGS,
   createDefaultPromptBindingState,
   defaultCharacter,
-  defaultCharacterMannequinJointPlane,
+  defaultCharacterMannequinJoints3D,
   defaultScene,
 } from "@/features/editor/store/defaults";
 import { defaultLineEndpoints, defaultPolygonPoints } from "@/features/editor/preset-scene-objects";
@@ -518,6 +518,8 @@ function sanitizeCharacter(raw: unknown): CharacterSkeleton | null {
     ? (Object.fromEntries(
         (Object.keys(defaultCharacter.joints) as JointId[]).map((jointId) => {
           const j = joints3DSource[jointId];
+          const fallback = defaultCharacterMannequinJoints3D[jointId];
+
           if (
             isRecord(j) &&
             typeof j.x === "number" &&
@@ -525,10 +527,14 @@ function sanitizeCharacter(raw: unknown): CharacterSkeleton | null {
             Number.isFinite(j.x) &&
             Number.isFinite(j.y)
           ) {
-            return [jointId, { x: j.x, y: j.y }];
+            const zRaw = j.z;
+            const z =
+              typeof zRaw === "number" && Number.isFinite(zRaw) ? zRaw : fallback.z;
+
+            return [jointId, { x: j.x, y: j.y, z }];
           }
 
-          return [jointId, { ...defaultCharacterMannequinJointPlane[jointId] }];
+          return [jointId, { ...fallback }];
         }),
       ) as CharacterSkeleton["joints3D"])
     : undefined;
