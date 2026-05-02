@@ -302,6 +302,26 @@ function sanitizeCharacter3DTransform(raw: unknown): CharacterSkeleton["transfor
   };
 }
 
+function sanitizeHeadRotation3D(raw: unknown): CharacterSkeleton["headRotation3D"] {
+  if (!isRecord(raw)) {
+    return undefined;
+  }
+
+  const clampAxis = (value: unknown, min: number, max: number): number => {
+    if (typeof value !== "number" || !Number.isFinite(value)) {
+      return 0;
+    }
+
+    return Math.min(max, Math.max(min, value));
+  };
+
+  return {
+    x: clampAxis(raw.x, -90, 90),
+    y: clampAxis(raw.y, -120, 120),
+    z: clampAxis(raw.z, -90, 90),
+  };
+}
+
 function sanitizeLineEndpoints(raw: unknown, width: number, height: number): LineEndpoints {
   if (!isRecord(raw)) {
     return defaultLineEndpoints(width, height);
@@ -539,6 +559,8 @@ function sanitizeCharacter(raw: unknown): CharacterSkeleton | null {
       ) as CharacterSkeleton["joints3D"])
     : undefined;
 
+  const headRotation3D = sanitizeHeadRotation3D(raw.headRotation3D);
+
   const bodyPartsRaw =
     Array.isArray(raw.bodyParts) && raw.bodyParts.length > 0
       ? (raw.bodyParts as CharacterSkeleton["bodyParts"])
@@ -577,6 +599,9 @@ function sanitizeCharacter(raw: unknown): CharacterSkeleton | null {
   const characterSpace: CharacterSkeleton["characterSpace"] | undefined =
     characterSpaceRaw === "2d" || characterSpaceRaw === "3d" ? characterSpaceRaw : undefined;
 
+  const limbLengthLocked3D =
+    typeof raw.limbLengthLocked3D === "boolean" ? raw.limbLengthLocked3D : undefined;
+
   return {
     id: raw.id,
     name: typeof raw.name === "string" ? raw.name : "人物",
@@ -590,6 +615,8 @@ function sanitizeCharacter(raw: unknown): CharacterSkeleton | null {
     scaleY: typeof raw.scaleY === "number" && Number.isFinite(raw.scaleY) ? raw.scaleY : undefined,
     joints,
     ...(joints3D ? { joints3D } : {}),
+    ...(headRotation3D ? { headRotation3D } : {}),
+    ...(limbLengthLocked3D !== undefined ? { limbLengthLocked3D } : {}),
     bodyParts,
     promptTags: dedupePromptTags(charPromptTags),
     promptCategoryBindings,

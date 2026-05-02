@@ -42,6 +42,12 @@ import { Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { CHARACTER_JOINT_BODY_PART_MAP } from "@/features/editor/character-skeleton";
 import { getCharacterMannequinPose, mannequinPlaneCoordsFromLocalXY } from "@/features/editor/character-mannequin-pose";
+import {
+  buildLimbLengthLockSpheres,
+  constrainJointPositionToLimbLengthSpheres,
+  isJointEligibleForLimbLengthLock,
+  type LimbLengthLockSpheres,
+} from "@/features/editor/character-limb-length-lock";
 import { useEditorStore } from "@/features/editor/store/editor-store";
 import { defaultCharacterMannequinJoints3D, defaultScene } from "@/features/editor/store/defaults";
 import { isThreeDViewportPrimitive } from "@/features/editor/scene-viewport-objects";
@@ -51,6 +57,13 @@ import { characterAppearsInThreeViewport } from "@/shared/utils/character-space"
 import type { CanvasCapture } from "./CanvasStage";
 
 const DEG2RAD = Math.PI / 180;
+const HEAD_ROTATE_DRAG_SENS = 0.32;
+
+function clampHeadRotationEulerDeg(value: number, axis: "x" | "y" | "z"): number {
+  const lim = axis === "y" ? 120 : 90;
+
+  return Math.min(lim, Math.max(-lim, value));
+}
 
 const MANNEQUIN_BONE_UP = new ThreeVector3(0, 1, 0);
 
@@ -75,7 +88,10 @@ function mannequinBoneQuaternion(
 }
 
 const MANNEQUIN_DRAG_PLANE = new Plane(new ThreeVector3(0, 0, 1), 0);
-const MANNEQUIN_PLANE_DOT_EPS = 0.025;
+/** 过小则人物旋转后射线与 z=0 掠射仍会通过检测，交点 t 极大，经 mannequinPlaneCoordsFromLocalXY 会炸 authoring 坐标。 */
+const MANNEQUIN_PLANE_DOT_EPS = 0.065;
+/** 角色局部空间内沿射线的最大交距；避免平面求交把关节甩到无效远处（肢体被拉成异常长度）。 */
+const MANNEQUIN_DRAG_RAY_T_MAX = 22;
 
 function assignRef<T>(ref: Ref<T> | undefined, value: T | null) {
   if (!ref) {
@@ -96,7 +112,15 @@ function localHitOnMannequinPlane(worldRay: Ray, group: Group): ThreeVector3 | n
   const origin = worldRay.origin.clone().applyMatrix4(inverse);
   const direction = worldRay.direction.clone().transformDirection(inverse);
 
-  if (Math.abs(direction.z) < MANNEQUIN_PLANE_DOT_EPS) {
+  const denom = direction.z;
+
+  if (Math.abs(denom) < MANNEQUIN_PLANE_DOT_EPS) {
+    return null;
+  }
+
+  const t = -origin.z / denom;
+
+  if (!Number.isFinite(t) || t > MANNEQUIN_DRAG_RAY_T_MAX) {
     return null;
   }
 
@@ -113,13 +137,21 @@ function localHitOnHorizontalPlane(worldRay: Ray, group: Group, planeY: number):
   const origin = worldRay.origin.clone().applyMatrix4(inverse);
   const direction = worldRay.direction.clone().transformDirection(inverse);
 
-  if (Math.abs(direction.y) < MANNEQUIN_PLANE_DOT_EPS) {
+  const denom = direction.y;
+
+  if (Math.abs(denom) < MANNEQUIN_PLANE_DOT_EPS) {
+    return null;
+  }
+
+  const horizontalPlane = new Plane(new ThreeVector3(0, 1, 0), -planeY);
+  const t = -(origin.dot(horizontalPlane.normal) + horizontalPlane.constant) / denom;
+
+  if (!Number.isFinite(t) || t > MANNEQUIN_DRAG_RAY_T_MAX) {
     return null;
   }
 
   const ray = new Ray(origin, direction);
   const hit = new ThreeVector3();
-  const horizontalPlane = new Plane(new ThreeVector3(0, 1, 0), -planeY);
 
   return ray.intersectPlane(horizontalPlane, hit) ? hit : null;
 }
@@ -639,6 +671,7 @@ function MannequinCapsuleLimb({
   rotation = [0, 0, 0],
   boneQuaternion,
   selected,
+  pointerDownFilter,
 }: {
   color: string;
   height: number;
@@ -647,6 +680,8 @@ function MannequinCapsuleLimb({
   position: ThreeTuple;
   radius: number;
   rotation?: ThreeTuple;
+  /** 若返回 true，表示已消费 pointerdown（不再触发 onSelect / 默认选择）。 */
+  pointerDownFilter?: (event: ThreeEvent<PointerEvent>) => boolean;
   /** 若提供，优先于 `rotation`（用于骨骼段，避免欧拉角万向节问题）。 */
   boneQuaternion?: ThreeQuaternion;
   selected: boolean;
@@ -659,6 +694,11 @@ function MannequinCapsuleLimb({
     <mesh
       onClick={onSelect}
       onPointerDown={(event) => {
+        if (event.button === 0 && pointerDownFilter?.(event)) {
+          event.stopPropagation();
+          return;
+        }
+
         if (event.button === 0 && onSelect) {
           event.stopPropagation();
         }
@@ -719,6 +759,7 @@ function MannequinJoint({
   radius,
   scale = [1, 1, 1],
   selected,
+  pointerDownFilter,
 }: {
   color: string;
   jointDrag?: {
@@ -731,11 +772,17 @@ function MannequinJoint({
   radius: number;
   scale?: ThreeTuple;
   selected: boolean;
+  pointerDownFilter?: (event: ThreeEvent<PointerEvent>) => boolean;
 }) {
   return (
     <mesh
       onClick={onSelect}
       onPointerDown={(event) => {
+        if (event.button === 0 && pointerDownFilter?.(event)) {
+          event.stopPropagation();
+          return;
+        }
+
         if (event.button === 0 && jointDrag) {
           event.stopPropagation();
           jointDrag.onPointerDown(jointDrag.jointId, event);
@@ -865,12 +912,42 @@ function CharacterMannequinMesh({
   const dragJointRef = useRef<JointId | null>(null);
   const jointDragModeRef = useRef<"depth" | "xy">("xy");
   const dragListenersRef = useRef<{ move: (ev: PointerEvent) => void; up: (ev: PointerEvent) => void } | null>(null);
+  const limbLockSpheresRef = useRef<LimbLengthLockSpheres | null>(null);
 
   const selectCharacter = useEditorStore((state) => state.selectCharacter);
   const selectBodyPart = useEditorStore((state) => state.selectBodyPart);
   const snapCharacterToGround = useEditorStore((state) => state.snapCharacterToGround);
   const updateCharacterJoint3D = useEditorStore((state) => state.updateCharacterJoint3D);
   const { camera, gl } = useThree();
+
+  const headAltRotateListenersRef = useRef<{ move: (ev: PointerEvent) => void; up: (ev: PointerEvent) => void } | null>(
+    null,
+  );
+  const headAltRotateLastRef = useRef<{ x: number; y: number } | null>(null);
+
+  const endHeadAltRotateDrag = useCallback(() => {
+    headAltRotateLastRef.current = null;
+
+    if (headAltRotateListenersRef.current) {
+      window.removeEventListener("pointermove", headAltRotateListenersRef.current.move);
+      window.removeEventListener("pointerup", headAltRotateListenersRef.current.up);
+      window.removeEventListener("pointercancel", headAltRotateListenersRef.current.up);
+      headAltRotateListenersRef.current = null;
+    }
+
+    setOrbitEnabled?.(true);
+  }, [setOrbitEnabled]);
+
+  useEffect(() => {
+    return () => {
+      if (headAltRotateListenersRef.current) {
+        window.removeEventListener("pointermove", headAltRotateListenersRef.current.move);
+        window.removeEventListener("pointerup", headAltRotateListenersRef.current.up);
+        window.removeEventListener("pointercancel", headAltRotateListenersRef.current.up);
+        headAltRotateListenersRef.current = null;
+      }
+    };
+  }, []);
 
   const transform = characterTransform(character);
   const pose = getCharacterMannequinPose(character);
@@ -916,7 +993,12 @@ function CharacterMannequinMesh({
           return;
         }
 
-        updateCharacterJoint3D(character.id, jointId, { ...baseJoint, z: hit.z });
+        let next: Vector3 = { ...baseJoint, z: hit.z };
+        if (character.limbLengthLocked3D && limbLockSpheresRef.current) {
+          next = constrainJointPositionToLimbLengthSpheres(next, limbLockSpheresRef.current);
+        }
+
+        updateCharacterJoint3D(character.id, jointId, next);
         return;
       }
 
@@ -927,13 +1009,19 @@ function CharacterMannequinMesh({
       }
 
       const xy = mannequinPlaneCoordsFromLocalXY(authoring, local.x, local.y);
-      updateCharacterJoint3D(character.id, jointId, { x: xy.x, y: xy.y, z: baseJoint.z });
+      let next: Vector3 = { x: xy.x, y: xy.y, z: baseJoint.z };
+      if (character.limbLengthLocked3D && limbLockSpheresRef.current) {
+        next = constrainJointPositionToLimbLengthSpheres(next, limbLockSpheresRef.current);
+      }
+
+      updateCharacterJoint3D(character.id, jointId, next);
     },
     [camera, character, gl.domElement, pose, updateCharacterJoint3D],
   );
 
   const endJointDrag = useCallback(() => {
     dragJointRef.current = null;
+    limbLockSpheresRef.current = null;
 
     if (dragListenersRef.current) {
       window.removeEventListener("pointermove", dragListenersRef.current.move);
@@ -961,6 +1049,7 @@ function CharacterMannequinMesh({
 
       onCloseContextMenu?.();
       event.stopPropagation();
+      endHeadAltRotateDrag();
       endJointDrag();
       jointDragModeRef.current = event.nativeEvent.shiftKey ? "depth" : "xy";
       selectCharacter(character.id);
@@ -972,6 +1061,13 @@ function CharacterMannequinMesh({
 
       dragJointRef.current = jointId;
       setOrbitEnabled?.(false);
+
+      const authoringStart = character.joints3D ?? defaultCharacterMannequinJoints3D;
+      if (character.limbLengthLocked3D && isJointEligibleForLimbLengthLock(jointId)) {
+        limbLockSpheresRef.current = buildLimbLengthLockSpheres(authoringStart, jointId);
+      } else {
+        limbLockSpheresRef.current = null;
+      }
 
       const onMove = (ev: PointerEvent) => {
         if (dragJointRef.current !== jointId) {
@@ -999,7 +1095,82 @@ function CharacterMannequinMesh({
     },
     [
       applyJointDragFromPointer,
+      character,
+      endHeadAltRotateDrag,
+      endJointDrag,
+      onCloseContextMenu,
+      selectBodyPart,
+      selectCharacter,
+      setOrbitEnabled,
+    ],
+  );
+
+  const headAltRotatePointerDownFilter = useCallback(
+    (event: ThreeEvent<PointerEvent>): boolean => {
+      if (event.button !== 0 || !event.altKey) {
+        return false;
+      }
+
+      onCloseContextMenu?.();
+      event.stopPropagation();
+      endJointDrag();
+      endHeadAltRotateDrag();
+
+      selectCharacter(character.id);
+      selectBodyPart(character.id, "head");
+
+      headAltRotateLastRef.current = { x: event.clientX, y: event.clientY };
+      setOrbitEnabled?.(false);
+
+      const onMove = (ev: PointerEvent) => {
+        const last = headAltRotateLastRef.current;
+
+        if (!last) {
+          return;
+        }
+
+        const dx = ev.clientX - last.x;
+        const dy = ev.clientY - last.y;
+        headAltRotateLastRef.current = { x: ev.clientX, y: ev.clientY };
+
+        const store = useEditorStore.getState();
+        const ch = store.project.scene.characters.find((c) => c.id === character.id);
+
+        if (!ch) {
+          return;
+        }
+
+        const cur = ch.headRotation3D ?? { x: 0, y: 0, z: 0 };
+
+        store.updateCharacter(character.id, {
+          headRotation3D: {
+            x: clampHeadRotationEulerDeg(cur.x - dy * HEAD_ROTATE_DRAG_SENS, "x"),
+            y: clampHeadRotationEulerDeg(cur.y + dx * HEAD_ROTATE_DRAG_SENS, "y"),
+            z: cur.z,
+          },
+        });
+      };
+
+      const onUp = () => {
+        endHeadAltRotateDrag();
+      };
+
+      headAltRotateListenersRef.current = { move: onMove, up: onUp };
+      window.addEventListener("pointermove", onMove);
+      window.addEventListener("pointerup", onUp);
+      window.addEventListener("pointercancel", onUp);
+
+      const captureTarget = event.nativeEvent.target;
+
+      if (captureTarget instanceof Element && "setPointerCapture" in captureTarget) {
+        captureTarget.setPointerCapture(event.pointerId);
+      }
+
+      return true;
+    },
+    [
       character.id,
+      endHeadAltRotateDrag,
       endJointDrag,
       onCloseContextMenu,
       selectBodyPart,
@@ -1032,6 +1203,16 @@ function CharacterMannequinMesh({
     selectBodyPart(character.id, bodyPartId);
   }
 
+  const neck = pose.joints.neck;
+  const headLocalPosition: ThreeTuple = [
+    pose.head.position[0] - neck.x,
+    pose.head.position[1] - neck.y,
+    pose.head.position[2] - neck.z,
+  ];
+  const headNeckSkinHeight = Math.max(0.1, pose.head.position[1] - neck.y - pose.head.radius * 0.55);
+  const headRotDeg = character.headRotation3D ?? { x: 0, y: 0, z: 0 };
+  const headRotRad: ThreeTuple = [headRotDeg.x * DEG2RAD, headRotDeg.y * DEG2RAD, headRotDeg.z * DEG2RAD];
+
   return (
     <group
       onClick={handleSelect}
@@ -1043,30 +1224,34 @@ function CharacterMannequinMesh({
       scale={[transform.scale.x, transform.scale.y, transform.scale.z]}
     >
       <MannequinJoint
-        color={mannequinPalette.skin}
-        kind="skin"
-        onSelect={(event) => handleBodyPartSelect("head", event)}
-        position={pose.head.position}
-        radius={pose.head.radius}
-        scale={[1.05, 1.08, 0.94]}
-        selected={isPartSelected("head") || focusWholeCharacter}
-      />
-      <MannequinCapsuleLimb
-        color={mannequinPalette.skin}
-        height={Math.max(0.1, pose.head.position[1] - pose.joints.neck.y - pose.head.radius * 0.55)}
-        kind="skin"
-        onSelect={(event) => handleBodyPartSelect("head", event)}
-        position={[pose.joints.neck.x, pose.joints.neck.y + 0.06, pose.joints.neck.z]}
-        radius={0.078}
-        selected={isPartSelected("head") || focusWholeCharacter}
-      />
-      <MannequinJoint
         color={jointColor}
         jointDrag={{ jointId: "neck", onPointerDown: handleJointPointerDown }}
         position={[pose.joints.neck.x, pose.joints.neck.y, pose.joints.neck.z]}
         radius={0.07}
         selected={jointDragSelected("neck")}
       />
+      <group position={[neck.x, neck.y, neck.z]} rotation={headRotRad}>
+        <MannequinCapsuleLimb
+          color={mannequinPalette.skin}
+          height={headNeckSkinHeight}
+          kind="skin"
+          onSelect={(event) => handleBodyPartSelect("head", event)}
+          pointerDownFilter={headAltRotatePointerDownFilter}
+          position={[0, 0.06, 0]}
+          radius={0.078}
+          selected={isPartSelected("head") || focusWholeCharacter}
+        />
+        <MannequinJoint
+          color={mannequinPalette.skin}
+          kind="skin"
+          onSelect={(event) => handleBodyPartSelect("head", event)}
+          pointerDownFilter={headAltRotatePointerDownFilter}
+          position={headLocalPosition}
+          radius={pose.head.radius}
+          scale={[1.05, 1.08, 0.94]}
+          selected={isPartSelected("head") || focusWholeCharacter}
+        />
+      </group>
       <MannequinJoint
         color={jointColor}
         jointDrag={{ jointId: "hip", onPointerDown: handleJointPointerDown }}
@@ -1687,6 +1872,7 @@ function ThreeViewportWeb({
   const { project, selectScene, selection, setCharacter3DTransform, setObject3DTransform, updateScene } =
     useEditorStore();
   const deleteSelection = useEditorStore((state) => state.deleteSelection);
+  const updateCharacter = useEditorStore((state) => state.updateCharacter);
   const { three } = project.scene;
   const objects = project.scene.objects.filter(isThreeDViewportPrimitive);
   const characters = useMemo(
@@ -1722,6 +1908,19 @@ function ThreeViewportWeb({
     (selection.kind === "character" ||
       selection.kind === "bodyPart" ||
       (selection.kind === "multiple" && selection.characterIds.length > 0));
+
+  const primaryCharacterIdForLimbLock =
+    selection.kind === "character"
+      ? selection.id
+      : selection.kind === "bodyPart"
+        ? selection.characterId
+        : selection.kind === "multiple" && selection.characterIds.length === 1
+          ? selection.characterIds[0]
+          : null;
+  const primaryCharacterForLimbLock =
+    primaryCharacterIdForLimbLock == null
+      ? undefined
+      : characters.find((c) => c.id === primaryCharacterIdForLimbLock);
 
   /* eslint-disable react-hooks/set-state-in-effect -- default 人体 Gizmo from selection (see selectionSyncKey); intentional UI sync */
   useEffect(() => {
@@ -1885,6 +2084,23 @@ function ThreeViewportWeb({
           </Button>
         ))}
         <div className="mx-1 h-4 w-px bg-white/10" />
+        {primaryCharacterForLimbLock ? (
+          <Button
+            className="h-7 rounded-lg px-2.5 text-xs"
+            onClick={() =>
+              updateCharacter(primaryCharacterForLimbLock.id, {
+                limbLengthLocked3D: !primaryCharacterForLimbLock.limbLengthLocked3D,
+              })
+            }
+            size="sm"
+            title="开启后，拖拽肩/肘/腕、髋/膝/踝链上的关节时保持骨段长度不变，仅绕另一端摆动。"
+            type="button"
+            variant={primaryCharacterForLimbLock.limbLengthLocked3D ? "primary" : "ghost"}
+          >
+            锁肢长
+          </Button>
+        ) : null}
+        {primaryCharacterForLimbLock ? <div className="mx-1 h-4 w-px bg-white/10" /> : null}
         {showMannequinGizmoToggle ? (
           <Button
             className="h-7 rounded-lg px-2.5 text-xs"
@@ -1910,7 +2126,7 @@ function ThreeViewportWeb({
       <div className="pointer-events-none absolute bottom-4 left-4 z-10 rounded-lg border border-white/10 bg-slate-900/75 px-3 py-2 text-[11px] leading-relaxed text-slate-300 shadow-lg">
         1/2/3 切换 gizmo；方向键移动，PageUp/PageDown 升降；F 聚焦选中，Home 重置相机。
         <br />
-        选中整个人物时可直接拖动 Gizmo 移动/旋转；点选肢体后请打开「人体 Gizmo」再拖动整体；拖拽关节球调整姿态（Shift+拖拽改前后深度）；与 2D 关节独立。
+        选中整个人物时可直接拖动 Gizmo 移动/旋转；点选肢体后请打开「人体 Gizmo」再拖动整体；拖拽关节球调整姿态（Shift+拖拽改前后深度）；Alt+拖拽头部可俯仰/转头；开启「锁肢长」后拖拽肘/膝等仅改变角度不改变骨长；与 2D 关节独立。
         <br />
         拖动空白处旋转视角并保存；当前工具：
         {transformModeOptions.find((option) => option.mode === transformMode)?.label}

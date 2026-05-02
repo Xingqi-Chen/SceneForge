@@ -580,9 +580,20 @@ export function ObjectPropertiesPanel() {
               <div>
                 <div className="text-xs font-semibold text-indigo-700">3D 人体</div>
                 <p className="mt-1 text-[11px] leading-relaxed text-indigo-700/80">
-                  调整低模人体在 3D 舞台中的根位置、朝向和整体比例。拖拽关节球可在正面调整肢体（默认）；按住 Shift 拖拽同一关节可在深度方向（局部 Z）微调，与 2D 画布的骨骼拖拽彼此独立。
+                  调整低模人体在 3D 舞台中的根位置、朝向和整体比例。拖拽关节球可在正面调整肢体（默认）；按住 Shift 拖拽同一关节可在深度方向（局部 Z）微调；选中头部后可在下方微调头部转动，或在视口按住 Alt 在头部拖拽。工具栏「锁肢长」或下方选项可锁死四肢骨段长度，拖拽肘/膝等时仅绕对端摆动。与 2D 画布的骨骼拖拽彼此独立。
                 </p>
               </div>
+              <label className="flex cursor-pointer items-center gap-2 rounded-md border border-indigo-200/80 bg-white px-2.5 py-2 text-[11px] font-medium text-indigo-900 shadow-sm">
+                <input
+                  checked={Boolean(selectedCharacter.limbLengthLocked3D)}
+                  className="h-4 w-4 shrink-0 rounded border-indigo-300 text-indigo-600 focus:ring-indigo-500"
+                  onChange={(event) =>
+                    updateSelectedCharacter({ limbLengthLocked3D: event.target.checked })
+                  }
+                  type="checkbox"
+                />
+                <span>锁死四肢骨长（拖拽肩/肘/腕、膝/踝链关节时保持骨段长度）</span>
+              </label>
               <div className="space-y-1.5">
                 <FieldLabel>位置</FieldLabel>
                 <Vector3Fields
@@ -622,6 +633,24 @@ export function ObjectPropertiesPanel() {
                   ))}
                 </div>
               </div>
+              {selectedBodyPart?.id === "head" ? (
+                <div className="space-y-2 border-t border-indigo-200/80 pt-3">
+                  <div className="text-[11px] font-semibold text-indigo-800">头部转动（相对颈部）</div>
+                  <p className="text-[10px] leading-snug text-indigo-700/85">
+                    单位：度（XYZ 顺序）。视口中按住 Alt 在头部或颈—头连接处拖拽可同步调整俯仰与水平转头。
+                  </p>
+                  <Vector3Fields
+                    labels={["俯仰 X", "转头 Y", "侧倾 Z"]}
+                    onChange={(axis, value) => {
+                      const cur = selectedCharacter.headRotation3D ?? { x: 0, y: 0, z: 0 };
+                      const lim = axis === "y" ? 120 : 90;
+                      const v = Math.min(lim, Math.max(-lim, value));
+                      updateSelectedCharacter({ headRotation3D: { ...cur, [axis]: v } });
+                    }}
+                    value={selectedCharacter.headRotation3D ?? { x: 0, y: 0, z: 0 }}
+                  />
+                </div>
+              ) : null}
             </div>
           ) : null}
           <div className="grid grid-cols-2 gap-3">

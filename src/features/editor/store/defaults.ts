@@ -73,6 +73,8 @@ export const defaultCharacter: CharacterSkeleton = {
     rotation: { x: 0, y: 0, z: 0 },
     scale: { x: 1, y: 1, z: 1 },
   },
+  headRotation3D: { x: 0, y: 0, z: 0 },
+  limbLengthLocked3D: false,
   rotation: 0,
   includeInPrompt: true,
   joints: {

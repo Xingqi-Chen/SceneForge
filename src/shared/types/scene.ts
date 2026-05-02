@@ -214,6 +214,13 @@ export type CharacterSkeleton = {
    * 未设置时使用编辑器内置默认 T 型姿态，不会随 2D `joints` 变化。
    */
   joints3D?: Record<JointId, Vector3>;
+  /**
+   * 头部相对颈关节（`neck`）的欧拉角，单位度，旋转顺序 XYZ，与 3D 根节点 `transform3D.rotation` 约定一致。
+   * 仅影响 3D 低模头部网格；未设置视为 0,0,0。
+   */
+  headRotation3D?: Vector3;
+  /** 3D 模式下锁死四肢骨段长度：拖拽上述肢链关节时仅绕对端摆动，不改变骨长。 */
+  limbLengthLocked3D?: boolean;
   bodyParts: CharacterBodyPart[];
   promptTags: PromptTag[];
   promptCategoryBindings?: PromptTagCategory[];

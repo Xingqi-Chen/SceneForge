@@ -1858,6 +1858,7 @@ export const useEditorStore = create<EditorState>((set) => ({
 
           return {
             ...withPose,
+            headRotation3D: { x: 0, y: 0, z: 0 },
             transform3D: {
               position: { ...snapped.position },
               rotation: { ...snapped.rotation },
@@ -1866,7 +1867,10 @@ export const useEditorStore = create<EditorState>((set) => ({
           };
         }
 
-        return withPose;
+        return {
+          ...withPose,
+          headRotation3D: { x: 0, y: 0, z: 0 },
+        };
       });
 
       return {
