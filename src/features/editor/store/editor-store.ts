@@ -34,6 +34,8 @@ import { mergeImportedPromptLibraryTags } from "@/features/prompt-engine/prompt-
 import {
   PROMPT_TAG_CATEGORY_ORDER,
   PROMPT_TAG_SUBCATEGORY_OPTIONS,
+  migrateLegacyPromptTagCategorySubcategory,
+  normalizePromptTagCategory,
   normalizePromptTagSubcategory,
 } from "@/features/prompt-engine/prompt-library/prompt-tag-taxonomy";
 
@@ -2284,12 +2286,15 @@ export const useEditorStore = create<EditorState>((set) => ({
     set((state) => {
       const existingCustomTags = state.project.settings.promptLibraryTags ?? [];
       const customTagExists = existingCustomTags.some((existingTag) => existingTag.id === tag.id);
+      const migrated = migrateLegacyPromptTagCategorySubcategory(tag.category, tag.subcategory);
+      const category = normalizePromptTagCategory(migrated.category);
       const normalizedTag: PromptTag = {
         ...tag,
+        category,
         label: tag.label.trim() || tag.prompt.trim().slice(0, 48) || "未命名",
         prompt: tag.prompt.trim(),
-        negative: tag.category === "negative" ? true : Boolean(tag.negative),
-        subcategory: normalizePromptTagSubcategory(tag.category, tag.subcategory),
+        negative: category === "negative" ? true : Boolean(tag.negative),
+        subcategory: normalizePromptTagSubcategory(category, migrated.subcategory),
         weight: { ...tag.weight },
       };
 

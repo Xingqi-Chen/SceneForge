@@ -16,21 +16,25 @@ import { migrateAuthoringJoints3DToStickFigure } from "@/features/editor/stick-f
 
 const now = new Date("2026-01-01T00:00:00.000Z").toISOString();
 
-/** 人物骨架（角色根与身体部位）默认只绑定「人物」「身体部位」两类词库类目。 */
+/** 人物骨架（角色根与身体部位）默认绑定「人物」「服装」「身体部位」词库类目。 */
 export const DEFAULT_PROMPT_CATEGORY_BINDINGS = {
   scene: ["style", "lighting", "quality", "scene", "negative"],
   object: ["scene", "lighting", "quality", "negative"],
-  character: ["character", "body-part"],
-  bodyPart: ["character", "body-part"],
+  character: ["character", "outfit", "body-part"],
+  bodyPart: ["character", "outfit", "body-part"],
 } satisfies Record<string, PromptTagCategory[]>;
 
-/** 与人物 / 身体部位大类对应的默认子类目（骨架内统一使用）。 */
+/** 与人物 / 服装 / 身体部位大类对应的默认子类目（骨架内统一使用）。 */
 const CHARACTER_AND_BODY_PART_SUBCATEGORIES = [
   "character-subject",
-  "character-clothing",
   "character-pose",
   "character-expression",
-  "character-accessory",
+  "outfit-upper",
+  "outfit-lower",
+  "outfit-dress",
+  "outfit-footwear",
+  "outfit-accessory",
+  "outfit-full",
   "body-part-hair",
   "body-part-eyes",
   "body-part-face",

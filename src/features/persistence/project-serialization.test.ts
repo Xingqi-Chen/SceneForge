@@ -150,6 +150,75 @@ describe("project serialization", () => {
     expect(lib.promptLibraryTags).toEqual(project.settings.promptLibraryTags);
   });
 
+  it("remaps dropped outfit subcategories when importing prompt library", () => {
+    const json = JSON.stringify({
+      kind: SCENEFORGE_PROMPT_LIBRARY_EXPORT_KIND,
+      version: 1,
+      promptLibraryTags: [
+        {
+          id: "old-bag",
+          label: "包",
+          prompt: "backpack",
+          category: "outfit",
+          subcategory: "outfit-bag",
+          weight: { value: 1, enabled: false },
+        },
+      ],
+      deletedBuiltInPromptLibraryTagIds: [],
+    });
+
+    const lib = importPromptLibraryBundleFromJson(json);
+    expect(lib.promptLibraryTags[0]?.subcategory).toBe("outfit-accessory");
+  });
+
+  it("migrates legacy character clothing/accessory tags to the outfit taxonomy", () => {
+    const json = JSON.stringify({
+      kind: SCENEFORGE_PROMPT_LIBRARY_EXPORT_KIND,
+      version: 1,
+      promptLibraryTags: [
+        {
+          id: "old-shirt",
+          label: "衬衫",
+          prompt: "white shirt",
+          category: "character",
+          subcategory: "character-clothing",
+          weight: { value: 1, enabled: false },
+        },
+        {
+          id: "old-ring",
+          label: "戒指",
+          prompt: "ring",
+          category: "character",
+          subcategory: "character-accessory",
+          weight: { value: 1, enabled: false },
+        },
+      ],
+      deletedBuiltInPromptLibraryTagIds: [],
+    });
+
+    const lib = importPromptLibraryBundleFromJson(json);
+    expect(lib.promptLibraryTags[0]?.category).toBe("outfit");
+    expect(lib.promptLibraryTags[0]?.subcategory).toBe("outfit-full");
+    expect(lib.promptLibraryTags[1]?.category).toBe("outfit");
+    expect(lib.promptLibraryTags[1]?.subcategory).toBe("outfit-accessory");
+  });
+
+  it("migrates legacy prompt subcategory bindings on character import", () => {
+    const project = createDefaultProject();
+    const raw = JSON.parse(serializeProject(project)) as Record<string, unknown>;
+    const char = structuredClone(defaultCharacter) as Record<string, unknown>;
+    char.id = "legacy-bindings";
+    char.promptCategoryBindings = ["character", "body-part"];
+    char.promptSubcategoryBindings = ["character-subject", "character-clothing", "body-part-hair"];
+    raw.scene = { ...(raw.scene as object), characters: [char] } as unknown;
+
+    const imported = importProjectFromJson(JSON.stringify(raw));
+    const first = imported.scene.characters[0];
+    expect(first?.promptCategoryBindings).toEqual(["character", "outfit", "body-part"]);
+    expect(first?.promptSubcategoryBindings).toContain("outfit-full");
+    expect(first?.promptSubcategoryBindings).not.toContain("character-clothing");
+  });
+
   it("keeps valid prompt library subcategories and drops invalid ones", () => {
     const json = JSON.stringify({
       kind: SCENEFORGE_PROMPT_LIBRARY_EXPORT_KIND,
@@ -273,7 +342,7 @@ describe("project serialization", () => {
     expect(imported.scene.promptSubcategoryBindings).toEqual(["scene-weather"]);
     expect(imported.scene.objects[0]?.promptCategoryBindings).toEqual(["character"]);
     expect(imported.scene.objects[0]?.promptSubcategoryBindings).toEqual(["character-pose"]);
-    expect(imported.scene.characters[0]?.promptCategoryBindings).toEqual(["character", "body-part"]);
+    expect(imported.scene.characters[0]?.promptCategoryBindings).toEqual(["character", "outfit", "body-part"]);
     expect(imported.scene.characters[0]?.promptSubcategoryBindings).toEqual([
       "character-expression",
     ]);

@@ -1,6 +1,10 @@
 import type { PromptTag } from "@/shared/types";
 
-import { normalizePromptTagSubcategory } from "./prompt-tag-taxonomy";
+import {
+  migrateLegacyPromptTagCategorySubcategory,
+  normalizePromptTagCategory,
+  normalizePromptTagSubcategory,
+} from "./prompt-tag-taxonomy";
 
 function sameSemanticTag(
   left: Pick<PromptTag, "prompt" | "category" | "negative">,
@@ -18,7 +22,9 @@ function listHasSemanticTag(tags: PromptTag[], candidate: Pick<PromptTag, "promp
 }
 
 function normalizeIncomingTag(tag: Omit<PromptTag, "id">): Omit<PromptTag, "id"> {
-  const negative = tag.category === "negative" ? true : Boolean(tag.negative);
+  const migrated = migrateLegacyPromptTagCategorySubcategory(tag.category, tag.subcategory);
+  const category = normalizePromptTagCategory(migrated.category);
+  const negative = category === "negative" ? true : Boolean(tag.negative);
   const label = tag.label.trim() || tag.prompt.trim().slice(0, 48) || "未命名";
   const weight =
     tag.weight && typeof tag.weight.value === "number" && Number.isFinite(tag.weight.value)
@@ -29,8 +35,8 @@ function normalizeIncomingTag(tag: Omit<PromptTag, "id">): Omit<PromptTag, "id">
     ...tag,
     label,
     prompt: tag.prompt.trim(),
-    category: tag.category,
-    subcategory: normalizePromptTagSubcategory(tag.category, tag.subcategory),
+    category,
+    subcategory: normalizePromptTagSubcategory(category, migrated.subcategory),
     negative,
     weight,
   };

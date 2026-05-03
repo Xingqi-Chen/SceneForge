@@ -80,7 +80,6 @@ function groupPromptLibrary(tags: PromptTag[]) {
         category,
         label: PROMPT_TAG_CATEGORY_LABELS[category],
         tagCount: categoryTags.length,
-        uncategorizedTags: categoryTags.filter((tag) => !tag.subcategory),
         subgroups: [
           ...PROMPT_TAG_SUBCATEGORY_OPTIONS[category].map((subcategory) => ({
             subcategory,
@@ -135,7 +134,6 @@ function filterPromptLibraryGroupsByBindings(
       return {
         ...group,
         tagCount: subgroups.reduce((total, subgroup) => total + subgroup.tags.length, 0),
-        uncategorizedTags: [],
         subgroups,
       };
     })
@@ -461,6 +459,7 @@ export function PromptTagPickerPanel() {
     }
   }
 
+  /** 对指定大类下的一批词条（通常为当前绑定下可见的全部）调用 AI 重新分配二级分类。 */
   async function handleClassifyUncategorizedTags(
     category: PromptTagCategory,
     tags: PromptTag[],
@@ -468,7 +467,7 @@ export function PromptTagPickerPanel() {
     if (tags.length === 0) {
       setClassifyCategoryState((current) => ({
         ...current,
-        [category]: { status: "error", message: "当前大类没有未分类词条。" },
+        [category]: { status: "error", message: "当前大类下没有可供分类的词条。" },
       }));
       return;
     }
@@ -582,7 +581,7 @@ export function PromptTagPickerPanel() {
           status: "success",
           message:
             updatedCount > 0
-              ? `已分类 ${updatedCount} 条未分类词条。`
+              ? `已更新 ${updatedCount} 条词条的二级分类。`
               : "AI 返回的分类没有更新任何词条。",
         },
       }));
@@ -822,24 +821,22 @@ export function PromptTagPickerPanel() {
                       {group.tagCount}
                     </span>
                   </button>
-                  {group.uncategorizedTags.length > 0 ? (
-                    <Button
-                      className="h-7 shrink-0 rounded-md border-pink-100 bg-pink-50 px-2 text-[11px] text-pink-600 hover:bg-pink-100 disabled:opacity-60"
-                      disabled={isClassifying}
-                      onClick={() =>
-                        void handleClassifyUncategorizedTags(
-                          group.category,
-                          group.uncategorizedTags,
-                        )
-                      }
-                      title={`让 AI 为 ${group.label} 中 ${group.uncategorizedTags.length} 条未分类词条选择二级分类`}
-                      type="button"
-                      variant="secondary"
-                    >
-                      {isClassifying ? <Loader2 className="mr-1 size-3 animate-spin" /> : null}
-                      AI 分类 {group.uncategorizedTags.length}
-                    </Button>
-                  ) : null}
+                  <button
+                    aria-label={`使用 AI 重写 ${group.label} 下 ${group.tagCount} 条词条的二级分类`}
+                    className="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 disabled:pointer-events-none disabled:opacity-30"
+                    disabled={isClassifying || group.tagCount === 0}
+                    onClick={() => {
+                      const tagsInGroup = group.subgroups.flatMap((subgroup) => subgroup.tags);
+                      void handleClassifyUncategorizedTags(group.category, tagsInGroup);
+                    }}
+                    type="button"
+                  >
+                    {isClassifying ? (
+                      <Loader2 className="size-3.5 animate-spin text-slate-500" aria-hidden />
+                    ) : (
+                      <Sparkles className="size-3.5" aria-hidden />
+                    )}
+                  </button>
                 </div>
                 {classifyState && classifyState.status !== "loading" ? (
                   <p

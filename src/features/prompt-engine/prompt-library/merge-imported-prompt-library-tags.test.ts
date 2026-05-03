@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 
+import type { PromptTag } from "@/shared/types";
+
 import { BUILT_IN_PROMPT_LIBRARY_TAGS } from "./built-in-prompt-tags";
 import { mergeImportedPromptLibraryTags } from "./merge-imported-prompt-library-tags";
 
@@ -74,5 +76,60 @@ describe("mergeImportedPromptLibraryTags", () => {
 
     expect(addedCount).toBe(0);
     expect(next).toHaveLength(1);
+  });
+
+  it("migrates legacy character clothing tags into outfit tags", () => {
+    const legacyTag = {
+      label: "Legacy shirt",
+      prompt: "white shirt",
+      category: "character",
+      subcategory: "character-clothing",
+      weight: { enabled: false, value: 1 },
+    } as unknown as Omit<PromptTag, "id">;
+
+    const { next, addedCount } = mergeImportedPromptLibraryTags(
+      BUILT_IN_PROMPT_LIBRARY_TAGS,
+      [],
+      [legacyTag],
+      () => "id-outfit",
+    );
+
+    expect(addedCount).toBe(1);
+    expect(next[0]).toMatchObject({
+      id: "id-outfit",
+      category: "outfit",
+      subcategory: "outfit-full",
+      prompt: "white shirt",
+    });
+  });
+
+  it("dedupes legacy clothing imports against existing outfit tags", () => {
+    const legacyTag = {
+      label: "Legacy shirt",
+      prompt: "white shirt",
+      category: "character",
+      subcategory: "character-clothing",
+      weight: { enabled: false, value: 1 },
+    } as unknown as Omit<PromptTag, "id">;
+    const existing = [
+      {
+        id: "existing-outfit",
+        label: "Existing shirt",
+        prompt: "white shirt",
+        category: "outfit" as const,
+        subcategory: "outfit-full" as const,
+        weight: { enabled: false, value: 1 },
+      },
+    ];
+
+    const { next, addedCount } = mergeImportedPromptLibraryTags(
+      BUILT_IN_PROMPT_LIBRARY_TAGS,
+      existing,
+      [legacyTag],
+      () => "id-new",
+    );
+
+    expect(addedCount).toBe(0);
+    expect(next).toEqual(existing);
   });
 });

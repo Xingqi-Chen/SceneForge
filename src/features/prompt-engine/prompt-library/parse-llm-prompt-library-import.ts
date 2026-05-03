@@ -2,6 +2,7 @@ import {
   PROMPT_TAG_CATEGORY_ORDER,
   PROMPT_TAG_SUBCATEGORY_LABELS,
   PROMPT_TAG_SUBCATEGORY_OPTIONS,
+  migrateLegacyPromptTagCategorySubcategory,
   normalizePromptTagCategory,
   normalizePromptTagSubcategory,
 } from "./prompt-tag-taxonomy";
@@ -149,8 +150,9 @@ function parseItem(value: unknown): Array<Omit<PromptTag, "id">> {
   }
 
   const labelRaw = typeof value.label === "string" ? value.label.trim() : "";
-  const category = normalizePromptTagCategory(value.category);
-  const subcategory = normalizePromptTagSubcategory(category, value.subcategory);
+  const migrated = migrateLegacyPromptTagCategorySubcategory(value.category, value.subcategory);
+  const category = normalizePromptTagCategory(migrated.category);
+  const subcategory = normalizePromptTagSubcategory(category, migrated.subcategory);
   const negative = category === "negative" ? true : Boolean(value.negative);
   const tokens = splitPromptTokens(prompt);
   const labelFallback = tokens.length === 1 ? labelRaw : undefined;
@@ -279,7 +281,8 @@ export function buildPromptLibraryImportMessages(rawPromptText: string) {
         "Use \"style\" for overall rendering, film grain, candid style, contrast, aesthetic wording.",
         "Use \"quality\" for tags like masterpiece, best quality, 8k, absurdres, detailed.",
         "Use \"scene\" for background, weather, environment.",
-        "Use \"character\" for identity, clothing role, pose at character level when not a single body part.",
+        "Use \"character\" for identity, role, pose, expression at character level when not clothing-only or a single body part.",
+        "Use \"outfit\" for illustration clothing tags: tops, bottoms, dresses or skirts, shoes and socks, accessories (bags, hats, ribbons, jewelry, glasses), or full outfits (school uniform, cosplay, hanfu). Pick the closest outfit subcategory.",
         "Use \"body-part\" for anatomy-focused descriptors (hair, eyes, breasts, hands, etc.) when they are the main focus of that chunk.",
         "Use \"lighting\" for light and shadow descriptions.",
         "Allowed subcategories:",

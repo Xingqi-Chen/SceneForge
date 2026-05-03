@@ -1,4 +1,4 @@
-import type { PromptTagCategory, PromptTagSubcategory } from "@/shared/types";
+import type { PromptTag, PromptTagCategory, PromptTagSubcategory } from "@/shared/types";
 
 export const PROMPT_TAG_CATEGORY_ORDER = [
   "style",
@@ -6,6 +6,7 @@ export const PROMPT_TAG_CATEGORY_ORDER = [
   "quality",
   "scene",
   "character",
+  "outfit",
   "body-part",
   "negative",
 ] satisfies PromptTagCategory[];
@@ -16,6 +17,7 @@ export const PROMPT_TAG_CATEGORY_LABELS: Record<PromptTagCategory, string> = {
   quality: "质量",
   scene: "场景",
   character: "人物",
+  outfit: "服装",
   "body-part": "身体部位",
   negative: "负面提示",
 };
@@ -36,10 +38,14 @@ export const PROMPT_TAG_SUBCATEGORY_LABELS: Record<PromptTagSubcategory, string>
   "scene-background": "背景",
   "scene-prop": "道具",
   "character-subject": "主体",
-  "character-clothing": "服装",
   "character-pose": "姿态",
   "character-expression": "表情",
-  "character-accessory": "配饰",
+  "outfit-upper": "上装",
+  "outfit-lower": "下装",
+  "outfit-dress": "裙装",
+  "outfit-footwear": "鞋袜",
+  "outfit-accessory": "配饰",
+  "outfit-full": "整身/套装",
   "body-part-hair": "头发",
   "body-part-eyes": "眼睛",
   "body-part-face": "面部",
@@ -57,13 +63,8 @@ export const PROMPT_TAG_SUBCATEGORY_OPTIONS: Record<PromptTagCategory, PromptTag
   lighting: ["lighting-source", "lighting-mood", "lighting-shadow"],
   quality: ["quality-detail", "quality-resolution", "quality-finish"],
   scene: ["scene-environment", "scene-weather", "scene-background", "scene-prop"],
-  character: [
-    "character-subject",
-    "character-clothing",
-    "character-pose",
-    "character-expression",
-    "character-accessory",
-  ],
+  character: ["character-subject", "character-pose", "character-expression"],
+  outfit: ["outfit-upper", "outfit-lower", "outfit-dress", "outfit-footwear", "outfit-accessory", "outfit-full"],
   "body-part": [
     "body-part-hair",
     "body-part-eyes",
@@ -78,6 +79,134 @@ export const PROMPT_TAG_SUBCATEGORY_OPTIONS: Record<PromptTagCategory, PromptTag
 const promptTagSubcategorySet = new Set<PromptTagSubcategory>(
   Object.values(PROMPT_TAG_SUBCATEGORY_OPTIONS).flat(),
 );
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** 已移除的服装子类 id → 当前子类（载入旧存档、绑定列表时使用）。 */
+const DROPPED_OUTFIT_SUBCATEGORY_REMAP: Record<string, PromptTagSubcategory> = {
+  "outfit-outerwear": "outfit-upper",
+  "outfit-underwear": "outfit-full",
+  "outfit-lounge": "outfit-full",
+  "outfit-socks": "outfit-footwear",
+  "outfit-bag": "outfit-accessory",
+  "outfit-headwear": "outfit-accessory",
+};
+
+function remapDroppedOutfitSubcategoryId(subcategory: unknown): unknown {
+  if (typeof subcategory !== "string") {
+    return subcategory;
+  }
+
+  return DROPPED_OUTFIT_SUBCATEGORY_REMAP[subcategory] ?? subcategory;
+}
+
+/**
+ * 旧版「人物」下的服装/配饰子类迁入独立「服装」大类（载入旧 JSON、合并导入等）。
+ * 按子类识别，避免 category/subcategory 不一致的存档无法修正。
+ * 已删减的服装子类 id 会映射到当前二次元常用分类。
+ */
+export function migrateLegacyPromptTagCategorySubcategory(
+  category: unknown,
+  subcategory: unknown,
+): { category: unknown; subcategory: unknown } {
+  if (subcategory === "character-clothing") {
+    return { category: "outfit", subcategory: "outfit-full" };
+  }
+
+  if (subcategory === "character-accessory") {
+    return { category: "outfit", subcategory: "outfit-accessory" };
+  }
+
+  const remappedSub = remapDroppedOutfitSubcategoryId(subcategory);
+  if (remappedSub !== subcategory) {
+    return { category: "outfit", subcategory: remappedSub };
+  }
+
+  return { category, subcategory };
+}
+
+/** 将绑定列表中的旧子类 id 替换为新服装子类，并在需要时插入 `outfit` 一级类目。 */
+export function migrateLegacyPromptBindingArrays(
+  categoriesRaw: unknown,
+  subcategoriesRaw: unknown,
+): { categoriesRaw: unknown; subcategoriesRaw: unknown } {
+  if (!Array.isArray(subcategoriesRaw)) {
+    return { categoriesRaw, subcategoriesRaw };
+  }
+
+  const mappedSubs = subcategoriesRaw.map((s) => {
+    if (s === "character-clothing") {
+      return "outfit-full";
+    }
+
+    if (s === "character-accessory") {
+      return "outfit-accessory";
+    }
+
+    return remapDroppedOutfitSubcategoryId(s);
+  });
+
+  const needsOutfit = mappedSubs.some(
+    (s) => typeof s === "string" && (s as string).startsWith("outfit-"),
+  );
+
+  if (!needsOutfit || !Array.isArray(categoriesRaw)) {
+    return { categoriesRaw, subcategoriesRaw: mappedSubs };
+  }
+
+  const list = categoriesRaw.filter((c): c is string => typeof c === "string");
+  if (list.includes("outfit")) {
+    return { categoriesRaw: list, subcategoriesRaw: mappedSubs };
+  }
+
+  const next = [...list];
+  const characterIdx = next.indexOf("character");
+  if (characterIdx >= 0) {
+    next.splice(characterIdx + 1, 0, "outfit");
+  } else {
+    next.push("outfit");
+  }
+
+  return { categoriesRaw: next, subcategoriesRaw: mappedSubs };
+}
+
+/** 将不信任来源的单条提示词标签修补为安全结构；无法识别则丢弃。 */
+export function coercePersistedPromptTag(raw: unknown): PromptTag | null {
+  if (!isRecord(raw)) {
+    return null;
+  }
+
+  const id = typeof raw.id === "string" && raw.id.trim() ? raw.id.trim() : null;
+  if (!id) {
+    return null;
+  }
+
+  const migrated = migrateLegacyPromptTagCategorySubcategory(raw.category, raw.subcategory);
+  const category = normalizePromptTagCategory(migrated.category);
+  const subcategory = normalizePromptTagSubcategory(category, migrated.subcategory);
+
+  const weightRaw = raw.weight;
+  const w = isRecord(weightRaw) ? weightRaw : undefined;
+  const value = typeof w?.value === "number" && Number.isFinite(w.value) ? w.value : 1;
+  const enabled = typeof w?.enabled === "boolean" ? w.enabled : false;
+
+  const tag: PromptTag = {
+    id,
+    label: typeof raw.label === "string" ? raw.label : "标签",
+    prompt: typeof raw.prompt === "string" ? raw.prompt : "",
+    category,
+    ...(subcategory ? { subcategory } : {}),
+    weight: { value, enabled },
+  };
+
+  if (typeof raw.negative === "boolean") {
+    tag.negative = raw.negative;
+  }
+
+  return tag;
+}
 
 export function isPromptTagCategory(value: unknown): value is PromptTagCategory {
   return (

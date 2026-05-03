@@ -58,6 +58,14 @@ export const BUILT_IN_PROMPT_LIBRARY_TAGS: PromptTag[] = [
     weight: { enabled: false, value: 1 },
   },
   {
+    id: "library-casual-top",
+    label: "休闲上衣",
+    prompt: "casual shirt",
+    category: "outfit",
+    subcategory: "outfit-upper",
+    weight: { enabled: false, value: 1 },
+  },
+  {
     id: "library-misty-background",
     label: "雾气背景",
     prompt: "misty background",

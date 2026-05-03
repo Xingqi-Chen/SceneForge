@@ -31,8 +31,8 @@ import { defaultLineEndpoints, defaultPolygonPoints } from "@/features/editor/pr
 import {
   PROMPT_TAG_CATEGORY_ORDER,
   PROMPT_TAG_SUBCATEGORY_OPTIONS,
-  normalizePromptTagCategory,
-  normalizePromptTagSubcategory,
+  coercePersistedPromptTag,
+  migrateLegacyPromptBindingArrays,
 } from "@/features/prompt-engine/prompt-library/prompt-tag-taxonomy";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -64,37 +64,7 @@ function dedupeById<T extends { id: string }>(items: T[]): T[] {
 
 /** 将不信任来源的单条词库标签修补为安全结构；无法识别则丢弃。 */
 function sanitizePromptLibraryTagEntry(raw: unknown): PromptTag | null {
-  if (!isRecord(raw)) {
-    return null;
-  }
-
-  const id = typeof raw.id === "string" && raw.id.trim() ? raw.id : null;
-  if (!id) {
-    return null;
-  }
-
-  const category = normalizePromptTagCategory(raw.category);
-  const subcategory = normalizePromptTagSubcategory(category, raw.subcategory);
-
-  const weightRaw = raw.weight;
-  const w = isRecord(weightRaw) ? weightRaw : undefined;
-  const value = typeof w?.value === "number" && Number.isFinite(w.value) ? w.value : 1;
-  const enabled = typeof w?.enabled === "boolean" ? w.enabled : false;
-
-  const tag: PromptTag = {
-    id,
-    label: typeof raw.label === "string" ? raw.label : "标签",
-    prompt: typeof raw.prompt === "string" ? raw.prompt : "",
-    category,
-    ...(subcategory ? { subcategory } : {}),
-    weight: { value, enabled },
-  };
-
-  if (typeof raw.negative === "boolean") {
-    tag.negative = raw.negative;
-  }
-
-  return tag;
+  return coercePersistedPromptTag(raw);
 }
 
 function isExportBundleVersion(value: unknown): boolean {
@@ -445,7 +415,10 @@ function sanitizeSceneObject(raw: unknown): SceneObject | null {
 
   const kind = coerceSceneObjectKind(raw.kind);
 
-  const promptTags = Array.isArray(raw.promptTags) ? (raw.promptTags as SceneObject["promptTags"]) : [];
+  const promptTagsRaw = Array.isArray(raw.promptTags) ? raw.promptTags : [];
+  const promptTags = dedupePromptTags(
+    promptTagsRaw.map((t) => coercePersistedPromptTag(t)).filter((tag): tag is PromptTag => tag !== null),
+  );
 
   const promptCategoryBindings = sanitizePromptCategoryBindings(
     raw.promptCategoryBindings,
@@ -464,7 +437,7 @@ function sanitizeSceneObject(raw: unknown): SceneObject | null {
     fill: typeof raw.fill === "string" ? raw.fill : "#e2e8f0",
     includeInPrompt: typeof raw.includeInPrompt === "boolean" ? raw.includeInPrompt : true,
     weight: sanitizeWeight(raw.weight),
-    promptTags: dedupePromptTags(promptTags),
+    promptTags,
     promptCategoryBindings,
     promptSubcategoryBindings: sanitizePromptSubcategoryBindings(
       raw.promptSubcategoryBindings,
@@ -577,28 +550,38 @@ function sanitizeCharacter(raw: unknown): CharacterSkeleton | null {
         }));
 
   const bodyParts = bodyPartsRaw.map((bodyPart) => {
-    const promptCategoryBindings = sanitizePromptCategoryBindings(
+    const migratedBp = migrateLegacyPromptBindingArrays(
       bodyPart.promptCategoryBindings,
+      bodyPart.promptSubcategoryBindings,
+    );
+    const promptCategoryBindings = sanitizePromptCategoryBindings(
+      migratedBp.categoriesRaw,
       DEFAULT_PROMPT_CATEGORY_BINDINGS.bodyPart,
     );
 
+    const partTagsRaw = Array.isArray(bodyPart.promptTags) ? bodyPart.promptTags : [];
+
     return {
       ...bodyPart,
-      promptTags: dedupePromptTags(bodyPart.promptTags),
+      promptTags: dedupePromptTags(
+        partTagsRaw.map((t) => coercePersistedPromptTag(t)).filter((tag): tag is PromptTag => tag !== null),
+      ),
       promptCategoryBindings,
       promptSubcategoryBindings: sanitizePromptSubcategoryBindings(
-        bodyPart.promptSubcategoryBindings,
+        migratedBp.subcategoriesRaw,
         promptCategoryBindings,
         DEFAULT_PROMPT_SUBCATEGORY_BINDINGS.bodyPart,
       ),
     };
   });
 
-  const charPromptTags = Array.isArray(raw.promptTags)
-    ? (raw.promptTags as CharacterSkeleton["promptTags"])
-    : [];
-  const promptCategoryBindings = sanitizePromptCategoryBindings(
+  const charPromptTags = Array.isArray(raw.promptTags) ? raw.promptTags : [];
+  const migratedCharBindings = migrateLegacyPromptBindingArrays(
     raw.promptCategoryBindings,
+    raw.promptSubcategoryBindings,
+  );
+  const promptCategoryBindings = sanitizePromptCategoryBindings(
+    migratedCharBindings.categoriesRaw,
     DEFAULT_PROMPT_CATEGORY_BINDINGS.character,
   );
 
@@ -639,10 +622,12 @@ function sanitizeCharacter(raw: unknown): CharacterSkeleton | null {
     ...(headRotation3D ? { headRotation3D } : {}),
     ...(limbLengthLocked3D !== undefined ? { limbLengthLocked3D } : {}),
     bodyParts,
-    promptTags: dedupePromptTags(charPromptTags),
+    promptTags: dedupePromptTags(
+      charPromptTags.map((t) => coercePersistedPromptTag(t)).filter((tag): tag is PromptTag => tag !== null),
+    ),
     promptCategoryBindings,
     promptSubcategoryBindings: sanitizePromptSubcategoryBindings(
-      raw.promptSubcategoryBindings,
+      migratedCharBindings.subcategoriesRaw,
       promptCategoryBindings,
       DEFAULT_PROMPT_SUBCATEGORY_BINDINGS.character,
     ),
@@ -676,7 +661,10 @@ function sanitizeScene(scene: unknown): Scene {
   const characters = dedupeById(
     charactersRaw.map(sanitizeCharacter).filter((c): c is CharacterSkeleton => c !== null),
   );
-  const scenePromptTags = Array.isArray(scene.promptTags) ? (scene.promptTags as Scene["promptTags"]) : [];
+  const scenePromptTagsRaw = Array.isArray(scene.promptTags) ? scene.promptTags : [];
+  const scenePromptTags = dedupePromptTags(
+    scenePromptTagsRaw.map((t) => coercePersistedPromptTag(t)).filter((tag): tag is PromptTag => tag !== null),
+  );
   const promptCategoryBindings = sanitizePromptCategoryBindings(
     scene.promptCategoryBindings,
     DEFAULT_PROMPT_CATEGORY_BINDINGS.scene,
@@ -691,7 +679,7 @@ function sanitizeScene(scene: unknown): Scene {
     three: sanitizeScene3DConfig(scene.three),
     objects,
     characters,
-    promptTags: dedupePromptTags(scenePromptTags),
+    promptTags: scenePromptTags,
     promptCategoryBindings,
     promptSubcategoryBindings: sanitizePromptSubcategoryBindings(
       scene.promptSubcategoryBindings,
@@ -797,8 +785,12 @@ export function sanitizeGlobalPromptBindingsPayload(payload: unknown): PromptBin
     PROMPT_BINDING_TARGETS.map((target) => {
       const raw = isRecord(payload[target]) ? payload[target] : {};
       const fallback = PROMPT_BINDING_FALLBACKS[target];
-      const promptCategoryBindings = sanitizePromptCategoryBindings(
+      const migrated = migrateLegacyPromptBindingArrays(
         raw.promptCategoryBindings,
+        raw.promptSubcategoryBindings,
+      );
+      const promptCategoryBindings = sanitizePromptCategoryBindings(
+        migrated.categoriesRaw,
         fallback.categories,
       );
 
@@ -807,7 +799,7 @@ export function sanitizeGlobalPromptBindingsPayload(payload: unknown): PromptBin
         {
           promptCategoryBindings,
           promptSubcategoryBindings: sanitizePromptSubcategoryBindings(
-            raw.promptSubcategoryBindings,
+            migrated.subcategoriesRaw,
             promptCategoryBindings,
             fallback.subcategories,
           ),
