@@ -214,7 +214,7 @@ describe("project serialization", () => {
 
     const imported = importProjectFromJson(JSON.stringify(raw));
     const first = imported.scene.characters[0];
-    expect(first?.promptCategoryBindings).toEqual(["character", "outfit", "body-part"]);
+    expect(first?.promptCategoryBindings).toEqual(["character", "body-part", "outfit"]);
     expect(first?.promptSubcategoryBindings).toContain("outfit-full");
     expect(first?.promptSubcategoryBindings).not.toContain("character-clothing");
   });
@@ -342,7 +342,7 @@ describe("project serialization", () => {
     expect(imported.scene.promptSubcategoryBindings).toEqual(["scene-weather"]);
     expect(imported.scene.objects[0]?.promptCategoryBindings).toEqual(["character"]);
     expect(imported.scene.objects[0]?.promptSubcategoryBindings).toEqual(["character-pose"]);
-    expect(imported.scene.characters[0]?.promptCategoryBindings).toEqual(["character", "outfit", "body-part"]);
+    expect(imported.scene.characters[0]?.promptCategoryBindings).toEqual(["character", "body-part", "outfit"]);
     expect(imported.scene.characters[0]?.promptSubcategoryBindings).toEqual([
       "character-expression",
     ]);

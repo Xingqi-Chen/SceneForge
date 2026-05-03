@@ -6,8 +6,8 @@ export const PROMPT_TAG_CATEGORY_ORDER = [
   "quality",
   "scene",
   "character",
-  "outfit",
   "body-part",
+  "outfit",
   "negative",
 ] satisfies PromptTagCategory[];
 
@@ -40,18 +40,18 @@ export const PROMPT_TAG_SUBCATEGORY_LABELS: Record<PromptTagSubcategory, string>
   "character-subject": "主体",
   "character-pose": "姿态",
   "character-expression": "表情",
-  "outfit-upper": "上装",
-  "outfit-lower": "下装",
-  "outfit-dress": "裙装",
-  "outfit-footwear": "鞋袜",
-  "outfit-accessory": "配饰",
-  "outfit-full": "整身/套装",
   "body-part-hair": "头发",
   "body-part-eyes": "眼睛",
   "body-part-face": "面部",
   "body-part-hands": "手部",
   "body-part-legs": "腿脚",
   "body-part-body": "身体",
+  "outfit-upper": "上装",
+  "outfit-lower": "下装",
+  "outfit-dress": "裙装",
+  "outfit-footwear": "鞋袜",
+  "outfit-accessory": "配饰",
+  "outfit-full": "整身/套装",
   "negative-quality": "质量问题",
   "negative-anatomy": "人体问题",
   "negative-artifact": "画面瑕疵",
@@ -64,7 +64,6 @@ export const PROMPT_TAG_SUBCATEGORY_OPTIONS: Record<PromptTagCategory, PromptTag
   quality: ["quality-detail", "quality-resolution", "quality-finish"],
   scene: ["scene-environment", "scene-weather", "scene-background", "scene-prop"],
   character: ["character-subject", "character-pose", "character-expression"],
-  outfit: ["outfit-upper", "outfit-lower", "outfit-dress", "outfit-footwear", "outfit-accessory", "outfit-full"],
   "body-part": [
     "body-part-hair",
     "body-part-eyes",
@@ -73,6 +72,7 @@ export const PROMPT_TAG_SUBCATEGORY_OPTIONS: Record<PromptTagCategory, PromptTag
     "body-part-legs",
     "body-part-body",
   ],
+  outfit: ["outfit-upper", "outfit-lower", "outfit-dress", "outfit-footwear", "outfit-accessory", "outfit-full"],
   negative: ["negative-quality", "negative-anatomy", "negative-artifact", "negative-composition"],
 };
 
@@ -156,20 +156,21 @@ export function migrateLegacyPromptBindingArrays(
     return { categoriesRaw, subcategoriesRaw: mappedSubs };
   }
 
-  const list = categoriesRaw.filter((c): c is string => typeof c === "string");
-  if (list.includes("outfit")) {
-    return { categoriesRaw: list, subcategoriesRaw: mappedSubs };
+  const order = PROMPT_TAG_CATEGORY_ORDER;
+  const merged = new Set<PromptTagCategory>();
+
+  for (const c of categoriesRaw) {
+    if (typeof c === "string" && (order as readonly string[]).includes(c)) {
+      merged.add(c as PromptTagCategory);
+    }
   }
 
-  const next = [...list];
-  const characterIdx = next.indexOf("character");
-  if (characterIdx >= 0) {
-    next.splice(characterIdx + 1, 0, "outfit");
-  } else {
-    next.push("outfit");
-  }
+  merged.add("outfit");
 
-  return { categoriesRaw: next, subcategoriesRaw: mappedSubs };
+  return {
+    categoriesRaw: order.filter((c) => merged.has(c)),
+    subcategoriesRaw: mappedSubs,
+  };
 }
 
 /** 将不信任来源的单条提示词标签修补为安全结构；无法识别则丢弃。 */
