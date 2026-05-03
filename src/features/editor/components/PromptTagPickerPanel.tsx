@@ -167,8 +167,13 @@ export function PromptTagPickerPanel() {
   const [collapsedCategories, setCollapsedCategories] = useState<CollapsedPromptCategories>(
     createCollapsedPromptCategories,
   );
-  /** At most one secondary subgroup expanded at a time (accordion). */
   const [expandedPromptSubcategoryKey, setExpandedPromptSubcategoryKey] = useState<string | null>(
+    null,
+  );
+  const [selectedPromptCategory, setSelectedPromptCategory] = useState<PromptTagCategory | null>(
+    null,
+  );
+  const [selectedPromptSubcategoryKey, setSelectedPromptSubcategoryKey] = useState<string | null>(
     null,
   );
   const [classifyCategoryState, setClassifyCategoryState] = useState<ClassifyCategoryState>({});
@@ -262,6 +267,20 @@ export function PromptTagPickerPanel() {
       ),
     [currentPromptCategoryBindings, currentPromptSubcategoryBindings, promptLibraryGroups],
   );
+  const selectedPromptLibraryGroup =
+    boundPromptLibraryGroups.find((group) => group.category === selectedPromptCategory) ??
+    boundPromptLibraryGroups[0];
+  const selectedPromptLibrarySubgroup = selectedPromptLibraryGroup
+    ? (
+        selectedPromptLibraryGroup.subgroups.find(
+          (subgroup) =>
+            getPromptSubcategoryKey(
+              selectedPromptLibraryGroup.category,
+              subgroup.subcategory,
+            ) === selectedPromptSubcategoryKey,
+        ) ?? selectedPromptLibraryGroup.subgroups[0]
+      )
+    : undefined;
 
   function handleBodyPartTargetChange(nextTarget: BodyPartTargetValue) {
     setBodyPartTarget(nextTarget);
@@ -794,7 +813,176 @@ export function PromptTagPickerPanel() {
 
         <div>
           <p className="mb-3 text-[11px] font-bold uppercase tracking-wider text-slate-500">点击选择或取消选择</p>
-          <div className="space-y-4">
+          {boundPromptLibraryGroups.length > 0 && selectedPromptLibraryGroup ? (
+            <div className="space-y-3">
+              <div className="rounded-md border border-slate-200 bg-white p-3">
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                    提示词类型
+                  </p>
+                  <button
+                    aria-label={`使用 AI 重写 ${selectedPromptLibraryGroup.label} 中 ${selectedPromptLibraryGroup.tagCount} 条词条的二级分类`}
+                    className="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 disabled:pointer-events-none disabled:opacity-30"
+                    disabled={
+                      classifyCategoryState[selectedPromptLibraryGroup.category]?.status ===
+                        "loading" || selectedPromptLibraryGroup.tagCount === 0
+                    }
+                    onClick={() => {
+                      const tagsInGroup = selectedPromptLibraryGroup.subgroups.flatMap(
+                        (subgroup) => subgroup.tags,
+                      );
+                      void handleClassifyUncategorizedTags(
+                        selectedPromptLibraryGroup.category,
+                        tagsInGroup,
+                      );
+                    }}
+                    title="AI 重新分配当前一级分类下的二级分类"
+                    type="button"
+                  >
+                    {classifyCategoryState[selectedPromptLibraryGroup.category]?.status ===
+                    "loading" ? (
+                      <Loader2 className="size-3.5 animate-spin text-slate-500" aria-hidden />
+                    ) : (
+                      <Sparkles className="size-3.5" aria-hidden />
+                    )}
+                  </button>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {boundPromptLibraryGroups.map((group) => {
+                    const isSelected = group.category === selectedPromptLibraryGroup.category;
+
+                    return (
+                      <button
+                        aria-pressed={isSelected}
+                        className={
+                          isSelected
+                            ? "rounded-full bg-pink-600 px-3 py-1.5 text-xs font-medium text-white shadow-sm transition-all hover:bg-pink-700"
+                            : "rounded-full border border-slate-200/80 bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-500 shadow-sm transition-all hover:border-pink-200 hover:bg-pink-50 hover:text-pink-700"
+                        }
+                        key={group.category}
+                        onClick={() => {
+                          setSelectedPromptCategory(group.category);
+                          setSelectedPromptSubcategoryKey(null);
+                        }}
+                        type="button"
+                      >
+                        {group.label}
+                        <span className="ml-1.5 text-[10px] opacity-75">{group.tagCount}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+                {classifyCategoryState[selectedPromptLibraryGroup.category] &&
+                classifyCategoryState[selectedPromptLibraryGroup.category]?.status !== "loading" ? (
+                  <p
+                    className={`mt-2 text-[11px] leading-relaxed ${
+                      classifyCategoryState[selectedPromptLibraryGroup.category]?.status ===
+                      "error"
+                        ? "text-rose-600"
+                        : "text-emerald-700"
+                    }`}
+                  >
+                    {classifyCategoryState[selectedPromptLibraryGroup.category]?.message}
+                  </p>
+                ) : null}
+              </div>
+
+              <div className="rounded-md border border-slate-200 bg-white p-3">
+                <p className="mb-2 text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                  细分方向
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {selectedPromptLibraryGroup.subgroups.map((subgroup) => {
+                    const subgroupKey = getPromptSubcategoryKey(
+                      selectedPromptLibraryGroup.category,
+                      subgroup.subcategory,
+                    );
+                    const isSelected =
+                      selectedPromptLibrarySubgroup &&
+                      getPromptSubcategoryKey(
+                        selectedPromptLibraryGroup.category,
+                        selectedPromptLibrarySubgroup.subcategory,
+                      ) === subgroupKey;
+
+                    return (
+                      <button
+                        aria-pressed={Boolean(isSelected)}
+                        className={
+                          isSelected
+                            ? "rounded-full bg-slate-800 px-3 py-1.5 text-xs font-medium text-white shadow-sm transition-all hover:bg-slate-900"
+                            : "rounded-full border border-slate-200/80 bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-500 shadow-sm transition-all hover:border-slate-300 hover:bg-white hover:text-slate-900"
+                        }
+                        key={subgroupKey}
+                        onClick={() => setSelectedPromptSubcategoryKey(subgroupKey)}
+                        type="button"
+                      >
+                        {subgroup.label}
+                        <span className="ml-1.5 text-[10px] opacity-75">
+                          {subgroup.tags.length}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                    可选提示词
+                  </p>
+                  <span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-medium text-slate-400">
+                    {selectedPromptLibrarySubgroup?.tags.length ?? 0}
+                  </span>
+                </div>
+                {selectedPromptLibrarySubgroup ? (
+                  <div className="flex flex-wrap gap-2">
+                    {selectedPromptLibrarySubgroup.tags.map((tag) => {
+                      const appliedTag = findAppliedTag(appliedTags, tag);
+
+                      return (
+                        <span className="relative inline-flex" key={tag.id}>
+                          <button
+                            aria-pressed={Boolean(appliedTag)}
+                            className={
+                              appliedTag
+                                ? "rounded-full bg-slate-800 px-3 py-1.5 pr-6 text-xs font-medium text-white shadow-sm transition-all hover:bg-slate-900 hover:shadow"
+                                : "rounded-full border border-slate-200/80 bg-white px-3 py-1.5 pr-6 text-xs font-medium text-slate-600 shadow-sm transition-all hover:border-slate-300 hover:bg-white hover:text-slate-900 hover:shadow"
+                            }
+                            onClick={() => void handleTogglePromptTag(tag, appliedTag)}
+                            title={tag.prompt}
+                            type="button"
+                          >
+                            {tag.label}
+                          </button>
+                          <button
+                            aria-label={`从词库删除 ${tag.label}`}
+                            className={
+                              appliedTag
+                                ? "absolute right-1 top-0.5 rounded-full p-0.5 text-white/50 transition-all hover:bg-white/10 hover:text-white"
+                                : "absolute right-1 top-0.5 rounded-full p-0.5 text-slate-400 transition-all hover:bg-rose-50 hover:text-rose-500"
+                            }
+                            onClick={() => requestManagePromptLibraryTag(tag)}
+                            title={`编辑或删除 ${tag.label}`}
+                            type="button"
+                          >
+                            <X className="size-3" />
+                          </button>
+                        </span>
+                      );
+                    })}
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          ) : (
+            <div className="rounded-md border border-dashed border-slate-200 bg-slate-50 p-5 text-center">
+              <p className="text-xs text-slate-500">
+                当前目标没有可显示的绑定分类，请在上方启用至少一个一级分类。
+              </p>
+            </div>
+          )}
+          <div className="hidden">
             {boundPromptLibraryGroups.length > 0 ? boundPromptLibraryGroups.map((group) => {
               const isCollapsed = Boolean(collapsedCategories[group.category]);
               const classifyState = classifyCategoryState[group.category];
