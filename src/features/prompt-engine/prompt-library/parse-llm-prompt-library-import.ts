@@ -47,11 +47,15 @@ function trimPromptToken(value: string) {
     token = token.slice(1, -1).trim();
   }
 
-  while (token.startsWith("{") || token.startsWith("[") || token.startsWith("(")) {
+  while (token.startsWith("(") && token.endsWith(")")) {
+    token = token.slice(1, -1).trim();
+  }
+
+  while (token.startsWith("{") || token.startsWith("[")) {
     token = token.slice(1).trim();
   }
 
-  while (token.endsWith("}") || token.endsWith("]") || token.endsWith(")")) {
+  while (token.endsWith("}") || token.endsWith("]")) {
     token = token.slice(0, -1).trim();
   }
 
@@ -268,6 +272,10 @@ export function buildPromptLibraryImportMessages(rawPromptText: string) {
         "You split Stable Diffusion / Midjourney style prompt text into a structured library.",
         "The user message is raw prompt text: it may contain positive prompt, a Negative prompt section, commas, newlines, quoted segments, and lines like <lora:Name:weight>.",
         "Create ATOMIC library entries. Do NOT group many comma-separated prompt tokens into one entry.",
+        "When the user text is prose or long descriptive sentences (not already a comma-separated tag list), you MUST distill it: rewrite into short, reusable prompt vocabulary. Never copy a full sentence or long clause into a single `prompt` value.",
+        "Summarize each idea into 1–3 common tag-style tokens (English unless the source is clearly Chinese). Prefer established SD/MJ wording (e.g. mood: \"serene\", \"ethereal atmosphere\", \"tranquil\"; lighting: \"soft lighting\"). Split mixed clauses into separate items with the right category for each idea.",
+        "Omit or generalize one-off narrative props that are not useful as generic tags. If a detail is only story dressing or contradicts the mood you are encoding, do not surface it as its own entry (e.g. do not emit awkward fragments like \"person partially covered by a floral arrangement\" when the useful reusable parts are mood and scene). Prefer a generic decor tag only when it stays broadly applicable (e.g. \"flowers\" under scene/decor), or skip.",
+        "Assign category by what the token actually expresses: atmosphere and rendering tone → \"style\" (or \"lighting\" for light/shadow); environment/setting → \"scene\"; do not park mood words under unrelated categories just because the sentence mentioned an object.",
         "Each comma-separated prompt token should usually become its own item: \"1girl\", \"black hair\", \"blue eyes\", \"chinese clothes\" are four separate items.",
         "Keep multi-word prompt phrases together when they are one token, e.g. \"best quality\", \"dynamic angle\", \"bad anatomy\".",
         "Keep a whole LoRA/embed token like <lora:Alpaca_Carlesi_Style:1> as one item.",

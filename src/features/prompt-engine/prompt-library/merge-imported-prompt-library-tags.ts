@@ -48,9 +48,19 @@ export function mergeImportedPromptLibraryTags(
   incoming: Array<Omit<PromptTag, "id">>,
   newId: () => string,
 ): { next: PromptTag[]; addedCount: number } {
+  const newTags = collectNewImportedPromptLibraryTags(builtIn, existingCustom, incoming);
+  const created = newTags.map((tag) => ({ ...tag, id: newId() }));
+
+  return { next: [...existingCustom, ...created], addedCount: created.length };
+}
+
+function collectNewImportedPromptLibraryTags(
+  builtIn: PromptTag[],
+  existingCustom: PromptTag[],
+  incoming: Array<Omit<PromptTag, "id">>,
+) {
   const reference: PromptTag[] = [...builtIn, ...existingCustom];
-  let next = [...existingCustom];
-  let addedCount = 0;
+  const newTags: Array<Omit<PromptTag, "id">> = [];
 
   for (const raw of incoming) {
     const normalized = normalizeIncomingTag(raw);
@@ -58,15 +68,22 @@ export function mergeImportedPromptLibraryTags(
       continue;
     }
 
-    if (listHasSemanticTag(reference, normalized) || listHasSemanticTag(next, normalized)) {
+    if (listHasSemanticTag(reference, normalized)) {
       continue;
     }
 
-    const created: PromptTag = { ...normalized, id: newId() };
-    next = [...next, created];
-    reference.push(created);
-    addedCount += 1;
+    newTags.push(normalized);
+    reference.push({ ...normalized, id: `__import-preview-${reference.length}__` });
   }
 
-  return { next, addedCount };
+  return newTags;
+}
+
+/** 与 {@link mergeImportedPromptLibraryTags} 相同的去重规则，返回将新增的词条（不含 id），用于导入前预览。 */
+export function computePromptLibraryImportPreview(
+  builtIn: PromptTag[],
+  existingCustom: PromptTag[],
+  incoming: Array<Omit<PromptTag, "id">>,
+): Array<Omit<PromptTag, "id">> {
+  return collectNewImportedPromptLibraryTags(builtIn, existingCustom, incoming);
 }

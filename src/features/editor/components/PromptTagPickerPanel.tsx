@@ -1,6 +1,6 @@
 "use client";
 
-import { ChevronRight, Loader2, Settings, Sparkles, Tags, X } from "lucide-react";
+import { ChevronRight, Loader2, Settings, Sparkles, Tags, Trash2, X } from "lucide-react";
 import { useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 
@@ -19,6 +19,7 @@ import {
   parseLlmPromptLibraryImportContent,
   parseLlmPromptLibrarySubcategoryContent,
 } from "@/features/prompt-engine/prompt-library/parse-llm-prompt-library-import";
+import { computePromptLibraryImportPreview } from "@/features/prompt-engine/prompt-library/merge-imported-prompt-library-tags";
 import {
   PROMPT_TAG_CATEGORY_LABELS,
   PROMPT_TAG_CATEGORY_ORDER,
@@ -27,6 +28,8 @@ import {
   normalizePromptTagSubcategory,
 } from "@/features/prompt-engine/prompt-library/prompt-tag-taxonomy";
 import type { BodyPartId, PromptTag, PromptTagCategory, PromptTagSubcategory } from "@/shared/types";
+
+type ImportPreviewRow = { id: string; tag: Omit<PromptTag, "id"> };
 
 type BodyPartTargetValue = BodyPartId | "character";
 
@@ -160,6 +163,8 @@ export function PromptTagPickerPanel() {
   const [importStatus, setImportStatus] = useState<ImportUiStatus>("idle");
   const [importError, setImportError] = useState("");
   const [importFeedback, setImportFeedback] = useState("");
+  const [importPreviewRows, setImportPreviewRows] = useState<ImportPreviewRow[] | null>(null);
+  const [importSaving, setImportSaving] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [manageStatus, setManageStatus] = useState<ManageUiStatus>("idle");
   const [manageError, setManageError] = useState("");
@@ -396,7 +401,11 @@ export function PromptTagPickerPanel() {
     });
   }
 
-  async function handleImportPromptLibrary() {
+  function clearImportPreview() {
+    setImportPreviewRows(null);
+  }
+
+  async function handleAnalyzePromptLibraryImport() {
     const raw = importDraft.trim();
     if (!raw) {
       setImportError("请先粘贴或输入 Prompt 文本。");
@@ -407,6 +416,7 @@ export function PromptTagPickerPanel() {
     setImportStatus("loading");
     setImportError("");
     setImportFeedback("");
+    clearImportPreview();
 
     try {
       const messages = buildPromptLibraryImportMessages(raw);
@@ -449,7 +459,49 @@ export function PromptTagPickerPanel() {
         throw new Error(parsed.error);
       }
 
-      const added = importPromptLibraryTags(parsed.tags);
+      const existingCustom = useEditorStore.getState().project.settings.promptLibraryTags ?? [];
+      const previewTags = computePromptLibraryImportPreview(
+        BUILT_IN_PROMPT_LIBRARY_TAGS,
+        existingCustom,
+        parsed.tags,
+      );
+
+      console.info("[SceneForge] [prompt-library] import preview ready", {
+        parsedCount: parsed.tags.length,
+        previewNewCount: previewTags.length,
+      });
+
+      setImportPreviewRows(
+        previewTags.map((tag) => ({ id: crypto.randomUUID(), tag })),
+      );
+      setImportStatus("success");
+      if (previewTags.length > 0) {
+        setImportFeedback(
+          `已解析 ${parsed.tags.length} 条片段；去重后待导入 ${previewTags.length} 条。可删除不需要的条目，再点击「导入到词库」。`,
+        );
+      } else {
+        setImportFeedback(
+          "没有待导入的新词条：解析结果与内置或已有词库重复，或无可合并内容。可修改原文后重新解析。",
+        );
+      }
+    } catch (error) {
+      console.error("[SceneForge] [prompt-library] import analyze failed", { error });
+      setImportStatus("error");
+      setImportError(error instanceof Error ? error.message : "解析失败，请稍后重试。");
+    }
+  }
+
+  async function handleConfirmPromptLibraryImport() {
+    if (!importPreviewRows?.length) {
+      return;
+    }
+
+    setImportSaving(true);
+    setImportError("");
+
+    try {
+      const incoming = importPreviewRows.map((row) => row.tag);
+      const added = importPromptLibraryTags(incoming);
       if (added > 0) {
         const nextProject = useEditorStore.getState().project;
         await savePromptLibrary({
@@ -459,22 +511,25 @@ export function PromptTagPickerPanel() {
       }
 
       console.info("[SceneForge] [prompt-library] import merged into project settings", {
-        parsedCount: parsed.tags.length,
+        selectedCount: importPreviewRows.length,
         addedCount: added,
         persisted: added > 0,
       });
 
+      clearImportPreview();
       setImportStatus("success");
       if (added > 0) {
-        setImportFeedback(`已保存 ${added} 条新词条到词库（与内置或已有词条重复的已跳过）。`);
+        setImportFeedback(`已保存 ${added} 条新词条到词库。`);
         setImportDraft("");
       } else {
-        setImportFeedback("没有新增词条：解析结果与现有词库重复，或无可合并内容。");
+        setImportFeedback("没有写入新词条（与当前词库比对后已全部跳过）。");
       }
     } catch (error) {
-      console.error("[SceneForge] [prompt-library] import failed", { error });
+      console.error("[SceneForge] [prompt-library] import persist failed", { error });
+      setImportError(error instanceof Error ? error.message : "保存失败，请稍后重试。");
       setImportStatus("error");
-      setImportError(error instanceof Error ? error.message : "导入失败，请稍后重试。");
+    } finally {
+      setImportSaving(false);
     }
   }
 
@@ -1203,7 +1258,10 @@ export function PromptTagPickerPanel() {
               <button
                 aria-label="关闭 Prompt 词库设置"
                 className="rounded-full bg-white/80 p-1.5 text-slate-400 shadow-sm transition-all hover:bg-white hover:text-slate-700"
-                onClick={() => setIsSettingsOpen(false)}
+                onClick={() => {
+                  setIsSettingsOpen(false);
+                  clearImportPreview();
+                }}
                 type="button"
               >
                 <X className="size-4" />
@@ -1313,34 +1371,122 @@ export function PromptTagPickerPanel() {
                   智能导入
                 </p>
                 <p className="mt-1 text-xs leading-relaxed text-slate-600">
-                  粘贴整段 Prompt（可含逗号换行、引号块、LoRA 行等）。将通过 AI 拆分、分类并写入当前项目的词库。
+                  粘贴整段 Prompt（可含逗号换行、引号块、LoRA 行等）。先由 AI 解析并预览去重后的新词条；确认列表后可再写入词库。
                 </p>
                 <textarea
                   className="mt-3 min-h-[120px] w-full resize-y rounded-md border border-slate-200 bg-white px-3 py-2.5 text-xs leading-relaxed text-slate-800 outline-none transition-all placeholder:text-slate-400 focus:border-pink-400 focus:ring-1 focus:ring-pink-400 disabled:opacity-60"
-                  disabled={importStatus === "loading"}
+                  disabled={importStatus === "loading" || importSaving}
                   onChange={(event) => {
                     setImportDraft(event.target.value);
                     setImportStatus("idle");
                     setImportError("");
                     setImportFeedback("");
+                    clearImportPreview();
                   }}
                   placeholder="在此粘贴需要解析的 Prompt 文本…"
                   value={importDraft}
                 />
-                <Button
-                  className="mt-3 h-9 w-full gap-2 rounded-md bg-pink-600 text-xs font-medium text-white hover:bg-pink-700 disabled:opacity-60"
-                  disabled={importStatus === "loading"}
-                  onClick={() => void handleImportPromptLibrary()}
-                  size="sm"
-                  type="button"
-                >
-                  {importStatus === "loading" ? (
-                    <Loader2 className="size-3.5 animate-spin" />
-                  ) : (
-                    <Sparkles className="size-3.5" />
-                  )}
-                  {importStatus === "loading" ? "解析中…" : "AI 解析并导入词库"}
-                </Button>
+                <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+                  <Button
+                    className="h-9 flex-1 gap-2 rounded-md bg-pink-600 text-xs font-medium text-white hover:bg-pink-700 disabled:opacity-60"
+                    disabled={importStatus === "loading" || importSaving}
+                    onClick={() => void handleAnalyzePromptLibraryImport()}
+                    size="sm"
+                    type="button"
+                  >
+                    {importStatus === "loading" ? (
+                      <Loader2 className="size-3.5 animate-spin" />
+                    ) : (
+                      <Sparkles className="size-3.5" />
+                    )}
+                    {importStatus === "loading" ? "解析中…" : "AI 解析"}
+                  </Button>
+                  <Button
+                    className="h-9 flex-1 gap-2 rounded-md border border-pink-200 bg-white text-xs font-medium text-pink-700 hover:bg-pink-50 disabled:opacity-60"
+                    disabled={
+                      !importPreviewRows?.length || importStatus === "loading" || importSaving
+                    }
+                    onClick={() => void handleConfirmPromptLibraryImport()}
+                    size="sm"
+                    type="button"
+                    variant="secondary"
+                  >
+                    {importSaving ? <Loader2 className="size-3.5 animate-spin" /> : null}
+                    {importSaving ? "保存中…" : "导入到词库"}
+                  </Button>
+                </div>
+                {importPreviewRows && importPreviewRows.length > 0 ? (
+                  <div className="mt-3 rounded-md border border-slate-200 bg-white">
+                    <p className="border-b border-slate-100 px-3 py-2 text-[11px] font-semibold text-slate-600">
+                      待导入（可删除条目）
+                    </p>
+                    <ul className="max-h-52 space-y-1 overflow-y-auto p-2 custom-scrollbar">
+                      {importPreviewRows.map((row) => {
+                        const sub = row.tag.subcategory
+                          ? PROMPT_TAG_SUBCATEGORY_LABELS[row.tag.subcategory] ?? row.tag.subcategory
+                          : "未分类";
+
+                        return (
+                          <li
+                            className="flex items-start gap-2 rounded-md border border-slate-100 bg-slate-50/80 px-2 py-2 text-xs"
+                            key={row.id}
+                          >
+                            <div className="min-w-0 flex-1">
+                              <p className="font-medium text-slate-800">{row.tag.label}</p>
+                              <p className="mt-0.5 break-words text-[11px] leading-relaxed text-slate-600">
+                                {row.tag.prompt.length > 120
+                                  ? `${row.tag.prompt.slice(0, 120)}…`
+                                  : row.tag.prompt}
+                              </p>
+                              <p className="mt-1 text-[10px] text-slate-500">
+                                {PROMPT_TAG_CATEGORY_LABELS[row.tag.category]}
+                                {" · "}
+                                {sub}
+                              </p>
+                            </div>
+                            <button
+                              aria-label={`从待导入列表移除 ${row.tag.label}`}
+                              className="shrink-0 rounded-md p-1.5 text-slate-400 transition-colors hover:bg-rose-50 hover:text-rose-600 disabled:opacity-40"
+                              disabled={importSaving}
+                              onClick={() =>
+                                setImportPreviewRows((current) => {
+                                  if (!current) {
+                                    return current;
+                                  }
+                                  return current.filter((r) => r.id !== row.id);
+                                })
+                              }
+                              type="button"
+                            >
+                              <Trash2 className="size-3.5" />
+                            </button>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </div>
+                ) : null}
+                {importPreviewRows && importPreviewRows.length === 0 ? (
+                  <p className="mt-2 text-xs leading-relaxed text-slate-500">
+                    列表已清空。可重新解析或点击「取消预览」。
+                  </p>
+                ) : null}
+                {importPreviewRows !== null ? (
+                  <Button
+                    className="mt-2 h-8 w-full text-xs text-slate-600"
+                    disabled={importSaving || importStatus === "loading"}
+                    onClick={() => {
+                      clearImportPreview();
+                      setImportFeedback("");
+                      setImportStatus("idle");
+                    }}
+                    size="sm"
+                    type="button"
+                    variant="ghost"
+                  >
+                    取消预览
+                  </Button>
+                ) : null}
                 {importStatus === "error" ? (
                   <p className="mt-2 text-xs leading-relaxed text-rose-600">{importError}</p>
                 ) : null}

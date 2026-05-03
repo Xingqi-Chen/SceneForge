@@ -3,7 +3,10 @@ import { describe, expect, it } from "vitest";
 import type { PromptTag } from "@/shared/types";
 
 import { BUILT_IN_PROMPT_LIBRARY_TAGS } from "./built-in-prompt-tags";
-import { mergeImportedPromptLibraryTags } from "./merge-imported-prompt-library-tags";
+import {
+  computePromptLibraryImportPreview,
+  mergeImportedPromptLibraryTags,
+} from "./merge-imported-prompt-library-tags";
 
 describe("mergeImportedPromptLibraryTags", () => {
   it("adds new tags with ids", () => {
@@ -131,5 +134,37 @@ describe("mergeImportedPromptLibraryTags", () => {
 
     expect(addedCount).toBe(0);
     expect(next).toEqual(existing);
+  });
+});
+
+describe("computePromptLibraryImportPreview", () => {
+  it("matches merge addedCount and tag prompts for the same inputs", () => {
+    let n = 0;
+    const incoming: Array<Omit<PromptTag, "id">> = [
+      {
+        label: "新",
+        prompt: "unique preview token",
+        category: "scene",
+        subcategory: "scene-environment",
+        weight: { enabled: false, value: 1 },
+      },
+      {
+        label: "内置重复",
+        prompt: "blue eyes",
+        category: "body-part",
+        weight: { enabled: false, value: 1 },
+      },
+    ];
+
+    const preview = computePromptLibraryImportPreview(BUILT_IN_PROMPT_LIBRARY_TAGS, [], incoming);
+    const { addedCount } = mergeImportedPromptLibraryTags(
+      BUILT_IN_PROMPT_LIBRARY_TAGS,
+      [],
+      incoming,
+      () => `id-${++n}`,
+    );
+
+    expect(preview).toHaveLength(addedCount);
+    expect(preview.map((t) => t.prompt)).toEqual(["unique preview token"]);
   });
 });

@@ -167,6 +167,47 @@ describe("parseLlmPromptLibraryImportContent", () => {
     }
   });
 
+  it("preserves inline parentheses such as watercolor (medium)", () => {
+    const result = parseLlmPromptLibraryImportContent(
+      JSON.stringify({
+        items: [
+          {
+            label: "水彩媒介",
+            prompt: "watercolor (medium)",
+            category: "style",
+            subcategory: "style-rendering",
+          },
+        ],
+      }),
+    );
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.tags).toHaveLength(1);
+      expect(result.tags[0]?.prompt).toBe("watercolor (medium)");
+    }
+  });
+
+  it("strips only fully wrapping parentheses layers", () => {
+    const result = parseLlmPromptLibraryImportContent(
+      JSON.stringify({
+        items: [
+          {
+            label: "强调",
+            prompt: "((serene atmosphere))",
+            category: "style",
+          },
+        ],
+      }),
+    );
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.tags).toHaveLength(1);
+      expect(result.tags[0]?.prompt).toBe("serene atmosphere");
+    }
+  });
+
   it("rejects invalid json", () => {
     const result = parseLlmPromptLibraryImportContent("not json");
     expect(result.ok).toBe(false);
