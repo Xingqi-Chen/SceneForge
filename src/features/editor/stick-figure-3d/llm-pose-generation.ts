@@ -13,6 +13,12 @@ const TARGET_IDS = ["pelvis", "chest", "head", "leftHand", "rightHand", "leftFoo
 const POLE_IDS = ["leftElbowPole", "rightElbowPole", "leftKneePole", "rightKneePole"] as const;
 
 const CURRENT_POSE_PRECISION = 3;
+const DEFAULT_POLE_OFFSETS: Record<(typeof POLE_IDS)[number], StickFigureVec3> = {
+  leftElbowPole: { x: -0.28, y: 0, z: 0.16 },
+  rightElbowPole: { x: 0.28, y: 0, z: 0.16 },
+  leftKneePole: { x: -0.08, y: 0.04, z: 0.34 },
+  rightKneePole: { x: 0.08, y: 0.04, z: 0.34 },
+};
 
 const STICK_FIGURE_POSE_SYSTEM_PROMPT = [
   "You generate 3D stick-figure pose data for SceneForge.",
@@ -21,7 +27,11 @@ const STICK_FIGURE_POSE_SYSTEM_PROMPT = [
   "If an existing character description is provided, preserve identity/style details and update or append only the pose/action part.",
   "Use meters in a character-local Y-up coordinate system: X left/right, Y up, Z depth.",
   "Keep the pose anatomically plausible for a low-poly humanoid. Feet should normally stay near y=0.04 unless the user asks for jumping or lying.",
-  "Prefer returning IK targets plus optional pole hints, not all solved joints.",
+  "Return IK targets plus all four pole controls, not all solved joints.",
+  "Targets control body anchors and end effectors: pelvis, chest, head, hands, and feet.",
+  "Pole controls are the four visible direction balls for elbows and knees. They are not body parts; they steer where the mid-joint bends.",
+  "Place each pole away from its elbow/knee in the direction the joint should point. For a raised/front knee, move that knee pole forward/up toward the visible knee cap. For arms, move elbow poles outward/forward/back to match the elbow angle.",
+  "Always include leftElbowPole, rightElbowPole, leftKneePole, and rightKneePole, even when only one limb changes. Preserve unchanged pole controls from currentPose.",
   'Required JSON shape: {"characterDescription":"short natural-language character pose/action description","targets":{"pelvis":{"x":0,"y":1.05,"z":0},"chest":{},"head":{},"leftHand":{},"rightHand":{},"leftFoot":{},"rightFoot":{}},"poles":{"leftElbowPole":{},"rightElbowPole":{},"leftKneePole":{},"rightKneePole":{}}}',
 ].join("\n");
 
@@ -37,15 +47,35 @@ function roundVec3(v: StickFigureVec3): StickFigureVec3 {
   };
 }
 
+function addVec3(a: StickFigureVec3, b: StickFigureVec3): StickFigureVec3 {
+  return { x: a.x + b.x, y: a.y + b.y, z: a.z + b.z };
+}
+
+function defaultPoleForPose(pose: StickFigurePoseV1, id: (typeof POLE_IDS)[number]): StickFigureVec3 {
+  const j = pose.joints;
+  const base =
+    id === "leftElbowPole"
+      ? j.leftElbow
+      : id === "rightElbowPole"
+        ? j.rightElbow
+        : id === "leftKneePole"
+          ? j.leftKnee
+          : j.rightKnee;
+  return addVec3(base, DEFAULT_POLE_OFFSETS[id]);
+}
+
+function completePolesForPose(pose: StickFigurePoseV1): Required<StickFigurePolesV1> {
+  return Object.fromEntries(
+    POLE_IDS.map((id) => [id, pose.poles?.[id] ?? defaultPoleForPose(pose, id)]),
+  ) as Required<StickFigurePolesV1>;
+}
+
 function compactPoseForPrompt(pose: StickFigurePoseV1) {
   const targets = stickPoseToTargets(pose);
+  const poles = completePolesForPose(pose);
   return {
     targets: Object.fromEntries(TARGET_IDS.map((id) => [id, roundVec3(targets[id])])),
-    poles: pose.poles
-      ? Object.fromEntries(
-          POLE_IDS.flatMap((id) => (pose.poles?.[id] ? [[id, roundVec3(pose.poles[id])]] : [])),
-        )
-      : {},
+    poles: Object.fromEntries(POLE_IDS.map((id) => [id, roundVec3(poles[id])])),
   };
 }
 
@@ -86,14 +116,15 @@ function sanitizeTargets(raw: unknown, fallback: StickFigureSolveTargets): Stick
   );
 }
 
-function sanitizePoles(raw: unknown, fallback?: StickFigurePolesV1): StickFigurePolesV1 | undefined {
+function sanitizePoles(raw: unknown, fallbackPose: StickFigurePoseV1): StickFigurePolesV1 {
+  const fallback = completePolesForPose(fallbackPose);
   if (!isRecord(raw)) {
     return fallback;
   }
 
   const poles: StickFigurePolesV1 = {};
   for (const id of POLE_IDS) {
-    const base = fallback?.[id] ?? { x: 0, y: 1, z: 0 };
+    const base = fallback[id];
     poles[id] = sanitizeGeneratedVec3(raw[id], base);
   }
 
@@ -232,7 +263,7 @@ export function parseStickFigurePoseGenerationResponse(
 
   const fallbackTargets = stickPoseToTargets(currentPose);
   const targets = sanitizeTargets(parsed.targets, fallbackTargets);
-  const poles = sanitizePoles(parsed.poles, currentPose.poles);
+  const poles = sanitizePoles(parsed.poles, currentPose);
   const warm = solveStickFigurePose(targets, currentPose, poles);
 
   return {
