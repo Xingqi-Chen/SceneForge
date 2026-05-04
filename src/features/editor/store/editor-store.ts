@@ -23,6 +23,7 @@ import type {
   Vector2,
   Vector3,
 } from "@/shared/types";
+import type { StickFigurePoseV1 } from "@/shared/types/stick-figure-pose";
 
 import {
   characterAppearsInThreeViewport,
@@ -160,6 +161,7 @@ type EditorState = {
   beginStickFigurePoseDrag: () => void;
   endStickFigurePoseDrag: () => void;
   /** 3D 模式：应用内置人体姿态预设，并在人物参与 3D 舞台时自动对齐脚底落点。 */
+  applyCharacter3DPose: (characterId: string, pose: StickFigurePoseV1) => void;
   applyCharacter3DPosePreset: (characterId: string, presetId: string) => void;
   addPromptTag: (target: PromptTagTarget, tag: PromptTag) => void;
   updatePromptTag: (target: PromptTagTarget, tagId: string, patch: PromptTagPatch) => void;
@@ -1867,6 +1869,50 @@ export const useEditorStore = create<EditorState>((set) => ({
       }));
     });
   },
+  applyCharacter3DPose: (characterId, pose) =>
+    set((state) => {
+      const stickFigurePose3D = cloneStickFigurePose(pose);
+      const mode = state.project.scene.mode;
+      const characters = state.project.scene.characters.map((character) => {
+        if (character.id !== characterId) {
+          return character;
+        }
+
+        const withPose: CharacterSkeleton = { ...character, stickFigurePose3D };
+
+        if (mode === "3d" && characterAppearsInThreeViewport(withPose)) {
+          const snapped = snapCharacterTransformToStickFigureGround(
+            stickFigurePose3D,
+            getCharacter3DTransform(character),
+          );
+
+          return {
+            ...withPose,
+            headRotation3D: { x: 0, y: 0, z: 0 },
+            transform3D: {
+              position: { ...snapped.position },
+              rotation: { ...snapped.rotation },
+              scale: { ...snapped.scale },
+            },
+          };
+        }
+
+        return {
+          ...withPose,
+          headRotation3D: { x: 0, y: 0, z: 0 },
+        };
+      });
+
+      return {
+        project: touchProject({
+          ...state.project,
+          scene: {
+            ...state.project.scene,
+            characters,
+          },
+        }),
+      };
+    }),
   applyCharacter3DPosePreset: (characterId, presetId) =>
     set((state) => {
       const preset = getStickFigurePosePresetById(presetId);

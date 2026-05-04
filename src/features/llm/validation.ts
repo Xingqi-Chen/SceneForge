@@ -61,7 +61,11 @@ function isOptionalString(value: unknown): value is string | undefined {
 }
 
 function isOptionalPurpose(value: unknown): value is LlmChatRequest["purpose"] {
-  return value === undefined || value === "prompt-library-classification";
+  return (
+    value === undefined ||
+    value === "prompt-library-classification" ||
+    value === "stick-figure-pose-generation"
+  );
 }
 
 export function isLlmChatRequest(value: unknown): value is LlmChatRequest {
@@ -79,4 +83,3 @@ export function isLlmChatRequest(value: unknown): value is LlmChatRequest {
     isOptionalNumber(value.maxTokens)
   );
 }
-

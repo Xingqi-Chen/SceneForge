@@ -22,7 +22,7 @@ export type LlmChatMessage = {
 
 export type LlmChatRequest = {
   model?: string;
-  purpose?: "prompt-library-classification";
+  purpose?: "prompt-library-classification" | "stick-figure-pose-generation";
   messages: LlmChatMessage[];
   temperature?: number;
   maxTokens?: number;
@@ -42,4 +42,3 @@ export type LlmChatResponse = {
   finishReason?: string;
   usage?: LlmTokenUsage;
 };
-

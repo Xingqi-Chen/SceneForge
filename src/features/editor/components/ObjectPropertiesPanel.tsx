@@ -3,6 +3,12 @@
 import { MousePointer2 } from "lucide-react";
 import { useRef, useState, type ChangeEvent, type ReactNode } from "react";
 
+import { getLlmProxyErrorMessage, isLlmChatResponse } from "@/features/llm";
+import { getCharacterStickFigurePose } from "@/features/editor/stick-figure-3d/get-character-stick-pose";
+import {
+  buildStickFigurePoseGenerationMessages,
+  parseStickFigurePoseGenerationResponse,
+} from "@/features/editor/stick-figure-3d/llm-pose-generation";
 import { STICK_FIGURE_POSE_PRESETS } from "@/features/editor/stick-figure-3d/PosePresets";
 import { exportStickPoseJsonString, importStickPoseFromJsonString } from "@/features/editor/stick-figure-3d/stick-pose-json";
 import { defaultLineEndpoints, defaultPolygonPoints } from "@/features/editor/preset-scene-objects";
@@ -147,6 +153,9 @@ const canvasSizes: Record<CanvasAspectRatio, { width: number; height: number }> 
 
 export function ObjectPropertiesPanel() {
   const stickPoseFileInputRef = useRef<HTMLInputElement>(null);
+  const [posePrompt, setPosePrompt] = useState("");
+  const [poseGenerationStatus, setPoseGenerationStatus] = useState<"idle" | "loading">("idle");
+  const [poseGenerationError, setPoseGenerationError] = useState("");
   const {
     project,
     selection,
@@ -156,6 +165,7 @@ export function ObjectPropertiesPanel() {
     updateObject3DTransform,
     updateProjectSettings,
     updateScene,
+    applyCharacter3DPose,
     applyCharacter3DPosePreset,
   } = useEditorStore();
   const selectedObject =
@@ -283,6 +293,61 @@ export function ObjectPropertiesPanel() {
         grid: patch.grid ? { ...project.scene.three.grid, ...patch.grid } : project.scene.three.grid,
       },
     });
+  }
+
+  async function handleGenerateCharacter3DPose() {
+    const description = posePrompt.trim();
+    if (!selectedCharacter || !description || poseGenerationStatus === "loading") {
+      return;
+    }
+
+    setPoseGenerationStatus("loading");
+    setPoseGenerationError("");
+
+    try {
+      const currentPose = getCharacterStickFigurePose(selectedCharacter);
+      const response = await fetch("/api/llm/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          purpose: "stick-figure-pose-generation",
+          messages: buildStickFigurePoseGenerationMessages(
+            description,
+            currentPose,
+            selectedCharacter.description,
+          ),
+          temperature: 0.2,
+          maxTokens: 900,
+        }),
+      });
+      const payload: unknown = await response.json();
+
+      if (!response.ok) {
+        setPoseGenerationError(getLlmProxyErrorMessage(payload));
+        return;
+      }
+
+      if (!isLlmChatResponse(payload)) {
+        setPoseGenerationError("AI 返回格式不正确，请重试。");
+        return;
+      }
+
+      const result = parseStickFigurePoseGenerationResponse(payload.content, currentPose);
+      if (!result) {
+        setPoseGenerationError("AI 没有返回可用的姿态 JSON，请换一种描述重试。");
+        return;
+      }
+
+      applyCharacter3DPose(selectedCharacter.id, result.pose);
+      if (result.characterDescription) {
+        updateCharacter(selectedCharacter.id, { description: result.characterDescription });
+      }
+    } catch (error) {
+      console.error("[SceneForge] [editor] failed to generate 3D character pose", { error });
+      setPoseGenerationError("AI 姿态生成失败，请检查 LiteLLM 配置或稍后重试。");
+    } finally {
+      setPoseGenerationStatus("idle");
+    }
   }
 
   return (
@@ -636,6 +701,32 @@ export function ObjectPropertiesPanel() {
                     ref={stickPoseFileInputRef}
                     type="file"
                   />
+                </div>
+              </div>
+              <div className="space-y-1.5">
+                <FieldLabel>AI 姿态生成</FieldLabel>
+                <textarea
+                  className="min-h-[78px] w-full resize-y rounded-md border border-indigo-200 bg-white px-3 py-2 text-xs leading-relaxed text-slate-900 outline-none transition-all placeholder:text-slate-400 focus:border-blue-400 focus:ring-1 focus:ring-blue-400 disabled:cursor-not-allowed disabled:bg-slate-50"
+                  disabled={poseGenerationStatus === "loading"}
+                  onChange={(event) => {
+                    setPosePrompt(event.target.value);
+                    setPoseGenerationError("");
+                  }}
+                  placeholder="例如：双手举过头顶跳起、身体向左倾斜；或：坐在椅子上，右手向前指。"
+                  value={posePrompt}
+                />
+                <div className="flex items-center gap-2">
+                  <button
+                    className="rounded-md border border-indigo-200/80 bg-white px-2.5 py-1.5 text-[11px] font-medium text-indigo-800 shadow-sm transition-colors hover:bg-indigo-50/80 disabled:cursor-not-allowed disabled:opacity-60"
+                    disabled={!posePrompt.trim() || poseGenerationStatus === "loading"}
+                    onClick={handleGenerateCharacter3DPose}
+                    type="button"
+                  >
+                    {poseGenerationStatus === "loading" ? "生成中..." : "生成姿态"}
+                  </button>
+                  {poseGenerationError ? (
+                    <span className="text-[11px] leading-snug text-red-600">{poseGenerationError}</span>
+                  ) : null}
                 </div>
               </div>
               <div className="space-y-1.5">
