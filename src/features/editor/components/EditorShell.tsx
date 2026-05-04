@@ -21,6 +21,7 @@ import { ExportControlsPanel } from "./ExportControlsPanel";
 import { ObjectPropertiesPanel } from "./ObjectPropertiesPanel";
 import { PromptPreviewPanel } from "./PromptPreviewPanel";
 import { PromptTagPickerPanel } from "./PromptTagPickerPanel";
+import { CharacterImagePromptTagPanel } from "./CharacterImagePromptTagPanel";
 import type { CanvasCapture } from "./CanvasStage";
 
 export function EditorShell() {
@@ -105,6 +106,7 @@ export function EditorShell() {
         >
           <div className="flex-1 overflow-y-auto custom-scrollbar p-4 flex flex-col gap-6">
             <AssetLibraryPanel />
+            <CharacterImagePromptTagPanel />
             <div className="h-px w-full bg-slate-100 shrink-0" />
             <PromptTagPickerPanel />
           </div>
