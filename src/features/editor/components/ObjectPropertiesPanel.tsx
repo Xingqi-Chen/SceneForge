@@ -1185,14 +1185,6 @@ export function ObjectPropertiesPanel() {
               </div>
             </div>
           ) : null}
-          <div className="space-y-1.5">
-            <FieldLabel>负面提示词</FieldLabel>
-              <textarea
-                className="min-h-[80px] w-full resize-none rounded-md border border-slate-200 bg-white px-3 py-2 text-sm leading-relaxed text-slate-900 outline-none transition-all focus:border-blue-400 focus:ring-1 focus:ring-blue-400"
-              onChange={(event) => updateProjectSettings({ negativePrompt: event.target.value })}
-              value={project.settings.negativePrompt}
-            />
-          </div>
         </div>
       )}
       </div>

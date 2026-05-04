@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { createDefaultProject, defaultCharacter } from "@/features/editor/store/defaults";
 import type { SceneForgeProject, SceneObject } from "@/shared/types";
 
-import { generatePrompt } from "./generate-prompt";
+import { formatPromptForClipboardCopy, generatePrompt } from "./generate-prompt";
 
 function addTableObject(project: SceneForgeProject) {
   const tableObject: SceneObject = {
@@ -90,7 +90,20 @@ describe("generatePrompt", () => {
     expect(result.prompt).toContain("场景描述");
     expect(result.prompt).toContain("wooden table in the foreground");
     expect(result.parts).toContain("head with (long flowing hair:1.2)");
-    expect(result.negativePrompt).toBe("low quality, blurry, extra fingers");
+    expect(result.negativePrompt).toBe(
+      "low quality, extra fingers, CGI, 3D render, over-smoothed skin, plastic skin, overly glossy, unnatural symmetry, saturated colors, digital airbrush",
+    );
+  });
+
+  it("keeps legacy settings negative prompts and dedupes against default negative tags", () => {
+    const project = createDefaultProject();
+    project.settings.negativePrompt = "low quality, blurry, extra fingers";
+
+    const result = generatePrompt(project);
+
+    expect(result.negativePrompt).toContain("blurry");
+    expect(result.negativePrompt.match(/\blow quality\b/g)).toHaveLength(1);
+    expect(result.negativePrompt.match(/\bextra fingers\b/g)).toHaveLength(1);
   });
 
   it("uses Midjourney weight formatting when configured", () => {
@@ -393,5 +406,20 @@ describe("generatePrompt", () => {
 
     expect(result.prompt).toContain("hero character in the foreground on the left");
     expect(result.prompt).toContain("stone sword pedestal near hero character");
+  });
+});
+
+describe("formatPromptForClipboardCopy", () => {
+  it("appends Please avoid when negative is non-empty", () => {
+    expect(formatPromptForClipboardCopy("a, b", "x, y")).toBe("a, b\n\nPlease avoid: x, y");
+  });
+
+  it("returns only positive when negative is empty or whitespace", () => {
+    expect(formatPromptForClipboardCopy("a", "")).toBe("a");
+    expect(formatPromptForClipboardCopy("a", "   ")).toBe("a");
+  });
+
+  it("trims positive and negative segments", () => {
+    expect(formatPromptForClipboardCopy("  hi  ", "  bad  ")).toBe("hi\n\nPlease avoid: bad");
   });
 });

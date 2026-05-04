@@ -272,7 +272,7 @@ function buildAiUserText({
       : null,
     "",
     `Prompt preview: ${promptForAi.prompt || "(empty)"}`,
-    `Negative prompt from project (reference only; your reply must be the positive prompt text only): ${promptForAi.negativePrompt || "(none)"}`,
+    `Negative prompt (from scene tags and legacy settings; reference only; your reply must be the positive prompt text only): ${promptForAi.negativePrompt || "(none)"}`,
     constraints.layout ? "" : null,
     constraints.layout ? "Hard layout constraints (must be preserved in the final prompt):" : null,
     constraints.layout ? layoutConstraints || "(none)" : null,

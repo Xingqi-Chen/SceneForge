@@ -13,8 +13,18 @@ import type {
 
 import { cloneStickFigurePose } from "@/features/editor/stick-figure-3d/stick-figure-pose-io";
 import { migrateAuthoringJoints3DToStickFigure } from "@/features/editor/stick-figure-3d/migrate-legacy-joints3d";
+import { BUILT_IN_PROMPT_LIBRARY_TAGS } from "@/features/prompt-engine/prompt-library/built-in-prompt-tags";
 
 const now = new Date("2026-01-01T00:00:00.000Z").toISOString();
+
+/** 默认画布场景上预选的负面词条（与内置词库负面条目一致，独立 id 便于实例级编辑）。 */
+export function createDefaultSceneNegativePromptTags(): PromptTag[] {
+  return BUILT_IN_PROMPT_LIBRARY_TAGS.filter((tag) => tag.category === "negative").map((tag) => ({
+    ...tag,
+    id: `tag-scene-default-${tag.id}`,
+    weight: { ...tag.weight },
+  }));
+}
 
 /** 人物骨架（角色根与身体部位）默认绑定「人物」「身体部位」「服装」词库类目。 */
 export const DEFAULT_PROMPT_CATEGORY_BINDINGS = {
@@ -180,7 +190,7 @@ export const defaultScene: Scene = {
   },
   objects: [],
   characters: [],
-  promptTags: [],
+  promptTags: createDefaultSceneNegativePromptTags(),
   promptCategoryBindings: [...DEFAULT_PROMPT_CATEGORY_BINDINGS.scene],
   promptSubcategoryBindings: [...DEFAULT_PROMPT_SUBCATEGORY_BINDINGS.scene],
 };
@@ -291,7 +301,7 @@ export function createDefaultProject(): SceneForgeProject {
     settings: {
       modelFormat: "generic",
       includeSpatialHints: true,
-      negativePrompt: "low quality, blurry, extra fingers",
+      negativePrompt: "",
       promptLibraryTags: [],
       deletedBuiltInPromptLibraryTagIds: [],
     },

@@ -52,6 +52,13 @@ function collectTags(tags: PromptTag[], format: PromptModelFormat, negative = fa
     .map((tag) => formatPromptTag(tag, format));
 }
 
+function collectSettingsNegativePrompt(negativePrompt: string) {
+  return negativePrompt
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean);
+}
+
 function buildScopedPrompt(scopePrompt: string, scopedTags: string[]) {
   if (!scopePrompt) {
     return scopedTags;
@@ -182,9 +189,7 @@ export function generatePrompt(project: SceneForgeProject, options: GenerateProm
     }
   }
 
-  if (settings.negativePrompt.trim()) {
-    negativeParts.push(settings.negativePrompt.trim());
-  }
+  negativeParts.push(...collectSettingsNegativePrompt(settings.negativePrompt));
 
   const uniqueParts = uniquePrompts(parts);
 
@@ -193,4 +198,14 @@ export function generatePrompt(project: SceneForgeProject, options: GenerateProm
     negativePrompt: uniquePrompts(negativeParts).join(", "),
     parts: uniqueParts,
   };
+}
+
+/** Appends merged negative prompt for clipboard paste (e.g. ChatGPT “please avoid” style). */
+export function formatPromptForClipboardCopy(positive: string, combinedNegative: string): string {
+  const base = positive.trim();
+  const neg = combinedNegative.trim();
+  if (!neg) {
+    return base;
+  }
+  return `${base}\n\nPlease avoid: ${neg}`;
 }

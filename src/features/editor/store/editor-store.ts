@@ -680,7 +680,8 @@ export const useEditorStore = create<EditorState>((set) => ({
             updatedAt: stamp,
             settings: {
               ...nextProject.settings,
-              ...state.project.settings,
+              modelFormat: state.project.settings.modelFormat,
+              includeSpatialHints: state.project.settings.includeSpatialHints,
               promptLibraryTags: state.project.settings.promptLibraryTags ?? [],
               deletedBuiltInPromptLibraryTagIds:
                 state.project.settings.deletedBuiltInPromptLibraryTagIds ?? [],

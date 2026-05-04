@@ -408,7 +408,7 @@ describe("editor store", () => {
     const { aiGeneratedPrompt, project, selection } = useEditorStore.getState();
 
     expect(project.scene.objects).toHaveLength(0);
-    expect(project.scene.promptTags).toHaveLength(0);
+    expect(project.scene.promptTags).toEqual(createDefaultProject().scene.promptTags);
     expect(project.settings.promptLibraryTags).toContainEqual(
       expect.objectContaining({
         label: "雨景",

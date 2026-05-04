@@ -14,7 +14,7 @@ import {
   serializeCanvasExport,
   serializePromptLibraryExport,
 } from "@/features/persistence";
-import { generatePrompt } from "@/features/prompt-engine";
+import { formatPromptForClipboardCopy, generatePrompt } from "@/features/prompt-engine";
 
 type ExportStatus =
   | "idle"
@@ -56,8 +56,9 @@ export function ExportControlsPanel() {
   async function handleCopyPrompt() {
     try {
       setStatusDetail("");
-      const { prompt: enginePrompt } = generatePrompt(project);
-      const textToCopy = aiGeneratedPrompt.trim() || enginePrompt;
+      const generated = generatePrompt(project);
+      const base = aiGeneratedPrompt.trim() || generated.prompt;
+      const textToCopy = formatPromptForClipboardCopy(base, generated.negativePrompt);
       await navigator.clipboard.writeText(textToCopy);
       setStatus("copied");
     } catch (error) {
@@ -245,7 +246,7 @@ export function ExportControlsPanel() {
         <Button
           onClick={handleCopyPrompt}
           size="sm"
-          title="复制当前用于生成的正面提示词（优先 AI 编辑区，否则为引擎拼接）。"
+          title="复制当前用于生成的正面提示词（优先 AI 编辑区，否则为引擎拼接）；若有负面提示词则在末尾附带 Please avoid: …"
           type="button"
           className="h-10 w-full rounded-md bg-slate-900 text-white transition-all hover:bg-slate-800"
         >
