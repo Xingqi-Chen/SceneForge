@@ -23,7 +23,7 @@ import type {
   Vector2,
   Vector3,
 } from "@/shared/types";
-import type { StickFigurePoseV1 } from "@/shared/types/stick-figure-pose";
+import type { StickFigurePolesV1, StickFigurePoseV1 } from "@/shared/types/stick-figure-pose";
 
 import {
   characterAppearsInThreeViewport,
@@ -110,7 +110,9 @@ type EditorState = {
   undoStack: EditorHistorySnapshot[];
   /** Last successful AI Prompt preview text; cleared when loading another project. */
   aiGeneratedPrompt: string;
+  showStickFigurePoleControls: boolean;
   setAiGeneratedPrompt: (prompt: string) => void;
+  setShowStickFigurePoleControls: (show: boolean) => void;
   undo: () => void;
   setProject: (project: SceneForgeProject) => void;
   resetProject: () => void;
@@ -154,6 +156,7 @@ type EditorState = {
   updateCharacterJoint: (id: string, jointId: JointId, position: Vector2) => void;
   /** 3D 火柴人：按 IK 控制点增量更新姿态（根局部米）。 */
   updateCharacterStickFigureTargets: (id: string, patch: Partial<StickFigureSolveTargets>) => void;
+  updateCharacterStickFigurePoles: (id: string, patch: StickFigurePolesV1) => void;
   /**
    * 与 `endStickFigurePoseDrag` 配对：在 IK 控制点按下时调用，拖拽期间不往 undo 栈逐帧压快照，
    * 松手后一次入栈，避免卡顿与栈膨胀。
@@ -613,7 +616,9 @@ export const useEditorStore = create<EditorState>((set) => ({
   selection: { kind: "scene" },
   undoStack: [],
   aiGeneratedPrompt: "",
+  showStickFigurePoleControls: true,
   setAiGeneratedPrompt: (prompt) => set({ aiGeneratedPrompt: prompt }),
+  setShowStickFigurePoleControls: (show) => set({ showStickFigurePoleControls: show }),
   undo: () =>
     withoutUndoHistory(() =>
       set((state) => {
@@ -1830,6 +1835,31 @@ export const useEditorStore = create<EditorState>((set) => ({
             const prev = getCharacterStickFigurePose(character);
             const targets = mergeTargets(stickPoseToTargets(prev), patch);
             const poles = character.stickFigurePose3D?.poles ?? prev.poles;
+            const pose = solveStickFigurePose(targets, prev, poles);
+            return {
+              ...character,
+              stickFigurePose3D: cloneStickFigurePose(pose),
+            };
+          }),
+        },
+      }),
+    })),
+  updateCharacterStickFigurePoles: (id, patch) =>
+    set((state) => ({
+      project: touchProject({
+        ...state.project,
+        scene: {
+          ...state.project.scene,
+          characters: state.project.scene.characters.map((character) => {
+            if (character.id !== id) {
+              return character;
+            }
+            const prev = getCharacterStickFigurePose(character);
+            const targets = stickPoseToTargets(prev);
+            const poles = {
+              ...(character.stickFigurePose3D?.poles ?? prev.poles),
+              ...patch,
+            };
             const pose = solveStickFigurePose(targets, prev, poles);
             return {
               ...character,

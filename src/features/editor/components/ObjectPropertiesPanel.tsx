@@ -1,6 +1,6 @@
 "use client";
 
-import { MousePointer2 } from "lucide-react";
+import { Eye, EyeOff, MousePointer2 } from "lucide-react";
 import { useRef, useState, type ChangeEvent, type ReactNode } from "react";
 
 import { getLlmProxyErrorMessage, isLlmChatResponse } from "@/features/llm";
@@ -219,6 +219,8 @@ export function ObjectPropertiesPanel() {
     updateScene,
     applyCharacter3DPose,
     applyCharacter3DPosePreset,
+    setShowStickFigurePoleControls,
+    showStickFigurePoleControls,
   } = useEditorStore();
   const selectedObject =
     selection.kind === "object"
@@ -355,6 +357,7 @@ export function ObjectPropertiesPanel() {
 
     setPoseGenerationStatus("text");
     setPoseGenerationError("");
+    setShowStickFigurePoleControls(false);
 
     try {
       const currentPose = getCharacterStickFigurePose(selectedCharacter);
@@ -409,6 +412,7 @@ export function ObjectPropertiesPanel() {
 
     setPoseGenerationStatus("image");
     setPoseGenerationError("");
+    setShowStickFigurePoleControls(false);
 
     try {
       const imageDataUrl = await downscaleImageFileToDataUrl(file);
@@ -753,7 +757,18 @@ export function ObjectPropertiesPanel() {
           {project.scene.mode === "3d" ? (
             <div className="space-y-3 rounded-md border border-indigo-100 bg-indigo-50/70 p-3">
               <div>
-                <div className="text-xs font-semibold text-indigo-700">3D 人体</div>
+                <div className="flex items-center justify-between gap-2">
+                  <div className="text-xs font-semibold text-indigo-700">3D 人体</div>
+                  <button
+                    className="inline-flex h-7 items-center gap-1.5 rounded-md border border-indigo-200/80 bg-white px-2 text-[11px] font-medium text-indigo-800 shadow-sm transition-colors hover:bg-indigo-50/80"
+                    onClick={() => setShowStickFigurePoleControls(!showStickFigurePoleControls)}
+                    title={showStickFigurePoleControls ? "隐藏膝盖/手肘方向控制球" : "显示膝盖/手肘方向控制球"}
+                    type="button"
+                  >
+                    {showStickFigurePoleControls ? <EyeOff className="size-3.5" /> : <Eye className="size-3.5" />}
+                    {showStickFigurePoleControls ? "隐藏方向球" : "显示方向球"}
+                  </button>
+                </div>
                 <p className="mt-1 text-[11px] leading-relaxed text-indigo-700/80">
                   调整火柴人在 3D 舞台中的根位置、朝向和整体比例。拖拽骨盆、胸、头与手脚的 IK
                   控制点摆姿（默认在正面平面）；按住 Shift 可在深度方向（局部 Z）微调同一控制点。选中头部后可在下方微调头部转动，或在视口按住 Alt

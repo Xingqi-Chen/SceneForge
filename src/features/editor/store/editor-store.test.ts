@@ -761,6 +761,36 @@ describe("editor store", () => {
     expect(useEditorStore.getState().undoStack.length).toBe(undoLenBeforeDrag + 1);
   });
 
+  it("updates 3D stick pose pole controls and re-solves the bend joint", () => {
+    useEditorStore.getState().setSceneMode("3d");
+    useEditorStore.getState().addCharacter();
+    const characterId = useEditorStore.getState().project.scene.characters[0].id;
+    const before = getCharacterStickFigurePose(useEditorStore.getState().project.scene.characters[0]);
+    const pole = {
+      x: before.joints.leftKnee.x - 0.2,
+      y: before.joints.leftKnee.y + 0.1,
+      z: before.joints.leftKnee.z + 0.6,
+    };
+
+    useEditorStore.getState().updateCharacterStickFigurePoles(characterId, {
+      leftKneePole: pole,
+    });
+
+    const after = getCharacterStickFigurePose(useEditorStore.getState().project.scene.characters[0]);
+    expect(after.poles?.leftKneePole).toEqual(pole);
+    expect(after.joints.leftKnee.z).not.toBeCloseTo(before.joints.leftKnee.z, 4);
+  });
+
+  it("toggles 3D stick pose pole control visibility as UI state", () => {
+    expect(useEditorStore.getState().showStickFigurePoleControls).toBe(true);
+
+    useEditorStore.getState().setShowStickFigurePoleControls(false);
+    expect(useEditorStore.getState().showStickFigurePoleControls).toBe(false);
+
+    useEditorStore.getState().setShowStickFigurePoleControls(true);
+    expect(useEditorStore.getState().showStickFigurePoleControls).toBe(true);
+  });
+
   it("records separate undo entries for stick pose updates without drag coalesce", () => {
     useEditorStore.getState().setSceneMode("3d");
     useEditorStore.getState().addCharacter();

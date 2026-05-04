@@ -53,8 +53,8 @@ export function solveTwoBoneIk(
   const p2 = new Vector3();
   const scratch = new Vector3();
 
-  const cands = twoBoneMidCandidates(p0, tClamped, len0, len1);
-  if (!cands) {
+  const bend = twoBoneBendGeometry(p0, tClamped, len0, len1);
+  if (!bend) {
     scratch.subVectors(tClamped, p0);
     const dl = scratch.length();
     if (dl < EPS) {
@@ -65,26 +65,22 @@ export function solveTwoBoneIk(
     p1.copy(p0).add(scratch.clone().multiplyScalar(len0));
     p2.copy(p1).add(scratch.multiplyScalar(len1));
   } else {
-    const [a, b] = cands;
-    if (pole) {
-      const poleV = toV3(pole).clone().sub(p0);
-      const bone = new Vector3().subVectors(tClamped, p0);
-      if (bone.lengthSq() >= EPS * EPS && poleV.lengthSq() >= EPS * EPS) {
-        bone.normalize();
-        const perp = poleV.clone().sub(bone.clone().multiplyScalar(poleV.dot(bone)));
-        if (perp.lengthSq() >= EPS * EPS) {
-          perp.normalize();
-          const pickA = a.clone().sub(p0).dot(perp) >= b.clone().sub(p0).dot(perp);
-          p1.copy(pickA ? a : b);
-        } else {
-          p1.copy(a.distanceToSquared(hint) <= b.distanceToSquared(hint) ? a : b);
-        }
-      } else {
-        p1.copy(a.distanceToSquared(hint) <= b.distanceToSquared(hint) ? a : b);
-      }
-    } else {
-      p1.copy(a.distanceToSquared(hint) <= b.distanceToSquared(hint) ? a : b);
+    const { base, axis, height } = bend;
+    const bendHint = pole ? toV3(pole) : hint;
+    scratch.subVectors(bendHint, p0);
+    scratch.addScaledVector(axis, -scratch.dot(axis));
+    if (scratch.lengthSq() < EPS * EPS) {
+      scratch.subVectors(hint, p0);
+      scratch.addScaledVector(axis, -scratch.dot(axis));
     }
+    if (scratch.lengthSq() < EPS * EPS) {
+      scratch.crossVectors(axis, new Vector3(0, 1, 0));
+      if (scratch.lengthSq() < EPS * EPS) {
+        scratch.crossVectors(axis, new Vector3(1, 0, 0));
+      }
+    }
+    scratch.setLength(height);
+    p1.copy(base).add(scratch);
     p2.copy(tClamped);
   }
 
@@ -93,7 +89,12 @@ export function solveTwoBoneIk(
 
 export const solveTwoBoneFabrik = solveTwoBoneIk;
 
-function twoBoneMidCandidates(root: Vector3, end: Vector3, len0: number, len1: number): [Vector3, Vector3] | null {
+function twoBoneBendGeometry(
+  root: Vector3,
+  end: Vector3,
+  len0: number,
+  len1: number,
+): { base: Vector3; axis: Vector3; height: number } | null {
   const d = root.distanceTo(end);
   if (d < EPS) {
     return null;
@@ -109,10 +110,5 @@ function twoBoneMidCandidates(root: Vector3, end: Vector3, len0: number, len1: n
   }
   const h = Math.sqrt(Math.max(0, hSq));
   const base = root.clone().add(u.clone().multiplyScalar(x));
-  const perp = new Vector3().crossVectors(u, new Vector3(0, 1, 0));
-  if (perp.lengthSq() < EPS) {
-    perp.crossVectors(u, new Vector3(1, 0, 0));
-  }
-  perp.setLength(h);
-  return [base.clone().add(perp), base.clone().sub(perp)];
+  return { base, axis: u, height: h };
 }

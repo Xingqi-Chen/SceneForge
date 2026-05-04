@@ -63,6 +63,28 @@ describe("solveStickFigurePose", () => {
     expect(pose.joints.leftHip.x).toBeLessThan(pose.joints.pelvis.x);
     expect(pose.joints.rightHip.x).toBeGreaterThan(pose.joints.pelvis.x);
   });
+
+  it("uses pole controls as continuous bend directions", () => {
+    const targets = {
+      pelvis: { x: 0, y: 1.05, z: 0 },
+      chest: { x: 0, y: 1.45, z: 0 },
+      head: { x: 0, y: 1.7, z: 0 },
+      leftHand: { x: -0.5, y: 1.48, z: 0 },
+      rightHand: { x: 0.5, y: 1.48, z: 0 },
+      leftFoot: { x: -0.12, y: 0.45, z: 0 },
+      rightFoot: { x: 0.12, y: 0.04, z: 0 },
+    };
+
+    const forward = solveStickFigurePose(targets, null, {
+      leftKneePole: { x: -0.12, y: 0.6, z: 1 },
+    });
+    const backward = solveStickFigurePose(targets, forward, {
+      leftKneePole: { x: -0.12, y: 0.6, z: -1 },
+    });
+
+    expect(forward.joints.leftKnee.z).toBeGreaterThan(0.1);
+    expect(backward.joints.leftKnee.z).toBeLessThan(-0.1);
+  });
 });
 
 function dist(

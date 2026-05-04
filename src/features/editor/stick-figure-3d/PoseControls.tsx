@@ -1,11 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useRef, type RefObject } from "react";
+import { useCallback, useEffect, useMemo, useRef, type RefObject } from "react";
 import { useThree, type ThreeEvent } from "@react-three/fiber";
-import { Raycaster, Vector2 as ThreeVector2, Vector3, type Group } from "three";
+import { Quaternion, Raycaster, Vector2 as ThreeVector2, Vector3, type Group } from "three";
 
 import type { BodyPartId, CharacterSkeleton } from "@/shared/types";
-import type { StickFigurePoseV1 } from "@/shared/types/stick-figure-pose";
+import type { StickFigurePolesV1, StickFigurePoseV1, StickFigureVec3 } from "@/shared/types/stick-figure-pose";
 
 import { useEditorStore } from "@/features/editor/store/editor-store";
 import { getCharacterStickFigurePose } from "@/features/editor/stick-figure-3d/get-character-stick-pose";
@@ -22,7 +22,17 @@ export type StickDragControlId =
   | "leftHand"
   | "rightHand"
   | "leftFoot"
-  | "rightFoot";
+  | "rightFoot"
+  | "leftElbowPole"
+  | "rightElbowPole"
+  | "leftKneePole"
+  | "rightKneePole";
+
+type StickPoleControlId = keyof StickFigurePolesV1;
+
+function isPoleControl(control: StickDragControlId): control is StickPoleControlId {
+  return control.endsWith("Pole");
+}
 
 function controlToBodyPart(control: StickDragControlId): BodyPartId {
   if (control === "pelvis" || control === "chest") {
@@ -40,13 +50,26 @@ function controlToBodyPart(control: StickDragControlId): BodyPartId {
   if (control === "leftFoot") {
     return "leftFoot";
   }
-  return "rightFoot";
+  if (control === "rightFoot") {
+    return "rightFoot";
+  }
+  if (control === "leftElbowPole") {
+    return "leftForearm";
+  }
+  if (control === "rightElbowPole") {
+    return "rightForearm";
+  }
+  if (control === "leftKneePole") {
+    return "leftShin";
+  }
+  return "rightShin";
 }
 
 type PoseControlsProps = {
   character: CharacterSkeleton;
   pose: StickFigurePoseV1;
   rootGroupRef: RefObject<Group | null>;
+  showPoleControls?: boolean;
   setOrbitEnabled?: (enabled: boolean) => void;
   shouldIgnorePointerDown?: (event: ThreeEvent<PointerEvent>) => boolean;
 };
@@ -57,16 +80,160 @@ type DragSession = {
   controlId: StickDragControlId;
   mode: DragMode;
   targets: StickFigureSolveTargets;
+  poles: StickFigurePolesV1;
   planeAnchor: { x: number; y: number; z: number };
   lastPlanePoint: Vector3 | null;
   lastClient: { x: number; y: number };
   viewportRect: { left: number; top: number; width: number; height: number };
 };
 
+const MIN_POLE_HANDLE_DISTANCE = 0.14;
+const Y_UP = new Vector3(0, 1, 0);
+
+function poleFallbackJoint(controlId: StickPoleControlId): keyof StickFigurePoseV1["joints"] {
+  if (controlId === "leftElbowPole") {
+    return "leftElbow";
+  }
+  if (controlId === "rightElbowPole") {
+    return "rightElbow";
+  }
+  if (controlId === "leftKneePole") {
+    return "leftKnee";
+  }
+  return "rightKnee";
+}
+
+function poleHandleOffset(controlId: StickPoleControlId): StickFigureVec3 {
+  if (controlId === "leftElbowPole") {
+    return { x: -0.28, y: 0, z: 0.16 };
+  }
+  if (controlId === "rightElbowPole") {
+    return { x: 0.28, y: 0, z: 0.16 };
+  }
+  if (controlId === "leftKneePole") {
+    return { x: -0.08, y: 0.04, z: 0.34 };
+  }
+  return { x: 0.08, y: 0.04, z: 0.34 };
+}
+
+function addVec3(a: StickFigureVec3, b: StickFigureVec3): StickFigureVec3 {
+  return { x: a.x + b.x, y: a.y + b.y, z: a.z + b.z };
+}
+
+function distanceSq(a: StickFigureVec3, b: StickFigureVec3): number {
+  const dx = a.x - b.x;
+  const dy = a.y - b.y;
+  const dz = a.z - b.z;
+  return dx * dx + dy * dy + dz * dz;
+}
+
+function getPosePolePosition(pose: StickFigurePoseV1, controlId: StickPoleControlId): StickFigureVec3 {
+  const joint = pose.joints[poleFallbackJoint(controlId)];
+  const savedPole = pose.poles?.[controlId];
+  if (savedPole && distanceSq(savedPole, joint) >= MIN_POLE_HANDLE_DISTANCE * MIN_POLE_HANDLE_DISTANCE) {
+    return savedPole;
+  }
+  return addVec3(joint, poleHandleOffset(controlId));
+}
+
+function getSessionControlPosition(session: DragSession, controlId: StickDragControlId): StickFigureVec3 {
+  if (isPoleControl(controlId)) {
+    return session.poles[controlId] ?? session.targets.pelvis;
+  }
+  return session.targets[controlId];
+}
+
+function getDragStartPosition(
+  pose: StickFigurePoseV1,
+  targets: StickFigureSolveTargets,
+  poles: StickFigurePolesV1,
+  controlId: StickDragControlId,
+): StickFigureVec3 {
+  if (isPoleControl(controlId)) {
+    return poles[controlId] ?? getPosePolePosition(pose, controlId);
+  }
+  return targets[controlId];
+}
+
+function PoleGuide({
+  color,
+  from,
+  to,
+}: {
+  color: string;
+  from: StickFigureVec3;
+  to: StickFigureVec3;
+}) {
+  const { length, position, quaternion } = useMemo(() => {
+    const a = new Vector3(from.x, from.y, from.z);
+    const b = new Vector3(to.x, to.y, to.z);
+    const dir = new Vector3().subVectors(b, a);
+    const length = dir.length();
+    const position = new Vector3().addVectors(a, b).multiplyScalar(0.5);
+    const quaternion = length > 1e-6 ? new Quaternion().setFromUnitVectors(Y_UP, dir.normalize()) : new Quaternion();
+    return { length, position, quaternion };
+  }, [from.x, from.y, from.z, to.x, to.y, to.z]);
+
+  if (length < 1e-6) {
+    return null;
+  }
+
+  return (
+    <mesh position={position} quaternion={quaternion} raycast={() => undefined}>
+      <cylinderGeometry args={[0.0035, 0.0035, length, 6]} />
+      <meshBasicMaterial color={color} depthWrite={false} opacity={0.34} transparent />
+    </mesh>
+  );
+}
+
+function PoleHandle({
+  color,
+  hitRadius,
+  onPointerDown,
+  position,
+}: {
+  color: string;
+  hitRadius: number;
+  onPointerDown: (event: ThreeEvent<PointerEvent>) => void;
+  position: StickFigureVec3;
+}) {
+  const visualRadius = hitRadius * 0.72;
+
+  return (
+    <group position={[position.x, position.y, position.z]}>
+      <mesh raycast={() => undefined}>
+        <sphereGeometry args={[visualRadius * 1.42, 24, 16]} />
+        <meshBasicMaterial color={color} depthWrite={false} opacity={0.16} transparent />
+      </mesh>
+      <mesh raycast={() => undefined}>
+        <sphereGeometry args={[visualRadius, 28, 20]} />
+        <meshStandardMaterial
+          color={color}
+          emissive={color}
+          emissiveIntensity={0.18}
+          metalness={0.05}
+          roughness={0.42}
+          transparent
+          opacity={0.92}
+        />
+      </mesh>
+      <mesh position={[-visualRadius * 0.28, visualRadius * 0.34, visualRadius * 0.45]} raycast={() => undefined}>
+        <sphereGeometry args={[visualRadius * 0.18, 12, 8]} />
+        <meshBasicMaterial color="#ffffff" depthWrite={false} opacity={0.48} transparent />
+      </mesh>
+      <mesh onClick={(e) => e.stopPropagation()} onPointerDown={onPointerDown} visible={false}>
+        <sphereGeometry args={[hitRadius, 12, 12]} />
+        <meshBasicMaterial depthWrite={false} opacity={0} transparent />
+      </mesh>
+    </group>
+  );
+}
+
 export function PoseControls({
   character,
   pose,
   rootGroupRef,
+  showPoleControls = true,
   setOrbitEnabled,
   shouldIgnorePointerDown,
 }: PoseControlsProps) {
@@ -86,6 +253,7 @@ export function PoseControls({
 
   const { camera, gl } = useThree();
   const updateStickFigureTargets = useEditorStore((s) => s.updateCharacterStickFigureTargets);
+  const updateStickFigurePoles = useEditorStore((s) => s.updateCharacterStickFigurePoles);
   const selectCharacter = useEditorStore((s) => s.selectCharacter);
   const selectBodyPart = useEditorStore((s) => s.selectBodyPart);
 
@@ -108,7 +276,7 @@ export function PoseControls({
 
       const nextMode: DragMode = shiftKey ? "depth" : "plane";
       if (session.mode !== nextMode) {
-        const anchor = session.targets[controlId];
+        const anchor = getSessionControlPosition(session, controlId);
         session.mode = nextMode;
         session.planeAnchor = { x: anchor.x, y: anchor.y, z: anchor.z };
         session.lastClient = { x: clientX, y: clientY };
@@ -117,7 +285,7 @@ export function PoseControls({
         return;
       }
 
-      const anchor = session.targets[controlId];
+      const anchor = getSessionControlPosition(session, controlId);
       let delta: Vector3;
 
       if (session.mode === "depth") {
@@ -154,14 +322,23 @@ export function PoseControls({
         y: anchor.y + delta.y,
         z: anchor.z + delta.z,
       };
-      const patch: Partial<StickFigureSolveTargets> = { [controlId]: target };
-      session.targets = {
-        ...session.targets,
-        [controlId]: target,
-      };
-      updateStickFigureTargets(character.id, patch);
+      if (isPoleControl(controlId)) {
+        const patch: StickFigurePolesV1 = { [controlId]: target };
+        session.poles = {
+          ...session.poles,
+          [controlId]: target,
+        };
+        updateStickFigurePoles(character.id, patch);
+      } else {
+        const patch: Partial<StickFigureSolveTargets> = { [controlId]: target };
+        session.targets = {
+          ...session.targets,
+          [controlId]: target,
+        };
+        updateStickFigureTargets(character.id, patch);
+      }
     },
-    [camera, character.id, rootGroupRef, updateStickFigureTargets],
+    [camera, character.id, rootGroupRef, updateStickFigurePoles, updateStickFigureTargets],
   );
 
   const flushPendingPointer = useCallback(() => {
@@ -215,8 +392,15 @@ export function PoseControls({
         const group = rootGroupRef.current;
         const ch0 = useEditorStore.getState().project.scene.characters.find((c) => c.id === character.id);
         if (ch0 && group) {
-          const targets = stickPoseToTargets(getCharacterStickFigurePose(ch0));
-          const t = targets[controlId];
+          const currentPose = getCharacterStickFigurePose(ch0);
+          const targets = stickPoseToTargets(currentPose);
+          const poles: StickFigurePolesV1 = {
+            leftElbowPole: getPosePolePosition(currentPose, "leftElbowPole"),
+            rightElbowPole: getPosePolePosition(currentPose, "rightElbowPole"),
+            leftKneePole: getPosePolePosition(currentPose, "leftKneePole"),
+            rightKneePole: getPosePolePosition(currentPose, "rightKneePole"),
+          };
+          const t = getDragStartPosition(currentPose, targets, poles, controlId);
           const mode: DragMode = event.nativeEvent.shiftKey ? "depth" : "plane";
           const rect = gl.domElement.getBoundingClientRect();
           ndcRef.current.set(
@@ -230,6 +414,7 @@ export function PoseControls({
             controlId,
             mode,
             targets,
+            poles,
             planeAnchor,
             lastPlanePoint: seeded.point,
             lastClient: {
@@ -300,30 +485,61 @@ export function PoseControls({
   );
 
   const j = pose.joints;
-  const controls = [
-    ["pelvis", j.pelvis, 0.13],
-    ["chest", j.chest, 0.12],
-    ["head", j.head, 0.12],
-    ["leftHand", j.leftHand, 0.085],
-    ["rightHand", j.rightHand, 0.085],
-    ["leftFoot", j.leftFoot, 0.095],
-    ["rightFoot", j.rightFoot, 0.095],
+  const poles = {
+    leftElbowPole: getPosePolePosition(pose, "leftElbowPole"),
+    rightElbowPole: getPosePolePosition(pose, "rightElbowPole"),
+    leftKneePole: getPosePolePosition(pose, "leftKneePole"),
+    rightKneePole: getPosePolePosition(pose, "rightKneePole"),
+  };
+  const targetControls = [
+    ["pelvis", j.pelvis, 0.13, false],
+    ["chest", j.chest, 0.12, false],
+    ["head", j.head, 0.12, false],
+    ["leftHand", j.leftHand, 0.085, false],
+    ["rightHand", j.rightHand, 0.085, false],
+    ["leftFoot", j.leftFoot, 0.095, false],
+    ["rightFoot", j.rightFoot, 0.095, false],
   ] as const;
+  const poleControls = [
+    ["leftElbowPole", poles.leftElbowPole, 0.075, true],
+    ["rightElbowPole", poles.rightElbowPole, 0.075, true],
+    ["leftKneePole", poles.leftKneePole, 0.085, true],
+    ["rightKneePole", poles.rightKneePole, 0.085, true],
+  ] as const;
+  const controls = showPoleControls ? [...targetControls, ...poleControls] : targetControls;
 
   return (
     <>
-      {controls.map(([id, pos, hitRadius]) => (
-        <mesh
-          key={id}
-          onClick={(e) => e.stopPropagation()}
-          onPointerDown={(e) => onControlPointerDown(id, e)}
-          position={[pos.x, pos.y, pos.z]}
-          visible={false}
-        >
-          <sphereGeometry args={[hitRadius, 12, 12]} />
-          <meshBasicMaterial depthWrite={false} opacity={0} transparent />
-        </mesh>
-      ))}
+      {controls.map(([id, pos, hitRadius, visible]) => {
+        const color = id.includes("Knee") ? "#f6c445" : "#b9a7ee";
+        const joint = isPoleControl(id) ? j[poleFallbackJoint(id)] : null;
+
+        return (
+          <group key={id}>
+            {visible && joint ? (
+              <PoleGuide color={color} from={joint} to={pos} />
+            ) : null}
+            {visible ? (
+              <PoleHandle
+                color={color}
+                hitRadius={hitRadius}
+                onPointerDown={(e) => onControlPointerDown(id, e)}
+                position={pos}
+              />
+            ) : (
+              <mesh
+                onClick={(e) => e.stopPropagation()}
+                onPointerDown={(e) => onControlPointerDown(id, e)}
+                position={[pos.x, pos.y, pos.z]}
+                visible={false}
+              >
+                <sphereGeometry args={[hitRadius, 12, 12]} />
+                <meshBasicMaterial depthWrite={false} opacity={0} transparent />
+              </mesh>
+            )}
+          </group>
+        );
+      })}
     </>
   );
 }

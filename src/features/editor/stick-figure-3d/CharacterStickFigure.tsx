@@ -104,6 +104,7 @@ export function CharacterStickFigure({
 
   const selectCharacter = useEditorStore((s) => s.selectCharacter);
   const selectBodyPart = useEditorStore((s) => s.selectBodyPart);
+  const showPoleControls = useEditorStore((s) => s.showStickFigurePoleControls);
   const snapCharacterToGround = useEditorStore((s) => s.snapCharacterToGround);
 
   const headAltRotateListenersRef = useRef<{ move: (ev: PointerEvent) => void; up: (ev: PointerEvent) => void } | null>(
@@ -276,6 +277,7 @@ export function CharacterStickFigure({
         character={character}
         pose={pose}
         rootGroupRef={rootGroupRef}
+        showPoleControls={showPoleControls}
         setOrbitEnabled={setOrbitEnabled}
         shouldIgnorePointerDown={shouldIgnorePoseControlPointerDown}
       />
