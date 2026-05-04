@@ -14,10 +14,14 @@ import {
 } from "@/features/editor/store/defaults";
 import { BUILT_IN_PROMPT_LIBRARY_TAGS } from "@/features/prompt-engine/prompt-library/built-in-prompt-tags";
 import {
+  buildPromptLibraryConsolidationMessages,
+  buildPromptLibraryConsolidationReferences,
   buildPromptLibraryImportMessages,
   buildPromptLibrarySubcategoryMessages,
+  parseLlmPromptLibraryConsolidationContent,
   parseLlmPromptLibraryImportContent,
   parseLlmPromptLibrarySubcategoryContent,
+  type PromptLibraryConsolidatedItem,
 } from "@/features/prompt-engine/prompt-library/parse-llm-prompt-library-import";
 import { computePromptLibraryImportPreview } from "@/features/prompt-engine/prompt-library/merge-imported-prompt-library-tags";
 import {
@@ -48,6 +52,15 @@ type CollapsedPromptCategories = Partial<Record<PromptTagCategory, boolean>>;
 type ClassifyCategoryState = Partial<
   Record<PromptTagCategory, { status: ClassifyUiStatus; message: string }>
 >;
+type ConsolidateSubcategoryState = Record<string, { status: ClassifyUiStatus; message: string }>;
+type ConsolidationPreview = {
+  category: PromptTagCategory;
+  subcategory: PromptTagSubcategory | "";
+  subgroupKey: string;
+  subgroupLabel: string;
+  originalTags: PromptTag[];
+  items: PromptLibraryConsolidatedItem[];
+};
 
 const MAX_CLASSIFICATION_TAGS_PER_REQUEST = 10;
 
@@ -143,6 +156,21 @@ function filterPromptLibraryGroupsByBindings(
     .filter((group) => group.subgroups.length > 0);
 }
 
+function getConsolidationRemovedTags(preview: ConsolidationPreview) {
+  const referencedIds = new Set(preview.items.flatMap((item) => item.sourceIds));
+  return preview.originalTags.filter((tag) => !referencedIds.has(tag.id));
+}
+
+function getConsolidationMergedTags(
+  item: PromptLibraryConsolidatedItem,
+  tagById: Map<string, PromptTag>,
+) {
+  return item.sourceIds
+    .slice(1)
+    .map((id) => tagById.get(id))
+    .filter((tag): tag is PromptTag => Boolean(tag));
+}
+
 export function PromptTagPickerPanel() {
   const {
     addPromptTag,
@@ -182,6 +210,11 @@ export function PromptTagPickerPanel() {
     null,
   );
   const [classifyCategoryState, setClassifyCategoryState] = useState<ClassifyCategoryState>({});
+  const [consolidateSubcategoryState, setConsolidateSubcategoryState] =
+    useState<ConsolidateSubcategoryState>({});
+  const [pendingConsolidationPreview, setPendingConsolidationPreview] =
+    useState<ConsolidationPreview | null>(null);
+  const [consolidationSaving, setConsolidationSaving] = useState(false);
   const [manageDraft, setManageDraft] = useState<PromptLibraryTagDraft>({
     label: "",
     prompt: "",
@@ -674,6 +707,223 @@ export function PromptTagPickerPanel() {
     }
   }
 
+  async function handleConsolidatePromptSubcategory(
+    category: PromptTagCategory,
+    subcategory: PromptTagSubcategory | "",
+    tags: PromptTag[],
+  ) {
+    const subgroupKey = getPromptSubcategoryKey(category, subcategory);
+
+    if (tags.length === 0) {
+      setConsolidateSubcategoryState((current) => ({
+        ...current,
+        [subgroupKey]: { status: "error", message: "当前二级分类中没有可整理的词条。" },
+      }));
+      return;
+    }
+
+    setConsolidateSubcategoryState((current) => ({
+      ...current,
+      [subgroupKey]: { status: "loading", message: "AI 整理中..." },
+    }));
+
+    try {
+      const messages = buildPromptLibraryConsolidationMessages(category, subcategory, tags);
+
+      console.info("[SceneForge] [prompt-library] client outbound /api/llm/chat consolidation", {
+        category,
+        subcategory,
+        tagCount: tags.length,
+        messageCount: messages.length,
+      });
+
+      const response = await fetch("/api/llm/chat", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          purpose: "prompt-library-classification",
+          messages,
+          temperature: 0.1,
+          maxTokens: 4000,
+        }),
+      });
+
+      const payload: unknown = await response.json();
+
+      if (!response.ok) {
+        console.info("[SceneForge] [prompt-library] client inbound /api/llm/chat consolidation error", {
+          category,
+          subcategory,
+          httpStatus: response.status,
+        });
+        throw new Error(getLlmProxyErrorMessage(payload));
+      }
+
+      if (!isLlmChatResponse(payload)) {
+        console.info("[SceneForge] [prompt-library] client inbound consolidation invalid response shape", {
+          category,
+          subcategory,
+          httpStatus: response.status,
+        });
+        throw new Error("AI 返回格式不正确。");
+      }
+
+      const parsed = parseLlmPromptLibraryConsolidationContent(
+        payload.content,
+        new Map(
+          buildPromptLibraryConsolidationReferences(tags).map((reference) => [
+            reference.ref,
+            reference,
+          ]),
+        ),
+      );
+      if (!parsed.ok) {
+        throw new Error(parsed.error);
+      }
+
+      setPendingConsolidationPreview({
+        category,
+        subcategory,
+        subgroupKey,
+        subgroupLabel: subcategory
+          ? PROMPT_TAG_SUBCATEGORY_LABELS[subcategory]
+          : "未分类",
+        originalTags: tags,
+        items: parsed.items,
+      });
+
+      console.info("[SceneForge] [prompt-library] consolidation preview ready", {
+        category,
+        subcategory,
+        requestedCount: tags.length,
+        returnedCount: parsed.items.length,
+      });
+
+      setConsolidateSubcategoryState((current) => ({
+        ...current,
+        [subgroupKey]: {
+          status: "success",
+          message: `已生成整理预览：建议保留 ${parsed.items.length} 条，请在弹窗中审核。`,
+        },
+      }));
+    } catch (error) {
+      console.error("[SceneForge] [prompt-library] consolidation failed", {
+        category,
+        subcategory,
+        error,
+      });
+      setConsolidateSubcategoryState((current) => ({
+        ...current,
+        [subgroupKey]: {
+          status: "error",
+          message: error instanceof Error ? error.message : "AI 整理失败，请稍后重试。",
+        },
+      }));
+    }
+  }
+
+  async function handleConfirmConsolidationPreview() {
+    if (!pendingConsolidationPreview) {
+      return;
+    }
+
+    setConsolidationSaving(true);
+
+    try {
+      const { category, subcategory, subgroupKey, originalTags, items } =
+        pendingConsolidationPreview;
+      const tagById = new Map(originalTags.map((tag) => [tag.id, tag]));
+      const keptSourceIds = new Set<string>();
+      let updatedCount = 0;
+      let deletedCount = 0;
+
+      for (const item of items) {
+        const [primaryId, ...mergedIds] = item.sourceIds;
+        const primaryTag = primaryId ? tagById.get(primaryId) : undefined;
+        if (!primaryTag) {
+          continue;
+        }
+
+        keptSourceIds.add(primaryTag.id);
+        for (const mergedId of mergedIds) {
+          keptSourceIds.add(mergedId);
+        }
+
+        const updated = updatePromptLibraryTag({
+          ...primaryTag,
+          label: item.label,
+          prompt: item.prompt,
+          category,
+          subcategory: subcategory || undefined,
+        });
+        if (updated) {
+          updatedCount += 1;
+        }
+
+        for (const mergedId of mergedIds) {
+          if (deletePromptLibraryTag(mergedId)) {
+            deletedCount += 1;
+          }
+        }
+      }
+
+      for (const tag of originalTags) {
+        if (!keptSourceIds.has(tag.id) && deletePromptLibraryTag(tag.id)) {
+          deletedCount += 1;
+        }
+      }
+
+      if (updatedCount > 0 || deletedCount > 0) {
+        const nextProject = useEditorStore.getState().project;
+        await savePromptLibrary({
+          promptLibraryTags: nextProject.settings.promptLibraryTags ?? [],
+          deletedBuiltInPromptLibraryTagIds: nextProject.settings.deletedBuiltInPromptLibraryTagIds ?? [],
+        });
+      }
+
+      console.info("[SceneForge] [prompt-library] consolidation approved and merged", {
+        category,
+        subcategory,
+        requestedCount: originalTags.length,
+        returnedCount: items.length,
+        updatedCount,
+        deletedCount,
+        persisted: updatedCount > 0 || deletedCount > 0,
+      });
+
+      setPendingConsolidationPreview(null);
+      setConsolidateSubcategoryState((current) => ({
+        ...current,
+        [subgroupKey]: {
+          status: "success",
+          message:
+            updatedCount > 0 || deletedCount > 0
+              ? `已应用整理：更新 ${updatedCount} 条，移除 ${deletedCount} 条重复或无效词条。`
+              : "审核通过，但整理结果没有改动当前词条。",
+        },
+      }));
+    } catch (error) {
+      console.error("[SceneForge] [prompt-library] consolidation apply failed", { error });
+      setConsolidateSubcategoryState((current) => {
+        if (!pendingConsolidationPreview) {
+          return current;
+        }
+
+        return {
+          ...current,
+          [pendingConsolidationPreview.subgroupKey]: {
+            status: "error",
+            message: error instanceof Error ? error.message : "应用整理结果失败，请稍后重试。",
+          },
+        };
+      });
+    } finally {
+      setConsolidationSaving(false);
+    }
+  }
+
   function requestManagePromptLibraryTag(tag: PromptTag) {
     setPendingManageTag(tag);
     setManageDraft({
@@ -986,10 +1236,60 @@ export function PromptTagPickerPanel() {
                   <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
                     可选提示词
                   </p>
-                  <span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-medium text-slate-400">
-                    {selectedPromptLibrarySubgroup?.tags.length ?? 0}
-                  </span>
+                  <div className="flex items-center gap-1.5">
+                    {selectedPromptLibrarySubgroup ? (() => {
+                      const subgroupKey = getPromptSubcategoryKey(
+                        selectedPromptLibraryGroup.category,
+                        selectedPromptLibrarySubgroup.subcategory,
+                      );
+                      const consolidateState = consolidateSubcategoryState[subgroupKey];
+                      const isConsolidating = consolidateState?.status === "loading";
+
+                      return (
+                        <button
+                          aria-label={`使用 AI 整理 ${selectedPromptLibrarySubgroup.label} 中的 ${selectedPromptLibrarySubgroup.tags.length} 条提示词`}
+                          className="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-slate-400 transition-colors hover:bg-white hover:text-slate-700 disabled:pointer-events-none disabled:opacity-30"
+                          disabled={isConsolidating || selectedPromptLibrarySubgroup.tags.length === 0}
+                          onClick={() =>
+                            void handleConsolidatePromptSubcategory(
+                              selectedPromptLibraryGroup.category,
+                              selectedPromptLibrarySubgroup.subcategory as PromptTagSubcategory | "",
+                              selectedPromptLibrarySubgroup.tags,
+                            )
+                          }
+                          title="AI 整理当前二级分类：去重、过滤并合并相近提示词"
+                          type="button"
+                        >
+                          {isConsolidating ? (
+                            <Loader2 className="size-3.5 animate-spin text-slate-500" aria-hidden />
+                          ) : (
+                            <Tags className="size-3.5" aria-hidden />
+                          )}
+                        </button>
+                      );
+                    })() : null}
+                    <span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-medium text-slate-400">
+                      {selectedPromptLibrarySubgroup?.tags.length ?? 0}
+                    </span>
+                  </div>
                 </div>
+                {selectedPromptLibrarySubgroup ? (() => {
+                  const subgroupKey = getPromptSubcategoryKey(
+                    selectedPromptLibraryGroup.category,
+                    selectedPromptLibrarySubgroup.subcategory,
+                  );
+                  const consolidateState = consolidateSubcategoryState[subgroupKey];
+
+                  return consolidateState && consolidateState.status !== "loading" ? (
+                    <p
+                      className={`mb-2 text-[11px] leading-relaxed ${
+                        consolidateState.status === "error" ? "text-rose-600" : "text-emerald-700"
+                      }`}
+                    >
+                      {consolidateState.message}
+                    </p>
+                  ) : null;
+                })() : null}
                 {selectedPromptLibrarySubgroup ? (
                   <div className="flex flex-wrap gap-2">
                     {selectedPromptLibrarySubgroup.tags.map((tag) => {
@@ -1494,6 +1794,169 @@ export function PromptTagPickerPanel() {
                   <p className="mt-2 text-xs leading-relaxed text-emerald-700">{importFeedback}</p>
                 ) : null}
               </div>
+            </div>
+          </div>
+        </div>,
+        document.body,
+      ) : null}
+      {pendingConsolidationPreview && typeof document !== "undefined" ? createPortal(
+        <div
+          aria-modal="true"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4 backdrop-blur-sm"
+          role="dialog"
+        >
+          <div className="flex max-h-[90vh] w-full max-w-2xl flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xl">
+            <div className="flex items-start gap-3 border-b border-slate-100 bg-pink-50 p-5">
+              <div className="rounded-md bg-white p-2 text-pink-600">
+                <Tags className="size-5" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <h3 className="text-base font-bold text-slate-900">审核提示词整理结果</h3>
+                <p className="mt-1 text-xs leading-relaxed text-slate-500">
+                  {PROMPT_TAG_CATEGORY_LABELS[pendingConsolidationPreview.category]}
+                  {" / "}
+                  {pendingConsolidationPreview.subgroupLabel}
+                  {"：AI 只生成建议，确认后才会写入词库。"}
+                </p>
+              </div>
+              <button
+                aria-label="关闭提示词整理审核"
+                className="rounded-full bg-white/80 p-1.5 text-slate-400 shadow-sm transition-all hover:bg-white hover:text-slate-700 disabled:opacity-50"
+                disabled={consolidationSaving}
+                onClick={() => setPendingConsolidationPreview(null)}
+                type="button"
+              >
+                <X className="size-4" />
+              </button>
+            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto p-5 custom-scrollbar">
+              {(() => {
+                const tagById = new Map(
+                  pendingConsolidationPreview.originalTags.map((tag) => [tag.id, tag]),
+                );
+                const removedTags = getConsolidationRemovedTags(pendingConsolidationPreview);
+
+                return (
+                  <div className="space-y-4">
+                    <div className="grid grid-cols-3 gap-2">
+                      <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                        <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                          原始
+                        </p>
+                        <p className="mt-1 text-lg font-bold text-slate-900">
+                          {pendingConsolidationPreview.originalTags.length}
+                        </p>
+                      </div>
+                      <div className="rounded-md border border-emerald-100 bg-emerald-50 p-3">
+                        <p className="text-[10px] font-bold uppercase tracking-wider text-emerald-700">
+                          建议保留
+                        </p>
+                        <p className="mt-1 text-lg font-bold text-emerald-800">
+                          {pendingConsolidationPreview.items.length}
+                        </p>
+                      </div>
+                      <div className="rounded-md border border-rose-100 bg-rose-50 p-3">
+                        <p className="text-[10px] font-bold uppercase tracking-wider text-rose-700">
+                          过滤移除
+                        </p>
+                        <p className="mt-1 text-lg font-bold text-rose-800">
+                          {removedTags.length}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div>
+                      <p className="mb-2 text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                        整理后将保留
+                      </p>
+                      <ul className="space-y-2">
+                        {pendingConsolidationPreview.items.map((item) => {
+                          const primaryTag = tagById.get(item.sourceIds[0] ?? "");
+                          const mergedTags = getConsolidationMergedTags(item, tagById);
+
+                          return (
+                            <li
+                              className="rounded-md border border-slate-200 bg-white p-3 text-xs"
+                              key={`${item.prompt}:${item.sourceIds.join("|")}`}
+                            >
+                              <div className="flex items-start justify-between gap-3">
+                                <div className="min-w-0 flex-1">
+                                  <p className="font-semibold text-slate-900">{item.label}</p>
+                                  <p className="mt-1 break-words leading-relaxed text-slate-600">
+                                    {item.prompt}
+                                  </p>
+                                </div>
+                                <span className="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-500">
+                                  {item.sourceIds.length} 源
+                                </span>
+                              </div>
+                              {primaryTag ? (
+                                <p className="mt-2 text-[11px] leading-relaxed text-slate-500">
+                                  主词条：{primaryTag.label} / {primaryTag.prompt}
+                                </p>
+                              ) : null}
+                              {mergedTags.length > 0 ? (
+                                <div className="mt-2 flex flex-wrap gap-1.5">
+                                  {mergedTags.map((tag) => (
+                                    <span
+                                      className="rounded-full bg-pink-50 px-2 py-1 text-[10px] font-medium text-pink-700"
+                                      key={tag.id}
+                                      title={tag.prompt}
+                                    >
+                                      合并 {tag.label}
+                                    </span>
+                                  ))}
+                                </div>
+                              ) : null}
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    </div>
+
+                    {removedTags.length > 0 ? (
+                      <div>
+                        <p className="mb-2 text-[11px] font-bold uppercase tracking-wider text-rose-700">
+                          将被过滤移除
+                        </p>
+                        <div className="flex flex-wrap gap-2">
+                          {removedTags.map((tag) => (
+                            <span
+                              className="rounded-full border border-rose-100 bg-rose-50 px-2.5 py-1 text-xs font-medium text-rose-700"
+                              key={tag.id}
+                              title={tag.prompt}
+                            >
+                              {tag.label}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              })()}
+            </div>
+            <div className="grid grid-cols-2 gap-3 border-t border-slate-100 bg-slate-50 p-4">
+              <Button
+                className="h-10 rounded-md border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+                disabled={consolidationSaving}
+                onClick={() => setPendingConsolidationPreview(null)}
+                type="button"
+                variant="secondary"
+              >
+                取消
+              </Button>
+              <Button
+                className="h-10 rounded-md bg-pink-600 text-white hover:bg-pink-700 disabled:opacity-60"
+                disabled={consolidationSaving}
+                onClick={() => void handleConfirmConsolidationPreview()}
+                type="button"
+              >
+                {consolidationSaving ? (
+                  <Loader2 className="mr-2 size-4 animate-spin" />
+                ) : null}
+                {consolidationSaving ? "应用中..." : "审核通过并更新词库"}
+              </Button>
             </div>
           </div>
         </div>,

@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  buildPromptLibraryConsolidationMessages,
+  buildPromptLibraryConsolidationReferences,
   buildPromptLibrarySubcategoryMessages,
+  parseLlmPromptLibraryConsolidationContent,
   parseLlmPromptLibraryImportContent,
   parseLlmPromptLibrarySubcategoryContent,
 } from "./parse-llm-prompt-library-import";
@@ -264,5 +267,91 @@ describe("parseLlmPromptLibrarySubcategoryContent", () => {
 
     expect(messages[0]?.content).toContain("scene-weather");
     expect(messages[1]?.content).toContain("tag-1");
+  });
+});
+
+describe("parseLlmPromptLibraryConsolidationContent", () => {
+  it("parses consolidated items and filters unknown or repeated source ids", () => {
+    const references = buildPromptLibraryConsolidationReferences([
+      { id: "a", label: "Soft", prompt: "soft light" },
+      { id: "b", label: "Soft lighting", prompt: "soft lighting" },
+      { id: "c", label: "Cinematic", prompt: "cinematic lighting" },
+    ]);
+    const result = parseLlmPromptLibraryConsolidationContent(
+      JSON.stringify({
+        items: [
+          {
+            refs: ["T001", "T002", "T999"],
+            l: "Soft light",
+            p: "soft lighting",
+          },
+          {
+            refs: ["T002", "T003"],
+            l: "",
+            p: '"cinematic lighting"',
+          },
+        ],
+      }),
+      new Map(references.map((reference) => [reference.ref, reference])),
+    );
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.items).toEqual([
+        {
+          sourceIds: ["a", "b"],
+          label: "Soft light",
+          prompt: "soft lighting",
+        },
+        {
+          sourceIds: ["c"],
+          label: "Cinematic",
+          prompt: "cinematic lighting",
+        },
+      ]);
+    }
+  });
+
+  it("rejects consolidation responses without usable source ids", () => {
+    const references = buildPromptLibraryConsolidationReferences([
+      { id: "a", label: "Soft", prompt: "soft light" },
+    ]);
+    const result = parseLlmPromptLibraryConsolidationContent(
+      JSON.stringify({
+        items: [{ refs: ["T999"], l: "Skip", p: "skip" }],
+      }),
+      new Map(references.map((reference) => [reference.ref, reference])),
+    );
+
+    expect(result.ok).toBe(false);
+  });
+
+  it("preserves the primary source Chinese label when the model returns an English label", () => {
+    const references = buildPromptLibraryConsolidationReferences([
+      { id: "a", label: "柔光", prompt: "soft light" },
+      { id: "b", label: "柔和光照", prompt: "soft lighting" },
+    ]);
+    const result = parseLlmPromptLibraryConsolidationContent(
+      JSON.stringify({
+        items: [{ refs: ["T001", "T002"], l: "Soft light", p: "soft lighting" }],
+      }),
+      new Map(references.map((reference) => [reference.ref, reference])),
+    );
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.items[0]?.label).toBe("柔光");
+    }
+  });
+
+  it("builds consolidation messages with the selected category and subcategory", () => {
+    const messages = buildPromptLibraryConsolidationMessages("lighting", "lighting-mood", [
+      { id: "tag-1", label: "柔光", prompt: "soft lighting", negative: false },
+    ]);
+
+    expect(messages[0]?.content).toContain("lighting-mood");
+    expect(messages[1]?.content).toContain("T001");
+    expect(messages[1]?.content).toContain("柔光");
+    expect(messages[1]?.content).not.toContain("tag-1");
   });
 });

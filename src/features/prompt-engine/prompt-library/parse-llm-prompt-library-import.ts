@@ -92,6 +92,10 @@ function isGenerationMetadataToken(value: string) {
   );
 }
 
+function containsCjk(value: string) {
+  return /[\u3400-\u9fff]/u.test(value);
+}
+
 function splitPromptTokens(value: string) {
   const tokens: string[] = [];
   let current = "";
@@ -175,8 +179,25 @@ export type PromptLibrarySubcategoryAssignment = {
   subcategory: PromptTagSubcategory;
 };
 
+export type PromptLibraryConsolidatedItem = {
+  sourceIds: string[];
+  label: string;
+  prompt: string;
+};
+
+export type PromptLibraryConsolidationReference = {
+  ref: string;
+  id: string;
+  label: string;
+  prompt: string;
+};
+
 export type ParseLlmPromptLibrarySubcategoryResult =
   | { ok: true; assignments: PromptLibrarySubcategoryAssignment[] }
+  | { ok: false; error: string };
+
+export type ParseLlmPromptLibraryConsolidationResult =
+  | { ok: true; items: PromptLibraryConsolidatedItem[] }
   | { ok: false; error: string };
 
 export function parseLlmPromptLibraryImportContent(content: string): ParseLlmPromptLibraryImportResult {
@@ -253,6 +274,104 @@ export function parseLlmPromptLibrarySubcategoryContent(
   }
 
   return { ok: true, assignments };
+}
+
+export function parseLlmPromptLibraryConsolidationContent(
+  content: string,
+  references: Map<string, PromptLibraryConsolidationReference>,
+): ParseLlmPromptLibraryConsolidationResult {
+  const jsonText = extractJsonPayload(content);
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(jsonText) as unknown;
+  } catch {
+    return { ok: false, error: "无法解析 AI 返回的 JSON。" };
+  }
+
+  if (!isRecord(parsed) && !Array.isArray(parsed)) {
+    return { ok: false, error: "JSON 顶层必须是对象。" };
+  }
+
+  const items = Array.isArray(parsed) ? parsed : parsed.items;
+  if (!Array.isArray(items)) {
+    return { ok: false, error: 'JSON 必须包含 "items" 数组。' };
+  }
+
+  const consolidatedItems: PromptLibraryConsolidatedItem[] = [];
+  const usedSourceIds = new Set<string>();
+
+  for (const item of items) {
+    if (!isRecord(item)) {
+      continue;
+    }
+
+    const rawRefs = Array.isArray(item.refs)
+      ? item.refs
+      : Array.isArray(item.sourceRefs)
+        ? item.sourceRefs
+        : Array.isArray(item.sourceIds)
+          ? item.sourceIds
+          : [];
+    const refs = rawRefs.filter((ref): ref is string => typeof ref === "string");
+    const sourceIds: string[] = [];
+    const sourceReferences: PromptLibraryConsolidationReference[] = [];
+
+    for (const ref of refs) {
+      const source = references.get(ref);
+      if (!source || usedSourceIds.has(source.id)) {
+        continue;
+      }
+
+      sourceIds.push(source.id);
+      sourceReferences.push(source);
+    }
+
+    const rawLabel = typeof item.l === "string" ? item.l : item.label;
+    const rawPrompt = typeof item.p === "string" ? item.p : item.prompt;
+    const primarySource = sourceReferences[0];
+    const prompt =
+      typeof rawPrompt === "string" && rawPrompt.trim()
+        ? trimPromptToken(rawPrompt)
+        : primarySource?.prompt.trim() ?? "";
+    const modelLabel = typeof rawLabel === "string" ? rawLabel.trim() : "";
+    const primaryLabel = primarySource?.label.trim() ?? "";
+    const label =
+      primaryLabel && containsCjk(primaryLabel) && (!modelLabel || !containsCjk(modelLabel))
+        ? primaryLabel
+        : modelLabel || primaryLabel || prompt.slice(0, 48);
+
+    if (sourceIds.length === 0 || !prompt) {
+      continue;
+    }
+
+    for (const sourceId of sourceIds) {
+      usedSourceIds.add(sourceId);
+    }
+
+    consolidatedItems.push({
+      sourceIds,
+      label: label || prompt.slice(0, 48),
+      prompt,
+    });
+  }
+
+  if (consolidatedItems.length === 0) {
+    return { ok: false, error: "AI 未返回任何可保留的有效词条。" };
+  }
+
+  return { ok: true, items: consolidatedItems };
+}
+
+export function buildPromptLibraryConsolidationReferences(
+  tags: Pick<PromptTag, "id" | "label" | "prompt">[],
+): PromptLibraryConsolidationReference[] {
+  return tags.map((tag, index) => ({
+    ref: `T${String(index + 1).padStart(3, "0")}`,
+    id: tag.id,
+    label: tag.label,
+    prompt: tag.prompt,
+  }));
 }
 
 export function buildPromptLibraryImportMessages(rawPromptText: string) {
@@ -335,6 +454,46 @@ export function buildPromptLibrarySubcategoryMessages(
     {
       role: "user" as const,
       content: JSON.stringify({ category, items }),
+    },
+  ];
+}
+
+export function buildPromptLibraryConsolidationMessages(
+  category: PromptTagCategory,
+  subcategory: PromptTagSubcategory | "",
+  tags: Pick<PromptTag, "id" | "label" | "prompt" | "negative">[],
+) {
+  const subcategoryLabel = subcategory ? PROMPT_TAG_SUBCATEGORY_LABELS[subcategory] : "未分类";
+  const references = buildPromptLibraryConsolidationReferences(tags);
+  const items = references.map((reference) => ({
+    r: reference.ref,
+    l: reference.label,
+    p: reference.prompt,
+  }));
+
+  return [
+    {
+      role: "system" as const,
+      content: [
+        "You consolidate SceneForge prompt-library tags within one secondary category.",
+        "Inputs use short reference codes. NEVER output original ids because they are not provided.",
+        "Deduplicate exact duplicates, near duplicates, spelling/case variants, and tags that express the same reusable visual idea.",
+        "Filter out weak, overly vague, broken, contradictory, metadata-like, or one-off narrative fragments that are not useful as reusable image prompt vocabulary.",
+        "You may lightly rewrite the kept prompt into a clean atomic Stable Diffusion / Midjourney style token, but do not broaden it beyond the source meaning.",
+        "Keep each final item atomic: never return comma-separated prompt lists.",
+        "Return only kept groups. Each group must contain refs, an array of one or more input reference codes. Put merged duplicate refs in the same refs array.",
+        "If an input should be removed entirely, omit its ref from every refs array.",
+        "Do not invent new ids, categories, subcategories, or unrelated prompt concepts.",
+        `All input items belong to category "${category}" and subcategory "${subcategory || "uncategorized"}" (${subcategoryLabel}).`,
+        "Use short keys to keep JSON small: refs = input refs, p = final atomic prompt, l = short display label.",
+        "Preserve existing Chinese labels. If the first kept source label is Chinese, omit l or return a Chinese label; never translate it into English.",
+        "Respond with compact JSON ONLY (no markdown fences, no commentary) in this exact shape:",
+        '{"items":[{"refs":["T001","T002"],"p":"atomic prompt token","l":"short label"}]}',
+      ].join("\n"),
+    },
+    {
+      role: "user" as const,
+      content: JSON.stringify({ c: category, s: subcategory || "", items }),
     },
   ];
 }
