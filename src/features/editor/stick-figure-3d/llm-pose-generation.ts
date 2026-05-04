@@ -14,6 +14,17 @@ const POLE_IDS = ["leftElbowPole", "rightElbowPole", "leftKneePole", "rightKneeP
 
 const CURRENT_POSE_PRECISION = 3;
 
+const STICK_FIGURE_POSE_SYSTEM_PROMPT = [
+  "You generate 3D stick-figure pose data for SceneForge.",
+  "Return only valid JSON. No markdown, no comments, no prose.",
+  "Also rewrite the user's pose/action input into a concise natural character description that can be stored in the character description field.",
+  "If an existing character description is provided, preserve identity/style details and update or append only the pose/action part.",
+  "Use meters in a character-local Y-up coordinate system: X left/right, Y up, Z depth.",
+  "Keep the pose anatomically plausible for a low-poly humanoid. Feet should normally stay near y=0.04 unless the user asks for jumping or lying.",
+  "Prefer returning IK targets plus optional pole hints, not all solved joints.",
+  'Required JSON shape: {"characterDescription":"short natural-language character pose/action description","targets":{"pelvis":{"x":0,"y":1.05,"z":0},"chest":{},"head":{},"leftHand":{},"rightHand":{},"leftFoot":{},"rightFoot":{}},"poles":{"leftElbowPole":{},"rightElbowPole":{},"leftKneePole":{},"rightKneePole":{}}}',
+].join("\n");
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -124,16 +135,7 @@ export function buildStickFigurePoseGenerationMessages(
   return [
     {
       role: "system",
-      content: [
-        "You generate 3D stick-figure pose data for SceneForge.",
-        "Return only valid JSON. No markdown, no comments, no prose.",
-        "Also rewrite the user's pose/action input into a concise natural character description that can be stored in the character description field.",
-        "If an existing character description is provided, preserve identity/style details and update or append only the pose/action part.",
-        "Use meters in a character-local Y-up coordinate system: X left/right, Y up, Z depth.",
-        "Keep the pose anatomically plausible for a low-poly humanoid. Feet should normally stay near y=0.04 unless the user asks for jumping or lying.",
-        "Prefer returning IK targets plus optional pole hints, not all solved joints.",
-        'Required JSON shape: {"characterDescription":"short natural-language character pose/action description","targets":{"pelvis":{"x":0,"y":1.05,"z":0},"chest":{},"head":{},"leftHand":{},"rightHand":{},"leftFoot":{},"rightFoot":{}},"poles":{"leftElbowPole":{},"rightElbowPole":{},"leftKneePole":{},"rightKneePole":{}}}',
-      ].join("\n"),
+      content: STICK_FIGURE_POSE_SYSTEM_PROMPT,
     },
     {
       role: "user",
@@ -146,6 +148,49 @@ export function buildStickFigurePoseGenerationMessages(
         null,
         2,
       ),
+    },
+  ];
+}
+
+export function buildStickFigurePoseImageGenerationMessages(
+  imageDataUrl: string,
+  currentPose: StickFigurePoseV1,
+  currentCharacterDescription = "",
+  userNotes = "",
+): LlmChatMessage[] {
+  return [
+    {
+      role: "system",
+      content: [
+        STICK_FIGURE_POSE_SYSTEM_PROMPT,
+        "Infer the visible human pose from the uploaded image. Ignore background, clothing details, and camera style unless they clarify limb placement.",
+        "If body parts are occluded, infer a plausible low-poly humanoid pose from the silhouette and visible joints.",
+      ].join("\n"),
+    },
+    {
+      role: "user",
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify(
+            {
+              poseDescription: userNotes.trim() || "Infer the character pose from the uploaded image.",
+              currentCharacterDescription,
+              currentPose: compactPoseForPrompt(currentPose),
+              imageNote: "The image was downscaled by the client before upload to reduce vision token cost.",
+            },
+            null,
+            2,
+          ),
+        },
+        {
+          type: "image_url",
+          image_url: {
+            url: imageDataUrl,
+            detail: "low",
+          },
+        },
+      ],
     },
   ];
 }

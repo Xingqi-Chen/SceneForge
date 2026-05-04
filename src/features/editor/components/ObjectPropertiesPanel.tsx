@@ -6,6 +6,7 @@ import { useRef, useState, type ChangeEvent, type ReactNode } from "react";
 import { getLlmProxyErrorMessage, isLlmChatResponse } from "@/features/llm";
 import { getCharacterStickFigurePose } from "@/features/editor/stick-figure-3d/get-character-stick-pose";
 import {
+  buildStickFigurePoseImageGenerationMessages,
   buildStickFigurePoseGenerationMessages,
   parseStickFigurePoseGenerationResponse,
 } from "@/features/editor/stick-figure-3d/llm-pose-generation";
@@ -42,6 +43,56 @@ function getClampedNumber(event: ChangeEvent<HTMLInputElement>, min: number, max
 
 function is3DSceneObject(object: SceneObject) {
   return Boolean(object.transform3D);
+}
+
+function loadImageElement(dataUrl: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error("Failed to load pose source image."));
+    image.src = dataUrl;
+  });
+}
+
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === "string") {
+        resolve(reader.result);
+      } else {
+        reject(new Error("Failed to read pose source image."));
+      }
+    };
+    reader.onerror = () => reject(reader.error ?? new Error("Failed to read pose source image."));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function downscaleImageFileToDataUrl(file: File, maxSide = 512, quality = 0.72): Promise<string> {
+  const sourceDataUrl = await readFileAsDataUrl(file);
+  const image = await loadImageElement(sourceDataUrl);
+  const sourceWidth = image.naturalWidth || image.width;
+  const sourceHeight = image.naturalHeight || image.height;
+
+  if (!sourceWidth || !sourceHeight) {
+    throw new Error("Pose source image has no readable dimensions.");
+  }
+
+  const scale = Math.min(1, maxSide / Math.max(sourceWidth, sourceHeight));
+  const width = Math.max(1, Math.round(sourceWidth * scale));
+  const height = Math.max(1, Math.round(sourceHeight * scale));
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext("2d");
+
+  if (!context) {
+    throw new Error("Canvas 2D context is unavailable.");
+  }
+
+  context.drawImage(image, 0, 0, width, height);
+  return canvas.toDataURL("image/jpeg", quality);
 }
 
 function Vector3Fields({
@@ -153,8 +204,9 @@ const canvasSizes: Record<CanvasAspectRatio, { width: number; height: number }> 
 
 export function ObjectPropertiesPanel() {
   const stickPoseFileInputRef = useRef<HTMLInputElement>(null);
+  const poseImageFileInputRef = useRef<HTMLInputElement>(null);
   const [posePrompt, setPosePrompt] = useState("");
-  const [poseGenerationStatus, setPoseGenerationStatus] = useState<"idle" | "loading">("idle");
+  const [poseGenerationStatus, setPoseGenerationStatus] = useState<"idle" | "text" | "image">("idle");
   const [poseGenerationError, setPoseGenerationError] = useState("");
   const {
     project,
@@ -297,11 +349,11 @@ export function ObjectPropertiesPanel() {
 
   async function handleGenerateCharacter3DPose() {
     const description = posePrompt.trim();
-    if (!selectedCharacter || !description || poseGenerationStatus === "loading") {
+    if (!selectedCharacter || !description || poseGenerationStatus !== "idle") {
       return;
     }
 
-    setPoseGenerationStatus("loading");
+    setPoseGenerationStatus("text");
     setPoseGenerationError("");
 
     try {
@@ -345,6 +397,62 @@ export function ObjectPropertiesPanel() {
     } catch (error) {
       console.error("[SceneForge] [editor] failed to generate 3D character pose", { error });
       setPoseGenerationError("AI 姿态生成失败，请检查 LiteLLM 配置或稍后重试。");
+    } finally {
+      setPoseGenerationStatus("idle");
+    }
+  }
+
+  async function handleGenerateCharacter3DPoseFromImage(file: File) {
+    if (!selectedCharacter || poseGenerationStatus !== "idle") {
+      return;
+    }
+
+    setPoseGenerationStatus("image");
+    setPoseGenerationError("");
+
+    try {
+      const imageDataUrl = await downscaleImageFileToDataUrl(file);
+      const currentPose = getCharacterStickFigurePose(selectedCharacter);
+      const response = await fetch("/api/llm/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          purpose: "stick-figure-pose-generation",
+          messages: buildStickFigurePoseImageGenerationMessages(
+            imageDataUrl,
+            currentPose,
+            selectedCharacter.description,
+            posePrompt,
+          ),
+          temperature: 0.2,
+          maxTokens: 900,
+        }),
+      });
+      const payload: unknown = await response.json();
+
+      if (!response.ok) {
+        setPoseGenerationError(getLlmProxyErrorMessage(payload));
+        return;
+      }
+
+      if (!isLlmChatResponse(payload)) {
+        setPoseGenerationError("AI 返回格式不正确，请重试。");
+        return;
+      }
+
+      const result = parseStickFigurePoseGenerationResponse(payload.content, currentPose);
+      if (!result) {
+        setPoseGenerationError("AI 没有返回可用的姿态 JSON，请换一张更清晰的人物图片重试。");
+        return;
+      }
+
+      applyCharacter3DPose(selectedCharacter.id, result.pose);
+      if (result.characterDescription) {
+        updateCharacter(selectedCharacter.id, { description: result.characterDescription });
+      }
+    } catch (error) {
+      console.error("[SceneForge] [editor] failed to generate 3D character pose from image", { error });
+      setPoseGenerationError("图片姿态推断失败，请换一张图片或稍后重试。");
     } finally {
       setPoseGenerationStatus("idle");
     }
@@ -707,7 +815,7 @@ export function ObjectPropertiesPanel() {
                 <FieldLabel>AI 姿态生成</FieldLabel>
                 <textarea
                   className="min-h-[78px] w-full resize-y rounded-md border border-indigo-200 bg-white px-3 py-2 text-xs leading-relaxed text-slate-900 outline-none transition-all placeholder:text-slate-400 focus:border-blue-400 focus:ring-1 focus:ring-blue-400 disabled:cursor-not-allowed disabled:bg-slate-50"
-                  disabled={poseGenerationStatus === "loading"}
+                  disabled={poseGenerationStatus !== "idle"}
                   onChange={(event) => {
                     setPosePrompt(event.target.value);
                     setPoseGenerationError("");
@@ -718,12 +826,34 @@ export function ObjectPropertiesPanel() {
                 <div className="flex items-center gap-2">
                   <button
                     className="rounded-md border border-indigo-200/80 bg-white px-2.5 py-1.5 text-[11px] font-medium text-indigo-800 shadow-sm transition-colors hover:bg-indigo-50/80 disabled:cursor-not-allowed disabled:opacity-60"
-                    disabled={!posePrompt.trim() || poseGenerationStatus === "loading"}
+                    disabled={!posePrompt.trim() || poseGenerationStatus !== "idle"}
                     onClick={handleGenerateCharacter3DPose}
                     type="button"
                   >
-                    {poseGenerationStatus === "loading" ? "生成中..." : "生成姿态"}
+                    {poseGenerationStatus === "text" ? "生成中..." : "生成姿态"}
                   </button>
+                  <button
+                    className="rounded-md border border-indigo-200/80 bg-white px-2.5 py-1.5 text-[11px] font-medium text-indigo-800 shadow-sm transition-colors hover:bg-indigo-50/80 disabled:cursor-not-allowed disabled:opacity-60"
+                    disabled={poseGenerationStatus !== "idle"}
+                    onClick={() => poseImageFileInputRef.current?.click()}
+                    type="button"
+                  >
+                    {poseGenerationStatus === "image" ? "推断中..." : "从图片推断"}
+                  </button>
+                  <input
+                    accept="image/*"
+                    className="hidden"
+                    onChange={(event) => {
+                      const file = event.target.files?.[0];
+                      event.target.value = "";
+                      if (!file) {
+                        return;
+                      }
+                      void handleGenerateCharacter3DPoseFromImage(file);
+                    }}
+                    ref={poseImageFileInputRef}
+                    type="file"
+                  />
                   {poseGenerationError ? (
                     <span className="text-[11px] leading-snug text-red-600">{poseGenerationError}</span>
                   ) : null}
