@@ -68,6 +68,59 @@ describe("parseCharacterImagePromptTagsContent", () => {
     });
   });
 
+  it("accepts body part ids returned in targetKind", () => {
+    const result = parseCharacterImagePromptTagsContent(
+      JSON.stringify({
+        items: [
+          {
+            targetKind: "torso",
+            label: "knit cardigan",
+            prompt: "knitted cardigan",
+            category: "outfit",
+            subcategory: "outfit-upper",
+          },
+          {
+            targetKind: "head",
+            label: "beret",
+            prompt: "beret",
+            category: "outfit",
+            subcategory: "outfit-accessory",
+          },
+        ],
+      }),
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      items: [
+        {
+          target: { kind: "bodyPart", bodyPartId: "torso" },
+          bodyPartId: "torso",
+          tag: {
+            label: "knit cardigan",
+            prompt: "knitted cardigan",
+            category: "outfit",
+            subcategory: "outfit-upper",
+            negative: false,
+            weight: { enabled: false, value: 1 },
+          },
+        },
+        {
+          target: { kind: "bodyPart", bodyPartId: "head" },
+          bodyPartId: "head",
+          tag: {
+            label: "beret",
+            prompt: "beret",
+            category: "outfit",
+            subcategory: "outfit-accessory",
+            negative: false,
+            weight: { enabled: false, value: 1 },
+          },
+        },
+      ],
+    });
+  });
+
   it("returns an error when no valid items are present", () => {
     const result = parseCharacterImagePromptTagsContent('{"items":[]}');
 

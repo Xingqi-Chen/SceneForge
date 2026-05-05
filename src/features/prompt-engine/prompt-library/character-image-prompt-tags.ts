@@ -98,7 +98,10 @@ function normalizePromptTarget(value: Record<string, unknown>): CharacterPromptT
     return { kind: "character" };
   }
 
-  const bodyPartId = normalizeBodyPartId(bodyPartValue);
+  const bodyPartId =
+    normalizeBodyPartId(bodyPartValue) ??
+    normalizeBodyPartId(targetKind) ??
+    normalizeBodyPartId(target);
   return bodyPartId ? { kind: "bodyPart", bodyPartId } : null;
 }
 
