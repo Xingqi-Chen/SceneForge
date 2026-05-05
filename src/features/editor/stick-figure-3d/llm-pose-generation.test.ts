@@ -13,7 +13,6 @@ describe("llm pose generation", () => {
     const messages = buildStickFigurePoseImageGenerationMessages(
       "data:image/jpeg;base64,abc",
       createDefaultStickFigurePoseV1(),
-      "young hero",
       "left arm is important",
     );
 
@@ -43,6 +42,7 @@ describe("llm pose generation", () => {
     expect(content).toContain("rightElbowPole");
     expect(content).toContain("leftKneePole");
     expect(content).toContain("rightKneePole");
+    expect(content).not.toContain("currentCharacterDescription");
   });
 
   it("parses generated pole controls and uses them to steer the solved knee", () => {

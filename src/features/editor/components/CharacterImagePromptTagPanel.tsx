@@ -1,12 +1,13 @@
 "use client";
 
-import { ImagePlus, Loader2, Sparkles, Upload, X } from "lucide-react";
+import { ImagePlus, Loader2, Sparkles, TextCursorInput, Upload, X } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 import { Button } from "@/components/ui/button";
 import { getCharacterStickFigurePose } from "@/features/editor/stick-figure-3d/get-character-stick-pose";
 import {
+  buildStickFigurePoseGenerationMessages,
   buildStickFigurePoseImageGenerationMessages,
   parseStickFigurePoseGenerationResponse,
 } from "@/features/editor/stick-figure-3d/llm-pose-generation";
@@ -14,21 +15,24 @@ import { useEditorStore } from "@/features/editor/store/editor-store";
 import { BUILT_IN_PROMPT_LIBRARY_TAGS } from "@/features/prompt-engine/prompt-library/built-in-prompt-tags";
 import {
   buildCharacterImagePromptTagMessages,
+  buildCharacterTextPromptTagMessages,
+  isCharacterBodyPromptTagCategory,
   parseCharacterImagePromptTagsContent,
+  type CharacterPromptTagTarget,
 } from "@/features/prompt-engine/prompt-library/character-image-prompt-tags";
 import {
   PROMPT_TAG_CATEGORY_LABELS,
   PROMPT_TAG_SUBCATEGORY_LABELS,
 } from "@/features/prompt-engine/prompt-library/prompt-tag-taxonomy";
-import { getLlmProxyErrorMessage, isLlmChatResponse } from "@/features/llm";
+import { getLlmProxyErrorMessage, isLlmChatResponse, type LlmChatMessage } from "@/features/llm";
 import { saveProject, savePromptLibrary } from "@/features/persistence";
 import { characterAppearsInThreeViewport } from "@/shared/utils/character-space";
-import type { BodyPartId, PromptTag } from "@/shared/types";
+import type { PromptTag, PromptTagCategory } from "@/shared/types";
 
 type AnalyzeStatus = "idle" | "loading" | "success" | "error";
 
 type BoundPromptTagSuggestion = {
-  bodyPartId: BodyPartId;
+  target: CharacterPromptTagTarget;
   tag: Omit<PromptTag, "id">;
 };
 
@@ -65,7 +69,7 @@ function uniqueSuggestions(suggestions: BoundPromptTagSuggestion[]) {
   const seen = new Set<string>();
 
   return suggestions.filter((suggestion) => {
-    const key = `${suggestion.bodyPartId}:${getSemanticTagKey(suggestion.tag)}`;
+    const key = `${getSuggestionTargetKey(suggestion.target)}:${getSemanticTagKey(suggestion.tag)}`;
     if (seen.has(key)) {
       return false;
     }
@@ -73,6 +77,19 @@ function uniqueSuggestions(suggestions: BoundPromptTagSuggestion[]) {
     seen.add(key);
     return true;
   });
+}
+
+function getSuggestionTargetKey(target: CharacterPromptTagTarget) {
+  return target.kind === "character" ? "character" : `bodyPart:${target.bodyPartId}`;
+}
+
+function getAllowedCategories(categories: PromptTagCategory[] | undefined) {
+  return new Set((categories ?? []).filter(isCharacterBodyPromptTagCategory));
+}
+
+function getAllowedWholeCharacterCategories(categories: PromptTagCategory[] | undefined) {
+  const allowed: PromptTagCategory[] = categories?.includes("character") ? ["character"] : [];
+  return new Set(allowed);
 }
 
 async function loadImage(file: File): Promise<HTMLImageElement> {
@@ -154,6 +171,7 @@ export function CharacterImagePromptTagPanel() {
   const [poseError, setPoseError] = useState("");
   const [pendingReview, setPendingReview] = useState<PendingImportReview | null>(null);
   const [savingReview, setSavingReview] = useState(false);
+  const [textPrompt, setTextPrompt] = useState("");
 
   const selectedCharacter =
     selection.kind === "character"
@@ -234,13 +252,26 @@ export function CharacterImagePromptTagPanel() {
           : []),
       ];
 
+      updateCharacter(character.id, {
+        promptTags: [],
+        bodyParts: character.bodyParts.map((bodyPart) => ({
+          ...bodyPart,
+          promptTags: [],
+        })),
+      });
+
       for (const suggestion of tagsToApply) {
         addPromptTag(
-          {
-            kind: "bodyPart",
-            characterId: character.id,
-            bodyPartId: suggestion.bodyPartId,
-          },
+          suggestion.target.kind === "character"
+            ? {
+                kind: "character",
+                id: character.id,
+              }
+            : {
+                kind: "bodyPart",
+                characterId: character.id,
+                bodyPartId: suggestion.target.bodyPartId,
+              },
           suggestion.tagToApply,
         );
       }
@@ -280,12 +311,7 @@ export function CharacterImagePromptTagPanel() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           purpose: "stick-figure-pose-generation",
-          messages: buildStickFigurePoseImageGenerationMessages(
-            imageDataUrl,
-            currentPose,
-            character.description,
-            "",
-          ),
+          messages: buildStickFigurePoseImageGenerationMessages(imageDataUrl, currentPose),
           temperature: 0.2,
           maxTokens: 900,
         }),
@@ -321,6 +347,120 @@ export function CharacterImagePromptTagPanel() {
     }
   }
 
+  async function generatePoseFromText(prompt: string, character: typeof selectedCharacter) {
+    if (!character) {
+      return;
+    }
+
+    setPoseStatus("loading");
+    setPoseError("");
+
+    try {
+      const currentPose = getCharacterStickFigurePose(character);
+      const response = await fetch("/api/llm/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          purpose: "stick-figure-pose-generation",
+          messages: buildStickFigurePoseGenerationMessages(prompt, currentPose),
+          temperature: 0.2,
+          maxTokens: 900,
+        }),
+      });
+      const payload: unknown = await response.json();
+
+      if (!response.ok) {
+        throw new Error(getLlmProxyErrorMessage(payload));
+      }
+
+      if (!isLlmChatResponse(payload)) {
+        throw new Error("AI 返回格式不正确，请重试。");
+      }
+
+      const result = parseStickFigurePoseGenerationResponse(payload.content, currentPose);
+      if (!result) {
+        throw new Error("AI 没有返回可用的姿态 JSON，请换一种描述重试。");
+      }
+
+      applyCharacter3DPose(character.id, result.pose);
+      if (result.characterDescription) {
+        updateCharacter(character.id, { description: result.characterDescription });
+      }
+
+      await saveProject(useEditorStore.getState().project);
+      setPoseStatus("success");
+    } catch (caught) {
+      console.error("[SceneForge] [editor] failed to generate 3D character pose from left text", {
+        error: caught,
+      });
+      setPoseStatus("error");
+      setPoseError(caught instanceof Error ? caught.message : "文本姿态生成失败，请稍后重试。");
+    }
+  }
+
+  async function analyzePromptTagMessages(
+    messages: LlmChatMessage[],
+    character: typeof selectedCharacter,
+    temperature = 0.35,
+  ) {
+    if (!character) {
+      return null;
+    }
+
+    const response = await fetch("/api/llm/chat", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        messages,
+        temperature,
+        maxTokens: 2200,
+      }),
+    });
+    const payload: unknown = await response.json();
+
+    if (!response.ok) {
+      throw new Error(getLlmProxyErrorMessage(payload));
+    }
+
+    if (!isLlmChatResponse(payload)) {
+      throw new Error("AI 返回格式不正确。");
+    }
+
+    const parsed = parseCharacterImagePromptTagsContent(payload.content);
+    if (!parsed.ok) {
+      throw new Error(parsed.error);
+    }
+
+    const allowedCharacterCategories = getAllowedWholeCharacterCategories(
+      character.promptCategoryBindings,
+    );
+    const allowedBodyPartCategories = new Map(
+      character.bodyParts.map((part) => [part.id, getAllowedCategories(part.promptCategoryBindings)]),
+    );
+    const suggestions = parsed.items.filter(
+      (item) => {
+        if (!isCharacterBodyPromptTagCategory(item.tag.category)) {
+          return false;
+        }
+
+        if (item.target.kind === "character") {
+          return allowedCharacterCategories.has(item.tag.category);
+        }
+
+        return allowedBodyPartCategories.get(item.target.bodyPartId)?.has(item.tag.category) ?? false;
+      },
+    );
+    const review = splitByLibrary(suggestions);
+
+    if (review.existingSuggestions.length === 0 && review.newSuggestions.length === 0) {
+      throw new Error("AI 未返回可用于当前人物部位的提示词。");
+    }
+
+    return review;
+  }
+
   async function handleAnalyzeFile(file: File | undefined) {
     const character = selectedCharacter;
     if (!character) {
@@ -349,42 +489,16 @@ export function CharacterImagePromptTagPanel() {
       setCompressedSize({ width: compressed.width, height: compressed.height });
       const messages = buildCharacterImagePromptTagMessages({
         bodyParts: character.bodyParts,
-        existingTags: allLibraryTags,
+        characterTarget: {
+          label: character.name,
+          promptCategoryBindings: character.promptCategoryBindings,
+        },
         imageDataUrl: compressed.dataUrl,
       });
 
-      const response = await fetch("/api/llm/chat", {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-        },
-        body: JSON.stringify({
-          messages,
-          temperature: 0.2,
-          maxTokens: 2200,
-        }),
-      });
-      const payload: unknown = await response.json();
-
-      if (!response.ok) {
-        throw new Error(getLlmProxyErrorMessage(payload));
-      }
-
-      if (!isLlmChatResponse(payload)) {
-        throw new Error("AI 返回格式不正确。");
-      }
-
-      const parsed = parseCharacterImagePromptTagsContent(payload.content);
-      if (!parsed.ok) {
-        throw new Error(parsed.error);
-      }
-
-      const validBodyPartIds = new Set(character.bodyParts.map((part) => part.id));
-      const suggestions = parsed.items.filter((item) => validBodyPartIds.has(item.bodyPartId));
-      const review = splitByLibrary(suggestions);
-
-      if (review.existingSuggestions.length === 0 && review.newSuggestions.length === 0) {
-        throw new Error("AI 未返回可用于当前人物部位的提示词。");
+      const review = await analyzePromptTagMessages(messages, character, 0.2);
+      if (!review) {
+        return;
       }
 
       if (review.newSuggestions.length > 0) {
@@ -416,6 +530,66 @@ export function CharacterImagePromptTagPanel() {
     }
   }
 
+  async function handleAnalyzeTextPrompt() {
+    const character = selectedCharacter;
+    const prompt = textPrompt.trim();
+    if (!character) {
+      return;
+    }
+
+    if (!prompt) {
+      setStatus("error");
+      setError("请输入用于反推的人物描述。");
+      return;
+    }
+
+    setStatus("loading");
+    setError("");
+    setFeedback("");
+    setPendingReview(null);
+    setCompressedSize(null);
+    setPoseStatus(inferPoseFromImage ? "loading" : "idle");
+    setPoseError("");
+
+    try {
+      const messages = buildCharacterTextPromptTagMessages({
+        bodyParts: character.bodyParts,
+        characterTarget: {
+          label: character.name,
+          promptCategoryBindings: character.promptCategoryBindings,
+        },
+        userPrompt: prompt,
+      });
+      const review = await analyzePromptTagMessages(messages, character);
+      if (!review) {
+        return;
+      }
+
+      if (review.newSuggestions.length > 0) {
+        setPendingReview(review);
+        setStatus("success");
+        setFeedback(
+          `识别到 ${review.existingSuggestions.length} 个已有词条、${review.newSuggestions.length} 个新词条。`,
+        );
+        if (inferPoseFromImage) {
+          await generatePoseFromText(prompt, character);
+        }
+        return;
+      }
+
+      await applySuggestions(review, false);
+      if (inferPoseFromImage) {
+        await generatePoseFromText(prompt, character);
+      }
+    } catch (caught) {
+      console.error("[SceneForge] [prompt-library] character text analysis failed", {
+        error: caught,
+      });
+      setStatus("error");
+      setError(caught instanceof Error ? caught.message : "文本反推失败，请稍后重试。");
+    }
+  }
+
   return (
     <section className="space-y-3">
       <div className="flex items-center justify-between gap-3">
@@ -427,8 +601,10 @@ export function CharacterImagePromptTagPanel() {
             选中整个人物后上传参考图，自动绑定到可见部位。
           </p>
         </div>
-        <div className="rounded-md bg-pink-50 p-2 text-pink-600">
-          <ImagePlus className="size-4" />
+        <div className="flex shrink-0 items-center gap-2">
+          <div className="rounded-md bg-pink-50 p-2 text-pink-600">
+            <ImagePlus className="size-4" />
+          </div>
         </div>
       </div>
 
@@ -484,6 +660,31 @@ export function CharacterImagePromptTagPanel() {
         {inferPoseFromImage ? "已开启同步姿态推断。" : "开启左侧开关可同步从图片推断 3D 姿态。"}
       </p>
 
+      <div className="space-y-2 rounded-md border border-slate-200 bg-slate-50 p-2">
+        <textarea
+          className="min-h-20 w-full resize-y rounded-md border border-slate-200 bg-white px-3 py-2 text-xs leading-relaxed text-slate-700 outline-none transition focus:border-pink-300 focus:ring-2 focus:ring-pink-100 disabled:cursor-not-allowed disabled:opacity-60"
+          disabled={status === "loading" || poseStatus === "loading"}
+          onChange={(event) => setTextPrompt(event.target.value)}
+          placeholder="也可以输入描述反推，例如：生成一个穿着长裙的漂亮女生"
+          value={textPrompt}
+        />
+        <Button
+          className="h-9 w-full rounded-md border border-pink-200 bg-white text-xs text-pink-700 hover:bg-pink-50 disabled:opacity-60"
+          disabled={status === "loading" || poseStatus === "loading" || textPrompt.trim().length === 0}
+          onClick={() => void handleAnalyzeTextPrompt()}
+          size="sm"
+          type="button"
+          variant="secondary"
+        >
+          {status === "loading" || poseStatus === "loading" ? (
+            <Loader2 className="size-4 animate-spin" />
+          ) : (
+            <TextCursorInput className="size-4" />
+          )}
+          用文本反推提示词
+        </Button>
+      </div>
+
       {compressedSize ? (
         <p className="text-[11px] leading-relaxed text-slate-500">
           已压缩到 {compressedSize.width} x {compressedSize.height} 后提交给 AI。
@@ -536,9 +737,13 @@ export function CharacterImagePromptTagPanel() {
                 <div className="min-h-0 flex-1 overflow-y-auto p-5 custom-scrollbar">
                   <ul className="space-y-2">
                     {pendingReview.newSuggestions.map((suggestion) => {
-                      const bodyPart = selectedCharacter.bodyParts.find(
-                        (part) => part.id === suggestion.bodyPartId,
-                      );
+                      let targetLabel = selectedCharacter.name;
+                      if (suggestion.target.kind === "bodyPart") {
+                        const bodyPartId = suggestion.target.bodyPartId;
+                        targetLabel =
+                          selectedCharacter.bodyParts.find((part) => part.id === bodyPartId)
+                            ?.label ?? bodyPartId;
+                      }
                       const subcategory = suggestion.tag.subcategory
                         ? PROMPT_TAG_SUBCATEGORY_LABELS[suggestion.tag.subcategory]
                         : "未分类";
@@ -546,12 +751,12 @@ export function CharacterImagePromptTagPanel() {
                       return (
                         <li
                           className="rounded-md border border-slate-200 bg-slate-50 p-3 text-xs"
-                          key={`${suggestion.bodyPartId}:${getSemanticTagKey(suggestion.tag)}`}
+                          key={`${getSuggestionTargetKey(suggestion.target)}:${getSemanticTagKey(suggestion.tag)}`}
                         >
                           <div className="flex items-start justify-between gap-3">
                             <div className="min-w-0">
                               <p className="font-semibold text-slate-900">
-                                {bodyPart?.label ?? suggestion.bodyPartId} / {suggestion.tag.label}
+                                {targetLabel} / {suggestion.tag.label}
                               </p>
                               <p className="mt-1 break-words leading-relaxed text-slate-600">
                                 {suggestion.tag.prompt}

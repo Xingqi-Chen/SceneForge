@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { parseCharacterImagePromptTagsContent } from "./character-image-prompt-tags";
+import {
+  buildCharacterTextPromptTagMessages,
+  parseCharacterImagePromptTagsContent,
+} from "./character-image-prompt-tags";
 
 describe("parseCharacterImagePromptTagsContent", () => {
   it("parses body-part-bound prompt tags from JSON", () => {
@@ -22,6 +25,7 @@ describe("parseCharacterImagePromptTagsContent", () => {
       ok: true,
       items: [
         {
+          target: { kind: "bodyPart", bodyPartId: "head" },
           bodyPartId: "head",
           tag: {
             label: "黑长发",
@@ -49,6 +53,7 @@ describe("parseCharacterImagePromptTagsContent", () => {
       ok: true,
       items: [
         {
+          target: { kind: "bodyPart", bodyPartId: "head" },
           bodyPartId: "head",
           tag: {
             label: "眼睛",
@@ -67,5 +72,40 @@ describe("parseCharacterImagePromptTagsContent", () => {
     const result = parseCharacterImagePromptTagsContent('{"items":[]}');
 
     expect(result.ok).toBe(false);
+  });
+
+  it("builds text reverse-engineering messages that allow creative expansion", () => {
+    const messages = buildCharacterTextPromptTagMessages({
+      bodyParts: [
+        {
+          id: "head",
+          label: "Head",
+          promptTags: [],
+          promptCategoryBindings: ["body-part", "outfit"],
+        },
+      ],
+      characterTarget: {
+        label: "Character",
+        promptCategoryBindings: ["character", "body-part", "outfit"],
+      },
+      userPrompt: "生成一个穿着长裙的漂亮女生",
+    });
+
+    expect(messages[0].content).toContain("freely expand");
+    expect(messages[0].content).toContain("label MUST be a short Simplified Chinese");
+    expect(messages[0].content).toContain('"label":"黑长发"');
+    expect(messages[0].content).toContain("Never return style, lighting, quality, scene");
+    expect(messages[0].content).toContain("Categories: character, body-part, outfit.");
+    expect(messages[0].content).not.toContain("lighting-source");
+    expect(messages[1].content).toContain("userCharacterPrompt");
+    expect(messages[1].content).toContain("生成一个穿着长裙的漂亮女生");
+    expect(messages[1].content).not.toContain("existingPromptLibraryExamples");
+
+    const payload = JSON.parse(String(messages[1].content)) as {
+      characterTarget: { allowedCategories: string[] };
+      bodyParts: Array<{ allowedCategories: string[] }>;
+    };
+    expect(payload.characterTarget.allowedCategories).toEqual(["character"]);
+    expect(payload.bodyParts[0].allowedCategories).toEqual(["body-part", "outfit"]);
   });
 });

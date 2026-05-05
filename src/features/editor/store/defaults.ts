@@ -26,11 +26,11 @@ export function createDefaultSceneNegativePromptTags(): PromptTag[] {
   }));
 }
 
-/** 人物骨架（角色根与身体部位）默认绑定「人物」「身体部位」「服装」词库类目。 */
+/** 人物整体默认只绑定「人物」；身体部位默认可绑定「人物」「身体部位」「服装」。 */
 export const DEFAULT_PROMPT_CATEGORY_BINDINGS = {
   scene: ["style", "lighting", "quality", "scene", "negative"],
   object: ["scene", "lighting", "quality", "negative"],
-  character: ["character", "body-part", "outfit"],
+  character: ["character"],
   bodyPart: ["character", "body-part", "outfit"],
 } satisfies Record<string, PromptTagCategory[]>;
 
@@ -56,7 +56,7 @@ const CHARACTER_AND_BODY_PART_SUBCATEGORIES = [
 export const DEFAULT_PROMPT_SUBCATEGORY_BINDINGS = {
   scene: [],
   object: [],
-  character: [...CHARACTER_AND_BODY_PART_SUBCATEGORIES],
+  character: ["character-subject", "character-pose", "character-expression"],
   bodyPart: [...CHARACTER_AND_BODY_PART_SUBCATEGORIES],
 } satisfies Record<string, PromptTagSubcategory[]>;
 

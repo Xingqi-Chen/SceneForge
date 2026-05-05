@@ -366,11 +366,7 @@ export function ObjectPropertiesPanel() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           purpose: "stick-figure-pose-generation",
-          messages: buildStickFigurePoseGenerationMessages(
-            description,
-            currentPose,
-            selectedCharacter.description,
-          ),
+          messages: buildStickFigurePoseGenerationMessages(description, currentPose),
           temperature: 0.2,
           maxTokens: 900,
         }),
@@ -425,7 +421,6 @@ export function ObjectPropertiesPanel() {
           messages: buildStickFigurePoseImageGenerationMessages(
             imageDataUrl,
             currentPose,
-            selectedCharacter.description,
             posePrompt,
           ),
           temperature: 0.2,
@@ -748,8 +743,8 @@ export function ObjectPropertiesPanel() {
           </div>
           <div className="space-y-1.5">
             <FieldLabel>人物描述</FieldLabel>
-              <textarea
-                className="min-h-[80px] w-full resize-none rounded-md border border-slate-200 bg-white px-3 py-2 text-sm leading-relaxed text-slate-900 outline-none transition-all focus:border-blue-400 focus:ring-1 focus:ring-blue-400"
+            <textarea
+              className="min-h-[80px] w-full resize-none rounded-md border border-slate-200 bg-white px-3 py-2 text-sm leading-relaxed text-slate-900 outline-none transition-all focus:border-blue-400 focus:ring-1 focus:ring-blue-400"
               onChange={(event) => updateSelectedCharacter({ description: event.target.value })}
               value={selectedCharacter.description}
             />
@@ -759,15 +754,17 @@ export function ObjectPropertiesPanel() {
               <div>
                 <div className="flex items-center justify-between gap-2">
                   <div className="text-xs font-semibold text-indigo-700">3D 人体</div>
-                  <button
-                    className="inline-flex h-7 items-center gap-1.5 rounded-md border border-indigo-200/80 bg-white px-2 text-[11px] font-medium text-indigo-800 shadow-sm transition-colors hover:bg-indigo-50/80"
-                    onClick={() => setShowStickFigurePoleControls(!showStickFigurePoleControls)}
-                    title={showStickFigurePoleControls ? "隐藏膝盖/手肘方向控制球" : "显示膝盖/手肘方向控制球"}
-                    type="button"
-                  >
-                    {showStickFigurePoleControls ? <EyeOff className="size-3.5" /> : <Eye className="size-3.5" />}
-                    {showStickFigurePoleControls ? "隐藏方向球" : "显示方向球"}
-                  </button>
+                  <div className="flex flex-wrap items-center justify-end gap-1.5">
+                    <button
+                      className="inline-flex h-7 items-center gap-1.5 rounded-md border border-indigo-200/80 bg-white px-2 text-[11px] font-medium text-indigo-800 shadow-sm transition-colors hover:bg-indigo-50/80"
+                      onClick={() => setShowStickFigurePoleControls(!showStickFigurePoleControls)}
+                      title={showStickFigurePoleControls ? "隐藏膝盖/手肘方向控制球" : "显示膝盖/手肘方向控制球"}
+                      type="button"
+                    >
+                      {showStickFigurePoleControls ? <EyeOff className="size-3.5" /> : <Eye className="size-3.5" />}
+                      {showStickFigurePoleControls ? "隐藏方向球" : "显示方向球"}
+                    </button>
+                  </div>
                 </div>
                 <p className="mt-1 text-[11px] leading-relaxed text-indigo-700/80">
                   调整火柴人在 3D 舞台中的根位置、朝向和整体比例。拖拽骨盆、胸、头与手脚的 IK

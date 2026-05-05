@@ -1,6 +1,6 @@
 "use client";
 
-import { ChevronRight, Loader2, Settings, Sparkles, Tags, Trash2, X } from "lucide-react";
+import { ChevronRight, ListChecks, Loader2, Settings, Sparkles, Tags, Trash2, X } from "lucide-react";
 import { useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 
@@ -63,6 +63,10 @@ type ConsolidationPreview = {
 };
 
 const MAX_CLASSIFICATION_TAGS_PER_REQUEST = 10;
+const WHOLE_CHARACTER_PROMPT_CATEGORIES: PromptTagCategory[] = ["character"];
+const WHOLE_CHARACTER_PROMPT_SUBCATEGORIES: PromptTagSubcategory[] = [
+  ...PROMPT_TAG_SUBCATEGORY_OPTIONS.character,
+];
 
 function chunkPromptTags(tags: PromptTag[], chunkSize: number) {
   const chunks: PromptTag[][] = [];
@@ -171,6 +175,57 @@ function getConsolidationMergedTags(
     .filter((tag): tag is PromptTag => Boolean(tag));
 }
 
+function BindingPills({
+  emptyLabel,
+  values,
+  variant = "category",
+}: {
+  emptyLabel: string;
+  values?: Array<PromptTagCategory | PromptTagSubcategory>;
+  variant?: "category" | "subcategory";
+}) {
+  if (!values || values.length === 0) {
+    return <span className="text-xs text-slate-400">{emptyLabel}</span>;
+  }
+
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {values.map((value) => (
+        <span
+          className="rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[11px] font-medium text-slate-600"
+          key={value}
+        >
+          {variant === "category"
+            ? PROMPT_TAG_CATEGORY_LABELS[value as PromptTagCategory] ?? value
+            : PROMPT_TAG_SUBCATEGORY_LABELS[value as PromptTagSubcategory] ?? value}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function PromptTagList({ tags }: { tags: PromptTag[] }) {
+  if (tags.length === 0) {
+    return <span className="text-xs text-slate-400">暂无已绑定提示词</span>;
+  }
+
+  return (
+    <div className="space-y-1.5">
+      {tags.map((tag) => (
+        <div className="rounded-md border border-slate-200 bg-white px-2.5 py-2" key={tag.id}>
+          <div className="flex items-start justify-between gap-2">
+            <span className="text-xs font-semibold text-slate-800">{tag.label}</span>
+            <span className="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-500">
+              {PROMPT_TAG_CATEGORY_LABELS[tag.category]}
+            </span>
+          </div>
+          <p className="mt-1 break-words text-[11px] leading-relaxed text-slate-500">{tag.prompt}</p>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export function PromptTagPickerPanel() {
   const {
     addPromptTag,
@@ -215,6 +270,7 @@ export function PromptTagPickerPanel() {
   const [pendingConsolidationPreview, setPendingConsolidationPreview] =
     useState<ConsolidationPreview | null>(null);
   const [consolidationSaving, setConsolidationSaving] = useState(false);
+  const [bindingModalOpen, setBindingModalOpen] = useState(false);
   const [manageDraft, setManageDraft] = useState<PromptLibraryTagDraft>({
     label: "",
     prompt: "",
@@ -249,6 +305,7 @@ export function PromptTagPickerPanel() {
     selectedCharacter && currentBodyPartTarget !== "character"
       ? selectedCharacter.bodyParts.find((bodyPart) => bodyPart.id === currentBodyPartTarget)
       : undefined;
+  const isWholeCharacterTarget = Boolean(selectedCharacter && !selectedBodyPart);
 
   const tagTarget = useMemo<PromptTagTarget>(() => {
     if (multiSelection) {
@@ -273,14 +330,14 @@ export function PromptTagPickerPanel() {
 
     return { kind: "scene" };
   }, [multiSelection, selectedBodyPart, selectedCharacter, selectedObject]);
-  const currentPromptCategoryBindings = selectedObject
+  const rawPromptCategoryBindings = selectedObject
     ? (selectedObject.promptCategoryBindings ?? DEFAULT_PROMPT_CATEGORY_BINDINGS.object)
     : selectedBodyPart
       ? (selectedBodyPart.promptCategoryBindings ?? DEFAULT_PROMPT_CATEGORY_BINDINGS.bodyPart)
       : selectedCharacter
         ? (selectedCharacter.promptCategoryBindings ?? DEFAULT_PROMPT_CATEGORY_BINDINGS.character)
         : (project.scene.promptCategoryBindings ?? DEFAULT_PROMPT_CATEGORY_BINDINGS.scene);
-  const currentPromptSubcategoryBindings = selectedObject
+  const rawPromptSubcategoryBindings = selectedObject
     ? (selectedObject.promptSubcategoryBindings ?? DEFAULT_PROMPT_SUBCATEGORY_BINDINGS.object)
     : selectedBodyPart
       ? (selectedBodyPart.promptSubcategoryBindings ?? DEFAULT_PROMPT_SUBCATEGORY_BINDINGS.bodyPart)
@@ -288,6 +345,17 @@ export function PromptTagPickerPanel() {
         ? (selectedCharacter.promptSubcategoryBindings ??
           DEFAULT_PROMPT_SUBCATEGORY_BINDINGS.character)
         : (project.scene.promptSubcategoryBindings ?? DEFAULT_PROMPT_SUBCATEGORY_BINDINGS.scene);
+  const currentPromptCategoryBindings = isWholeCharacterTarget
+    ? WHOLE_CHARACTER_PROMPT_CATEGORIES
+    : rawPromptCategoryBindings;
+  const currentPromptSubcategoryBindings = isWholeCharacterTarget
+    ? rawPromptSubcategoryBindings.filter((subcategory) =>
+        WHOLE_CHARACTER_PROMPT_SUBCATEGORIES.includes(subcategory),
+      )
+    : rawPromptSubcategoryBindings;
+  const categoryOptions = isWholeCharacterTarget
+    ? WHOLE_CHARACTER_PROMPT_CATEGORIES
+    : PROMPT_TAG_CATEGORY_ORDER;
   const promptCategoryBindingSet = useMemo(
     () => new Set(currentPromptCategoryBindings),
     [currentPromptCategoryBindings],
@@ -1064,6 +1132,19 @@ export function PromptTagPickerPanel() {
 
   return (
     <section className="flex flex-col flex-1">
+      {selectedCharacter ? (
+        <div className="mb-3 shrink-0 rounded-md border border-pink-100 bg-pink-50/70 p-2.5">
+          <button
+            className="inline-flex h-8 w-full items-center justify-center gap-1.5 rounded-md border border-pink-200 bg-white px-2 text-xs font-medium text-pink-700 shadow-sm transition-colors hover:bg-pink-50"
+            onClick={() => setBindingModalOpen(true)}
+            title="查看当前人物各部位提示词绑定情况"
+            type="button"
+          >
+            <ListChecks className="size-3.5" />
+            查看人物绑定情况
+          </button>
+        </div>
+      ) : null}
       <div className="mb-4 flex items-center justify-between gap-3 border-b border-slate-100 pb-3 shrink-0">
         <div className="flex items-center gap-2.5">
           <div className="rounded-md bg-pink-50 p-1.5 text-pink-600">
@@ -1538,6 +1619,112 @@ export function PromptTagPickerPanel() {
           )}
         </div>
       </div>
+      {bindingModalOpen && selectedCharacter && typeof document !== "undefined"
+        ? createPortal(
+            <div
+              aria-modal="true"
+              className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4 backdrop-blur-sm"
+              role="dialog"
+            >
+              <div className="flex max-h-[88vh] w-full max-w-2xl flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xl">
+                <div className="flex items-start gap-3 border-b border-slate-100 bg-pink-50 p-5">
+                  <div className="rounded-md bg-white p-2 text-pink-600">
+                    <ListChecks className="size-5" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <h3 className="text-base font-bold text-slate-900">人物绑定情况</h3>
+                    <p className="mt-1 text-xs leading-relaxed text-slate-500">
+                      {selectedCharacter.name} 的人物整体与身体部位提示词分类绑定。
+                    </p>
+                  </div>
+                  <button
+                    aria-label="关闭人物绑定情况"
+                    className="rounded-full bg-white/80 p-1.5 text-slate-400 shadow-sm transition-all hover:bg-white hover:text-slate-700"
+                    onClick={() => setBindingModalOpen(false)}
+                    type="button"
+                  >
+                    <X className="size-4" />
+                  </button>
+                </div>
+
+                <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-5 custom-scrollbar">
+                  <div className="rounded-md border border-pink-100 bg-pink-50/60 p-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-bold text-slate-900">人物整体</p>
+                        <p className="mt-1 text-xs text-slate-500">绑定到整个人物目标的分类与提示词。</p>
+                      </div>
+                      <span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-medium text-pink-700">
+                        {selectedCharacter.promptTags.length} 个提示词
+                      </span>
+                    </div>
+                    <div className="mt-3 space-y-3">
+                      <div>
+                        <p className="mb-1.5 text-[11px] font-semibold text-slate-500">一级分类</p>
+                        <BindingPills
+                          emptyLabel="未绑定一级分类"
+                          values={WHOLE_CHARACTER_PROMPT_CATEGORIES}
+                        />
+                      </div>
+                      <div>
+                        <p className="mb-1.5 text-[11px] font-semibold text-slate-500">二级分类</p>
+                        <BindingPills
+                          emptyLabel="未绑定二级分类"
+                          values={(selectedCharacter.promptSubcategoryBindings ?? []).filter((subcategory) =>
+                            WHOLE_CHARACTER_PROMPT_SUBCATEGORIES.includes(subcategory),
+                          )}
+                          variant="subcategory"
+                        />
+                      </div>
+                      <div>
+                        <p className="mb-1.5 text-[11px] font-semibold text-slate-500">已绑定提示词</p>
+                        <PromptTagList tags={selectedCharacter.promptTags} />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="grid gap-2">
+                    {selectedCharacter.bodyParts.map((bodyPart) => (
+                      <div className="rounded-md border border-slate-200 bg-slate-50 p-3" key={bodyPart.id}>
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <p className="text-sm font-bold text-slate-900">{bodyPart.label}</p>
+                            <p className="mt-1 text-[11px] text-slate-500">{bodyPart.id}</p>
+                          </div>
+                          <span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-medium text-slate-500">
+                            {bodyPart.promptTags.length} 个提示词
+                          </span>
+                        </div>
+                        <div className="mt-3 space-y-3">
+                          <div>
+                            <p className="mb-1.5 text-[11px] font-semibold text-slate-500">一级分类</p>
+                            <BindingPills
+                              emptyLabel="未绑定一级分类"
+                              values={bodyPart.promptCategoryBindings}
+                            />
+                          </div>
+                          <div>
+                            <p className="mb-1.5 text-[11px] font-semibold text-slate-500">二级分类</p>
+                            <BindingPills
+                              emptyLabel="未绑定二级分类"
+                              values={bodyPart.promptSubcategoryBindings}
+                              variant="subcategory"
+                            />
+                          </div>
+                          <div>
+                            <p className="mb-1.5 text-[11px] font-semibold text-slate-500">已绑定提示词</p>
+                            <PromptTagList tags={bodyPart.promptTags} />
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>,
+            document.body,
+          )
+        : null}
       {isSettingsOpen && typeof document !== "undefined" ? createPortal(
         <div
           aria-modal="true"
@@ -1578,7 +1765,7 @@ export function PromptTagPickerPanel() {
                     绑定一级分类
                   </p>
                   <div className="mt-2 flex flex-wrap gap-2">
-                    {PROMPT_TAG_CATEGORY_ORDER.map((category) => {
+                    {categoryOptions.map((category) => {
                       const enabled = promptCategoryBindingSet.has(category);
                       const isOnlyEnabledCategory =
                         enabled && currentPromptCategoryBindings.length === 1;
@@ -1613,7 +1800,7 @@ export function PromptTagPickerPanel() {
                     <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
                       绑定二级分类
                     </p>
-                    {PROMPT_TAG_CATEGORY_ORDER.filter((category) =>
+                    {categoryOptions.filter((category) =>
                       promptCategoryBindingSet.has(category),
                     ).map((category) => {
                       const boundSubcategories = PROMPT_TAG_SUBCATEGORY_OPTIONS[category].filter(

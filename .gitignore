@@ -49,3 +49,7 @@ next-env.d.ts
 
 # Shared prompt library target bindings (server-side persistence)
 /data/prompt-bindings.json
+
+# Local LLM interaction logs
+/data/logs/*
+!/data/logs/.gitkeep

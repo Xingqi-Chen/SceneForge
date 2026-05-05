@@ -6,8 +6,17 @@ import {
   LiteLlmError,
   type LlmChatRequest,
 } from "../../../../features/llm";
+import { appendLlmLocalLog, serializeErrorForLlmLog } from "../../../../features/llm/llm-local-log";
 
 export const runtime = "nodejs";
+
+function createRequestId() {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return crypto.randomUUID();
+  }
+
+  return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
 
 function errorResponse(message: string, status: number, details?: unknown) {
   return NextResponse.json(
@@ -34,6 +43,7 @@ function resolveDefaultModel(payload: LlmChatRequest) {
 }
 
 export async function POST(request: Request) {
+  const requestId = createRequestId();
   let payload: unknown;
 
   try {
@@ -48,6 +58,24 @@ export async function POST(request: Request) {
 
   const chatRequest: LlmChatRequest = payload;
   const defaultModel = resolveDefaultModel(chatRequest);
+  const resolvedRequest: LlmChatRequest = {
+    ...chatRequest,
+    model: chatRequest.model ?? defaultModel,
+  };
+
+  await appendLlmLocalLog({
+    requestId,
+    timestamp: new Date().toISOString(),
+    phase: "request",
+    route: "/api/llm/chat",
+    payload: {
+      purpose: resolvedRequest.purpose,
+      model: resolvedRequest.model,
+      temperature: resolvedRequest.temperature,
+      maxTokens: resolvedRequest.maxTokens,
+      messages: resolvedRequest.messages,
+    },
+  });
 
   try {
     const client = createLiteLlmClient({
@@ -56,14 +84,33 @@ export async function POST(request: Request) {
       defaultModel,
     });
 
-    const completion = await client.completeChat({
-      ...chatRequest,
-      model: chatRequest.model ?? defaultModel,
+    const completion = await client.completeChat(resolvedRequest);
+
+    await appendLlmLocalLog({
+      requestId,
+      timestamp: new Date().toISOString(),
+      phase: "response",
+      route: "/api/llm/chat",
+      payload: {
+        completion,
+      },
     });
 
     return NextResponse.json(completion);
   } catch (error) {
     if (error instanceof LiteLlmError) {
+      await appendLlmLocalLog({
+        requestId,
+        timestamp: new Date().toISOString(),
+        phase: "error",
+        route: "/api/llm/chat",
+        payload: {
+          error: serializeErrorForLlmLog(error),
+          statusCode: error.statusCode,
+          details: error.details,
+        },
+      });
+
       console.error("[SceneForge] [llm] LiteLLM request failed", {
         statusCode: error.statusCode,
         details: error.details,
@@ -71,6 +118,16 @@ export async function POST(request: Request) {
 
       return errorResponse(error.message, error.statusCode ?? 500, error.details);
     }
+
+    await appendLlmLocalLog({
+      requestId,
+      timestamp: new Date().toISOString(),
+      phase: "error",
+      route: "/api/llm/chat",
+      payload: {
+        error: serializeErrorForLlmLog(error),
+      },
+    });
 
     console.error("[SceneForge] [llm] unexpected LLM proxy failure", error);
 

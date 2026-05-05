@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ChevronLeft, ChevronRight } from "lucide-react";
+import { ChevronLeft, ChevronRight, Trash2, X } from "lucide-react";
+import { createPortal } from "react-dom";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -27,16 +28,31 @@ import type { CanvasCapture } from "./CanvasStage";
 export function EditorShell() {
   const canvasCaptureRef = useRef<CanvasCapture | null>(null);
   const resetProject = useEditorStore((state) => state.resetProject);
+  const selectScene = useEditorStore((state) => state.selectScene);
+  const setAiGeneratedPrompt = useEditorStore((state) => state.setAiGeneratedPrompt);
   const setProject = useEditorStore((state) => state.setProject);
+  const updateScene = useEditorStore((state) => state.updateScene);
   const [loadState, setLoadState] = useState<"loading" | "ready">("loading");
   const [leftPanelOpen, setLeftPanelOpen] = useState(true);
   const [rightPanelOpen, setRightPanelOpen] = useState(true);
+  const [clearCanvasConfirmOpen, setClearCanvasConfirmOpen] = useState(false);
 
   const registerCanvasCapture = useCallback((capture: CanvasCapture | null) => {
     canvasCaptureRef.current = capture;
   }, []);
 
   const captureCanvas = useCallback(() => canvasCaptureRef.current?.() ?? null, []);
+
+  const clearCanvas = useCallback(() => {
+    updateScene({
+      objects: [],
+      characters: [],
+      promptTags: [],
+    });
+    selectScene();
+    setAiGeneratedPrompt("");
+    setClearCanvasConfirmOpen(false);
+  }, [selectScene, setAiGeneratedPrompt, updateScene]);
 
   useEffect(() => {
     let active = true;
@@ -92,6 +108,17 @@ export function EditorShell() {
             <span className="mr-1.5 inline-block h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
             {loadState === "loading" ? "加载中..." : "已就绪"}
           </span>
+          <Button
+            onClick={() => setClearCanvasConfirmOpen(true)}
+            type="button"
+            size="sm"
+            variant="secondary"
+            className="h-8 border-rose-200 bg-white text-rose-600 shadow-none hover:bg-rose-50 hover:text-rose-700"
+            title="清空当前画布内容"
+          >
+            <Trash2 className="size-4" />
+            清空画布
+          </Button>
           <Button onClick={resetProject} type="button" size="sm" className="h-8 shadow-none">
             新建场景
           </Button>
@@ -150,6 +177,61 @@ export function EditorShell() {
           </div>
         </div>
       </div>
+
+      {clearCanvasConfirmOpen && typeof document !== "undefined"
+        ? createPortal(
+            <div
+              aria-modal="true"
+              className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4 backdrop-blur-sm"
+              role="dialog"
+            >
+              <div className="flex w-full max-w-md flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xl">
+                <div className="flex items-start gap-3 border-b border-slate-100 bg-rose-50 p-5">
+                  <div className="rounded-md bg-white p-2 text-rose-600">
+                    <Trash2 className="size-5" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <h3 className="text-base font-bold text-slate-900">清空画布</h3>
+                    <p className="mt-1 text-xs leading-relaxed text-slate-500">
+                      将移除当前画布上的对象、人物和场景提示词，项目设置与词库会保留。
+                    </p>
+                  </div>
+                  <button
+                    aria-label="关闭清空画布确认"
+                    className="rounded-full bg-white/80 p-1.5 text-slate-400 shadow-sm transition-all hover:bg-white hover:text-slate-700"
+                    onClick={() => setClearCanvasConfirmOpen(false)}
+                    type="button"
+                  >
+                    <X className="size-4" />
+                  </button>
+                </div>
+                <div className="p-5">
+                  <p className="text-sm leading-relaxed text-slate-600">
+                    该操作会让画布回到空白状态。确认后可继续添加素材、人物或导入画布 JSON。
+                  </p>
+                </div>
+                <div className="grid grid-cols-2 gap-3 border-t border-slate-100 bg-slate-50 p-4">
+                  <Button
+                    className="h-10 rounded-md border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+                    onClick={() => setClearCanvasConfirmOpen(false)}
+                    type="button"
+                    variant="secondary"
+                  >
+                    取消
+                  </Button>
+                  <Button
+                    className="h-10 rounded-md bg-rose-600 text-white hover:bg-rose-700"
+                    onClick={clearCanvas}
+                    type="button"
+                  >
+                    确认清空
+                  </Button>
+                </div>
+              </div>
+            </div>,
+            document.body,
+          )
+        : null}
     </main>
   );
 }

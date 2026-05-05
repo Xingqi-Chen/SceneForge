@@ -1,17 +1,29 @@
 import {
-  PROMPT_TAG_CATEGORY_ORDER,
   PROMPT_TAG_SUBCATEGORY_LABELS,
   PROMPT_TAG_SUBCATEGORY_OPTIONS,
   migrateLegacyPromptTagCategorySubcategory,
   normalizePromptTagCategory,
   normalizePromptTagSubcategory,
 } from "./prompt-tag-taxonomy";
-import type { BodyPartId, CharacterBodyPart, PromptTag } from "@/shared/types";
+import type { BodyPartId, CharacterBodyPart, PromptTag, PromptTagCategory } from "@/shared/types";
 import type { LlmChatMessage } from "@/features/llm";
 
+export type CharacterPromptTagTarget =
+  | { kind: "character" }
+  | { kind: "bodyPart"; bodyPartId: BodyPartId };
+
 type CharacterImagePromptTagItem = {
-  bodyPartId: BodyPartId;
+  target: CharacterPromptTagTarget;
+  bodyPartId?: BodyPartId;
   tag: Omit<PromptTag, "id">;
+};
+
+type CharacterPromptTagMessageContext = {
+  bodyParts: CharacterBodyPart[];
+  characterTarget: {
+    label: string;
+    promptCategoryBindings?: PromptTagCategory[];
+  };
 };
 
 export type ParseCharacterImagePromptTagsResult =
@@ -34,6 +46,25 @@ const BODY_PART_IDS = new Set<BodyPartId>([
   "leftFoot",
   "rightFoot",
 ]);
+export const CHARACTER_BODY_PROMPT_TAG_CATEGORIES = [
+  "character",
+  "body-part",
+  "outfit",
+] satisfies PromptTagCategory[];
+
+export function isCharacterBodyPromptTagCategory(
+  category: PromptTagCategory,
+): category is (typeof CHARACTER_BODY_PROMPT_TAG_CATEGORIES)[number] {
+  return (CHARACTER_BODY_PROMPT_TAG_CATEGORIES as readonly PromptTagCategory[]).includes(category);
+}
+
+function getAllowedCharacterBodyCategories(categories: PromptTagCategory[] | undefined) {
+  return (categories ?? []).filter(isCharacterBodyPromptTagCategory);
+}
+
+function getAllowedWholeCharacterCategories(categories: PromptTagCategory[] | undefined) {
+  return categories?.includes("character") ? ["character"] : [];
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -56,6 +87,23 @@ function normalizeBodyPartId(value: unknown): BodyPartId | null {
 
   const bodyPartId = value.trim() as BodyPartId;
   return BODY_PART_IDS.has(bodyPartId) ? bodyPartId : null;
+}
+
+function normalizePromptTarget(value: Record<string, unknown>): CharacterPromptTagTarget | null {
+  const targetKind = typeof value.targetKind === "string" ? value.targetKind.trim() : "";
+  const target = typeof value.target === "string" ? value.target.trim() : "";
+  const bodyPartValue = value.bodyPartId ?? value.partId ?? value.part;
+
+  if (targetKind === "character" || target === "character" || bodyPartValue === "character") {
+    return { kind: "character" };
+  }
+
+  const bodyPartId = normalizeBodyPartId(bodyPartValue);
+  return bodyPartId ? { kind: "bodyPart", bodyPartId } : null;
+}
+
+function getPromptTargetBodyPartId(target: CharacterPromptTagTarget) {
+  return target.kind === "bodyPart" ? target.bodyPartId : undefined;
 }
 
 function trimPromptToken(value: string) {
@@ -96,8 +144,8 @@ function parseItem(value: unknown): CharacterImagePromptTagItem | null {
     return null;
   }
 
-  const bodyPartId = normalizeBodyPartId(value.bodyPartId ?? value.partId ?? value.part);
-  if (!bodyPartId) {
+  const target = normalizePromptTarget(value);
+  if (!target) {
     return null;
   }
 
@@ -119,7 +167,8 @@ function parseItem(value: unknown): CharacterImagePromptTagItem | null {
     : prompt.slice(0, 48);
 
   return {
-    bodyPartId,
+    target,
+    ...(getPromptTargetBodyPartId(target) ? { bodyPartId: getPromptTargetBodyPartId(target) } : {}),
     tag: {
       label,
       prompt,
@@ -165,27 +214,21 @@ export function parseCharacterImagePromptTagsContent(
 
 export function buildCharacterImagePromptTagMessages({
   bodyParts,
-  existingTags,
+  characterTarget,
   imageDataUrl,
 }: {
   bodyParts: CharacterBodyPart[];
-  existingTags: PromptTag[];
+  characterTarget: CharacterPromptTagMessageContext["characterTarget"];
   imageDataUrl: string;
 }): LlmChatMessage[] {
-  const categoryList = PROMPT_TAG_CATEGORY_ORDER.join(", ");
-  const subcategoryList = PROMPT_TAG_CATEGORY_ORDER.map((category) => {
+  const categoryList = CHARACTER_BODY_PROMPT_TAG_CATEGORIES.join(", ");
+  const subcategoryList = CHARACTER_BODY_PROMPT_TAG_CATEGORIES.map((category) => {
     const values = PROMPT_TAG_SUBCATEGORY_OPTIONS[category]
       .map((subcategory) => `${subcategory} (${PROMPT_TAG_SUBCATEGORY_LABELS[subcategory]})`)
       .join(", ");
 
     return `- ${category}: ${values}`;
   }).join("\n");
-  const compactExistingTags = existingTags.slice(0, 180).map((tag) => ({
-    label: tag.label,
-    prompt: tag.prompt,
-    category: tag.category,
-    subcategory: tag.subcategory ?? "",
-  }));
 
   return [
     {
@@ -194,19 +237,23 @@ export function buildCharacterImagePromptTagMessages({
         "You reverse-engineer reusable image prompt tags from a reference character image for SceneForge.",
         "The user provides one compressed character image and a list of available character body parts.",
         "Infer short Stable Diffusion / Midjourney style prompt tags that match the project prompt-library style.",
-        "Prefer reusing existing prompt wording when the visual idea already exists in the provided library examples.",
-        "Every returned item MUST be bound to exactly one bodyPartId from the provided list.",
+        "Every returned item MUST target either the whole character or exactly one bodyPartId from the provided list.",
+        "Each target has allowedCategories. The item's category MUST be included in that exact target's allowedCategories.",
+        "Use targetKind character only for category character whole-character role, subject, pose, or expression tags.",
+        "Never bind category body-part or outfit to targetKind character; bind those to the most specific matching bodyPart target.",
         "Use head for hair, face, eyes, expression, hats, glasses, and head accessories.",
         "Use torso for full outfit, upper clothing, body silhouette, dress, coat, armor, chest accessories, and whole-body style when no smaller part fits.",
         "Use hands/feet/arms/legs only for visible details specific to those limbs.",
         "Keep prompts atomic: one prompt token per item, no comma-separated prompt values.",
-        "Use category body-part for anatomy, hair, eyes, face, hands, legs, and category outfit for clothing/accessories. Use character only for role/pose/expression that belongs to the whole character but still bind it to the best visible part.",
+        "The label MUST be a short Simplified Chinese display label. The prompt MUST stay in English image-prompt wording.",
+        "Use category body-part for anatomy, hair, eyes, face, hands, and legs. Use category outfit for clothing/accessories. Use category character only for whole-character role, subject, pose, or expression tags.",
+        "Never return style, lighting, quality, scene, or negative prompt tags.",
         "Do not invent hidden details. Skip uncertain or occluded parts.",
         "Return compact JSON ONLY, no markdown, no commentary.",
         `Categories: ${categoryList}.`,
         "Allowed subcategories:",
         subcategoryList,
-        'Shape: {"items":[{"bodyPartId":"head","label":"黑长发","prompt":"long black hair","category":"body-part","subcategory":"body-part-hair"}]}',
+        'Shape: {"items":[{"targetKind":"bodyPart","bodyPartId":"head","label":"黑长发","prompt":"long black hair","category":"body-part","subcategory":"body-part-hair"},{"targetKind":"character","label":"站姿","prompt":"standing pose","category":"character","subcategory":"character-pose"}]}',
       ].join("\n"),
     },
     {
@@ -215,8 +262,16 @@ export function buildCharacterImagePromptTagMessages({
         {
           type: "text",
           text: JSON.stringify({
-            bodyParts: bodyParts.map((part) => ({ id: part.id, label: part.label })),
-            existingPromptLibraryExamples: compactExistingTags,
+            characterTarget: {
+              targetKind: "character",
+              label: characterTarget.label,
+              allowedCategories: getAllowedWholeCharacterCategories(characterTarget.promptCategoryBindings),
+            },
+            bodyParts: bodyParts.map((part) => ({
+              id: part.id,
+              label: part.label,
+              allowedCategories: getAllowedCharacterBodyCategories(part.promptCategoryBindings),
+            })),
           }),
         },
         {
@@ -227,6 +282,68 @@ export function buildCharacterImagePromptTagMessages({
           },
         },
       ],
+    },
+  ];
+}
+
+export function buildCharacterTextPromptTagMessages({
+  bodyParts,
+  characterTarget,
+  userPrompt,
+}: CharacterPromptTagMessageContext & {
+  userPrompt: string;
+}): LlmChatMessage[] {
+  const categoryList = CHARACTER_BODY_PROMPT_TAG_CATEGORIES.join(", ");
+  const subcategoryList = CHARACTER_BODY_PROMPT_TAG_CATEGORIES.map((category) => {
+    const values = PROMPT_TAG_SUBCATEGORY_OPTIONS[category]
+      .map((subcategory) => `${subcategory} (${PROMPT_TAG_SUBCATEGORY_LABELS[subcategory]})`)
+      .join(", ");
+
+    return `- ${category}: ${values}`;
+  }).join("\n");
+
+  return [
+    {
+      role: "system",
+      content: [
+        "You reverse-engineer reusable image prompt tags from a natural-language character idea for SceneForge.",
+        "The user provides a rough character prompt and a list of available character body parts.",
+        "Infer short Stable Diffusion / Midjourney style prompt tags that match the project prompt-library style.",
+        "If the input is short, abstract, or underspecified, freely expand it into a coherent visual design while staying faithful to the stated idea.",
+        "Do not ask follow-up questions. Make reasonable creative choices for missing details.",
+        "Every returned item MUST target either the whole character or exactly one bodyPartId from the provided list.",
+        "Each target has allowedCategories. The item's category MUST be included in that exact target's allowedCategories.",
+        "Use targetKind character only for category character whole-character role, subject, pose, or expression tags.",
+        "Never bind category body-part or outfit to targetKind character; bind those to the most specific matching bodyPart target.",
+        "Use head for hair, face, eyes, expression, hats, glasses, and head accessories.",
+        "Use torso for full outfit, upper clothing, body silhouette, dress, coat, armor, chest accessories, and whole-body style when no smaller part fits.",
+        "Use hands/feet/arms/legs only for details specific to those limbs.",
+        "Keep prompts atomic: one prompt token per item, no comma-separated prompt values.",
+        "The label MUST be a short Simplified Chinese display label. The prompt MUST stay in English image-prompt wording.",
+        "Use category body-part for anatomy, hair, eyes, face, hands, and legs. Use category outfit for clothing/accessories. Use category character only for whole-character role, subject, pose, or expression tags.",
+        "Never return style, lighting, quality, scene, or negative prompt tags, even if the user's text mentions background, atmosphere, camera, or lighting.",
+        "Return compact JSON ONLY, no markdown, no commentary.",
+        `Categories: ${categoryList}.`,
+        "Allowed subcategories:",
+        subcategoryList,
+        'Shape: {"items":[{"targetKind":"bodyPart","bodyPartId":"head","label":"黑长发","prompt":"long black hair","category":"body-part","subcategory":"body-part-hair"},{"targetKind":"character","label":"站姿","prompt":"standing pose","category":"character","subcategory":"character-pose"}]}',
+      ].join("\n"),
+    },
+    {
+      role: "user",
+      content: JSON.stringify({
+        characterTarget: {
+          targetKind: "character",
+          label: characterTarget.label,
+          allowedCategories: getAllowedWholeCharacterCategories(characterTarget.promptCategoryBindings),
+        },
+        bodyParts: bodyParts.map((part) => ({
+          id: part.id,
+          label: part.label,
+          allowedCategories: getAllowedCharacterBodyCategories(part.promptCategoryBindings),
+        })),
+        userCharacterPrompt: userPrompt.trim(),
+      }),
     },
   ];
 }

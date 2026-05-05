@@ -24,7 +24,6 @@ const STICK_FIGURE_POSE_SYSTEM_PROMPT = [
   "You generate 3D stick-figure pose data for SceneForge.",
   "Return only valid JSON. No markdown, no comments, no prose.",
   "Also rewrite the user's pose/action input into a concise natural character description that can be stored in the character description field.",
-  "If an existing character description is provided, preserve identity/style details and update or append only the pose/action part.",
   "Use meters in a character-local Y-up coordinate system: X left/right, Y up, Z depth.",
   "Keep the pose anatomically plausible for a low-poly humanoid. Feet should normally stay near y=0.04 unless the user asks for jumping or lying.",
   "Return IK targets plus all four pole controls, not all solved joints.",
@@ -161,7 +160,6 @@ function extractJsonObject(text: string): unknown | null {
 export function buildStickFigurePoseGenerationMessages(
   description: string,
   currentPose: StickFigurePoseV1,
-  currentCharacterDescription = "",
 ): LlmChatMessage[] {
   return [
     {
@@ -173,7 +171,6 @@ export function buildStickFigurePoseGenerationMessages(
       content: JSON.stringify(
         {
           poseDescription: description,
-          currentCharacterDescription,
           currentPose: compactPoseForPrompt(currentPose),
         },
         null,
@@ -186,7 +183,6 @@ export function buildStickFigurePoseGenerationMessages(
 export function buildStickFigurePoseImageGenerationMessages(
   imageDataUrl: string,
   currentPose: StickFigurePoseV1,
-  currentCharacterDescription = "",
   userNotes = "",
 ): LlmChatMessage[] {
   return [
@@ -206,7 +202,6 @@ export function buildStickFigurePoseImageGenerationMessages(
           text: JSON.stringify(
             {
               poseDescription: userNotes.trim() || "Infer the character pose from the uploaded image.",
-              currentCharacterDescription,
               currentPose: compactPoseForPrompt(currentPose),
               imageNote: "The image was downscaled by the client before upload to reduce vision token cost.",
             },
