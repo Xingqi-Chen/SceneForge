@@ -23,6 +23,13 @@ import {
   parseLlmPromptLibrarySubcategoryContent,
   type PromptLibraryConsolidatedItem,
 } from "@/features/prompt-engine/prompt-library/parse-llm-prompt-library-import";
+import {
+  FACE_TEMPLATES,
+  type FaceTemplateId,
+  applyFaceTemplateTagsToHead,
+  getFaceTemplate,
+  removeFaceTemplateApplicationFromHead,
+} from "@/features/prompt-engine/face-templates";
 import { computePromptLibraryImportPreview } from "@/features/prompt-engine/prompt-library/merge-imported-prompt-library-tags";
 import {
   PROMPT_TAG_CATEGORY_LABELS,
@@ -61,11 +68,20 @@ type ConsolidationPreview = {
   originalTags: PromptTag[];
   items: PromptLibraryConsolidatedItem[];
 };
+type FaceTemplateApplicationState = Record<
+  string,
+  { applied: boolean; addedTagIds: string[] }
+>;
 
 const MAX_CLASSIFICATION_TAGS_PER_REQUEST = 10;
 const WHOLE_CHARACTER_PROMPT_CATEGORIES: PromptTagCategory[] = ["character"];
 const WHOLE_CHARACTER_PROMPT_SUBCATEGORIES: PromptTagSubcategory[] = [
   ...PROMPT_TAG_SUBCATEGORY_OPTIONS.character,
+];
+const HEAD_EXTRA_PROMPT_CATEGORIES: PromptTagCategory[] = ["negative"];
+const HEAD_EXTRA_PROMPT_SUBCATEGORIES: PromptTagSubcategory[] = [
+  "negative-anatomy",
+  "negative-artifact",
 ];
 
 function chunkPromptTags(tags: PromptTag[], chunkSize: number) {
@@ -175,6 +191,10 @@ function getConsolidationMergedTags(
     .filter((tag): tag is PromptTag => Boolean(tag));
 }
 
+function mergePromptBindingValues<T>(base: T[], extras: T[]) {
+  return Array.from(new Set([...base, ...extras]));
+}
+
 function BindingPills({
   emptyLabel,
   values,
@@ -236,6 +256,7 @@ export function PromptTagPickerPanel() {
     selectBodyPart,
     selectCharacter,
     selection,
+    updateCharacter,
     updatePromptCategoryBindings,
     updatePromptLibraryTag,
     updatePromptSubcategoryBindings,
@@ -271,6 +292,11 @@ export function PromptTagPickerPanel() {
     useState<ConsolidationPreview | null>(null);
   const [consolidationSaving, setConsolidationSaving] = useState(false);
   const [bindingModalOpen, setBindingModalOpen] = useState(false);
+  const [selectedFaceTemplateId, setSelectedFaceTemplateId] =
+    useState<FaceTemplateId>("real-human-face");
+  const [faceTemplateIntensity, setFaceTemplateIntensity] = useState(1);
+  const [faceTemplateApplications, setFaceTemplateApplications] =
+    useState<FaceTemplateApplicationState>({});
   const [manageDraft, setManageDraft] = useState<PromptLibraryTagDraft>({
     label: "",
     prompt: "",
@@ -347,12 +373,16 @@ export function PromptTagPickerPanel() {
         : (project.scene.promptSubcategoryBindings ?? DEFAULT_PROMPT_SUBCATEGORY_BINDINGS.scene);
   const currentPromptCategoryBindings = isWholeCharacterTarget
     ? WHOLE_CHARACTER_PROMPT_CATEGORIES
-    : rawPromptCategoryBindings;
+    : selectedBodyPart?.id === "head"
+      ? mergePromptBindingValues(rawPromptCategoryBindings, HEAD_EXTRA_PROMPT_CATEGORIES)
+      : rawPromptCategoryBindings;
   const currentPromptSubcategoryBindings = isWholeCharacterTarget
     ? rawPromptSubcategoryBindings.filter((subcategory) =>
         WHOLE_CHARACTER_PROMPT_SUBCATEGORIES.includes(subcategory),
       )
-    : rawPromptSubcategoryBindings;
+    : selectedBodyPart?.id === "head"
+      ? mergePromptBindingValues(rawPromptSubcategoryBindings, HEAD_EXTRA_PROMPT_SUBCATEGORIES)
+      : rawPromptSubcategoryBindings;
   const categoryOptions = isWholeCharacterTarget
     ? WHOLE_CHARACTER_PROMPT_CATEGORIES
     : PROMPT_TAG_CATEGORY_ORDER;
@@ -387,6 +417,16 @@ export function PromptTagPickerPanel() {
         ) ?? selectedPromptLibraryGroup.subgroups[0]
       )
     : undefined;
+  const selectedFaceTemplate = useMemo(
+    () => getFaceTemplate(selectedFaceTemplateId),
+    [selectedFaceTemplateId],
+  );
+  const faceTemplateApplicationKey = selectedCharacter
+    ? `${selectedCharacter.id}:${selectedFaceTemplateId}`
+    : "";
+  const currentFaceTemplateApplication =
+    faceTemplateApplications[faceTemplateApplicationKey];
+  const canRemoveCurrentFaceTemplate = Boolean(currentFaceTemplateApplication?.applied);
 
   function handleBodyPartTargetChange(nextTarget: BodyPartTargetValue) {
     setBodyPartTarget(nextTarget);
@@ -499,6 +539,61 @@ export function PromptTagPickerPanel() {
   async function handleUpdateTagWeightValue(tagId: string, value: number) {
     await handleUpdateAppliedTag(tagId, {
       weight: { value: Number.isFinite(value) ? value : 1 },
+    });
+  }
+
+  async function handleApplyFaceTemplate() {
+    if (!selectedCharacter) {
+      return;
+    }
+
+    const result = applyFaceTemplateTagsToHead(
+      selectedCharacter.bodyParts,
+      selectedFaceTemplateId,
+      faceTemplateIntensity,
+    );
+
+    await persistCurrentProject(
+      () =>
+        updateCharacter(selectedCharacter.id, {
+          bodyParts: result.bodyParts,
+        }),
+      "apply-face-template",
+    );
+
+    setFaceTemplateApplications((current) => {
+      const previous = current[faceTemplateApplicationKey];
+      const addedTagIds = Array.from(
+        new Set([...(previous?.addedTagIds ?? []), ...result.addedTagIds]),
+      );
+
+      return {
+        ...current,
+        [faceTemplateApplicationKey]: { applied: true, addedTagIds },
+      };
+    });
+  }
+
+  async function handleRemoveFaceTemplate() {
+    if (!selectedCharacter || !currentFaceTemplateApplication?.applied) {
+      return;
+    }
+
+    await persistCurrentProject(
+      () =>
+        updateCharacter(selectedCharacter.id, {
+          bodyParts: removeFaceTemplateApplicationFromHead(
+            selectedCharacter.bodyParts,
+            currentFaceTemplateApplication.addedTagIds,
+          ),
+        }),
+      "remove-face-template",
+    );
+
+    setFaceTemplateApplications((current) => {
+      const next = { ...current };
+      delete next[faceTemplateApplicationKey];
+      return next;
     });
   }
 
@@ -1196,6 +1291,105 @@ export function PromptTagPickerPanel() {
             </>
           )}
         </div>
+
+        {selectedCharacter && currentBodyPartTarget === "head" ? (
+          <div className="rounded-md border border-amber-200 bg-amber-50/70 p-4">
+            <div className="mb-3 flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-[11px] font-bold uppercase tracking-wider text-amber-700">
+                  脸部模板
+                </p>
+                <p className="mt-1 text-xs leading-relaxed text-amber-800/80">
+                  将一组可加权的脸部提示词追加到头部，并保留已有头部标签。
+                </p>
+              </div>
+              <Sparkles className="mt-0.5 size-4 shrink-0 text-amber-600" />
+            </div>
+            <div className="space-y-3">
+              <label className="block">
+                <span className="text-xs font-medium text-slate-600">模板</span>
+                <select
+                  className="mt-1.5 h-9 w-full rounded-md border border-amber-200 bg-white px-3 text-xs text-slate-800 outline-none transition-all focus:border-amber-400 focus:ring-1 focus:ring-amber-400"
+                  onChange={(event) =>
+                    setSelectedFaceTemplateId(event.target.value as FaceTemplateId)
+                  }
+                  value={selectedFaceTemplateId}
+                >
+                  {FACE_TEMPLATES.map((template) => (
+                    <option key={template.id} value={template.id}>
+                      {template.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <div className="grid grid-cols-[1fr_auto] items-end gap-3">
+                <label className="block">
+                  <span className="text-xs font-medium text-slate-600">强度</span>
+                  <input
+                    className="mt-1.5 w-full accent-amber-600"
+                    max={1.4}
+                    min={0.8}
+                    onChange={(event) => {
+                      const value = event.target.valueAsNumber;
+                      setFaceTemplateIntensity(Number.isFinite(value) ? value : 1);
+                    }}
+                    step={0.05}
+                    type="range"
+                    value={faceTemplateIntensity}
+                  />
+                </label>
+                <input
+                  aria-label="脸部模板强度"
+                  className="h-9 w-20 rounded-md border border-amber-200 bg-white px-2 text-xs text-slate-800 outline-none transition-all focus:border-amber-400 focus:ring-1 focus:ring-amber-400"
+                  max={1.4}
+                  min={0.8}
+                  onChange={(event) => {
+                    const value = event.target.valueAsNumber;
+                    setFaceTemplateIntensity(Number.isFinite(value) ? value : 1);
+                  }}
+                  step={0.05}
+                  type="number"
+                  value={faceTemplateIntensity}
+                />
+              </div>
+              <p className="text-[11px] leading-relaxed text-amber-800/80">
+                {selectedFaceTemplate.description}
+              </p>
+              <div className="flex flex-wrap gap-1.5">
+                {selectedFaceTemplate.tags.slice(0, 4).map((tag) => (
+                  <span
+                    className="rounded-full border border-amber-200 bg-white px-2 py-0.5 text-[10px] font-medium text-amber-800"
+                    key={tag.id}
+                    title={tag.label}
+                  >
+                    {tag.label}
+                  </span>
+                ))}
+              </div>
+              <div className={canRemoveCurrentFaceTemplate ? "grid grid-cols-2 gap-2" : ""}>
+                {canRemoveCurrentFaceTemplate ? (
+                  <Button
+                    className="h-9 rounded-md border-amber-200 bg-white text-xs text-amber-700 hover:bg-amber-50"
+                    onClick={() => void handleRemoveFaceTemplate()}
+                    size="sm"
+                    type="button"
+                    variant="secondary"
+                  >
+                    取消应用
+                  </Button>
+                ) : null}
+                <Button
+                  className="h-9 w-full rounded-md bg-amber-600 text-xs text-white hover:bg-amber-700"
+                  onClick={() => void handleApplyFaceTemplate()}
+                  size="sm"
+                  type="button"
+                >
+                  应用到头部
+                </Button>
+              </div>
+            </div>
+          </div>
+        ) : null}
 
         <div>
           <p className="mb-3 text-[11px] font-bold uppercase tracking-wider text-slate-500">点击选择或取消选择</p>

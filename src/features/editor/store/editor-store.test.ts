@@ -421,6 +421,56 @@ describe("editor store", () => {
     expect(aiGeneratedPrompt).toBe("");
   });
 
+  it("clears the canvas back to the default scene without clearing default negatives", () => {
+    useEditorStore.getState().importPromptLibraryTags([
+      {
+        label: "闆ㄦ櫙",
+        prompt: "heavy rain on cobblestones",
+        category: "scene",
+        weight: { enabled: false, value: 1 },
+      },
+    ]);
+    useEditorStore.getState().updateProjectSettings({
+      modelFormat: "midjourney",
+      negativePrompt: "washed out",
+    });
+    useEditorStore.getState().updateScene({
+      canvas: {
+        ...useEditorStore.getState().project.scene.canvas,
+        background: "#020617",
+      },
+      promptTags: [],
+    });
+    useEditorStore.getState().addObject({
+      kind: "rectangle",
+      name: "璺伅",
+      description: "street lamp on the left",
+    });
+    useEditorStore.getState().addCharacter();
+    useEditorStore.getState().setAiGeneratedPrompt("generated prompt");
+
+    useEditorStore.getState().resetCanvas();
+
+    const { aiGeneratedPrompt, project, selection } = useEditorStore.getState();
+
+    expect(project.scene).toEqual(createDefaultProject().scene);
+    expect(project.settings).toMatchObject({
+      modelFormat: "midjourney",
+      negativePrompt: "washed out",
+      promptLibraryTags: [
+        expect.objectContaining({
+          label: "闆ㄦ櫙",
+          prompt: "heavy rain on cobblestones",
+          category: "scene",
+        }),
+      ],
+    });
+    expect(project.scene.promptTags).toEqual(createDefaultProject().scene.promptTags);
+    expect(project.scene.promptTags.length).toBeGreaterThan(0);
+    expect(selection).toEqual({ kind: "scene" });
+    expect(aiGeneratedPrompt).toBe("");
+  });
+
   it("imports prompt library tags into project settings", () => {
     const added = useEditorStore.getState().importPromptLibraryTags([
       {

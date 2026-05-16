@@ -28,10 +28,8 @@ import type { CanvasCapture } from "./CanvasStage";
 export function EditorShell() {
   const canvasCaptureRef = useRef<CanvasCapture | null>(null);
   const resetProject = useEditorStore((state) => state.resetProject);
-  const selectScene = useEditorStore((state) => state.selectScene);
-  const setAiGeneratedPrompt = useEditorStore((state) => state.setAiGeneratedPrompt);
+  const resetCanvas = useEditorStore((state) => state.resetCanvas);
   const setProject = useEditorStore((state) => state.setProject);
-  const updateScene = useEditorStore((state) => state.updateScene);
   const [loadState, setLoadState] = useState<"loading" | "ready">("loading");
   const [leftPanelOpen, setLeftPanelOpen] = useState(true);
   const [rightPanelOpen, setRightPanelOpen] = useState(true);
@@ -44,15 +42,9 @@ export function EditorShell() {
   const captureCanvas = useCallback(() => canvasCaptureRef.current?.() ?? null, []);
 
   const clearCanvas = useCallback(() => {
-    updateScene({
-      objects: [],
-      characters: [],
-      promptTags: [],
-    });
-    selectScene();
-    setAiGeneratedPrompt("");
+    resetCanvas();
     setClearCanvasConfirmOpen(false);
-  }, [selectScene, setAiGeneratedPrompt, updateScene]);
+  }, [resetCanvas]);
 
   useEffect(() => {
     let active = true;

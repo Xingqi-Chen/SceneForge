@@ -13,13 +13,13 @@ import type {
 
 import { cloneStickFigurePose } from "@/features/editor/stick-figure-3d/stick-figure-pose-io";
 import { migrateAuthoringJoints3DToStickFigure } from "@/features/editor/stick-figure-3d/migrate-legacy-joints3d";
-import { BUILT_IN_PROMPT_LIBRARY_TAGS } from "@/features/prompt-engine/prompt-library/built-in-prompt-tags";
+import { BUILT_IN_BASE_PROMPT_LIBRARY_TAGS } from "@/features/prompt-engine/prompt-library/built-in-prompt-tags";
 
 const now = new Date("2026-01-01T00:00:00.000Z").toISOString();
 
 /** 默认画布场景上预选的负面词条（与内置词库负面条目一致，独立 id 便于实例级编辑）。 */
 export function createDefaultSceneNegativePromptTags(): PromptTag[] {
-  return BUILT_IN_PROMPT_LIBRARY_TAGS.filter((tag) => tag.category === "negative").map((tag) => ({
+  return BUILT_IN_BASE_PROMPT_LIBRARY_TAGS.filter((tag) => tag.category === "negative").map((tag) => ({
     ...tag,
     id: `tag-scene-default-${tag.id}`,
     weight: { ...tag.weight },
@@ -292,12 +292,16 @@ function cloneScene(scene: Scene): Scene {
   };
 }
 
+export function createDefaultScene(): Scene {
+  return cloneScene(defaultScene);
+}
+
 export function createDefaultProject(): SceneForgeProject {
   return {
     id: "project-default",
     name: "Untitled SceneForge Project",
     version: 1,
-    scene: cloneScene(defaultScene),
+    scene: createDefaultScene(),
     settings: {
       modelFormat: "generic",
       includeSpatialHints: true,

@@ -72,11 +72,21 @@ function buildScopedPrompt(scopePrompt: string, scopedTags: string[]) {
 }
 
 function buildBodyPartPrompt(bodyPartPrompt: string, bodyPartTags: string[]) {
-  return bodyPartTags.map((tag) =>
-    /^(holding|gripping|wearing|pointing|touching)\b/i.test(tag)
-      ? `${bodyPartPrompt} ${tag}`
-      : `${bodyPartPrompt} with ${tag}`,
-  );
+  const actionTags: string[] = [];
+  const descriptiveTags: string[] = [];
+
+  for (const tag of bodyPartTags) {
+    if (/^(holding|gripping|wearing|pointing|touching)\b/i.test(tag)) {
+      actionTags.push(tag);
+    } else {
+      descriptiveTags.push(tag);
+    }
+  }
+
+  return [
+    ...(descriptiveTags.length > 0 ? [`${bodyPartPrompt} with ${descriptiveTags.join(", ")}`] : []),
+    ...actionTags.map((tag) => `${bodyPartPrompt} ${tag}`),
+  ];
 }
 
 function shouldSkipPlainObjectPrompt({

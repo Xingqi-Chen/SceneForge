@@ -56,6 +56,7 @@ import {
   DEFAULT_PROMPT_CATEGORY_BINDINGS,
   DEFAULT_PROMPT_SUBCATEGORY_BINDINGS,
   createDefaultPromptBindingState,
+  createDefaultScene,
   createDefaultStickFigurePoseV1,
   createDefaultProject,
   defaultCharacter,
@@ -116,6 +117,7 @@ type EditorState = {
   undo: () => void;
   setProject: (project: SceneForgeProject) => void;
   resetProject: () => void;
+  resetCanvas: () => void;
   selectScene: () => void;
   selectObject: (id: string) => void;
   selectCharacter: (id: string) => void;
@@ -693,6 +695,20 @@ export const useEditorStore = create<EditorState>((set) => ({
         aiGeneratedPrompt: "",
       };
     }),
+  resetCanvas: () =>
+    set((state) => ({
+      project: touchProject(
+        applyPromptBindingsToProject(
+          {
+            ...state.project,
+            scene: createDefaultScene(),
+          },
+          state.promptBindings,
+        ),
+      ),
+      selection: { kind: "scene" },
+      aiGeneratedPrompt: "",
+    })),
   selectScene: () => set({ selection: { kind: "scene" } }),
   selectObject: (id) =>
     set((state) => {

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { createDefaultProject, defaultCharacter } from "@/features/editor/store/defaults";
 import type { SceneForgeProject, SceneObject } from "@/shared/types";
 
+import { upsertFaceTemplateTagsOnHead } from "./face-templates";
 import { formatPromptForClipboardCopy, generatePrompt } from "./generate-prompt";
 
 function addTableObject(project: SceneForgeProject) {
@@ -178,6 +179,100 @@ describe("generatePrompt", () => {
     const result = generatePrompt(project);
 
     expect(result.negativePrompt).toContain("bad hands");
+  });
+
+  it("adds weighted face template tags to the scoped head prompt", () => {
+    const project = createDefaultProject();
+    project.settings.modelFormat = "stable-diffusion";
+    const character = addDefaultCharacter(project);
+    character.bodyParts = upsertFaceTemplateTagsOnHead(
+      character.bodyParts,
+      "real-human-face",
+      1,
+    );
+
+    const result = generatePrompt(project);
+    const headPrompt = result.parts.find((part) => part.startsWith("head with "));
+
+    expect(headPrompt).toContain("(multi-tone living skin:1.16)");
+    expect(headPrompt).toContain("(natural skin microtexture:1.12)");
+    expect(headPrompt).toContain("slight facial asymmetry");
+    expect(result.parts.filter((part) => part.startsWith("head with "))).toHaveLength(1);
+    expect(result.negativePrompt).toContain("waxy face");
+    expect(result.negativePrompt).toContain("dead eyes");
+  });
+
+  it("formats face template weights for Midjourney", () => {
+    const project = createDefaultProject();
+    project.settings.modelFormat = "midjourney";
+    const character = addDefaultCharacter(project);
+    character.bodyParts = upsertFaceTemplateTagsOnHead(
+      character.bodyParts,
+      "real-human-face",
+      1,
+    );
+
+    const result = generatePrompt(project);
+
+    expect(result.prompt).toContain("multi-tone living skin::1.16");
+    expect(result.prompt).toContain("natural skin microtexture::1.12");
+  });
+
+  it("dedupes face template negative tags against existing negative prompts", () => {
+    const project = createDefaultProject();
+    const character = addDefaultCharacter(project);
+    character.bodyParts = upsertFaceTemplateTagsOnHead(
+      character.bodyParts,
+      "real-human-face",
+      1,
+    );
+
+    const result = generatePrompt(project);
+
+    expect(result.negativePrompt.match(/\bover-smoothed skin\b/g)).toHaveLength(1);
+    expect(result.negativePrompt).toContain("dead eyes");
+  });
+
+  it("adds anime hand-drawn face template tags to the head prompt", () => {
+    const project = createDefaultProject();
+    project.settings.modelFormat = "stable-diffusion";
+    const character = addDefaultCharacter(project);
+    character.bodyParts = upsertFaceTemplateTagsOnHead(
+      character.bodyParts,
+      "anime-handdrawn-face",
+      1,
+    );
+
+    const result = generatePrompt(project);
+    const headPrompt = result.parts.find((part) => part.startsWith("head with "));
+
+    expect(headPrompt).toContain("(clean hand-drawn anime face lineart:1.12)");
+    expect(headPrompt).toContain("(consistent anime eye shapes:1.1)");
+    expect(headPrompt).toContain("simple readable anime nose and mouth");
+    expect(result.negativePrompt).toContain("broken eye details");
+    expect(result.negativePrompt).toContain("melted iris");
+    expect(result.negativePrompt).toContain("AI-generated eye artifacts");
+  });
+
+  it("adds transparent hand-drawn anime face template tags to the head prompt", () => {
+    const project = createDefaultProject();
+    project.settings.modelFormat = "stable-diffusion";
+    const character = addDefaultCharacter(project);
+    character.bodyParts = upsertFaceTemplateTagsOnHead(
+      character.bodyParts,
+      "transparent-handdrawn-anime-face",
+      1,
+    );
+
+    const result = generatePrompt(project);
+    const headPrompt = result.parts.find((part) => part.startsWith("head with "));
+
+    expect(headPrompt).toContain("(transparent watercolor-like skin shading:1.12)");
+    expect(headPrompt).toContain("(detailed layered iris highlights:1.12)");
+    expect(headPrompt).toContain("gentle hand-painted skin gradients");
+    expect(result.negativePrompt).toContain("plastic anime face");
+    expect(result.negativePrompt).toContain("flat dead eyes");
+    expect(result.negativePrompt).toContain("muddy facial lineart");
   });
 
   it("uses layout constraints as the default source for canvas placement hints", () => {

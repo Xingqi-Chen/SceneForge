@@ -1,6 +1,11 @@
 import type { PromptTag } from "@/shared/types";
+import { FACE_TEMPLATES } from "@/features/prompt-engine/face-templates";
 
-export const BUILT_IN_PROMPT_LIBRARY_TAGS: PromptTag[] = [
+export const BUILT_IN_FACE_TEMPLATE_PROMPT_TAGS: PromptTag[] = FACE_TEMPLATES.flatMap(
+  (template) => template.tags,
+);
+
+export const BUILT_IN_BASE_PROMPT_LIBRARY_TAGS: PromptTag[] = [
   {
     id: "library-cinematic",
     label: "电影感",
@@ -163,4 +168,9 @@ export const BUILT_IN_PROMPT_LIBRARY_TAGS: PromptTag[] = [
     weight: { enabled: false, value: 1 },
     negative: true,
   },
+];
+
+export const BUILT_IN_PROMPT_LIBRARY_TAGS: PromptTag[] = [
+  ...BUILT_IN_BASE_PROMPT_LIBRARY_TAGS,
+  ...BUILT_IN_FACE_TEMPLATE_PROMPT_TAGS,
 ];
