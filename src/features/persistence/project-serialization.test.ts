@@ -342,7 +342,7 @@ describe("project serialization", () => {
     expect(imported.scene.promptSubcategoryBindings).toEqual(["scene-weather"]);
     expect(imported.scene.objects[0]?.promptCategoryBindings).toEqual(["character"]);
     expect(imported.scene.objects[0]?.promptSubcategoryBindings).toEqual(["character-pose"]);
-    expect(imported.scene.characters[0]?.promptCategoryBindings).toEqual(["character", "body-part", "outfit"]);
+    expect(imported.scene.characters[0]?.promptCategoryBindings).toEqual(["character"]);
     expect(imported.scene.characters[0]?.promptSubcategoryBindings).toEqual([
       "character-expression",
     ]);

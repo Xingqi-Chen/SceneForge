@@ -9,6 +9,7 @@ import type { BodyPartId, CharacterBodyPart, PromptTag, PromptTagCategory } from
 import type { LlmChatMessage } from "@/features/llm";
 
 export type CharacterPromptTagTarget =
+  | { kind: "scene" }
   | { kind: "character" }
   | { kind: "bodyPart"; bodyPartId: BodyPartId };
 
@@ -51,11 +52,23 @@ export const CHARACTER_BODY_PROMPT_TAG_CATEGORIES = [
   "body-part",
   "outfit",
 ] satisfies PromptTagCategory[];
+export const SCENE_PROMPT_TAG_CATEGORIES = [
+  "style",
+  "lighting",
+  "quality",
+  "scene",
+] satisfies PromptTagCategory[];
 
 export function isCharacterBodyPromptTagCategory(
   category: PromptTagCategory,
 ): category is (typeof CHARACTER_BODY_PROMPT_TAG_CATEGORIES)[number] {
   return (CHARACTER_BODY_PROMPT_TAG_CATEGORIES as readonly PromptTagCategory[]).includes(category);
+}
+
+export function isScenePromptTagCategory(
+  category: PromptTagCategory,
+): category is (typeof SCENE_PROMPT_TAG_CATEGORIES)[number] {
+  return (SCENE_PROMPT_TAG_CATEGORIES as readonly PromptTagCategory[]).includes(category);
 }
 
 function getAllowedCharacterBodyCategories(categories: PromptTagCategory[] | undefined) {
@@ -64,6 +77,10 @@ function getAllowedCharacterBodyCategories(categories: PromptTagCategory[] | und
 
 function getAllowedWholeCharacterCategories(categories: PromptTagCategory[] | undefined) {
   return categories?.includes("character") ? ["character"] : [];
+}
+
+function getAllowedSceneCategories(categories: PromptTagCategory[] | undefined) {
+  return (categories ?? []).filter(isScenePromptTagCategory);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -93,6 +110,10 @@ function normalizePromptTarget(value: Record<string, unknown>): CharacterPromptT
   const targetKind = typeof value.targetKind === "string" ? value.targetKind.trim() : "";
   const target = typeof value.target === "string" ? value.target.trim() : "";
   const bodyPartValue = value.bodyPartId ?? value.partId ?? value.part;
+
+  if (targetKind === "scene" || target === "scene") {
+    return { kind: "scene" };
+  }
 
   if (targetKind === "character" || target === "character" || bodyPartValue === "character") {
     return { kind: "character" };
@@ -346,6 +367,116 @@ export function buildCharacterTextPromptTagMessages({
           allowedCategories: getAllowedCharacterBodyCategories(part.promptCategoryBindings),
         })),
         userCharacterPrompt: userPrompt.trim(),
+      }),
+    },
+  ];
+}
+
+function buildSceneSubcategoryList() {
+  return SCENE_PROMPT_TAG_CATEGORIES.map((category) => {
+    const values = PROMPT_TAG_SUBCATEGORY_OPTIONS[category]
+      .map((subcategory) => `${subcategory} (${PROMPT_TAG_SUBCATEGORY_LABELS[subcategory]})`)
+      .join(", ");
+
+    return `- ${category}: ${values}`;
+  }).join("\n");
+}
+
+function getSceneMessageHeader(source: "image" | "text") {
+  return [
+    `You reverse-engineer reusable image prompt tags from a reference scene ${source} for SceneForge.`,
+    "Infer short Stable Diffusion / Midjourney style prompt tags that match the project prompt-library style.",
+    "Every returned item MUST target the scene with targetKind scene.",
+    "Each returned category MUST be one of the scene allowedCategories.",
+    "Extract only broad reusable tags for visual style, lighting, image quality, and scene/environment.",
+    "Use category style for rendering style, mood, atmosphere, camera/shot language, and overall art direction.",
+    "Use category lighting for light source, brightness, color temperature, shadows, and time-of-day light.",
+    "Use category quality for rendering quality, detail level, resolution/finish, and model-quality terms.",
+    "Use category scene for location, background, environment, weather, and reusable props.",
+    "Never return character, body-part, outfit, or negative prompt tags.",
+    "Keep prompts atomic: one prompt token per item, no comma-separated prompt values.",
+    "The label MUST be a short Simplified Chinese display label. The prompt MUST stay in English image-prompt wording.",
+    "Do not invent hidden details. Skip uncertain details.",
+    "Return compact JSON ONLY, no markdown, no commentary.",
+    `Categories: ${SCENE_PROMPT_TAG_CATEGORIES.join(", ")}.`,
+    "Allowed subcategories:",
+    buildSceneSubcategoryList(),
+    'Shape: {"items":[{"targetKind":"scene","label":"柔和光照","prompt":"soft lighting","category":"lighting","subcategory":"lighting-mood"},{"targetKind":"scene","label":"室内背景","prompt":"cozy interior background","category":"scene","subcategory":"scene-background"}]}',
+  ].join("\n");
+}
+
+export function buildSceneImagePromptTagMessages({
+  imageDataUrl,
+  sceneTarget,
+}: {
+  imageDataUrl: string;
+  sceneTarget: {
+    label: string;
+    description?: string;
+    promptCategoryBindings?: PromptTagCategory[];
+  };
+}): LlmChatMessage[] {
+  return [
+    {
+      role: "system",
+      content: getSceneMessageHeader("image"),
+    },
+    {
+      role: "user",
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            sceneTarget: {
+              targetKind: "scene",
+              label: sceneTarget.label,
+              description: sceneTarget.description,
+              allowedCategories: getAllowedSceneCategories(sceneTarget.promptCategoryBindings),
+            },
+          }),
+        },
+        {
+          type: "image_url",
+          image_url: {
+            url: imageDataUrl,
+            detail: "low",
+          },
+        },
+      ],
+    },
+  ];
+}
+
+export function buildSceneTextPromptTagMessages({
+  sceneTarget,
+  userPrompt,
+}: {
+  sceneTarget: {
+    label: string;
+    description?: string;
+    promptCategoryBindings?: PromptTagCategory[];
+  };
+  userPrompt: string;
+}): LlmChatMessage[] {
+  return [
+    {
+      role: "system",
+      content: [
+        getSceneMessageHeader("text"),
+        "If the input is short, abstract, or underspecified, expand it into a coherent scene direction while staying faithful to the stated idea.",
+        "Do not ask follow-up questions. Make reasonable creative choices for missing details.",
+      ].join("\n"),
+    },
+    {
+      role: "user",
+      content: JSON.stringify({
+        sceneTarget: {
+          targetKind: "scene",
+          label: sceneTarget.label,
+          description: sceneTarget.description,
+          allowedCategories: getAllowedSceneCategories(sceneTarget.promptCategoryBindings),
+        },
+        userScenePrompt: userPrompt.trim(),
       }),
     },
   ];

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  buildSceneTextPromptTagMessages,
   buildCharacterTextPromptTagMessages,
   parseCharacterImagePromptTagsContent,
 } from "./character-image-prompt-tags";
@@ -127,6 +128,39 @@ describe("parseCharacterImagePromptTagsContent", () => {
     expect(result.ok).toBe(false);
   });
 
+  it("parses scene-bound prompt tags from JSON", () => {
+    const result = parseCharacterImagePromptTagsContent(
+      JSON.stringify({
+        items: [
+          {
+            targetKind: "scene",
+            label: "soft light",
+            prompt: "soft cinematic lighting",
+            category: "lighting",
+            subcategory: "lighting-mood",
+          },
+        ],
+      }),
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      items: [
+        {
+          target: { kind: "scene" },
+          tag: {
+            label: "soft light",
+            prompt: "soft cinematic lighting",
+            category: "lighting",
+            subcategory: "lighting-mood",
+            negative: false,
+            weight: { enabled: false, value: 1 },
+          },
+        },
+      ],
+    });
+  });
+
   it("builds text reverse-engineering messages that allow creative expansion", () => {
     const messages = buildCharacterTextPromptTagMessages({
       bodyParts: [
@@ -160,5 +194,31 @@ describe("parseCharacterImagePromptTagsContent", () => {
     };
     expect(payload.characterTarget.allowedCategories).toEqual(["character"]);
     expect(payload.bodyParts[0].allowedCategories).toEqual(["body-part", "outfit"]);
+  });
+
+  it("builds scene text reverse-engineering messages for scene-level categories", () => {
+    const messages = buildSceneTextPromptTagMessages({
+      sceneTarget: {
+        label: "Scene",
+        description: "A rainy city street.",
+        promptCategoryBindings: ["style", "lighting", "quality", "scene", "negative"],
+      },
+      userPrompt: "rainy cyberpunk alley at night",
+    });
+
+    expect(messages[0].content).toContain("targetKind scene");
+    expect(messages[0].content).toContain("Categories: style, lighting, quality, scene.");
+    expect(messages[0].content).toContain("Never return character, body-part, outfit");
+    expect(messages[1].content).toContain("userScenePrompt");
+
+    const payload = JSON.parse(String(messages[1].content)) as {
+      sceneTarget: { allowedCategories: string[] };
+    };
+    expect(payload.sceneTarget.allowedCategories).toEqual([
+      "style",
+      "lighting",
+      "quality",
+      "scene",
+    ]);
   });
 });
