@@ -409,12 +409,21 @@ export async function importCivitaiImageUrlToSqlite(options: {
   });
   const selectedImportResourceKeySet =
     options.selectedImportResourceKeys === undefined ? null : new Set(options.selectedImportResourceKeys);
-  const resourcePreviews =
+  const selectedResourcePreviews =
     selectedImportResourceKeySet === null
       ? previews
       : previews.filter((preview) => selectedImportResourceKeySet.has(makePreviewResourceKey(preview)));
+  const implicitExistingCheckpointPreviews =
+    selectedImportResourceKeySet === null
+      ? []
+      : previews.filter(
+          (preview) =>
+            preview.upsertInput.resourceType === "model" &&
+            preview.existingResource &&
+            !selectedImportResourceKeySet.has(makePreviewResourceKey(preview)),
+        );
 
-  if (resourcePreviews.length === 0) {
+  if (selectedResourcePreviews.length === 0) {
     throw new Error("请至少选择一个 LoRA 或 checkpoint/model 再导入。");
   }
 
@@ -441,7 +450,7 @@ export async function importCivitaiImageUrlToSqlite(options: {
     selectedOfficialImagesByResource.set(selectedImage.resourceKey, urls);
   }
 
-  for (const preview of resourcePreviews) {
+  for (const preview of selectedResourcePreviews) {
     const resourceKey = makeOfficialImageResourceKey(preview.upsertInput);
     const selectedUrlsForResource =
       options.selectedOfficialImages === undefined
@@ -463,9 +472,11 @@ export async function importCivitaiImageUrlToSqlite(options: {
       options.importedByUserId ?? null,
     );
     const importedResourceIds: string[] = [];
-
-    for (const preview of resourcePreviews) {
-      const { resource, isNew } = upsertCivitaiResourceToSqlite(options.db, preview.upsertInput);
+    const linkResourceUsage = (
+      resource: CivitaiResourceRecord,
+      preview: (typeof previews)[number],
+      isNewResource: boolean,
+    ) => {
       importedResourceIds.push(resource.id);
       const usage = upsertImageResourceUsageToSqlite(options.db, {
         importedImageId: importedImage.id,
@@ -477,8 +488,22 @@ export async function importCivitaiImageUrlToSqlite(options: {
         rawResourceJson: preview.imageResource.raw,
       });
 
-      importedResources.push({ resource, usage, isNewResource: isNew });
+      importedResources.push({ resource, usage, isNewResource });
+    };
+
+    for (const preview of selectedResourcePreviews) {
+      const { resource, isNew } = upsertCivitaiResourceToSqlite(options.db, preview.upsertInput);
+      linkResourceUsage(resource, preview, isNew);
     }
+
+    for (const preview of implicitExistingCheckpointPreviews) {
+      if (!preview.existingResource) {
+        continue;
+      }
+
+      linkResourceUsage(preview.existingResource, preview, false);
+    }
+
     if (selectedImportResourceKeySet !== null) {
       deleteImageResourceUsagesExceptFromSqlite(options.db, {
         importedImageId: importedImage.id,

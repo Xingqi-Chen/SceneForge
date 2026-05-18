@@ -100,6 +100,18 @@ function formatRange(resource: CivitaiResourceListItem | CivitaiResourceDetail) 
   return `${formatWeight(resource.minWeight)} - ${formatWeight(resource.maxWeight)}`;
 }
 
+function formatResourceVersion(resource: Pick<CivitaiResourceListItem, "versionName" | "civitaiModelVersionId">) {
+  if (resource.versionName) {
+    return resource.versionName;
+  }
+
+  if (resource.civitaiModelVersionId !== null) {
+    return `Version ${resource.civitaiModelVersionId}`;
+  }
+
+  return "Unknown version";
+}
+
 function formatCivitaiNsfw(value: boolean | null | undefined) {
   return value ? "NSFW" : "No/unknown";
 }
@@ -1141,6 +1153,12 @@ export function CivitaiLoraLibraryPanel() {
                               )}
                               <div className="min-w-0">
                                 <p className="truncate text-xs font-semibold text-slate-900">{resource.name}</p>
+                                <p
+                                  className="mt-0.5 truncate text-[11px] font-medium text-slate-500"
+                                  title={formatResourceVersion(resource)}
+                                >
+                                  Model version: {formatResourceVersion(resource)}
+                                </p>
                                 <div className="mt-1 flex flex-wrap gap-1">
                                   {isCheckpointTab ? (
                                     <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-500">
@@ -1182,7 +1200,7 @@ export function CivitaiLoraLibraryPanel() {
                               <h4 className="break-words text-xl font-bold text-slate-950">{detail.name}</h4>
                               <p className="mt-2 text-xs leading-relaxed text-slate-500">
                                 {detailIsCheckpoint ? "checkpoint" : (detail.category ?? "other")} ·{" "}
-                                {detail.baseModel ?? "unknown base model"} · source: Civitai
+                                {formatResourceVersion(detail)} · {detail.baseModel ?? "unknown base model"} · source: Civitai
                               </p>
                               <div className="mt-3">
                                 <p className="mb-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-500">
@@ -1243,6 +1261,12 @@ export function CivitaiLoraLibraryPanel() {
                             <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
                               <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Images</p>
                               <p className="mt-1 text-lg font-bold text-slate-900">{detail.importedImageCount}</p>
+                            </div>
+                            <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                              <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Model version</p>
+                              <p className="mt-1 truncate text-lg font-bold text-slate-900" title={formatResourceVersion(detail)}>
+                                {formatResourceVersion(detail)}
+                              </p>
                             </div>
                             {!detailIsCheckpoint ? (
                               <>
@@ -1324,6 +1348,7 @@ export function CivitaiLoraLibraryPanel() {
                                 <p className="mb-2 text-[11px] font-bold uppercase tracking-wider text-slate-500">Resource metadata</p>
                                 <div className="grid gap-2 text-xs text-slate-600 md:grid-cols-2">
                                   <p className="rounded-md bg-slate-50 p-2">Model ID: {detail.civitaiModelId ?? "-"}</p>
+                                  <p className="rounded-md bg-slate-50 p-2">Version name: {detail.versionName ?? "-"}</p>
                                   <p className="rounded-md bg-slate-50 p-2">Version ID: {detail.civitaiModelVersionId ?? "-"}</p>
                                   <p className="rounded-md bg-slate-50 p-2">Hash: {detail.hash ?? "-"}</p>
                                   <p className="rounded-md bg-slate-50 p-2">Creator: {detail.creator ?? "-"}</p>

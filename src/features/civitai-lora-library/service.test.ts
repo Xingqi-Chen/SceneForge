@@ -8,7 +8,10 @@ import { describe, expect, it } from "vitest";
 
 import { importCivitaiImageUrlToSqlite, parseCivitaiImageUrl } from "./service";
 import type { CivitaiClient } from "./client";
-import { openSceneForgeSqliteDatabase } from "@/features/persistence/sqlite-storage";
+import {
+  getCivitaiResourceDetailFromSqlite,
+  openSceneForgeSqliteDatabase,
+} from "@/features/persistence/sqlite-storage";
 
 describe("Civitai LoRA import service", () => {
   it("uses modelVersionIds as the primary resource source and reports filtered resources", async () => {
@@ -512,13 +515,17 @@ describe("Civitai LoRA import service", () => {
       });
 
       expect(result.resources.map((entry) => entry.resource.name)).toEqual(["Selected LoRA"]);
+      const skippedCheckpoint = db
+        .prepare("SELECT COUNT(*) AS count FROM civitai_resources WHERE name = ?")
+        .get("Skipped Checkpoint");
+      expect((skippedCheckpoint as { count: number }).count).toBe(0);
     } finally {
       db.close();
       await fs.rm(tempDir, { recursive: true, force: true });
     }
   });
 
-  it("replaces existing resource usages for the image when importing a selected subset", async () => {
+  it("links existing checkpoints for the image even when importing a selected LoRA subset", async () => {
     const client: CivitaiClient = {
       async getImageById() {
         return {
@@ -610,13 +617,22 @@ describe("Civitai LoRA import service", () => {
         selectedImportResourceKeys: [selectedKey!],
       });
 
-      expect(result.resources.map((entry) => entry.resource.name)).toEqual(["Kept LoRA"]);
+      expect(result.resources.map((entry) => entry.resource.name)).toEqual(["Kept LoRA", "Removed Checkpoint"]);
       const checkpoint = preview.resources.find((resource) => resource.name === "Removed Checkpoint");
       expect(checkpoint?.existingResourceId).toBeDefined();
       const rows = db
         .prepare("SELECT COUNT(*) AS count FROM image_resource_usages WHERE resource_id = ?")
         .get(checkpoint!.existingResourceId!);
-      expect((rows as { count: number }).count).toBe(0);
+      expect((rows as { count: number }).count).toBe(1);
+      const lora = result.resources.find((entry) => entry.resource.name === "Kept LoRA");
+      expect(lora).toBeDefined();
+      expect(getCivitaiResourceDetailFromSqlite(db, lora!.resource.id)?.commonCheckpoints).toEqual([
+        {
+          resourceId: checkpoint!.existingResourceId!,
+          name: "Removed Checkpoint",
+          count: 1,
+        },
+      ]);
     } finally {
       db.close();
       await fs.rm(tempDir, { recursive: true, force: true });
