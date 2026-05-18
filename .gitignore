@@ -50,6 +50,10 @@ next-env.d.ts
 # Shared prompt library target bindings (server-side persistence)
 /data/prompt-bindings.json
 
+# Local SQLite database and Civitai image cache
+/data/sceneforge.sqlite
+/data/civitai-lora-library/
+
 # Local LLM interaction logs
 /data/logs/*
 !/data/logs/.gitkeep

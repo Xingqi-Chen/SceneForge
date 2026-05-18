@@ -39,6 +39,10 @@ function resolveDefaultModel(payload: LlmChatRequest) {
     return process.env.LITELLM_POSE_MODEL || process.env.LITELLM_DEFAULT_MODEL;
   }
 
+  if (payload.purpose === "civitai-resource-enrichment") {
+    return process.env.LITELLM_DEFAULT_MODEL;
+  }
+
   return process.env.LITELLM_DEFAULT_MODEL;
 }
 

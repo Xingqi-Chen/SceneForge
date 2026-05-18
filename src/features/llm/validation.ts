@@ -64,7 +64,8 @@ function isOptionalPurpose(value: unknown): value is LlmChatRequest["purpose"] {
   return (
     value === undefined ||
     value === "prompt-library-classification" ||
-    value === "stick-figure-pose-generation"
+    value === "stick-figure-pose-generation" ||
+    value === "civitai-resource-enrichment"
   );
 }
 
