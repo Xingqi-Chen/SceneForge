@@ -382,7 +382,8 @@ export function CivitaiLoraLibraryPanel() {
       setImportError("请先解析并确认结果。");
       return;
     }
-    if (selectedImportResourceKeys.size === 0) {
+    const hasExistingImportResources = parsePreview.resources.some((entry) => entry.existingResourceId);
+    if (selectedImportResourceKeys.size === 0 && !hasExistingImportResources) {
       setImportStatus("error");
       setImportError("请至少选择一个 LoRA 或 checkpoint/model 再导入。");
       return;
@@ -472,6 +473,7 @@ export function CivitaiLoraLibraryPanel() {
   const previewModels = parsePreview?.resources.filter((entry) => entry.resourceType === "model") ?? [];
   const previewResources = parsePreview?.resources ?? [];
   const previewIgnored = parsePreview?.ignoredResources ?? [];
+  const hasExistingImportResources = previewResources.some((entry) => entry.existingResourceId);
   const previewOfficialImageEntries = useMemo(() => {
     const seen = new Set<string>();
     const entries: Array<{
@@ -628,7 +630,7 @@ export function CivitaiLoraLibraryPanel() {
                         className="h-10 rounded-md border-emerald-200 bg-white px-5 text-emerald-700 hover:bg-emerald-50"
                         disabled={
                           !parsePreview ||
-                          selectedImportResourceKeys.size === 0 ||
+                          (selectedImportResourceKeys.size === 0 && !hasExistingImportResources) ||
                           importStatus === "loading" ||
                           parseStatus === "loading"
                         }

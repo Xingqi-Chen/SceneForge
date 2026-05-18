@@ -416,14 +416,18 @@ async function buildResolvedResourcePreviews(options: {
       continue;
     }
 
-    const enrichment = await (options.enricher ?? enrichCivitaiResource)(upsertInput);
-    upsertInput = applyCivitaiEnrichment(upsertInput, enrichment);
-
-    const weight = imageResource.weight ?? getPromptWeightForResource(promptWeights, imageResource, upsertInput);
-    const triggerWordsUsed = findTriggerWordsUsed(options.image.prompt, upsertInput.trainedWords);
     const existing = options.db
       ? findCivitaiResourceByUpsertInputFromSqlite(options.db, upsertInput)
       : undefined;
+    if (existing) {
+      upsertInput = existing;
+    } else {
+      const enrichment = await (options.enricher ?? enrichCivitaiResource)(upsertInput);
+      upsertInput = applyCivitaiEnrichment(upsertInput, enrichment);
+    }
+
+    const weight = imageResource.weight ?? getPromptWeightForResource(promptWeights, imageResource, upsertInput);
+    const triggerWordsUsed = findTriggerWordsUsed(options.image.prompt, upsertInput.trainedWords);
 
     previews.push({
       imageResource,
@@ -543,17 +547,17 @@ export async function importCivitaiImageUrlToSqlite(options: {
     selectedImportResourceKeySet === null
       ? previews
       : previews.filter((preview) => selectedImportResourceKeySet.has(makePreviewResourceKey(preview)));
-  const implicitExistingCheckpointPreviews =
+  const implicitExistingResourcePreviews =
     selectedImportResourceKeySet === null
       ? []
       : previews.filter(
           (preview) =>
-            preview.upsertInput.resourceType === "model" &&
             preview.existingResource &&
             !selectedImportResourceKeySet.has(makePreviewResourceKey(preview)),
         );
+  const selectedNewResourcePreviews = selectedResourcePreviews.filter((preview) => !preview.existingResource);
 
-  if (selectedResourcePreviews.length === 0) {
+  if (selectedResourcePreviews.length === 0 && implicitExistingResourcePreviews.length === 0) {
     throw new Error("请至少选择一个 LoRA 或 checkpoint/model 再导入。");
   }
 
@@ -581,7 +585,7 @@ export async function importCivitaiImageUrlToSqlite(options: {
   }
 
   const cachedOfficialImages = await mapWithConcurrency(
-    selectedResourcePreviews,
+    selectedNewResourcePreviews,
     OFFICIAL_RESOURCE_CACHE_CONCURRENCY,
     async (preview) => {
       const resourceKey = makeOfficialImageResourceKey(preview.upsertInput);
@@ -596,7 +600,7 @@ export async function importCivitaiImageUrlToSqlite(options: {
     },
   );
 
-  selectedResourcePreviews.forEach((preview, index) => {
+  selectedNewResourcePreviews.forEach((preview, index) => {
     preview.upsertInput.officialImagesJson = cachedOfficialImages[index];
   });
   await cleanupLegacyOriginalCachedImages();
@@ -629,11 +633,16 @@ export async function importCivitaiImageUrlToSqlite(options: {
     };
 
     for (const preview of selectedResourcePreviews) {
+      if (preview.existingResource) {
+        linkResourceUsage(preview.existingResource, preview, false);
+        continue;
+      }
+
       const { resource, isNew } = upsertCivitaiResourceToSqlite(options.db, preview.upsertInput);
       linkResourceUsage(resource, preview, isNew);
     }
 
-    for (const preview of implicitExistingCheckpointPreviews) {
+    for (const preview of implicitExistingResourcePreviews) {
       if (!preview.existingResource) {
         continue;
       }

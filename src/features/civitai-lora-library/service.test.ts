@@ -906,6 +906,155 @@ describe("Civitai LoRA import service", () => {
     }
   });
 
+  it("links a new image to existing resources even when none are selected", async () => {
+    const client: CivitaiClient = {
+      async getImageById(imageId) {
+        return {
+          civitaiImageId: imageId,
+          civitaiImagePageUrl: `https://civitai.com/images/${imageId}`,
+          imageUrl: null,
+          width: null,
+          height: null,
+          nsfw: false,
+          nsfwLevel: null,
+          browsingLevel: null,
+          createdAtOnCivitai: null,
+          postId: null,
+          username: null,
+          baseModel: "Illustrious",
+          prompt: "masterpiece, <lora:StoredLora:0.7>",
+          negativePrompt: null,
+          sampler: "Euler a",
+          steps: null,
+          cfgScale: null,
+          seed: null,
+          modelVersionIds: [601],
+          resources: [],
+          rawMetaJson: {},
+        };
+      },
+      async getModelVersion() {
+        return {
+          resourceType: "lora",
+          civitaiModelId: 601,
+          civitaiModelVersionId: 601,
+          name: "Stored LoRA",
+          versionName: "v1",
+          hash: null,
+          baseModel: "Illustrious",
+          trainedWords: [],
+          tags: ["style"],
+          description: null,
+          creator: null,
+          downloadUrl: null,
+          filesJson: null,
+          officialImagesJson: null,
+          nsfw: false,
+          rawVersionJson: {},
+        };
+      },
+      async getModelVersionByHash() {
+        throw new Error("not used");
+      },
+      async searchModelVersionByName() {
+        return null;
+      },
+    };
+    let enrichCalls = 0;
+    const enricher = async () => {
+      enrichCalls += 1;
+      return {
+        usageGuide: null,
+        categories: ["style" as const],
+        triggerWords: [],
+        recommendations: [],
+        aiNsfwLevel: "unknown" as const,
+        aiNsfwConfidence: null,
+        aiNsfwReason: null,
+        status: "fallback" as const,
+        error: null,
+      };
+    };
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "sceneforge-civitai-existing-link-"));
+    const db = await openSceneForgeSqliteDatabase(path.join(tempDir, "sceneforge.sqlite"));
+    try {
+      await importCivitaiImageUrlToSqlite({
+        db,
+        imageUrl: "https://civitai.com/images/8",
+        client,
+        enricher,
+      });
+      expect(enrichCalls).toBe(1);
+
+      const preview = await parseCivitaiImageUrl({
+        db,
+        imageUrl: "https://civitai.com/images/9",
+        client,
+        enricher,
+      });
+      const existingResource = preview.resources[0];
+      expect(existingResource?.existingResourceId).toBeDefined();
+      expect(enrichCalls).toBe(1);
+      const resourceBefore = db
+        .prepare("SELECT * FROM civitai_resources WHERE id = ?")
+        .get(existingResource!.existingResourceId!);
+
+      const result = await importCivitaiImageUrlToSqlite({
+        db,
+        imageUrl: "https://civitai.com/images/9",
+        client,
+        enricher,
+        selectedImportResourceKeys: [],
+      });
+
+      expect(result.resources[0]?.isNewResource).toBe(false);
+      expect(result.resources[0]?.usage.importedImageId).toBe(result.importedImage.id);
+      expect(enrichCalls).toBe(1);
+      const resourceAfter = db
+        .prepare("SELECT * FROM civitai_resources WHERE id = ?")
+        .get(existingResource!.existingResourceId!);
+      expect(resourceAfter).toEqual(resourceBefore);
+
+      const selectedExistingPreview = await parseCivitaiImageUrl({
+        db,
+        imageUrl: "https://civitai.com/images/10",
+        client,
+        enricher,
+      });
+      const selectedExistingResource = selectedExistingPreview.resources[0];
+      expect(selectedExistingResource?.existingResourceId).toBe(existingResource!.existingResourceId);
+      expect(enrichCalls).toBe(1);
+
+      const selectedResourceBefore = db
+        .prepare("SELECT * FROM civitai_resources WHERE id = ?")
+        .get(existingResource!.existingResourceId!);
+      const selectedExistingResult = await importCivitaiImageUrlToSqlite({
+        db,
+        imageUrl: "https://civitai.com/images/10",
+        client,
+        enricher,
+        selectedImportResourceKeys: [selectedExistingResource!.importResourceKey],
+      });
+
+      expect(selectedExistingResult.resources[0]?.isNewResource).toBe(false);
+      expect(enrichCalls).toBe(1);
+      const selectedResourceAfter = db
+        .prepare("SELECT * FROM civitai_resources WHERE id = ?")
+        .get(existingResource!.existingResourceId!);
+      expect(selectedResourceAfter).toEqual(selectedResourceBefore);
+
+      const detail = getCivitaiResourceDetailFromSqlite(db, existingResource!.existingResourceId!);
+      expect(detail?.usages.map((usage) => usage.importedImage.civitaiImageId).sort((a, b) => a - b)).toEqual([
+        8,
+        9,
+        10,
+      ]);
+    } finally {
+      db.close();
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("rejects imports when all parsed resources are deselected", async () => {
     const client: CivitaiClient = {
       async getImageById() {
