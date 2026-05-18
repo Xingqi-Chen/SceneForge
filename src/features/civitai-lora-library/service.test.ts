@@ -250,6 +250,273 @@ describe("Civitai LoRA import service", () => {
     });
   });
 
+  it("merges hash-only resources with matching modelVersionIds before previewing", async () => {
+    const versionById = new Map([
+      [
+        1280074,
+        {
+          resourceType: "lora" as const,
+          civitaiModelId: 1138294,
+          civitaiModelVersionId: 1280074,
+          name: "Melancholy Anime - Illustrious",
+          versionName: "v1.0",
+          hash: "46FA9D5BFB",
+          baseModel: "Illustrious",
+          trainedWords: ["melanch0ly"],
+          tags: ["style"],
+          description: null,
+          creator: null,
+          downloadUrl: null,
+          filesJson: null,
+          officialImagesJson: null,
+          nsfw: false,
+          rawVersionJson: {},
+        },
+      ],
+      [
+        1345990,
+        {
+          resourceType: "lora" as const,
+          civitaiModelId: 971952,
+          civitaiModelVersionId: 1345990,
+          name: "Stabilizer IL/NAI/CK",
+          versionName: "illus01 v1.23",
+          hash: "A2EFEE207A",
+          baseModel: "Illustrious",
+          trainedWords: [],
+          tags: ["utility"],
+          description: null,
+          creator: null,
+          downloadUrl: null,
+          filesJson: null,
+          officialImagesJson: null,
+          nsfw: false,
+          rawVersionJson: {},
+        },
+      ],
+      [
+        1356500,
+        {
+          resourceType: "lora" as const,
+          civitaiModelId: 1204563,
+          civitaiModelVersionId: 1356500,
+          name: "ma1ma1helmes | Shiiro's Styles | Niji",
+          versionName: "Style_A",
+          hash: "23F0ACE9A1",
+          baseModel: "Illustrious",
+          trainedWords: ["xxx667_illu"],
+          tags: ["style"],
+          description: null,
+          creator: null,
+          downloadUrl: null,
+          filesJson: null,
+          officialImagesJson: null,
+          nsfw: false,
+          rawVersionJson: {},
+        },
+      ],
+    ]);
+    const versionByHash = new Map([...versionById.values()].map((version) => [version.hash, version]));
+
+    const client: CivitaiClient = {
+      async getImageById() {
+        return {
+          civitaiImageId: 57187119,
+          civitaiImagePageUrl: "https://civitai.com/images/57187119",
+          imageUrl: null,
+          width: null,
+          height: null,
+          nsfw: false,
+          nsfwLevel: null,
+          browsingLevel: null,
+          createdAtOnCivitai: null,
+          postId: null,
+          username: null,
+          baseModel: "Illustrious",
+          prompt:
+            "<lora:illustriousXL_stabilizer_v1.23:0.3> <lora:XXX667:0.7> <lora:MelancholyAnime:0.8>",
+          negativePrompt: null,
+          sampler: null,
+          steps: null,
+          cfgScale: null,
+          seed: null,
+          modelVersionIds: [1280074, 1345990, 1356500],
+          resources: [
+            {
+              type: "lora",
+              name: "illustriousXL_stabilizer_v1.23",
+              hash: "A2EFEE207A",
+              modelVersionId: null,
+              modelId: null,
+              weight: 0.3,
+              raw: { source: "resources", hash: "A2EFEE207A" },
+            },
+            {
+              type: "lora",
+              name: "XXX667",
+              hash: "23F0ACE9A1",
+              modelVersionId: null,
+              modelId: null,
+              weight: 0.7,
+              raw: { source: "resources", hash: "23F0ACE9A1" },
+            },
+            {
+              type: "lora",
+              name: "MelancholyAnime",
+              hash: "46FA9D5BFB",
+              modelVersionId: null,
+              modelId: null,
+              weight: 0.8,
+              raw: { source: "resources", hash: "46FA9D5BFB" },
+            },
+          ],
+          rawMetaJson: {},
+        };
+      },
+      async getModelVersionByHash(hash) {
+        const version = versionByHash.get(hash);
+        if (!version) {
+          throw new Error(`unexpected hash ${hash}`);
+        }
+        return version;
+      },
+      async getModelVersion(modelVersionId) {
+        const version = versionById.get(modelVersionId);
+        if (!version) {
+          throw new Error(`unexpected modelVersionId ${modelVersionId}`);
+        }
+        return version;
+      },
+      async searchModelVersionByName() {
+        return null;
+      },
+    };
+
+    const preview = await parseCivitaiImageUrl({
+      imageUrl: "https://civitai.com/images/57187119",
+      client,
+      async enricher(input) {
+        return {
+          usageGuide: null,
+          categories: input.tags.includes("utility") ? ["detail"] : ["style"],
+          triggerWords: [],
+          recommendations: [],
+          aiNsfwLevel: "unknown",
+          aiNsfwConfidence: null,
+          aiNsfwReason: null,
+          status: "fallback",
+          error: null,
+        };
+      },
+    });
+
+    expect(preview.resources).toHaveLength(3);
+    expect(preview.resources.map((resource) => resource.name).sort()).toEqual([
+      "Melancholy Anime - Illustrious",
+      "Stabilizer IL/NAI/CK",
+      "ma1ma1helmes | Shiiro's Styles | Niji",
+    ]);
+    expect(
+      Object.fromEntries(preview.resources.map((resource) => [resource.modelVersionId, resource.weight])),
+    ).toEqual({
+      1280074: 0.8,
+      1345990: 0.3,
+      1356500: 0.7,
+    });
+  });
+
+  it("merges hash-only metadata into a resolved modelVersionId even if hash lookup fails", async () => {
+    const client: CivitaiClient = {
+      async getImageById() {
+        return {
+          civitaiImageId: 7,
+          civitaiImagePageUrl: "https://civitai.com/images/7",
+          imageUrl: null,
+          width: null,
+          height: null,
+          nsfw: false,
+          nsfwLevel: null,
+          browsingLevel: null,
+          createdAtOnCivitai: null,
+          postId: null,
+          username: null,
+          baseModel: "Illustrious",
+          prompt: "<lora:ExampleAlias:0.42>",
+          negativePrompt: null,
+          sampler: null,
+          steps: null,
+          cfgScale: null,
+          seed: null,
+          modelVersionIds: [777],
+          resources: [
+            {
+              type: "lora",
+              name: "ExampleAlias",
+              hash: "DEADBEEF01",
+              modelVersionId: null,
+              modelId: null,
+              weight: 0.42,
+              raw: { source: "resources", hash: "DEADBEEF01" },
+            },
+          ],
+          rawMetaJson: {},
+        };
+      },
+      async getModelVersionByHash() {
+        throw new Error("hash lookup temporarily unavailable");
+      },
+      async getModelVersion() {
+        return {
+          resourceType: "lora",
+          civitaiModelId: 70,
+          civitaiModelVersionId: 777,
+          name: "Example Official LoRA",
+          versionName: "v1",
+          hash: "DEADBEEF01",
+          baseModel: "Illustrious",
+          trainedWords: [],
+          tags: ["style"],
+          description: null,
+          creator: null,
+          downloadUrl: null,
+          filesJson: null,
+          officialImagesJson: null,
+          nsfw: false,
+          rawVersionJson: {},
+        };
+      },
+      async searchModelVersionByName() {
+        return null;
+      },
+    };
+
+    const preview = await parseCivitaiImageUrl({
+      imageUrl: "https://civitai.com/images/7",
+      client,
+      async enricher() {
+        return {
+          usageGuide: null,
+          categories: ["style"],
+          triggerWords: [],
+          recommendations: [],
+          aiNsfwLevel: "unknown",
+          aiNsfwConfidence: null,
+          aiNsfwReason: null,
+          status: "fallback",
+          error: null,
+        };
+      },
+    });
+
+    expect(preview.resources).toHaveLength(1);
+    expect(preview.resources[0]).toMatchObject({
+      name: "Example Official LoRA",
+      modelVersionId: 777,
+      hash: "DEADBEEF01",
+      weight: 0.42,
+    });
+  });
+
   it("applies LLM enrichment to previews and merges extracted trigger words", async () => {
     const client: CivitaiClient = {
       async getImageById() {

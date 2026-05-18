@@ -4,11 +4,15 @@ import path from "node:path";
 
 import sharp from "sharp";
 
+import { getCivitaiImageVariantUrl } from "./image-url";
+
 const IMAGE_CACHE_DIR = path.join(process.cwd(), "data", "civitai-lora-library", "images");
 const IMAGE_ROUTE_PREFIX = "/api/civitai-lora-library/images";
 const MAX_IMAGE_BYTES = 64 * 1024 * 1024;
 const DEFAULT_MAX_IMAGE_SIZE = 768;
 const OFFICIAL_REFERENCE_MAX_IMAGE_SIZE = 512;
+const CIVITAI_DOWNLOAD_VARIANT_SIZE = 512;
+const OFFICIAL_REFERENCE_CACHE_CONCURRENCY = 4;
 const CACHE_FILENAME_PATTERN = /^[a-f0-9]{32}\.webp$/i;
 
 const CONTENT_TYPE_EXTENSIONS = new Map([
@@ -56,6 +60,28 @@ function getLocalCachedFilename(url: string | null | undefined) {
   return filename && getCivitaiCachedImagePath(filename) ? filename : null;
 }
 
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  mapper: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+  const workerCount = Math.min(Math.max(1, concurrency), items.length);
+
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      while (nextIndex < items.length) {
+        const index = nextIndex;
+        nextIndex += 1;
+        results[index] = await mapper(items[index]!, index);
+      }
+    }),
+  );
+
+  return results;
+}
+
 export function getCivitaiCachedImagePath(filename: string) {
   if (!/^[a-f0-9]{32}\.(?:jpg|png|webp|gif)$/i.test(filename)) {
     return null;
@@ -101,13 +127,66 @@ async function downscaleImage(bytes: Uint8Array, maxSize: number) {
 }
 
 async function downloadAndStoreCivitaiImageUrl(url: string, filePath: string, maxSize: number) {
-  const response = await fetch(url, {
-    headers: {
-      accept: "image/avif,image/webp,image/png,image/jpeg,image/*,*/*;q=0.8",
-      referer: "https://civitai.com/",
-      "user-agent": "SceneForge/1.0 (+https://civitai.com)",
-    },
-  });
+  const downloadUrl = getCivitaiImageVariantUrl(url, CIVITAI_DOWNLOAD_VARIANT_SIZE) ?? url;
+  let response: Response;
+  try {
+    response = await fetch(downloadUrl, {
+      headers: {
+        accept: "image/avif,image/webp,image/png,image/jpeg,image/*,*/*;q=0.8",
+        referer: "https://civitai.com/",
+        "user-agent": "SceneForge/1.0 (+https://civitai.com)",
+      },
+    });
+  } catch {
+    return downloadUrl === url ? false : downloadAndStoreCivitaiImageUrlOriginal(url, filePath, maxSize);
+  }
+  if (!response.ok) {
+    if (downloadUrl === url) {
+      return false;
+    }
+    return downloadAndStoreCivitaiImageUrlOriginal(url, filePath, maxSize);
+  }
+
+  const contentType = response.headers.get("content-type");
+  const normalizedContentType = contentType?.split(";")[0]?.trim().toLocaleLowerCase();
+  if (normalizedContentType && !normalizedContentType.startsWith("image/")) {
+    if (downloadUrl === url) {
+      return false;
+    }
+    return downloadAndStoreCivitaiImageUrlOriginal(url, filePath, maxSize);
+  }
+
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  if (bytes.byteLength === 0 || bytes.byteLength > MAX_IMAGE_BYTES) {
+    if (downloadUrl === url) {
+      return false;
+    }
+    return downloadAndStoreCivitaiImageUrlOriginal(url, filePath, maxSize);
+  }
+
+  try {
+    const resizedBytes = await downscaleImage(bytes, maxSize);
+    await fs.mkdir(IMAGE_CACHE_DIR, { recursive: true });
+    await fs.writeFile(filePath, resizedBytes);
+    return true;
+  } catch {
+    return downloadUrl === url ? false : downloadAndStoreCivitaiImageUrlOriginal(url, filePath, maxSize);
+  }
+}
+
+async function downloadAndStoreCivitaiImageUrlOriginal(url: string, filePath: string, maxSize: number) {
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      headers: {
+        accept: "image/avif,image/webp,image/png,image/jpeg,image/*,*/*;q=0.8",
+        referer: "https://civitai.com/",
+        "user-agent": "SceneForge/1.0 (+https://civitai.com)",
+      },
+    });
+  } catch {
+    return false;
+  }
   if (!response.ok) {
     return false;
   }
@@ -123,10 +202,14 @@ async function downloadAndStoreCivitaiImageUrl(url: string, filePath: string, ma
     return false;
   }
 
-  const resizedBytes = await downscaleImage(bytes, maxSize);
-  await fs.mkdir(IMAGE_CACHE_DIR, { recursive: true });
-  await fs.writeFile(filePath, resizedBytes);
-  return true;
+  try {
+    const resizedBytes = await downscaleImage(bytes, maxSize);
+    await fs.mkdir(IMAGE_CACHE_DIR, { recursive: true });
+    await fs.writeFile(filePath, resizedBytes);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function getSourceUrl(entry: Record<string, unknown>) {
@@ -296,32 +379,46 @@ export async function cacheSelectedOfficialImages(
     return officialImagesJson;
   }
 
-  const entries: unknown[] = [];
-  for (const entry of officialImagesJson) {
+  type CachedOfficialImageEntry = Record<string, unknown> & {
+    sourceUrl: string;
+    url: string;
+    cached: true;
+  };
+
+  const candidates = officialImagesJson.filter((entry): entry is Record<string, unknown> => {
     if (!isRecord(entry)) {
-      continue;
+      return false;
     }
 
     const sourceUrl = getSourceUrl(entry);
-    if (!sourceUrl || (selectedUrls && !selectedUrls.has(sourceUrl))) {
-      continue;
-    }
+    return Boolean(sourceUrl && (!selectedUrls || selectedUrls.has(sourceUrl)));
+  });
 
-    const localUrl = await cacheCivitaiImageUrl(sourceUrl, {
-      cacheKey: options.cacheKey,
-      maxSize: OFFICIAL_REFERENCE_MAX_IMAGE_SIZE,
-    });
-    if (!localUrl) {
-      continue;
-    }
+  const entries = await mapWithConcurrency<Record<string, unknown>, CachedOfficialImageEntry | null>(
+    candidates,
+    OFFICIAL_REFERENCE_CACHE_CONCURRENCY,
+    async (entry) => {
+      const sourceUrl = getSourceUrl(entry);
+      if (!sourceUrl) {
+        return null;
+      }
 
-    entries.push({
-      ...entry,
-      sourceUrl,
-      url: localUrl,
-      cached: true,
-    });
-  }
+      const localUrl = await cacheCivitaiImageUrl(sourceUrl, {
+        cacheKey: options.cacheKey,
+        maxSize: OFFICIAL_REFERENCE_MAX_IMAGE_SIZE,
+      });
+      if (!localUrl) {
+        return null;
+      }
 
-  return entries;
+      return {
+        ...entry,
+        sourceUrl,
+        url: localUrl,
+        cached: true,
+      };
+    },
+  );
+
+  return entries.filter((entry): entry is CachedOfficialImageEntry => Boolean(entry));
 }

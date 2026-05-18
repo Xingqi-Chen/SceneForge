@@ -39,6 +39,29 @@ import {
 
 const IMPORT_METADATA_MESSAGE =
   "已从 Civitai 图片公开元数据中识别资源；部分资源可能因隐藏元数据、权限限制或 API 返回不完整而无法解析。";
+const OFFICIAL_RESOURCE_CACHE_CONCURRENCY = 3;
+
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  mapper: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+  const workerCount = Math.min(Math.max(1, concurrency), items.length);
+
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      while (nextIndex < items.length) {
+        const index = nextIndex;
+        nextIndex += 1;
+        results[index] = await mapper(items[index]!, index);
+      }
+    }),
+  );
+
+  return results;
+}
 
 type CivitaiResourceEnricher = typeof enrichCivitaiResource;
 type SelectedOfficialImageRef = { resourceKey: string; url: string };
@@ -231,14 +254,12 @@ function makeIgnoredResourceKey(resource: CivitaiParseIgnoredResource) {
 
 function makePreviewResourceKey(preview: {
   upsertInput: CivitaiResourceUpsertInput;
-  weight: number | null;
 }) {
   return [
     preview.upsertInput.civitaiModelVersionId ?? "no-version",
     preview.upsertInput.hash ? normalizeName(preview.upsertInput.hash) : "no-hash",
     preview.upsertInput.resourceType,
     normalizeName(preview.upsertInput.name),
-    preview.weight ?? "no-weight",
   ].join("|");
 }
 
@@ -251,6 +272,107 @@ function makeOfficialImageResourceKey(input: CivitaiResourceUpsertInput) {
   ].join("|");
 }
 
+type ResolvedResourceCandidate = {
+  imageResource: NormalizedCivitaiImageResource;
+  resolvedVersion: Awaited<ReturnType<CivitaiClient["getModelVersion"]>> | null;
+  resolveStatus: CivitaiResolveStatus;
+};
+
+function getResolvedResourceCandidateKeys(candidate: ResolvedResourceCandidate) {
+  const keys: string[] = [];
+  const versionId = candidate.resolvedVersion?.civitaiModelVersionId ?? candidate.imageResource.modelVersionId;
+  if (versionId !== null) {
+    keys.push(`version:${versionId}`);
+  }
+
+  const hash = candidate.resolvedVersion?.hash ?? candidate.imageResource.hash;
+  if (hash) {
+    keys.push(`hash:${normalizeName(hash)}`);
+  }
+
+  if (keys.length === 0) {
+    keys.push(
+      [
+        "metadata",
+        candidate.resolvedVersion?.resourceType ?? candidate.imageResource.type,
+        normalizeName(candidate.resolvedVersion?.name ?? candidate.imageResource.name ?? "unknown"),
+        normalizeName(candidate.resolvedVersion?.versionName ?? "unknown"),
+      ].join("|"),
+    );
+  }
+
+  return keys;
+}
+
+function mergeRawResourceSources(...sources: unknown[]) {
+  const mergedSources = sources.flatMap((source) => {
+    if (
+      source &&
+      typeof source === "object" &&
+      "sources" in source &&
+      Array.isArray((source as { sources?: unknown }).sources)
+    ) {
+      return (source as { sources: unknown[] }).sources;
+    }
+
+    return [source];
+  });
+
+  return { source: "merged_civitai_resource", sources: mergedSources };
+}
+
+function mergeImageResources(
+  existing: NormalizedCivitaiImageResource,
+  incoming: NormalizedCivitaiImageResource,
+  resolvedVersion: ResolvedResourceCandidate["resolvedVersion"],
+): NormalizedCivitaiImageResource {
+  return {
+    type: existing.type !== "other" ? existing.type : incoming.type,
+    name: existing.name ?? incoming.name,
+    hash: existing.hash ?? incoming.hash ?? resolvedVersion?.hash ?? null,
+    modelVersionId: existing.modelVersionId ?? incoming.modelVersionId ?? resolvedVersion?.civitaiModelVersionId ?? null,
+    modelId: existing.modelId ?? incoming.modelId ?? resolvedVersion?.civitaiModelId ?? null,
+    weight: existing.weight ?? incoming.weight,
+    raw: mergeRawResourceSources(existing.raw, incoming.raw),
+  };
+}
+
+function preferResolveStatus(existing: CivitaiResolveStatus, incoming: CivitaiResolveStatus): CivitaiResolveStatus {
+  const priority: Record<CivitaiResolveStatus, number> = {
+    resolved_by_model_version_id: 5,
+    resolved_by_hash: 4,
+    resolved_by_name_search: 3,
+    metadata_only: 2,
+    unresolved: 1,
+  };
+
+  return priority[incoming] > priority[existing] ? incoming : existing;
+}
+
+function mergeResolvedResourceCandidates(candidates: ResolvedResourceCandidate[]) {
+  const groups: Array<{ candidate: ResolvedResourceCandidate; keys: Set<string> }> = [];
+
+  for (const candidate of candidates) {
+    const keys = getResolvedResourceCandidateKeys(candidate);
+    const existingGroup = groups.find((group) => keys.some((key) => group.keys.has(key)));
+    if (!existingGroup) {
+      groups.push({ candidate, keys: new Set(keys) });
+      continue;
+    }
+
+    const existing = existingGroup.candidate;
+    const resolvedVersion = existing.resolvedVersion ?? candidate.resolvedVersion;
+    existingGroup.candidate = {
+      imageResource: mergeImageResources(existing.imageResource, candidate.imageResource, resolvedVersion),
+      resolvedVersion,
+      resolveStatus: preferResolveStatus(existing.resolveStatus, candidate.resolveStatus),
+    };
+    keys.forEach((key) => existingGroup.keys.add(key));
+  }
+
+  return groups.map((group) => group.candidate);
+}
+
 async function buildResolvedResourcePreviews(options: {
   client: CivitaiClient;
   image: NormalizedCivitaiImage;
@@ -259,6 +381,16 @@ async function buildResolvedResourcePreviews(options: {
 }) {
   const resources = getModelVersionCandidates(options.image);
   const promptWeights = parseLoraWeightsFromPrompt(options.image.prompt);
+  const resolvedCandidates: ResolvedResourceCandidate[] = [];
+
+  for (const imageResource of resources) {
+    const resolved = await resolveResource(options.client, imageResource);
+    resolvedCandidates.push({
+      imageResource,
+      resolvedVersion: resolved.version,
+      resolveStatus: resolved.status,
+    });
+  }
 
   const previews: Array<{
     imageResource: NormalizedCivitaiImageResource;
@@ -271,13 +403,13 @@ async function buildResolvedResourcePreviews(options: {
   }> = [];
   const ignoredResources: CivitaiParseIgnoredResource[] = [];
 
-  for (const imageResource of resources) {
-    const resolved = await resolveResource(options.client, imageResource);
-    let upsertInput = mergeResourceVersion(imageResource, resolved.version);
+  for (const candidate of mergeResolvedResourceCandidates(resolvedCandidates)) {
+    const imageResource = candidate.imageResource;
+    let upsertInput = mergeResourceVersion(imageResource, candidate.resolvedVersion);
 
     if (upsertInput.resourceType !== "lora" && upsertInput.resourceType !== "model") {
       ignoredResources.push(
-        resolved.version
+        candidate.resolvedVersion
           ? makeFilteredIgnoredResource(upsertInput, imageResource)
           : makeUnresolvedIgnoredResource(imageResource),
       );
@@ -298,7 +430,7 @@ async function buildResolvedResourcePreviews(options: {
       upsertInput,
       weight,
       triggerWordsUsed,
-      resolveStatus: resolved.status,
+      resolveStatus: candidate.resolveStatus,
       existingResourceId: existing?.id ?? null,
       existingResource: existing ?? null,
     });
@@ -308,10 +440,8 @@ async function buildResolvedResourcePreviews(options: {
     (preview) => preview.upsertInput.resourceType === "lora" && preview.weight === null,
   );
   const unusedPromptWeights = promptWeights.filter((promptWeight) => promptWeight.weight !== null);
-  if (unresolvedLoraPreviews.length === unusedPromptWeights.length) {
-    unresolvedLoraPreviews.forEach((preview, index) => {
-      preview.weight = unusedPromptWeights[index]?.weight ?? null;
-    });
+  if (unresolvedLoraPreviews.length === 1 && unusedPromptWeights.length === 1) {
+    unresolvedLoraPreviews[0]!.weight = unusedPromptWeights[0]!.weight;
   }
 
   const previewByKey = new Map<string, (typeof previews)[number]>();
@@ -450,18 +580,25 @@ export async function importCivitaiImageUrlToSqlite(options: {
     selectedOfficialImagesByResource.set(selectedImage.resourceKey, urls);
   }
 
-  for (const preview of selectedResourcePreviews) {
-    const resourceKey = makeOfficialImageResourceKey(preview.upsertInput);
-    const selectedUrlsForResource =
-      options.selectedOfficialImages === undefined
-        ? selectedOfficialImageUrlSet
-        : (selectedOfficialImagesByResource.get(resourceKey) ?? new Set<string>());
-    preview.upsertInput.officialImagesJson = await cacheSelectedOfficialImages(
-      preview.upsertInput.officialImagesJson,
-      selectedUrlsForResource,
-      { cacheKey: resourceKey },
-    );
-  }
+  const cachedOfficialImages = await mapWithConcurrency(
+    selectedResourcePreviews,
+    OFFICIAL_RESOURCE_CACHE_CONCURRENCY,
+    async (preview) => {
+      const resourceKey = makeOfficialImageResourceKey(preview.upsertInput);
+      const selectedUrlsForResource =
+        options.selectedOfficialImages === undefined
+          ? selectedOfficialImageUrlSet
+          : (selectedOfficialImagesByResource.get(resourceKey) ?? new Set<string>());
+
+      return cacheSelectedOfficialImages(preview.upsertInput.officialImagesJson, selectedUrlsForResource, {
+        cacheKey: resourceKey,
+      });
+    },
+  );
+
+  selectedResourcePreviews.forEach((preview, index) => {
+    preview.upsertInput.officialImagesJson = cachedOfficialImages[index];
+  });
   await cleanupLegacyOriginalCachedImages();
 
   options.db.exec("BEGIN IMMEDIATE");
