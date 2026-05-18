@@ -216,6 +216,23 @@ export type CivitaiResourceListItem = CivitaiResourceRecord & {
   previewImage: string | null;
 };
 
+export type ImportedImageListFilters = {
+  baseModel?: string;
+  nsfw?: "all" | "sfw" | "nsfw";
+  resourceCount?: "all" | "none" | "with";
+  query?: string;
+};
+
+export type ImportedImageListItem = ImportedImageRecord & {
+  resourceCount: number;
+  loraCount: number;
+  checkpointCount: number;
+};
+
+export type ImportedImageDetail = ImportedImageListItem & {
+  usages: Array<ImageResourceUsageRecord & { resource: CivitaiResourceRecord }>;
+};
+
 export type CivitaiResourceDetail = CivitaiResourceListItem & {
   usages: Array<ImageResourceUsageRecord & { importedImage: ImportedImageRecord }>;
   commonCheckpoints: Array<{ resourceId: string; name: string; count: number }>;

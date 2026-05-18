@@ -1,7 +1,7 @@
 "use client";
 
-import { Check, ChevronDown, Database, ExternalLink, ImageIcon, Loader2, Search, ShieldCheck, Sparkles, X } from "lucide-react";
-import { type ImgHTMLAttributes, useEffect, useMemo, useState } from "react";
+import { Check, ChevronDown, Database, ExternalLink, ImageIcon, Loader2, Pencil, Save, Search, ShieldCheck, Sparkles, X } from "lucide-react";
+import { type ImgHTMLAttributes, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 import { Button } from "@/components/ui/button";
@@ -14,11 +14,13 @@ import type {
   CivitaiResourceDetail,
   CivitaiResourceListItem,
   CivitaiResolveStatus,
+  ImportedImageDetail,
+  ImportedImageListItem,
 } from "@/features/civitai-lora-library";
 import { getCivitaiImageVariantUrl } from "@/features/civitai-lora-library/image-url";
 
 type LoadStatus = "idle" | "loading" | "success" | "error";
-type LibraryResourceTab = "lora" | "model";
+type LibraryResourceTab = "image" | "lora" | "model";
 type CacheRepairResult = {
   checked: number;
   repaired: number;
@@ -249,12 +251,19 @@ function CivitaiPreviewImage({ alt, src, loading = "lazy", decoding = "async", .
 export function CivitaiLoraLibraryPanel() {
   const [open, setOpen] = useState(false);
   const [resources, setResources] = useState<CivitaiResourceListItem[]>([]);
+  const [images, setImages] = useState<ImportedImageListItem[]>([]);
   const [resourceStatus, setResourceStatus] = useState<LoadStatus>("idle");
   const [resourceError, setResourceError] = useState("");
   const [selectedResourceId, setSelectedResourceId] = useState<string | null>(null);
+  const [selectedImageId, setSelectedImageId] = useState<string | null>(null);
   const [detail, setDetail] = useState<CivitaiResourceDetail | null>(null);
+  const [imageDetail, setImageDetail] = useState<ImportedImageDetail | null>(null);
   const [detailStatus, setDetailStatus] = useState<LoadStatus>("idle");
   const [detailError, setDetailError] = useState("");
+  const [loraWeightEditing, setLoraWeightEditing] = useState(false);
+  const [loraWeightDrafts, setLoraWeightDrafts] = useState<Record<string, string>>({});
+  const [loraWeightSaveStatus, setLoraWeightSaveStatus] = useState<LoadStatus>("idle");
+  const [loraWeightSaveError, setLoraWeightSaveError] = useState("");
   const [imageUrl, setImageUrl] = useState("");
   const [parseStatus, setParseStatus] = useState<LoadStatus>("idle");
   const [parseError, setParseError] = useState("");
@@ -271,23 +280,58 @@ export function CivitaiLoraLibraryPanel() {
   const [resourceTab, setResourceTab] = useState<LibraryResourceTab>("lora");
   const [category, setCategory] = useState<CivitaiLoraCategory | "all">("all");
   const [nsfw, setNsfw] = useState<"all" | "sfw" | "nsfw">("all");
-  const [importedCount, setImportedCount] = useState<"all" | "one" | "multiple">("all");
+  const [importedCount, setImportedCount] = useState<"all" | "one" | "multiple" | "none" | "with">("all");
   const [query, setQuery] = useState("");
   const [baseModels, setBaseModels] = useState<string[]>([]);
   const [baseModel, setBaseModel] = useState("");
+  const resourceLoadRequestIdRef = useRef(0);
 
   async function loadResources() {
+    const requestId = resourceLoadRequestIdRef.current + 1;
+    resourceLoadRequestIdRef.current = requestId;
     setResourceStatus("loading");
     setResourceError("");
 
     try {
       const params = new URLSearchParams();
+      if (resourceTab === "image") {
+        params.set("nsfw", nsfw);
+        params.set("resourceCount", importedCount === "one" || importedCount === "multiple" ? "with" : importedCount);
+        if (query.trim()) {
+          params.set("query", query.trim());
+        }
+        if (baseModel) {
+          params.set("baseModel", baseModel);
+        }
+
+        const payload = await fetchJson<{ items: ImportedImageListItem[] }>(
+          `/api/civitai-lora-library/imported-images?${params.toString()}`,
+        );
+        if (resourceLoadRequestIdRef.current !== requestId) {
+          return;
+        }
+        setImages(payload.items);
+        setResources([]);
+        if (!baseModel) {
+          setBaseModels(
+            Array.from(
+              new Set(payload.items.map((image) => image.baseModel).filter((model): model is string => Boolean(model))),
+            ).sort(),
+          );
+        }
+        setResourceStatus("success");
+        setSelectedImageId((current) =>
+          current && payload.items.some((image) => image.id === current) ? current : (payload.items[0]?.id ?? null),
+        );
+        return;
+      }
+
       params.set("resourceType", resourceTab);
       if (resourceTab === "lora") {
         params.set("category", category);
       }
       params.set("nsfw", nsfw);
-      params.set("importedCount", importedCount);
+      params.set("importedCount", importedCount === "one" || importedCount === "multiple" ? importedCount : "all");
       if (query.trim()) {
         params.set("query", query.trim());
       }
@@ -298,7 +342,11 @@ export function CivitaiLoraLibraryPanel() {
       const payload = await fetchJson<{ items: CivitaiResourceListItem[] }>(
         `/api/civitai-lora-library/resources?${params.toString()}`,
       );
+      if (resourceLoadRequestIdRef.current !== requestId) {
+        return;
+      }
       setResources(payload.items);
+      setImages([]);
       if (!baseModel) {
         setBaseModels(
           Array.from(
@@ -311,6 +359,9 @@ export function CivitaiLoraLibraryPanel() {
         current && payload.items.some((resource) => resource.id === current) ? current : (payload.items[0]?.id ?? null),
       );
     } catch (error) {
+      if (resourceLoadRequestIdRef.current !== requestId) {
+        return;
+      }
       setResourceStatus("error");
       setResourceError(error instanceof Error ? error.message : "无法读取 LoRA Library。");
     }
@@ -320,6 +371,11 @@ export function CivitaiLoraLibraryPanel() {
     setDetailStatus("loading");
     setDetailError("");
     setDetail(null);
+    setImageDetail(null);
+    setLoraWeightEditing(false);
+    setLoraWeightDrafts({});
+    setLoraWeightSaveStatus("idle");
+    setLoraWeightSaveError("");
 
     try {
       const payload = await fetchJson<CivitaiResourceDetail>(
@@ -330,6 +386,84 @@ export function CivitaiLoraLibraryPanel() {
     } catch (error) {
       setDetailStatus("error");
       setDetailError(error instanceof Error ? error.message : "无法读取 LoRA 详情。");
+    }
+  }
+
+  async function loadImageDetail(importedImageId: string) {
+    setDetailStatus("loading");
+    setDetailError("");
+    setDetail(null);
+    setImageDetail(null);
+    setLoraWeightEditing(false);
+    setLoraWeightDrafts({});
+    setLoraWeightSaveStatus("idle");
+    setLoraWeightSaveError("");
+
+    try {
+      const payload = await fetchJson<ImportedImageDetail>(
+        `/api/civitai-lora-library/imported-images/${encodeURIComponent(importedImageId)}`,
+      );
+      setImageDetail(payload);
+      setDetailStatus("success");
+    } catch (error) {
+      setDetailStatus("error");
+      setDetailError(error instanceof Error ? error.message : "Unable to read imported image detail.");
+    }
+  }
+
+  async function handleLoraWeightEditToggle() {
+    if (!imageDetail) {
+      return;
+    }
+
+    const loraUsages = imageDetail.usages.filter((usage) => usage.resource.resourceType === "lora");
+    if (!loraWeightEditing) {
+      setLoraWeightDrafts(
+        Object.fromEntries(
+          loraUsages.map((usage) => [usage.id, usage.weight === null ? "" : String(usage.weight)]),
+        ),
+      );
+      setLoraWeightSaveError("");
+      setLoraWeightSaveStatus("idle");
+      setLoraWeightEditing(true);
+      return;
+    }
+
+    const weights: Array<{ usageId: string; weight: number | null }> = [];
+    for (const usage of loraUsages) {
+      const value = loraWeightDrafts[usage.id]?.trim() ?? "";
+      if (!value) {
+        weights.push({ usageId: usage.id, weight: null });
+        continue;
+      }
+
+      const weight = Number(value);
+      if (!Number.isFinite(weight)) {
+        setLoraWeightSaveStatus("error");
+        setLoraWeightSaveError("Please enter a valid number for each LoRA weight.");
+        return;
+      }
+      weights.push({ usageId: usage.id, weight });
+    }
+
+    setLoraWeightSaveStatus("loading");
+    setLoraWeightSaveError("");
+    try {
+      const updated = await fetchJson<ImportedImageDetail>(
+        `/api/civitai-lora-library/imported-images/${encodeURIComponent(imageDetail.id)}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ weights }),
+        },
+      );
+      setImageDetail(updated);
+      setLoraWeightEditing(false);
+      setLoraWeightDrafts({});
+      setLoraWeightSaveStatus("success");
+    } catch (error) {
+      setLoraWeightSaveStatus("error");
+      setLoraWeightSaveError(error instanceof Error ? error.message : "Unable to save LoRA weights.");
     }
   }
 
@@ -411,6 +545,10 @@ export function CivitaiLoraLibraryPanel() {
       setImportResult(result);
       setImportStatus("success");
       await loadResources();
+      if (resourceTab === "image") {
+        setSelectedImageId(result.importedImage.id);
+        return;
+      }
       const firstMatchingResource = result.resources.find((entry) => entry.resource.resourceType === resourceTab);
       if (firstMatchingResource) {
         setSelectedResourceId(firstMatchingResource.resource.id);
@@ -453,10 +591,26 @@ export function CivitaiLoraLibraryPanel() {
 
     return () => window.clearTimeout(timeout);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, resourceTab, category, nsfw, importedCount, baseModel]);
+  }, [open, resourceTab, category, nsfw, importedCount, baseModel, query]);
 
   useEffect(() => {
-    if (!open || !selectedResourceId) {
+    if (!open) {
+      return;
+    }
+
+    if (resourceTab === "image") {
+      if (!selectedImageId) {
+        return;
+      }
+
+      const timeout = window.setTimeout(() => {
+        void loadImageDetail(selectedImageId);
+      }, 0);
+
+      return () => window.clearTimeout(timeout);
+    }
+
+    if (!selectedResourceId) {
       return;
     }
 
@@ -465,7 +619,7 @@ export function CivitaiLoraLibraryPanel() {
     }, 0);
 
     return () => window.clearTimeout(timeout);
-  }, [open, selectedResourceId]);
+  }, [open, resourceTab, selectedImageId, selectedResourceId]);
 
   const importedLoras = importResult?.resources.filter((entry) => entry.resource.resourceType === "lora") ?? [];
   const importedModels = importResult?.resources.filter((entry) => entry.resource.resourceType === "model") ?? [];
@@ -507,10 +661,13 @@ export function CivitaiLoraLibraryPanel() {
   }, [parsePreview]);
   const officialImages = detail ? extractImageUrls(detail.officialImagesJson) : [];
   const detailUrl = detail ? resourceVersionUrl(detail) : null;
+  const isImageTab = resourceTab === "image";
   const isCheckpointTab = resourceTab === "model";
-  const activeResourceLabel = isCheckpointTab ? "Checkpoint" : "LoRA";
+  const activeResourceLabel = isImageTab ? "Image" : isCheckpointTab ? "Checkpoint" : "LoRA";
   const detailIsCheckpoint = detail?.resourceType === "model";
   const detailResourceLabel = detailIsCheckpoint ? "Checkpoint" : "LoRA";
+  const imageDetailLoras = imageDetail?.usages.filter((usage) => usage.resource.resourceType === "lora") ?? [];
+  const imageDetailCheckpoints = imageDetail?.usages.filter((usage) => usage.resource.resourceType === "model") ?? [];
 
   function toggleOfficialImageSelection(selectionId: string) {
     setSelectedOfficialImageUrls((current) => {
@@ -1002,9 +1159,10 @@ export function CivitaiLoraLibraryPanel() {
                   <div className="grid min-h-0 grid-cols-[360px_1fr] overflow-hidden">
                     <aside className="flex min-h-0 flex-col border-r border-slate-100 bg-white">
                       <div className="shrink-0 space-y-2 border-b border-slate-100 p-3">
-                        <div className="grid grid-cols-2 gap-1 rounded-md bg-slate-100 p-1">
+                        <div className="grid grid-cols-3 gap-1 rounded-md bg-slate-100 p-1">
                           {(
                             [
+                              ["image", "Image"],
                               ["lora", "LoRA"],
                               ["model", "Checkpoint"],
                             ] as const
@@ -1019,9 +1177,12 @@ export function CivitaiLoraLibraryPanel() {
                               onClick={() => {
                                 setResourceTab(value);
                                 setSelectedResourceId(null);
+                                setSelectedImageId(null);
                                 setDetail(null);
+                                setImageDetail(null);
                                 setCategory("all");
                                 setBaseModel("");
+                                setImportedCount("all");
                               }}
                               type="button"
                             >
@@ -1034,17 +1195,12 @@ export function CivitaiLoraLibraryPanel() {
                           <input
                             className="h-9 w-full rounded-md border border-slate-200 bg-white pl-9 pr-3 text-xs text-slate-700 outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
                             onChange={(event) => setQuery(event.target.value)}
-                            onKeyDown={(event) => {
-                              if (event.key === "Enter") {
-                                void loadResources();
-                              }
-                            }}
                             placeholder="Search name / tags / trained words"
                             value={query}
                           />
                         </div>
                         <div className="grid grid-cols-2 gap-2">
-                          {!isCheckpointTab ? (
+                          {resourceTab === "lora" ? (
                             <select
                               className="h-9 rounded-md border border-slate-200 bg-white px-2 text-xs text-slate-700 outline-none"
                               onChange={(event) => setCategory(event.target.value as CivitaiLoraCategory | "all")}
@@ -1059,7 +1215,7 @@ export function CivitaiLoraLibraryPanel() {
                           ) : null}
                           <select
                             className={`h-9 rounded-md border border-slate-200 bg-white px-2 text-xs text-slate-700 outline-none ${
-                              isCheckpointTab ? "col-span-2" : ""
+                              resourceTab !== "lora" ? "col-span-2" : ""
                             }`}
                             onChange={(event) => setBaseModel(event.target.value)}
                             value={baseModel}
@@ -1082,12 +1238,22 @@ export function CivitaiLoraLibraryPanel() {
                           </select>
                           <select
                             className="h-9 rounded-md border border-slate-200 bg-white px-2 text-xs text-slate-700 outline-none"
-                            onChange={(event) => setImportedCount(event.target.value as "all" | "one" | "multiple")}
+                            onChange={(event) => setImportedCount(event.target.value as "all" | "one" | "multiple" | "none" | "with")}
                             value={importedCount}
                           >
-                            <option value="all">Any imports</option>
-                            <option value="one">1 imported image</option>
-                            <option value="multiple">2+ imported images</option>
+                            {isImageTab ? (
+                              <>
+                                <option value="all">Any resources</option>
+                                <option value="with">With resources</option>
+                                <option value="none">No resources</option>
+                              </>
+                            ) : (
+                              <>
+                                <option value="all">Any imports</option>
+                                <option value="one">1 imported image</option>
+                                <option value="multiple">2+ imported images</option>
+                              </>
+                            )}
                           </select>
                         </div>
                         <Button className="h-8 w-full text-xs" onClick={() => void loadResources()} size="sm" type="button" variant="secondary">
@@ -1105,12 +1271,53 @@ export function CivitaiLoraLibraryPanel() {
                         {resourceStatus === "error" ? (
                           <p className="rounded-md bg-rose-50 p-3 text-xs leading-relaxed text-rose-600">{resourceError}</p>
                         ) : null}
-                        {resourceStatus !== "loading" && resources.length === 0 ? (
+                        {resourceStatus !== "loading" && (isImageTab ? images.length === 0 : resources.length === 0) ? (
                           <p className="rounded-md bg-slate-50 p-3 text-xs leading-relaxed text-slate-500">
                             暂无已导入 {activeResourceLabel}。先粘贴一个 Civitai image URL 解析并确认导入。
                           </p>
                         ) : null}
                         <div className="space-y-2">
+                          {isImageTab
+                            ? images.map((image) => (
+                                <button
+                                  className={`grid w-full grid-cols-[64px_1fr] gap-3 rounded-md border p-2 text-left transition ${
+                                    selectedImageId === image.id
+                                      ? "border-indigo-300 bg-indigo-50"
+                                      : "border-slate-200 bg-white hover:border-indigo-200 hover:bg-slate-50"
+                                  }`}
+                                  key={image.id}
+                                  onClick={() => setSelectedImageId(image.id)}
+                                  type="button"
+                                >
+                                  {image.imageUrl ? (
+                                    <img
+                                      alt={`Civitai image ${image.civitaiImageId}`}
+                                      className="h-16 w-16 rounded-md object-cover"
+                                      src={image.imageUrl}
+                                    />
+                                  ) : (
+                                    <div className="flex h-16 w-16 items-center justify-center rounded-md bg-slate-100 text-[10px] text-slate-400">
+                                      Image
+                                    </div>
+                                  )}
+                                  <div className="min-w-0">
+                                    <p className="truncate text-xs font-semibold text-slate-900">Image #{image.civitaiImageId}</p>
+                                    <p className="mt-0.5 truncate text-[11px] font-medium text-slate-500">
+                                      {image.baseModel ?? "unknown base model"} · {image.username ?? "unknown user"}
+                                    </p>
+                                    <div className="mt-1 flex flex-wrap gap-1">
+                                      <span className="rounded-full bg-indigo-50 px-1.5 py-0.5 text-[10px] text-indigo-700">
+                                        {image.loraCount} LoRA
+                                      </span>
+                                      <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-500">
+                                        {image.checkpointCount} checkpoint
+                                      </span>
+                                    </div>
+                                    <p className="mt-1 text-[11px] text-slate-500">{snippet(image.prompt, 72)}</p>
+                                  </div>
+                                </button>
+                              ))
+                            : null}
                           {resources.map((resource) => (
                             <button
                               className={`grid w-full grid-cols-[64px_1fr] gap-3 rounded-md border p-2 text-left transition ${
@@ -1175,7 +1382,170 @@ export function CivitaiLoraLibraryPanel() {
                       {detailStatus === "error" ? (
                         <p className="rounded-md bg-rose-50 p-4 text-sm text-rose-600">{detailError}</p>
                       ) : null}
-                      {detail ? (
+                      {imageDetail ? (
+                        <div className="space-y-5">
+                          <div className="grid gap-5 xl:grid-cols-[360px_1fr]">
+                            <div className="space-y-3">
+                              <div className="overflow-hidden rounded-md bg-slate-100">
+                                {imageDetail.imageUrl ? (
+                                  <img
+                                    alt={`Civitai image ${imageDetail.civitaiImageId}`}
+                                    className="max-h-[560px] w-full object-contain"
+                                    src={imageDetail.imageUrl}
+                                  />
+                                ) : (
+                                  <div className="flex h-80 items-center justify-center text-xs text-slate-400">
+                                    Image
+                                  </div>
+                                )}
+                              </div>
+                              <a
+                                className="inline-flex h-9 items-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                                href={imageDetail.civitaiImagePageUrl}
+                                rel="noreferrer"
+                                target="_blank"
+                              >
+                                <ExternalLink className="size-4" />
+                                Open source image
+                              </a>
+                            </div>
+                            <div className="min-w-0 space-y-5">
+                              <div>
+                                <h4 className="break-words text-xl font-bold text-slate-950">
+                                  Image #{imageDetail.civitaiImageId}
+                                </h4>
+                                <p className="mt-2 text-xs leading-relaxed text-slate-500">
+                                  {imageDetail.baseModel ?? "unknown base model"} · {imageDetail.username ?? "unknown user"} ·{" "}
+                                  {imageDetail.width ?? "-"}x{imageDetail.height ?? "-"}
+                                </p>
+                              </div>
+
+                              <div className="grid gap-3 md:grid-cols-4">
+                                <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                                  <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Resources</p>
+                                  <p className="mt-1 text-lg font-bold text-slate-900">{imageDetail.resourceCount}</p>
+                                </div>
+                                <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                                  <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">LoRA</p>
+                                  <p className="mt-1 text-lg font-bold text-slate-900">{imageDetail.loraCount}</p>
+                                </div>
+                                <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                                  <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Checkpoint</p>
+                                  <p className="mt-1 text-lg font-bold text-slate-900">{imageDetail.checkpointCount}</p>
+                                </div>
+                                <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                                  <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Sampler</p>
+                                  <p className="mt-1 truncate text-lg font-bold text-slate-900" title={imageDetail.sampler ?? undefined}>
+                                    {imageDetail.sampler ?? "-"}
+                                  </p>
+                                </div>
+                              </div>
+
+                              <div>
+                                <p className="mb-2 text-[11px] font-bold uppercase tracking-wider text-slate-500">Prompt</p>
+                                <p className="rounded-md bg-slate-50 p-3 text-sm leading-relaxed text-slate-700">
+                                  {imageDetail.prompt ?? "No prompt metadata."}
+                                </p>
+                              </div>
+
+                              <div className="grid gap-4 xl:grid-cols-2">
+                                <div>
+                                  <p className="mb-2 text-[11px] font-bold uppercase tracking-wider text-slate-500">Checkpoint</p>
+                                  <div className="space-y-2">
+                                    {imageDetailCheckpoints.length > 0 ? (
+                                      imageDetailCheckpoints.map((usage) => (
+                                        <div className="rounded-md border border-slate-200 bg-white p-3" key={usage.id}>
+                                          <p className="text-sm font-semibold text-slate-900">{usage.resource.name}</p>
+                                          <p className="mt-1 text-xs text-slate-500">
+                                            {formatResourceVersion(usage.resource)} · {usage.resource.baseModel ?? "unknown base model"}
+                                          </p>
+                                        </div>
+                                      ))
+                                    ) : (
+                                      <p className="rounded-md bg-slate-50 p-3 text-xs text-slate-500">No checkpoint metadata.</p>
+                                    )}
+                                  </div>
+                                </div>
+
+                                <div>
+                                  <div className="mb-2 flex items-center justify-between gap-3">
+                                    <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500">LoRA Stack</p>
+                                    {imageDetailLoras.length > 0 ? (
+                                      <button
+                                        aria-label={loraWeightEditing ? "Save LoRA weights" : "Edit LoRA weights"}
+                                        className="inline-flex h-7 items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2 text-[11px] font-medium text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                                        disabled={loraWeightSaveStatus === "loading"}
+                                        onClick={() => void handleLoraWeightEditToggle()}
+                                        type="button"
+                                      >
+                                        {loraWeightSaveStatus === "loading" ? (
+                                          <Loader2 className="size-3 animate-spin" />
+                                        ) : loraWeightEditing ? (
+                                          <Save className="size-3" />
+                                        ) : (
+                                          <Pencil className="size-3" />
+                                        )}
+                                        {loraWeightEditing ? "Save" : "Edit"}
+                                      </button>
+                                    ) : null}
+                                  </div>
+                                  {loraWeightSaveStatus === "error" ? (
+                                    <p className="mb-2 rounded-md bg-rose-50 p-2 text-xs text-rose-600">{loraWeightSaveError}</p>
+                                  ) : null}
+                                  <div className="space-y-2">
+                                    {imageDetailLoras.length > 0 ? (
+                                      imageDetailLoras.map((usage) => (
+                                        <div className="rounded-md border border-slate-200 bg-white p-3" key={usage.id}>
+                                          <div className="flex items-start justify-between gap-3">
+                                            <div className="min-w-0">
+                                              <p className="truncate text-sm font-semibold text-slate-900">{usage.resource.name}</p>
+                                              <p className="mt-1 text-xs text-slate-500">
+                                                {formatResourceVersion(usage.resource)} · {usage.resource.baseModel ?? "unknown base model"}
+                                              </p>
+                                            </div>
+                                            {loraWeightEditing ? (
+                                              <input
+                                                aria-label={`Weight for ${usage.resource.name}`}
+                                                className="h-8 w-20 shrink-0 rounded-md border border-indigo-200 bg-white px-2 text-right text-xs font-medium text-indigo-700 outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
+                                                inputMode="decimal"
+                                                onChange={(event) =>
+                                                  setLoraWeightDrafts((current) => ({
+                                                    ...current,
+                                                    [usage.id]: event.target.value,
+                                                  }))
+                                                }
+                                                placeholder="-"
+                                                type="number"
+                                                value={loraWeightDrafts[usage.id] ?? ""}
+                                              />
+                                            ) : (
+                                              <span className="shrink-0 rounded-full bg-indigo-50 px-2 py-1 text-[11px] font-medium text-indigo-700">
+                                                {formatWeight(usage.weight)}
+                                              </span>
+                                            )}
+                                          </div>
+                                          {usage.triggerWordsUsed.length > 0 ? (
+                                            <div className="mt-2 flex flex-wrap gap-1">
+                                              {usage.triggerWordsUsed.map((word) => (
+                                                <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-600" key={word}>
+                                                  {word}
+                                                </span>
+                                              ))}
+                                            </div>
+                                          ) : null}
+                                        </div>
+                                      ))
+                                    ) : (
+                                      <p className="rounded-md bg-slate-50 p-3 text-xs text-slate-500">No LoRA metadata.</p>
+                                    )}
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      ) : null}
+                      {!imageDetail && detail ? (
                         <div className="space-y-5">
                           <div className="flex items-start justify-between gap-4">
                             <div className="min-w-0">
@@ -1446,7 +1816,7 @@ export function CivitaiLoraLibraryPanel() {
                             </aside>
                           </div>
                         </div>
-                      ) : detailStatus !== "loading" ? (
+                      ) : !imageDetail && detailStatus !== "loading" ? (
                         <div className="flex h-full min-h-72 items-center justify-center rounded-md bg-slate-50 text-sm text-slate-500">
                           Select a {activeResourceLabel} to inspect metadata and imported image usage.
                         </div>

@@ -2,10 +2,7 @@ import fs from "node:fs/promises";
 import crypto from "node:crypto";
 import path from "node:path";
 
-import {
-  chooseResourceUpsertKey,
-  getOfficialPreviewImage,
-} from "@/features/civitai-lora-library/normalize";
+import { getOfficialPreviewImage } from "@/features/civitai-lora-library/normalize";
 import type {
   CivitaiResourceListFilters,
   CivitaiResourceListItem,
@@ -17,6 +14,9 @@ import type {
   CivitaiResourceDetail,
   CivitaiUsageSource,
   ImageResourceUsageRecord,
+  ImportedImageDetail,
+  ImportedImageListFilters,
+  ImportedImageListItem,
   ImportedImageRecord,
   NormalizedCivitaiImage,
 } from "@/features/civitai-lora-library/types";
@@ -471,6 +471,66 @@ function stringifyJson(value: unknown): string {
   return JSON.stringify(value ?? null);
 }
 
+function parseJsonText(value: string | undefined): unknown {
+  if (!value) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
+}
+
+function mergeTriggerWordsJson(targetJson: string | undefined, sourceJson: string | undefined): string {
+  const words = new Set<string>();
+  for (const value of [parseJsonText(targetJson), parseJsonText(sourceJson)]) {
+    if (!Array.isArray(value)) {
+      continue;
+    }
+
+    for (const word of value) {
+      if (typeof word === "string" && word.trim()) {
+        words.add(word);
+      }
+    }
+  }
+
+  return stringifyJson([...words]);
+}
+
+function mergeRawResourceJson(targetJson: string | undefined, sourceJson: string | undefined): string {
+  const target = parseJsonText(targetJson);
+  const source = parseJsonText(sourceJson);
+  if (target === null) {
+    return stringifyJson(source);
+  }
+  if (source === null || JSON.stringify(target) === JSON.stringify(source)) {
+    return stringifyJson(target);
+  }
+
+  return stringifyJson({ source: "merged_civitai_resource_usage", sources: [target, source] });
+}
+
+function preferUsageResolveStatus(
+  targetStatus: string | undefined,
+  sourceStatus: string | undefined,
+): CivitaiResolveStatus {
+  const fallback: CivitaiResolveStatus = "unresolved";
+  const priority: Record<CivitaiResolveStatus, number> = {
+    resolved_by_model_version_id: 5,
+    resolved_by_hash: 4,
+    resolved_by_name_search: 3,
+    metadata_only: 2,
+    unresolved: 1,
+  };
+  const target = (targetStatus ?? fallback) as CivitaiResolveStatus;
+  const source = (sourceStatus ?? fallback) as CivitaiResolveStatus;
+
+  return (priority[source] ?? 0) > (priority[target] ?? 0) ? source : target;
+}
+
 function collectCivitaiLocalImageUrls(value: unknown, urls: Set<string>): void {
   if (typeof value === "string") {
     if (value.startsWith(CIVITAI_LOCAL_IMAGE_ROUTE_PREFIX)) {
@@ -689,6 +749,15 @@ function mapResourceListRow(row: unknown): CivitaiResourceListItem {
   };
 }
 
+function mapImportedImageListRow(row: unknown): ImportedImageListItem {
+  return {
+    ...mapImportedImageRow(row),
+    resourceCount: readNumberColumn(row, "resource_count") ?? 0,
+    loraCount: readNumberColumn(row, "lora_count") ?? 0,
+    checkpointCount: readNumberColumn(row, "checkpoint_count") ?? 0,
+  };
+}
+
 export function upsertImportedCivitaiImageToSqlite(
   db: SceneForgeSqliteDatabase,
   image: NormalizedCivitaiImage,
@@ -783,28 +852,130 @@ export function upsertImportedCivitaiImageToSqlite(
   );
 }
 
+function findResourceRowByModelVersionId(db: SceneForgeSqliteDatabase, modelVersionId: number) {
+  return db.prepare("SELECT * FROM civitai_resources WHERE civitai_model_version_id = ?").get(modelVersionId);
+}
+
+function findResourceRowByHash(db: SceneForgeSqliteDatabase, hash: string) {
+  return db.prepare("SELECT * FROM civitai_resources WHERE lower(hash) = ?").get(hash.toLocaleLowerCase());
+}
+
 function findExistingResource(db: SceneForgeSqliteDatabase, input: CivitaiResourceUpsertInput) {
-  const key = chooseResourceUpsertKey(input);
+  const rows: unknown[] = [];
+  const addRow = (row: unknown) => {
+    const id = readTextColumn(row, "id");
+    if (id && !rows.some((existing) => readTextColumn(existing, "id") === id)) {
+      rows.push(row);
+    }
+  };
 
-  if (key.kind === "civitaiModelVersionId") {
-    return db.prepare("SELECT * FROM civitai_resources WHERE civitai_model_version_id = ?").get(key.value);
+  if (input.civitaiModelVersionId !== null) {
+    addRow(findResourceRowByModelVersionId(db, input.civitaiModelVersionId));
+  }
+  if (input.hash) {
+    addRow(findResourceRowByHash(db, input.hash));
   }
 
-  if (key.kind === "hash") {
-    return db.prepare("SELECT * FROM civitai_resources WHERE lower(hash) = ?").get(key.value);
+  return rows[0];
+}
+
+function mergeCivitaiResourceRows(db: SceneForgeSqliteDatabase, targetResourceId: string, sourceResourceId: string): void {
+  if (targetResourceId === sourceResourceId) {
+    return;
   }
 
-  if (key.kind === "modelVersionName") {
-    return db.prepare(`
-      SELECT * FROM civitai_resources
-      WHERE civitai_model_id = ? AND normalized_version_name = ?
-    `).get(key.civitaiModelId, key.versionName);
+  db.prepare(`
+    INSERT OR IGNORE INTO civitai_resource_categories (resource_id, category, sort_order)
+    SELECT ?, category, sort_order
+    FROM civitai_resource_categories
+    WHERE resource_id = ?
+  `).run(targetResourceId, sourceResourceId);
+
+  const duplicateUsages = db.prepare(`
+    SELECT
+      target_usage.id AS target_id,
+      target_usage.weight AS target_weight,
+      target_usage.trigger_words_used_json AS target_trigger_words_used_json,
+      target_usage.resolve_status AS target_resolve_status,
+      target_usage.raw_resource_json AS target_raw_resource_json,
+      source_usage.weight AS source_weight,
+      source_usage.trigger_words_used_json AS source_trigger_words_used_json,
+      source_usage.resolve_status AS source_resolve_status,
+      source_usage.raw_resource_json AS source_raw_resource_json
+    FROM image_resource_usages source_usage
+    INNER JOIN image_resource_usages target_usage
+      ON target_usage.imported_image_id = source_usage.imported_image_id
+      AND target_usage.resource_id = ?
+      AND target_usage.source = source_usage.source
+    WHERE source_usage.resource_id = ?
+  `).all(targetResourceId, sourceResourceId);
+  for (const usage of duplicateUsages) {
+    const targetUsageId = readTextColumn(usage, "target_id");
+    if (!targetUsageId) {
+      continue;
+    }
+
+    db.prepare(`
+      UPDATE image_resource_usages
+      SET
+        weight = ?,
+        trigger_words_used_json = ?,
+        resolve_status = ?,
+        raw_resource_json = ?
+      WHERE id = ?
+    `).run(
+      readNumberColumn(usage, "target_weight") ?? readNumberColumn(usage, "source_weight") ?? null,
+      mergeTriggerWordsJson(
+        readTextColumn(usage, "target_trigger_words_used_json"),
+        readTextColumn(usage, "source_trigger_words_used_json"),
+      ),
+      preferUsageResolveStatus(
+        readTextColumn(usage, "target_resolve_status"),
+        readTextColumn(usage, "source_resolve_status"),
+      ),
+      mergeRawResourceJson(
+        readTextColumn(usage, "target_raw_resource_json"),
+        readTextColumn(usage, "source_raw_resource_json"),
+      ),
+      targetUsageId,
+    );
   }
 
-  return db.prepare(`
-    SELECT * FROM civitai_resources
-    WHERE normalized_name = ? AND normalized_base_model IS ?
-  `).get(key.normalizedName, key.baseModel);
+  db.prepare(`
+    UPDATE image_resource_usages
+    SET resource_id = ?
+    WHERE resource_id = ?
+      AND NOT EXISTS (
+        SELECT 1
+        FROM image_resource_usages target_usage
+        WHERE target_usage.imported_image_id = image_resource_usages.imported_image_id
+          AND target_usage.resource_id = ?
+          AND target_usage.source = image_resource_usages.source
+      )
+  `).run(targetResourceId, sourceResourceId, targetResourceId);
+
+  db.prepare("DELETE FROM image_resource_usages WHERE resource_id = ?").run(sourceResourceId);
+  db.prepare("DELETE FROM civitai_resources WHERE id = ?").run(sourceResourceId);
+}
+
+function mergeConflictingResourceRows(
+  db: SceneForgeSqliteDatabase,
+  targetResourceId: string,
+  input: CivitaiResourceUpsertInput,
+): void {
+  if (input.hash) {
+    const hashConflictId = readTextColumn(findResourceRowByHash(db, input.hash), "id");
+    if (hashConflictId && hashConflictId !== targetResourceId) {
+      mergeCivitaiResourceRows(db, targetResourceId, hashConflictId);
+    }
+  }
+
+  if (input.civitaiModelVersionId !== null) {
+    const versionConflictId = readTextColumn(findResourceRowByModelVersionId(db, input.civitaiModelVersionId), "id");
+    if (versionConflictId && versionConflictId !== targetResourceId) {
+      mergeCivitaiResourceRows(db, targetResourceId, versionConflictId);
+    }
+  }
 }
 
 function getResourceRowById(db: SceneForgeSqliteDatabase, id: string) {
@@ -847,6 +1018,8 @@ export function upsertCivitaiResourceToSqlite(
   const normalizedBaseModel = normalizeKeyText(input.baseModel);
   const normalizedVersionName = normalizeKeyText(input.versionName);
   const categories = input.categories.length > 0 ? input.categories : input.category ? [input.category] : [];
+
+  mergeConflictingResourceRows(db, id, input);
 
   db.prepare(`
     INSERT INTO civitai_resources (
@@ -1033,6 +1206,99 @@ export function deleteImageResourceUsagesExceptFromSqlite(
       AND source = ?
       AND resource_id NOT IN (${placeholders})
   `).run(input.importedImageId, input.source, ...input.keepResourceIds);
+}
+
+export function updateImportedImageLoraUsageWeightsFromSqlite(
+  db: SceneForgeSqliteDatabase,
+  importedImageId: string,
+  weights: Array<{ usageId: string; weight: number | null }>,
+): ImportedImageDetail | undefined {
+  const image = getImportedImageFromSqlite(db, importedImageId);
+  if (!image) {
+    return undefined;
+  }
+
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    for (const entry of weights) {
+      db.prepare(`
+        UPDATE image_resource_usages
+        SET weight = ?
+        WHERE id = ?
+          AND imported_image_id = ?
+          AND resource_id IN (
+            SELECT id
+            FROM civitai_resources
+            WHERE resource_type = 'lora'
+          )
+      `).run(entry.weight, entry.usageId, importedImageId);
+    }
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+
+  return getImportedImageDetailFromSqlite(db, importedImageId);
+}
+
+export function listImportedImagesFromSqlite(
+  db: SceneForgeSqliteDatabase,
+  filters: ImportedImageListFilters = {},
+): ImportedImageListItem[] {
+  const where: string[] = [];
+  const values: SqlitePrimitive[] = [];
+
+  if (filters.baseModel) {
+    where.push("img.base_model = ?");
+    values.push(filters.baseModel);
+  }
+
+  if (filters.nsfw === "sfw") {
+    where.push("(img.nsfw IS NULL OR img.nsfw = 0)");
+  } else if (filters.nsfw === "nsfw") {
+    where.push("img.nsfw = 1");
+  }
+
+  if (filters.query?.trim()) {
+    where.push(`(
+      CAST(img.civitai_image_id AS TEXT) LIKE ?
+      OR img.prompt LIKE ?
+      OR img.negative_prompt LIKE ?
+      OR img.username LIKE ?
+      OR EXISTS (
+        SELECT 1
+        FROM image_resource_usages iru_filter
+        INNER JOIN civitai_resources r_filter ON r_filter.id = iru_filter.resource_id
+        WHERE iru_filter.imported_image_id = img.id
+          AND (r_filter.name LIKE ? OR r_filter.tags_json LIKE ? OR r_filter.trained_words_json LIKE ?)
+      )
+    )`);
+    const query = `%${filters.query.trim()}%`;
+    values.push(query, query, query, query, query, query, query);
+  }
+
+  const having =
+    filters.resourceCount === "none"
+      ? "HAVING COUNT(iru.id) = 0"
+      : filters.resourceCount === "with"
+        ? "HAVING COUNT(iru.id) > 0"
+        : "";
+
+  return db.prepare(`
+    SELECT
+      img.*,
+      COUNT(iru.id) AS resource_count,
+      SUM(CASE WHEN r.resource_type = 'lora' THEN 1 ELSE 0 END) AS lora_count,
+      SUM(CASE WHEN r.resource_type = 'model' THEN 1 ELSE 0 END) AS checkpoint_count
+    FROM imported_images img
+    LEFT JOIN image_resource_usages iru ON iru.imported_image_id = img.id
+    LEFT JOIN civitai_resources r ON r.id = iru.resource_id
+    ${where.length > 0 ? `WHERE ${where.join(" AND ")}` : ""}
+    GROUP BY img.id
+    ${having}
+    ORDER BY img.imported_at DESC
+  `).all(...values).map(mapImportedImageListRow);
 }
 
 export function listCivitaiResourcesFromSqlite(
@@ -1226,4 +1492,44 @@ export function getImportedImageFromSqlite(
   }
 
   return mapImportedImageRow(row);
+}
+
+export function getImportedImageDetailFromSqlite(
+  db: SceneForgeSqliteDatabase,
+  importedImageId: string,
+): ImportedImageDetail | undefined {
+  const row = db.prepare(`
+    SELECT
+      img.*,
+      COUNT(iru.id) AS resource_count,
+      SUM(CASE WHEN r.resource_type = 'lora' THEN 1 ELSE 0 END) AS lora_count,
+      SUM(CASE WHEN r.resource_type = 'model' THEN 1 ELSE 0 END) AS checkpoint_count
+    FROM imported_images img
+    LEFT JOIN image_resource_usages iru ON iru.imported_image_id = img.id
+    LEFT JOIN civitai_resources r ON r.id = iru.resource_id
+    WHERE img.id = ?
+    GROUP BY img.id
+  `).get(importedImageId);
+
+  if (!readTextColumn(row, "id")) {
+    return undefined;
+  }
+
+  const usages = db.prepare(`
+    SELECT *
+    FROM image_resource_usages
+    WHERE imported_image_id = ?
+    ORDER BY created_at ASC
+  `).all(importedImageId).map((usageRow) => {
+    const usage = mapUsageRow(usageRow);
+    return {
+      ...usage,
+      resource: mapResourceRow(getResourceRowById(db, usage.resourceId)),
+    };
+  });
+
+  return {
+    ...mapImportedImageListRow(row),
+    usages,
+  };
 }
