@@ -25,6 +25,8 @@ import type {
   Vector3,
 } from "@/shared/types";
 
+import { CivitaiLoraLibraryPanel } from "./CivitaiLoraLibraryPanel";
+
 function FieldLabel({ children }: { children: ReactNode }) {
   return <label className="text-xs font-medium text-slate-500">{children}</label>;
 }
@@ -1038,9 +1040,9 @@ export function ObjectPropertiesPanel() {
             >
               <option value="generic">通用 Prompt</option>
               <option value="stable-diffusion">Stable Diffusion</option>
-              <option value="midjourney">Midjourney</option>
             </select>
           </div>
+          {project.settings.modelFormat === "stable-diffusion" ? <CivitaiLoraLibraryPanel /> : null}
           <label className="flex h-10 cursor-pointer items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-4 text-xs font-medium text-slate-700 transition-all hover:bg-white">
             <input
               checked={project.settings.includeSpatialHints}

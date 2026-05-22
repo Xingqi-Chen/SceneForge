@@ -1,4 +1,5 @@
-import { createLiteLlmClient, type LlmChatMessage } from "@/features/llm";
+import { createLiteLlmClient, type LlmChatMessage, type LlmChatRequest } from "@/features/llm";
+import { appendLlmLocalLog, serializeErrorForLlmLog } from "@/features/llm/llm-local-log";
 
 import { classifyCivitaiLora } from "./classification";
 import type {
@@ -25,6 +26,14 @@ const AI_NSFW_LEVELS: CivitaiAiNsfwLevel[] = ["sfw", "suggestive", "mature", "ex
 const AI_NSFW_LEVEL_SET = new Set<CivitaiAiNsfwLevel>(AI_NSFW_LEVELS);
 const MAX_DESCRIPTION_CHARS = 6000;
 const MAX_ERROR_CHARS = 240;
+
+function createLlmLogRequestId() {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return crypto.randomUUID();
+  }
+
+  return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -362,6 +371,36 @@ export async function enrichCivitaiResource(
   input: CivitaiResourceUpsertInput,
 ): Promise<CivitaiResourceEnrichmentResult> {
   const fallbackCategories = getFallbackCategories(input);
+  const requestId = createLlmLogRequestId();
+  const chatRequest: LlmChatRequest = {
+    purpose: "civitai-resource-enrichment",
+    model: process.env.LITELLM_DEFAULT_MODEL,
+    messages: buildCivitaiResourceEnrichmentMessages(input),
+    temperature: 0,
+    maxTokens: 900,
+  };
+
+  await appendLlmLocalLog({
+    requestId,
+    timestamp: new Date().toISOString(),
+    phase: "request",
+    route: "civitai-lora-library/enrichment",
+    payload: {
+      purpose: chatRequest.purpose,
+      model: chatRequest.model,
+      temperature: chatRequest.temperature,
+      maxTokens: chatRequest.maxTokens,
+      resource: {
+        resourceType: input.resourceType,
+        civitaiModelId: input.civitaiModelId,
+        civitaiModelVersionId: input.civitaiModelVersionId,
+        name: input.name,
+        versionName: input.versionName,
+        baseModel: input.baseModel,
+      },
+      messages: chatRequest.messages,
+    },
+  });
 
   try {
     const client = createLiteLlmClient({
@@ -369,12 +408,18 @@ export async function enrichCivitaiResource(
       apiKey: process.env.LITELLM_API_KEY,
       defaultModel: process.env.LITELLM_DEFAULT_MODEL,
     });
-    const completion = await client.completeChat({
-      purpose: "civitai-resource-enrichment",
-      messages: buildCivitaiResourceEnrichmentMessages(input),
-      temperature: 0,
-      maxTokens: 900,
+    const completion = await client.completeChat(chatRequest);
+
+    await appendLlmLocalLog({
+      requestId,
+      timestamp: new Date().toISOString(),
+      phase: "response",
+      route: "civitai-lora-library/enrichment",
+      payload: {
+        completion,
+      },
     });
+
     const enrichment = parseCivitaiResourceEnrichmentContent(completion.content, fallbackCategories);
 
     return {
@@ -383,6 +428,16 @@ export async function enrichCivitaiResource(
       error: null,
     };
   } catch (error) {
+    await appendLlmLocalLog({
+      requestId,
+      timestamp: new Date().toISOString(),
+      phase: "error",
+      route: "civitai-lora-library/enrichment",
+      payload: {
+        error: serializeErrorForLlmLog(error),
+      },
+    });
+
     return fallbackEnrichment(input, "ai_failed", summarizeError(error));
   }
 }

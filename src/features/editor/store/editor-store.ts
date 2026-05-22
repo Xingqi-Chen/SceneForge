@@ -132,6 +132,8 @@ type EditorState = {
   setSceneMode: (mode: SceneMode) => void;
   updateProjectDocument: (patch: Partial<Pick<SceneForgeProject, "name">>) => void;
   updateProjectSettings: (patch: Partial<ProjectSettings>) => void;
+  selectCivitaiCheckpoint: (resourceId: string) => void;
+  toggleCivitaiLora: (resourceId: string) => void;
   addObject: (input: AddSceneObjectInput) => void;
   updateObject: (id: string, patch: Partial<SceneObject>) => void;
   updateObject3DTransform: (id: string, patch: Partial<SceneObject3DTransform>) => void;
@@ -656,6 +658,8 @@ export const useEditorStore = create<EditorState>((set) => ({
               promptLibraryTags: project.settings.promptLibraryTags ?? [],
               deletedBuiltInPromptLibraryTagIds:
                 project.settings.deletedBuiltInPromptLibraryTagIds ?? [],
+              selectedCivitaiCheckpointId: project.settings.selectedCivitaiCheckpointId ?? null,
+              selectedCivitaiLoraIds: project.settings.selectedCivitaiLoraIds ?? [],
             },
           },
           promptBindings,
@@ -900,6 +904,34 @@ export const useEditorStore = create<EditorState>((set) => ({
         },
       }),
     })),
+  selectCivitaiCheckpoint: (resourceId) =>
+    set((state) => ({
+      project: touchProject({
+        ...state.project,
+        settings: {
+          ...state.project.settings,
+          selectedCivitaiCheckpointId:
+            state.project.settings.selectedCivitaiCheckpointId === resourceId ? null : resourceId,
+        },
+      }),
+    })),
+  toggleCivitaiLora: (resourceId) =>
+    set((state) => {
+      const selectedLoras = state.project.settings.selectedCivitaiLoraIds ?? [];
+      const nextSelectedLoras = selectedLoras.includes(resourceId)
+        ? selectedLoras.filter((id) => id !== resourceId)
+        : [...selectedLoras, resourceId];
+
+      return {
+        project: touchProject({
+          ...state.project,
+          settings: {
+            ...state.project.settings,
+            selectedCivitaiLoraIds: nextSelectedLoras,
+          },
+        }),
+      };
+    }),
   addObject: (input) =>
     set((state) => {
       const nextLayer = getNextLayer(state.project.scene.objects);

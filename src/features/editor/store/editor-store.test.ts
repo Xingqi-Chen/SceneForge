@@ -235,7 +235,7 @@ describe("editor store", () => {
   it("updates scene and project settings", () => {
     useEditorStore.getState().updateScene({ description: "rainy cyberpunk street" });
     useEditorStore.getState().updateProjectSettings({
-      modelFormat: "midjourney",
+      modelFormat: "stable-diffusion",
       negativePrompt: "washed out",
     });
 
@@ -243,11 +243,32 @@ describe("editor store", () => {
 
     expect(project.scene.description).toBe("rainy cyberpunk street");
     expect(project.settings).toMatchObject({
-      modelFormat: "midjourney",
+      modelFormat: "stable-diffusion",
       negativePrompt: "washed out",
       promptLibraryTags: [],
       deletedBuiltInPromptLibraryTagIds: [],
     });
+  });
+
+  it("selects one Civitai checkpoint and toggles Civitai LoRAs in order", () => {
+    useEditorStore.getState().selectCivitaiCheckpoint("checkpoint-a");
+    expect(useEditorStore.getState().project.settings.selectedCivitaiCheckpointId).toBe("checkpoint-a");
+
+    useEditorStore.getState().selectCivitaiCheckpoint("checkpoint-b");
+    expect(useEditorStore.getState().project.settings.selectedCivitaiCheckpointId).toBe("checkpoint-b");
+
+    useEditorStore.getState().selectCivitaiCheckpoint("checkpoint-b");
+    expect(useEditorStore.getState().project.settings.selectedCivitaiCheckpointId).toBeNull();
+
+    useEditorStore.getState().toggleCivitaiLora("lora-a");
+    useEditorStore.getState().toggleCivitaiLora("lora-b");
+    expect(useEditorStore.getState().project.settings.selectedCivitaiLoraIds).toEqual(["lora-a", "lora-b"]);
+
+    useEditorStore.getState().toggleCivitaiLora("lora-a");
+    expect(useEditorStore.getState().project.settings.selectedCivitaiLoraIds).toEqual(["lora-b"]);
+
+    useEditorStore.getState().toggleCivitaiLora("lora-a");
+    expect(useEditorStore.getState().project.settings.selectedCivitaiLoraIds).toEqual(["lora-b", "lora-a"]);
   });
 
   it("switches to 3D mode, adds a primitive, and updates its transform", () => {
@@ -431,7 +452,7 @@ describe("editor store", () => {
       },
     ]);
     useEditorStore.getState().updateProjectSettings({
-      modelFormat: "midjourney",
+      modelFormat: "stable-diffusion",
       negativePrompt: "washed out",
     });
     useEditorStore.getState().updateScene({
@@ -455,7 +476,7 @@ describe("editor store", () => {
 
     expect(project.scene).toEqual(createDefaultProject().scene);
     expect(project.settings).toMatchObject({
-      modelFormat: "midjourney",
+      modelFormat: "stable-diffusion",
       negativePrompt: "washed out",
       promptLibraryTags: [
         expect.objectContaining({

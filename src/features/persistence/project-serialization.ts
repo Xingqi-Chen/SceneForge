@@ -75,6 +75,31 @@ function dedupePromptTags(tags: PromptTag[]): PromptTag[] {
   return dedupeById(tags);
 }
 
+function sanitizeStringIdList(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const seen = new Set<string>();
+  const result: string[] = [];
+
+  for (const entry of value) {
+    if (typeof entry !== "string") {
+      continue;
+    }
+
+    const id = entry.trim();
+    if (!id || seen.has(id)) {
+      continue;
+    }
+
+    seen.add(id);
+    result.push(id);
+  }
+
+  return result;
+}
+
 const PROMPT_EXPORT_KIND = "sceneforge-prompt";
 
 /** 画布（场景）专用 JSON 导出，`importCanvasBundleFromJson` 与之配对。 */
@@ -695,6 +720,8 @@ function sanitizeSettings(settings: unknown): SceneForgeProject["settings"] {
       modelFormat: "generic",
       includeSpatialHints: true,
       negativePrompt: "",
+      selectedCivitaiCheckpointId: null,
+      selectedCivitaiLoraIds: [],
       promptLibraryTags: [],
       deletedBuiltInPromptLibraryTagIds: [],
     };
@@ -703,7 +730,7 @@ function sanitizeSettings(settings: unknown): SceneForgeProject["settings"] {
   const modelFormat = settings.modelFormat;
   const mf: SceneForgeProject["settings"]["modelFormat"] =
     typeof modelFormat === "string" &&
-    (modelFormat === "generic" || modelFormat === "stable-diffusion" || modelFormat === "midjourney")
+    (modelFormat === "generic" || modelFormat === "stable-diffusion")
       ? modelFormat
       : "generic";
 
@@ -719,6 +746,11 @@ function sanitizeSettings(settings: unknown): SceneForgeProject["settings"] {
     modelFormat: mf,
     includeSpatialHints: typeof settings.includeSpatialHints === "boolean" ? settings.includeSpatialHints : true,
     negativePrompt: typeof settings.negativePrompt === "string" ? settings.negativePrompt : "",
+    selectedCivitaiCheckpointId:
+      typeof settings.selectedCivitaiCheckpointId === "string" && settings.selectedCivitaiCheckpointId.trim()
+        ? settings.selectedCivitaiCheckpointId.trim()
+        : null,
+    selectedCivitaiLoraIds: sanitizeStringIdList(settings.selectedCivitaiLoraIds),
     promptLibraryTags: libraryTags,
     deletedBuiltInPromptLibraryTagIds: [...new Set(deletedBuiltIns)],
   };

@@ -260,7 +260,7 @@ export function buildCharacterImagePromptTagMessages({
       content: [
         "You reverse-engineer reusable image prompt tags from a reference character image for SceneForge.",
         "The user provides one compressed character image and a list of available character body parts.",
-        "Infer short Stable Diffusion / Midjourney style prompt tags that match the project prompt-library style.",
+        "Infer short Stable Diffusion style prompt tags that match the project prompt-library style.",
         "Every returned item MUST target either the whole character or exactly one bodyPartId from the provided list.",
         "Each target has allowedCategories. The item's category MUST be included in that exact target's allowedCategories.",
         "Use targetKind character only for category character whole-character role, subject, pose, or expression tags.",
@@ -332,7 +332,7 @@ export function buildCharacterTextPromptTagMessages({
       content: [
         "You reverse-engineer reusable image prompt tags from a natural-language character idea for SceneForge.",
         "The user provides a rough character prompt and a list of available character body parts.",
-        "Infer short Stable Diffusion / Midjourney style prompt tags that match the project prompt-library style.",
+        "Infer short Stable Diffusion style prompt tags that match the project prompt-library style.",
         "If the input is short, abstract, or underspecified, freely expand it into a coherent visual design while staying faithful to the stated idea.",
         "Do not ask follow-up questions. Make reasonable creative choices for missing details.",
         "Every returned item MUST target either the whole character or exactly one bodyPartId from the provided list.",
@@ -385,7 +385,7 @@ function buildSceneSubcategoryList() {
 function getSceneMessageHeader(source: "image" | "text") {
   return [
     `You reverse-engineer reusable image prompt tags from a reference scene ${source} for SceneForge.`,
-    "Infer short Stable Diffusion / Midjourney style prompt tags that match the project prompt-library style.",
+    "Infer short Stable Diffusion style prompt tags that match the project prompt-library style.",
     "Every returned item MUST target the scene with targetKind scene.",
     "Each returned category MUST be one of the scene allowedCategories.",
     "Extract only broad reusable tags for visual style, lighting, image quality, and scene/environment.",

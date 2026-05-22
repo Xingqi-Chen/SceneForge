@@ -23,6 +23,42 @@ export type CivitaiEnrichmentStatus = "ai_enriched" | "fallback" | "ai_failed";
 
 export type CivitaiAiNsfwLevel = "sfw" | "suggestive" | "mature" | "explicit" | "unknown";
 
+export type CivitaiLibrarySettings = {
+  loraDownloadPath: string;
+  checkpointDownloadPath: string;
+};
+
+export type CivitaiResourceDownloadState =
+  | "path_missing"
+  | "directory_missing"
+  | "not_downloaded"
+  | "verified"
+  | "checksum_mismatch"
+  | "unverified";
+
+export type CivitaiResourceDownloadStatus = {
+  resourceId: string;
+  status: CivitaiResourceDownloadState;
+  message: string;
+  pathConfigured: boolean;
+  directoryExists: boolean;
+  targetFileName: string;
+  targetPath: string | null;
+  fileExists: boolean;
+  checksumType: "SHA256" | null;
+  expectedSha256: string | null;
+  actualSha256: string | null;
+  checksumMatches: boolean | null;
+  downloadUrl: string | null;
+};
+
+export type CivitaiResourceDownloadResult = CivitaiResourceDownloadStatus & {
+  action: "download" | "upload";
+  skipped: boolean;
+  overwritten: boolean;
+  bytesWritten: number;
+};
+
 export type CivitaiResourceRecommendation = {
   condition: string | null;
   baseModel: string | null;
@@ -237,6 +273,30 @@ export type CivitaiResourceDetail = CivitaiResourceListItem & {
   usages: Array<ImageResourceUsageRecord & { importedImage: ImportedImageRecord }>;
   commonCheckpoints: Array<{ resourceId: string; name: string; count: number }>;
   commonLoras: Array<{ resourceId: string; name: string; count: number }>;
+};
+
+export type SelectedCivitaiResourcePreview = {
+  id: string;
+  resourceType: "lora" | "model";
+  name: string;
+  versionName: string | null;
+  baseModel: string | null;
+  creator: string | null;
+  trainedWords: string[];
+  tags: string[];
+  categories: CivitaiLoraCategory[];
+  usageGuide: string | null;
+  descriptionSnippet: string | null;
+  averageWeight: number | null;
+  minWeight: number | null;
+  maxWeight: number | null;
+  recommendations: CivitaiResourceRecommendation[];
+  previewImage: string | null;
+};
+
+export type SelectedCivitaiResourcesPreview = {
+  checkpoint: SelectedCivitaiResourcePreview | null;
+  loras: SelectedCivitaiResourcePreview[];
 };
 
 export type CivitaiImportResourceResult = {

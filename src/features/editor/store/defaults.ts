@@ -306,6 +306,8 @@ export function createDefaultProject(): SceneForgeProject {
       modelFormat: "generic",
       includeSpatialHints: true,
       negativePrompt: "",
+      selectedCivitaiCheckpointId: null,
+      selectedCivitaiLoraIds: [],
       promptLibraryTags: [],
       deletedBuiltInPromptLibraryTagIds: [],
     },

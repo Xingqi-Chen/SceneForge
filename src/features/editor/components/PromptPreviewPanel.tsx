@@ -1,9 +1,23 @@
 "use client";
 
-import { Palette, Sparkles } from "lucide-react";
-import { useState } from "react";
+import { Palette, Sparkles, X } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import type {
+  SelectedCivitaiResourcePreview,
+  SelectedCivitaiResourcesPreview,
+} from "@/features/civitai-lora-library";
+import { getCivitaiImageVariantUrl } from "@/features/civitai-lora-library/image-url";
+import { dispatchOpenCivitaiLibraryResourceDetail } from "@/features/civitai-lora-library/ui-events";
+import {
+  buildCivitaiAiJsonResponseInstructions,
+  formatSelectedCivitaiResourcesForAi,
+  hasSelectedCivitaiResources,
+  parseCivitaiAiPromptResponse,
+  selectedCivitaiResourceCards,
+  type CivitaiAiPromptResult,
+} from "@/features/editor/ai-prompt/civitai-ai-context";
 import { useEditorStore } from "@/features/editor/store/editor-store";
 import { generatePrompt } from "@/features/prompt-engine";
 import { inferSceneLayoutConstraints } from "@/features/prompt-engine/spatial-relations";
@@ -15,6 +29,7 @@ import { getCharacterStickFigurePose } from "@/features/editor/stick-figure-3d/g
 import { stickFigurePoseToPromptSnippet } from "@/features/editor/stick-figure-3d/PromptExporter";
 
 type AiGenerationStatus = "idle" | "loading" | "success" | "error";
+type SelectedResourceStatus = "idle" | "loading" | "success" | "error";
 
 type PromptPreviewPanelProps = {
   onCaptureCanvas?: () => string | null;
@@ -25,6 +40,130 @@ type AiGenerationConstraints = {
   pose: boolean;
   visual: boolean;
 };
+
+const EMPTY_SELECTED_CIVITAI_RESOURCES: SelectedCivitaiResourcesPreview = {
+  checkpoint: null,
+  loras: [],
+};
+
+function readErrorMessage(payload: unknown, fallback: string) {
+  if (
+    payload &&
+    typeof payload === "object" &&
+    "error" in payload &&
+    typeof (payload as { error?: unknown }).error === "object" &&
+    (payload as { error?: { message?: unknown } }).error &&
+    typeof (payload as { error: { message?: unknown } }).error.message === "string"
+  ) {
+    return (payload as { error: { message: string } }).error.message;
+  }
+
+  return fallback;
+}
+
+async function fetchJson<T>(input: RequestInfo | URL, init?: RequestInit): Promise<T> {
+  const response = await fetch(input, init);
+  const payload: unknown = await response.json().catch(() => null);
+
+  if (!response.ok) {
+    throw new Error(readErrorMessage(payload, response.statusText || "请求失败。"));
+  }
+
+  return payload as T;
+}
+
+function buildSelectedCivitaiResourcesQuery(checkpointId: string | null, loraIds: string[]) {
+  const params = new URLSearchParams();
+
+  if (checkpointId) {
+    params.set("checkpointId", checkpointId);
+  }
+
+  if (loraIds.length > 0) {
+    params.set("loraIds", loraIds.join(","));
+  }
+
+  return params.toString();
+}
+
+function selectedResourceVersionLabel(resource: SelectedCivitaiResourcePreview) {
+  return resource.versionName?.trim() || "Unknown version";
+}
+
+function SelectedCivitaiResourceCard({
+  onOpenDetail,
+  onRemove,
+  resource,
+}: {
+  onOpenDetail: () => void;
+  onRemove: () => void;
+  resource: SelectedCivitaiResourcePreview;
+}) {
+  const previewImage = resource.previewImage
+    ? (getCivitaiImageVariantUrl(resource.previewImage, 256) ?? resource.previewImage)
+    : null;
+
+  return (
+    <div className="grid gap-3 rounded-md border border-slate-200 bg-white p-3 sm:grid-cols-[72px_1fr]">
+      <button
+        aria-label={`打开 ${resource.name} 的 Civitai 详情`}
+        className="flex h-[72px] w-[72px] overflow-hidden rounded-md bg-slate-100 transition hover:ring-2 hover:ring-indigo-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300"
+        onClick={onOpenDetail}
+        title="打开 Civitai 详情"
+        type="button"
+      >
+        {previewImage ? (
+          <img
+            alt={`${resource.name} official reference`}
+            className="h-full w-full object-cover"
+            decoding="async"
+            loading="lazy"
+            src={previewImage}
+          />
+        ) : (
+          <div className="flex h-full w-full items-center justify-center text-[10px] text-slate-400">
+            No image
+          </div>
+        )}
+      </button>
+      <div className="min-w-0">
+        <div className="flex items-start justify-between gap-2">
+          <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+            <span className="rounded-full bg-indigo-50 px-2 py-0.5 text-[10px] font-medium text-indigo-700">
+              {resource.resourceType === "model" ? "Checkpoint" : "LoRA"}
+            </span>
+            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] text-slate-500">
+              {selectedResourceVersionLabel(resource)}
+            </span>
+          </div>
+          <button
+            aria-label={`去选中 ${resource.name}`}
+            className="shrink-0 rounded-full p-1 text-slate-400 transition hover:bg-rose-50 hover:text-rose-600"
+            onClick={onRemove}
+            title="去选中"
+            type="button"
+          >
+            <X className="size-3.5" />
+          </button>
+        </div>
+        <p className="mt-1 truncate text-sm font-semibold text-slate-900" title={resource.name}>
+          {resource.name}
+        </p>
+        <div className="mt-2 flex flex-wrap gap-1">
+          {resource.trainedWords.length > 0 ? (
+            resource.trainedWords.map((word) => (
+              <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-600" key={word}>
+                {word}
+              </span>
+            ))
+          ) : (
+            <span className="text-[11px] text-slate-400">无触发词</span>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function formatTagsForAi(tags: SceneForgeProject["scene"]["promptTags"]) {
   return tags
@@ -201,7 +340,10 @@ function getConstraintButtonClass(enabled: boolean) {
   }`;
 }
 
-function buildAiSystemPrompt(constraints: AiGenerationConstraints) {
+function buildAiSystemPrompt(
+  constraints: AiGenerationConstraints,
+  options: { civitaiAware: boolean } = { civitaiAware: false },
+) {
   const priority = [
     constraints.layout ? "hard layout constraints" : null,
     constraints.pose ? "the character pose in the screenshot" : null,
@@ -224,7 +366,12 @@ function buildAiSystemPrompt(constraints: AiGenerationConstraints) {
     "Describe pose, expression, and props in natural, artistic language (e.g. leaning on a wall, dynamic stance, one arm raised). Never echo raw coordinates, pixel math, or awkward joint-vs-joint alignment phrases (e.g. do not write \"wrist level with neck\", \"ankle left of other ankle\", \"horizontally aligned with neck\").",
     "Skeleton notes in the summary are hints only; infer a plausible pose from the image, do not transcribe joint tuples.",
     "Merge duplicates; keep token economy; preserve style and subject tags from the preview when they matter.",
-    "Return only the final prompt text (no markdown, no labels like \"Prompt:\").",
+    options.civitaiAware
+      ? "Use selected Civitai resources as model-specific context; their trigger words are optional tools, not mandatory text."
+      : null,
+    options.civitaiAware
+      ? buildCivitaiAiJsonResponseInstructions()
+      : "Return only the final prompt text (no markdown, no labels like \"Prompt:\").",
   ].filter(Boolean);
 
   return [
@@ -245,14 +392,18 @@ function buildAiUserText({
   layoutConstraints,
   promptForAi,
   project,
+  selectedCivitaiResourcesText,
   structuredSummary,
 }: {
   constraints: AiGenerationConstraints;
   layoutConstraints: string | null;
   promptForAi: ReturnType<typeof generatePrompt>;
   project: SceneForgeProject;
+  selectedCivitaiResourcesText: string | null;
   structuredSummary: string;
 }) {
+  const civitaiAware = selectedCivitaiResourcesText !== null;
+
   return [
     "Generate a stronger positive prompt from the preview + screenshot below.",
     constraints.layout || constraints.pose || constraints.visual
@@ -272,7 +423,17 @@ function buildAiUserText({
       : null,
     "",
     `Prompt preview: ${promptForAi.prompt || "(empty)"}`,
-    `Negative prompt (from scene tags and legacy settings; reference only; your reply must be the positive prompt text only): ${promptForAi.negativePrompt || "(none)"}`,
+    `Negative prompt (from scene tags and legacy settings; reference only; your reply must ${
+      civitaiAware ? "put the positive prompt in the JSON prompt field" : "be the positive prompt text only"
+    }): ${promptForAi.negativePrompt || "(none)"}`,
+    selectedCivitaiResourcesText ? "" : null,
+    selectedCivitaiResourcesText
+      ? "Selected Civitai resources (model-specific context; use trigger words only when useful):"
+      : null,
+    selectedCivitaiResourcesText,
+    selectedCivitaiResourcesText
+      ? "Civitai rules: do not invent trigger words, do not force every trigger word, and do not include local paths, hashes, or download links. The JSON overallEffect field must be written in Simplified Chinese and describe only the style/effect expected from the selected checkpoint + LoRA combination, not the image subject, pose, action, composition, or scene contents. The JSON parameterSuggestionReason field must be written in Simplified Chinese as one or two user-facing sentences explaining why the suggested parameters fit this resource combination. The JSON parameterSuggestions.loraWeights field must include one item for every selected LoRA, preserving each LoRA name and giving a suggestedWeight."
+      : null,
     constraints.layout ? "" : null,
     constraints.layout ? "Hard layout constraints (must be preserved in the final prompt):" : null,
     constraints.layout ? layoutConstraints || "(none)" : null,
@@ -287,16 +448,203 @@ function buildAiUserText({
     .join("\n");
 }
 
+function hasRenderableCivitaiAdvice(advice: CivitaiAiPromptResult | null) {
+  return Boolean(
+    advice &&
+      (advice.parseWarning ||
+        advice.parameterSuggestionReason ||
+        advice.overallEffect ||
+        advice.parameterSuggestions !== null),
+  );
+}
+
+function formatAdviceLabel(key: string) {
+  return key
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/[_-]+/g, " ")
+    .trim();
+}
+
+function isAdviceRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isEmptyAdviceValue(value: unknown) {
+  return (
+    value === null ||
+    value === undefined ||
+    (typeof value === "string" && value.trim().length === 0) ||
+    (Array.isArray(value) && value.length === 0) ||
+    (isAdviceRecord(value) && Object.keys(value).length === 0)
+  );
+}
+
+function formatAdvicePrimitive(value: unknown) {
+  if (typeof value === "number") {
+    return Number.isInteger(value) ? String(value) : value.toFixed(2).replace(/\.?0+$/, "");
+  }
+
+  if (typeof value === "boolean") {
+    return value ? "是" : "否";
+  }
+
+  return typeof value === "string" ? value : String(value);
+}
+
+function AiAdviceValue({ depth = 0, value }: { depth?: number; value: unknown }) {
+  if (isEmptyAdviceValue(value)) {
+    return <span className="text-slate-400">未提供</span>;
+  }
+
+  if (Array.isArray(value)) {
+    return (
+      <div className="space-y-1">
+        {value.map((item, index) => (
+          <div className="rounded-md bg-white/70 px-2 py-1" key={index}>
+            <AiAdviceValue depth={depth + 1} value={item} />
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  if (isAdviceRecord(value)) {
+    const entries = Object.entries(value).filter(([, entryValue]) => !isEmptyAdviceValue(entryValue));
+
+    if (entries.length === 0) {
+      return <span className="text-slate-400">未提供</span>;
+    }
+
+    return (
+      <div className={depth > 0 ? "space-y-1" : "grid gap-2"}>
+        {entries.map(([key, entryValue]) => (
+          <div className="rounded-md bg-white/70 px-2 py-1" key={key}>
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+              {formatAdviceLabel(key)}
+            </p>
+            <div className="mt-0.5 text-xs leading-relaxed text-slate-700">
+              <AiAdviceValue depth={depth + 1} value={entryValue} />
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  return <span>{formatAdvicePrimitive(value)}</span>;
+}
+
 export function PromptPreviewPanel({ onCaptureCanvas }: PromptPreviewPanelProps) {
   const project = useEditorStore((state) => state.project);
   const aiPrompt = useEditorStore((state) => state.aiGeneratedPrompt);
   const setAiGeneratedPrompt = useEditorStore((state) => state.setAiGeneratedPrompt);
+  const selectCivitaiCheckpoint = useEditorStore((state) => state.selectCivitaiCheckpoint);
+  const toggleCivitaiLora = useEditorStore((state) => state.toggleCivitaiLora);
   const [aiStatus, setAiStatus] = useState<AiGenerationStatus>("idle");
   const [aiError, setAiError] = useState("");
   const [useLayoutConstraints, setUseLayoutConstraints] = useState(false);
   const [usePoseConstraints, setUsePoseConstraints] = useState(false);
   const [useVisualConstraints, setUseVisualConstraints] = useState(false);
+  const [aiCivitaiAdvice, setAiCivitaiAdvice] = useState<CivitaiAiPromptResult | null>(null);
+  const [selectedResources, setSelectedResources] = useState<SelectedCivitaiResourcesPreview>(
+    EMPTY_SELECTED_CIVITAI_RESOURCES,
+  );
+  const [selectedResourceStatus, setSelectedResourceStatus] = useState<SelectedResourceStatus>("idle");
+  const [selectedResourceError, setSelectedResourceError] = useState("");
+  const [selectedResourcesResultQuery, setSelectedResourcesResultQuery] = useState("");
   const generatedPrompt = generatePrompt(project);
+  const selectedCheckpointId = project.settings.selectedCivitaiCheckpointId;
+  const selectedLoraIds = project.settings.selectedCivitaiLoraIds ?? [];
+  const selectedLoraIdsKey = selectedLoraIds.join(",");
+  const shouldLoadSelectedResources =
+    project.settings.modelFormat === "stable-diffusion" && (Boolean(selectedCheckpointId) || selectedLoraIds.length > 0);
+  const selectedResourcesQuery = useMemo(
+    () =>
+      shouldLoadSelectedResources
+        ? buildSelectedCivitaiResourcesQuery(
+            selectedCheckpointId,
+            selectedLoraIdsKey ? selectedLoraIdsKey.split(",") : [],
+          )
+        : "",
+    [selectedCheckpointId, selectedLoraIdsKey, shouldLoadSelectedResources],
+  );
+  const effectiveSelectedResourceStatus: SelectedResourceStatus = !shouldLoadSelectedResources
+    ? "idle"
+    : selectedResourcesResultQuery === selectedResourcesQuery
+      ? selectedResourceStatus
+      : "loading";
+  const displayedSelectedResources = shouldLoadSelectedResources && selectedResourcesResultQuery === selectedResourcesQuery
+    ? selectedResources
+    : EMPTY_SELECTED_CIVITAI_RESOURCES;
+  const selectedResourceCards = useMemo(
+    () => selectedCivitaiResourceCards(displayedSelectedResources),
+    [displayedSelectedResources],
+  );
+
+  useEffect(() => {
+    if (!shouldLoadSelectedResources) {
+      return;
+    }
+
+    const controller = new AbortController();
+
+    fetchJson<SelectedCivitaiResourcesPreview>(`/api/civitai-lora-library/selected-resources?${selectedResourcesQuery}`, {
+      signal: controller.signal,
+    })
+      .then((payload) => {
+        setSelectedResources(payload);
+        setSelectedResourceStatus("success");
+        setSelectedResourceError("");
+        setSelectedResourcesResultQuery(selectedResourcesQuery);
+      })
+      .catch((error) => {
+        if (controller.signal.aborted) {
+          return;
+        }
+
+        setSelectedResources(EMPTY_SELECTED_CIVITAI_RESOURCES);
+        setSelectedResourceStatus("error");
+        setSelectedResourceError(error instanceof Error ? error.message : "无法读取已选 Civitai 资源。");
+        setSelectedResourcesResultQuery(selectedResourcesQuery);
+      });
+
+    return () => controller.abort();
+  }, [selectedResourcesQuery, shouldLoadSelectedResources]);
+
+  async function loadSelectedResourcesForAi() {
+    if (!shouldLoadSelectedResources) {
+      return EMPTY_SELECTED_CIVITAI_RESOURCES;
+    }
+
+    if (selectedResourcesResultQuery === selectedResourcesQuery && selectedResourceStatus === "success") {
+      return selectedResources;
+    }
+
+    const payload = await fetchJson<SelectedCivitaiResourcesPreview>(
+      `/api/civitai-lora-library/selected-resources?${selectedResourcesQuery}`,
+    );
+    setSelectedResources(payload);
+    setSelectedResourceStatus("success");
+    setSelectedResourceError("");
+    setSelectedResourcesResultQuery(selectedResourcesQuery);
+    return payload;
+  }
+
+  function handleRemoveSelectedResource(resource: SelectedCivitaiResourcePreview) {
+    if (resource.resourceType === "model") {
+      selectCivitaiCheckpoint(resource.id);
+      return;
+    }
+
+    toggleCivitaiLora(resource.id);
+  }
+
+  function handleOpenSelectedResourceDetail(resource: SelectedCivitaiResourcePreview) {
+    dispatchOpenCivitaiLibraryResourceDetail({
+      id: resource.id,
+      resourceType: resource.resourceType,
+    });
+  }
 
   async function handleGenerateAiPrompt() {
     const canvasImage = onCaptureCanvas?.();
@@ -309,8 +657,17 @@ export function PromptPreviewPanel({ onCaptureCanvas }: PromptPreviewPanelProps)
 
     setAiStatus("loading");
     setAiError("");
+    setAiCivitaiAdvice(null);
 
     try {
+      const selectedResourcesForAi = shouldLoadSelectedResources
+        ? await loadSelectedResourcesForAi()
+        : EMPTY_SELECTED_CIVITAI_RESOURCES;
+      const selectedCivitaiResourcesText =
+        project.settings.modelFormat === "stable-diffusion" && hasSelectedCivitaiResources(selectedResourcesForAi)
+          ? formatSelectedCivitaiResourcesForAi(selectedResourcesForAi)
+          : null;
+      const civitaiAware = selectedCivitaiResourcesText !== null;
       const promptForAi = generatePrompt(project, {
         includeLayoutConstraints: useLayoutConstraints,
       });
@@ -323,15 +680,17 @@ export function PromptPreviewPanel({ onCaptureCanvas }: PromptPreviewPanelProps)
       const layoutConstraints = useLayoutConstraints && project.settings.includeSpatialHints
         ? inferSceneLayoutConstraints(project.scene)
         : null;
-      const systemPrompt = buildAiSystemPrompt(constraints);
+      const systemPrompt = buildAiSystemPrompt(constraints, { civitaiAware });
       const userText = buildAiUserText({
         constraints,
         layoutConstraints,
         promptForAi,
         project,
+        selectedCivitaiResourcesText,
         structuredSummary,
       });
       const requestBody = {
+        purpose: civitaiAware ? ("stable-diffusion-prompt-generation" as const) : undefined,
         messages: [
           {
             role: "system" as const,
@@ -355,7 +714,7 @@ export function PromptPreviewPanel({ onCaptureCanvas }: PromptPreviewPanelProps)
           },
         ],
         temperature: 0.4,
-        maxTokens: 600,
+        maxTokens: civitaiAware ? 900 : 600,
       };
 
       console.info("[SceneForge] [llm] client outbound /api/llm/chat", {
@@ -365,6 +724,9 @@ export function PromptPreviewPanel({ onCaptureCanvas }: PromptPreviewPanelProps)
         layoutConstraintsEnabled: useLayoutConstraints,
         poseConstraintsEnabled: usePoseConstraints,
         visualConstraintsEnabled: useVisualConstraints,
+        civitaiAware,
+        selectedCivitaiResourceCount: selectedCivitaiResourceCards(selectedResourcesForAi).length,
+        selectedCivitaiContextChars: selectedCivitaiResourcesText?.length ?? 0,
         promptPreviewChars: (promptForAi.prompt ?? "").length,
         structuredSummaryChars: structuredSummary.length,
         canvasImageDataUrlChars: canvasImage.length,
@@ -401,11 +763,19 @@ export function PromptPreviewPanel({ onCaptureCanvas }: PromptPreviewPanelProps)
         usage: payload.usage,
       });
 
-      setAiGeneratedPrompt(payload.content.trim());
+      if (civitaiAware) {
+        const parsed = parseCivitaiAiPromptResponse(payload.content);
+        setAiGeneratedPrompt(parsed.prompt.trim());
+        setAiCivitaiAdvice(parsed);
+      } else {
+        setAiGeneratedPrompt(payload.content.trim());
+        setAiCivitaiAdvice(null);
+      }
       setAiStatus("success");
     } catch (error) {
       console.error("[SceneForge] [llm] failed to generate AI prompt", { error });
       setAiStatus("error");
+      setAiCivitaiAdvice(null);
       setAiError(error instanceof Error ? error.message : "AI 生成失败，请稍后重试。");
     }
   }
@@ -469,6 +839,35 @@ export function PromptPreviewPanel({ onCaptureCanvas }: PromptPreviewPanelProps)
         </div>
       </div>
       <div className="space-y-4">
+        {shouldLoadSelectedResources ? (
+          <div>
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500">已选 Civitai 资源</p>
+              {effectiveSelectedResourceStatus === "loading" ? (
+                <span className="text-[11px] text-slate-400">读取中...</span>
+              ) : null}
+            </div>
+            <div className="space-y-2 rounded-md border border-indigo-100 bg-indigo-50/50 p-3">
+              {effectiveSelectedResourceStatus === "error" ? (
+                <p className="text-xs leading-relaxed text-rose-600">{selectedResourceError}</p>
+              ) : null}
+              {selectedResourceCards.length > 0 ? (
+                selectedResourceCards.map((resource) => (
+                  <SelectedCivitaiResourceCard
+                    key={resource.id}
+                    onOpenDetail={() => handleOpenSelectedResourceDetail(resource)}
+                    onRemove={() => handleRemoveSelectedResource(resource)}
+                    resource={resource}
+                  />
+                ))
+              ) : effectiveSelectedResourceStatus === "success" ? (
+                <p className="text-xs leading-relaxed text-slate-500">
+                  已选资源未在本机 Civitai 收藏库中找到。
+                </p>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
         <div>
           <p className="mb-2 text-[11px] font-bold uppercase tracking-wider text-slate-500">Prompt</p>
           <div className="relative rounded-md border border-slate-200 bg-slate-50 p-4">
@@ -505,6 +904,42 @@ export function PromptPreviewPanel({ onCaptureCanvas }: PromptPreviewPanelProps)
             />
           </div>
         </div>
+        {hasRenderableCivitaiAdvice(aiCivitaiAdvice) ? (
+          <div>
+            <p className="mb-2 text-[11px] font-bold uppercase tracking-wider text-slate-500">
+              AI 参数建议 / 整体效果
+            </p>
+            <div className="space-y-3 rounded-md border border-indigo-100 bg-indigo-50/50 p-4">
+              {aiCivitaiAdvice?.parseWarning ? (
+                <p className="rounded-md border border-amber-100 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-700">
+                  {aiCivitaiAdvice.parseWarning}
+                </p>
+              ) : null}
+              {aiCivitaiAdvice?.parameterSuggestionReason ? (
+                <div>
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-indigo-500">参数建议理由</p>
+                  <p className="mt-1 text-xs leading-relaxed text-slate-700">
+                    {aiCivitaiAdvice.parameterSuggestionReason}
+                  </p>
+                </div>
+              ) : null}
+              {aiCivitaiAdvice?.overallEffect ? (
+                <div>
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-indigo-500">模型组合效果</p>
+                  <p className="mt-1 text-xs leading-relaxed text-slate-700">{aiCivitaiAdvice.overallEffect}</p>
+                </div>
+              ) : null}
+              {aiCivitaiAdvice && aiCivitaiAdvice.parameterSuggestions !== null ? (
+                <div>
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-indigo-500">参数建议</p>
+                  <div className="mt-1 text-xs leading-relaxed text-slate-700">
+                    <AiAdviceValue value={aiCivitaiAdvice.parameterSuggestions} />
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
         <div>
           <p className="mb-2 text-[11px] font-bold uppercase tracking-wider text-slate-500">Negative Prompt</p>
           <div className="relative rounded-md border border-rose-200 bg-rose-50 p-4">

@@ -388,11 +388,11 @@ export function buildPromptLibraryImportMessages(rawPromptText: string) {
     {
       role: "system" as const,
       content: [
-        "You split Stable Diffusion / Midjourney style prompt text into a structured library.",
+        "You split Stable Diffusion style prompt text into a structured library.",
         "The user message is raw prompt text: it may contain positive prompt, a Negative prompt section, commas, newlines, quoted segments, and lines like <lora:Name:weight>.",
         "Create ATOMIC library entries. Do NOT group many comma-separated prompt tokens into one entry.",
         "When the user text is prose or long descriptive sentences (not already a comma-separated tag list), you MUST distill it: rewrite into short, reusable prompt vocabulary. Never copy a full sentence or long clause into a single `prompt` value.",
-        "Summarize each idea into 1–3 common tag-style tokens (English unless the source is clearly Chinese). Prefer established SD/MJ wording (e.g. mood: \"serene\", \"ethereal atmosphere\", \"tranquil\"; lighting: \"soft lighting\"). Split mixed clauses into separate items with the right category for each idea.",
+        "Summarize each idea into 1–3 common tag-style tokens (English unless the source is clearly Chinese). Prefer established Stable Diffusion wording (e.g. mood: \"serene\", \"ethereal atmosphere\", \"tranquil\"; lighting: \"soft lighting\"). Split mixed clauses into separate items with the right category for each idea.",
         "Omit or generalize one-off narrative props that are not useful as generic tags. If a detail is only story dressing or contradicts the mood you are encoding, do not surface it as its own entry (e.g. do not emit awkward fragments like \"person partially covered by a floral arrangement\" when the useful reusable parts are mood and scene). Prefer a generic decor tag only when it stays broadly applicable (e.g. \"flowers\" under scene/decor), or skip.",
         "Assign category by what the token actually expresses: atmosphere and rendering tone → \"style\" (or \"lighting\" for light/shadow); environment/setting → \"scene\"; do not park mood words under unrelated categories just because the sentence mentioned an object.",
         "Each comma-separated prompt token should usually become its own item: \"1girl\", \"black hair\", \"blue eyes\", \"chinese clothes\" are four separate items.",
@@ -479,7 +479,7 @@ export function buildPromptLibraryConsolidationMessages(
         "Inputs use short reference codes. NEVER output original ids because they are not provided.",
         "Deduplicate exact duplicates, near duplicates, spelling/case variants, and tags that express the same reusable visual idea.",
         "Filter out weak, overly vague, broken, contradictory, metadata-like, or one-off narrative fragments that are not useful as reusable image prompt vocabulary.",
-        "You may lightly rewrite the kept prompt into a clean atomic Stable Diffusion / Midjourney style token, but do not broaden it beyond the source meaning.",
+        "You may lightly rewrite the kept prompt into a clean atomic Stable Diffusion style token, but do not broaden it beyond the source meaning.",
         "Keep each final item atomic: never return comma-separated prompt lists.",
         "Return only kept groups. Each group must contain refs, an array of one or more input reference codes. Put merged duplicate refs in the same refs array.",
         "If an input should be removed entirely, omit its ref from every refs array.",

@@ -1,15 +1,19 @@
 "use client";
 
-import { Check, ChevronDown, Database, ExternalLink, ImageIcon, Loader2, Pencil, Save, Search, ShieldCheck, Sparkles, X } from "lucide-react";
+import { Check, ChevronDown, Database, Download, ExternalLink, ImageIcon, Loader2, Pencil, Save, Search, Settings, ShieldCheck, Sparkles, Upload, X } from "lucide-react";
 import { type ImgHTMLAttributes, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 import { Button } from "@/components/ui/button";
+import { useEditorStore } from "@/features/editor/store/editor-store";
 import type {
   CivitaiAiNsfwLevel,
   CivitaiImportResult,
+  CivitaiLibrarySettings,
   CivitaiLoraCategory,
   CivitaiParsePreview,
+  CivitaiResourceDownloadResult,
+  CivitaiResourceDownloadStatus,
   CivitaiResourceRecommendation,
   CivitaiResourceDetail,
   CivitaiResourceListItem,
@@ -18,6 +22,10 @@ import type {
   ImportedImageListItem,
 } from "@/features/civitai-lora-library";
 import { getCivitaiImageVariantUrl } from "@/features/civitai-lora-library/image-url";
+import {
+  isOpenCivitaiLibraryResourceDetailEvent,
+  OPEN_CIVITAI_LIBRARY_RESOURCE_DETAIL_EVENT,
+} from "@/features/civitai-lora-library/ui-events";
 
 type LoadStatus = "idle" | "loading" | "success" | "error";
 type LibraryResourceTab = "image" | "lora" | "model";
@@ -26,6 +34,11 @@ type CacheRepairResult = {
   repaired: number;
   failed: number;
   skipped: number;
+};
+
+const EMPTY_CIVITAI_LIBRARY_SETTINGS: CivitaiLibrarySettings = {
+  loraDownloadPath: "",
+  checkpointDownloadPath: "",
 };
 
 const CATEGORY_OPTIONS: Array<{ value: CivitaiLoraCategory | "all"; label: string }> = [
@@ -222,6 +235,65 @@ function resourceVersionUrl(resource: CivitaiResourceDetail) {
   return `https://civitai.com/models/${resource.civitaiModelId}${params}`;
 }
 
+function getDownloadStatusLabel(status: CivitaiResourceDownloadStatus | null) {
+  if (!status) {
+    return "检查中";
+  }
+
+  switch (status.status) {
+    case "verified":
+      return "已校验";
+    case "checksum_mismatch":
+      return "校验不一致";
+    case "unverified":
+      return "未校验";
+    case "path_missing":
+      return "路径未设置";
+    case "directory_missing":
+      return "目录不存在";
+    case "not_downloaded":
+      return "未下载";
+  }
+}
+
+function getDownloadStatusClass(status: CivitaiResourceDownloadStatus | null) {
+  if (!status) {
+    return "bg-slate-100 text-slate-500";
+  }
+
+  switch (status.status) {
+    case "verified":
+      return "bg-emerald-50 text-emerald-700";
+    case "checksum_mismatch":
+      return "bg-rose-50 text-rose-700";
+    case "unverified":
+      return "bg-amber-50 text-amber-700";
+    case "path_missing":
+    case "directory_missing":
+      return "bg-rose-50 text-rose-700";
+    case "not_downloaded":
+      return "bg-slate-100 text-slate-600";
+  }
+}
+
+function getDownloadButtonLabel(status: CivitaiResourceDownloadStatus | null, label: string) {
+  if (status?.fileExists) {
+    return "重新下载";
+  }
+
+  return `下载 ${label}`;
+}
+
+function shouldShowDownloadStatusBadge(status: CivitaiResourceDownloadStatus | null, loadStatus: LoadStatus) {
+  return loadStatus === "loading" || (status !== null && status.status !== "unverified");
+}
+
+function shouldShowDownloadStatusMessage(
+  status: CivitaiResourceDownloadStatus | null,
+): status is CivitaiResourceDownloadStatus {
+  return status !== null && status.status !== "unverified";
+}
+
 type CivitaiPreviewImageProps = Omit<ImgHTMLAttributes<HTMLImageElement>, "alt" | "onError" | "src"> & {
   alt: string;
   src: string;
@@ -249,6 +321,10 @@ function CivitaiPreviewImage({ alt, src, loading = "lazy", decoding = "async", .
 }
 
 export function CivitaiLoraLibraryPanel() {
+  const selectedCivitaiCheckpointId = useEditorStore((state) => state.project.settings.selectedCivitaiCheckpointId);
+  const selectedCivitaiLoraIds = useEditorStore((state) => state.project.settings.selectedCivitaiLoraIds);
+  const selectCivitaiCheckpoint = useEditorStore((state) => state.selectCivitaiCheckpoint);
+  const toggleCivitaiLora = useEditorStore((state) => state.toggleCivitaiLora);
   const [open, setOpen] = useState(false);
   const [resources, setResources] = useState<CivitaiResourceListItem[]>([]);
   const [images, setImages] = useState<ImportedImageListItem[]>([]);
@@ -276,6 +352,18 @@ export function CivitaiLoraLibraryPanel() {
   const [repairStatus, setRepairStatus] = useState<LoadStatus>("idle");
   const [repairError, setRepairError] = useState("");
   const [repairResult, setRepairResult] = useState<CacheRepairResult | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settings, setSettings] = useState<CivitaiLibrarySettings>(EMPTY_CIVITAI_LIBRARY_SETTINGS);
+  const [settingsDraft, setSettingsDraft] = useState<CivitaiLibrarySettings>(EMPTY_CIVITAI_LIBRARY_SETTINGS);
+  const [settingsLoadStatus, setSettingsLoadStatus] = useState<LoadStatus>("idle");
+  const [settingsLoadError, setSettingsLoadError] = useState("");
+  const [settingsSaveStatus, setSettingsSaveStatus] = useState<LoadStatus>("idle");
+  const [settingsSaveError, setSettingsSaveError] = useState("");
+  const [downloadStatus, setDownloadStatus] = useState<CivitaiResourceDownloadStatus | null>(null);
+  const [downloadStatusLoadStatus, setDownloadStatusLoadStatus] = useState<LoadStatus>("idle");
+  const [downloadActionStatus, setDownloadActionStatus] = useState<LoadStatus>("idle");
+  const [downloadActionMessage, setDownloadActionMessage] = useState("");
+  const [downloadActionError, setDownloadActionError] = useState("");
   const [importPanelCollapsed, setImportPanelCollapsed] = useState(false);
   const [resourceTab, setResourceTab] = useState<LibraryResourceTab>("lora");
   const [category, setCategory] = useState<CivitaiLoraCategory | "all">("all");
@@ -285,6 +373,7 @@ export function CivitaiLoraLibraryPanel() {
   const [baseModels, setBaseModels] = useState<string[]>([]);
   const [baseModel, setBaseModel] = useState("");
   const detailPaneRef = useRef<HTMLElement | null>(null);
+  const uploadInputRef = useRef<HTMLInputElement | null>(null);
   const resourceLoadRequestIdRef = useRef(0);
 
   async function loadResources() {
@@ -368,6 +457,35 @@ export function CivitaiLoraLibraryPanel() {
     }
   }
 
+  function resetDownloadState() {
+    setDownloadStatus(null);
+    setDownloadStatusLoadStatus("idle");
+    setDownloadActionStatus("idle");
+    setDownloadActionMessage("");
+    setDownloadActionError("");
+    if (uploadInputRef.current) {
+      uploadInputRef.current.value = "";
+    }
+  }
+
+  async function loadDownloadStatus(resourceId: string, options: { verifyChecksum?: boolean } = {}) {
+    setDownloadStatusLoadStatus("loading");
+    setDownloadActionError("");
+
+    try {
+      const verifyQuery = options.verifyChecksum ? "?verify=1" : "";
+      const payload = await fetchJson<CivitaiResourceDownloadStatus>(
+        `/api/civitai-lora-library/resources/${encodeURIComponent(resourceId)}/download${verifyQuery}`,
+      );
+      setDownloadStatus(payload);
+      setDownloadStatusLoadStatus("success");
+      return payload;
+    } catch (error) {
+      setDownloadStatusLoadStatus("error");
+      setDownloadActionError(error instanceof Error ? error.message : "无法读取资源下载状态。");
+    }
+  }
+
   async function loadDetail(resourceId: string) {
     setDetailStatus("loading");
     setDetailError("");
@@ -377,6 +495,7 @@ export function CivitaiLoraLibraryPanel() {
     setLoraWeightDrafts({});
     setLoraWeightSaveStatus("idle");
     setLoraWeightSaveError("");
+    resetDownloadState();
 
     try {
       const payload = await fetchJson<CivitaiResourceDetail>(
@@ -384,6 +503,9 @@ export function CivitaiLoraLibraryPanel() {
       );
       setDetail(payload);
       setDetailStatus("success");
+      if (payload.resourceType === "lora" || payload.resourceType === "model") {
+        void loadDownloadStatus(payload.id);
+      }
     } catch (error) {
       setDetailStatus("error");
       setDetailError(error instanceof Error ? error.message : "无法读取 LoRA 详情。");
@@ -399,6 +521,7 @@ export function CivitaiLoraLibraryPanel() {
     setLoraWeightDrafts({});
     setLoraWeightSaveStatus("idle");
     setLoraWeightSaveError("");
+    resetDownloadState();
 
     try {
       const payload = await fetchJson<ImportedImageDetail>(
@@ -581,6 +704,188 @@ export function CivitaiLoraLibraryPanel() {
     }
   }
 
+  async function loadSettings() {
+    setSettingsLoadStatus("loading");
+    setSettingsLoadError("");
+
+    try {
+      const payload = await fetchJson<CivitaiLibrarySettings>("/api/civitai-lora-library/settings");
+      setSettings(payload);
+      setSettingsDraft(payload);
+      setSettingsLoadStatus("success");
+    } catch (error) {
+      setSettingsLoadStatus("error");
+      setSettingsLoadError(error instanceof Error ? error.message : "无法读取下载路径设置。");
+    }
+  }
+
+  function handleOpenSettings() {
+    setSettingsDraft(settings);
+    setSettingsSaveStatus("idle");
+    setSettingsSaveError("");
+    setSettingsOpen(true);
+  }
+
+  function handleCancelSettings() {
+    setSettingsDraft(settings);
+    setSettingsSaveStatus("idle");
+    setSettingsSaveError("");
+    setSettingsOpen(false);
+  }
+
+  async function handleSaveSettings() {
+    const nextSettings: CivitaiLibrarySettings = {
+      loraDownloadPath: settingsDraft.loraDownloadPath.trim(),
+      checkpointDownloadPath: settingsDraft.checkpointDownloadPath.trim(),
+    };
+
+    setSettingsSaveStatus("loading");
+    setSettingsSaveError("");
+
+    try {
+      await fetchJson<{ ok: true }>("/api/civitai-lora-library/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(nextSettings),
+      });
+      setSettings(nextSettings);
+      setSettingsDraft(nextSettings);
+      setSettingsLoadStatus("success");
+      setSettingsLoadError("");
+      setSettingsSaveStatus("success");
+      if (detail?.resourceType === "lora" || detail?.resourceType === "model") {
+        void loadDownloadStatus(detail.id);
+      }
+    } catch (error) {
+      setSettingsSaveStatus("error");
+      setSettingsSaveError(error instanceof Error ? error.message : "无法保存下载路径设置。");
+    }
+  }
+
+  async function handleDownloadResource() {
+    if (!detail || (detail.resourceType !== "lora" && detail.resourceType !== "model")) {
+      return;
+    }
+
+    const label = detail.resourceType === "model" ? "Checkpoint" : "LoRA";
+    if (downloadStatus?.status === "path_missing") {
+      setDownloadActionStatus("error");
+      setDownloadActionError(`${label} 下载路径未设置，请先在设置中填写 ${label} 下载路径。`);
+      return;
+    }
+
+    setDownloadActionStatus("loading");
+    setDownloadActionError("");
+    setDownloadActionMessage("");
+
+    try {
+      const result = await fetchJson<CivitaiResourceDownloadResult>(
+        `/api/civitai-lora-library/resources/${encodeURIComponent(detail.id)}/download`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "download" }),
+        },
+      );
+      setDownloadStatus(result);
+      setDownloadActionStatus("success");
+      setDownloadActionMessage(result.message);
+    } catch (error) {
+      setDownloadActionStatus("error");
+      setDownloadActionError(error instanceof Error ? error.message : `${label} 下载失败。`);
+      void loadDownloadStatus(detail.id);
+    }
+  }
+
+  async function handleUploadResourceFile(file: File | null | undefined) {
+    if (!detail || (detail.resourceType !== "lora" && detail.resourceType !== "model") || !file) {
+      return;
+    }
+
+    const label = detail.resourceType === "model" ? "Checkpoint" : "LoRA";
+    if (downloadStatus?.status === "path_missing") {
+      setDownloadActionStatus("error");
+      setDownloadActionError(`${label} 下载路径未设置，请先在设置中填写 ${label} 下载路径。`);
+      if (uploadInputRef.current) {
+        uploadInputRef.current.value = "";
+      }
+      return;
+    }
+
+    setDownloadActionStatus("loading");
+    setDownloadActionError("");
+    setDownloadActionMessage("");
+
+    try {
+      const result = await fetchJson<CivitaiResourceDownloadResult>(
+        `/api/civitai-lora-library/resources/${encodeURIComponent(detail.id)}/download`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/octet-stream",
+            "X-SceneForge-File-Name": encodeURIComponent(file.name),
+          },
+          body: file,
+        },
+      );
+      setDownloadStatus(result);
+      setDownloadActionStatus("success");
+      setDownloadActionMessage(result.message);
+    } catch (error) {
+      setDownloadActionStatus("error");
+      setDownloadActionError(error instanceof Error ? error.message : `${label} 上传失败。`);
+      void loadDownloadStatus(detail.id);
+    } finally {
+      if (uploadInputRef.current) {
+        uploadInputRef.current.value = "";
+      }
+    }
+  }
+
+  async function handleVerifyResourceFile() {
+    if (!detail || (detail.resourceType !== "lora" && detail.resourceType !== "model")) {
+      return;
+    }
+
+    setDownloadActionStatus("loading");
+    setDownloadActionError("");
+    setDownloadActionMessage("");
+
+    const result = await loadDownloadStatus(detail.id, { verifyChecksum: true });
+    if (!result) {
+      setDownloadActionStatus("error");
+      return;
+    }
+
+    setDownloadActionStatus("success");
+    setDownloadActionMessage(result.message);
+  }
+
+  function handleToggleSelectedResource() {
+    if (!detail || (detail.resourceType !== "lora" && detail.resourceType !== "model")) {
+      return;
+    }
+
+    if (detail.resourceType === "model") {
+      selectCivitaiCheckpoint(detail.id);
+      return;
+    }
+
+    toggleCivitaiLora(detail.id);
+  }
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+
+    const timeout = window.setTimeout(() => {
+      void loadSettings();
+    }, 0);
+
+    return () => window.clearTimeout(timeout);
+  }, [open]);
+
   useEffect(() => {
     if (!open) {
       return;
@@ -620,6 +925,7 @@ export function CivitaiLoraLibraryPanel() {
     }, 0);
 
     return () => window.clearTimeout(timeout);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, resourceTab, selectedImageId, selectedResourceId]);
 
   const importedLoras = importResult?.resources.filter((entry) => entry.resource.resourceType === "lora") ?? [];
@@ -667,6 +973,11 @@ export function CivitaiLoraLibraryPanel() {
   const activeResourceLabel = isImageTab ? "Image" : isCheckpointTab ? "Checkpoint" : "LoRA";
   const detailIsCheckpoint = detail?.resourceType === "model";
   const detailResourceLabel = detailIsCheckpoint ? "Checkpoint" : "LoRA";
+  const detailIsSelected = detail
+    ? detailIsCheckpoint
+      ? selectedCivitaiCheckpointId === detail.id
+      : selectedCivitaiLoraIds.includes(detail.id)
+    : false;
   const imageDetailLoras = imageDetail?.usages.filter((usage) => usage.resource.resourceType === "lora") ?? [];
   const imageDetailCheckpoints = imageDetail?.usages.filter((usage) => usage.resource.resourceType === "model") ?? [];
 
@@ -719,6 +1030,32 @@ export function CivitaiLoraLibraryPanel() {
     resetDetailNavigationState();
   }
 
+  useEffect(() => {
+    function handleOpenResourceDetail(event: Event) {
+      if (!isOpenCivitaiLibraryResourceDetailEvent(event)) {
+        return;
+      }
+
+      setOpen(true);
+      setResourceTab(event.detail.resourceType === "model" ? "model" : "lora");
+      setSelectedResourceId(event.detail.id);
+      setSelectedImageId(null);
+      setDetail(null);
+      setImageDetail(null);
+      setCategory("all");
+      setBaseModel("");
+      setImportedCount("all");
+      setQuery("");
+      setNsfw("all");
+      window.requestAnimationFrame(() => detailPaneRef.current?.scrollTo({ top: 0 }));
+    }
+
+    window.addEventListener(OPEN_CIVITAI_LIBRARY_RESOURCE_DETAIL_EVENT, handleOpenResourceDetail);
+    return () => {
+      window.removeEventListener(OPEN_CIVITAI_LIBRARY_RESOURCE_DETAIL_EVENT, handleOpenResourceDetail);
+    };
+  }, []);
+
   return (
     <section className="space-y-3 rounded-md border border-indigo-100 bg-indigo-50/70 p-3">
       <div className="flex items-start gap-2.5">
@@ -759,6 +1096,19 @@ export function CivitaiLoraLibraryPanel() {
                     <p className="mt-1 text-xs leading-relaxed text-slate-500">{METADATA_NOTICE}</p>
                   </div>
                   <button
+                    aria-label={settingsOpen ? "关闭下载路径设置" : "打开下载路径设置"}
+                    className={`rounded-full p-2 transition ${
+                      settingsOpen
+                        ? "bg-indigo-50 text-indigo-700"
+                        : "text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                    }`}
+                    onClick={settingsOpen ? handleCancelSettings : handleOpenSettings}
+                    title="下载路径设置"
+                    type="button"
+                  >
+                    <Settings className="size-5" />
+                  </button>
+                  <button
                     aria-label="关闭 Civitai LoRA Library"
                     className="rounded-full p-2 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
                     onClick={() => setOpen(false)}
@@ -767,6 +1117,85 @@ export function CivitaiLoraLibraryPanel() {
                     <X className="size-5" />
                   </button>
                 </header>
+
+                {settingsOpen ? (
+                  <div className="shrink-0 border-b border-slate-100 bg-slate-50 p-5">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <h4 className="text-sm font-bold text-slate-900">下载路径设置</h4>
+                        <p className="mt-1 text-xs text-slate-500">LoRA 和 Checkpoint 将分别使用这里配置的路径。</p>
+                      </div>
+                      {settingsLoadStatus === "loading" ? (
+                        <span className="inline-flex items-center gap-2 rounded-md bg-white px-2.5 py-1.5 text-xs text-slate-500">
+                          <Loader2 className="size-3.5 animate-spin" />
+                          正在读取设置
+                        </span>
+                      ) : null}
+                    </div>
+                    <div className="mt-4 grid gap-3 md:grid-cols-2">
+                      <label className="block text-xs font-medium text-slate-600">
+                        <span>LoRA 下载路径</span>
+                        <input
+                          className="mt-1 h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm font-normal text-slate-800 outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 disabled:opacity-60"
+                          disabled={settingsLoadStatus === "loading" || settingsSaveStatus === "loading"}
+                          onChange={(event) =>
+                            setSettingsDraft((current) => ({ ...current, loraDownloadPath: event.target.value }))
+                          }
+                          placeholder="D:/StableDiffusion/models/Lora"
+                          value={settingsDraft.loraDownloadPath}
+                        />
+                      </label>
+                      <label className="block text-xs font-medium text-slate-600">
+                        <span>Checkpoint 下载路径</span>
+                        <input
+                          className="mt-1 h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm font-normal text-slate-800 outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 disabled:opacity-60"
+                          disabled={settingsLoadStatus === "loading" || settingsSaveStatus === "loading"}
+                          onChange={(event) =>
+                            setSettingsDraft((current) => ({ ...current, checkpointDownloadPath: event.target.value }))
+                          }
+                          placeholder="D:/StableDiffusion/models/Stable-diffusion"
+                          value={settingsDraft.checkpointDownloadPath}
+                        />
+                      </label>
+                    </div>
+                    <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+                      <div className="min-h-5 text-xs">
+                        {settingsLoadStatus === "error" ? (
+                          <span className="text-rose-600">{settingsLoadError}</span>
+                        ) : null}
+                        {settingsSaveStatus === "success" ? (
+                          <span className="text-emerald-700">设置已保存。</span>
+                        ) : null}
+                        {settingsSaveStatus === "error" ? (
+                          <span className="text-rose-600">{settingsSaveError}</span>
+                        ) : null}
+                      </div>
+                      <div className="flex gap-2">
+                        <Button
+                          className="h-9 rounded-md border-slate-200 bg-white px-4 text-xs text-slate-700 hover:bg-slate-50"
+                          disabled={settingsSaveStatus === "loading"}
+                          onClick={handleCancelSettings}
+                          size="sm"
+                          type="button"
+                          variant="secondary"
+                        >
+                          <X className="size-4" />
+                          取消
+                        </Button>
+                        <Button
+                          className="h-9 rounded-md bg-indigo-600 px-4 text-xs text-white hover:bg-indigo-700"
+                          disabled={settingsLoadStatus === "loading" || settingsSaveStatus === "loading"}
+                          onClick={() => void handleSaveSettings()}
+                          size="sm"
+                          type="button"
+                        >
+                          {settingsSaveStatus === "loading" ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />}
+                          保存设置
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
 
                 <div className="grid min-h-0 flex-1 grid-rows-[auto_1fr] overflow-hidden">
                   <div className="border-b border-slate-100 bg-slate-50 p-4">
@@ -1650,17 +2079,116 @@ export function CivitaiLoraLibraryPanel() {
                                 </div>
                               ) : null}
                             </div>
-                            {detailUrl ? (
-                              <a
-                                className="inline-flex h-9 shrink-0 items-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-xs font-medium text-slate-700 hover:bg-slate-50"
-                                href={detailUrl}
-                                rel="noreferrer"
-                                target="_blank"
-                              >
-                                <ExternalLink className="size-4" />
-                                Civitai
-                              </a>
-                            ) : null}
+                            <div className="flex shrink-0 flex-col items-end gap-2">
+                              {detail.resourceType === "lora" || detail.resourceType === "model" ? (
+                                <div className="flex flex-col items-end gap-2">
+                                  <div className="flex flex-wrap justify-end gap-2">
+                                    {shouldShowDownloadStatusBadge(downloadStatus, downloadStatusLoadStatus) ? (
+                                      <span
+                                        className={`inline-flex h-9 items-center rounded-md px-3 text-xs font-medium ${getDownloadStatusClass(downloadStatus)}`}
+                                        title={downloadStatus?.message}
+                                      >
+                                        {downloadStatusLoadStatus === "loading" ? "检查中" : getDownloadStatusLabel(downloadStatus)}
+                                      </span>
+                                    ) : null}
+                                    <Button
+                                      className={`h-9 rounded-md px-3 text-xs ${
+                                        detailIsSelected
+                                          ? "border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
+                                          : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+                                      }`}
+                                      onClick={handleToggleSelectedResource}
+                                      size="sm"
+                                      type="button"
+                                      variant="secondary"
+                                    >
+                                      <Check className="size-4" />
+                                      {detailIsSelected ? "已选中" : `选中 ${detailResourceLabel}`}
+                                    </Button>
+                                    {downloadStatus?.fileExists && downloadStatus.checksumType === "SHA256" ? (
+                                      <Button
+                                        className="h-9 rounded-md border-slate-200 bg-white px-3 text-xs text-slate-700 hover:bg-slate-50"
+                                        disabled={downloadActionStatus === "loading" || downloadStatusLoadStatus === "loading"}
+                                        onClick={() => void handleVerifyResourceFile()}
+                                        size="sm"
+                                        type="button"
+                                        variant="secondary"
+                                      >
+                                        {downloadActionStatus === "loading" && downloadStatusLoadStatus === "loading" ? (
+                                          <Loader2 className="size-4 animate-spin" />
+                                        ) : (
+                                          <ShieldCheck className="size-4" />
+                                        )}
+                                        {downloadStatus.status === "verified" ? "重新校验" : "校验"}
+                                      </Button>
+                                    ) : null}
+                                    <Button
+                                      className="h-9 rounded-md bg-indigo-600 px-3 text-xs text-white hover:bg-indigo-700"
+                                      disabled={
+                                        downloadActionStatus === "loading" ||
+                                        downloadStatusLoadStatus === "loading" ||
+                                        downloadStatus?.status === "path_missing" ||
+                                        downloadStatus?.status === "directory_missing"
+                                      }
+                                      onClick={() => void handleDownloadResource()}
+                                      size="sm"
+                                      type="button"
+                                    >
+                                      {downloadActionStatus === "loading" ? <Loader2 className="size-4 animate-spin" /> : <Download className="size-4" />}
+                                      {getDownloadButtonLabel(downloadStatus, detailResourceLabel)}
+                                    </Button>
+                                    <Button
+                                      className="h-9 rounded-md border-slate-200 bg-white px-3 text-xs text-slate-700 hover:bg-slate-50"
+                                      disabled={
+                                        downloadActionStatus === "loading" ||
+                                        downloadStatusLoadStatus === "loading" ||
+                                        downloadStatus?.status === "path_missing" ||
+                                        downloadStatus?.status === "directory_missing"
+                                      }
+                                      onClick={() => uploadInputRef.current?.click()}
+                                      size="sm"
+                                      type="button"
+                                      variant="secondary"
+                                    >
+                                      <Upload className="size-4" />
+                                      上传文件
+                                    </Button>
+                                    <input
+                                      accept=".safetensors,.ckpt,.pt,.bin"
+                                      className="hidden"
+                                      onChange={(event) => void handleUploadResourceFile(event.target.files?.[0])}
+                                      ref={uploadInputRef}
+                                      type="file"
+                                    />
+                                  </div>
+                                  {downloadStatus?.targetFileName ? (
+                                    <p className="max-w-[360px] truncate text-right text-[11px] text-slate-500" title={downloadStatus.targetPath ?? undefined}>
+                                      {downloadStatus.targetFileName}
+                                    </p>
+                                  ) : null}
+                                  {downloadActionStatus === "success" && downloadActionMessage ? (
+                                    <p className="max-w-[360px] text-right text-[11px] leading-relaxed text-emerald-700">{downloadActionMessage}</p>
+                                  ) : null}
+                                  {downloadActionStatus === "error" && downloadActionError ? (
+                                    <p className="max-w-[360px] text-right text-[11px] leading-relaxed text-rose-600">{downloadActionError}</p>
+                                  ) : null}
+                                  {downloadActionStatus !== "success" && downloadActionStatus !== "error" && shouldShowDownloadStatusMessage(downloadStatus) ? (
+                                    <p className="max-w-[360px] text-right text-[11px] leading-relaxed text-slate-500">{downloadStatus.message}</p>
+                                  ) : null}
+                                </div>
+                              ) : null}
+                              {detailUrl ? (
+                                <a
+                                  className="inline-flex h-9 shrink-0 items-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                                  href={detailUrl}
+                                  rel="noreferrer"
+                                  target="_blank"
+                                >
+                                  <ExternalLink className="size-4" />
+                                  Civitai
+                                </a>
+                              ) : null}
+                            </div>
                           </div>
 
                           <div className="grid gap-3 md:grid-cols-4">

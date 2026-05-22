@@ -107,27 +107,6 @@ describe("generatePrompt", () => {
     expect(result.negativePrompt.match(/\bextra fingers\b/g)).toHaveLength(1);
   });
 
-  it("uses Midjourney weight formatting when configured", () => {
-    const project = {
-      ...createDefaultProject(),
-      settings: {
-        ...createDefaultProject().settings,
-        modelFormat: "midjourney" as const,
-      },
-    };
-    project.scene.promptTags.push({
-      id: "tag-cinematic-style",
-      label: "电影感",
-      prompt: "cinematic composition",
-      category: "style",
-      weight: { enabled: true, value: 1.15 },
-    });
-
-    const result = generatePrompt(project);
-
-    expect(result.prompt).toContain("cinematic composition::1.15");
-  });
-
   it("keeps object tags scoped to their scene object prompt", () => {
     const project = createDefaultProject();
     const tableObject = addTableObject(project);
@@ -200,22 +179,6 @@ describe("generatePrompt", () => {
     expect(result.parts.filter((part) => part.startsWith("head with "))).toHaveLength(1);
     expect(result.negativePrompt).toContain("waxy face");
     expect(result.negativePrompt).toContain("dead eyes");
-  });
-
-  it("formats face template weights for Midjourney", () => {
-    const project = createDefaultProject();
-    project.settings.modelFormat = "midjourney";
-    const character = addDefaultCharacter(project);
-    character.bodyParts = upsertFaceTemplateTagsOnHead(
-      character.bodyParts,
-      "real-human-face",
-      1,
-    );
-
-    const result = generatePrompt(project);
-
-    expect(result.prompt).toContain("multi-tone living skin::1.16");
-    expect(result.prompt).toContain("natural skin microtexture::1.12");
   });
 
   it("dedupes face template negative tags against existing negative prompts", () => {

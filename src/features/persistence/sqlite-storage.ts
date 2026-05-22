@@ -3,7 +3,9 @@ import crypto from "node:crypto";
 import path from "node:path";
 
 import { getOfficialPreviewImage } from "@/features/civitai-lora-library/normalize";
+import { sanitizeCivitaiLibrarySettingsPayload } from "@/features/civitai-lora-library/settings";
 import type {
+  CivitaiLibrarySettings,
   CivitaiResourceListFilters,
   CivitaiResourceListItem,
   CivitaiResourceRecord,
@@ -49,6 +51,7 @@ export type SceneForgeSqliteDatabase = {
 const SCHEMA_VERSION = "2";
 const PROMPT_LIBRARY_KEY = "prompt-library";
 const PROMPT_BINDINGS_KEY = "prompt-bindings";
+const CIVITAI_LIBRARY_SETTINGS_KEY = "civitai-lora-library-settings";
 const CIVITAI_LOCAL_IMAGE_ROUTE_PREFIX = "/api/civitai-lora-library/images/";
 
 type NodeSqliteModule = {
@@ -465,6 +468,22 @@ export function savePromptBindingsToSqlite(
 ): void {
   const normalized = sanitizeGlobalPromptBindingsPayload(state);
   writeAppStateJson(db, PROMPT_BINDINGS_KEY, { version: 1, ...normalized });
+}
+
+export function loadCivitaiLibrarySettingsFromSqlite(
+  db: SceneForgeSqliteDatabase,
+): CivitaiLibrarySettings {
+  const payload = readAppStateJson(db, CIVITAI_LIBRARY_SETTINGS_KEY);
+  return sanitizeCivitaiLibrarySettingsPayload(payload ?? {});
+}
+
+export function saveCivitaiLibrarySettingsToSqlite(
+  db: SceneForgeSqliteDatabase,
+  settings: unknown,
+): CivitaiLibrarySettings {
+  const normalized = sanitizeCivitaiLibrarySettingsPayload(settings);
+  writeAppStateJson(db, CIVITAI_LIBRARY_SETTINGS_KEY, { version: 1, ...normalized });
+  return normalized;
 }
 
 function stringifyJson(value: unknown): string {

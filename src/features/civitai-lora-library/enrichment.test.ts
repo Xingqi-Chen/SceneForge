@@ -1,12 +1,84 @@
-import { describe, expect, it } from "vitest";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   buildCivitaiResourceEnrichmentMessages,
+  enrichCivitaiResource,
   mergeCivitaiTriggerWords,
   parseCivitaiResourceEnrichmentContent,
 } from "./enrichment";
+import type { CivitaiResourceUpsertInput } from "./types";
+
+function makeResourceInput(overrides: Partial<CivitaiResourceUpsertInput> = {}): CivitaiResourceUpsertInput {
+  return {
+    resourceType: "lora",
+    civitaiModelId: 1,
+    civitaiModelVersionId: 2,
+    name: "Example LoRA",
+    versionName: "v1",
+    hash: null,
+    baseModel: "Illustrious",
+    trainedWords: [],
+    tags: [],
+    description: "Trigger word: example",
+    creator: null,
+    downloadUrl: null,
+    filesJson: null,
+    officialImagesJson: null,
+    category: null,
+    categories: [],
+    usageGuide: null,
+    recommendations: [],
+    enrichmentStatus: "fallback",
+    enrichmentError: null,
+    nsfw: null,
+    aiNsfwLevel: "unknown",
+    aiNsfwConfidence: null,
+    aiNsfwReason: null,
+    rawVersionJson: null,
+    ...overrides,
+  };
+}
 
 describe("Civitai resource enrichment", () => {
+  let tempDir: string;
+  let previousLogFile: string | undefined;
+  let previousBaseUrl: string | undefined;
+  let previousDefaultModel: string | undefined;
+
+  beforeEach(async () => {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "sceneforge-civitai-enrichment-"));
+    previousLogFile = process.env.SCENEFORGE_LLM_LOG_FILE;
+    previousBaseUrl = process.env.LITELLM_BASE_URL;
+    previousDefaultModel = process.env.LITELLM_DEFAULT_MODEL;
+    process.env.SCENEFORGE_LLM_LOG_FILE = path.join(tempDir, "llm-chat.jsonl");
+    process.env.LITELLM_BASE_URL = "https://litellm.test";
+    process.env.LITELLM_DEFAULT_MODEL = "test-model";
+  });
+
+  afterEach(async () => {
+    vi.unstubAllGlobals();
+    if (previousLogFile === undefined) {
+      delete process.env.SCENEFORGE_LLM_LOG_FILE;
+    } else {
+      process.env.SCENEFORGE_LLM_LOG_FILE = previousLogFile;
+    }
+    if (previousBaseUrl === undefined) {
+      delete process.env.LITELLM_BASE_URL;
+    } else {
+      process.env.LITELLM_BASE_URL = previousBaseUrl;
+    }
+    if (previousDefaultModel === undefined) {
+      delete process.env.LITELLM_DEFAULT_MODEL;
+    } else {
+      process.env.LITELLM_DEFAULT_MODEL = previousDefaultModel;
+    }
+    await fs.rm(tempDir, { recursive: true, force: true });
+  });
+
   it("parses fenced JSON with categories, trigger words, ranges, and redraw rates", () => {
     const parsed = parseCivitaiResourceEnrichmentContent(
       `\`\`\`json
@@ -131,5 +203,94 @@ describe("Civitai resource enrichment", () => {
     expect(messages[1]?.content).not.toContain("sourceImage");
     expect(messages[1]?.content).toContain("civitaiNsfw");
     expect(messages[0]?.content).toContain("Do NOT infer recommendations from a source image prompt");
+  });
+
+  it("writes direct enrichment LLM calls to llm-chat.jsonl", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json({
+          id: "chatcmpl-test",
+          model: "test-model",
+          choices: [
+            {
+              message: {
+                role: "assistant",
+                content: JSON.stringify({
+                  usageGuide: "适合写实细节。",
+                  categories: ["style"],
+                  triggerWords: ["example"],
+                  recommendations: [{ loraWeight: 0.7 }],
+                  aiNsfwLevel: "sfw",
+                  aiNsfwConfidence: 0.9,
+                  aiNsfwReason: "描述中未出现敏感内容。",
+                }),
+              },
+              finish_reason: "stop",
+            },
+          ],
+          usage: {
+            prompt_tokens: 10,
+            completion_tokens: 12,
+            total_tokens: 22,
+          },
+        }),
+      ),
+    );
+
+    const result = await enrichCivitaiResource(makeResourceInput());
+    const logLines = (await fs.readFile(process.env.SCENEFORGE_LLM_LOG_FILE!, "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { phase: string; route: string; payload: Record<string, unknown> });
+
+    expect(result.status).toBe("ai_enriched");
+    expect(logLines).toHaveLength(2);
+    expect(logLines.map((line) => line.phase)).toEqual(["request", "response"]);
+    expect(logLines.every((line) => line.route === "civitai-lora-library/enrichment")).toBe(true);
+    expect(logLines[0]?.payload).toMatchObject({
+      purpose: "civitai-resource-enrichment",
+      model: "test-model",
+      resource: {
+        resourceType: "lora",
+        civitaiModelId: 1,
+        civitaiModelVersionId: 2,
+        name: "Example LoRA",
+      },
+    });
+    expect(logLines[1]?.payload.completion).toMatchObject({
+      id: "chatcmpl-test",
+      model: "test-model",
+    });
+  });
+
+  it("writes an error log when direct enrichment receives an invalid LLM response", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json({
+          choices: [
+            {
+              message: {
+                role: "assistant",
+                content: "not json",
+              },
+            },
+          ],
+        }),
+      ),
+    );
+
+    const result = await enrichCivitaiResource(makeResourceInput());
+    const logLines = (await fs.readFile(process.env.SCENEFORGE_LLM_LOG_FILE!, "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { phase: string; payload: Record<string, unknown> });
+
+    expect(result.status).toBe("ai_failed");
+    expect(logLines.map((line) => line.phase)).toEqual(["request", "response", "error"]);
+    expect(logLines[2]?.payload.error).toMatchObject({
+      name: "SyntaxError",
+    });
   });
 });

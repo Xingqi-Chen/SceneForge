@@ -43,6 +43,10 @@ function resolveDefaultModel(payload: LlmChatRequest) {
     return process.env.LITELLM_DEFAULT_MODEL;
   }
 
+  if (payload.purpose === "stable-diffusion-prompt-generation") {
+    return process.env.LITELLM_DEFAULT_MODEL;
+  }
+
   return process.env.LITELLM_DEFAULT_MODEL;
 }
 

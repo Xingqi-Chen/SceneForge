@@ -22,7 +22,11 @@ export type LlmChatMessage = {
 
 export type LlmChatRequest = {
   model?: string;
-  purpose?: "prompt-library-classification" | "stick-figure-pose-generation" | "civitai-resource-enrichment";
+  purpose?:
+    | "prompt-library-classification"
+    | "stick-figure-pose-generation"
+    | "civitai-resource-enrichment"
+    | "stable-diffusion-prompt-generation";
   messages: LlmChatMessage[];
   temperature?: number;
   maxTokens?: number;

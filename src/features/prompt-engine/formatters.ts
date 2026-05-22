@@ -15,10 +15,6 @@ function formatWeightedPrompt(prompt: string, weight: PromptWeight, format: Prom
     return `(${normalizedPrompt}:${weight.value})`;
   }
 
-  if (format === "midjourney") {
-    return `${normalizedPrompt}::${weight.value}`;
-  }
-
   return `${normalizedPrompt} (${weight.value})`;
 }
 

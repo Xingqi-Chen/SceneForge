@@ -13,6 +13,7 @@ import {
   deleteProjectFromSqlite,
   getCivitaiResourceDetailFromSqlite,
   getImportedImageDetailFromSqlite,
+  loadCivitaiLibrarySettingsFromSqlite,
   listCivitaiImageCacheReferencesFromSqlite,
   listImportedImagesFromSqlite,
   listReferencedCivitaiLocalImageUrlsFromSqlite,
@@ -22,6 +23,7 @@ import {
   loadPromptBindingsFromSqlite,
   loadPromptLibraryFromSqlite,
   openSceneForgeSqliteDatabase,
+  saveCivitaiLibrarySettingsToSqlite,
   saveProjectToSqlite,
   savePromptBindingsToSqlite,
   savePromptLibraryToSqlite,
@@ -98,6 +100,35 @@ describe("sqlite persistence support", () => {
 
     expect(loadPromptLibraryFromSqlite(db)).toEqual(library);
     expect(loadPromptBindingsFromSqlite(db)).toEqual(bindings);
+  });
+
+  it("stores Civitai library download path settings in SQLite", () => {
+    expect(loadCivitaiLibrarySettingsFromSqlite(db)).toEqual({
+      loraDownloadPath: "",
+      checkpointDownloadPath: "",
+    });
+
+    expect(
+      saveCivitaiLibrarySettingsToSqlite(db, {
+        loraDownloadPath: "  D:/models/loras  ",
+        checkpointDownloadPath: "  D:/models/checkpoints  ",
+      }),
+    ).toEqual({
+      loraDownloadPath: "D:/models/loras",
+      checkpointDownloadPath: "D:/models/checkpoints",
+    });
+    expect(loadCivitaiLibrarySettingsFromSqlite(db)).toEqual({
+      loraDownloadPath: "D:/models/loras",
+      checkpointDownloadPath: "D:/models/checkpoints",
+    });
+
+    saveCivitaiLibrarySettingsToSqlite(db, {
+      loraDownloadPath: 123,
+    });
+    expect(loadCivitaiLibrarySettingsFromSqlite(db)).toEqual({
+      loraDownloadPath: "",
+      checkpointDownloadPath: "",
+    });
   });
 
   it("stores Civitai image resource usages and deduplicates resources", () => {

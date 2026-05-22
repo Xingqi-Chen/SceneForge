@@ -44,6 +44,16 @@ describe("project serialization", () => {
     );
   });
 
+  it("falls back to generic format when importing legacy Midjourney settings", () => {
+    const project = createDefaultProject();
+    const raw = JSON.parse(serializeProject(project));
+    raw.settings.modelFormat = "midjourney";
+
+    const imported = importProjectFromJson(JSON.stringify(raw));
+
+    expect(imported.settings.modelFormat).toBe("generic");
+  });
+
   it("clamps imported 3D scene config to viewport-safe ranges", () => {
     const project = createDefaultProject();
     project.scene.three.camera.fov = 500;
@@ -288,6 +298,20 @@ describe("project serialization", () => {
     expect(imported.scene.characters).toEqual([]);
     expect(imported.scene.promptTags).toEqual([]);
     expect(Array.isArray(imported.settings.promptLibraryTags)).toBe(true);
+    expect(imported.settings.selectedCivitaiCheckpointId).toBeNull();
+    expect(imported.settings.selectedCivitaiLoraIds).toEqual([]);
+  });
+
+  it("normalizes selected Civitai resources on project import", () => {
+    const project = createDefaultProject();
+    const raw = JSON.parse(serializeProject(project));
+    raw.settings.selectedCivitaiCheckpointId = " checkpoint-a ";
+    raw.settings.selectedCivitaiLoraIds = ["lora-a", "lora-b", "lora-a", "", 12, " lora-c "];
+
+    const imported = importProjectFromJson(JSON.stringify(raw));
+
+    expect(imported.settings.selectedCivitaiCheckpointId).toBe("checkpoint-a");
+    expect(imported.settings.selectedCivitaiLoraIds).toEqual(["lora-a", "lora-b", "lora-c"]);
   });
 
   it("coerces target prompt category bindings on import", () => {
