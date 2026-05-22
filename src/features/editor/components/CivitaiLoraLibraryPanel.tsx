@@ -7,6 +7,7 @@ import { createPortal } from "react-dom";
 import { Button } from "@/components/ui/button";
 import { useEditorStore } from "@/features/editor/store/editor-store";
 import type {
+  CivitaiAiRecommendationResponse,
   CivitaiAiNsfwLevel,
   CivitaiImportResult,
   CivitaiLibrarySettings,
@@ -20,6 +21,7 @@ import type {
   CivitaiResolveStatus,
   ImportedImageDetail,
   ImportedImageListItem,
+  SelectedCivitaiResourcePreview,
 } from "@/features/civitai-lora-library";
 import { getCivitaiImageVariantUrl } from "@/features/civitai-lora-library/image-url";
 import {
@@ -320,11 +322,67 @@ function CivitaiPreviewImage({ alt, src, loading = "lazy", decoding = "async", .
   );
 }
 
+function AiRecommendationResourceCard({
+  label,
+  onOpenDetail,
+  reason,
+  resource,
+  suggestedWeight,
+}: {
+  label: string;
+  onOpenDetail: () => void;
+  reason: string;
+  resource: SelectedCivitaiResourcePreview;
+  suggestedWeight?: number | null;
+}) {
+  return (
+    <button
+      aria-label={`打开 ${resource.name} 的 Civitai 详情`}
+      className="grid w-full gap-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-left transition hover:border-indigo-200 hover:bg-indigo-50/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300 sm:grid-cols-[56px_1fr]"
+      onClick={onOpenDetail}
+      type="button"
+    >
+      <div className="flex h-14 w-14 overflow-hidden rounded-md bg-white">
+        {resource.previewImage ? (
+          <CivitaiPreviewImage
+            alt={`${resource.name} preview`}
+            className="h-full w-full object-cover"
+            src={resource.previewImage}
+          />
+        ) : (
+          <div className="flex h-full w-full items-center justify-center text-[10px] text-slate-400">
+            {label}
+          </div>
+        )}
+      </div>
+      <div className="min-w-0">
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="rounded-full bg-indigo-50 px-2 py-0.5 text-[10px] font-medium text-indigo-700">
+            {label}
+          </span>
+          <span className="rounded-full bg-white px-2 py-0.5 text-[10px] text-slate-500">
+            {resource.versionName ?? "Unknown version"}
+          </span>
+          {suggestedWeight !== undefined ? (
+            <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-medium text-emerald-700">
+              weight {formatWeight(suggestedWeight)}
+            </span>
+          ) : null}
+        </div>
+        <p className="mt-1 truncate text-xs font-semibold text-slate-900">{resource.name}</p>
+        <p className="mt-0.5 text-[11px] text-slate-500">{resource.baseModel ?? "unknown base model"}</p>
+        <p className="mt-2 text-xs leading-relaxed text-slate-600">{reason}</p>
+      </div>
+    </button>
+  );
+}
+
 export function CivitaiLoraLibraryPanel() {
   const selectedCivitaiCheckpointId = useEditorStore((state) => state.project.settings.selectedCivitaiCheckpointId);
   const selectedCivitaiLoraIds = useEditorStore((state) => state.project.settings.selectedCivitaiLoraIds);
   const selectCivitaiCheckpoint = useEditorStore((state) => state.selectCivitaiCheckpoint);
   const toggleCivitaiLora = useEditorStore((state) => state.toggleCivitaiLora);
+  const setSelectedCivitaiResources = useEditorStore((state) => state.setSelectedCivitaiResources);
   const [open, setOpen] = useState(false);
   const [resources, setResources] = useState<CivitaiResourceListItem[]>([]);
   const [images, setImages] = useState<ImportedImageListItem[]>([]);
@@ -364,6 +422,11 @@ export function CivitaiLoraLibraryPanel() {
   const [downloadActionStatus, setDownloadActionStatus] = useState<LoadStatus>("idle");
   const [downloadActionMessage, setDownloadActionMessage] = useState("");
   const [downloadActionError, setDownloadActionError] = useState("");
+  const [aiRecommendationInput, setAiRecommendationInput] = useState("");
+  const [aiRecommendationStatus, setAiRecommendationStatus] = useState<LoadStatus>("idle");
+  const [aiRecommendationError, setAiRecommendationError] = useState("");
+  const [aiRecommendationResult, setAiRecommendationResult] = useState<CivitaiAiRecommendationResponse | null>(null);
+  const [aiRecommendationPanelCollapsed, setAiRecommendationPanelCollapsed] = useState(false);
   const [importPanelCollapsed, setImportPanelCollapsed] = useState(false);
   const [resourceTab, setResourceTab] = useState<LibraryResourceTab>("lora");
   const [category, setCategory] = useState<CivitaiLoraCategory | "all">("all");
@@ -861,6 +924,46 @@ export function CivitaiLoraLibraryPanel() {
     setDownloadActionMessage(result.message);
   }
 
+  async function handleRecommendCivitaiCombination() {
+    const desiredEffect = aiRecommendationInput.trim();
+    if (!desiredEffect) {
+      setAiRecommendationStatus("error");
+      setAiRecommendationError("请先输入想要的画面效果。");
+      setAiRecommendationResult(null);
+      return;
+    }
+
+    setAiRecommendationStatus("loading");
+    setAiRecommendationError("");
+
+    try {
+      const result = await fetchJson<CivitaiAiRecommendationResponse>(
+        "/api/civitai-lora-library/ai-recommendation",
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({
+            desiredEffect,
+            maxLoras: 3,
+          }),
+        },
+      );
+
+      setAiRecommendationResult(result);
+      setSelectedCivitaiResources(
+        result.checkpoint.resource.id,
+        result.loras.map((entry) => entry.resource.id),
+      );
+      setAiRecommendationStatus("success");
+    } catch (error) {
+      setAiRecommendationStatus("error");
+      setAiRecommendationError(error instanceof Error ? error.message : "AI 推荐失败，请稍后重试。");
+      setAiRecommendationResult(null);
+    }
+  }
+
   function handleToggleSelectedResource() {
     if (!detail || (detail.resourceType !== "lora" && detail.resourceType !== "model")) {
       return;
@@ -1269,6 +1372,116 @@ export function CivitaiLoraLibraryPanel() {
                         {repairResult.skipped} 张，失败 {repairResult.failed} 张。
                       </p>
                     ) : null}
+                    <div className="mt-4 rounded-lg border border-indigo-100 bg-white p-3 shadow-sm">
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div>
+                          <p className="text-sm font-bold text-slate-900">AI 推荐组合</p>
+                          <p className="mt-1 text-xs leading-relaxed text-slate-500">
+                            输入想要的效果，AI 会从本地收藏库里推荐 checkpoint + LoRA，并自动覆盖当前选择。
+                          </p>
+                        </div>
+                        <div className="flex shrink-0 items-center gap-2">
+                          {aiRecommendationStatus === "success" ? (
+                            <span className="rounded-full border border-emerald-100 bg-emerald-50 px-2.5 py-1 text-[11px] font-medium text-emerald-700">
+                              已自动选中
+                            </span>
+                          ) : null}
+                          <button
+                            aria-expanded={!aiRecommendationPanelCollapsed}
+                            className="inline-flex h-8 items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 text-xs font-medium text-slate-600 transition hover:bg-slate-50 hover:text-slate-900"
+                            onClick={() => setAiRecommendationPanelCollapsed((current) => !current)}
+                            type="button"
+                          >
+                            {aiRecommendationPanelCollapsed ? "展开" : "收起"}
+                            <ChevronDown
+                              className={`size-3.5 transition-transform ${
+                                aiRecommendationPanelCollapsed ? "" : "rotate-180"
+                              }`}
+                            />
+                          </button>
+                        </div>
+                      </div>
+                      {!aiRecommendationPanelCollapsed ? (
+                        <div className="mt-3 space-y-3">
+                          <div className="grid gap-2 lg:grid-cols-[1fr_auto]">
+                            <input
+                              className="h-10 min-w-0 rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-800 outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 disabled:opacity-60"
+                              disabled={aiRecommendationStatus === "loading"}
+                              onChange={(event) => {
+                                setAiRecommendationInput(event.target.value);
+                                if (aiRecommendationStatus === "error") {
+                                  setAiRecommendationStatus("idle");
+                                  setAiRecommendationError("");
+                                }
+                              }}
+                              placeholder="例如：赛博朋克霓虹雨夜、柔和写实人像、动漫厚涂光影"
+                              value={aiRecommendationInput}
+                            />
+                            <Button
+                              className="h-10 rounded-md bg-purple-600 px-5 text-white hover:bg-purple-700"
+                              disabled={aiRecommendationStatus === "loading"}
+                              onClick={() => void handleRecommendCivitaiCombination()}
+                              type="button"
+                            >
+                              {aiRecommendationStatus === "loading" ? (
+                                <Loader2 className="size-4 animate-spin" />
+                              ) : (
+                                <Sparkles className="size-4" />
+                              )}
+                              {aiRecommendationStatus === "loading" ? "推荐中..." : "AI 推荐"}
+                            </Button>
+                          </div>
+                          {aiRecommendationStatus === "error" && aiRecommendationError ? (
+                            <p className="text-xs leading-relaxed text-rose-600">{aiRecommendationError}</p>
+                          ) : null}
+                          {aiRecommendationResult ? (
+                            <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
+                              <div className="space-y-2 rounded-md border border-purple-100 bg-purple-50/60 p-3">
+                                <p className="text-[11px] font-bold uppercase tracking-wider text-purple-700">
+                                  推荐理由
+                                </p>
+                                <p className="text-xs leading-relaxed text-slate-700">
+                                  {aiRecommendationResult.recommendationReason}
+                                </p>
+                                <p className="text-[11px] font-bold uppercase tracking-wider text-purple-700">
+                                  组合效果
+                                </p>
+                                <p className="text-xs leading-relaxed text-slate-700">
+                                  {aiRecommendationResult.overallEffect}
+                                </p>
+                                {aiRecommendationResult.warnings.length > 0 ? (
+                                  <div className="space-y-1">
+                                    {aiRecommendationResult.warnings.map((warning) => (
+                                      <p className="text-[11px] leading-relaxed text-amber-700" key={warning}>
+                                        {warning}
+                                      </p>
+                                    ))}
+                                  </div>
+                                ) : null}
+                              </div>
+                              <div className="space-y-2">
+                                <AiRecommendationResourceCard
+                                  label="Checkpoint"
+                                  onOpenDetail={() => openResourceDetail(aiRecommendationResult.checkpoint.resource)}
+                                  reason={aiRecommendationResult.checkpoint.reason}
+                                  resource={aiRecommendationResult.checkpoint.resource}
+                                />
+                                {aiRecommendationResult.loras.map((entry) => (
+                                  <AiRecommendationResourceCard
+                                    key={entry.resource.id}
+                                    label="LoRA"
+                                    onOpenDetail={() => openResourceDetail(entry.resource)}
+                                    reason={entry.reason}
+                                    resource={entry.resource}
+                                    suggestedWeight={entry.suggestedWeight}
+                                  />
+                                ))}
+                              </div>
+                            </div>
+                          ) : null}
+                        </div>
+                      ) : null}
+                    </div>
                     {parsePreview ? (
                       <button
                         aria-expanded={!importPanelCollapsed}

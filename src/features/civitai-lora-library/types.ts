@@ -299,6 +299,25 @@ export type SelectedCivitaiResourcesPreview = {
   loras: SelectedCivitaiResourcePreview[];
 };
 
+export type CivitaiAiRecommendedCheckpoint = {
+  resource: SelectedCivitaiResourcePreview;
+  reason: string;
+};
+
+export type CivitaiAiRecommendedLora = {
+  resource: SelectedCivitaiResourcePreview;
+  suggestedWeight: number | null;
+  reason: string;
+};
+
+export type CivitaiAiRecommendationResponse = {
+  checkpoint: CivitaiAiRecommendedCheckpoint;
+  loras: CivitaiAiRecommendedLora[];
+  recommendationReason: string;
+  overallEffect: string;
+  warnings: string[];
+};
+
 export type CivitaiImportResourceResult = {
   resource: CivitaiResourceRecord;
   usage: ImageResourceUsageRecord;

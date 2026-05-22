@@ -134,6 +134,7 @@ type EditorState = {
   updateProjectSettings: (patch: Partial<ProjectSettings>) => void;
   selectCivitaiCheckpoint: (resourceId: string) => void;
   toggleCivitaiLora: (resourceId: string) => void;
+  setSelectedCivitaiResources: (checkpointId: string | null, loraIds: string[]) => void;
   addObject: (input: AddSceneObjectInput) => void;
   updateObject: (id: string, patch: Partial<SceneObject>) => void;
   updateObject3DTransform: (id: string, patch: Partial<SceneObject3DTransform>) => void;
@@ -200,6 +201,23 @@ function touchProject(project: SceneForgeProject): SceneForgeProject {
     ...project,
     updatedAt: new Date().toISOString(),
   };
+}
+
+function sanitizeCivitaiSelectionIds(ids: string[]) {
+  const seen = new Set<string>();
+  const cleanIds: string[] = [];
+
+  for (const rawId of ids) {
+    const id = rawId.trim();
+    if (!id || seen.has(id)) {
+      continue;
+    }
+
+    seen.add(id);
+    cleanIds.push(id);
+  }
+
+  return cleanIds;
 }
 
 const maxUndoSteps = 50;
@@ -932,6 +950,17 @@ export const useEditorStore = create<EditorState>((set) => ({
         }),
       };
     }),
+  setSelectedCivitaiResources: (checkpointId, loraIds) =>
+    set((state) => ({
+      project: touchProject({
+        ...state.project,
+        settings: {
+          ...state.project.settings,
+          selectedCivitaiCheckpointId: checkpointId?.trim() || null,
+          selectedCivitaiLoraIds: sanitizeCivitaiSelectionIds(loraIds),
+        },
+      }),
+    })),
   addObject: (input) =>
     set((state) => {
       const nextLayer = getNextLayer(state.project.scene.objects);

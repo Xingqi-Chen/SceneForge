@@ -269,6 +269,20 @@ describe("editor store", () => {
 
     useEditorStore.getState().toggleCivitaiLora("lora-a");
     expect(useEditorStore.getState().project.settings.selectedCivitaiLoraIds).toEqual(["lora-b", "lora-a"]);
+
+    useEditorStore.getState().setSelectedCivitaiResources(" checkpoint-c ", [
+      "lora-c",
+      "lora-b",
+      "lora-c",
+      "",
+      " lora-d ",
+    ]);
+    expect(useEditorStore.getState().project.settings.selectedCivitaiCheckpointId).toBe("checkpoint-c");
+    expect(useEditorStore.getState().project.settings.selectedCivitaiLoraIds).toEqual(["lora-c", "lora-b", "lora-d"]);
+
+    useEditorStore.getState().setSelectedCivitaiResources(null, []);
+    expect(useEditorStore.getState().project.settings.selectedCivitaiCheckpointId).toBeNull();
+    expect(useEditorStore.getState().project.settings.selectedCivitaiLoraIds).toEqual([]);
   });
 
   it("switches to 3D mode, adds a primitive, and updates its transform", () => {

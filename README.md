@@ -26,6 +26,7 @@ Configure the LiteLLM proxy with server-only environment variables:
 LITELLM_BASE_URL=http://localhost:4000
 LITELLM_API_KEY=your-litellm-proxy-key
 LITELLM_DEFAULT_MODEL=your-model-name
+LITELLM_CIVITAI_RECOMMENDATION_MODEL=optional-civitai-recommendation-model
 ```
 
 The endpoint accepts `model`, `messages`, `temperature`, and `maxTokens`, then forwards the request to LiteLLM's OpenAI-compatible `/v1/chat/completions` API.

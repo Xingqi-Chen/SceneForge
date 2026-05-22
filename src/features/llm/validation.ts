@@ -66,6 +66,7 @@ function isOptionalPurpose(value: unknown): value is LlmChatRequest["purpose"] {
     value === "prompt-library-classification" ||
     value === "stick-figure-pose-generation" ||
     value === "civitai-resource-enrichment" ||
+    value === "civitai-combination-recommendation" ||
     value === "stable-diffusion-prompt-generation"
   );
 }

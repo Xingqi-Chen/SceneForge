@@ -43,6 +43,10 @@ function resolveDefaultModel(payload: LlmChatRequest) {
     return process.env.LITELLM_DEFAULT_MODEL;
   }
 
+  if (payload.purpose === "civitai-combination-recommendation") {
+    return process.env.LITELLM_CIVITAI_RECOMMENDATION_MODEL || process.env.LITELLM_DEFAULT_MODEL;
+  }
+
   if (payload.purpose === "stable-diffusion-prompt-generation") {
     return process.env.LITELLM_DEFAULT_MODEL;
   }

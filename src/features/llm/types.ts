@@ -26,6 +26,7 @@ export type LlmChatRequest = {
     | "prompt-library-classification"
     | "stick-figure-pose-generation"
     | "civitai-resource-enrichment"
+    | "civitai-combination-recommendation"
     | "stable-diffusion-prompt-generation";
   messages: LlmChatMessage[];
   temperature?: number;
