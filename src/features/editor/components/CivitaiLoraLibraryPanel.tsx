@@ -284,6 +284,7 @@ export function CivitaiLoraLibraryPanel() {
   const [query, setQuery] = useState("");
   const [baseModels, setBaseModels] = useState<string[]>([]);
   const [baseModel, setBaseModel] = useState("");
+  const detailPaneRef = useRef<HTMLElement | null>(null);
   const resourceLoadRequestIdRef = useRef(0);
 
   async function loadResources() {
@@ -691,6 +692,31 @@ export function CivitaiLoraLibraryPanel() {
       }
       return next;
     });
+  }
+
+  function resetDetailNavigationState() {
+    setDetail(null);
+    setImageDetail(null);
+    setCategory("all");
+    setBaseModel("");
+    setImportedCount("all");
+    setQuery("");
+    setNsfw("all");
+    window.requestAnimationFrame(() => detailPaneRef.current?.scrollTo({ top: 0 }));
+  }
+
+  function openResourceDetail(resource: Pick<CivitaiResourceDetail, "id" | "resourceType">) {
+    setResourceTab(resource.resourceType === "model" ? "model" : "lora");
+    setSelectedResourceId(resource.id);
+    setSelectedImageId(null);
+    resetDetailNavigationState();
+  }
+
+  function openImportedImageDetail(image: { id: string }) {
+    setResourceTab("image");
+    setSelectedImageId(image.id);
+    setSelectedResourceId(null);
+    resetDetailNavigationState();
   }
 
   return (
@@ -1372,7 +1398,7 @@ export function CivitaiLoraLibraryPanel() {
                       </div>
                     </aside>
 
-                    <section className="min-h-0 overflow-y-auto p-5">
+                    <section className="min-h-0 overflow-y-auto p-5" ref={detailPaneRef}>
                       {detailStatus === "loading" ? (
                         <div className="flex h-full min-h-72 items-center justify-center text-sm text-slate-500">
                           <Loader2 className="mr-2 size-4 animate-spin" />
@@ -1454,12 +1480,18 @@ export function CivitaiLoraLibraryPanel() {
                                   <div className="space-y-2">
                                     {imageDetailCheckpoints.length > 0 ? (
                                       imageDetailCheckpoints.map((usage) => (
-                                        <div className="rounded-md border border-slate-200 bg-white p-3" key={usage.id}>
+                                        <button
+                                          aria-label={`Open checkpoint detail for ${usage.resource.name}`}
+                                          className="w-full rounded-md border border-slate-200 bg-white p-3 text-left transition hover:border-indigo-200 hover:bg-indigo-50/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-200"
+                                          key={usage.id}
+                                          onClick={() => openResourceDetail(usage.resource)}
+                                          type="button"
+                                        >
                                           <p className="text-sm font-semibold text-slate-900">{usage.resource.name}</p>
                                           <p className="mt-1 text-xs text-slate-500">
                                             {formatResourceVersion(usage.resource)} · {usage.resource.baseModel ?? "unknown base model"}
                                           </p>
-                                        </div>
+                                        </button>
                                       ))
                                     ) : (
                                       <p className="rounded-md bg-slate-50 p-3 text-xs text-slate-500">No checkpoint metadata.</p>
@@ -1495,7 +1527,29 @@ export function CivitaiLoraLibraryPanel() {
                                   <div className="space-y-2">
                                     {imageDetailLoras.length > 0 ? (
                                       imageDetailLoras.map((usage) => (
-                                        <div className="rounded-md border border-slate-200 bg-white p-3" key={usage.id}>
+                                        <div
+                                          aria-label={loraWeightEditing ? undefined : `Open LoRA detail for ${usage.resource.name}`}
+                                          className={`rounded-md border border-slate-200 bg-white p-3 ${
+                                            loraWeightEditing
+                                              ? ""
+                                              : "cursor-pointer transition hover:border-indigo-200 hover:bg-indigo-50/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-200"
+                                          }`}
+                                          key={usage.id}
+                                          onClick={() => {
+                                            if (!loraWeightEditing) {
+                                              openResourceDetail(usage.resource);
+                                            }
+                                          }}
+                                          onKeyDown={(event) => {
+                                            if (loraWeightEditing || (event.key !== "Enter" && event.key !== " ")) {
+                                              return;
+                                            }
+                                            event.preventDefault();
+                                            openResourceDetail(usage.resource);
+                                          }}
+                                          role={loraWeightEditing ? undefined : "button"}
+                                          tabIndex={loraWeightEditing ? undefined : 0}
+                                        >
                                           <div className="flex items-start justify-between gap-3">
                                             <div className="min-w-0">
                                               <p className="truncate text-sm font-semibold text-slate-900">{usage.resource.name}</p>
@@ -1718,15 +1772,27 @@ export function CivitaiLoraLibraryPanel() {
                                   {detail.usages.map((usage) => (
                                     <div className="grid gap-3 rounded-md border border-slate-200 bg-white p-3 md:grid-cols-[96px_1fr]" key={usage.id}>
                                       {usage.importedImage.imageUrl ? (
-                                        <img
-                                          alt={`Civitai image ${usage.importedImage.civitaiImageId}`}
-                                          className="h-24 w-24 rounded-md object-cover"
-                                          src={usage.importedImage.imageUrl}
-                                        />
+                                        <button
+                                          aria-label={`Open image detail for Civitai image ${usage.importedImage.civitaiImageId}`}
+                                          className="h-24 w-24 rounded-md text-left transition hover:ring-2 hover:ring-indigo-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-200"
+                                          onClick={() => openImportedImageDetail(usage.importedImage)}
+                                          type="button"
+                                        >
+                                          <img
+                                            alt={`Civitai image ${usage.importedImage.civitaiImageId}`}
+                                            className="h-24 w-24 rounded-md object-cover"
+                                            src={usage.importedImage.imageUrl}
+                                          />
+                                        </button>
                                       ) : (
-                                        <div className="flex h-24 w-24 items-center justify-center rounded-md bg-slate-100 text-[10px] text-slate-400">
+                                        <button
+                                          aria-label={`Open image detail for Civitai image ${usage.importedImage.civitaiImageId}`}
+                                          className="flex h-24 w-24 items-center justify-center rounded-md bg-slate-100 text-[10px] text-slate-400 transition hover:ring-2 hover:ring-indigo-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-200"
+                                          onClick={() => openImportedImageDetail(usage.importedImage)}
+                                          type="button"
+                                        >
                                           Image
-                                        </div>
+                                        </button>
                                       )}
                                       <div className="min-w-0">
                                         <div className="flex flex-wrap gap-1.5 text-[11px] text-slate-500">
