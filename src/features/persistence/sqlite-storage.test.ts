@@ -7,12 +7,16 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { createDefaultProject, createDefaultPromptBindingState } from "@/features/editor/store/defaults";
+import { formatArtistStringForPlatform, parseNovelAiArtistString } from "@/features/artist-string-library";
 
 import { stripSharedPromptStateFromProject } from "./project-serialization";
 import {
   deleteProjectFromSqlite,
   getCivitaiResourceDetailFromSqlite,
   getImportedImageDetailFromSqlite,
+  listArtistStringItemsFromSqlite,
+  listArtistStringPlatformsFromSqlite,
+  listReferencedArtistStringLocalImageUrlsFromSqlite,
   loadCivitaiLibrarySettingsFromSqlite,
   listCivitaiImageCacheReferencesFromSqlite,
   listImportedImagesFromSqlite,
@@ -29,6 +33,7 @@ import {
   savePromptLibraryToSqlite,
   type SceneForgeSqliteDatabase,
   updateImportedImageLoraUsageWeightsFromSqlite,
+  upsertArtistStringSyncToSqlite,
   upsertCivitaiResourceToSqlite,
   upsertImportedCivitaiImageToSqlite,
   upsertImageResourceUsageToSqlite,
@@ -128,6 +133,72 @@ describe("sqlite persistence support", () => {
     expect(loadCivitaiLibrarySettingsFromSqlite(db)).toEqual({
       loraDownloadPath: "",
       checkpointDownloadPath: "",
+    });
+  });
+
+  it("stores structured artist strings and local reference image urls in SQLite", () => {
+    const structuredArtistString = parseNovelAiArtistString("{artist:wlop},[[murata range]],");
+    const formattedPrompt = formatArtistStringForPlatform(structuredArtistString, "novelai");
+
+    const platform = upsertArtistStringSyncToSqlite(db, {
+      platform: {
+        id: "nai_bot_artists_gallery",
+        name: "nai-bot 300 artists gallery",
+        sourceUrl: "https://nai-bot.pages.dev/%E6%B3%95%E5%85%B8/artists-gallery/",
+        promptFormat: "novelai",
+        sourceUpdatedAtText: "2025/9/6",
+        rawMetaJson: { parsedItemCount: 1 },
+      },
+      items: [
+        {
+          platformId: "nai_bot_artists_gallery",
+          sourceSequence: 0,
+          categoryKey: "independent",
+          categoryName: "Independent style",
+          rawArtistString: "{artist:wlop},[[murata range]],",
+          structuredArtistString,
+          promptFormat: "novelai",
+          parseStatus: "parsed",
+          parseError: null,
+          formattedPrompt,
+          sourceUrl: "https://nai-bot.pages.dev/%E6%B3%95%E5%85%B8/artists-gallery/",
+          referenceImages: [
+            {
+              role: "SMEA False",
+              sourceUrl: "https://nai-bot.pages.dev/assets/300_artists/artist_000/img_1.webp",
+              alt: "000 - SMEA False",
+              localUrl: "/api/artist-string-library/images/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.webp",
+              width: 512,
+              height: 512,
+              sortOrder: 0,
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(platform.sourceUpdatedAtText).toBe("2025/9/6");
+    expect(listArtistStringPlatformsFromSqlite(db)).toHaveLength(1);
+    expect(listReferencedArtistStringLocalImageUrlsFromSqlite(db)).toEqual([
+      "/api/artist-string-library/images/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.webp",
+    ]);
+
+    const items = listArtistStringItemsFromSqlite(db, {
+      platformId: "nai_bot_artists_gallery",
+      query: "murata",
+    });
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      sourceSequence: 0,
+      parseStatus: "parsed",
+      formattedPrompt: "(artist:wlop:1.1),(murata range:0.8)",
+      normalizedArtistString: "(artist:wlop:1.1),(murata range:0.8)",
+    });
+    expect(items[0]?.structuredArtistString.nodes).toHaveLength(2);
+    expect(items[0]?.referenceImages[0]).toMatchObject({
+      role: "SMEA False",
+      width: 512,
+      height: 512,
     });
   });
 

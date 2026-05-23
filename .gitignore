@@ -53,6 +53,7 @@ next-env.d.ts
 # Local SQLite database and Civitai image cache
 /data/sceneforge.sqlite
 /data/civitai-lora-library/
+/data/artist-string-library/
 
 # Local LLM interaction logs
 /data/logs/*

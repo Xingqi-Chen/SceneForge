@@ -25,6 +25,7 @@ import type {
   Vector3,
 } from "@/shared/types";
 
+import { ArtistStringLibraryPanel } from "./ArtistStringLibraryPanel";
 import { CivitaiLoraLibraryPanel } from "./CivitaiLoraLibraryPanel";
 
 function FieldLabel({ children }: { children: ReactNode }) {
@@ -1042,7 +1043,12 @@ export function ObjectPropertiesPanel() {
               <option value="stable-diffusion">Stable Diffusion</option>
             </select>
           </div>
-          {project.settings.modelFormat === "stable-diffusion" ? <CivitaiLoraLibraryPanel /> : null}
+          {project.settings.modelFormat === "stable-diffusion" ? (
+            <>
+              <ArtistStringLibraryPanel />
+              <CivitaiLoraLibraryPanel />
+            </>
+          ) : null}
           <label className="flex h-10 cursor-pointer items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-4 text-xs font-medium text-slate-700 transition-all hover:bg-white">
             <input
               checked={project.settings.includeSpatialHints}

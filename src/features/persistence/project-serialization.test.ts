@@ -300,18 +300,41 @@ describe("project serialization", () => {
     expect(Array.isArray(imported.settings.promptLibraryTags)).toBe(true);
     expect(imported.settings.selectedCivitaiCheckpointId).toBeNull();
     expect(imported.settings.selectedCivitaiLoraIds).toEqual([]);
+    expect(imported.settings.selectedArtistStringIds).toEqual([]);
+    expect(imported.settings.selectedArtistStringPrompts).toEqual([]);
+    expect(imported.settings.artistStringPromptRenderMode).toBe("artist-weight");
   });
 
-  it("normalizes selected Civitai resources on project import", () => {
+  it("normalizes selected external resources on project import", () => {
     const project = createDefaultProject();
     const raw = JSON.parse(serializeProject(project));
     raw.settings.selectedCivitaiCheckpointId = " checkpoint-a ";
     raw.settings.selectedCivitaiLoraIds = ["lora-a", "lora-b", "lora-a", "", 12, " lora-c "];
+    raw.settings.selectedArtistStringIds = ["artist-string-a", " artist-string-b ", "artist-string-a", "", 12];
+    raw.settings.selectedArtistStringPrompts = [" {artist:foo}, bar ", "{artist:bar}", "{artist:foo}, bar", "", 12];
+    raw.settings.artistStringPromptRenderMode = "by-weight";
 
     const imported = importProjectFromJson(JSON.stringify(raw));
 
     expect(imported.settings.selectedCivitaiCheckpointId).toBe("checkpoint-a");
     expect(imported.settings.selectedCivitaiLoraIds).toEqual(["lora-a", "lora-b", "lora-c"]);
+    expect(imported.settings.selectedArtistStringIds).toEqual(["artist-string-a", "artist-string-b"]);
+    expect(imported.settings.selectedArtistStringPrompts).toEqual(["{artist:foo}, bar", "{artist:bar}"]);
+    expect(imported.settings.artistStringPromptRenderMode).toBe("by-weight");
+  });
+
+  it("migrates legacy selected artist string settings on project import", () => {
+    const project = createDefaultProject();
+    const raw = JSON.parse(serializeProject(project));
+    raw.settings.selectedArtistStringId = " artist-string-a ";
+    raw.settings.selectedArtistStringPrompt = " {artist:foo}, bar ";
+    delete raw.settings.selectedArtistStringIds;
+    delete raw.settings.selectedArtistStringPrompts;
+
+    const imported = importProjectFromJson(JSON.stringify(raw));
+
+    expect(imported.settings.selectedArtistStringIds).toEqual(["artist-string-a"]);
+    expect(imported.settings.selectedArtistStringPrompts).toEqual(["{artist:foo}, bar"]);
   });
 
   it("coerces target prompt category bindings on import", () => {

@@ -4,6 +4,8 @@ import { Palette, Sparkles, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import type { ArtistStringItemRecord } from "@/features/artist-string-library";
+import { formatArtistStringForPlatform } from "@/features/artist-string-library/novelai-artist-string";
 import type {
   SelectedCivitaiResourcePreview,
   SelectedCivitaiResourcesPreview,
@@ -22,7 +24,7 @@ import { useEditorStore } from "@/features/editor/store/editor-store";
 import { generatePrompt } from "@/features/prompt-engine";
 import { inferSceneLayoutConstraints } from "@/features/prompt-engine/spatial-relations";
 import { getLlmProxyErrorMessage, isLlmChatResponse } from "@/features/llm";
-import type { SceneForgeProject } from "@/shared/types";
+import type { ArtistStringPromptRenderMode, PromptTag, SceneForgeProject } from "@/shared/types";
 import { characterAppearsInThreeViewport } from "@/shared/utils/character-space";
 
 import { getCharacterStickFigurePose } from "@/features/editor/stick-figure-3d/get-character-stick-pose";
@@ -45,6 +47,19 @@ const EMPTY_SELECTED_CIVITAI_RESOURCES: SelectedCivitaiResourcesPreview = {
   checkpoint: null,
   loras: [],
 };
+
+type SelectedArtistStringsResponse = {
+  items: ArtistStringItemRecord[];
+};
+
+const ARTIST_STRING_PROMPT_RENDER_MODE_OPTIONS: Array<{
+  value: ArtistStringPromptRenderMode;
+  label: string;
+}> = [
+  { value: "artist-weight", label: "(artist:name:weight)" },
+  { value: "by-weight", label: "by name:weight" },
+  { value: "novelai", label: "NovelAI" },
+];
 
 function readErrorMessage(payload: unknown, fallback: string) {
   if (
@@ -88,6 +103,56 @@ function buildSelectedCivitaiResourcesQuery(checkpointId: string | null, loraIds
 
 function selectedResourceVersionLabel(resource: SelectedCivitaiResourcePreview) {
   return resource.versionName?.trim() || "Unknown version";
+}
+
+function formatArtistStringSequence(value: number) {
+  return String(value).padStart(3, "0");
+}
+
+function createPromptTagId(prefix: string) {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return `${prefix}-${crypto.randomUUID()}`;
+  }
+
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function formatSelectedArtistPrompt(item: ArtistStringItemRecord, renderMode: ArtistStringPromptRenderMode) {
+  return formatArtistStringForPlatform(item.structuredArtistString, item.promptFormat, { renderMode });
+}
+
+function makeSelectedArtistPromptTag(item: ArtistStringItemRecord, prompt: string): PromptTag {
+  return {
+    id: createPromptTagId("artist-string"),
+    label: `NAI ${formatArtistStringSequence(item.sourceSequence)} / ${item.categoryName}`,
+    prompt,
+    category: "style",
+    subcategory: "style-rendering",
+    weight: { enabled: false, value: 1 },
+  };
+}
+
+function compactPromptSnippet(value: string, max = 180) {
+  const compact = value.replace(/\s+/g, " ").trim();
+  return compact.length > max ? `${compact.slice(0, max)}...` : compact;
+}
+
+function findSceneArtistPromptTagIds(tags: SceneForgeProject["scene"]["promptTags"], prompt: string) {
+  const normalizedPrompt = prompt.trim();
+  if (!normalizedPrompt) {
+    return [];
+  }
+
+  return tags
+    .filter(
+      (tag) =>
+        /^NAI \d{3} \//.test(tag.label) &&
+        tag.category === "style" &&
+        tag.subcategory === "style-rendering" &&
+        !tag.negative &&
+        tag.prompt.trim() === normalizedPrompt,
+    )
+    .map((tag) => tag.id);
 }
 
 function SelectedCivitaiResourceCard({
@@ -160,6 +225,62 @@ function SelectedCivitaiResourceCard({
             <span className="text-[11px] text-slate-400">无触发词</span>
           )}
         </div>
+      </div>
+    </div>
+  );
+}
+
+function SelectedArtistStringResourceCard({
+  item,
+  onRemove,
+  renderMode,
+}: {
+  item: ArtistStringItemRecord;
+  onRemove: () => void;
+  renderMode: ArtistStringPromptRenderMode;
+}) {
+  const previewImage = item.referenceImages.find((image) => image.localUrl)?.localUrl ?? null;
+  const formattedPrompt = formatSelectedArtistPrompt(item, renderMode);
+  const sequenceLabel = `NAI ${formatArtistStringSequence(item.sourceSequence)}`;
+
+  return (
+    <div className="grid gap-3 rounded-md border border-fuchsia-100 bg-white p-3 sm:grid-cols-[72px_1fr]">
+      <div className="flex h-[72px] w-[72px] overflow-hidden rounded-md bg-slate-100">
+        {previewImage ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            alt={`${sequenceLabel} reference`}
+            className="h-full w-full object-cover"
+            decoding="async"
+            loading="lazy"
+            src={previewImage}
+          />
+        ) : (
+          <div className="flex h-full w-full items-center justify-center text-[10px] text-slate-400">
+            No image
+          </div>
+        )}
+      </div>
+      <div className="min-w-0">
+        <div className="flex items-start justify-between gap-2">
+          <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+            <span className="rounded-full bg-fuchsia-50 px-2 py-0.5 text-[10px] font-medium text-fuchsia-700">
+              {sequenceLabel} / {item.categoryName}
+            </span>
+          </div>
+          <button
+            aria-label={`去选中 ${sequenceLabel}`}
+            className="shrink-0 rounded-full p-1 text-slate-400 transition hover:bg-rose-50 hover:text-rose-600"
+            onClick={onRemove}
+            title="去选中"
+            type="button"
+          >
+            <X className="size-3.5" />
+          </button>
+        </div>
+        <p className="mt-2 text-xs leading-relaxed text-slate-600 [overflow-wrap:anywhere]">
+          {compactPromptSnippet(formattedPrompt, 160)}
+        </p>
       </div>
     </div>
   );
@@ -540,6 +661,9 @@ export function PromptPreviewPanel({ onCaptureCanvas }: PromptPreviewPanelProps)
   const setAiGeneratedPrompt = useEditorStore((state) => state.setAiGeneratedPrompt);
   const selectCivitaiCheckpoint = useEditorStore((state) => state.selectCivitaiCheckpoint);
   const toggleCivitaiLora = useEditorStore((state) => state.toggleCivitaiLora);
+  const updateProjectSettings = useEditorStore((state) => state.updateProjectSettings);
+  const addPromptTag = useEditorStore((state) => state.addPromptTag);
+  const removePromptTag = useEditorStore((state) => state.removePromptTag);
   const [aiStatus, setAiStatus] = useState<AiGenerationStatus>("idle");
   const [aiError, setAiError] = useState("");
   const [useLayoutConstraints, setUseLayoutConstraints] = useState(false);
@@ -552,10 +676,19 @@ export function PromptPreviewPanel({ onCaptureCanvas }: PromptPreviewPanelProps)
   const [selectedResourceStatus, setSelectedResourceStatus] = useState<SelectedResourceStatus>("idle");
   const [selectedResourceError, setSelectedResourceError] = useState("");
   const [selectedResourcesResultQuery, setSelectedResourcesResultQuery] = useState("");
+  const [selectedArtistStrings, setSelectedArtistStrings] = useState<ArtistStringItemRecord[]>([]);
+  const [selectedArtistStringStatus, setSelectedArtistStringStatus] = useState<SelectedResourceStatus>("idle");
+  const [selectedArtistStringError, setSelectedArtistStringError] = useState("");
+  const [selectedArtistStringResultKey, setSelectedArtistStringResultKey] = useState("");
   const generatedPrompt = generatePrompt(project);
   const selectedCheckpointId = project.settings.selectedCivitaiCheckpointId;
   const selectedLoraIds = project.settings.selectedCivitaiLoraIds ?? [];
+  const selectedArtistStringIds = project.settings.selectedArtistStringIds ?? [];
+  const artistStringPromptRenderMode = project.settings.artistStringPromptRenderMode ?? "artist-weight";
   const selectedLoraIdsKey = selectedLoraIds.join(",");
+  const selectedArtistStringIdsKey = selectedArtistStringIds.join(",");
+  const shouldLoadSelectedArtistStrings =
+    project.settings.modelFormat === "stable-diffusion" && selectedArtistStringIds.length > 0;
   const shouldLoadSelectedResources =
     project.settings.modelFormat === "stable-diffusion" && (Boolean(selectedCheckpointId) || selectedLoraIds.length > 0);
   const selectedResourcesQuery = useMemo(
@@ -580,6 +713,46 @@ export function PromptPreviewPanel({ onCaptureCanvas }: PromptPreviewPanelProps)
     () => selectedCivitaiResourceCards(displayedSelectedResources),
     [displayedSelectedResources],
   );
+  const effectiveSelectedArtistStringStatus: SelectedResourceStatus = !shouldLoadSelectedArtistStrings
+    ? "idle"
+    : selectedArtistStringResultKey === selectedArtistStringIdsKey
+      ? selectedArtistStringStatus
+      : "loading";
+  const displayedSelectedArtistStrings =
+    shouldLoadSelectedArtistStrings && selectedArtistStringResultKey === selectedArtistStringIdsKey
+      ? selectedArtistStrings
+      : [];
+
+  useEffect(() => {
+    if (!shouldLoadSelectedArtistStrings) {
+      return;
+    }
+
+    const controller = new AbortController();
+
+    fetchJson<SelectedArtistStringsResponse>(
+      `/api/artist-string-library/selected-resources?ids=${encodeURIComponent(selectedArtistStringIdsKey)}`,
+      { signal: controller.signal },
+    )
+      .then((payload) => {
+        setSelectedArtistStrings(payload.items);
+        setSelectedArtistStringStatus("success");
+        setSelectedArtistStringError("");
+        setSelectedArtistStringResultKey(selectedArtistStringIdsKey);
+      })
+      .catch((error) => {
+        if (controller.signal.aborted) {
+          return;
+        }
+
+        setSelectedArtistStrings([]);
+        setSelectedArtistStringStatus("error");
+        setSelectedArtistStringError(error instanceof Error ? error.message : "无法读取已选画师串资源。");
+        setSelectedArtistStringResultKey(selectedArtistStringIdsKey);
+      });
+
+    return () => controller.abort();
+  }, [selectedArtistStringIdsKey, shouldLoadSelectedArtistStrings]);
 
   useEffect(() => {
     if (!shouldLoadSelectedResources) {
@@ -637,6 +810,96 @@ export function PromptPreviewPanel({ onCaptureCanvas }: PromptPreviewPanelProps)
     }
 
     toggleCivitaiLora(resource.id);
+  }
+
+  function removeSceneArtistPrompt(prompt: string | null) {
+    if (!prompt) {
+      return;
+    }
+
+    for (const tagId of findSceneArtistPromptTagIds(project.scene.promptTags, prompt)) {
+      removePromptTag({ kind: "scene" }, tagId);
+    }
+  }
+
+  function handleArtistStringPromptRenderModeChange(nextMode: ArtistStringPromptRenderMode) {
+    if (nextMode === artistStringPromptRenderMode) {
+      return;
+    }
+
+    const selectedIds = project.settings.selectedArtistStringIds ?? [];
+    const selectedPrompts = project.settings.selectedArtistStringPrompts ?? [];
+    const itemById = new Map(displayedSelectedArtistStrings.map((item) => [item.id, item]));
+    const currentPrompts = selectedIds.map((id, index) => {
+      const item = itemById.get(id);
+      return selectedPrompts[index] ?? (item ? formatSelectedArtistPrompt(item, artistStringPromptRenderMode) : "");
+    });
+    const nextPrompts = selectedIds.map((id, index) => {
+      const item = itemById.get(id);
+      return item ? formatSelectedArtistPrompt(item, nextMode) : (selectedPrompts[index] ?? "");
+    });
+
+    for (const prompt of new Set(currentPrompts.filter((prompt) => prompt.trim()))) {
+      removeSceneArtistPrompt(prompt);
+    }
+
+    for (const id of selectedIds) {
+      const item = itemById.get(id);
+      if (!item) {
+        continue;
+      }
+
+      const prompt = formatSelectedArtistPrompt(item, nextMode);
+      if (prompt.trim()) {
+        addPromptTag({ kind: "scene" }, makeSelectedArtistPromptTag(item, prompt));
+      }
+    }
+
+    updateProjectSettings({
+      artistStringPromptRenderMode: nextMode,
+      selectedArtistStringPrompts: nextPrompts,
+    });
+  }
+
+  function handleRemoveSelectedArtistString(item: ArtistStringItemRecord) {
+    const selectedIds = project.settings.selectedArtistStringIds ?? [];
+    const selectedPrompts = project.settings.selectedArtistStringPrompts ?? [];
+    const removedIndex = selectedIds.indexOf(item.id);
+    const formattedPrompt = selectedPrompts[removedIndex]
+      ?? formatSelectedArtistPrompt(item, artistStringPromptRenderMode);
+    const nextIds = selectedIds.filter((id) => id !== item.id);
+    const nextPrompts =
+      removedIndex >= 0
+        ? selectedPrompts.filter((_, index) => index !== removedIndex)
+        : selectedPrompts.filter((prompt) => prompt.trim() !== formattedPrompt.trim());
+
+    if (!nextPrompts.some((prompt) => prompt.trim() === formattedPrompt.trim())) {
+      removeSceneArtistPrompt(formattedPrompt);
+    }
+
+    updateProjectSettings({
+      selectedArtistStringIds: nextIds,
+      selectedArtistStringPrompts: nextPrompts,
+    });
+    setSelectedArtistStrings((current) => current.filter((entry) => entry.id !== item.id));
+    setSelectedArtistStringResultKey(nextIds.join(","));
+  }
+
+  function handleClearSelectedArtistStrings() {
+    const prompts = project.settings.selectedArtistStringPrompts ?? [];
+    const fallbackPrompts = selectedArtistStrings.map((item) =>
+      formatSelectedArtistPrompt(item, artistStringPromptRenderMode),
+    );
+
+    for (const prompt of [...new Set(prompts.length > 0 ? prompts : fallbackPrompts)]) {
+      removeSceneArtistPrompt(prompt);
+    }
+
+    updateProjectSettings({ selectedArtistStringIds: [], selectedArtistStringPrompts: [] });
+    setSelectedArtistStrings([]);
+    setSelectedArtistStringStatus("idle");
+    setSelectedArtistStringError("");
+    setSelectedArtistStringResultKey("");
   }
 
   function handleOpenSelectedResourceDetail(resource: SelectedCivitaiResourcePreview) {
@@ -839,6 +1102,63 @@ export function PromptPreviewPanel({ onCaptureCanvas }: PromptPreviewPanelProps)
         </div>
       </div>
       <div className="space-y-4">
+        {shouldLoadSelectedArtistStrings ? (
+          <div>
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500">已选画师串资源</p>
+              <div className="flex items-center gap-2">
+                {effectiveSelectedArtistStringStatus === "loading" ? (
+                  <span className="text-[11px] text-slate-400">读取中...</span>
+                ) : null}
+                <select
+                  aria-label="选择画师串 Prompt 格式"
+                  className="h-7 max-w-[170px] rounded-md border border-fuchsia-100 bg-white px-2 text-[11px] font-medium text-slate-700 outline-none transition focus:border-fuchsia-300 focus:ring-2 focus:ring-fuchsia-100"
+                  disabled={
+                    effectiveSelectedArtistStringStatus !== "success" ||
+                    displayedSelectedArtistStrings.length !== selectedArtistStringIds.length
+                  }
+                  onChange={(event) =>
+                    handleArtistStringPromptRenderModeChange(event.target.value as ArtistStringPromptRenderMode)
+                  }
+                  title="选择添加到 Prompt 的画师串格式"
+                  value={artistStringPromptRenderMode}
+                >
+                  {ARTIST_STRING_PROMPT_RENDER_MODE_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  className="text-[11px] font-medium text-fuchsia-600 transition hover:text-fuchsia-700"
+                  onClick={handleClearSelectedArtistStrings}
+                  type="button"
+                >
+                  全部去选中
+                </button>
+              </div>
+            </div>
+            <div className="space-y-2 rounded-md border border-fuchsia-100 bg-fuchsia-50/50 p-3">
+              {effectiveSelectedArtistStringStatus === "error" ? (
+                <p className="text-xs leading-relaxed text-rose-600">{selectedArtistStringError}</p>
+              ) : null}
+              {displayedSelectedArtistStrings.length > 0 ? (
+                displayedSelectedArtistStrings.map((item) => (
+                  <SelectedArtistStringResourceCard
+                    item={item}
+                    key={item.id}
+                    onRemove={() => handleRemoveSelectedArtistString(item)}
+                    renderMode={artistStringPromptRenderMode}
+                  />
+                ))
+              ) : effectiveSelectedArtistStringStatus === "success" ? (
+                <p className="text-xs leading-relaxed text-slate-500">
+                  已选画师串未在本地画师串库中找到，可以先去选中后重新选择。
+                </p>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
         {shouldLoadSelectedResources ? (
           <div>
             <div className="mb-2 flex items-center justify-between gap-2">

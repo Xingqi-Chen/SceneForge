@@ -1,6 +1,7 @@
 import type { PromptTag, PromptTagCategory, PromptTagSubcategory, Scene } from "./scene";
 
 export type PromptModelFormat = "generic" | "stable-diffusion";
+export type ArtistStringPromptRenderMode = "novelai" | "artist-weight" | "by-weight";
 
 export type ProjectSettings = {
   modelFormat: PromptModelFormat;
@@ -8,6 +9,9 @@ export type ProjectSettings = {
   negativePrompt: string;
   selectedCivitaiCheckpointId: string | null;
   selectedCivitaiLoraIds: string[];
+  selectedArtistStringIds: string[];
+  selectedArtistStringPrompts: string[];
+  artistStringPromptRenderMode: ArtistStringPromptRenderMode;
   /** User-imported prompt library entries, loaded from the shared prompt library file at runtime. */
   promptLibraryTags: PromptTag[];
   /** Built-in prompt library entries hidden by the user, loaded from the shared prompt library file at runtime. */

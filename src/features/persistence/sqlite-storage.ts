@@ -2,6 +2,19 @@ import fs from "node:fs/promises";
 import crypto from "node:crypto";
 import path from "node:path";
 
+import {
+  coerceStructuredArtistString,
+  normalizeFormattedArtistString,
+} from "@/features/artist-string-library/novelai-artist-string";
+import type {
+  ArtistStringAdapterItem,
+  ArtistStringCategoryCount,
+  ArtistStringItemRecord,
+  ArtistStringListFilters,
+  ArtistStringPlatformRecord,
+  ArtistStringReferenceImageInput,
+  ArtistStringReferenceImageRecord,
+} from "@/features/artist-string-library/types";
 import { getOfficialPreviewImage } from "@/features/civitai-lora-library/normalize";
 import { sanitizeCivitaiLibrarySettingsPayload } from "@/features/civitai-lora-library/settings";
 import type {
@@ -53,6 +66,7 @@ const PROMPT_LIBRARY_KEY = "prompt-library";
 const PROMPT_BINDINGS_KEY = "prompt-bindings";
 const CIVITAI_LIBRARY_SETTINGS_KEY = "civitai-lora-library-settings";
 const CIVITAI_LOCAL_IMAGE_ROUTE_PREFIX = "/api/civitai-lora-library/images/";
+const ARTIST_STRING_LOCAL_IMAGE_ROUTE_PREFIX = "/api/artist-string-library/images/";
 
 type NodeSqliteModule = {
   DatabaseSync: new (location: string) => SceneForgeSqliteDatabase;
@@ -305,6 +319,59 @@ export function ensureSceneForgeSqliteSchema(db: SceneForgeSqliteDatabase): void
 
     CREATE INDEX IF NOT EXISTS idx_image_resource_usages_resource
       ON image_resource_usages (resource_id);
+
+    CREATE TABLE IF NOT EXISTS artist_string_platforms (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      source_url TEXT NOT NULL,
+      prompt_format TEXT NOT NULL,
+      source_updated_at_text TEXT,
+      synced_at TEXT NOT NULL,
+      raw_meta_json TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS artist_string_items (
+      id TEXT PRIMARY KEY,
+      platform_id TEXT NOT NULL,
+      source_sequence INTEGER NOT NULL,
+      category_key TEXT NOT NULL,
+      category_name TEXT NOT NULL,
+      raw_artist_string TEXT NOT NULL,
+      structured_artist_string_json TEXT NOT NULL,
+      prompt_format TEXT NOT NULL,
+      parse_status TEXT NOT NULL,
+      parse_error TEXT,
+      formatted_prompt TEXT NOT NULL,
+      normalized_artist_string TEXT NOT NULL,
+      source_url TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(platform_id, source_sequence),
+      FOREIGN KEY(platform_id) REFERENCES artist_string_platforms(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_artist_string_items_platform_category
+      ON artist_string_items (platform_id, category_key, source_sequence);
+
+    CREATE INDEX IF NOT EXISTS idx_artist_string_items_normalized
+      ON artist_string_items (normalized_artist_string);
+
+    CREATE TABLE IF NOT EXISTS artist_string_reference_images (
+      id TEXT PRIMARY KEY,
+      item_id TEXT NOT NULL,
+      role TEXT NOT NULL,
+      source_url TEXT NOT NULL,
+      alt TEXT,
+      local_url TEXT,
+      width INTEGER,
+      height INTEGER,
+      sort_order INTEGER NOT NULL,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY(item_id) REFERENCES artist_string_items(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_artist_string_reference_images_item
+      ON artist_string_reference_images (item_id, sort_order);
   `);
 
   ensureCivitaiResourceSchema(db);
@@ -488,6 +555,350 @@ export function saveCivitaiLibrarySettingsToSqlite(
 
 function stringifyJson(value: unknown): string {
   return JSON.stringify(value ?? null);
+}
+
+type ArtistStringReferenceImageUpsertInput = ArtistStringReferenceImageInput & {
+  localUrl: string | null;
+  width: number | null;
+  height: number | null;
+};
+
+type ArtistStringItemUpsertInput = Omit<ArtistStringAdapterItem, "referenceImages"> & {
+  referenceImages: ArtistStringReferenceImageUpsertInput[];
+};
+
+function mapArtistStringPlatformRow(row: unknown): ArtistStringPlatformRecord {
+  return {
+    id: (readTextColumn(row, "id") ?? "nai_bot_artists_gallery") as ArtistStringPlatformRecord["id"],
+    name: readTextColumn(row, "name") ?? "",
+    sourceUrl: readTextColumn(row, "source_url") ?? "",
+    promptFormat: (readTextColumn(row, "prompt_format") ?? "novelai") as ArtistStringPlatformRecord["promptFormat"],
+    sourceUpdatedAtText: readTextColumn(row, "source_updated_at_text") ?? null,
+    syncedAt: readTextColumn(row, "synced_at") ?? "",
+    rawMetaJson: readJsonColumn(row, "raw_meta_json"),
+  };
+}
+
+function mapArtistStringReferenceImageRow(row: unknown): ArtistStringReferenceImageRecord {
+  return {
+    id: readTextColumn(row, "id") ?? "",
+    itemId: readTextColumn(row, "item_id") ?? "",
+    role: readTextColumn(row, "role") ?? "",
+    sourceUrl: readTextColumn(row, "source_url") ?? "",
+    alt: readTextColumn(row, "alt") ?? null,
+    localUrl: readTextColumn(row, "local_url") ?? null,
+    width: readNumberColumn(row, "width") ?? null,
+    height: readNumberColumn(row, "height") ?? null,
+    sortOrder: readNumberColumn(row, "sort_order") ?? 0,
+    createdAt: readTextColumn(row, "created_at") ?? "",
+  };
+}
+
+function listArtistStringReferenceImagesForItem(
+  db: SceneForgeSqliteDatabase,
+  itemId: string,
+): ArtistStringReferenceImageRecord[] {
+  return db.prepare(`
+    SELECT *
+    FROM artist_string_reference_images
+    WHERE item_id = ?
+    ORDER BY sort_order ASC, id ASC
+  `).all(itemId).map(mapArtistStringReferenceImageRow);
+}
+
+function mapArtistStringItemRow(
+  row: unknown,
+  referenceImages: ArtistStringReferenceImageRecord[] = [],
+): ArtistStringItemRecord {
+  const structuredArtistString = coerceStructuredArtistString(
+    readJsonColumn(row, "structured_artist_string_json"),
+  ) ?? {
+    type: "novelai" as const,
+    raw: readTextColumn(row, "raw_artist_string") ?? "",
+    nodes: [],
+    warnings: ["Stored structured artist string could not be parsed."],
+  };
+
+  return {
+    id: readTextColumn(row, "id") ?? "",
+    platformId: (readTextColumn(row, "platform_id") ?? "nai_bot_artists_gallery") as ArtistStringItemRecord["platformId"],
+    sourceSequence: readNumberColumn(row, "source_sequence") ?? 0,
+    categoryKey: readTextColumn(row, "category_key") ?? "",
+    categoryName: readTextColumn(row, "category_name") ?? "",
+    rawArtistString: readTextColumn(row, "raw_artist_string") ?? "",
+    structuredArtistString,
+    promptFormat: (readTextColumn(row, "prompt_format") ?? "novelai") as ArtistStringItemRecord["promptFormat"],
+    parseStatus: (readTextColumn(row, "parse_status") ?? "failed") as ArtistStringItemRecord["parseStatus"],
+    parseError: readTextColumn(row, "parse_error") ?? null,
+    formattedPrompt: readTextColumn(row, "formatted_prompt") ?? "",
+    normalizedArtistString: readTextColumn(row, "normalized_artist_string") ?? "",
+    sourceUrl: readTextColumn(row, "source_url") ?? "",
+    referenceImages,
+    createdAt: readTextColumn(row, "created_at") ?? "",
+    updatedAt: readTextColumn(row, "updated_at") ?? "",
+  };
+}
+
+export function upsertArtistStringSyncToSqlite(
+  db: SceneForgeSqliteDatabase,
+  input: {
+    platform: Omit<ArtistStringPlatformRecord, "syncedAt">;
+    items: ArtistStringItemUpsertInput[];
+  },
+): ArtistStringPlatformRecord {
+  const syncedAt = nowIso();
+
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    db.prepare(`
+      INSERT INTO artist_string_platforms (
+        id,
+        name,
+        source_url,
+        prompt_format,
+        source_updated_at_text,
+        synced_at,
+        raw_meta_json
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        name = excluded.name,
+        source_url = excluded.source_url,
+        prompt_format = excluded.prompt_format,
+        source_updated_at_text = excluded.source_updated_at_text,
+        synced_at = excluded.synced_at,
+        raw_meta_json = excluded.raw_meta_json
+    `).run(
+      input.platform.id,
+      input.platform.name,
+      input.platform.sourceUrl,
+      input.platform.promptFormat,
+      input.platform.sourceUpdatedAtText,
+      syncedAt,
+      stringifyJson(input.platform.rawMetaJson),
+    );
+
+    const seenSequences: number[] = [];
+    for (const item of input.items) {
+      seenSequences.push(item.sourceSequence);
+      const existing = db.prepare(`
+        SELECT id, created_at
+        FROM artist_string_items
+        WHERE platform_id = ? AND source_sequence = ?
+      `).get(item.platformId, item.sourceSequence);
+      const id = readTextColumn(existing, "id") ?? newId("artist_str");
+      const createdAt = readTextColumn(existing, "created_at") ?? syncedAt;
+      const updatedAt = syncedAt;
+      const normalizedArtistString = normalizeFormattedArtistString(item.formattedPrompt);
+
+      db.prepare(`
+        INSERT INTO artist_string_items (
+          id,
+          platform_id,
+          source_sequence,
+          category_key,
+          category_name,
+          raw_artist_string,
+          structured_artist_string_json,
+          prompt_format,
+          parse_status,
+          parse_error,
+          formatted_prompt,
+          normalized_artist_string,
+          source_url,
+          created_at,
+          updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(platform_id, source_sequence) DO UPDATE SET
+          category_key = excluded.category_key,
+          category_name = excluded.category_name,
+          raw_artist_string = excluded.raw_artist_string,
+          structured_artist_string_json = excluded.structured_artist_string_json,
+          prompt_format = excluded.prompt_format,
+          parse_status = excluded.parse_status,
+          parse_error = excluded.parse_error,
+          formatted_prompt = excluded.formatted_prompt,
+          normalized_artist_string = excluded.normalized_artist_string,
+          source_url = excluded.source_url,
+          updated_at = excluded.updated_at
+      `).run(
+        id,
+        item.platformId,
+        item.sourceSequence,
+        item.categoryKey,
+        item.categoryName,
+        item.rawArtistString,
+        stringifyJson(item.structuredArtistString),
+        item.promptFormat,
+        item.parseStatus,
+        item.parseError,
+        item.formattedPrompt,
+        normalizedArtistString,
+        item.sourceUrl,
+        createdAt,
+        updatedAt,
+      );
+
+      db.prepare("DELETE FROM artist_string_reference_images WHERE item_id = ?").run(id);
+      for (const referenceImage of item.referenceImages) {
+        db.prepare(`
+          INSERT INTO artist_string_reference_images (
+            id,
+            item_id,
+            role,
+            source_url,
+            alt,
+            local_url,
+            width,
+            height,
+            sort_order,
+            created_at
+          )
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+          newId("artist_img"),
+          id,
+          referenceImage.role,
+          referenceImage.sourceUrl,
+          referenceImage.alt,
+          referenceImage.localUrl,
+          referenceImage.width,
+          referenceImage.height,
+          referenceImage.sortOrder,
+          syncedAt,
+        );
+      }
+    }
+
+    if (seenSequences.length > 0) {
+      const placeholders = seenSequences.map(() => "?").join(", ");
+      db.prepare(`
+        DELETE FROM artist_string_items
+        WHERE platform_id = ?
+          AND source_sequence NOT IN (${placeholders})
+      `).run(input.platform.id, ...seenSequences);
+    } else {
+      db.prepare("DELETE FROM artist_string_items WHERE platform_id = ?").run(input.platform.id);
+    }
+
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+
+  return mapArtistStringPlatformRow(
+    db.prepare("SELECT * FROM artist_string_platforms WHERE id = ?").get(input.platform.id),
+  );
+}
+
+export function listArtistStringPlatformsFromSqlite(
+  db: SceneForgeSqliteDatabase,
+): ArtistStringPlatformRecord[] {
+  return db.prepare(`
+    SELECT *
+    FROM artist_string_platforms
+    ORDER BY name ASC
+  `).all().map(mapArtistStringPlatformRow);
+}
+
+export function listArtistStringCategoryCountsFromSqlite(
+  db: SceneForgeSqliteDatabase,
+  platformId: string,
+): ArtistStringCategoryCount[] {
+  return db.prepare(`
+    SELECT
+      category_key,
+      category_name,
+      MIN(source_sequence) AS start_sequence,
+      MAX(source_sequence) AS end_sequence,
+      COUNT(*) AS count
+    FROM artist_string_items
+    WHERE platform_id = ?
+    GROUP BY category_key, category_name
+    ORDER BY start_sequence ASC
+  `).all(platformId).map((row) => ({
+    key: readTextColumn(row, "category_key") ?? "",
+    name: readTextColumn(row, "category_name") ?? "",
+    description: "",
+    startSequence: readNumberColumn(row, "start_sequence") ?? 0,
+    endSequence: readNumberColumn(row, "end_sequence") ?? null,
+    count: readNumberColumn(row, "count") ?? 0,
+  }));
+}
+
+export function listArtistStringItemsFromSqlite(
+  db: SceneForgeSqliteDatabase,
+  filters: ArtistStringListFilters = {},
+): ArtistStringItemRecord[] {
+  const where: string[] = [];
+  const values: SqlitePrimitive[] = [];
+
+  if (filters.platformId) {
+    where.push("platform_id = ?");
+    values.push(filters.platformId);
+  }
+
+  if (filters.category && filters.category !== "all") {
+    where.push("category_key = ?");
+    values.push(filters.category);
+  }
+
+  if (filters.query?.trim()) {
+    where.push(`(
+      CAST(source_sequence AS TEXT) LIKE ?
+      OR raw_artist_string LIKE ?
+      OR formatted_prompt LIKE ?
+      OR normalized_artist_string LIKE ?
+      OR category_name LIKE ?
+    )`);
+    const query = `%${filters.query.trim()}%`;
+    const normalizedQuery = `%${normalizeFormattedArtistString(filters.query)}%`;
+    values.push(query, query, query, normalizedQuery, query);
+  }
+
+  return db.prepare(`
+    SELECT *
+    FROM artist_string_items
+    ${where.length > 0 ? `WHERE ${where.join(" AND ")}` : ""}
+    ORDER BY platform_id ASC, source_sequence ASC
+  `).all(...values).map((row) => {
+    const itemId = readTextColumn(row, "id") ?? "";
+    return mapArtistStringItemRow(row, listArtistStringReferenceImagesForItem(db, itemId));
+  });
+}
+
+export function getArtistStringItemFromSqlite(
+  db: SceneForgeSqliteDatabase,
+  itemId: string,
+): ArtistStringItemRecord | undefined {
+  const row = db.prepare("SELECT * FROM artist_string_items WHERE id = ?").get(itemId);
+  const id = readTextColumn(row, "id");
+  if (!id) {
+    return undefined;
+  }
+
+  return mapArtistStringItemRow(row, listArtistStringReferenceImagesForItem(db, id));
+}
+
+export function getArtistStringItemsFromSqlite(
+  db: SceneForgeSqliteDatabase,
+  itemIds: string[],
+): ArtistStringItemRecord[] {
+  return itemIds
+    .map((itemId) => getArtistStringItemFromSqlite(db, itemId))
+    .filter((item): item is ArtistStringItemRecord => item !== undefined);
+}
+
+export function listReferencedArtistStringLocalImageUrlsFromSqlite(
+  db: SceneForgeSqliteDatabase,
+): string[] {
+  return db.prepare(`
+    SELECT local_url
+    FROM artist_string_reference_images
+    WHERE local_url LIKE ?
+  `).all(`${ARTIST_STRING_LOCAL_IMAGE_ROUTE_PREFIX}%`).map((row) => readTextColumn(row, "local_url")).filter((url): url is string => Boolean(url));
 }
 
 function parseJsonText(value: string | undefined): unknown {

@@ -100,6 +100,31 @@ function sanitizeStringIdList(value: unknown): string[] {
   return result;
 }
 
+function sanitizeStringList(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const seen = new Set<string>();
+  const result: string[] = [];
+
+  for (const entry of value) {
+    if (typeof entry !== "string") {
+      continue;
+    }
+
+    const text = entry.trim();
+    if (!text || seen.has(text)) {
+      continue;
+    }
+
+    seen.add(text);
+    result.push(text);
+  }
+
+  return result;
+}
+
 const PROMPT_EXPORT_KIND = "sceneforge-prompt";
 
 /** 画布（场景）专用 JSON 导出，`importCanvasBundleFromJson` 与之配对。 */
@@ -722,6 +747,9 @@ function sanitizeSettings(settings: unknown): SceneForgeProject["settings"] {
       negativePrompt: "",
       selectedCivitaiCheckpointId: null,
       selectedCivitaiLoraIds: [],
+      selectedArtistStringIds: [],
+      selectedArtistStringPrompts: [],
+      artistStringPromptRenderMode: "artist-weight",
       promptLibraryTags: [],
       deletedBuiltInPromptLibraryTagIds: [],
     };
@@ -741,6 +769,22 @@ function sanitizeSettings(settings: unknown): SceneForgeProject["settings"] {
   const deletedBuiltIns = Array.isArray(settings.deletedBuiltInPromptLibraryTagIds)
     ? (settings.deletedBuiltInPromptLibraryTagIds as string[]).filter((id) => typeof id === "string")
     : [];
+  const selectedArtistStringIds = sanitizeStringIdList(settings.selectedArtistStringIds);
+  if (
+    selectedArtistStringIds.length === 0 &&
+    typeof settings.selectedArtistStringId === "string" &&
+    settings.selectedArtistStringId.trim()
+  ) {
+    selectedArtistStringIds.push(settings.selectedArtistStringId.trim());
+  }
+  const selectedArtistStringPrompts = sanitizeStringList(settings.selectedArtistStringPrompts);
+  if (
+    selectedArtistStringPrompts.length === 0 &&
+    typeof settings.selectedArtistStringPrompt === "string" &&
+    settings.selectedArtistStringPrompt.trim()
+  ) {
+    selectedArtistStringPrompts.push(settings.selectedArtistStringPrompt.trim());
+  }
 
   return {
     modelFormat: mf,
@@ -751,6 +795,14 @@ function sanitizeSettings(settings: unknown): SceneForgeProject["settings"] {
         ? settings.selectedCivitaiCheckpointId.trim()
         : null,
     selectedCivitaiLoraIds: sanitizeStringIdList(settings.selectedCivitaiLoraIds),
+    selectedArtistStringIds,
+    selectedArtistStringPrompts,
+    artistStringPromptRenderMode:
+      settings.artistStringPromptRenderMode === "novelai" ||
+      settings.artistStringPromptRenderMode === "artist-weight" ||
+      settings.artistStringPromptRenderMode === "by-weight"
+        ? settings.artistStringPromptRenderMode
+        : "artist-weight",
     promptLibraryTags: libraryTags,
     deletedBuiltInPromptLibraryTagIds: [...new Set(deletedBuiltIns)],
   };
