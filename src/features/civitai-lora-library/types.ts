@@ -71,6 +71,16 @@ export type CivitaiResourceRecommendation = {
   notes: string | null;
 };
 
+export type CivitaiPromptReference = {
+  cfgScale: number | null;
+  civitaiImagePageUrl: string;
+  negativePrompt: string | null;
+  prompt: string;
+  sampler: string | null;
+  seed: string | null;
+  steps: number | null;
+};
+
 export type ParsedLoraWeight = {
   name: string;
   weight: number | null;
@@ -292,6 +302,8 @@ export type SelectedCivitaiResourcePreview = {
   maxWeight: number | null;
   recommendations: CivitaiResourceRecommendation[];
   previewImage: string | null;
+  modelFileName: string;
+  promptReferences?: CivitaiPromptReference[];
 };
 
 export type SelectedCivitaiResourcesPreview = {

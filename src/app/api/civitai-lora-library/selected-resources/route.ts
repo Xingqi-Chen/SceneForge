@@ -1,10 +1,12 @@
 import { NextResponse } from "next/server";
 
 import type {
+  CivitaiPromptReference,
   CivitaiResourceDetail,
   SelectedCivitaiResourcePreview,
   SelectedCivitaiResourcesPreview,
 } from "@/features/civitai-lora-library";
+import { makeCivitaiResourceTargetFileName } from "@/features/civitai-lora-library";
 import {
   getCivitaiResourceDetailFromSqlite,
   openSceneForgeSqliteDatabase,
@@ -12,6 +14,8 @@ import {
 
 export const runtime = "nodejs";
 const DESCRIPTION_SNIPPET_MAX_LENGTH = 800;
+const PROMPT_REFERENCE_LIMIT = 6;
+const PROMPT_REFERENCE_MAX_LENGTH = 1200;
 
 function errorResponse(message: string, status: number, details?: unknown) {
   return NextResponse.json(
@@ -70,6 +74,44 @@ function sanitizeDescriptionSnippet(description: string | null) {
   return `${text.slice(0, DESCRIPTION_SNIPPET_MAX_LENGTH).trimEnd()}...`;
 }
 
+function sanitizePromptReferenceText(value: string | null) {
+  const text = value?.replace(/\s+/g, " ").trim();
+  if (!text) {
+    return null;
+  }
+
+  return text.length <= PROMPT_REFERENCE_MAX_LENGTH ? text : `${text.slice(0, PROMPT_REFERENCE_MAX_LENGTH).trimEnd()}...`;
+}
+
+function getPromptReferences(resource: CivitaiResourceDetail): CivitaiPromptReference[] {
+  const seen = new Set<string>();
+  const references: CivitaiPromptReference[] = [];
+
+  for (const usage of resource.usages) {
+    const prompt = sanitizePromptReferenceText(usage.importedImage.prompt);
+    if (!prompt || seen.has(prompt.toLocaleLowerCase())) {
+      continue;
+    }
+
+    seen.add(prompt.toLocaleLowerCase());
+    references.push({
+      cfgScale: usage.importedImage.cfgScale,
+      civitaiImagePageUrl: usage.importedImage.civitaiImagePageUrl,
+      negativePrompt: sanitizePromptReferenceText(usage.importedImage.negativePrompt),
+      prompt,
+      sampler: usage.importedImage.sampler,
+      seed: usage.importedImage.seed,
+      steps: usage.importedImage.steps,
+    });
+
+    if (references.length >= PROMPT_REFERENCE_LIMIT) {
+      break;
+    }
+  }
+
+  return references;
+}
+
 function toPreviewResource(resource: CivitaiResourceDetail): SelectedCivitaiResourcePreview {
   return {
     id: resource.id,
@@ -88,6 +130,8 @@ function toPreviewResource(resource: CivitaiResourceDetail): SelectedCivitaiReso
     maxWeight: resource.maxWeight,
     recommendations: resource.recommendations,
     previewImage: resource.previewImage,
+    modelFileName: makeCivitaiResourceTargetFileName(resource),
+    promptReferences: getPromptReferences(resource),
   };
 }
 

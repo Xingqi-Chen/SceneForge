@@ -6,9 +6,11 @@ import path from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import type { CivitaiResourceUpsertInput } from "@/features/civitai-lora-library";
+import type { CivitaiResourceUpsertInput, NormalizedCivitaiImage } from "@/features/civitai-lora-library";
 import {
   openSceneForgeSqliteDatabase,
+  upsertImportedCivitaiImageToSqlite,
+  upsertImageResourceUsageToSqlite,
   upsertCivitaiResourceToSqlite,
   type SceneForgeSqliteDatabase,
 } from "@/features/persistence/sqlite-storage";
@@ -61,6 +63,34 @@ function makeResourceInput(
     aiNsfwConfidence: null,
     aiNsfwReason: null,
     rawVersionJson: null,
+    ...overrides,
+  };
+}
+
+function makeImage(id: number, prompt: string, overrides: Partial<NormalizedCivitaiImage> = {}): NormalizedCivitaiImage {
+  return {
+    baseModel: "Pony",
+    browsingLevel: null,
+    cfgScale: 5.5,
+    civitaiImageId: id,
+    civitaiImagePageUrl: `https://civitai.com/images/${id}`,
+    createdAtOnCivitai: `2025-01-${String(id).padStart(2, "0")}T00:00:00.000Z`,
+    height: 1024,
+    imageUrl: `https://image.civitai.test/${id}.jpeg`,
+    modelVersionIds: [],
+    negativePrompt: "worst quality",
+    nsfw: false,
+    nsfwLevel: 1,
+    postId: null,
+    prompt,
+    rawMetaJson: null,
+    resources: [],
+    sampler: "DPM++ 2M SDE",
+    seed: String(id * 100),
+    sourceImageUrl: null,
+    steps: 28,
+    username: "artist",
+    width: 768,
     ...overrides,
   };
 }
@@ -171,5 +201,37 @@ describe("selected Civitai resources route", () => {
     expect(payload.loras[0].descriptionSnippet).not.toContain("<strong>");
     expect(payload.loras[0].descriptionSnippet.length).toBeLessThanOrEqual(803);
     expect(payload.loras[0].descriptionSnippet.endsWith("...")).toBe(true);
+  });
+
+  it("includes prompt references from images that use the selected checkpoint", async () => {
+    const checkpoint = upsertCivitaiResourceToSqlite(db, makeResourceInput("model", "Checkpoint")).resource;
+    const image = upsertImportedCivitaiImageToSqlite(
+      db,
+      makeImage(41, "masterpiece, cinematic portrait, detailed eyes"),
+    );
+    upsertImageResourceUsageToSqlite(db, {
+      importedImageId: image.id,
+      rawResourceJson: null,
+      resolveStatus: "resolved_by_model_version_id",
+      resourceId: checkpoint.id,
+      source: "civitai_image_meta",
+      triggerWordsUsed: [],
+      weight: null,
+    });
+
+    const response = await GET(new Request(`http://localhost/api?checkpointId=${checkpoint.id}`));
+    const payload = await response.json();
+
+    expect(payload.checkpoint.promptReferences).toEqual([
+      {
+        cfgScale: 5.5,
+        civitaiImagePageUrl: "https://civitai.com/images/41",
+        negativePrompt: "worst quality",
+        prompt: "masterpiece, cinematic portrait, detailed eyes",
+        sampler: "DPM++ 2M SDE",
+        seed: "4100",
+        steps: 28,
+      },
+    ]);
   });
 });

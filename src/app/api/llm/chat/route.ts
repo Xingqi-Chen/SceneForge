@@ -51,6 +51,10 @@ function resolveDefaultModel(payload: LlmChatRequest) {
     return process.env.LITELLM_DEFAULT_MODEL;
   }
 
+  if (payload.purpose === "comfyui-generation-diagnosis") {
+    return process.env.LITELLM_COMFYUI_DIAGNOSIS_MODEL || process.env.LITELLM_DEFAULT_MODEL;
+  }
+
   return process.env.LITELLM_DEFAULT_MODEL;
 }
 

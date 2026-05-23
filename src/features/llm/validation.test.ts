@@ -11,4 +11,13 @@ describe("isLlmChatRequest", () => {
       }),
     ).toBe(true);
   });
+
+  it("accepts ComfyUI generation diagnosis purpose", () => {
+    expect(
+      isLlmChatRequest({
+        purpose: "comfyui-generation-diagnosis",
+        messages: [{ role: "user", content: "Diagnose this generation" }],
+      }),
+    ).toBe(true);
+  });
 });

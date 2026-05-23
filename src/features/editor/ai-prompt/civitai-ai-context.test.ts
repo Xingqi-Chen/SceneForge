@@ -40,6 +40,7 @@ function makeResource(
       },
     ],
     previewImage: null,
+    modelFileName: "Cyber Outfit__v1.safetensors",
     ...overrides,
   };
 }

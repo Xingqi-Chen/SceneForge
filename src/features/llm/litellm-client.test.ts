@@ -16,26 +16,18 @@ describe("createLiteLlmClient", () => {
         messages: [{ role: "user", content: "Describe the scene" }],
         temperature: 0.2,
         max_tokens: 128,
+        stream: true,
       });
 
       return new Response(
-        JSON.stringify({
-          id: "chatcmpl-1",
-          model: "scene-model",
-          choices: [
-            {
-              message: { role: "assistant", content: "A quiet forest scene." },
-              finish_reason: "stop",
-            },
-          ],
-          usage: {
-            prompt_tokens: 8,
-            completion_tokens: 5,
-            total_tokens: 13,
-          },
-        }),
+        [
+          'data: {"id":"chatcmpl-1","model":"scene-model","choices":[{"delta":{"role":"assistant","content":"A quiet "},"finish_reason":null}]}',
+          'data: {"id":"chatcmpl-1","model":"scene-model","choices":[{"delta":{"content":"forest scene."},"finish_reason":"stop"}],"usage":{"prompt_tokens":8,"completion_tokens":5,"total_tokens":13}}',
+          "data: [DONE]",
+          "",
+        ].join("\n\n"),
         {
-          headers: { "content-type": "application/json" },
+          headers: { "content-type": "text/event-stream" },
         },
       );
     };
@@ -138,4 +130,3 @@ describe("createLiteLlmClient", () => {
     );
   });
 });
-

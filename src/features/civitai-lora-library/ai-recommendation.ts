@@ -17,6 +17,7 @@ import type {
   CivitaiResourceRecommendation,
   SelectedCivitaiResourcePreview,
 } from "./types";
+import { makeCivitaiResourceTargetFileName } from "./download";
 
 export const CIVITAI_RECOMMENDATION_CHECKPOINT_LIMIT = 8;
 export const CIVITAI_RECOMMENDATION_LORA_LIMIT = 24;
@@ -286,6 +287,7 @@ function toPreviewResource(resource: CivitaiResourceDetail): SelectedCivitaiReso
     maxWeight: resource.maxWeight,
     recommendations: resource.recommendations,
     previewImage: resource.previewImage,
+    modelFileName: makeCivitaiResourceTargetFileName(resource),
   };
 }
 

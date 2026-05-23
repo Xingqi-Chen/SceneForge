@@ -437,10 +437,17 @@ describe("editor store", () => {
     });
     useEditorStore.getState().addPromptTag({ kind: "scene" }, testTag);
     useEditorStore.getState().setAiGeneratedPrompt("generated prompt");
+    useEditorStore.getState().setAiCivitaiAdvice({
+      prompt: "generated prompt",
+      parameterSuggestions: { steps: 28 },
+      parameterSuggestionReason: "reason",
+      overallEffect: "effect",
+      parseWarning: null,
+    });
 
     useEditorStore.getState().resetProject();
 
-    const { aiGeneratedPrompt, project, selection } = useEditorStore.getState();
+    const { aiCivitaiAdvice, aiGeneratedPrompt, project, selection } = useEditorStore.getState();
 
     expect(project.scene.objects).toHaveLength(0);
     expect(project.scene.promptTags).toEqual(createDefaultProject().scene.promptTags);
@@ -454,6 +461,7 @@ describe("editor store", () => {
     expect(project.settings.deletedBuiltInPromptLibraryTagIds).toContain("library-blue-eyes");
     expect(selection).toEqual({ kind: "scene" });
     expect(aiGeneratedPrompt).toBe("");
+    expect(aiCivitaiAdvice).toBeNull();
   });
 
   it("clears the canvas back to the default scene without clearing default negatives", () => {
@@ -483,10 +491,17 @@ describe("editor store", () => {
     });
     useEditorStore.getState().addCharacter();
     useEditorStore.getState().setAiGeneratedPrompt("generated prompt");
+    useEditorStore.getState().setAiCivitaiAdvice({
+      prompt: "generated prompt",
+      parameterSuggestions: { cfgScale: 6 },
+      parameterSuggestionReason: "reason",
+      overallEffect: "effect",
+      parseWarning: null,
+    });
 
     useEditorStore.getState().resetCanvas();
 
-    const { aiGeneratedPrompt, project, selection } = useEditorStore.getState();
+    const { aiCivitaiAdvice, aiGeneratedPrompt, project, selection } = useEditorStore.getState();
 
     expect(project.scene).toEqual(createDefaultProject().scene);
     expect(project.settings).toMatchObject({
@@ -504,6 +519,7 @@ describe("editor store", () => {
     expect(project.scene.promptTags.length).toBeGreaterThan(0);
     expect(selection).toEqual({ kind: "scene" });
     expect(aiGeneratedPrompt).toBe("");
+    expect(aiCivitaiAdvice).toBeNull();
   });
 
   it("imports prompt library tags into project settings", () => {

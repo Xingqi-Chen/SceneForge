@@ -27,7 +27,8 @@ export type LlmChatRequest = {
     | "stick-figure-pose-generation"
     | "civitai-resource-enrichment"
     | "civitai-combination-recommendation"
-    | "stable-diffusion-prompt-generation";
+    | "stable-diffusion-prompt-generation"
+    | "comfyui-generation-diagnosis";
   messages: LlmChatMessage[];
   temperature?: number;
   maxTokens?: number;

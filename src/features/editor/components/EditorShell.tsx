@@ -19,6 +19,7 @@ import { ProjectMenu } from "./ProjectMenu";
 import { AssetLibraryPanel } from "./AssetLibraryPanel";
 import { CanvasViewport } from "./CanvasViewport";
 import { ExportControlsPanel } from "./ExportControlsPanel";
+import { ImageGenerationPanel } from "./ImageGenerationPanel";
 import { ObjectPropertiesPanel } from "./ObjectPropertiesPanel";
 import { PromptPreviewPanel } from "./PromptPreviewPanel";
 import { PromptTagPickerPanel } from "./PromptTagPickerPanel";
@@ -164,6 +165,8 @@ export function EditorShell() {
             <ObjectPropertiesPanel />
             <div className="h-px w-full bg-slate-100 shrink-0" />
             <PromptPreviewPanel onCaptureCanvas={captureCanvas} />
+            <div className="h-px w-full bg-slate-100 shrink-0" />
+            <ImageGenerationPanel />
             <div className="h-px w-full bg-slate-100 shrink-0" />
             <ExportControlsPanel />
           </div>

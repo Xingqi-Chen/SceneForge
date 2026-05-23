@@ -24,6 +24,7 @@ import type {
   Vector3,
 } from "@/shared/types";
 import type { StickFigurePolesV1, StickFigurePoseV1 } from "@/shared/types/stick-figure-pose";
+import type { CivitaiAiPromptResult } from "@/features/editor/ai-prompt/civitai-ai-context";
 
 import {
   characterAppearsInThreeViewport,
@@ -102,6 +103,7 @@ type EditorHistorySnapshot = {
   promptBindings: PromptBindingState;
   selection: EditorSelection;
   aiGeneratedPrompt: string;
+  aiCivitaiAdvice: CivitaiAiPromptResult | null;
 };
 
 type EditorState = {
@@ -111,8 +113,11 @@ type EditorState = {
   undoStack: EditorHistorySnapshot[];
   /** Last successful AI Prompt preview text; cleared when loading another project. */
   aiGeneratedPrompt: string;
+  /** Last parsed Civitai-aware AI parameter suggestions; cleared with AI prompt context. */
+  aiCivitaiAdvice: CivitaiAiPromptResult | null;
   showStickFigurePoleControls: boolean;
   setAiGeneratedPrompt: (prompt: string) => void;
+  setAiCivitaiAdvice: (advice: CivitaiAiPromptResult | null) => void;
   setShowStickFigurePoleControls: (show: boolean) => void;
   undo: () => void;
   setProject: (project: SceneForgeProject) => void;
@@ -638,8 +643,10 @@ export const useEditorStore = create<EditorState>((set) => ({
   selection: { kind: "scene" },
   undoStack: [],
   aiGeneratedPrompt: "",
+  aiCivitaiAdvice: null,
   showStickFigurePoleControls: true,
   setAiGeneratedPrompt: (prompt) => set({ aiGeneratedPrompt: prompt }),
+  setAiCivitaiAdvice: (advice) => set({ aiCivitaiAdvice: advice }),
   setShowStickFigurePoleControls: (show) => set({ showStickFigurePoleControls: show }),
   undo: () =>
     withoutUndoHistory(() =>
@@ -659,6 +666,7 @@ export const useEditorStore = create<EditorState>((set) => ({
             previous.project.scene.mode,
           ),
           aiGeneratedPrompt: previous.aiGeneratedPrompt,
+          aiCivitaiAdvice: previous.aiCivitaiAdvice,
           undoStack: state.undoStack.slice(0, -1),
         };
       }),
@@ -689,6 +697,7 @@ export const useEditorStore = create<EditorState>((set) => ({
         selection: { kind: "scene" },
         undoStack: [],
         aiGeneratedPrompt: "",
+        aiCivitaiAdvice: null,
       }),
     );
   },
@@ -718,6 +727,7 @@ export const useEditorStore = create<EditorState>((set) => ({
         ),
         selection: { kind: "scene" },
         aiGeneratedPrompt: "",
+        aiCivitaiAdvice: null,
       };
     }),
   resetCanvas: () =>
@@ -733,6 +743,7 @@ export const useEditorStore = create<EditorState>((set) => ({
       ),
       selection: { kind: "scene" },
       aiGeneratedPrompt: "",
+      aiCivitaiAdvice: null,
     })),
   selectScene: () => set({ selection: { kind: "scene" } }),
   selectObject: (id) =>
@@ -1960,6 +1971,7 @@ export const useEditorStore = create<EditorState>((set) => ({
       promptBindings: s.promptBindings,
       selection: s.selection,
       aiGeneratedPrompt: s.aiGeneratedPrompt,
+      aiCivitaiAdvice: s.aiCivitaiAdvice,
     };
     stickFigurePoseDragSuppressUndo = true;
   },
@@ -2575,6 +2587,7 @@ useEditorStore.subscribe((state, previousState) => {
     promptBindings: previousState.promptBindings,
     selection: previousState.selection,
     aiGeneratedPrompt: previousState.aiGeneratedPrompt,
+    aiCivitaiAdvice: previousState.aiCivitaiAdvice,
   };
 
   withoutUndoHistory(() => {

@@ -658,7 +658,9 @@ function AiAdviceValue({ depth = 0, value }: { depth?: number; value: unknown })
 export function PromptPreviewPanel({ onCaptureCanvas }: PromptPreviewPanelProps) {
   const project = useEditorStore((state) => state.project);
   const aiPrompt = useEditorStore((state) => state.aiGeneratedPrompt);
+  const aiCivitaiAdvice = useEditorStore((state) => state.aiCivitaiAdvice);
   const setAiGeneratedPrompt = useEditorStore((state) => state.setAiGeneratedPrompt);
+  const setAiCivitaiAdvice = useEditorStore((state) => state.setAiCivitaiAdvice);
   const selectCivitaiCheckpoint = useEditorStore((state) => state.selectCivitaiCheckpoint);
   const toggleCivitaiLora = useEditorStore((state) => state.toggleCivitaiLora);
   const updateProjectSettings = useEditorStore((state) => state.updateProjectSettings);
@@ -669,7 +671,6 @@ export function PromptPreviewPanel({ onCaptureCanvas }: PromptPreviewPanelProps)
   const [useLayoutConstraints, setUseLayoutConstraints] = useState(false);
   const [usePoseConstraints, setUsePoseConstraints] = useState(false);
   const [useVisualConstraints, setUseVisualConstraints] = useState(false);
-  const [aiCivitaiAdvice, setAiCivitaiAdvice] = useState<CivitaiAiPromptResult | null>(null);
   const [selectedResources, setSelectedResources] = useState<SelectedCivitaiResourcesPreview>(
     EMPTY_SELECTED_CIVITAI_RESOURCES,
   );
