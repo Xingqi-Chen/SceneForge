@@ -13,6 +13,10 @@ import type {
 } from "@/features/civitai-lora-library";
 import {
   buildBasicTextToImageWorkflow,
+  COMFYUI_FACE_DETAILER_DEFAULTS,
+  COMFYUI_FACE_DETAILER_SAM_DETECTION_HINT_OPTIONS,
+  COMFYUI_FACE_DETAILER_SAM_MASK_HINT_USE_NEGATIVE_OPTIONS,
+  DEFAULT_COMFYUI_FACE_DETAILER_DETECTOR_MODEL,
   COMFYUI_LATENT_IMAGE_NODE_OPTIONS,
   type ComfyUiGeneratedImage,
   type ComfyUiInputValue,
@@ -91,10 +95,11 @@ type GenerationDraftLora = Required<NonNullable<ComfyUiTextToImageRequest["loras
   enabled: boolean;
 };
 
-type GenerationDraft = Required<Omit<ComfyUiTextToImageRequest, "loras" | "promptWrapper">> & {
+type GenerationDraft = Required<Omit<ComfyUiTextToImageRequest, "loras" | "promptWrapper" | "faceDetailer">> & {
   loras: GenerationDraftLora[];
   imageCount: number;
   promptWrapper: Required<NonNullable<ComfyUiTextToImageRequest["promptWrapper"]>>;
+  faceDetailer: Required<NonNullable<ComfyUiTextToImageRequest["faceDetailer"]>>;
   seedMode: ComfyUiGenerationSeedMode;
 };
 
@@ -493,6 +498,33 @@ function toDraft(
       negativePrefix: request.promptWrapper?.negativePrefix ?? "",
     },
     outputPrefix: request.outputPrefix ?? "SceneForge",
+    faceDetailer: {
+      bboxCropFactor: request.faceDetailer?.bboxCropFactor ?? COMFYUI_FACE_DETAILER_DEFAULTS.bboxCropFactor,
+      bboxDilation: request.faceDetailer?.bboxDilation ?? COMFYUI_FACE_DETAILER_DEFAULTS.bboxDilation,
+      bboxThreshold: request.faceDetailer?.bboxThreshold ?? COMFYUI_FACE_DETAILER_DEFAULTS.bboxThreshold,
+      cfg: request.faceDetailer?.cfg ?? request.cfg ?? 7,
+      cycle: request.faceDetailer?.cycle ?? COMFYUI_FACE_DETAILER_DEFAULTS.cycle,
+      denoise: request.faceDetailer?.denoise ?? COMFYUI_FACE_DETAILER_DEFAULTS.denoise,
+      enabled: request.faceDetailer?.enabled ?? false,
+      detectorModelName: request.faceDetailer?.detectorModelName ?? DEFAULT_COMFYUI_FACE_DETAILER_DETECTOR_MODEL,
+      dropSize: request.faceDetailer?.dropSize ?? COMFYUI_FACE_DETAILER_DEFAULTS.dropSize,
+      feather: request.faceDetailer?.feather ?? COMFYUI_FACE_DETAILER_DEFAULTS.feather,
+      forceInpaint: request.faceDetailer?.forceInpaint ?? COMFYUI_FACE_DETAILER_DEFAULTS.forceInpaint,
+      guideSize: request.faceDetailer?.guideSize ?? COMFYUI_FACE_DETAILER_DEFAULTS.guideSize,
+      guideSizeFor: request.faceDetailer?.guideSizeFor ?? COMFYUI_FACE_DETAILER_DEFAULTS.guideSizeFor,
+      maxSize: request.faceDetailer?.maxSize ?? COMFYUI_FACE_DETAILER_DEFAULTS.maxSize,
+      noiseMask: request.faceDetailer?.noiseMask ?? COMFYUI_FACE_DETAILER_DEFAULTS.noiseMask,
+      samBBoxExpansion: request.faceDetailer?.samBBoxExpansion ?? COMFYUI_FACE_DETAILER_DEFAULTS.samBBoxExpansion,
+      samDetectionHint: request.faceDetailer?.samDetectionHint ?? COMFYUI_FACE_DETAILER_DEFAULTS.samDetectionHint,
+      samDilation: request.faceDetailer?.samDilation ?? COMFYUI_FACE_DETAILER_DEFAULTS.samDilation,
+      samMaskHintThreshold: request.faceDetailer?.samMaskHintThreshold ?? COMFYUI_FACE_DETAILER_DEFAULTS.samMaskHintThreshold,
+      samMaskHintUseNegative: request.faceDetailer?.samMaskHintUseNegative ?? COMFYUI_FACE_DETAILER_DEFAULTS.samMaskHintUseNegative,
+      samThreshold: request.faceDetailer?.samThreshold ?? COMFYUI_FACE_DETAILER_DEFAULTS.samThreshold,
+      samplerName: request.faceDetailer?.samplerName ?? samplerSettings.samplerName ?? "euler",
+      scheduler: request.faceDetailer?.scheduler ?? samplerSettings.scheduler ?? "normal",
+      steps: request.faceDetailer?.steps ?? request.steps ?? 30,
+      wildcard: request.faceDetailer?.wildcard ?? COMFYUI_FACE_DETAILER_DEFAULTS.wildcard,
+    },
   };
 }
 
@@ -511,6 +543,7 @@ function toSavedParameters(draft: GenerationDraft): SavedComfyUiGenerationParams
     latentImageNode: draft.latentImageNode,
     promptWrapper: draft.promptWrapper,
     outputPrefix: draft.outputPrefix,
+    faceDetailer: draft.faceDetailer,
     loras: draft.loras.map((lora) => ({
       loraName: lora.loraName,
       enabled: lora.enabled,
@@ -545,6 +578,7 @@ function toRequestPayload(draft: GenerationDraft, seed: number): ComfyUiTextToIm
     latentImageNode: draft.latentImageNode,
     promptWrapper: draft.promptWrapper,
     outputPrefix: draft.outputPrefix,
+    faceDetailer: draft.faceDetailer,
   };
 }
 
@@ -781,6 +815,28 @@ function TextAreaInput({
         onChange={(event) => onChange(event.target.value)}
         value={value}
       />
+    </label>
+  );
+}
+
+function BooleanInput({
+  checked,
+  label,
+  onChange,
+}: {
+  checked: boolean;
+  label: string;
+  onChange: (value: boolean) => void;
+}) {
+  return (
+    <label className="flex min-h-9 items-center gap-2 rounded-md border border-slate-200 bg-white px-2 text-xs font-medium text-slate-700">
+      <input
+        checked={checked}
+        className="size-3.5 rounded border-slate-300 text-sky-600"
+        onChange={(event) => onChange(event.target.checked)}
+        type="checkbox"
+      />
+      {label}
     </label>
   );
 }
@@ -1113,6 +1169,22 @@ export function ComfyUiGenerationDialog({
             ...current,
             promptWrapper: {
               ...current.promptWrapper,
+              ...patch,
+            },
+          }
+        : current
+    ));
+  }
+
+  function patchFaceDetailer(patch: Partial<GenerationDraft["faceDetailer"]>) {
+    clearDiagnosisReview();
+    setSaveMessage("");
+    setDraft((current) => (
+      current
+        ? {
+            ...current,
+            faceDetailer: {
+              ...current.faceDetailer,
               ...patch,
             },
           }
@@ -1789,6 +1861,180 @@ export function ComfyUiGenerationDialog({
                               value={draft.latentImageNode}
                             />
                             <TextInput label="output" onChange={(value) => patchDraft({ outputPrefix: value })} value={draft.outputPrefix} />
+                            <div className="grid gap-3 rounded-md border border-slate-200 bg-white p-3 sm:col-span-2 lg:col-span-3">
+                              <label className="flex items-center gap-2 text-xs font-semibold text-slate-700">
+                                <input
+                                  checked={draft.faceDetailer.enabled}
+                                  className="size-3.5 rounded border-slate-300 text-sky-600"
+                                  onChange={(event) => patchFaceDetailer({ enabled: event.target.checked })}
+                                  type="checkbox"
+                                />
+                                FaceDetailer
+                              </label>
+                              {draft.faceDetailer.enabled ? (
+                                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                                  <TextInput
+                                    label="detector model"
+                                    onChange={(value) => patchFaceDetailer({ detectorModelName: value })}
+                                    value={draft.faceDetailer.detectorModelName}
+                                  />
+                                  <NumberInput
+                                    label="guide size"
+                                    min={64}
+                                    onChange={(value) => patchFaceDetailer({ guideSize: Math.round(value / 8) * 8 })}
+                                    step={8}
+                                    value={draft.faceDetailer.guideSize}
+                                  />
+                                  <NumberInput
+                                    label="max size"
+                                    min={64}
+                                    onChange={(value) => patchFaceDetailer({ maxSize: Math.round(value / 8) * 8 })}
+                                    step={8}
+                                    value={draft.faceDetailer.maxSize}
+                                  />
+                                  <NumberInput
+                                    label="face denoise"
+                                    max={1}
+                                    min={0}
+                                    onChange={(value) => patchFaceDetailer({ denoise: value })}
+                                    step={0.05}
+                                    value={draft.faceDetailer.denoise}
+                                  />
+                                  <NumberInput
+                                    label="face steps"
+                                    min={1}
+                                    onChange={(value) => patchFaceDetailer({ steps: Math.round(value) })}
+                                    value={draft.faceDetailer.steps}
+                                  />
+                                  <NumberInput
+                                    label="face cfg"
+                                    min={0}
+                                    onChange={(value) => patchFaceDetailer({ cfg: value })}
+                                    step={0.5}
+                                    value={draft.faceDetailer.cfg}
+                                  />
+                                  <SelectInput
+                                    label="face sampler"
+                                    onChange={(value) => patchFaceDetailer({ samplerName: value })}
+                                    options={COMFYUI_SAMPLER_OPTIONS}
+                                    value={draft.faceDetailer.samplerName}
+                                  />
+                                  <SelectInput
+                                    label="face scheduler"
+                                    onChange={(value) => patchFaceDetailer({ scheduler: value })}
+                                    options={COMFYUI_SCHEDULER_OPTIONS}
+                                    value={draft.faceDetailer.scheduler}
+                                  />
+                                  <NumberInput
+                                    label="bbox threshold"
+                                    max={1}
+                                    min={0}
+                                    onChange={(value) => patchFaceDetailer({ bboxThreshold: value })}
+                                    step={0.01}
+                                    value={draft.faceDetailer.bboxThreshold}
+                                  />
+                                  <NumberInput
+                                    label="bbox dilation"
+                                    max={512}
+                                    min={-512}
+                                    onChange={(value) => patchFaceDetailer({ bboxDilation: Math.round(value) })}
+                                    value={draft.faceDetailer.bboxDilation}
+                                  />
+                                  <NumberInput
+                                    label="bbox crop"
+                                    max={10}
+                                    min={1}
+                                    onChange={(value) => patchFaceDetailer({ bboxCropFactor: value })}
+                                    step={0.1}
+                                    value={draft.faceDetailer.bboxCropFactor}
+                                  />
+                                  <NumberInput
+                                    label="feather"
+                                    max={100}
+                                    min={0}
+                                    onChange={(value) => patchFaceDetailer({ feather: Math.round(value) })}
+                                    value={draft.faceDetailer.feather}
+                                  />
+                                  <NumberInput
+                                    label="drop size"
+                                    min={1}
+                                    onChange={(value) => patchFaceDetailer({ dropSize: Math.round(value) })}
+                                    value={draft.faceDetailer.dropSize}
+                                  />
+                                  <NumberInput
+                                    label="cycle"
+                                    max={10}
+                                    min={1}
+                                    onChange={(value) => patchFaceDetailer({ cycle: Math.round(value) })}
+                                    value={draft.faceDetailer.cycle}
+                                  />
+                                  <BooleanInput
+                                    checked={draft.faceDetailer.guideSizeFor}
+                                    label="guide size for bbox"
+                                    onChange={(value) => patchFaceDetailer({ guideSizeFor: value })}
+                                  />
+                                  <BooleanInput
+                                    checked={draft.faceDetailer.noiseMask}
+                                    label="noise mask"
+                                    onChange={(value) => patchFaceDetailer({ noiseMask: value })}
+                                  />
+                                  <BooleanInput
+                                    checked={draft.faceDetailer.forceInpaint}
+                                    label="force inpaint"
+                                    onChange={(value) => patchFaceDetailer({ forceInpaint: value })}
+                                  />
+                                  <SelectInput
+                                    label="sam hint"
+                                    onChange={(value) => patchFaceDetailer({ samDetectionHint: value as GenerationDraft["faceDetailer"]["samDetectionHint"] })}
+                                    options={COMFYUI_FACE_DETAILER_SAM_DETECTION_HINT_OPTIONS}
+                                    value={draft.faceDetailer.samDetectionHint}
+                                  />
+                                  <NumberInput
+                                    label="sam dilation"
+                                    max={512}
+                                    min={-512}
+                                    onChange={(value) => patchFaceDetailer({ samDilation: Math.round(value) })}
+                                    value={draft.faceDetailer.samDilation}
+                                  />
+                                  <NumberInput
+                                    label="sam threshold"
+                                    max={1}
+                                    min={0}
+                                    onChange={(value) => patchFaceDetailer({ samThreshold: value })}
+                                    step={0.01}
+                                    value={draft.faceDetailer.samThreshold}
+                                  />
+                                  <NumberInput
+                                    label="sam bbox expansion"
+                                    max={1000}
+                                    min={0}
+                                    onChange={(value) => patchFaceDetailer({ samBBoxExpansion: Math.round(value) })}
+                                    value={draft.faceDetailer.samBBoxExpansion}
+                                  />
+                                  <NumberInput
+                                    label="sam mask threshold"
+                                    max={1}
+                                    min={0}
+                                    onChange={(value) => patchFaceDetailer({ samMaskHintThreshold: value })}
+                                    step={0.01}
+                                    value={draft.faceDetailer.samMaskHintThreshold}
+                                  />
+                                  <SelectInput
+                                    label="sam negative"
+                                    onChange={(value) => patchFaceDetailer({ samMaskHintUseNegative: value as GenerationDraft["faceDetailer"]["samMaskHintUseNegative"] })}
+                                    options={COMFYUI_FACE_DETAILER_SAM_MASK_HINT_USE_NEGATIVE_OPTIONS}
+                                    value={draft.faceDetailer.samMaskHintUseNegative}
+                                  />
+                                  <div className="sm:col-span-2 lg:col-span-3">
+                                    <TextAreaInput
+                                      label="wildcard"
+                                      onChange={(value) => patchFaceDetailer({ wildcard: value })}
+                                      value={draft.faceDetailer.wildcard}
+                                    />
+                                  </div>
+                                </div>
+                              ) : null}
+                            </div>
                           </div>
                           <div className="mt-5">
                             <GeneratedImageResults
@@ -2049,13 +2295,30 @@ export function ComfyUiGenerationDialog({
                                   </span>
                                 ) : null}
                               </div>
-                              <div className="mt-2 space-y-1">
-                                {Object.entries(node.inputs).map(([key, value]) => (
-                                  <p className="grid grid-cols-[96px_1fr] gap-2 text-[11px] leading-relaxed" key={key}>
-                                    <span className="font-semibold text-slate-500">{key}</span>
-                                    <span className="min-w-0 break-words text-slate-700">{formatNodeInput(value)}</span>
-                                  </p>
-                                ))}
+                              <div className="mt-2 grid gap-1.5">
+                                {Object.entries(node.inputs).map(([key, value]) => {
+                                  const formattedValue = formatNodeInput(value);
+
+                                  return (
+                                    <div
+                                      className="grid grid-cols-[minmax(0,1fr)_minmax(76px,0.9fr)] gap-3 rounded border border-slate-200/70 bg-white/70 px-2 py-1.5 text-[11px] leading-snug"
+                                      key={key}
+                                    >
+                                      <span
+                                        className="min-w-0 font-semibold text-slate-500 [overflow-wrap:anywhere]"
+                                        title={key}
+                                      >
+                                        {key}
+                                      </span>
+                                      <span
+                                        className="min-w-0 text-right text-slate-700 [overflow-wrap:anywhere]"
+                                        title={formattedValue}
+                                      >
+                                        {formattedValue}
+                                      </span>
+                                    </div>
+                                  );
+                                })}
                               </div>
                             </div>
                           ))}

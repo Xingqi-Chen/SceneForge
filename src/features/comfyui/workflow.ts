@@ -123,19 +123,72 @@ export function buildBasicTextToImageWorkflow(request: ComfyUiTextToImageRequest
     },
     "KSampler",
   );
+  const vaeConnection = builder.connect(checkpoint, 2);
   const vaeDecode = builder.addNode(
     "VAEDecode",
     {
       samples: builder.connect(sampler, 0),
-      vae: builder.connect(checkpoint, 2),
+      vae: vaeConnection,
     },
     "Decode Image",
   );
+  let outputImageConnection = builder.connect(vaeDecode, 0);
+  let ultralyticsDetectorProvider: string | undefined;
+  let faceDetailer: string | undefined;
+
+  if (resolvedRequest.faceDetailer.enabled) {
+    ultralyticsDetectorProvider = builder.addNode(
+      "UltralyticsDetectorProvider",
+      {
+        model_name: resolvedRequest.faceDetailer.detectorModelName,
+      },
+      "Face Detector",
+    );
+    faceDetailer = builder.addNode(
+      "FaceDetailer",
+      {
+        image: outputImageConnection,
+        model: modelConnection,
+        clip: clipConnection,
+        vae: vaeConnection,
+        guide_size: resolvedRequest.faceDetailer.guideSize,
+        guide_size_for: resolvedRequest.faceDetailer.guideSizeFor ? "bbox" : "crop_region",
+        max_size: resolvedRequest.faceDetailer.maxSize,
+        seed: resolvedRequest.seed,
+        steps: resolvedRequest.faceDetailer.steps,
+        cfg: resolvedRequest.faceDetailer.cfg,
+        sampler_name: resolvedRequest.faceDetailer.samplerName,
+        scheduler: resolvedRequest.faceDetailer.scheduler,
+        positive: builder.connect(positivePrompt, 0),
+        negative: builder.connect(negativePrompt, 0),
+        denoise: resolvedRequest.faceDetailer.denoise,
+        feather: resolvedRequest.faceDetailer.feather,
+        noise_mask: resolvedRequest.faceDetailer.noiseMask,
+        force_inpaint: resolvedRequest.faceDetailer.forceInpaint,
+        bbox_threshold: resolvedRequest.faceDetailer.bboxThreshold,
+        bbox_dilation: resolvedRequest.faceDetailer.bboxDilation,
+        bbox_crop_factor: resolvedRequest.faceDetailer.bboxCropFactor,
+        sam_detection_hint: resolvedRequest.faceDetailer.samDetectionHint,
+        sam_dilation: resolvedRequest.faceDetailer.samDilation,
+        sam_threshold: resolvedRequest.faceDetailer.samThreshold,
+        sam_bbox_expansion: resolvedRequest.faceDetailer.samBBoxExpansion,
+        sam_mask_hint_threshold: resolvedRequest.faceDetailer.samMaskHintThreshold,
+        sam_mask_hint_use_negative: resolvedRequest.faceDetailer.samMaskHintUseNegative,
+        drop_size: resolvedRequest.faceDetailer.dropSize,
+        bbox_detector: builder.connect(ultralyticsDetectorProvider, 0),
+        wildcard: resolvedRequest.faceDetailer.wildcard,
+        cycle: resolvedRequest.faceDetailer.cycle,
+      },
+      "FaceDetailer",
+    );
+    outputImageConnection = builder.connect(faceDetailer, 0);
+  }
+
   const saveImage = builder.addNode(
     "SaveImage",
     {
       filename_prefix: resolvedRequest.outputPrefix,
-      images: builder.connect(vaeDecode, 0),
+      images: outputImageConnection,
     },
     "Save Image",
   );
@@ -150,6 +203,8 @@ export function buildBasicTextToImageWorkflow(request: ComfyUiTextToImageRequest
       latentImage,
       sampler,
       vaeDecode,
+      ...(ultralyticsDetectorProvider ? { ultralyticsDetectorProvider } : {}),
+      ...(faceDetailer ? { faceDetailer } : {}),
       saveImage,
     },
     outputNodeId: saveImage,

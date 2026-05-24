@@ -29,6 +29,18 @@ const objectInfo = {
   },
 };
 
+const objectInfoWithFaceDetailer = {
+  ...objectInfo,
+  FaceDetailer: {},
+  UltralyticsDetectorProvider: {
+    input: {
+      required: {
+        model_name: [["bbox/face_yolov8s.pt"], {}],
+      },
+    },
+  },
+};
+
 describe("ComfyUI generate image route", () => {
   const previousBaseUrl = process.env.COMFYUI_BASE_URL;
   const previousApiKey = process.env.COMFYUI_API_KEY;
@@ -123,6 +135,120 @@ describe("ComfyUI generate image route", () => {
       },
       request: {
         seed: 123,
+      },
+    });
+  });
+
+  it("queues a text-to-image workflow with FaceDetailer when enabled", async () => {
+    process.env.COMFYUI_BASE_URL = "http://comfyui.test";
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      if (input === "http://comfyui.test/object_info") {
+        return Response.json(objectInfoWithFaceDetailer);
+      }
+
+      expect(input).toBe("http://comfyui.test/prompt");
+      const body = JSON.parse(String(init?.body));
+      expect(body.prompt["7"].class_type).toBe("UltralyticsDetectorProvider");
+      expect(body.prompt["7"].inputs.model_name).toBe("bbox/face_yolov8s.pt");
+      expect(body.prompt["8"].class_type).toBe("FaceDetailer");
+      expect(body.prompt["8"].inputs.image).toEqual(["6", 0]);
+      expect(body.prompt["8"].inputs.guide_size_for).toBe("bbox");
+      expect(body.prompt["8"].inputs.bbox_detector).toEqual(["7", 0]);
+      expect(body.prompt["9"].inputs.images).toEqual(["8", 0]);
+
+      return Response.json({
+        prompt_id: "prompt-face",
+        number: 10,
+        node_errors: {},
+      });
+    });
+
+    const response = await POST(
+      new Request("http://localhost/api/comfyui/generate-image", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          checkpointName: "model.safetensors",
+          positivePrompt: "a scene",
+          seed: 123,
+          faceDetailer: {
+            enabled: true,
+          },
+        }),
+      }),
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(payload).toMatchObject({
+      promptId: "prompt-face",
+      outputNodeId: "9",
+      nodeIds: {
+        ultralyticsDetectorProvider: "7",
+        faceDetailer: "8",
+        saveImage: "9",
+      },
+      request: {
+        faceDetailer: {
+          enabled: true,
+          detectorModelName: "bbox/face_yolov8s.pt",
+        },
+      },
+    });
+  });
+
+  it("accepts a disabled FaceDetailer config with blank optional string fields", async () => {
+    process.env.COMFYUI_BASE_URL = "http://comfyui.test";
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      if (input === "http://comfyui.test/object_info") {
+        return Response.json(objectInfo);
+      }
+
+      expect(input).toBe("http://comfyui.test/prompt");
+      const body = JSON.parse(String(init?.body));
+      expect(body.prompt["7"].class_type).toBe("SaveImage");
+      expect(body.prompt["8"]).toBeUndefined();
+
+      return Response.json({
+        prompt_id: "prompt-disabled-face",
+        node_errors: {},
+      });
+    });
+
+    const response = await POST(
+      new Request("http://localhost/api/comfyui/generate-image", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          checkpointName: "model.safetensors",
+          positivePrompt: "a scene",
+          seed: 123,
+          faceDetailer: {
+            enabled: false,
+            detectorModelName: "",
+            samplerName: "",
+            scheduler: "",
+            wildcard: "",
+          },
+        }),
+      }),
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(payload).toMatchObject({
+      promptId: "prompt-disabled-face",
+      outputNodeId: "7",
+      request: {
+        faceDetailer: {
+          enabled: false,
+          detectorModelName: "bbox/face_yolov8m.pt",
+          samplerName: "euler",
+          scheduler: "normal",
+          wildcard: "",
+        },
       },
     });
   });

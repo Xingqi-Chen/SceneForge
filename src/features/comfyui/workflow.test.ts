@@ -75,6 +75,101 @@ describe("ComfyUI workflow builder", () => {
     });
   });
 
+  it("adds FaceDetailer and UltralyticsDetectorProvider when enabled", () => {
+    const result = buildBasicTextToImageWorkflow({
+      checkpointName: "dream.safetensors",
+      positivePrompt: "portrait",
+      seed: 123,
+      faceDetailer: {
+        bboxCropFactor: 2.5,
+        bboxDilation: 16,
+        bboxThreshold: 0.42,
+        cfg: 5.5,
+        cycle: 2,
+        denoise: 0.38,
+        enabled: true,
+        detectorModelName: "bbox/face_yolov8s.pt",
+        dropSize: 12,
+        feather: 7,
+        forceInpaint: false,
+        guideSize: 640,
+        guideSizeFor: false,
+        maxSize: 1280,
+        noiseMask: false,
+        samBBoxExpansion: 4,
+        samDetectionHint: "rect-4",
+        samDilation: 2,
+        samMaskHintThreshold: 0.63,
+        samMaskHintUseNegative: "Small",
+        samThreshold: 0.88,
+        samplerName: "dpmpp_2m",
+        scheduler: "karras",
+        steps: 18,
+        wildcard: "[LAB] face detail",
+      },
+    });
+
+    expect(result.nodeIds).toEqual({
+      checkpoint: "1",
+      loraLoaders: [],
+      positivePrompt: "2",
+      negativePrompt: "3",
+      latentImage: "4",
+      sampler: "5",
+      vaeDecode: "6",
+      ultralyticsDetectorProvider: "7",
+      faceDetailer: "8",
+      saveImage: "9",
+    });
+    expect(result.outputNodeId).toBe("9");
+    expect(result.workflow["7"]).toMatchObject({
+      class_type: "UltralyticsDetectorProvider",
+      inputs: {
+        model_name: "bbox/face_yolov8s.pt",
+      },
+    });
+    expect(result.workflow["8"]).toMatchObject({
+      class_type: "FaceDetailer",
+      inputs: {
+        image: ["6", 0],
+        model: ["1", 0],
+        clip: ["1", 1],
+        vae: ["1", 2],
+        positive: ["2", 0],
+        negative: ["3", 0],
+        seed: 123,
+        steps: 18,
+        cfg: 5.5,
+        guide_size: 640,
+        guide_size_for: "crop_region",
+        max_size: 1280,
+        sampler_name: "dpmpp_2m",
+        scheduler: "karras",
+        denoise: 0.38,
+        feather: 7,
+        noise_mask: false,
+        force_inpaint: false,
+        bbox_threshold: 0.42,
+        bbox_dilation: 16,
+        bbox_crop_factor: 2.5,
+        sam_detection_hint: "rect-4",
+        sam_dilation: 2,
+        sam_threshold: 0.88,
+        sam_bbox_expansion: 4,
+        sam_mask_hint_threshold: 0.63,
+        sam_mask_hint_use_negative: "Small",
+        drop_size: 12,
+        bbox_detector: ["7", 0],
+        wildcard: "[LAB] face detail",
+        cycle: 2,
+      },
+    });
+    expect(result.workflow["9"].inputs).toEqual({
+      filename_prefix: "SceneForge",
+      images: ["8", 0],
+    });
+  });
+
   it("writes custom generation parameters to KSampler and latent nodes", () => {
     const result = buildBasicTextToImageWorkflow({
       checkpointName: "scene.ckpt",

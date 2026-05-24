@@ -1,3 +1,7 @@
+import type {
+  ComfyUiFaceDetailerSamDetectionHint,
+  ComfyUiFaceDetailerSamMaskHintUseNegative,
+} from "./face-detailer";
 import type { ComfyUiLatentImageNode } from "./latent-image-node";
 
 export type ComfyUiNodeConnection = [nodeId: string, outputIndex: number];
@@ -40,11 +44,40 @@ export type ComfyUiTextToImageRequest = {
   latentImageNode?: ComfyUiLatentImageNode;
   promptWrapper?: ComfyUiPromptWrapper;
   outputPrefix?: string;
+  faceDetailer?: ComfyUiFaceDetailerConfig;
 };
 
 export type ComfyUiPromptWrapper = {
   positivePrefix?: string;
   negativePrefix?: string;
+};
+
+export type ComfyUiFaceDetailerConfig = {
+  bboxCropFactor?: number;
+  bboxDilation?: number;
+  bboxThreshold?: number;
+  cfg?: number;
+  cycle?: number;
+  denoise?: number;
+  enabled?: boolean;
+  detectorModelName?: string;
+  dropSize?: number;
+  feather?: number;
+  forceInpaint?: boolean;
+  guideSize?: number;
+  guideSizeFor?: boolean;
+  maxSize?: number;
+  noiseMask?: boolean;
+  samBBoxExpansion?: number;
+  samDetectionHint?: ComfyUiFaceDetailerSamDetectionHint;
+  samDilation?: number;
+  samMaskHintThreshold?: number;
+  samMaskHintUseNegative?: ComfyUiFaceDetailerSamMaskHintUseNegative;
+  samThreshold?: number;
+  samplerName?: string;
+  scheduler?: string;
+  steps?: number;
+  wildcard?: string;
 };
 
 export type ComfyUiLoraInput = {
@@ -76,11 +109,40 @@ export type ResolvedComfyUiTextToImageRequest = {
   latentImageNode: ComfyUiLatentImageNode;
   promptWrapper: ResolvedComfyUiPromptWrapper;
   outputPrefix: string;
+  faceDetailer: ResolvedComfyUiFaceDetailerConfig;
 };
 
 export type ResolvedComfyUiPromptWrapper = {
   positivePrefix: string;
   negativePrefix: string;
+};
+
+export type ResolvedComfyUiFaceDetailerConfig = {
+  bboxCropFactor: number;
+  bboxDilation: number;
+  bboxThreshold: number;
+  cfg: number;
+  cycle: number;
+  denoise: number;
+  enabled: boolean;
+  detectorModelName: string;
+  dropSize: number;
+  feather: number;
+  forceInpaint: boolean;
+  guideSize: number;
+  guideSizeFor: boolean;
+  maxSize: number;
+  noiseMask: boolean;
+  samBBoxExpansion: number;
+  samDetectionHint: ComfyUiFaceDetailerSamDetectionHint;
+  samDilation: number;
+  samMaskHintThreshold: number;
+  samMaskHintUseNegative: ComfyUiFaceDetailerSamMaskHintUseNegative;
+  samThreshold: number;
+  samplerName: string;
+  scheduler: string;
+  steps: number;
+  wildcard: string;
 };
 
 export type BasicTextToImageNodeIds = {
@@ -91,6 +153,8 @@ export type BasicTextToImageNodeIds = {
   latentImage: string;
   sampler: string;
   vaeDecode: string;
+  ultralyticsDetectorProvider?: string;
+  faceDetailer?: string;
   saveImage: string;
 };
 

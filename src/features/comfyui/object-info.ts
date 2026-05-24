@@ -1,4 +1,8 @@
 import type { ComfyUiTextToImageRequest } from "./types";
+import {
+  COMFYUI_FACE_DETAILER_DETECTOR_MODEL_PREFERENCES,
+  DEFAULT_COMFYUI_FACE_DETAILER_DETECTOR_MODEL,
+} from "./face-detailer";
 import { normalizeComfyUiLatentImageNode } from "./latent-image-node";
 
 type ComfyUiObjectInfoNode = {
@@ -138,6 +142,25 @@ function findSampler(value: string | undefined, options: string[], schedulerOpti
   };
 }
 
+function findPreferredFaceDetailerDetectorModel(options: string[]) {
+  for (const preferred of COMFYUI_FACE_DETAILER_DETECTOR_MODEL_PREFERENCES) {
+    const matched = findOption(preferred, options);
+    if (matched) {
+      return matched;
+    }
+  }
+
+  return options.find((option) => option.toLowerCase().startsWith("bbox/") && option.toLowerCase().includes("face"))
+    ?? options.find((option) => option.toLowerCase().includes("face"))
+    ?? options.find((option) => option.toLowerCase().startsWith("bbox/"))
+    ?? options[0]
+    ?? null;
+}
+
+function shouldFallbackFromRequestedFaceDetailerDetectorModel(value: string | undefined) {
+  return !value || normalizeOptionName(value) === normalizeOptionName(DEFAULT_COMFYUI_FACE_DETAILER_DETECTOR_MODEL);
+}
+
 function validateDimension(value: number | undefined, label: string, latentImageNode: string, errors: string[]) {
   if (value === undefined) {
     return;
@@ -158,12 +181,14 @@ export function validateComfyUiRequestAgainstObjectInfo(
   const loraOptions = readInputOptions(objectInfo, "LoraLoader", "lora_name");
   const samplerOptions = readInputOptions(objectInfo, "KSampler", "sampler_name");
   const schedulerOptions = readInputOptions(objectInfo, "KSampler", "scheduler");
+  const ultralyticsDetectorOptions = readInputOptions(objectInfo, "UltralyticsDetectorProvider", "model_name");
   const checkpointName = findOption(request.checkpointName, checkpointOptions);
   const sampler = findSampler(request.samplerName, samplerOptions, schedulerOptions);
   const samplerName = sampler.samplerName;
   const requestedScheduler = request.scheduler ? findOption(request.scheduler, schedulerOptions) : null;
   const scheduler = sampler.scheduler ?? requestedScheduler;
   const latentImageNode = normalizeComfyUiLatentImageNode(request.latentImageNode);
+  let faceDetailer = request.faceDetailer;
   const loras = (request.loras ?? []).map((lora, index) => {
     const loraName = findOption(lora.loraName, loraOptions);
     if (!loraName) {
@@ -196,6 +221,63 @@ export function validateComfyUiRequestAgainstObjectInfo(
     errors.push(`Latent image node is not available in ComfyUI: ${latentImageNode}`);
   }
 
+  if (request.faceDetailer?.enabled) {
+    if (!hasNodeInfo(objectInfo, "FaceDetailer")) {
+      errors.push("FaceDetailer node is not available in ComfyUI. Install ComfyUI Impact Pack to use FaceDetailer.");
+    }
+
+    if (!hasNodeInfo(objectInfo, "UltralyticsDetectorProvider")) {
+      errors.push("UltralyticsDetectorProvider node is not available in ComfyUI. Install ComfyUI Impact Subpack to use FaceDetailer.");
+    }
+
+    const detectorModelName = request.faceDetailer.detectorModelName;
+    const requestedDetectorModel = shouldFallbackFromRequestedFaceDetailerDetectorModel(detectorModelName)
+      ? (
+          detectorModelName
+            ? findOption(detectorModelName, ultralyticsDetectorOptions)
+            : null
+        ) ?? findPreferredFaceDetailerDetectorModel(ultralyticsDetectorOptions)
+      : detectorModelName
+        ? findOption(detectorModelName, ultralyticsDetectorOptions)
+        : null;
+
+    if (!requestedDetectorModel) {
+      errors.push(
+        request.faceDetailer.detectorModelName
+          ? `FaceDetailer detector model is not available in ComfyUI: ${request.faceDetailer.detectorModelName}`
+          : "FaceDetailer detector model is not available in ComfyUI.",
+      );
+    } else {
+      faceDetailer = {
+        ...request.faceDetailer,
+        detectorModelName: requestedDetectorModel,
+      };
+    }
+
+    const faceSampler = findSampler(request.faceDetailer.samplerName, samplerOptions, schedulerOptions);
+    const faceSamplerName = faceSampler.samplerName;
+    const requestedFaceScheduler = request.faceDetailer.scheduler
+      ? findOption(request.faceDetailer.scheduler, schedulerOptions)
+      : null;
+    const faceScheduler = faceSampler.scheduler ?? requestedFaceScheduler;
+
+    if (request.faceDetailer.samplerName && !faceSamplerName) {
+      errors.push(`FaceDetailer sampler is not available in ComfyUI: ${request.faceDetailer.samplerName}`);
+    }
+
+    if (request.faceDetailer.scheduler && !faceScheduler) {
+      errors.push(`FaceDetailer scheduler is not available in ComfyUI: ${request.faceDetailer.scheduler}`);
+    }
+
+    if (faceSamplerName || faceScheduler) {
+      faceDetailer = {
+        ...faceDetailer,
+        ...(faceSamplerName ? { samplerName: faceSamplerName } : {}),
+        ...(faceScheduler ? { scheduler: faceScheduler } : {}),
+      };
+    }
+  }
+
   validateDimension(request.width, "width", latentImageNode ?? "EmptyLatentImage", errors);
   validateDimension(request.height, "height", latentImageNode ?? "EmptyLatentImage", errors);
 
@@ -222,6 +304,7 @@ export function validateComfyUiRequestAgainstObjectInfo(
       samplerName: samplerName ?? request.samplerName,
       scheduler: scheduler ?? request.scheduler,
       latentImageNode: latentImageNode ?? request.latentImageNode,
+      faceDetailer,
       loras,
     },
   };

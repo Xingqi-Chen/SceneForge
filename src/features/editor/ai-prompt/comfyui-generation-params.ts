@@ -3,6 +3,10 @@ import type {
   SelectedCivitaiResourcesPreview,
 } from "@/features/civitai-lora-library";
 import {
+  COMFYUI_FACE_DETAILER_DEFAULTS,
+  COMFYUI_FACE_DETAILER_SAM_DETECTION_HINT_OPTIONS,
+  COMFYUI_FACE_DETAILER_SAM_MASK_HINT_USE_NEGATIVE_OPTIONS,
+  DEFAULT_COMFYUI_FACE_DETAILER_DETECTOR_MODEL,
   DEFAULT_COMFYUI_LATENT_IMAGE_NODE,
   normalizeComfyUiLatentImageNode,
   type ComfyUiTextToImageRequest,
@@ -293,6 +297,62 @@ function resolveSavedPromptWrapper(savedParameters: SavedComfyUiGenerationParams
   };
 }
 
+function resolveSavedFaceDetailerOption<T extends string>(
+  value: string | undefined,
+  fallback: T,
+  options: readonly { value: T }[],
+): T {
+  return options.find((option) => option.value === value)?.value ?? fallback;
+}
+
+function resolveSavedFaceDetailer(
+  savedParameters: SavedComfyUiGenerationParams | null,
+  fallback: Pick<ComfyUiTextToImageRequest, "cfg" | "samplerName" | "scheduler" | "steps">,
+) {
+  const samplerSettings = normalizeComfyUiSamplerSettings({
+    samplerName: savedParameters?.faceDetailer?.samplerName,
+    scheduler: savedParameters?.faceDetailer?.scheduler,
+  });
+
+  return {
+    bboxCropFactor: savedParameters?.faceDetailer?.bboxCropFactor ?? COMFYUI_FACE_DETAILER_DEFAULTS.bboxCropFactor,
+    bboxDilation: savedParameters?.faceDetailer?.bboxDilation ?? COMFYUI_FACE_DETAILER_DEFAULTS.bboxDilation,
+    bboxThreshold: savedParameters?.faceDetailer?.bboxThreshold ?? COMFYUI_FACE_DETAILER_DEFAULTS.bboxThreshold,
+    cfg: savedParameters?.faceDetailer?.cfg ?? fallback.cfg ?? DEFAULT_CFG,
+    cycle: savedParameters?.faceDetailer?.cycle ?? COMFYUI_FACE_DETAILER_DEFAULTS.cycle,
+    denoise: savedParameters?.faceDetailer?.denoise ?? COMFYUI_FACE_DETAILER_DEFAULTS.denoise,
+    enabled: savedParameters?.faceDetailer?.enabled ?? false,
+    detectorModelName: savedParameters?.faceDetailer?.detectorModelName?.trim()
+      || DEFAULT_COMFYUI_FACE_DETAILER_DETECTOR_MODEL,
+    dropSize: savedParameters?.faceDetailer?.dropSize ?? COMFYUI_FACE_DETAILER_DEFAULTS.dropSize,
+    feather: savedParameters?.faceDetailer?.feather ?? COMFYUI_FACE_DETAILER_DEFAULTS.feather,
+    forceInpaint: savedParameters?.faceDetailer?.forceInpaint ?? COMFYUI_FACE_DETAILER_DEFAULTS.forceInpaint,
+    guideSize: savedParameters?.faceDetailer?.guideSize ?? COMFYUI_FACE_DETAILER_DEFAULTS.guideSize,
+    guideSizeFor: savedParameters?.faceDetailer?.guideSizeFor ?? COMFYUI_FACE_DETAILER_DEFAULTS.guideSizeFor,
+    maxSize: savedParameters?.faceDetailer?.maxSize ?? COMFYUI_FACE_DETAILER_DEFAULTS.maxSize,
+    noiseMask: savedParameters?.faceDetailer?.noiseMask ?? COMFYUI_FACE_DETAILER_DEFAULTS.noiseMask,
+    samBBoxExpansion: savedParameters?.faceDetailer?.samBBoxExpansion ?? COMFYUI_FACE_DETAILER_DEFAULTS.samBBoxExpansion,
+    samDetectionHint: resolveSavedFaceDetailerOption(
+      savedParameters?.faceDetailer?.samDetectionHint,
+      COMFYUI_FACE_DETAILER_DEFAULTS.samDetectionHint,
+      COMFYUI_FACE_DETAILER_SAM_DETECTION_HINT_OPTIONS,
+    ),
+    samDilation: savedParameters?.faceDetailer?.samDilation ?? COMFYUI_FACE_DETAILER_DEFAULTS.samDilation,
+    samMaskHintThreshold: savedParameters?.faceDetailer?.samMaskHintThreshold
+      ?? COMFYUI_FACE_DETAILER_DEFAULTS.samMaskHintThreshold,
+    samMaskHintUseNegative: resolveSavedFaceDetailerOption(
+      savedParameters?.faceDetailer?.samMaskHintUseNegative,
+      COMFYUI_FACE_DETAILER_DEFAULTS.samMaskHintUseNegative,
+      COMFYUI_FACE_DETAILER_SAM_MASK_HINT_USE_NEGATIVE_OPTIONS,
+    ),
+    samThreshold: savedParameters?.faceDetailer?.samThreshold ?? COMFYUI_FACE_DETAILER_DEFAULTS.samThreshold,
+    samplerName: samplerSettings.samplerName ?? fallback.samplerName ?? DEFAULT_SAMPLER,
+    scheduler: samplerSettings.scheduler ?? fallback.scheduler ?? DEFAULT_SCHEDULER,
+    steps: savedParameters?.faceDetailer?.steps ?? fallback.steps ?? DEFAULT_STEPS,
+    wildcard: savedParameters?.faceDetailer?.wildcard ?? COMFYUI_FACE_DETAILER_DEFAULTS.wildcard,
+  };
+}
+
 function makeNegativePrompt(baseNegativePrompt: string, additions: string | undefined) {
   const parts = [baseNegativePrompt.trim(), additions?.trim()].filter(Boolean);
   return Array.from(new Set(parts)).join(", ");
@@ -329,6 +389,10 @@ export function resolveComfyUiGenerationSettings(input: {
       source: savedLora ? "saved" as const : aiWeight ? "ai" as const : "reference" as const,
     };
   });
+  const steps = sanitizePositiveInteger(savedParameters?.steps) ?? sanitizePositiveInteger(parsedAi?.steps) ?? DEFAULT_STEPS;
+  const cfg = sanitizeFiniteNumber(savedParameters?.cfg) ?? sanitizeFiniteNumber(parsedAi?.cfg) ?? DEFAULT_CFG;
+  const samplerName = savedSamplerSettings.samplerName ?? parsedAi?.samplerName ?? DEFAULT_SAMPLER;
+  const scheduler = savedSamplerSettings.scheduler ?? parsedAi?.scheduler ?? DEFAULT_SCHEDULER;
   const request: ComfyUiTextToImageRequest = {
     checkpointName: checkpoint?.modelFileName ?? "",
     positivePrompt: input.activePrompt.trim(),
@@ -343,15 +407,21 @@ export function resolveComfyUiGenerationSettings(input: {
     width: sanitizeComfyUiDimension(savedParameters?.width) ?? sanitizeComfyUiDimension(parsedAi?.width) ?? DEFAULT_WIDTH,
     height: sanitizeComfyUiDimension(savedParameters?.height) ?? sanitizeComfyUiDimension(parsedAi?.height) ?? DEFAULT_HEIGHT,
     seed: sanitizeSeed(savedParameters?.seed) ?? sanitizeSeed(parsedAi?.seed),
-    steps: sanitizePositiveInteger(savedParameters?.steps) ?? sanitizePositiveInteger(parsedAi?.steps) ?? DEFAULT_STEPS,
-    cfg: sanitizeFiniteNumber(savedParameters?.cfg) ?? sanitizeFiniteNumber(parsedAi?.cfg) ?? DEFAULT_CFG,
-    samplerName: savedSamplerSettings.samplerName ?? parsedAi?.samplerName ?? DEFAULT_SAMPLER,
-    scheduler: savedSamplerSettings.scheduler ?? parsedAi?.scheduler ?? DEFAULT_SCHEDULER,
+    steps,
+    cfg,
+    samplerName,
+    scheduler,
     denoise: sanitizeDenoise(savedParameters?.denoise) ?? sanitizeDenoise(parsedAi?.denoise) ?? DEFAULT_DENOISE,
     batchSize: sanitizePositiveInteger(savedParameters?.imageCount) ?? DEFAULT_BATCH_SIZE,
     latentImageNode: inferLatentImageNode(checkpoint, savedParameters),
     promptWrapper: resolveSavedPromptWrapper(savedParameters),
     outputPrefix: savedParameters?.outputPrefix?.trim() || DEFAULT_OUTPUT_PREFIX,
+    faceDetailer: resolveSavedFaceDetailer(savedParameters, {
+      cfg,
+      samplerName,
+      scheduler,
+      steps,
+    }),
   };
 
   return {

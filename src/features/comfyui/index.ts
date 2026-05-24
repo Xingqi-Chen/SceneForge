@@ -1,4 +1,5 @@
 export * from "./client";
+export * from "./face-detailer";
 export * from "./history";
 export * from "./latent-image-node";
 export * from "./object-info";

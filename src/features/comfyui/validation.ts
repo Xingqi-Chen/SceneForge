@@ -1,4 +1,5 @@
 import type {
+  ComfyUiFaceDetailerConfig,
   ComfyUiLoraInput,
   ComfyUiTextToImageRequest,
   ResolvedComfyUiTextToImageRequest,
@@ -7,6 +8,12 @@ import {
   DEFAULT_COMFYUI_LATENT_IMAGE_NODE,
   normalizeComfyUiLatentImageNode,
 } from "./latent-image-node";
+import {
+  COMFYUI_FACE_DETAILER_DEFAULTS,
+  COMFYUI_FACE_DETAILER_SAM_DETECTION_HINT_OPTIONS,
+  COMFYUI_FACE_DETAILER_SAM_MASK_HINT_USE_NEGATIVE_OPTIONS,
+  DEFAULT_COMFYUI_FACE_DETAILER_DETECTOR_MODEL,
+} from "./face-detailer";
 
 const DEFAULT_TEXT_TO_IMAGE_REQUEST = {
   negativePrompt: "",
@@ -25,6 +32,15 @@ const DEFAULT_TEXT_TO_IMAGE_REQUEST = {
     negativePrefix: "",
   },
   outputPrefix: "SceneForge",
+  faceDetailer: {
+    ...COMFYUI_FACE_DETAILER_DEFAULTS,
+    cfg: 7,
+    enabled: false,
+    detectorModelName: DEFAULT_COMFYUI_FACE_DETAILER_DETECTOR_MODEL,
+    samplerName: "euler",
+    scheduler: "normal",
+    steps: 30,
+  },
 } satisfies Omit<ResolvedComfyUiTextToImageRequest, "checkpointName" | "positivePrompt" | "seed">;
 const RANDOM_SEED_UPPER_BOUND = 2 ** 50;
 const RANDOM_SEED_RANGE = RANDOM_SEED_UPPER_BOUND + 1;
@@ -52,6 +68,10 @@ function isOptionalString(value: unknown): value is string | undefined {
   return value === undefined || hasNonEmptyString(value);
 }
 
+function isOptionalStringValue(value: unknown): value is string | undefined {
+  return value === undefined || typeof value === "string";
+}
+
 function isOptionalFiniteNumber(value: unknown): value is number | undefined {
   return value === undefined || (typeof value === "number" && Number.isFinite(value));
 }
@@ -64,8 +84,16 @@ function isOptionalSafeSeed(value: unknown): value is number | undefined {
   return value === undefined || (typeof value === "number" && Number.isSafeInteger(value) && value >= 0);
 }
 
+function isOptionalBoolean(value: unknown): value is boolean | undefined {
+  return value === undefined || typeof value === "boolean";
+}
+
 function getString(value: unknown, fallback: string) {
-  return typeof value === "string" ? value.trim() : fallback;
+  if (typeof value !== "string") {
+    return fallback;
+  }
+
+  return value.trim() || fallback;
 }
 
 function getOptionalNumber(value: unknown): number | undefined {
@@ -123,6 +151,128 @@ function normalizePromptWrapper(value: unknown) {
   };
 }
 
+function isOptionalIntegerInRange(value: unknown, min: number, max: number): value is number | undefined {
+  return value === undefined || (typeof value === "number" && Number.isInteger(value) && value >= min && value <= max);
+}
+
+function isOptionalNumberInRange(value: unknown, min: number, max: number): value is number | undefined {
+  return value === undefined || (typeof value === "number" && Number.isFinite(value) && value >= min && value <= max);
+}
+
+function isOptionalPositiveFiniteNumber(value: unknown): value is number | undefined {
+  return value === undefined || (typeof value === "number" && Number.isFinite(value) && value > 0);
+}
+
+function isOptionalFaceDetailerOption<T extends string>(
+  value: unknown,
+  options: readonly { value: T }[],
+): value is T | undefined {
+  return value === undefined || (typeof value === "string" && options.some((option) => option.value === value));
+}
+
+function normalizeFaceDetailerConfig(value: unknown): ComfyUiFaceDetailerConfig | null | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (typeof value === "boolean") {
+    return {
+      enabled: value,
+    };
+  }
+
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  if (value.enabled !== undefined && typeof value.enabled !== "boolean") {
+    return null;
+  }
+
+  if (value.detectorModelName !== undefined && typeof value.detectorModelName !== "string") {
+    return null;
+  }
+
+  if (
+    !isOptionalPositiveFiniteNumber(value.guideSize) ||
+    !isOptionalPositiveFiniteNumber(value.maxSize) ||
+    !isOptionalPositiveInteger(value.steps) ||
+    !isOptionalFiniteNumber(value.cfg) ||
+    !isOptionalNumberInRange(value.denoise, 0, 1) ||
+    !isOptionalNumberInRange(value.bboxThreshold, 0, 1) ||
+    !isOptionalNumberInRange(value.bboxCropFactor, 1, 10) ||
+    !isOptionalNumberInRange(value.samThreshold, 0, 1) ||
+    !isOptionalNumberInRange(value.samMaskHintThreshold, 0, 1)
+  ) {
+    return null;
+  }
+
+  if (
+    !isOptionalIntegerInRange(value.feather, 0, 100) ||
+    !isOptionalIntegerInRange(value.bboxDilation, -512, 512) ||
+    !isOptionalIntegerInRange(value.dropSize, 1, 16384) ||
+    !isOptionalIntegerInRange(value.cycle, 1, 10) ||
+    !isOptionalIntegerInRange(value.samDilation, -512, 512) ||
+    !isOptionalIntegerInRange(value.samBBoxExpansion, 0, 1000)
+  ) {
+    return null;
+  }
+
+  if (
+    !isOptionalBoolean(value.guideSizeFor) ||
+    !isOptionalBoolean(value.noiseMask) ||
+    !isOptionalBoolean(value.forceInpaint)
+  ) {
+    return null;
+  }
+
+  if (!isOptionalStringValue(value.wildcard)) {
+    return null;
+  }
+
+  if (!isOptionalStringValue(value.samplerName) || !isOptionalStringValue(value.scheduler)) {
+    return null;
+  }
+
+  if (
+    !isOptionalFaceDetailerOption(value.samDetectionHint, COMFYUI_FACE_DETAILER_SAM_DETECTION_HINT_OPTIONS) ||
+    !isOptionalFaceDetailerOption(
+      value.samMaskHintUseNegative,
+      COMFYUI_FACE_DETAILER_SAM_MASK_HINT_USE_NEGATIVE_OPTIONS,
+    )
+  ) {
+    return null;
+  }
+
+  return {
+    ...(typeof value.bboxCropFactor === "number" ? { bboxCropFactor: value.bboxCropFactor } : {}),
+    ...(typeof value.bboxDilation === "number" ? { bboxDilation: value.bboxDilation } : {}),
+    ...(typeof value.bboxThreshold === "number" ? { bboxThreshold: value.bboxThreshold } : {}),
+    ...(typeof value.cfg === "number" ? { cfg: value.cfg } : {}),
+    ...(typeof value.cycle === "number" ? { cycle: value.cycle } : {}),
+    ...(typeof value.denoise === "number" ? { denoise: value.denoise } : {}),
+    ...(typeof value.enabled === "boolean" ? { enabled: value.enabled } : {}),
+    ...(hasNonEmptyString(value.detectorModelName) ? { detectorModelName: value.detectorModelName.trim() } : {}),
+    ...(typeof value.dropSize === "number" ? { dropSize: value.dropSize } : {}),
+    ...(typeof value.feather === "number" ? { feather: value.feather } : {}),
+    ...(typeof value.forceInpaint === "boolean" ? { forceInpaint: value.forceInpaint } : {}),
+    ...(typeof value.guideSize === "number" ? { guideSize: value.guideSize } : {}),
+    ...(typeof value.guideSizeFor === "boolean" ? { guideSizeFor: value.guideSizeFor } : {}),
+    ...(typeof value.maxSize === "number" ? { maxSize: value.maxSize } : {}),
+    ...(typeof value.noiseMask === "boolean" ? { noiseMask: value.noiseMask } : {}),
+    ...(typeof value.samBBoxExpansion === "number" ? { samBBoxExpansion: value.samBBoxExpansion } : {}),
+    ...(typeof value.samDetectionHint === "string" ? { samDetectionHint: value.samDetectionHint } : {}),
+    ...(typeof value.samDilation === "number" ? { samDilation: value.samDilation } : {}),
+    ...(typeof value.samMaskHintThreshold === "number" ? { samMaskHintThreshold: value.samMaskHintThreshold } : {}),
+    ...(typeof value.samMaskHintUseNegative === "string" ? { samMaskHintUseNegative: value.samMaskHintUseNegative } : {}),
+    ...(typeof value.samThreshold === "number" ? { samThreshold: value.samThreshold } : {}),
+    ...(hasNonEmptyString(value.samplerName) ? { samplerName: value.samplerName.trim() } : {}),
+    ...(hasNonEmptyString(value.scheduler) ? { scheduler: value.scheduler.trim() } : {}),
+    ...(typeof value.steps === "number" ? { steps: value.steps } : {}),
+    ...(typeof value.wildcard === "string" ? { wildcard: value.wildcard } : {}),
+  };
+}
+
 function createRandomSeed() {
   return Math.floor(Math.random() * RANDOM_SEED_RANGE);
 }
@@ -161,6 +311,14 @@ export function validateComfyUiTextToImageRequest(value: unknown): ComfyUiTextTo
     return {
       ok: false,
       message: "promptWrapper must include string positivePrefix and negativePrefix values when provided.",
+    };
+  }
+
+  const faceDetailer = normalizeFaceDetailerConfig(value.faceDetailer);
+  if (faceDetailer === null) {
+    return {
+      ok: false,
+      message: "faceDetailer must be a boolean or an object with valid FaceDetailer option values when provided.",
     };
   }
 
@@ -261,6 +419,7 @@ export function validateComfyUiTextToImageRequest(value: unknown): ComfyUiTextTo
       latentImageNode: normalizeComfyUiLatentImageNode(value.latentImageNode),
       promptWrapper,
       outputPrefix: value.outputPrefix?.trim(),
+      faceDetailer,
     },
   };
 }
@@ -292,5 +451,37 @@ export function resolveComfyUiTextToImageRequest(
       negativePrefix: request.promptWrapper?.negativePrefix ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.promptWrapper.negativePrefix,
     },
     outputPrefix: getString(request.outputPrefix, DEFAULT_TEXT_TO_IMAGE_REQUEST.outputPrefix),
+    faceDetailer: {
+      bboxCropFactor: request.faceDetailer?.bboxCropFactor ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.faceDetailer.bboxCropFactor,
+      bboxDilation: request.faceDetailer?.bboxDilation ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.faceDetailer.bboxDilation,
+      bboxThreshold: request.faceDetailer?.bboxThreshold ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.faceDetailer.bboxThreshold,
+      cfg: request.faceDetailer?.cfg ?? request.cfg ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.cfg,
+      cycle: request.faceDetailer?.cycle ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.faceDetailer.cycle,
+      denoise: request.faceDetailer?.denoise ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.faceDetailer.denoise,
+      enabled: request.faceDetailer?.enabled ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.faceDetailer.enabled,
+      detectorModelName: getString(
+        request.faceDetailer?.detectorModelName,
+        DEFAULT_TEXT_TO_IMAGE_REQUEST.faceDetailer.detectorModelName,
+      ),
+      dropSize: request.faceDetailer?.dropSize ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.faceDetailer.dropSize,
+      feather: request.faceDetailer?.feather ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.faceDetailer.feather,
+      forceInpaint: request.faceDetailer?.forceInpaint ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.faceDetailer.forceInpaint,
+      guideSize: request.faceDetailer?.guideSize ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.faceDetailer.guideSize,
+      guideSizeFor: request.faceDetailer?.guideSizeFor ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.faceDetailer.guideSizeFor,
+      maxSize: request.faceDetailer?.maxSize ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.faceDetailer.maxSize,
+      noiseMask: request.faceDetailer?.noiseMask ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.faceDetailer.noiseMask,
+      samBBoxExpansion: request.faceDetailer?.samBBoxExpansion ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.faceDetailer.samBBoxExpansion,
+      samDetectionHint: request.faceDetailer?.samDetectionHint ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.faceDetailer.samDetectionHint,
+      samDilation: request.faceDetailer?.samDilation ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.faceDetailer.samDilation,
+      samMaskHintThreshold: request.faceDetailer?.samMaskHintThreshold
+        ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.faceDetailer.samMaskHintThreshold,
+      samMaskHintUseNegative: request.faceDetailer?.samMaskHintUseNegative
+        ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.faceDetailer.samMaskHintUseNegative,
+      samThreshold: request.faceDetailer?.samThreshold ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.faceDetailer.samThreshold,
+      samplerName: getString(request.faceDetailer?.samplerName, getString(request.samplerName, DEFAULT_TEXT_TO_IMAGE_REQUEST.samplerName)),
+      scheduler: getString(request.faceDetailer?.scheduler, getString(request.scheduler, DEFAULT_TEXT_TO_IMAGE_REQUEST.scheduler)),
+      steps: request.faceDetailer?.steps ?? request.steps ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.steps,
+      wildcard: request.faceDetailer?.wildcard ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.faceDetailer.wildcard,
+    },
   };
 }

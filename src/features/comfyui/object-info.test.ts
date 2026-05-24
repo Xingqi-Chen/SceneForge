@@ -30,6 +30,14 @@ const objectInfo = {
   },
   EmptyLatentImage: {},
   EmptySD3LatentImage: {},
+  FaceDetailer: {},
+  UltralyticsDetectorProvider: {
+    input: {
+      required: {
+        model_name: [["bbox/face_yolov8s.pt", "bbox/person_yolov8n.pt"], {}],
+      },
+    },
+  },
 };
 
 describe("ComfyUI object info helpers", () => {
@@ -101,6 +109,28 @@ describe("ComfyUI object info helpers", () => {
       errors: [],
       request: {
         samplerName: "dpmpp_2m_sde",
+      },
+    });
+
+    expect(
+      validateComfyUiRequestAgainstObjectInfo(
+        {
+          checkpointName: "model.safetensors",
+          positivePrompt: "scene",
+          faceDetailer: {
+            enabled: true,
+            detectorModelName: "bbox/face_yolov8m.pt",
+          },
+        },
+        objectInfo,
+      ),
+    ).toMatchObject({
+      errors: [],
+      request: {
+        faceDetailer: {
+          enabled: true,
+          detectorModelName: "bbox/face_yolov8s.pt",
+        },
       },
     });
 
@@ -200,6 +230,66 @@ describe("ComfyUI object info helpers", () => {
         },
       ).errors,
     ).toEqual(["Latent image node is not available in ComfyUI: EmptySD3LatentImage"]);
+  });
+
+  it("validates and normalizes FaceDetailer detector settings before queueing", () => {
+    expect(
+      validateComfyUiRequestAgainstObjectInfo(
+        {
+          checkpointName: "model.safetensors",
+          positivePrompt: "scene",
+          faceDetailer: {
+            enabled: true,
+          },
+        },
+        objectInfo,
+      ),
+    ).toMatchObject({
+      errors: [],
+      request: {
+        faceDetailer: {
+          enabled: true,
+          detectorModelName: "bbox/face_yolov8s.pt",
+        },
+      },
+    });
+
+    expect(
+      validateComfyUiRequestAgainstObjectInfo(
+        {
+          checkpointName: "model.safetensors",
+          positivePrompt: "scene",
+          faceDetailer: {
+            enabled: true,
+            detectorModelName: "missing.pt",
+          },
+        },
+        objectInfo,
+      ).errors,
+    ).toEqual(["FaceDetailer detector model is not available in ComfyUI: missing.pt"]);
+  });
+
+  it("reports missing FaceDetailer custom nodes before queueing", () => {
+    expect(
+      validateComfyUiRequestAgainstObjectInfo(
+        {
+          checkpointName: "model.safetensors",
+          positivePrompt: "scene",
+          faceDetailer: {
+            enabled: true,
+          },
+        },
+        {
+          ...objectInfo,
+          FaceDetailer: undefined,
+          UltralyticsDetectorProvider: undefined,
+        },
+      ).errors,
+    ).toEqual([
+      "FaceDetailer node is not available in ComfyUI. Install ComfyUI Impact Pack to use FaceDetailer.",
+      "UltralyticsDetectorProvider node is not available in ComfyUI. Install ComfyUI Impact Subpack to use FaceDetailer.",
+      "FaceDetailer detector model is not available in ComfyUI.",
+    ]);
   });
 
   it("summarizes nested ComfyUI node errors", () => {

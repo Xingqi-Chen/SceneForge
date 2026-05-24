@@ -25,6 +25,12 @@ import {
   defaultCharacterMannequinJoints3D,
   defaultScene,
 } from "@/features/editor/store/defaults";
+import {
+  COMFYUI_FACE_DETAILER_DEFAULTS,
+  COMFYUI_FACE_DETAILER_SAM_DETECTION_HINT_OPTIONS,
+  COMFYUI_FACE_DETAILER_SAM_MASK_HINT_USE_NEGATIVE_OPTIONS,
+  DEFAULT_COMFYUI_FACE_DETAILER_DETECTOR_MODEL,
+} from "@/features/comfyui/face-detailer";
 import { migrateAuthoringJoints3DToStickFigure } from "@/features/editor/stick-figure-3d/migrate-legacy-joints3d";
 import { sanitizeStickFigurePoseV1 } from "@/features/editor/stick-figure-3d/stick-figure-pose-io";
 import { defaultLineEndpoints, defaultPolygonPoints } from "@/features/editor/preset-scene-objects";
@@ -739,6 +745,191 @@ function sanitizeScene(scene: unknown): Scene {
   };
 }
 
+function sanitizePositiveInteger(raw: unknown, fallback: number): number {
+  return typeof raw === "number" && Number.isFinite(raw) && raw > 0 ? Math.round(raw) : fallback;
+}
+
+function sanitizeFiniteNumber(raw: unknown, fallback: number): number {
+  return typeof raw === "number" && Number.isFinite(raw) ? raw : fallback;
+}
+
+function sanitizeNumberInRangeLoose(raw: unknown, fallback: number, min: number, max: number): number {
+  return typeof raw === "number" && Number.isFinite(raw)
+    ? Math.min(max, Math.max(min, raw))
+    : fallback;
+}
+
+function sanitizeIntegerInRangeLoose(raw: unknown, fallback: number, min: number, max: number): number {
+  return Math.round(sanitizeNumberInRangeLoose(raw, fallback, min, max));
+}
+
+function sanitizeOptionValue<T extends string>(
+  raw: unknown,
+  fallback: T,
+  options: readonly { value: T }[],
+): T {
+  return typeof raw === "string" ? options.find((option) => option.value === raw)?.value ?? fallback : fallback;
+}
+
+function sanitizeSavedComfyUiGenerationParams(
+  raw: unknown,
+): SceneForgeProject["settings"]["savedComfyUiGenerationParams"] | undefined {
+  if (raw === null) {
+    return null;
+  }
+
+  if (!isRecord(raw)) {
+    return undefined;
+  }
+
+  const seed = typeof raw.seed === "number" && Number.isSafeInteger(raw.seed) && raw.seed >= 0
+    ? raw.seed
+    : 0;
+  const seedMode = raw.seedMode === "fixed" ? "fixed" : "random";
+  const denoise = sanitizeFiniteNumber(raw.denoise, 1);
+  const latentImageNode =
+    raw.latentImageNode === "EmptyLatentImage" || raw.latentImageNode === "EmptySD3LatentImage"
+      ? raw.latentImageNode
+      : undefined;
+  const promptWrapper = isRecord(raw.promptWrapper)
+    ? {
+        ...(typeof raw.promptWrapper.positivePrefix === "string"
+          ? { positivePrefix: raw.promptWrapper.positivePrefix }
+          : {}),
+        ...(typeof raw.promptWrapper.negativePrefix === "string"
+          ? { negativePrefix: raw.promptWrapper.negativePrefix }
+          : {}),
+      }
+    : undefined;
+  const faceDetailer = isRecord(raw.faceDetailer)
+    ? {
+        bboxCropFactor: sanitizeNumberInRangeLoose(
+          raw.faceDetailer.bboxCropFactor,
+          COMFYUI_FACE_DETAILER_DEFAULTS.bboxCropFactor,
+          1,
+          10,
+        ),
+        bboxDilation: sanitizeIntegerInRangeLoose(
+          raw.faceDetailer.bboxDilation,
+          COMFYUI_FACE_DETAILER_DEFAULTS.bboxDilation,
+          -512,
+          512,
+        ),
+        bboxThreshold: sanitizeNumberInRangeLoose(
+          raw.faceDetailer.bboxThreshold,
+          COMFYUI_FACE_DETAILER_DEFAULTS.bboxThreshold,
+          0,
+          1,
+        ),
+        cfg: sanitizeFiniteNumber(raw.faceDetailer.cfg, sanitizeFiniteNumber(raw.cfg, 7)),
+        cycle: sanitizeIntegerInRangeLoose(raw.faceDetailer.cycle, COMFYUI_FACE_DETAILER_DEFAULTS.cycle, 1, 10),
+        denoise: sanitizeNumberInRangeLoose(raw.faceDetailer.denoise, COMFYUI_FACE_DETAILER_DEFAULTS.denoise, 0, 1),
+        enabled: raw.faceDetailer.enabled === true,
+        detectorModelName: typeof raw.faceDetailer.detectorModelName === "string" && raw.faceDetailer.detectorModelName.trim()
+          ? raw.faceDetailer.detectorModelName.trim()
+          : DEFAULT_COMFYUI_FACE_DETAILER_DETECTOR_MODEL,
+        dropSize: sanitizeIntegerInRangeLoose(raw.faceDetailer.dropSize, COMFYUI_FACE_DETAILER_DEFAULTS.dropSize, 1, 16384),
+        feather: sanitizeIntegerInRangeLoose(raw.faceDetailer.feather, COMFYUI_FACE_DETAILER_DEFAULTS.feather, 0, 100),
+        forceInpaint: typeof raw.faceDetailer.forceInpaint === "boolean"
+          ? raw.faceDetailer.forceInpaint
+          : COMFYUI_FACE_DETAILER_DEFAULTS.forceInpaint,
+        guideSize: sanitizeNumberInRangeLoose(raw.faceDetailer.guideSize, COMFYUI_FACE_DETAILER_DEFAULTS.guideSize, 64, 16384),
+        guideSizeFor: typeof raw.faceDetailer.guideSizeFor === "boolean"
+          ? raw.faceDetailer.guideSizeFor
+          : COMFYUI_FACE_DETAILER_DEFAULTS.guideSizeFor,
+        maxSize: sanitizeNumberInRangeLoose(raw.faceDetailer.maxSize, COMFYUI_FACE_DETAILER_DEFAULTS.maxSize, 64, 16384),
+        noiseMask: typeof raw.faceDetailer.noiseMask === "boolean"
+          ? raw.faceDetailer.noiseMask
+          : COMFYUI_FACE_DETAILER_DEFAULTS.noiseMask,
+        samBBoxExpansion: sanitizeIntegerInRangeLoose(
+          raw.faceDetailer.samBBoxExpansion,
+          COMFYUI_FACE_DETAILER_DEFAULTS.samBBoxExpansion,
+          0,
+          1000,
+        ),
+        samDetectionHint: sanitizeOptionValue(
+          raw.faceDetailer.samDetectionHint,
+          COMFYUI_FACE_DETAILER_DEFAULTS.samDetectionHint,
+          COMFYUI_FACE_DETAILER_SAM_DETECTION_HINT_OPTIONS,
+        ),
+        samDilation: sanitizeIntegerInRangeLoose(
+          raw.faceDetailer.samDilation,
+          COMFYUI_FACE_DETAILER_DEFAULTS.samDilation,
+          -512,
+          512,
+        ),
+        samMaskHintThreshold: sanitizeNumberInRangeLoose(
+          raw.faceDetailer.samMaskHintThreshold,
+          COMFYUI_FACE_DETAILER_DEFAULTS.samMaskHintThreshold,
+          0,
+          1,
+        ),
+        samMaskHintUseNegative: sanitizeOptionValue(
+          raw.faceDetailer.samMaskHintUseNegative,
+          COMFYUI_FACE_DETAILER_DEFAULTS.samMaskHintUseNegative,
+          COMFYUI_FACE_DETAILER_SAM_MASK_HINT_USE_NEGATIVE_OPTIONS,
+        ),
+        samThreshold: sanitizeNumberInRangeLoose(
+          raw.faceDetailer.samThreshold,
+          COMFYUI_FACE_DETAILER_DEFAULTS.samThreshold,
+          0,
+          1,
+        ),
+        samplerName: typeof raw.faceDetailer.samplerName === "string" && raw.faceDetailer.samplerName.trim()
+          ? raw.faceDetailer.samplerName.trim()
+          : typeof raw.samplerName === "string" && raw.samplerName.trim()
+            ? raw.samplerName.trim()
+            : "euler",
+        scheduler: typeof raw.faceDetailer.scheduler === "string" && raw.faceDetailer.scheduler.trim()
+          ? raw.faceDetailer.scheduler.trim()
+          : typeof raw.scheduler === "string" && raw.scheduler.trim()
+            ? raw.scheduler.trim()
+            : "normal",
+        steps: sanitizePositiveInteger(raw.faceDetailer.steps, sanitizePositiveInteger(raw.steps, 30)),
+        wildcard: typeof raw.faceDetailer.wildcard === "string"
+          ? raw.faceDetailer.wildcard
+          : COMFYUI_FACE_DETAILER_DEFAULTS.wildcard,
+      }
+    : undefined;
+  const loras = Array.isArray(raw.loras)
+    ? raw.loras.flatMap((lora) => {
+        if (!isRecord(lora) || typeof lora.loraName !== "string" || !lora.loraName.trim()) {
+          return [];
+        }
+
+        return [
+          {
+            enabled: lora.enabled !== false,
+            loraName: lora.loraName.trim(),
+            strengthClip: sanitizeFiniteNumber(lora.strengthClip, sanitizeFiniteNumber(lora.strengthModel, 0.7)),
+            strengthModel: sanitizeFiniteNumber(lora.strengthModel, 0.7),
+          },
+        ];
+      })
+    : [];
+
+  return {
+    width: sanitizePositiveInteger(raw.width, 1024),
+    height: sanitizePositiveInteger(raw.height, 1024),
+    seed,
+    seedMode,
+    steps: sanitizePositiveInteger(raw.steps, 30),
+    cfg: sanitizeFiniteNumber(raw.cfg, 7),
+    samplerName: typeof raw.samplerName === "string" && raw.samplerName.trim() ? raw.samplerName.trim() : "euler",
+    scheduler: typeof raw.scheduler === "string" && raw.scheduler.trim() ? raw.scheduler.trim() : "normal",
+    denoise: Math.min(1, Math.max(0, denoise)),
+    imageCount: sanitizePositiveInteger(raw.imageCount, 1),
+    ...(latentImageNode ? { latentImageNode } : {}),
+    ...(promptWrapper ? { promptWrapper } : {}),
+    outputPrefix: typeof raw.outputPrefix === "string" && raw.outputPrefix.trim() ? raw.outputPrefix.trim() : "SceneForge",
+    ...(faceDetailer ? { faceDetailer } : {}),
+    loras,
+    savedAt: typeof raw.savedAt === "string" && raw.savedAt.trim()
+      ? raw.savedAt
+      : "1970-01-01T00:00:00.000Z",
+  };
+}
+
 function sanitizeSettings(settings: unknown): SceneForgeProject["settings"] {
   if (!isRecord(settings)) {
     return {
@@ -755,6 +946,9 @@ function sanitizeSettings(settings: unknown): SceneForgeProject["settings"] {
     };
   }
 
+  const savedComfyUiGenerationParams = sanitizeSavedComfyUiGenerationParams(
+    settings.savedComfyUiGenerationParams,
+  );
   const modelFormat = settings.modelFormat;
   const mf: SceneForgeProject["settings"]["modelFormat"] =
     typeof modelFormat === "string" &&
@@ -803,6 +997,7 @@ function sanitizeSettings(settings: unknown): SceneForgeProject["settings"] {
       settings.artistStringPromptRenderMode === "by-weight"
         ? settings.artistStringPromptRenderMode
         : "artist-weight",
+    ...(savedComfyUiGenerationParams !== undefined ? { savedComfyUiGenerationParams } : {}),
     promptLibraryTags: libraryTags,
     deletedBuiltInPromptLibraryTagIds: [...new Set(deletedBuiltIns)],
   };

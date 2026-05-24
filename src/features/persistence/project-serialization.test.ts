@@ -37,6 +37,87 @@ describe("project serialization", () => {
     expect(stripSharedPromptStateFromProject(parsed)).toEqual(stripSharedPromptStateFromProject(project));
   });
 
+  it("round-trips saved ComfyUI FaceDetailer parameters", () => {
+    const project = createDefaultProject();
+    project.settings.savedComfyUiGenerationParams = {
+      cfg: 7,
+      denoise: 1,
+      faceDetailer: {
+        bboxCropFactor: 2.4,
+        bboxDilation: 14,
+        bboxThreshold: 0.45,
+        cfg: 5.5,
+        cycle: 2,
+        denoise: 0.4,
+        enabled: true,
+        detectorModelName: "bbox/face_yolov8s.pt",
+        dropSize: 16,
+        feather: 8,
+        forceInpaint: false,
+        guideSize: 640,
+        guideSizeFor: false,
+        maxSize: 1280,
+        noiseMask: false,
+        samBBoxExpansion: 6,
+        samDetectionHint: "rect-4",
+        samDilation: 3,
+        samMaskHintThreshold: 0.62,
+        samMaskHintUseNegative: "Small",
+        samThreshold: 0.86,
+        samplerName: "dpmpp_2m",
+        scheduler: "karras",
+        steps: 18,
+        wildcard: "[LAB] face",
+      },
+      height: 1024,
+      imageCount: 1,
+      latentImageNode: "EmptyLatentImage",
+      loras: [],
+      outputPrefix: "SceneForge",
+      promptWrapper: {
+        negativePrefix: "",
+        positivePrefix: "",
+      },
+      samplerName: "euler",
+      savedAt: "2026-05-24T00:00:00.000Z",
+      scheduler: "normal",
+      seed: 123,
+      seedMode: "fixed",
+      steps: 30,
+      width: 1024,
+    };
+
+    const parsed = parseProjectJson(serializeProject(project));
+
+    expect(parsed.settings.savedComfyUiGenerationParams?.faceDetailer).toEqual({
+      bboxCropFactor: 2.4,
+      bboxDilation: 14,
+      bboxThreshold: 0.45,
+      cfg: 5.5,
+      cycle: 2,
+      denoise: 0.4,
+      enabled: true,
+      detectorModelName: "bbox/face_yolov8s.pt",
+      dropSize: 16,
+      feather: 8,
+      forceInpaint: false,
+      guideSize: 640,
+      guideSizeFor: false,
+      maxSize: 1280,
+      noiseMask: false,
+      samBBoxExpansion: 6,
+      samDetectionHint: "rect-4",
+      samDilation: 3,
+      samMaskHintThreshold: 0.62,
+      samMaskHintUseNegative: "Small",
+      samThreshold: 0.86,
+      samplerName: "dpmpp_2m",
+      scheduler: "karras",
+      steps: 18,
+      wildcard: "[LAB] face",
+    });
+  });
+
   it("rejects invalid imported data", () => {
     expect(isSceneForgeProject({ version: 1 })).toBe(false);
     expect(() => parseProjectJson(JSON.stringify({ version: 1 }))).toThrow(

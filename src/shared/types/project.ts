@@ -16,6 +16,34 @@ export type SavedComfyUiPromptWrapper = {
   negativePrefix?: string;
 };
 
+export type SavedComfyUiFaceDetailerParams = {
+  bboxCropFactor?: number;
+  bboxDilation?: number;
+  bboxThreshold?: number;
+  cfg?: number;
+  cycle?: number;
+  denoise?: number;
+  enabled: boolean;
+  detectorModelName?: string;
+  dropSize?: number;
+  feather?: number;
+  forceInpaint?: boolean;
+  guideSize?: number;
+  guideSizeFor?: boolean;
+  maxSize?: number;
+  noiseMask?: boolean;
+  samBBoxExpansion?: number;
+  samDetectionHint?: string;
+  samDilation?: number;
+  samMaskHintThreshold?: number;
+  samMaskHintUseNegative?: string;
+  samThreshold?: number;
+  samplerName?: string;
+  scheduler?: string;
+  steps?: number;
+  wildcard?: string;
+};
+
 export type SavedComfyUiGenerationParams = {
   width: number;
   height: number;
@@ -30,6 +58,7 @@ export type SavedComfyUiGenerationParams = {
   latentImageNode?: "EmptyLatentImage" | "EmptySD3LatentImage";
   promptWrapper?: SavedComfyUiPromptWrapper;
   outputPrefix: string;
+  faceDetailer?: SavedComfyUiFaceDetailerParams;
   loras: SavedComfyUiGenerationLoraParams[];
   savedAt: string;
 };

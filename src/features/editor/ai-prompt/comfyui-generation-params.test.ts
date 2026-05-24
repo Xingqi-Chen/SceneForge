@@ -309,6 +309,11 @@ describe("ComfyUI generation parameters", () => {
           },
         ],
         outputPrefix: "SavedPrefix",
+        faceDetailer: {
+          enabled: true,
+          samplerName: "DPM++ 2M SDE Karras",
+          scheduler: "normal",
+        },
         samplerName: "DPM++ 2M Karras",
         savedAt: "2026-05-23T00:00:00.000Z",
         scheduler: "normal",
@@ -331,6 +336,11 @@ describe("ComfyUI generation parameters", () => {
       outputPrefix: "SavedPrefix",
       samplerName: "dpmpp_2m",
       scheduler: "karras",
+      faceDetailer: {
+        enabled: true,
+        samplerName: "dpmpp_2m_sde",
+        scheduler: "karras",
+      },
     });
     expect(settings.loras).toMatchObject([
       {
