@@ -689,6 +689,9 @@ export const useEditorStore = create<EditorState>((set) => ({
               selectedArtistStringIds: project.settings.selectedArtistStringIds ?? [],
               selectedArtistStringPrompts: project.settings.selectedArtistStringPrompts ?? [],
               artistStringPromptRenderMode: project.settings.artistStringPromptRenderMode ?? "artist-weight",
+              ...(project.settings.savedComfyUiGenerationParams
+                ? { savedComfyUiGenerationParams: project.settings.savedComfyUiGenerationParams }
+                : {}),
             },
           },
           promptBindings,

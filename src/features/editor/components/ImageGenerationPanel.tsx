@@ -1,7 +1,7 @@
 "use client";
 
 import { AlertTriangle, CheckCircle2, Download, Image as ImageIcon, Loader2, Play, Sparkles, X } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 
 import { Button } from "@/components/ui/button";
@@ -13,6 +13,7 @@ import type {
 } from "@/features/civitai-lora-library";
 import {
   buildBasicTextToImageWorkflow,
+  COMFYUI_LATENT_IMAGE_NODE_OPTIONS,
   type ComfyUiGeneratedImage,
   type ComfyUiInputValue,
   type ComfyUiPromptHistoryResponse,
@@ -37,6 +38,12 @@ import {
   type ComfyUiGenerationParameterSource,
 } from "@/features/editor/ai-prompt/comfyui-generation-params";
 import {
+  COMFYUI_SAMPLER_OPTIONS,
+  COMFYUI_SCHEDULER_OPTIONS,
+  normalizeComfyUiSamplerSettings,
+} from "@/features/editor/ai-prompt/comfyui-generation-options";
+import type { CivitaiAiPromptResult } from "@/features/editor/ai-prompt/civitai-ai-context";
+import {
   getComfyUiGenerationDownloadReadiness,
   isComfyUiGenerationResourceReady,
   shouldDownloadComfyUiGenerationResource,
@@ -53,6 +60,7 @@ import {
 import { useEditorStore } from "@/features/editor/store/editor-store";
 import { getLlmProxyErrorMessage, isLlmChatResponse } from "@/features/llm";
 import { generatePrompt } from "@/features/prompt-engine";
+import type { SavedComfyUiGenerationParams } from "@/shared/types";
 
 type LoadStatus = "idle" | "loading" | "success" | "error";
 type SubmitStatus = "idle" | "loading" | "success" | "error";
@@ -68,6 +76,11 @@ type GenerationResult = {
   seed: number;
 };
 
+type GeneratedImageItem = {
+  image: ComfyUiGeneratedImage;
+  seed: number;
+};
+
 type GenerationProgress = {
   value: number;
   max: number;
@@ -78,9 +91,10 @@ type GenerationDraftLora = Required<NonNullable<ComfyUiTextToImageRequest["loras
   enabled: boolean;
 };
 
-type GenerationDraft = Required<Omit<ComfyUiTextToImageRequest, "loras">> & {
+type GenerationDraft = Required<Omit<ComfyUiTextToImageRequest, "loras" | "promptWrapper">> & {
   loras: GenerationDraftLora[];
   imageCount: number;
+  promptWrapper: Required<NonNullable<ComfyUiTextToImageRequest["promptWrapper"]>>;
   seedMode: ComfyUiGenerationSeedMode;
 };
 
@@ -106,9 +120,31 @@ const EMPTY_SELECTED_RESOURCES: SelectedCivitaiResourcesPreview = {
 };
 const COMFYUI_HISTORY_POLL_INTERVAL_MS = 2000;
 const COMFYUI_HISTORY_POLL_TIMEOUT_MS = 180000;
+const COMFYUI_PROMPT_WRAPPER_PRESETS = [
+  {
+    id: "none",
+    label: "None",
+    negativePrefix: "",
+    positivePrefix: "",
+  },
+  {
+    id: "assistant-prompt-start",
+    label: "ComfyUI <Prompt Start>",
+    negativePrefix: "You are an assistant designed to generate low-quality images based on textual prompts <Prompt Start> ",
+    positivePrefix: "You are an assistant designed to generate high quality anime images based on textual prompts. <Prompt Start> ",
+  },
+] as const;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function getPromptWrapperPresetId(wrapper: { negativePrefix: string; positivePrefix: string }) {
+  return COMFYUI_PROMPT_WRAPPER_PRESETS.find(
+    (preset) =>
+      preset.negativePrefix === wrapper.negativePrefix &&
+      preset.positivePrefix === wrapper.positivePrefix,
+  )?.id;
 }
 
 function readErrorMessage(payload: unknown, fallback: string) {
@@ -397,39 +433,91 @@ function getResourceDownloadStatusClass(item: ResourceDownloadItem) {
 
 function ResourceDownloadBadge({ item }: { item: ResourceDownloadItem | undefined }) {
   if (!item) {
-    return <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-500">检查中</span>;
+    return (
+      <span className="inline-flex h-6 shrink-0 items-center whitespace-nowrap rounded-full bg-slate-100 px-2.5 text-[10px] font-medium leading-none text-slate-500">
+        检查中
+      </span>
+    );
   }
 
   return (
-    <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${getResourceDownloadStatusClass(item)}`}>
+    <span
+      className={`inline-flex h-6 shrink-0 items-center whitespace-nowrap rounded-full px-2.5 text-[10px] font-medium leading-none ${getResourceDownloadStatusClass(item)}`}
+    >
       {getResourceDownloadStatusLabel(item)}
     </span>
   );
 }
 
-function toDraft(request: ComfyUiTextToImageRequest): GenerationDraft {
+function toDraft(
+  request: ComfyUiTextToImageRequest,
+  loraSettings?: ComfyUiGenerationLoraSetting[],
+  savedSeedMode?: ComfyUiGenerationSeedMode,
+): GenerationDraft {
+  const samplerSettings = normalizeComfyUiSamplerSettings({
+    samplerName: request.samplerName,
+    scheduler: request.scheduler,
+  });
+
   return {
     checkpointName: request.checkpointName,
     positivePrompt: request.positivePrompt,
     negativePrompt: request.negativePrompt ?? "",
-    loras: (request.loras ?? []).map((lora) => ({
+    loras: loraSettings
+      ? loraSettings.map((lora) => ({
+          enabled: lora.enabled,
+          loraName: lora.loraName,
+          strengthModel: lora.strengthModel,
+          strengthClip: lora.strengthClip,
+        }))
+      : (request.loras ?? []).map((lora) => ({
       enabled: true,
       loraName: lora.loraName,
       strengthModel: lora.strengthModel,
       strengthClip: lora.strengthClip ?? lora.strengthModel,
     })),
-    imageCount: 1,
+    imageCount: normalizeComfyUiGenerationImageCount(request.batchSize ?? 1),
     width: request.width ?? 1024,
     height: request.height ?? 1024,
     seed: request.seed ?? createComfyUiGenerationSeed(),
-    seedMode: getInitialComfyUiGenerationSeedMode(request),
+    seedMode: savedSeedMode ?? getInitialComfyUiGenerationSeedMode(request),
     steps: request.steps ?? 30,
     cfg: request.cfg ?? 7,
-    samplerName: request.samplerName ?? "euler",
-    scheduler: request.scheduler ?? "normal",
+    samplerName: samplerSettings.samplerName ?? "euler",
+    scheduler: samplerSettings.scheduler ?? "normal",
     denoise: request.denoise ?? 1,
     batchSize: request.batchSize ?? 1,
+    latentImageNode: request.latentImageNode ?? "EmptyLatentImage",
+    promptWrapper: {
+      positivePrefix: request.promptWrapper?.positivePrefix ?? "",
+      negativePrefix: request.promptWrapper?.negativePrefix ?? "",
+    },
     outputPrefix: request.outputPrefix ?? "SceneForge",
+  };
+}
+
+function toSavedParameters(draft: GenerationDraft): SavedComfyUiGenerationParams {
+  return {
+    width: draft.width,
+    height: draft.height,
+    seed: draft.seed,
+    seedMode: draft.seedMode,
+    steps: draft.steps,
+    cfg: draft.cfg,
+    samplerName: draft.samplerName,
+    scheduler: draft.scheduler,
+    denoise: draft.denoise,
+    imageCount: normalizeComfyUiGenerationImageCount(draft.imageCount),
+    latentImageNode: draft.latentImageNode,
+    promptWrapper: draft.promptWrapper,
+    outputPrefix: draft.outputPrefix,
+    loras: draft.loras.map((lora) => ({
+      loraName: lora.loraName,
+      enabled: lora.enabled,
+      strengthModel: lora.strengthModel,
+      strengthClip: lora.strengthClip,
+    })),
+    savedAt: new Date().toISOString(),
   };
 }
 
@@ -454,6 +542,8 @@ function toRequestPayload(draft: GenerationDraft, seed: number): ComfyUiTextToIm
     scheduler: draft.scheduler,
     denoise: draft.denoise,
     batchSize: draft.imageCount,
+    latentImageNode: draft.latentImageNode,
+    promptWrapper: draft.promptWrapper,
     outputPrefix: draft.outputPrefix,
   };
 }
@@ -465,6 +555,10 @@ function formatSource(source: ComfyUiGenerationParameterSource) {
 
   if (source === "diagnosis") {
     return "AI 诊断";
+  }
+
+  if (source === "saved") {
+    return "已保存参数";
   }
 
   return "参考值";
@@ -670,8 +764,61 @@ function TextInput({
   );
 }
 
+function TextAreaInput({
+  label,
+  onChange,
+  value,
+}: {
+  label: string;
+  onChange: (value: string) => void;
+  value: string;
+}) {
+  return (
+    <label className="grid gap-1">
+      <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">{label}</span>
+      <textarea
+        className="min-h-16 w-full resize-y rounded-md border border-slate-200 bg-white px-2 py-2 text-xs leading-relaxed text-slate-700 outline-none transition focus:border-sky-300 focus:ring-2 focus:ring-sky-100"
+        onChange={(event) => onChange(event.target.value)}
+        value={value}
+      />
+    </label>
+  );
+}
+
+function SelectInput({
+  label,
+  onChange,
+  options,
+  value,
+}: {
+  label: string;
+  onChange: (value: string) => void;
+  options: readonly { label: string; value: string }[];
+  value: string;
+}) {
+  const selectedValue = options.some((option) => option.value === value) ? value : options[0]?.value ?? "";
+
+  return (
+    <label className="grid gap-1">
+      <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">{label}</span>
+      <select
+        className="h-9 min-w-0 rounded-md border border-slate-200 bg-white px-2 text-sm text-slate-700 outline-none transition focus:border-sky-300 focus:ring-2 focus:ring-sky-100"
+        onChange={(event) => onChange(event.target.value)}
+        value={selectedValue}
+      >
+        {options.map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
 function GeneratedImageResults({
-  generatedImages,
+  generatedImageItems,
+  imageClickMode,
   onSelectImage,
   progress,
   resultsCount,
@@ -679,7 +826,8 @@ function GeneratedImageResults({
   submitStatus,
   waitMessage,
 }: {
-  generatedImages: ComfyUiGeneratedImage[];
+  generatedImageItems: GeneratedImageItem[];
+  imageClickMode: "open" | "select";
   onSelectImage: (imageKey: string) => void;
   progress: GenerationProgress | null;
   resultsCount: number;
@@ -687,14 +835,46 @@ function GeneratedImageResults({
   submitStatus: SubmitStatus;
   waitMessage: string;
 }) {
-  if (generatedImages.length > 0) {
+  if (generatedImageItems.length > 0) {
     return (
       <div>
         <p className="mb-2 text-[11px] font-bold uppercase tracking-wider text-slate-500">生成结果</p>
         <div className="grid grid-cols-2 gap-2">
-          {generatedImages.map((image, index) => {
+          {generatedImageItems.map((item, index) => {
+            const { image } = item;
             const imageKey = getGeneratedImageKey(image, index);
-            const selected = selectedImageKey ? selectedImageKey === imageKey : index === 0;
+            const selected = imageClickMode === "select" && (selectedImageKey ? selectedImageKey === imageKey : index === 0);
+            const imageContent = (
+              <>
+                <img
+                  alt={`ComfyUI generated image ${index + 1}`}
+                  className="aspect-square w-full object-cover transition group-hover:scale-[1.02]"
+                  src={image.url}
+                />
+                <div className="border-t border-slate-200 bg-white px-2 py-1 text-[10px] text-slate-500">
+                  <span className="block truncate">
+                    {selected ? "诊断图 · " : ""}
+                    {image.filename}
+                  </span>
+                  <span className="mt-0.5 block font-mono text-[10px] text-slate-600">seed {item.seed}</span>
+                </div>
+              </>
+            );
+
+            if (imageClickMode === "open") {
+              return (
+                <a
+                  className="group block overflow-hidden rounded-md border border-slate-200 bg-slate-50 text-left transition hover:border-sky-200"
+                  href={image.url}
+                  key={imageKey}
+                  rel="noreferrer"
+                  target="_blank"
+                  title={`打开原图：${image.filename}`}
+                >
+                  {imageContent}
+                </a>
+              );
+            }
 
             return (
               <button
@@ -706,15 +886,7 @@ function GeneratedImageResults({
                 title={image.filename}
                 type="button"
               >
-                <img
-                  alt={`ComfyUI generated image ${index + 1}`}
-                  className="aspect-square w-full object-cover transition group-hover:scale-[1.02]"
-                  src={image.url}
-                />
-                <span className="block truncate border-t border-slate-200 bg-white px-2 py-1 text-[10px] text-slate-500">
-                  {selected ? "诊断图 · " : ""}
-                  {image.filename}
-                </span>
+                {imageContent}
               </button>
             );
           })}
@@ -756,16 +928,42 @@ function GeneratedImageResults({
   return null;
 }
 
-export function ImageGenerationPanel() {
-  const project = useEditorStore((state) => state.project);
-  const aiGeneratedPrompt = useEditorStore((state) => state.aiGeneratedPrompt);
-  const aiCivitaiAdvice = useEditorStore((state) => state.aiCivitaiAdvice);
-  const generatedPrompt = useMemo(() => generatePrompt(project), [project]);
-  const activePrompt = aiGeneratedPrompt.trim() || generatedPrompt.prompt;
-  const selectedCheckpointId = project.settings.selectedCivitaiCheckpointId;
-  const selectedLoraIds = project.settings.selectedCivitaiLoraIds ?? [];
-  const hasCheckpoint = Boolean(selectedCheckpointId);
-  const [modalOpen, setModalOpen] = useState(false);
+export type ComfyUiGenerationDialogProps = {
+  activePrompt: string;
+  advice: CivitaiAiPromptResult | null;
+  allowDiagnosis?: boolean;
+  baseNegativePrompt: string;
+  description?: ReactNode;
+  introContent?: ReactNode;
+  negativePromptLocked?: boolean;
+  onSaveParameters?: (parameters: SavedComfyUiGenerationParams) => void;
+  onClose: () => void;
+  open: boolean;
+  positivePromptLocked?: boolean;
+  savedParameters?: SavedComfyUiGenerationParams | null;
+  selectedCheckpointId: string | null;
+  selectedLoraIds: string[];
+  title?: string;
+};
+
+export function ComfyUiGenerationDialog({
+  activePrompt,
+  advice,
+  allowDiagnosis = true,
+  baseNegativePrompt,
+  description,
+  introContent,
+  negativePromptLocked = false,
+  onSaveParameters,
+  onClose,
+  open,
+  positivePromptLocked = false,
+  savedParameters = null,
+  selectedCheckpointId,
+  selectedLoraIds,
+  title = "ComfyUI 生图",
+}: ComfyUiGenerationDialogProps) {
+  const selectedLoraIdsKey = selectedLoraIds.join(",");
   const [selectedResources, setSelectedResources] = useState<SelectedCivitaiResourcesPreview>(EMPTY_SELECTED_RESOURCES);
   const [loadStatus, setLoadStatus] = useState<LoadStatus>("idle");
   const [loadError, setLoadError] = useState("");
@@ -778,6 +976,7 @@ export function ImageGenerationPanel() {
   const [downloadActionError, setDownloadActionError] = useState("");
   const [submitStatus, setSubmitStatus] = useState<SubmitStatus>("idle");
   const [submitError, setSubmitError] = useState("");
+  const [saveMessage, setSaveMessage] = useState("");
   const [waitMessage, setWaitMessage] = useState("");
   const [generationProgress, setGenerationProgress] = useState<GenerationProgress | null>(null);
   const [results, setResults] = useState<GenerationResult[]>([]);
@@ -838,6 +1037,7 @@ export function ImageGenerationPanel() {
     setDownloadActionError("");
     setSubmitStatus("idle");
     setSubmitError("");
+    setSaveMessage("");
     setWaitMessage("");
     setGenerationProgress(null);
     setResults([]);
@@ -854,13 +1054,14 @@ export function ImageGenerationPanel() {
 
       const settings = resolveComfyUiGenerationSettings({
         activePrompt,
-        baseNegativePrompt: generatedPrompt.negativePrompt,
+        baseNegativePrompt,
         selectedResources: resources,
-        aiAdvice: aiCivitaiAdvice,
+        aiAdvice: advice,
+        savedParameters,
       });
 
       setSelectedResources(resources);
-      setDraft(toDraft(settings.request));
+      setDraft(toDraft(settings.request, settings.loras, savedParameters?.seedMode));
       setLoraSettings(settings.loras);
       setParameterSource(settings.parameterSource);
       setDownloadItems(await loadResourceDownloadItems(resources));
@@ -875,26 +1076,53 @@ export function ImageGenerationPanel() {
     }
   }
 
-  function openModal() {
-    setModalOpen(true);
-    void loadGenerationContext();
-  }
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+
+    const timeout = window.setTimeout(() => {
+      void loadGenerationContext();
+    }, 0);
+
+    return () => window.clearTimeout(timeout);
+    // Reload the draft whenever the caller changes the selected resources or locked prompts.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, selectedCheckpointId, selectedLoraIdsKey, activePrompt, baseNegativePrompt, advice]);
 
   function closeModal() {
     if (submitStatus === "loading" || downloadActionStatus === "loading") {
       return;
     }
 
-    setModalOpen(false);
+    onClose();
   }
 
   function patchDraft(patch: Partial<GenerationDraft>) {
     clearDiagnosisReview();
+    setSaveMessage("");
     setDraft((current) => (current ? { ...current, ...patch } : current));
+  }
+
+  function patchPromptWrapper(patch: Partial<GenerationDraft["promptWrapper"]>) {
+    clearDiagnosisReview();
+    setSaveMessage("");
+    setDraft((current) => (
+      current
+        ? {
+            ...current,
+            promptWrapper: {
+              ...current.promptWrapper,
+              ...patch,
+            },
+          }
+        : current
+    ));
   }
 
   function patchLora(index: number, patch: Partial<GenerationDraft["loras"][number]>) {
     clearDiagnosisReview();
+    setSaveMessage("");
     setDraft((current) => {
       if (!current) {
         return current;
@@ -905,6 +1133,15 @@ export function ImageGenerationPanel() {
         loras: current.loras.map((lora, loraIndex) => (loraIndex === index ? { ...lora, ...patch } : lora)),
       };
     });
+  }
+
+  function saveCurrentParameters() {
+    if (!draft || !onSaveParameters) {
+      return;
+    }
+
+    onSaveParameters(toSavedParameters(draft));
+    setSaveMessage("当前参数已保存，后续风格调色板和 ComfyUI 生图都会优先使用。");
   }
 
   async function downloadMissingResources() {
@@ -987,10 +1224,11 @@ export function ImageGenerationPanel() {
         mode: draft.seedMode,
       });
       const clientId = createComfyUiClientId();
-      const requestPayload = toRequestPayload({ ...draft, imageCount }, seed);
 
       setDraft((current) => (current ? { ...current, imageCount, seed } : current));
+      setWaitMessage(`已准备生成 ${imageCount} 张图片，正在提交到 ComfyUI...`);
 
+      const requestPayload = toRequestPayload({ ...draft, imageCount }, seed);
       const payload = await fetchJson<Omit<GenerationResult, "imageCount" | "images" | "seed">>("/api/comfyui/generate-image", {
         method: "POST",
         headers: {
@@ -1009,7 +1247,7 @@ export function ImageGenerationPanel() {
       };
 
       setResults([queuedResult]);
-      setWaitMessage(`已加入 ComfyUI 队列，正在等待生成 ${imageCount} 张图片...`);
+      setWaitMessage(`已提交 batch_size ${imageCount} 到 ComfyUI，seed ${seed}。`);
 
       const history = await waitForComfyUiGeneratedImages(clientId, payload.promptId, imageCount, (historyUpdate) => {
         const progress = readComfyUiProgress(historyUpdate.raw);
@@ -1020,7 +1258,7 @@ export function ImageGenerationPanel() {
 
         if (historyUpdate.images.length > 0) {
           setResults([{ ...queuedResult, images: historyUpdate.images }]);
-          setWaitMessage(`已获取 ${historyUpdate.images.length}/${imageCount} 张图片，等待 ComfyUI 完成...`);
+          setWaitMessage(`已获取 ${historyUpdate.images.length}/${imageCount} 张图片，seed ${seed}。`);
         }
       });
 
@@ -1216,48 +1454,27 @@ export function ImageGenerationPanel() {
   }
 
   const workflowPreview = draft ? buildBasicTextToImageWorkflow(toRequestPayload(draft, draft.seed)) : null;
-  const generatedImages = results.flatMap((result) => result.images);
+  const generatedImageItems = results.flatMap((result) =>
+    result.images.map((image): GeneratedImageItem => ({
+      image,
+      seed: result.seed,
+    })),
+  );
+  const generatedImages = generatedImageItems.map((item) => item.image);
   const selectedGeneratedImage =
-    generatedImages.find((image, index) => getGeneratedImageKey(image, index) === selectedGeneratedImageKey) ??
-    generatedImages[0] ??
+    generatedImageItems.find((item, index) => getGeneratedImageKey(item.image, index) === selectedGeneratedImageKey)?.image ??
+    generatedImageItems[0]?.image ??
     null;
   const diagnosisDiffRows = diagnosisResult && diagnosisBaseConfig
     ? buildDiagnosisDiffRows(diagnosisBaseConfig, diagnosisResult)
     : [];
   const diagnosisBusy = diagnosisStatus === "analyzing" || diagnosisStatus === "searching" || diagnosisStatus === "suggesting";
 
-  return (
-    <section className="flex flex-col">
-      <div className="mb-4 flex items-center justify-between gap-3 border-b border-slate-100 pb-3">
-        <div className="flex min-w-0 items-center gap-2.5">
-          <div className="rounded-md bg-sky-50 p-1.5 text-sky-600">
-            <ImageIcon className="size-4" />
-          </div>
-          <div className="min-w-0">
-            <h2 className="text-[15px] font-semibold text-slate-800">运行生图</h2>
-            <p className="mt-0.5 truncate text-[11px] text-slate-500">ComfyUI text-to-image</p>
-          </div>
-        </div>
-        <Button
-          className="h-8 shrink-0 rounded-md bg-sky-600 px-3 text-xs text-white hover:bg-sky-700 disabled:opacity-60"
-          disabled={!hasCheckpoint || !activePrompt.trim()}
-          onClick={openModal}
-          size="sm"
-          title={!hasCheckpoint ? "请先在 Civitai 资源库中选择 checkpoint" : "打开 ComfyUI 生图参数"}
-          type="button"
-        >
-          <Play className="size-3.5" />
-          ComfyUI 生图
-        </Button>
-      </div>
-      <p className="text-xs leading-relaxed text-slate-500">
-        {!hasCheckpoint
-          ? "请先选择一个 Civitai checkpoint；LoRA 会随当前选择一起进入 ComfyUI 工作流。"
-          : `当前已选择 ${selectedLoraIds.length} 个 LoRA，参数将优先使用 AI 生成建议。`}
-      </p>
+  if (!open || typeof document === "undefined") {
+    return null;
+  }
 
-      {modalOpen && typeof document !== "undefined"
-        ? createPortal(
+  return createPortal(
             <div
               aria-modal="true"
               className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4 backdrop-blur-sm"
@@ -1269,9 +1486,9 @@ export function ImageGenerationPanel() {
                     <ImageIcon className="size-5" />
                   </div>
                   <div className="min-w-0 flex-1">
-                    <h3 className="text-base font-bold text-slate-900">ComfyUI 生图</h3>
+                    <h3 className="text-base font-bold text-slate-900">{title}</h3>
                     <p className="mt-1 text-xs leading-relaxed text-slate-500">
-                      参数来源：{formatSource(parameterSource)}。提交后会等待 ComfyUI 完成，并在这里显示生成图片。
+                      {description ?? <>参数来源：{formatSource(parameterSource)}。提交后会等待 ComfyUI 完成，并在这里显示生成图片。</>}
                     </p>
                   </div>
                   <button
@@ -1285,6 +1502,7 @@ export function ImageGenerationPanel() {
                 </div>
 
                 <div className="min-h-0 flex-1 overflow-y-auto p-5">
+                  {introContent ? <div className="mb-5">{introContent}</div> : null}
                   {loadStatus === "loading" ? (
                     <div className="flex min-h-[280px] items-center justify-center text-sm text-slate-500">
                       <Loader2 className="mr-2 size-4 animate-spin" />
@@ -1305,7 +1523,12 @@ export function ImageGenerationPanel() {
                           <p className="mb-2 text-[11px] font-bold uppercase tracking-wider text-slate-500">Active Prompt</p>
                           <textarea
                             className="min-h-[110px] w-full resize-y rounded-md border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm leading-relaxed text-slate-700 outline-none transition focus:border-sky-300 focus:ring-2 focus:ring-sky-100"
-                            onChange={(event) => patchDraft({ positivePrompt: event.target.value })}
+                            onChange={(event) => {
+                              if (!positivePromptLocked) {
+                                patchDraft({ positivePrompt: event.target.value });
+                              }
+                            }}
+                            readOnly={positivePromptLocked}
                             value={draft.positivePrompt}
                           />
                         </div>
@@ -1313,16 +1536,60 @@ export function ImageGenerationPanel() {
                           <p className="mb-2 text-[11px] font-bold uppercase tracking-wider text-slate-500">Negative Prompt</p>
                           <textarea
                             className="min-h-[80px] w-full resize-y rounded-md border border-rose-100 bg-rose-50 px-3 py-2.5 text-sm leading-relaxed text-slate-700 outline-none transition focus:border-rose-300 focus:ring-2 focus:ring-rose-100"
-                            onChange={(event) => patchDraft({ negativePrompt: event.target.value })}
+                            onChange={(event) => {
+                              if (!negativePromptLocked) {
+                                patchDraft({ negativePrompt: event.target.value });
+                              }
+                            }}
+                            readOnly={negativePromptLocked}
                             value={draft.negativePrompt}
                           />
+                        </div>
+                        <div>
+                          <p className="mb-2 text-[11px] font-bold uppercase tracking-wider text-slate-500">Prompt Wrapper</p>
+                          <div className="mb-3 flex flex-wrap gap-2">
+                            {COMFYUI_PROMPT_WRAPPER_PRESETS.map((preset) => {
+                              const selected = getPromptWrapperPresetId(draft.promptWrapper) === preset.id;
+                              return (
+                                <button
+                                  className={`rounded-md border px-2.5 py-1 text-[11px] font-medium transition ${
+                                    selected
+                                      ? "border-sky-300 bg-sky-50 text-sky-700"
+                                      : "border-slate-200 bg-white text-slate-600 hover:border-sky-200 hover:bg-sky-50"
+                                  }`}
+                                  key={preset.id}
+                                  onClick={() =>
+                                    patchPromptWrapper({
+                                      negativePrefix: preset.negativePrefix,
+                                      positivePrefix: preset.positivePrefix,
+                                    })
+                                  }
+                                  type="button"
+                                >
+                                  {preset.label}
+                                </button>
+                              );
+                            })}
+                          </div>
+                          <div className="grid gap-3 sm:grid-cols-2">
+                            <TextAreaInput
+                              label="positive prefix"
+                              onChange={(value) => patchPromptWrapper({ positivePrefix: value })}
+                              value={draft.promptWrapper.positivePrefix}
+                            />
+                            <TextAreaInput
+                              label="negative prefix"
+                              onChange={(value) => patchPromptWrapper({ negativePrefix: value })}
+                              value={draft.promptWrapper.negativePrefix}
+                            />
+                          </div>
                         </div>
 
                         <div>
                           <p className="mb-2 text-[11px] font-bold uppercase tracking-wider text-slate-500">Checkpoint / LoRA</p>
                           <div className="space-y-2">
                             <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
-                              <div className="flex items-center justify-between gap-2">
+                              <div className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-3">
                                 <p className="min-w-0 truncate text-sm font-semibold text-slate-900">{selectedResources.checkpoint?.name}</p>
                                 {selectedResources.checkpoint ? (
                                   <ResourceDownloadBadge item={downloadItemById.get(selectedResources.checkpoint.id)} />
@@ -1334,7 +1601,7 @@ export function ImageGenerationPanel() {
                               draft.loras.map((lora, index) => (
                                 <div className="grid gap-3 rounded-md border border-slate-200 bg-white p-3 sm:grid-cols-[1fr_88px_88px]" key={`${lora.loraName}-${index}`}>
                                   <div className="min-w-0">
-                                    <div className="flex items-center gap-2">
+                                    <div className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-3">
                                       <p className="min-w-0 truncate text-sm font-semibold text-slate-900">
                                         {loraSettings[index]?.resource.name ?? lora.loraName}
                                       </p>
@@ -1503,13 +1770,30 @@ export function ImageGenerationPanel() {
                               onChange={(value) => patchDraft({ imageCount: normalizeComfyUiGenerationImageCount(value) })}
                               value={draft.imageCount}
                             />
-                            <TextInput label="sampler" onChange={(value) => patchDraft({ samplerName: value })} value={draft.samplerName} />
-                            <TextInput label="scheduler" onChange={(value) => patchDraft({ scheduler: value })} value={draft.scheduler} />
+                            <SelectInput
+                              label="sampler"
+                              onChange={(value) => patchDraft({ samplerName: value })}
+                              options={COMFYUI_SAMPLER_OPTIONS}
+                              value={draft.samplerName}
+                            />
+                            <SelectInput
+                              label="scheduler"
+                              onChange={(value) => patchDraft({ scheduler: value })}
+                              options={COMFYUI_SCHEDULER_OPTIONS}
+                              value={draft.scheduler}
+                            />
+                            <SelectInput
+                              label="latent"
+                              onChange={(value) => patchDraft({ latentImageNode: value as GenerationDraft["latentImageNode"] })}
+                              options={COMFYUI_LATENT_IMAGE_NODE_OPTIONS}
+                              value={draft.latentImageNode}
+                            />
                             <TextInput label="output" onChange={(value) => patchDraft({ outputPrefix: value })} value={draft.outputPrefix} />
                           </div>
                           <div className="mt-5">
                             <GeneratedImageResults
-                              generatedImages={generatedImages}
+                              generatedImageItems={generatedImageItems}
+                              imageClickMode={allowDiagnosis ? "select" : "open"}
                               onSelectImage={(imageKey) => {
                                 setSelectedGeneratedImageKey(imageKey);
                                 clearDiagnosisReview();
@@ -1521,7 +1805,7 @@ export function ImageGenerationPanel() {
                               waitMessage={waitMessage}
                             />
                           </div>
-                          {submitStatus === "success" && selectedGeneratedImage ? (
+                          {allowDiagnosis && submitStatus === "success" && selectedGeneratedImage ? (
                             <div className="mt-5 rounded-md border border-violet-100 bg-violet-50/70 p-3">
                               <div className="flex items-center justify-between gap-3">
                                 <div className="min-w-0">
@@ -1785,10 +2069,7 @@ export function ImageGenerationPanel() {
                   <div className="min-w-0 text-xs leading-relaxed">
                     {results.length > 0 ? (
                       <div className="space-y-1 text-emerald-700">
-                        <p>
-                          已提交 {results[0]?.imageCount ?? results.length} 张到 ComfyUI
-                          {results[0]?.imageCount && results[0].imageCount > 1 ? " batch" : ""}
-                        </p>
+                        <p>已提交 {results.length} 个 batch 任务到 ComfyUI</p>
                         <div className="max-h-24 space-y-0.5 overflow-y-auto pr-2">
                           {results.map((item) => (
                             <p className="break-all text-[11px]" key={item.promptId}>
@@ -1799,9 +2080,21 @@ export function ImageGenerationPanel() {
                         </div>
                       </div>
                     ) : null}
+                    {saveMessage ? <p className="text-emerald-700">{saveMessage}</p> : null}
                     {submitStatus === "error" ? <p className="text-rose-600">{submitError}</p> : null}
                   </div>
                   <div className="flex shrink-0 gap-3">
+                    {onSaveParameters ? (
+                      <Button
+                        className="h-10 rounded-md border-teal-200 bg-white text-teal-700 hover:bg-teal-50"
+                        disabled={!draft || submitStatus === "loading" || downloadActionStatus === "loading"}
+                        onClick={saveCurrentParameters}
+                        type="button"
+                        variant="secondary"
+                      >
+                        保存参数
+                      </Button>
+                    ) : null}
                     <Button
                       className="h-10 rounded-md border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
                       disabled={submitStatus === "loading" || downloadActionStatus === "loading"}
@@ -1825,8 +2118,60 @@ export function ImageGenerationPanel() {
               </div>
             </div>,
             document.body,
-          )
-        : null}
+  );
+}
+
+export function ImageGenerationPanel() {
+  const project = useEditorStore((state) => state.project);
+  const aiGeneratedPrompt = useEditorStore((state) => state.aiGeneratedPrompt);
+  const generatedPrompt = useMemo(() => generatePrompt(project), [project]);
+  const activePrompt = aiGeneratedPrompt.trim() || generatedPrompt.prompt;
+  const selectedCheckpointId = project.settings.selectedCivitaiCheckpointId;
+  const selectedLoraIds = project.settings.selectedCivitaiLoraIds ?? [];
+  const savedParameters = project.settings.savedComfyUiGenerationParams ?? null;
+  const hasCheckpoint = Boolean(selectedCheckpointId);
+  const [open, setOpen] = useState(false);
+
+  return (
+    <section className="flex flex-col">
+      <div className="mb-4 flex items-center justify-between gap-3 border-b border-slate-100 pb-3">
+        <div className="flex min-w-0 items-center gap-2.5">
+          <div className="rounded-md bg-sky-50 p-1.5 text-sky-600">
+            <ImageIcon className="size-4" />
+          </div>
+          <div className="min-w-0">
+            <h2 className="text-[15px] font-semibold text-slate-800">运行生图</h2>
+            <p className="mt-0.5 truncate text-[11px] text-slate-500">ComfyUI text-to-image</p>
+          </div>
+        </div>
+        <Button
+          className="h-8 shrink-0 rounded-md bg-sky-600 px-3 text-xs text-white hover:bg-sky-700 disabled:opacity-60"
+          disabled={!hasCheckpoint || !activePrompt.trim()}
+          onClick={() => setOpen(true)}
+          size="sm"
+          title={!hasCheckpoint ? "请先在 Civitai 资源库中选择 checkpoint" : "打开 ComfyUI 生图参数"}
+          type="button"
+        >
+          <Play className="size-3.5" />
+          ComfyUI 生图
+        </Button>
+      </div>
+      <p className="text-xs leading-relaxed text-slate-500">
+        {!hasCheckpoint
+          ? "请先选择一个 Civitai checkpoint；LoRA 会随当前选择一起进入 ComfyUI 工作流。"
+          : `当前已选择 ${selectedLoraIds.length} 个 LoRA，参数将使用 Civitai 推荐或观测权重。`}
+      </p>
+      <ComfyUiGenerationDialog
+        activePrompt={activePrompt}
+        advice={null}
+        baseNegativePrompt={generatedPrompt.negativePrompt}
+        onClose={() => setOpen(false)}
+        open={open}
+        savedParameters={savedParameters}
+        selectedCheckpointId={selectedCheckpointId}
+        selectedLoraIds={selectedLoraIds}
+        title="ComfyUI 生图"
+      />
     </section>
   );
 }

@@ -28,6 +28,8 @@ const objectInfo = {
       },
     },
   },
+  EmptyLatentImage: {},
+  EmptySD3LatentImage: {},
 };
 
 describe("ComfyUI object info helpers", () => {
@@ -42,6 +44,26 @@ describe("ComfyUI object info helpers", () => {
           width: 1024,
           height: 1024,
           loras: [{ loraName: "style.safetensors", strengthModel: 0.7 }],
+        },
+        objectInfo,
+      ),
+    ).toMatchObject({
+      errors: [],
+      request: {
+        samplerName: "dpmpp_2m",
+        scheduler: "karras",
+      },
+    });
+
+    expect(
+      validateComfyUiRequestAgainstObjectInfo(
+        {
+          checkpointName: "model.safetensors",
+          positivePrompt: "scene",
+          samplerName: "DPM++ 2M Karras",
+          scheduler: "normal",
+          width: 1024,
+          height: 1024,
         },
         objectInfo,
       ),
@@ -79,6 +101,36 @@ describe("ComfyUI object info helpers", () => {
       errors: [],
       request: {
         samplerName: "dpmpp_2m_sde",
+      },
+    });
+
+    expect(
+      validateComfyUiRequestAgainstObjectInfo(
+        {
+          checkpointName: "model.safetensors",
+          positivePrompt: "scene",
+          samplerName: "DPM++ 2M SDE Karras",
+          scheduler: "normal",
+          width: 1024,
+          height: 1024,
+        },
+        {
+          ...objectInfo,
+          KSampler: {
+            input: {
+              required: {
+                sampler_name: [["dpmpp_2m_sde"], {}],
+                scheduler: [["normal", "karras"], {}],
+              },
+            },
+          },
+        },
+      ),
+    ).toMatchObject({
+      errors: [],
+      request: {
+        samplerName: "dpmpp_2m_sde",
+        scheduler: "karras",
       },
     });
 
@@ -132,6 +184,22 @@ describe("ComfyUI object info helpers", () => {
       "Sampler is not available in ComfyUI: DPM++ 4M",
       "width must be between 16 and 16384 and divisible by 8 for ComfyUI EmptyLatentImage.",
     ]);
+  });
+
+  it("validates the requested latent image node before queueing", () => {
+    expect(
+      validateComfyUiRequestAgainstObjectInfo(
+        {
+          checkpointName: "model.safetensors",
+          positivePrompt: "scene",
+          latentImageNode: "EmptySD3LatentImage",
+        },
+        {
+          ...objectInfo,
+          EmptySD3LatentImage: undefined,
+        },
+      ).errors,
+    ).toEqual(["Latent image node is not available in ComfyUI: EmptySD3LatentImage"]);
   });
 
   it("summarizes nested ComfyUI node errors", () => {

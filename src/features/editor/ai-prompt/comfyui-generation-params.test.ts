@@ -57,6 +57,27 @@ describe("ComfyUI generation parameters", () => {
     });
   });
 
+  it("splits combined Civitai sampler and scheduler strings before applying them", () => {
+    expect(
+      parseComfyUiAiGenerationParameters({
+        sampler: "DPM++ 2M Karras",
+        steps: 30,
+      }),
+    ).toMatchObject({
+      samplerName: "dpmpp_2m",
+      scheduler: "karras",
+    });
+
+    expect(
+      parseComfyUiAiGenerationParameters({
+        sampler: "DPM++ 2M SDE Karras",
+      }),
+    ).toMatchObject({
+      samplerName: "dpmpp_2m_sde",
+      scheduler: "karras",
+    });
+  });
+
   it("uses AI values when available", () => {
     const selectedResources: SelectedCivitaiResourcesPreview = {
       checkpoint: makeResource("model", "Cyber Checkpoint"),
@@ -92,7 +113,9 @@ describe("ComfyUI generation parameters", () => {
       height: 1024,
       steps: 28,
       cfg: 6,
-      samplerName: "euler_a",
+      samplerName: "euler_ancestral",
+      scheduler: "normal",
+      latentImageNode: "EmptyLatentImage",
     });
     expect(settings.request.loras).toEqual([
       {
@@ -189,5 +212,148 @@ describe("ComfyUI generation parameters", () => {
       width: 1024,
       height: 776,
     });
+  });
+
+  it("infers SD3-compatible latent nodes from the selected checkpoint family", () => {
+    const settings = resolveComfyUiGenerationSettings({
+      activePrompt: "portrait",
+      baseNegativePrompt: "",
+      selectedResources: {
+        checkpoint: makeResource("model", "Red Lily", {
+          baseModel: "SD 3.5",
+          modelFileName: "red-lily.safetensors",
+        }),
+        loras: [],
+      },
+      aiAdvice: null,
+    });
+
+    expect(settings.request.latentImageNode).toBe("EmptySD3LatentImage");
+  });
+
+  it("uses the saved latent node when present", () => {
+    const settings = resolveComfyUiGenerationSettings({
+      activePrompt: "portrait",
+      baseNegativePrompt: "",
+      selectedResources: {
+        checkpoint: makeResource("model", "Base Model"),
+        loras: [],
+      },
+      aiAdvice: null,
+      savedParameters: {
+        cfg: 7,
+        denoise: 1,
+        height: 1024,
+        imageCount: 1,
+        latentImageNode: "EmptySD3LatentImage",
+        loras: [],
+        outputPrefix: "SceneForge",
+        promptWrapper: {
+          negativePrefix: "Negative prefix: ",
+          positivePrefix: "Positive prefix: ",
+        },
+        samplerName: "euler",
+        savedAt: "2026-05-23T00:00:00.000Z",
+        scheduler: "normal",
+        seed: 123,
+        seedMode: "fixed",
+        steps: 30,
+        width: 1024,
+      },
+    });
+
+    expect(settings.request.latentImageNode).toBe("EmptySD3LatentImage");
+    expect(settings.request.promptWrapper).toEqual({
+      negativePrefix: "Negative prefix: ",
+      positivePrefix: "Positive prefix: ",
+    });
+  });
+
+  it("prioritizes saved parameters without replacing the active prompt", () => {
+    const selectedResources: SelectedCivitaiResourcesPreview = {
+      checkpoint: makeResource("model", "Base Model"),
+      loras: [
+        makeResource("lora", "Saved LoRA"),
+        makeResource("lora", "Fresh LoRA", {
+          averageWeight: 0.55,
+        }),
+      ],
+    };
+    const settings = resolveComfyUiGenerationSettings({
+      activePrompt: "current canvas prompt",
+      baseNegativePrompt: "low quality",
+      selectedResources,
+      aiAdvice: {
+        prompt: "style prompt",
+        parameterSuggestionReason: "",
+        overallEffect: "",
+        parseWarning: null,
+        parameterSuggestions: {
+          steps: 28,
+          cfgScale: 6,
+          resolution: "768x1024",
+          loraWeights: [{ name: "Saved LoRA", suggestedWeight: 0.25 }],
+        },
+      },
+      savedParameters: {
+        cfg: 8.5,
+        denoise: 0.9,
+        height: 1536,
+        imageCount: 3,
+        loras: [
+          {
+            enabled: false,
+            loraName: "Saved LoRA.safetensors",
+            strengthClip: 0.42,
+            strengthModel: 0.38,
+          },
+        ],
+        outputPrefix: "SavedPrefix",
+        samplerName: "DPM++ 2M Karras",
+        savedAt: "2026-05-23T00:00:00.000Z",
+        scheduler: "normal",
+        seed: 12345,
+        seedMode: "fixed",
+        steps: 36,
+        width: 1024,
+      },
+    });
+
+    expect(settings.parameterSource).toBe("saved");
+    expect(settings.request).toMatchObject({
+      positivePrompt: "current canvas prompt",
+      negativePrompt: "low quality",
+      width: 1024,
+      height: 1536,
+      steps: 36,
+      cfg: 8.5,
+      batchSize: 3,
+      outputPrefix: "SavedPrefix",
+      samplerName: "dpmpp_2m",
+      scheduler: "karras",
+    });
+    expect(settings.loras).toMatchObject([
+      {
+        enabled: false,
+        loraName: "Saved LoRA.safetensors",
+        source: "saved",
+        strengthClip: 0.42,
+        strengthModel: 0.38,
+      },
+      {
+        enabled: true,
+        loraName: "Fresh LoRA.safetensors",
+        source: "reference",
+        strengthClip: 0.55,
+        strengthModel: 0.55,
+      },
+    ]);
+    expect(settings.request.loras).toEqual([
+      {
+        loraName: "Fresh LoRA.safetensors",
+        strengthClip: 0.55,
+        strengthModel: 0.55,
+      },
+    ]);
   });
 });

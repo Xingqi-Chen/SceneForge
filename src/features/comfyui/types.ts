@@ -1,3 +1,5 @@
+import type { ComfyUiLatentImageNode } from "./latent-image-node";
+
 export type ComfyUiNodeConnection = [nodeId: string, outputIndex: number];
 
 export type ComfyUiInputValue =
@@ -35,7 +37,14 @@ export type ComfyUiTextToImageRequest = {
   scheduler?: string;
   denoise?: number;
   batchSize?: number;
+  latentImageNode?: ComfyUiLatentImageNode;
+  promptWrapper?: ComfyUiPromptWrapper;
   outputPrefix?: string;
+};
+
+export type ComfyUiPromptWrapper = {
+  positivePrefix?: string;
+  negativePrefix?: string;
 };
 
 export type ComfyUiLoraInput = {
@@ -64,7 +73,14 @@ export type ResolvedComfyUiTextToImageRequest = {
   scheduler: string;
   denoise: number;
   batchSize: number;
+  latentImageNode: ComfyUiLatentImageNode;
+  promptWrapper: ResolvedComfyUiPromptWrapper;
   outputPrefix: string;
+};
+
+export type ResolvedComfyUiPromptWrapper = {
+  positivePrefix: string;
+  negativePrefix: string;
 };
 
 export type BasicTextToImageNodeIds = {

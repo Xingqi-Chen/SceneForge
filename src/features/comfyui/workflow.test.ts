@@ -54,6 +54,7 @@ describe("ComfyUI workflow builder", () => {
       scheduler: "normal",
       denoise: 1,
       batchSize: 1,
+      latentImageNode: "EmptyLatentImage",
       outputPrefix: "SceneForge",
     });
     expect(result.workflow["5"].inputs).toMatchObject({
@@ -106,6 +107,41 @@ describe("ComfyUI workflow builder", () => {
     });
     expect(result.workflow["3"].inputs.text).toBe("low quality");
     expect(result.workflow["7"].inputs.filename_prefix).toBe("CustomScene");
+  });
+
+  it("applies configured prompt wrappers before CLIP encoding", () => {
+    const result = buildBasicTextToImageWorkflow({
+      checkpointName: "scene.ckpt",
+      positivePrompt: "cinematic portrait",
+      negativePrompt: "low quality",
+      promptWrapper: {
+        positivePrefix: "Positive prefix: ",
+        negativePrefix: "Negative prefix: ",
+      },
+      seed: 999,
+    });
+
+    expect(result.workflow["2"].inputs.text).toBe("Positive prefix: cinematic portrait");
+    expect(result.workflow["3"].inputs.text).toBe("Negative prefix: low quality");
+    expect(result.request.promptWrapper).toEqual({
+      positivePrefix: "Positive prefix: ",
+      negativePrefix: "Negative prefix: ",
+    });
+  });
+
+  it("uses the requested latent image node", () => {
+    const result = buildBasicTextToImageWorkflow({
+      checkpointName: "sd3.safetensors",
+      positivePrompt: "a quiet forest",
+      latentImageNode: "EmptySD3LatentImage",
+      seed: 123,
+    });
+
+    expect(result.workflow["4"]).toMatchObject({
+      class_type: "EmptySD3LatentImage",
+      _meta: { title: "Empty SD3 Latent Image" },
+    });
+    expect(result.request.latentImageNode).toBe("EmptySD3LatentImage");
   });
 
   it("builds a chained LoRA workflow before text encoding and sampling", () => {

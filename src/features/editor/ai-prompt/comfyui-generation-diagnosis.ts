@@ -2,6 +2,7 @@ import type { LlmChatMessage } from "@/features/llm";
 import type { CivitaiLoraCategory, CivitaiPromptReference, CivitaiResourceRecommendation } from "@/features/civitai-lora-library";
 
 import type { ComfyUiGenerationSeedMode } from "./comfyui-generation-seed";
+import { normalizeComfyUiSamplerSettings } from "./comfyui-generation-options";
 
 export type ComfyUiGenerationDiagnosisLoraConfig = {
   averageWeight?: number | null;
@@ -366,8 +367,12 @@ function sanitizeAdjustments(
   const adjustments: ComfyUiGenerationDiagnosisAdjustments = {};
   const positivePrompt = readString(value, ["positivePrompt", "prompt"]);
   const negativePrompt = readStringAllowEmpty(value, ["negativePrompt"]);
-  const samplerName = readString(value, ["samplerName", "sampler"]);
-  const scheduler = readString(value, ["scheduler"]);
+  const rawSamplerName = readString(value, ["samplerName", "sampler"]);
+  const rawScheduler = readString(value, ["scheduler"]);
+  const samplerSettings = normalizeComfyUiSamplerSettings({
+    samplerName: rawSamplerName,
+    scheduler: rawScheduler,
+  });
   const width = sanitizeDimension(readNumber(value, ["width"]));
   const height = sanitizeDimension(readNumber(value, ["height"]));
   const steps = sanitizePositiveInteger(readNumber(value, ["steps"]));
@@ -385,12 +390,20 @@ function sanitizeAdjustments(
     adjustments.negativePrompt = negativePrompt;
   }
 
-  if (samplerName) {
-    adjustments.samplerName = samplerName;
+  if (rawSamplerName && !samplerSettings.samplerName) {
+    ignored.push(`Ignored unsupported sampler suggestion: ${rawSamplerName}.`);
   }
 
-  if (scheduler) {
-    adjustments.scheduler = scheduler;
+  if (samplerSettings.samplerName) {
+    adjustments.samplerName = samplerSettings.samplerName;
+  }
+
+  if (rawScheduler && !samplerSettings.scheduler) {
+    ignored.push(`Ignored unsupported scheduler suggestion: ${rawScheduler}.`);
+  }
+
+  if (samplerSettings.scheduler) {
+    adjustments.scheduler = samplerSettings.scheduler;
   }
 
   if (width !== undefined) {
@@ -536,6 +549,7 @@ export function buildComfyUiGenerationDiagnosisMessages({
         "Analyze the generated image against the user's requested diagnosis and the current ComfyUI configuration.",
         "Return JSON only. Do not wrap it in markdown.",
         "Schema: { \"summary\": string, \"reasoning\": string, \"adjustments\": { \"positivePrompt\"?: string, \"negativePrompt\"?: string, \"width\"?: number, \"height\"?: number, \"steps\"?: number, \"cfg\"?: number, \"samplerName\"?: string, \"scheduler\"?: string, \"denoise\"?: number, \"seedMode\"?: \"random\"|\"fixed\", \"seed\"?: number, \"loras\"?: [{ \"loraName\": string, \"enabled\"?: boolean, \"strengthModel\"?: number, \"strengthClip\"?: number, \"reason\"?: string }] }, \"warnings\"?: string[] }.",
+        "If changing sampler settings, return ComfyUI samplerName and scheduler separately. Do not combine scheduler words into samplerName.",
         "Do not suggest a new checkpoint or new LoRA. You may only adjust or disable LoRAs already listed in currentConfig.loras.",
         "If currentConfig.checkpointPromptReferences is present, use those prompts only as format and phrasing references for the current checkpoint. Do not copy their subject, character, composition, or scene unless the user explicitly asks for it.",
         "Prefer practical, conservative changes that can be applied before the next ComfyUI run.",
@@ -630,6 +644,7 @@ export function buildComfyUiGenerationAdjustmentMessages({
         "Stage 2 task: convert the supplied visual diagnosis into practical ComfyUI adjustments.",
         "Return JSON only. Do not wrap it in markdown.",
         "Schema: { \"summary\": string, \"reasoning\": string, \"adjustments\": { \"positivePrompt\"?: string, \"negativePrompt\"?: string, \"width\"?: number, \"height\"?: number, \"steps\"?: number, \"cfg\"?: number, \"samplerName\"?: string, \"scheduler\"?: string, \"denoise\"?: number, \"seedMode\"?: \"random\"|\"fixed\", \"seed\"?: number, \"loras\"?: [{ \"loraName\": string, \"enabled\"?: boolean, \"strengthModel\"?: number, \"strengthClip\"?: number, \"reason\"?: string }] }, \"confidence\": number, \"changeRationale\"?: [{ \"field\": string, \"reason\": string, \"expectedEffect\": string, \"risk\": string }], \"warnings\"?: string[] }.",
+        "If changing sampler settings, return ComfyUI samplerName and scheduler separately. Do not combine scheduler words into samplerName.",
         "Balanced adjustment policy: you may edit positivePrompt, negativePrompt, sampler/latent parameters, seed mode, and current LoRA enabled/weight values.",
         "Do not suggest a new checkpoint or new LoRA. You may only adjust or disable LoRAs already listed in currentConfig.loras.",
         "When rewriting prompts, preserve the original subject, composition intent, and scene. Do not copy checkpoint reference prompt subjects unless the user asks.",
@@ -704,6 +719,10 @@ export function applyComfyUiGenerationDiagnosisAdjustments(
   adjustments: ComfyUiGenerationDiagnosisAdjustments,
 ): ComfyUiGenerationDiagnosisConfig {
   const loraAdjustmentByName = new Map((adjustments.loras ?? []).map((lora) => [lora.loraName, lora]));
+  const samplerSettings = normalizeComfyUiSamplerSettings({
+    samplerName: adjustments.samplerName,
+    scheduler: adjustments.scheduler,
+  });
 
   return {
     ...current,
@@ -723,8 +742,8 @@ export function applyComfyUiGenerationDiagnosisAdjustments(
     }),
     negativePrompt: adjustments.negativePrompt ?? current.negativePrompt,
     positivePrompt: adjustments.positivePrompt ?? current.positivePrompt,
-    samplerName: adjustments.samplerName ?? current.samplerName,
-    scheduler: adjustments.scheduler ?? current.scheduler,
+    samplerName: samplerSettings.samplerName ?? current.samplerName,
+    scheduler: samplerSettings.scheduler ?? current.scheduler,
     seed: adjustments.seed ?? current.seed,
     seedMode: adjustments.seedMode ?? current.seedMode,
     steps: adjustments.steps ?? current.steps,

@@ -1,4 +1,5 @@
 import type { ComfyUiTextToImageRequest } from "./types";
+import { normalizeComfyUiLatentImageNode } from "./latent-image-node";
 
 type ComfyUiObjectInfoNode = {
   input?: {
@@ -59,6 +60,10 @@ function readInputOptions(objectInfo: unknown, classType: string, inputName: str
   return inputInfo[0].filter((value): value is string => typeof value === "string");
 }
 
+function hasNodeInfo(objectInfo: unknown, classType: string) {
+  return isRecord(objectInfo) && isRecord(objectInfo[classType]);
+}
+
 function findOption(value: string, options: string[]) {
   const trimmed = value.trim();
   const exact = options.find((option) => option === trimmed);
@@ -70,17 +75,8 @@ function findOption(value: string, options: string[]) {
   return options.find((option) => normalizeOptionName(option) === normalized) ?? null;
 }
 
-function findSampler(value: string | undefined, options: string[]) {
-  if (!value) {
-    return null;
-  }
-
-  const direct = findOption(value, options);
-  if (direct) {
-    return direct;
-  }
-
-  const alias = SAMPLER_ALIASES[normalizeOptionName(value)];
+function findSamplerAlias(normalizedValue: string, options: string[]) {
+  const alias = SAMPLER_ALIASES[normalizedValue];
   if (!alias) {
     return null;
   }
@@ -89,13 +85,66 @@ function findSampler(value: string | undefined, options: string[]) {
   return [alias, fallbackAlias].find((option) => options.includes(option)) ?? null;
 }
 
-function validateDimension(value: number | undefined, label: string, errors: string[]) {
+function findSamplerByNormalizedValue(normalizedValue: string, options: string[]) {
+  return options.find((option) => normalizeOptionName(option) === normalizedValue) ?? findSamplerAlias(normalizedValue, options);
+}
+
+function findSampler(value: string | undefined, options: string[], schedulerOptions: string[]) {
+  if (!value) {
+    return {
+      samplerName: null,
+      scheduler: null,
+    };
+  }
+
+  const direct = findOption(value, options);
+  if (direct) {
+    return {
+      samplerName: direct,
+      scheduler: null,
+    };
+  }
+
+  const normalized = normalizeOptionName(value);
+  const alias = findSamplerAlias(normalized, options);
+  if (alias) {
+    return {
+      samplerName: alias,
+      scheduler: null,
+    };
+  }
+
+  for (const scheduler of schedulerOptions) {
+    const normalizedScheduler = normalizeOptionName(scheduler);
+    if (!normalized.endsWith(normalizedScheduler) || normalized.length <= normalizedScheduler.length) {
+      continue;
+    }
+
+    const samplerName = findSamplerByNormalizedValue(
+      normalized.slice(0, -normalizedScheduler.length),
+      options,
+    );
+    if (samplerName) {
+      return {
+        samplerName,
+        scheduler,
+      };
+    }
+  }
+
+  return {
+    samplerName: null,
+    scheduler: null,
+  };
+}
+
+function validateDimension(value: number | undefined, label: string, latentImageNode: string, errors: string[]) {
   if (value === undefined) {
     return;
   }
 
   if (value < 16 || value > 16384 || value % 8 !== 0) {
-    errors.push(`${label} must be between 16 and 16384 and divisible by 8 for ComfyUI EmptyLatentImage.`);
+    errors.push(`${label} must be between 16 and 16384 and divisible by 8 for ComfyUI ${latentImageNode}.`);
   }
 }
 
@@ -110,8 +159,11 @@ export function validateComfyUiRequestAgainstObjectInfo(
   const samplerOptions = readInputOptions(objectInfo, "KSampler", "sampler_name");
   const schedulerOptions = readInputOptions(objectInfo, "KSampler", "scheduler");
   const checkpointName = findOption(request.checkpointName, checkpointOptions);
-  const samplerName = findSampler(request.samplerName, samplerOptions);
-  const scheduler = request.scheduler ? findOption(request.scheduler, schedulerOptions) : null;
+  const sampler = findSampler(request.samplerName, samplerOptions, schedulerOptions);
+  const samplerName = sampler.samplerName;
+  const requestedScheduler = request.scheduler ? findOption(request.scheduler, schedulerOptions) : null;
+  const scheduler = sampler.scheduler ?? requestedScheduler;
+  const latentImageNode = normalizeComfyUiLatentImageNode(request.latentImageNode);
   const loras = (request.loras ?? []).map((lora, index) => {
     const loraName = findOption(lora.loraName, loraOptions);
     if (!loraName) {
@@ -136,14 +188,28 @@ export function validateComfyUiRequestAgainstObjectInfo(
     errors.push(`Scheduler is not available in ComfyUI: ${request.scheduler}`);
   }
 
-  validateDimension(request.width, "width", errors);
-  validateDimension(request.height, "height", errors);
+  if (request.latentImageNode && !latentImageNode) {
+    errors.push(`Latent image node is not supported by SceneForge: ${request.latentImageNode}`);
+  }
+
+  if (latentImageNode && !hasNodeInfo(objectInfo, latentImageNode)) {
+    errors.push(`Latent image node is not available in ComfyUI: ${latentImageNode}`);
+  }
+
+  validateDimension(request.width, "width", latentImageNode ?? "EmptyLatentImage", errors);
+  validateDimension(request.height, "height", latentImageNode ?? "EmptyLatentImage", errors);
 
   if (request.samplerName && samplerName && samplerName !== request.samplerName) {
     warnings.push(`Normalized sampler ${request.samplerName} to ${samplerName}.`);
   }
 
-  if (request.scheduler && scheduler && scheduler !== request.scheduler) {
+  if (request.samplerName && sampler.scheduler) {
+    warnings.push(`Extracted scheduler ${sampler.scheduler} from sampler ${request.samplerName}.`);
+  }
+
+  if (request.scheduler && sampler.scheduler && sampler.scheduler !== request.scheduler) {
+    warnings.push(`Normalized scheduler ${request.scheduler} to ${sampler.scheduler}.`);
+  } else if (request.scheduler && scheduler && scheduler !== request.scheduler) {
     warnings.push(`Normalized scheduler ${request.scheduler} to ${scheduler}.`);
   }
 
@@ -155,6 +221,7 @@ export function validateComfyUiRequestAgainstObjectInfo(
       checkpointName: checkpointName ?? request.checkpointName,
       samplerName: samplerName ?? request.samplerName,
       scheduler: scheduler ?? request.scheduler,
+      latentImageNode: latentImageNode ?? request.latentImageNode,
       loras,
     },
   };

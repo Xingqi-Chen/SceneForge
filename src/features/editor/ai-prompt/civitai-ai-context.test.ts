@@ -83,6 +83,7 @@ describe("Civitai AI prompt context", () => {
 
     expect(instructions).toContain('"prompt"');
     expect(instructions).toContain('"parameterSuggestions"');
+    expect(instructions).toContain('"scheduler"');
     expect(instructions).toContain('"loraWeights"');
     expect(instructions).toContain('"suggestedWeight"');
     expect(instructions).toContain('"parameterSuggestionReason"');
@@ -90,6 +91,7 @@ describe("Civitai AI prompt context", () => {
     expect(instructions).toContain("checkpoint + LoRA combination");
     expect(instructions).toContain("must not describe the current image subject");
     expect(instructions).toContain("user-facing Chinese sentences");
+    expect(instructions).toContain("sampler and scheduler as separate");
     expect(instructions).toContain("one item for every selected LoRA");
     expect(instructions).toContain("do not force every trigger word");
     expect(instructions).toContain("Do not invent trigger words");

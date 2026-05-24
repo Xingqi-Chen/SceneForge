@@ -99,12 +99,13 @@ export function formatSelectedCivitaiResourcesForAi(resources: SelectedCivitaiRe
 export function buildCivitaiAiJsonResponseInstructions() {
   return [
     "Return JSON only. Do not wrap it in markdown.",
-    "Shape: { \"prompt\": string, \"parameterSuggestions\": { \"checkpoint\"?: string, \"sampler\"?: string, \"steps\"?: number|string, \"cfgScale\"?: number|string, \"resolution\"?: string, \"negativePromptAdditions\"?: string, \"loraWeights\": [{ \"name\": string, \"suggestedWeight\": number|string, \"reason\"?: string }] }|string|null, \"parameterSuggestionReason\": string, \"overallEffect\": string }.",
+    "Shape: { \"prompt\": string, \"parameterSuggestions\": { \"checkpoint\"?: string, \"sampler\"?: string, \"scheduler\"?: string, \"steps\"?: number|string, \"cfgScale\"?: number|string, \"resolution\"?: string, \"negativePromptAdditions\"?: string, \"loraWeights\": [{ \"name\": string, \"suggestedWeight\": number|string, \"reason\"?: string }] }|string|null, \"parameterSuggestionReason\": string, \"overallEffect\": string }.",
     "Use selected Civitai resources as model-specific context.",
     "overallEffect and parameterSuggestionReason must be written in Simplified Chinese.",
     "overallEffect must describe the visual style/effect expected from the selected checkpoint + LoRA combination: rendering style, texture, lighting tendency, detail level, color mood, realism/anime bias, and possible tradeoffs.",
     "overallEffect must not describe the current image subject, pose, action, composition, or scene contents.",
-    "parameterSuggestionReason must be one or two user-facing Chinese sentences explaining why the suggested sampler, steps, CFG, resolution, and LoRA weights fit this checkpoint + LoRA combination.",
+    "parameterSuggestionReason must be one or two user-facing Chinese sentences explaining why the suggested sampler, scheduler, steps, CFG, resolution, and LoRA weights fit this checkpoint + LoRA combination.",
+    "For ComfyUI, return sampler and scheduler as separate parameterSuggestions fields. Do not combine scheduler words into sampler.",
     "When any LoRA is selected, parameterSuggestions must include loraWeights with one item for every selected LoRA, preserving each LoRA's name and giving a suggestedWeight.",
     "For each LoRA suggestedWeight, prefer Civitai recommended or observed weights when available; otherwise choose a conservative value and explain it in the per-LoRA reason.",
     "You may include useful LoRA trigger words from trainedWords, but do not force every trigger word into the prompt.",

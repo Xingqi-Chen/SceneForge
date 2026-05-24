@@ -12,19 +12,12 @@ import type {
 } from "@/features/civitai-lora-library";
 import { getCivitaiImageVariantUrl } from "@/features/civitai-lora-library/image-url";
 import { dispatchOpenCivitaiLibraryResourceDetail } from "@/features/civitai-lora-library/ui-events";
-import {
-  buildCivitaiAiJsonResponseInstructions,
-  formatSelectedCivitaiResourcesForAi,
-  hasSelectedCivitaiResources,
-  parseCivitaiAiPromptResponse,
-  selectedCivitaiResourceCards,
-  type CivitaiAiPromptResult,
-} from "@/features/editor/ai-prompt/civitai-ai-context";
+import { selectedCivitaiResourceCards } from "@/features/editor/ai-prompt/civitai-ai-context";
 import { useEditorStore } from "@/features/editor/store/editor-store";
 import { generatePrompt } from "@/features/prompt-engine";
 import { inferSceneLayoutConstraints } from "@/features/prompt-engine/spatial-relations";
 import { getLlmProxyErrorMessage, isLlmChatResponse } from "@/features/llm";
-import type { ArtistStringPromptRenderMode, PromptTag, SceneForgeProject } from "@/shared/types";
+import type { ArtistStringPromptRenderMode, SceneForgeProject } from "@/shared/types";
 import { characterAppearsInThreeViewport } from "@/shared/utils/character-space";
 
 import { getCharacterStickFigurePose } from "@/features/editor/stick-figure-3d/get-character-stick-pose";
@@ -51,15 +44,6 @@ const EMPTY_SELECTED_CIVITAI_RESOURCES: SelectedCivitaiResourcesPreview = {
 type SelectedArtistStringsResponse = {
   items: ArtistStringItemRecord[];
 };
-
-const ARTIST_STRING_PROMPT_RENDER_MODE_OPTIONS: Array<{
-  value: ArtistStringPromptRenderMode;
-  label: string;
-}> = [
-  { value: "artist-weight", label: "(artist:name:weight)" },
-  { value: "by-weight", label: "by name:weight" },
-  { value: "novelai", label: "NovelAI" },
-];
 
 function readErrorMessage(payload: unknown, fallback: string) {
   if (
@@ -109,27 +93,8 @@ function formatArtistStringSequence(value: number) {
   return String(value).padStart(3, "0");
 }
 
-function createPromptTagId(prefix: string) {
-  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
-    return `${prefix}-${crypto.randomUUID()}`;
-  }
-
-  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-}
-
 function formatSelectedArtistPrompt(item: ArtistStringItemRecord, renderMode: ArtistStringPromptRenderMode) {
   return formatArtistStringForPlatform(item.structuredArtistString, item.promptFormat, { renderMode });
-}
-
-function makeSelectedArtistPromptTag(item: ArtistStringItemRecord, prompt: string): PromptTag {
-  return {
-    id: createPromptTagId("artist-string"),
-    label: `NAI ${formatArtistStringSequence(item.sourceSequence)} / ${item.categoryName}`,
-    prompt,
-    category: "style",
-    subcategory: "style-rendering",
-    weight: { enabled: false, value: 1 },
-  };
 }
 
 function compactPromptSnippet(value: string, max = 180) {
@@ -463,7 +428,6 @@ function getConstraintButtonClass(enabled: boolean) {
 
 function buildAiSystemPrompt(
   constraints: AiGenerationConstraints,
-  options: { civitaiAware: boolean } = { civitaiAware: false },
 ) {
   const priority = [
     constraints.layout ? "hard layout constraints" : null,
@@ -487,12 +451,7 @@ function buildAiSystemPrompt(
     "Describe pose, expression, and props in natural, artistic language (e.g. leaning on a wall, dynamic stance, one arm raised). Never echo raw coordinates, pixel math, or awkward joint-vs-joint alignment phrases (e.g. do not write \"wrist level with neck\", \"ankle left of other ankle\", \"horizontally aligned with neck\").",
     "Skeleton notes in the summary are hints only; infer a plausible pose from the image, do not transcribe joint tuples.",
     "Merge duplicates; keep token economy; preserve style and subject tags from the preview when they matter.",
-    options.civitaiAware
-      ? "Use selected Civitai resources as model-specific context; their trigger words are optional tools, not mandatory text."
-      : null,
-    options.civitaiAware
-      ? buildCivitaiAiJsonResponseInstructions()
-      : "Return only the final prompt text (no markdown, no labels like \"Prompt:\").",
+    "Return only the final prompt text (no markdown, no labels like \"Prompt:\").",
   ].filter(Boolean);
 
   return [
@@ -513,18 +472,14 @@ function buildAiUserText({
   layoutConstraints,
   promptForAi,
   project,
-  selectedCivitaiResourcesText,
   structuredSummary,
 }: {
   constraints: AiGenerationConstraints;
   layoutConstraints: string | null;
   promptForAi: ReturnType<typeof generatePrompt>;
   project: SceneForgeProject;
-  selectedCivitaiResourcesText: string | null;
   structuredSummary: string;
 }) {
-  const civitaiAware = selectedCivitaiResourcesText !== null;
-
   return [
     "Generate a stronger positive prompt from the preview + screenshot below.",
     constraints.layout || constraints.pose || constraints.visual
@@ -544,17 +499,7 @@ function buildAiUserText({
       : null,
     "",
     `Prompt preview: ${promptForAi.prompt || "(empty)"}`,
-    `Negative prompt (from scene tags and legacy settings; reference only; your reply must ${
-      civitaiAware ? "put the positive prompt in the JSON prompt field" : "be the positive prompt text only"
-    }): ${promptForAi.negativePrompt || "(none)"}`,
-    selectedCivitaiResourcesText ? "" : null,
-    selectedCivitaiResourcesText
-      ? "Selected Civitai resources (model-specific context; use trigger words only when useful):"
-      : null,
-    selectedCivitaiResourcesText,
-    selectedCivitaiResourcesText
-      ? "Civitai rules: do not invent trigger words, do not force every trigger word, and do not include local paths, hashes, or download links. The JSON overallEffect field must be written in Simplified Chinese and describe only the style/effect expected from the selected checkpoint + LoRA combination, not the image subject, pose, action, composition, or scene contents. The JSON parameterSuggestionReason field must be written in Simplified Chinese as one or two user-facing sentences explaining why the suggested parameters fit this resource combination. The JSON parameterSuggestions.loraWeights field must include one item for every selected LoRA, preserving each LoRA name and giving a suggestedWeight."
-      : null,
+    `Negative prompt (from scene tags and legacy settings; reference only; your reply must be the positive prompt text only): ${promptForAi.negativePrompt || "(none)"}`,
     constraints.layout ? "" : null,
     constraints.layout ? "Hard layout constraints (must be preserved in the final prompt):" : null,
     constraints.layout ? layoutConstraints || "(none)" : null,
@@ -569,102 +514,13 @@ function buildAiUserText({
     .join("\n");
 }
 
-function hasRenderableCivitaiAdvice(advice: CivitaiAiPromptResult | null) {
-  return Boolean(
-    advice &&
-      (advice.parseWarning ||
-        advice.parameterSuggestionReason ||
-        advice.overallEffect ||
-        advice.parameterSuggestions !== null),
-  );
-}
-
-function formatAdviceLabel(key: string) {
-  return key
-    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
-    .replace(/[_-]+/g, " ")
-    .trim();
-}
-
-function isAdviceRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isEmptyAdviceValue(value: unknown) {
-  return (
-    value === null ||
-    value === undefined ||
-    (typeof value === "string" && value.trim().length === 0) ||
-    (Array.isArray(value) && value.length === 0) ||
-    (isAdviceRecord(value) && Object.keys(value).length === 0)
-  );
-}
-
-function formatAdvicePrimitive(value: unknown) {
-  if (typeof value === "number") {
-    return Number.isInteger(value) ? String(value) : value.toFixed(2).replace(/\.?0+$/, "");
-  }
-
-  if (typeof value === "boolean") {
-    return value ? "是" : "否";
-  }
-
-  return typeof value === "string" ? value : String(value);
-}
-
-function AiAdviceValue({ depth = 0, value }: { depth?: number; value: unknown }) {
-  if (isEmptyAdviceValue(value)) {
-    return <span className="text-slate-400">未提供</span>;
-  }
-
-  if (Array.isArray(value)) {
-    return (
-      <div className="space-y-1">
-        {value.map((item, index) => (
-          <div className="rounded-md bg-white/70 px-2 py-1" key={index}>
-            <AiAdviceValue depth={depth + 1} value={item} />
-          </div>
-        ))}
-      </div>
-    );
-  }
-
-  if (isAdviceRecord(value)) {
-    const entries = Object.entries(value).filter(([, entryValue]) => !isEmptyAdviceValue(entryValue));
-
-    if (entries.length === 0) {
-      return <span className="text-slate-400">未提供</span>;
-    }
-
-    return (
-      <div className={depth > 0 ? "space-y-1" : "grid gap-2"}>
-        {entries.map(([key, entryValue]) => (
-          <div className="rounded-md bg-white/70 px-2 py-1" key={key}>
-            <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">
-              {formatAdviceLabel(key)}
-            </p>
-            <div className="mt-0.5 text-xs leading-relaxed text-slate-700">
-              <AiAdviceValue depth={depth + 1} value={entryValue} />
-            </div>
-          </div>
-        ))}
-      </div>
-    );
-  }
-
-  return <span>{formatAdvicePrimitive(value)}</span>;
-}
-
 export function PromptPreviewPanel({ onCaptureCanvas }: PromptPreviewPanelProps) {
   const project = useEditorStore((state) => state.project);
   const aiPrompt = useEditorStore((state) => state.aiGeneratedPrompt);
-  const aiCivitaiAdvice = useEditorStore((state) => state.aiCivitaiAdvice);
   const setAiGeneratedPrompt = useEditorStore((state) => state.setAiGeneratedPrompt);
-  const setAiCivitaiAdvice = useEditorStore((state) => state.setAiCivitaiAdvice);
   const selectCivitaiCheckpoint = useEditorStore((state) => state.selectCivitaiCheckpoint);
   const toggleCivitaiLora = useEditorStore((state) => state.toggleCivitaiLora);
   const updateProjectSettings = useEditorStore((state) => state.updateProjectSettings);
-  const addPromptTag = useEditorStore((state) => state.addPromptTag);
   const removePromptTag = useEditorStore((state) => state.removePromptTag);
   const [aiStatus, setAiStatus] = useState<AiGenerationStatus>("idle");
   const [aiError, setAiError] = useState("");
@@ -785,25 +641,6 @@ export function PromptPreviewPanel({ onCaptureCanvas }: PromptPreviewPanelProps)
     return () => controller.abort();
   }, [selectedResourcesQuery, shouldLoadSelectedResources]);
 
-  async function loadSelectedResourcesForAi() {
-    if (!shouldLoadSelectedResources) {
-      return EMPTY_SELECTED_CIVITAI_RESOURCES;
-    }
-
-    if (selectedResourcesResultQuery === selectedResourcesQuery && selectedResourceStatus === "success") {
-      return selectedResources;
-    }
-
-    const payload = await fetchJson<SelectedCivitaiResourcesPreview>(
-      `/api/civitai-lora-library/selected-resources?${selectedResourcesQuery}`,
-    );
-    setSelectedResources(payload);
-    setSelectedResourceStatus("success");
-    setSelectedResourceError("");
-    setSelectedResourcesResultQuery(selectedResourcesQuery);
-    return payload;
-  }
-
   function handleRemoveSelectedResource(resource: SelectedCivitaiResourcePreview) {
     if (resource.resourceType === "model") {
       selectCivitaiCheckpoint(resource.id);
@@ -821,45 +658,6 @@ export function PromptPreviewPanel({ onCaptureCanvas }: PromptPreviewPanelProps)
     for (const tagId of findSceneArtistPromptTagIds(project.scene.promptTags, prompt)) {
       removePromptTag({ kind: "scene" }, tagId);
     }
-  }
-
-  function handleArtistStringPromptRenderModeChange(nextMode: ArtistStringPromptRenderMode) {
-    if (nextMode === artistStringPromptRenderMode) {
-      return;
-    }
-
-    const selectedIds = project.settings.selectedArtistStringIds ?? [];
-    const selectedPrompts = project.settings.selectedArtistStringPrompts ?? [];
-    const itemById = new Map(displayedSelectedArtistStrings.map((item) => [item.id, item]));
-    const currentPrompts = selectedIds.map((id, index) => {
-      const item = itemById.get(id);
-      return selectedPrompts[index] ?? (item ? formatSelectedArtistPrompt(item, artistStringPromptRenderMode) : "");
-    });
-    const nextPrompts = selectedIds.map((id, index) => {
-      const item = itemById.get(id);
-      return item ? formatSelectedArtistPrompt(item, nextMode) : (selectedPrompts[index] ?? "");
-    });
-
-    for (const prompt of new Set(currentPrompts.filter((prompt) => prompt.trim()))) {
-      removeSceneArtistPrompt(prompt);
-    }
-
-    for (const id of selectedIds) {
-      const item = itemById.get(id);
-      if (!item) {
-        continue;
-      }
-
-      const prompt = formatSelectedArtistPrompt(item, nextMode);
-      if (prompt.trim()) {
-        addPromptTag({ kind: "scene" }, makeSelectedArtistPromptTag(item, prompt));
-      }
-    }
-
-    updateProjectSettings({
-      artistStringPromptRenderMode: nextMode,
-      selectedArtistStringPrompts: nextPrompts,
-    });
   }
 
   function handleRemoveSelectedArtistString(item: ArtistStringItemRecord) {
@@ -921,17 +719,8 @@ export function PromptPreviewPanel({ onCaptureCanvas }: PromptPreviewPanelProps)
 
     setAiStatus("loading");
     setAiError("");
-    setAiCivitaiAdvice(null);
 
     try {
-      const selectedResourcesForAi = shouldLoadSelectedResources
-        ? await loadSelectedResourcesForAi()
-        : EMPTY_SELECTED_CIVITAI_RESOURCES;
-      const selectedCivitaiResourcesText =
-        project.settings.modelFormat === "stable-diffusion" && hasSelectedCivitaiResources(selectedResourcesForAi)
-          ? formatSelectedCivitaiResourcesForAi(selectedResourcesForAi)
-          : null;
-      const civitaiAware = selectedCivitaiResourcesText !== null;
       const promptForAi = generatePrompt(project, {
         includeLayoutConstraints: useLayoutConstraints,
       });
@@ -944,17 +733,15 @@ export function PromptPreviewPanel({ onCaptureCanvas }: PromptPreviewPanelProps)
       const layoutConstraints = useLayoutConstraints && project.settings.includeSpatialHints
         ? inferSceneLayoutConstraints(project.scene)
         : null;
-      const systemPrompt = buildAiSystemPrompt(constraints, { civitaiAware });
+      const systemPrompt = buildAiSystemPrompt(constraints);
       const userText = buildAiUserText({
         constraints,
         layoutConstraints,
         promptForAi,
         project,
-        selectedCivitaiResourcesText,
         structuredSummary,
       });
       const requestBody = {
-        purpose: civitaiAware ? ("stable-diffusion-prompt-generation" as const) : undefined,
         messages: [
           {
             role: "system" as const,
@@ -978,7 +765,7 @@ export function PromptPreviewPanel({ onCaptureCanvas }: PromptPreviewPanelProps)
           },
         ],
         temperature: 0.4,
-        maxTokens: civitaiAware ? 900 : 600,
+        maxTokens: 600,
       };
 
       console.info("[SceneForge] [llm] client outbound /api/llm/chat", {
@@ -988,9 +775,6 @@ export function PromptPreviewPanel({ onCaptureCanvas }: PromptPreviewPanelProps)
         layoutConstraintsEnabled: useLayoutConstraints,
         poseConstraintsEnabled: usePoseConstraints,
         visualConstraintsEnabled: useVisualConstraints,
-        civitaiAware,
-        selectedCivitaiResourceCount: selectedCivitaiResourceCards(selectedResourcesForAi).length,
-        selectedCivitaiContextChars: selectedCivitaiResourcesText?.length ?? 0,
         promptPreviewChars: (promptForAi.prompt ?? "").length,
         structuredSummaryChars: structuredSummary.length,
         canvasImageDataUrlChars: canvasImage.length,
@@ -1027,19 +811,11 @@ export function PromptPreviewPanel({ onCaptureCanvas }: PromptPreviewPanelProps)
         usage: payload.usage,
       });
 
-      if (civitaiAware) {
-        const parsed = parseCivitaiAiPromptResponse(payload.content);
-        setAiGeneratedPrompt(parsed.prompt.trim());
-        setAiCivitaiAdvice(parsed);
-      } else {
-        setAiGeneratedPrompt(payload.content.trim());
-        setAiCivitaiAdvice(null);
-      }
+      setAiGeneratedPrompt(payload.content.trim());
       setAiStatus("success");
     } catch (error) {
       console.error("[SceneForge] [llm] failed to generate AI prompt", { error });
       setAiStatus("error");
-      setAiCivitaiAdvice(null);
       setAiError(error instanceof Error ? error.message : "AI 生成失败，请稍后重试。");
     }
   }
@@ -1111,25 +887,6 @@ export function PromptPreviewPanel({ onCaptureCanvas }: PromptPreviewPanelProps)
                 {effectiveSelectedArtistStringStatus === "loading" ? (
                   <span className="text-[11px] text-slate-400">读取中...</span>
                 ) : null}
-                <select
-                  aria-label="选择画师串 Prompt 格式"
-                  className="h-7 max-w-[170px] rounded-md border border-fuchsia-100 bg-white px-2 text-[11px] font-medium text-slate-700 outline-none transition focus:border-fuchsia-300 focus:ring-2 focus:ring-fuchsia-100"
-                  disabled={
-                    effectiveSelectedArtistStringStatus !== "success" ||
-                    displayedSelectedArtistStrings.length !== selectedArtistStringIds.length
-                  }
-                  onChange={(event) =>
-                    handleArtistStringPromptRenderModeChange(event.target.value as ArtistStringPromptRenderMode)
-                  }
-                  title="选择添加到 Prompt 的画师串格式"
-                  value={artistStringPromptRenderMode}
-                >
-                  {ARTIST_STRING_PROMPT_RENDER_MODE_OPTIONS.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
                 <button
                   className="text-[11px] font-medium text-fuchsia-600 transition hover:text-fuchsia-700"
                   onClick={handleClearSelectedArtistStrings}
@@ -1225,42 +982,6 @@ export function PromptPreviewPanel({ onCaptureCanvas }: PromptPreviewPanelProps)
             />
           </div>
         </div>
-        {hasRenderableCivitaiAdvice(aiCivitaiAdvice) ? (
-          <div>
-            <p className="mb-2 text-[11px] font-bold uppercase tracking-wider text-slate-500">
-              AI 参数建议 / 整体效果
-            </p>
-            <div className="space-y-3 rounded-md border border-indigo-100 bg-indigo-50/50 p-4">
-              {aiCivitaiAdvice?.parseWarning ? (
-                <p className="rounded-md border border-amber-100 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-700">
-                  {aiCivitaiAdvice.parseWarning}
-                </p>
-              ) : null}
-              {aiCivitaiAdvice?.parameterSuggestionReason ? (
-                <div>
-                  <p className="text-[10px] font-semibold uppercase tracking-wider text-indigo-500">参数建议理由</p>
-                  <p className="mt-1 text-xs leading-relaxed text-slate-700">
-                    {aiCivitaiAdvice.parameterSuggestionReason}
-                  </p>
-                </div>
-              ) : null}
-              {aiCivitaiAdvice?.overallEffect ? (
-                <div>
-                  <p className="text-[10px] font-semibold uppercase tracking-wider text-indigo-500">模型组合效果</p>
-                  <p className="mt-1 text-xs leading-relaxed text-slate-700">{aiCivitaiAdvice.overallEffect}</p>
-                </div>
-              ) : null}
-              {aiCivitaiAdvice && aiCivitaiAdvice.parameterSuggestions !== null ? (
-                <div>
-                  <p className="text-[10px] font-semibold uppercase tracking-wider text-indigo-500">参数建议</p>
-                  <div className="mt-1 text-xs leading-relaxed text-slate-700">
-                    <AiAdviceValue value={aiCivitaiAdvice.parameterSuggestions} />
-                  </div>
-                </div>
-              ) : null}
-            </div>
-          </div>
-        ) : null}
         <div>
           <p className="mb-2 text-[11px] font-bold uppercase tracking-wider text-slate-500">Negative Prompt</p>
           <div className="relative rounded-md border border-rose-200 bg-rose-50 p-4">

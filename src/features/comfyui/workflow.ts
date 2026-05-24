@@ -6,6 +6,7 @@ import type {
   ComfyUiWorkflow,
   ComfyUiWorkflowNode,
 } from "./types";
+import { getComfyUiLatentImageNodeTitle } from "./latent-image-node";
 import { resolveComfyUiTextToImageRequest } from "./validation";
 
 function cloneWorkflowNode(node: ComfyUiWorkflowNode): ComfyUiWorkflowNode {
@@ -46,6 +47,10 @@ export class ComfyUiWorkflowBuilder {
   }
 }
 
+function applyPromptPrefix(prefix: string, prompt: string) {
+  return prefix ? `${prefix}${prompt}` : prompt;
+}
+
 export function buildBasicTextToImageWorkflow(request: ComfyUiTextToImageRequest): BasicTextToImageWorkflow {
   const resolvedRequest = resolveComfyUiTextToImageRequest(request);
   const builder = new ComfyUiWorkflowBuilder();
@@ -80,7 +85,7 @@ export function buildBasicTextToImageWorkflow(request: ComfyUiTextToImageRequest
   const positivePrompt = builder.addNode(
     "CLIPTextEncode",
     {
-      text: resolvedRequest.positivePrompt,
+      text: applyPromptPrefix(resolvedRequest.promptWrapper.positivePrefix, resolvedRequest.positivePrompt),
       clip: clipConnection,
     },
     "Positive Prompt",
@@ -88,19 +93,19 @@ export function buildBasicTextToImageWorkflow(request: ComfyUiTextToImageRequest
   const negativePrompt = builder.addNode(
     "CLIPTextEncode",
     {
-      text: resolvedRequest.negativePrompt,
+      text: applyPromptPrefix(resolvedRequest.promptWrapper.negativePrefix, resolvedRequest.negativePrompt),
       clip: clipConnection,
     },
     "Negative Prompt",
   );
   const latentImage = builder.addNode(
-    "EmptyLatentImage",
+    resolvedRequest.latentImageNode,
     {
       width: resolvedRequest.width,
       height: resolvedRequest.height,
       batch_size: resolvedRequest.batchSize,
     },
-    "Empty Latent Image",
+    getComfyUiLatentImageNodeTitle(resolvedRequest.latentImageNode),
   );
   const sampler = builder.addNode(
     "KSampler",

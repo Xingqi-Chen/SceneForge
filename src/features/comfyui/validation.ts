@@ -3,6 +3,10 @@ import type {
   ComfyUiTextToImageRequest,
   ResolvedComfyUiTextToImageRequest,
 } from "./types";
+import {
+  DEFAULT_COMFYUI_LATENT_IMAGE_NODE,
+  normalizeComfyUiLatentImageNode,
+} from "./latent-image-node";
 
 const DEFAULT_TEXT_TO_IMAGE_REQUEST = {
   negativePrompt: "",
@@ -15,8 +19,15 @@ const DEFAULT_TEXT_TO_IMAGE_REQUEST = {
   scheduler: "normal",
   denoise: 1,
   batchSize: 1,
+  latentImageNode: DEFAULT_COMFYUI_LATENT_IMAGE_NODE,
+  promptWrapper: {
+    positivePrefix: "",
+    negativePrefix: "",
+  },
   outputPrefix: "SceneForge",
 } satisfies Omit<ResolvedComfyUiTextToImageRequest, "checkpointName" | "positivePrompt" | "seed">;
+const RANDOM_SEED_UPPER_BOUND = 2 ** 50;
+const RANDOM_SEED_RANGE = RANDOM_SEED_UPPER_BOUND + 1;
 
 export type ComfyUiTextToImageValidationResult =
   | {
@@ -89,8 +100,31 @@ function normalizeOptionalLoras(value: unknown): ComfyUiLoraInput[] | undefined 
   return value.map(normalizeLoraInput).filter((lora): lora is ComfyUiLoraInput => lora !== null);
 }
 
+function normalizePromptWrapper(value: unknown) {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  if (value.positivePrefix !== undefined && typeof value.positivePrefix !== "string") {
+    return null;
+  }
+
+  if (value.negativePrefix !== undefined && typeof value.negativePrefix !== "string") {
+    return null;
+  }
+
+  return {
+    ...(typeof value.positivePrefix === "string" ? { positivePrefix: value.positivePrefix } : {}),
+    ...(typeof value.negativePrefix === "string" ? { negativePrefix: value.negativePrefix } : {}),
+  };
+}
+
 function createRandomSeed() {
-  return Math.floor(Math.random() * Number.MAX_SAFE_INTEGER);
+  return Math.floor(Math.random() * RANDOM_SEED_RANGE);
 }
 
 export function validateComfyUiTextToImageRequest(value: unknown): ComfyUiTextToImageValidationResult {
@@ -119,6 +153,14 @@ export function validateComfyUiTextToImageRequest(value: unknown): ComfyUiTextTo
     return {
       ok: false,
       message: "negativePrompt must be a string when provided.",
+    };
+  }
+
+  const promptWrapper = normalizePromptWrapper(value.promptWrapper);
+  if (promptWrapper === null) {
+    return {
+      ok: false,
+      message: "promptWrapper must include string positivePrefix and negativePrefix values when provided.",
     };
   }
 
@@ -158,6 +200,13 @@ export function validateComfyUiTextToImageRequest(value: unknown): ComfyUiTextTo
     return {
       ok: false,
       message: "outputPrefix must be a non-empty string when provided.",
+    };
+  }
+
+  if (value.latentImageNode !== undefined && !normalizeComfyUiLatentImageNode(value.latentImageNode)) {
+    return {
+      ok: false,
+      message: "latentImageNode must be EmptyLatentImage or EmptySD3LatentImage when provided.",
     };
   }
 
@@ -209,6 +258,8 @@ export function validateComfyUiTextToImageRequest(value: unknown): ComfyUiTextTo
       scheduler: value.scheduler?.trim(),
       denoise: getOptionalNumber(value.denoise),
       batchSize: getOptionalNumber(value.batchSize),
+      latentImageNode: normalizeComfyUiLatentImageNode(value.latentImageNode),
+      promptWrapper,
       outputPrefix: value.outputPrefix?.trim(),
     },
   };
@@ -235,6 +286,11 @@ export function resolveComfyUiTextToImageRequest(
     scheduler: getString(request.scheduler, DEFAULT_TEXT_TO_IMAGE_REQUEST.scheduler),
     denoise: request.denoise ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.denoise,
     batchSize: request.batchSize ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.batchSize,
+    latentImageNode: request.latentImageNode ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.latentImageNode,
+    promptWrapper: {
+      positivePrefix: request.promptWrapper?.positivePrefix ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.promptWrapper.positivePrefix,
+      negativePrefix: request.promptWrapper?.negativePrefix ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.promptWrapper.negativePrefix,
+    },
     outputPrefix: getString(request.outputPrefix, DEFAULT_TEXT_TO_IMAGE_REQUEST.outputPrefix),
   };
 }

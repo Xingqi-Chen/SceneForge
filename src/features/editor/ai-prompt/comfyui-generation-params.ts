@@ -2,13 +2,20 @@ import type {
   SelectedCivitaiResourcePreview,
   SelectedCivitaiResourcesPreview,
 } from "@/features/civitai-lora-library";
-import type { ComfyUiTextToImageRequest } from "@/features/comfyui";
+import {
+  DEFAULT_COMFYUI_LATENT_IMAGE_NODE,
+  normalizeComfyUiLatentImageNode,
+  type ComfyUiTextToImageRequest,
+} from "@/features/comfyui";
+import type { SavedComfyUiGenerationParams } from "@/shared/types";
 
 import type { CivitaiAiPromptResult } from "./civitai-ai-context";
+import { normalizeComfyUiSamplerSettings } from "./comfyui-generation-options";
 
-export type ComfyUiGenerationParameterSource = "ai" | "reference" | "diagnosis";
+export type ComfyUiGenerationParameterSource = "ai" | "reference" | "diagnosis" | "saved";
 
 export type ComfyUiGenerationLoraSetting = {
+  enabled: boolean;
   resource: SelectedCivitaiResourcePreview;
   loraName: string;
   strengthModel: number;
@@ -54,6 +61,7 @@ const DEFAULT_OUTPUT_PREFIX = "SceneForge";
 const DEFAULT_LORA_WEIGHT = 0.7;
 const MIN_DIMENSION = 16;
 const MAX_DIMENSION = 16384;
+const SD3_LATENT_MODEL_PATTERN = /\b(?:sd\s*3(?:\.\d+)?|stable\s+diffusion\s+3(?:\.\d+)?|flux(?:\s*1)?|qwen(?:\s+image)?|z\s+image|lumina)\b/i;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -152,14 +160,19 @@ export function parseComfyUiAiGenerationParameters(
   }
 
   const resolution = parseResolution(parameterSuggestions.resolution);
+  const samplerSettings = normalizeComfyUiSamplerSettings({
+    samplerName: readString(parameterSuggestions, ["samplerName", "sampler"]),
+    scheduler: readString(parameterSuggestions, ["scheduler"]),
+  });
+
   return {
     width: readNumber(parameterSuggestions, ["width", "imageWidth"]) ?? resolution.width,
     height: readNumber(parameterSuggestions, ["height", "imageHeight"]) ?? resolution.height,
     seed: readNumber(parameterSuggestions, ["seed"]),
     steps: readNumber(parameterSuggestions, ["steps"]),
     cfg: readNumber(parameterSuggestions, ["cfg", "cfgScale", "cfg_scale"]),
-    samplerName: readString(parameterSuggestions, ["samplerName", "sampler"]),
-    scheduler: readString(parameterSuggestions, ["scheduler"]),
+    samplerName: samplerSettings.samplerName,
+    scheduler: samplerSettings.scheduler,
     denoise: readNumber(parameterSuggestions, ["denoise"]),
     negativePromptAdditions: readString(parameterSuggestions, ["negativePromptAdditions", "negativePrompt"]),
     loraWeights: parseLoraWeights(parameterSuggestions.loraWeights),
@@ -215,6 +228,71 @@ function sanitizeComfyUiDimension(value: number | undefined) {
   return Math.min(MAX_DIMENSION, Math.max(MIN_DIMENSION, Math.round(value / 8) * 8));
 }
 
+function sanitizePositiveInteger(value: number | undefined) {
+  if (value === undefined || !Number.isFinite(value) || value <= 0) {
+    return undefined;
+  }
+
+  return Math.round(value);
+}
+
+function sanitizeFiniteNumber(value: number | undefined) {
+  return value === undefined || !Number.isFinite(value) ? undefined : value;
+}
+
+function sanitizeDenoise(value: number | undefined) {
+  if (value === undefined || !Number.isFinite(value) || value < 0 || value > 1) {
+    return undefined;
+  }
+
+  return value;
+}
+
+function sanitizeSeed(value: number | undefined) {
+  return value !== undefined && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+}
+
+function savedLoraByName(savedParameters: SavedComfyUiGenerationParams | null | undefined) {
+  return new Map((savedParameters?.loras ?? []).map((lora) => [normalizeWeightName(lora.loraName), lora]));
+}
+
+function getResourceModelFamilyText(resource: SelectedCivitaiResourcePreview | null) {
+  if (!resource) {
+    return "";
+  }
+
+  return [
+    resource.baseModel,
+    resource.name,
+    resource.versionName,
+    resource.modelFileName,
+  ]
+    .filter((value): value is string => Boolean(value))
+    .join(" ")
+    .replace(/[_-]+/g, " ");
+}
+
+function inferLatentImageNode(
+  checkpoint: SelectedCivitaiResourcePreview | null,
+  savedParameters: SavedComfyUiGenerationParams | null,
+) {
+  const savedLatentImageNode = normalizeComfyUiLatentImageNode(savedParameters?.latentImageNode);
+  if (savedLatentImageNode) {
+    return savedLatentImageNode;
+  }
+
+  return SD3_LATENT_MODEL_PATTERN.test(getResourceModelFamilyText(checkpoint))
+    ? "EmptySD3LatentImage"
+    : DEFAULT_COMFYUI_LATENT_IMAGE_NODE;
+}
+
+function resolveSavedPromptWrapper(savedParameters: SavedComfyUiGenerationParams | null) {
+  return {
+    positivePrefix: savedParameters?.promptWrapper?.positivePrefix ?? "",
+    negativePrefix: savedParameters?.promptWrapper?.negativePrefix ?? "",
+  };
+}
+
 function makeNegativePrompt(baseNegativePrompt: string, additions: string | undefined) {
   const parts = [baseNegativePrompt.trim(), additions?.trim()].filter(Boolean);
   return Array.from(new Set(parts)).join(", ");
@@ -225,41 +303,55 @@ export function resolveComfyUiGenerationSettings(input: {
   baseNegativePrompt: string;
   selectedResources: SelectedCivitaiResourcesPreview;
   aiAdvice: CivitaiAiPromptResult | null;
+  savedParameters?: SavedComfyUiGenerationParams | null;
 }): ComfyUiGenerationSettings {
   const parsedAi = parseComfyUiAiGenerationParameters(input.aiAdvice?.parameterSuggestions ?? null);
-  const parameterSource: ComfyUiGenerationParameterSource = parsedAi ? "ai" : "reference";
+  const savedParameters = input.savedParameters ?? null;
+  const savedSamplerSettings = normalizeComfyUiSamplerSettings({
+    samplerName: savedParameters?.samplerName,
+    scheduler: savedParameters?.scheduler,
+  });
+  const parameterSource: ComfyUiGenerationParameterSource = savedParameters ? "saved" : parsedAi ? "ai" : "reference";
   const checkpoint = input.selectedResources.checkpoint;
+  const savedLoras = savedLoraByName(savedParameters);
   const loras = input.selectedResources.loras.map((resource) => {
     const aiWeight = parsedAi ? findAiLoraWeight(resource, parsedAi.loraWeights) : undefined;
-    const strengthModel = clampWeight(aiWeight?.weight ?? getReferenceLoraWeight(resource));
+    const savedLora = savedLoras.get(normalizeWeightName(resource.modelFileName));
+    const strengthModel = clampWeight(savedLora?.strengthModel ?? aiWeight?.weight ?? getReferenceLoraWeight(resource));
+    const strengthClip = clampWeight(savedLora?.strengthClip ?? strengthModel);
 
     return {
+      enabled: savedLora?.enabled ?? true,
       resource,
       loraName: resource.modelFileName,
       strengthModel,
-      strengthClip: strengthModel,
-      source: aiWeight ? "ai" as const : "reference" as const,
+      strengthClip,
+      source: savedLora ? "saved" as const : aiWeight ? "ai" as const : "reference" as const,
     };
   });
   const request: ComfyUiTextToImageRequest = {
     checkpointName: checkpoint?.modelFileName ?? "",
     positivePrompt: input.activePrompt.trim(),
     negativePrompt: makeNegativePrompt(input.baseNegativePrompt, parsedAi?.negativePromptAdditions),
-    loras: loras.map((lora) => ({
-      loraName: lora.loraName,
-      strengthModel: lora.strengthModel,
-      strengthClip: lora.strengthClip,
-    })),
-    width: sanitizeComfyUiDimension(parsedAi?.width) ?? DEFAULT_WIDTH,
-    height: sanitizeComfyUiDimension(parsedAi?.height) ?? DEFAULT_HEIGHT,
-    seed: parsedAi?.seed !== undefined && Number.isSafeInteger(parsedAi.seed) && parsedAi.seed >= 0 ? parsedAi.seed : undefined,
-    steps: parsedAi?.steps && Number.isInteger(parsedAi.steps) && parsedAi.steps > 0 ? parsedAi.steps : DEFAULT_STEPS,
-    cfg: parsedAi?.cfg ?? DEFAULT_CFG,
-    samplerName: parsedAi?.samplerName ?? DEFAULT_SAMPLER,
-    scheduler: parsedAi?.scheduler ?? DEFAULT_SCHEDULER,
-    denoise: parsedAi?.denoise !== undefined && parsedAi.denoise >= 0 && parsedAi.denoise <= 1 ? parsedAi.denoise : DEFAULT_DENOISE,
-    batchSize: DEFAULT_BATCH_SIZE,
-    outputPrefix: DEFAULT_OUTPUT_PREFIX,
+    loras: loras
+      .filter((lora) => lora.enabled)
+      .map((lora) => ({
+        loraName: lora.loraName,
+        strengthModel: lora.strengthModel,
+        strengthClip: lora.strengthClip,
+      })),
+    width: sanitizeComfyUiDimension(savedParameters?.width) ?? sanitizeComfyUiDimension(parsedAi?.width) ?? DEFAULT_WIDTH,
+    height: sanitizeComfyUiDimension(savedParameters?.height) ?? sanitizeComfyUiDimension(parsedAi?.height) ?? DEFAULT_HEIGHT,
+    seed: sanitizeSeed(savedParameters?.seed) ?? sanitizeSeed(parsedAi?.seed),
+    steps: sanitizePositiveInteger(savedParameters?.steps) ?? sanitizePositiveInteger(parsedAi?.steps) ?? DEFAULT_STEPS,
+    cfg: sanitizeFiniteNumber(savedParameters?.cfg) ?? sanitizeFiniteNumber(parsedAi?.cfg) ?? DEFAULT_CFG,
+    samplerName: savedSamplerSettings.samplerName ?? parsedAi?.samplerName ?? DEFAULT_SAMPLER,
+    scheduler: savedSamplerSettings.scheduler ?? parsedAi?.scheduler ?? DEFAULT_SCHEDULER,
+    denoise: sanitizeDenoise(savedParameters?.denoise) ?? sanitizeDenoise(parsedAi?.denoise) ?? DEFAULT_DENOISE,
+    batchSize: sanitizePositiveInteger(savedParameters?.imageCount) ?? DEFAULT_BATCH_SIZE,
+    latentImageNode: inferLatentImageNode(checkpoint, savedParameters),
+    promptWrapper: resolveSavedPromptWrapper(savedParameters),
+    outputPrefix: savedParameters?.outputPrefix?.trim() || DEFAULT_OUTPUT_PREFIX,
   };
 
   return {

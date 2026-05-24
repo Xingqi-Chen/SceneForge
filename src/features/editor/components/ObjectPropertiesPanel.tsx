@@ -27,6 +27,7 @@ import type {
 
 import { ArtistStringLibraryPanel } from "./ArtistStringLibraryPanel";
 import { CivitaiLoraLibraryPanel } from "./CivitaiLoraLibraryPanel";
+import { StylePalettePanel } from "./StylePalettePanel";
 
 function FieldLabel({ children }: { children: ReactNode }) {
   return <label className="text-xs font-medium text-slate-500">{children}</label>;
@@ -1047,6 +1048,7 @@ export function ObjectPropertiesPanel() {
             <>
               <ArtistStringLibraryPanel />
               <CivitaiLoraLibraryPanel />
+              <StylePalettePanel />
             </>
           ) : null}
           <label className="flex h-10 cursor-pointer items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-4 text-xs font-medium text-slate-700 transition-all hover:bg-white">

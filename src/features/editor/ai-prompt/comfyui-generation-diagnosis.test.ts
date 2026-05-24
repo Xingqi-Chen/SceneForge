@@ -165,6 +165,7 @@ describe("ComfyUI generation diagnosis", () => {
     expect(messages).toHaveLength(2);
     expect(messages[0].content).toContain("Stage 2 task");
     expect(messages[0].content).toContain("changeRationale");
+    expect(messages[0].content).toContain("samplerName and scheduler separately");
     expect(typeof messages[1].content).toBe("string");
     expect(messages[1].content).toContain("Face needs sharper details");
     expect(messages[1].content).toContain("webContext");
@@ -274,7 +275,8 @@ describe("ComfyUI generation diagnosis", () => {
     const next = applyComfyUiGenerationDiagnosisAdjustments(currentConfig, {
       negativePrompt: "",
       positivePrompt: "better portrait",
-      samplerName: "dpmpp_2m_sde",
+      samplerName: "DPM++ 2M Karras",
+      scheduler: "normal",
       seedMode: "fixed",
       loras: [
         {
@@ -288,7 +290,8 @@ describe("ComfyUI generation diagnosis", () => {
     expect(next).toMatchObject({
       negativePrompt: "",
       positivePrompt: "better portrait",
-      samplerName: "dpmpp_2m_sde",
+      samplerName: "dpmpp_2m",
+      scheduler: "karras",
       seedMode: "fixed",
     });
     expect(next.loras[0]).toMatchObject({
