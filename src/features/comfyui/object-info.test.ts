@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   summarizeComfyUiErrorDetails,
+  validateComfyUiInpaintRequestAgainstObjectInfo,
   validateComfyUiRequestAgainstObjectInfo,
 } from "./object-info";
 
@@ -59,6 +60,16 @@ const objectInfoWithControlNet = {
       },
     },
   },
+};
+
+const objectInfoWithInpaint = {
+  ...objectInfo,
+  LoadImage: {},
+  LoadImageMask: {},
+  SetLatentNoiseMask: {},
+  VAEEncode: {},
+  VAEEncodeForInpaint: {},
+  VAEDecode: {},
 };
 
 describe("ComfyUI object info helpers", () => {
@@ -486,6 +497,76 @@ describe("ComfyUI object info helpers", () => {
       "UltralyticsDetectorProvider node is not available in ComfyUI. Install ComfyUI Impact Subpack to use FaceDetailer.",
       "FaceDetailer detector model is not available in ComfyUI.",
     ]);
+  });
+
+  it("validates latent noise mask inpaint nodes before queueing", () => {
+    expect(
+      validateComfyUiInpaintRequestAgainstObjectInfo(
+        {
+          checkpointName: "model.safetensors",
+          positivePrompt: "replace the window",
+          sourceImage: { filename: "source.png", type: "output" },
+          maskName: "mask.png",
+          samplerName: "DPM++ 2M",
+          scheduler: "Karras",
+        },
+        objectInfoWithInpaint,
+      ),
+    ).toMatchObject({
+      errors: [],
+      request: {
+        checkpointName: "model.safetensors",
+        samplerName: "dpmpp_2m",
+        scheduler: "karras",
+        inpaintMode: "latent-noise-mask",
+      },
+    });
+
+    expect(
+      validateComfyUiInpaintRequestAgainstObjectInfo(
+        {
+          checkpointName: "model.safetensors",
+          positivePrompt: "replace the window",
+          sourceImage: { filename: "source.png", type: "output" },
+          maskName: "mask.png",
+        },
+        {
+          ...objectInfoWithInpaint,
+          SetLatentNoiseMask: undefined,
+        },
+      ).errors,
+    ).toContain("SetLatentNoiseMask node is not available in ComfyUI. It is required for latent noise mask inpaint mode.");
+  });
+
+  it("validates VAE inpaint nodes before queueing", () => {
+    expect(
+      validateComfyUiInpaintRequestAgainstObjectInfo(
+        {
+          checkpointName: "model.safetensors",
+          positivePrompt: "replace the window",
+          sourceImage: { filename: "source.png", type: "output" },
+          maskName: "mask.png",
+          inpaintMode: "vae-inpaint",
+        },
+        objectInfoWithInpaint,
+      ).errors,
+    ).toEqual([]);
+
+    expect(
+      validateComfyUiInpaintRequestAgainstObjectInfo(
+        {
+          checkpointName: "model.safetensors",
+          positivePrompt: "replace the window",
+          sourceImage: { filename: "source.png", type: "output" },
+          maskName: "mask.png",
+          inpaintMode: "vae-inpaint",
+        },
+        {
+          ...objectInfoWithInpaint,
+          VAEEncodeForInpaint: undefined,
+        },
+      ).errors,
+    ).toContain("VAEEncodeForInpaint node is not available in ComfyUI. It is required for VAE inpaint mode.");
   });
 
   it("summarizes nested ComfyUI node errors", () => {

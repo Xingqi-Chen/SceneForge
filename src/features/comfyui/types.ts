@@ -2,6 +2,7 @@ import type {
   ComfyUiFaceDetailerSamDetectionHint,
   ComfyUiFaceDetailerSamMaskHintUseNegative,
 } from "./face-detailer";
+import type { ComfyUiInpaintMode } from "./inpaint";
 import type { ComfyUiLatentImageNode } from "./latent-image-node";
 
 export type ComfyUiNodeConnection = [nodeId: string, outputIndex: number];
@@ -47,6 +48,27 @@ export type ComfyUiTextToImageRequest = {
   faceDetailer?: ComfyUiFaceDetailerConfig;
   controlNet?: ComfyUiControlNetConfig;
   controlNets?: ComfyUiControlNetUnitConfig[];
+};
+
+export type ComfyUiInpaintRequest = {
+  checkpointName: string;
+  positivePrompt: string;
+  negativePrompt?: string;
+  loras?: ComfyUiLoraInput[];
+  seed?: number;
+  steps?: number;
+  cfg?: number;
+  samplerName?: string;
+  scheduler?: string;
+  denoise?: number;
+  promptWrapper?: ComfyUiPromptWrapper;
+  outputPrefix?: string;
+  sourceImage?: ComfyUiViewImageReference;
+  imageName?: string;
+  maskDataUrl?: string;
+  maskName?: string;
+  inpaintMode?: ComfyUiInpaintMode;
+  growMaskBy?: number;
 };
 
 export type ComfyUiPromptWrapper = {
@@ -141,6 +163,27 @@ export type ResolvedComfyUiTextToImageRequest = {
   controlNets: ResolvedComfyUiControlNetUnitConfig[];
 };
 
+export type ResolvedComfyUiInpaintRequest = {
+  checkpointName: string;
+  positivePrompt: string;
+  negativePrompt: string;
+  loras: ResolvedComfyUiLoraInput[];
+  seed: number;
+  steps: number;
+  cfg: number;
+  samplerName: string;
+  scheduler: string;
+  denoise: number;
+  promptWrapper: ResolvedComfyUiPromptWrapper;
+  outputPrefix: string;
+  sourceImage?: ComfyUiViewImageReference;
+  imageName: string;
+  maskDataUrl: string;
+  maskName: string;
+  inpaintMode: ComfyUiInpaintMode;
+  growMaskBy: number;
+};
+
 export type ResolvedComfyUiPromptWrapper = {
   positivePrefix: string;
   negativePrefix: string;
@@ -222,11 +265,33 @@ export type BasicTextToImageNodeIds = {
   saveImage: string;
 };
 
+export type BasicInpaintNodeIds = {
+  checkpoint: string;
+  loraLoaders: string[];
+  positivePrompt: string;
+  negativePrompt: string;
+  sourceImage: string;
+  maskImage: string;
+  vaeEncode?: string;
+  vaeEncodeForInpaint?: string;
+  setLatentNoiseMask?: string;
+  sampler: string;
+  vaeDecode: string;
+  saveImage: string;
+};
+
 export type BasicTextToImageWorkflow = {
   workflow: ComfyUiWorkflow;
   nodeIds: BasicTextToImageNodeIds;
   outputNodeId: string;
   request: ResolvedComfyUiTextToImageRequest;
+};
+
+export type BasicInpaintWorkflow = {
+  workflow: ComfyUiWorkflow;
+  nodeIds: BasicInpaintNodeIds;
+  outputNodeId: string;
+  request: ResolvedComfyUiInpaintRequest;
 };
 
 export type ComfyUiQueuePromptOptions = {
@@ -242,6 +307,8 @@ export type ComfyUiQueuePromptResponse = {
 };
 
 export type ComfyUiGenerateImageResponse = ComfyUiQueuePromptResponse & BasicTextToImageWorkflow;
+
+export type ComfyUiGenerateInpaintResponse = ComfyUiQueuePromptResponse & BasicInpaintWorkflow;
 
 export type ComfyUiViewImageReference = {
   filename: string;

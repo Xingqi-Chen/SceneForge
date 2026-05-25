@@ -6,13 +6,17 @@ import {
   ChevronDown,
   ChevronRight,
   Download,
+  Eraser,
   Image as ImageIcon,
   Loader2,
+  Paintbrush,
   Play,
+  Settings,
   Sparkles,
+  Undo2,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type PointerEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 
 import { Button } from "@/components/ui/button";
@@ -27,9 +31,15 @@ import {
   COMFYUI_FACE_DETAILER_DEFAULTS,
   COMFYUI_FACE_DETAILER_SAM_DETECTION_HINT_OPTIONS,
   COMFYUI_FACE_DETAILER_SAM_MASK_HINT_USE_NEGATIVE_OPTIONS,
+  COMFYUI_INPAINT_MODE_OPTIONS,
   DEFAULT_COMFYUI_FACE_DETAILER_DETECTOR_MODEL,
+  DEFAULT_COMFYUI_INPAINT_DENOISE,
+  DEFAULT_COMFYUI_INPAINT_GROW_MASK_BY,
+  DEFAULT_COMFYUI_INPAINT_MODE,
   COMFYUI_LATENT_IMAGE_NODE_OPTIONS,
   type ComfyUiGeneratedImage,
+  type ComfyUiInpaintMode,
+  type ComfyUiInpaintRequest,
   type ComfyUiInputValue,
   type ComfyUiPromptHistoryResponse,
   type ComfyUiTextToImageRequest,
@@ -41,6 +51,7 @@ import {
   type ComfyUiDiagnosisWebContext,
   parseComfyUiGenerationDiagnosisResponse,
   parseComfyUiGenerationVisualDiagnosisResponse,
+  type ComfyUiGenerationDiagnosisAdjustmentScopes,
   type ComfyUiGenerationDiagnosisConfig,
   type ComfyUiGenerationDiagnosisChangeRationale,
   type ComfyUiGenerationDiagnosisResult,
@@ -90,6 +101,16 @@ type SubmitStatus = "idle" | "loading" | "success" | "error";
 type DownloadActionStatus = "idle" | "loading" | "success" | "error";
 type DiagnosisStatus = "idle" | "analyzing" | "searching" | "suggesting" | "success" | "error";
 
+type ControlNetModelOption = {
+  label: string;
+  value: string;
+};
+
+type ControlNetModelsResponse = {
+  modelPath: string;
+  models: ControlNetModelOption[];
+};
+
 type GenerationResult = {
   imageCount: number;
   images: ComfyUiGeneratedImage[];
@@ -132,12 +153,20 @@ type GenerationDraftControlNets = {
   openpose: GenerationDraftControlNetUnit;
 };
 
+type GenerationDraftInpaint = {
+  brushSize: number;
+  denoise: number;
+  growMaskBy: number;
+  mode: ComfyUiInpaintMode;
+};
+
 type GenerationDraft = Required<Omit<ComfyUiTextToImageRequest, "loras" | "promptWrapper" | "faceDetailer" | "controlNet" | "controlNets">> & {
   loras: GenerationDraftLora[];
   imageCount: number;
   promptWrapper: Required<NonNullable<ComfyUiTextToImageRequest["promptWrapper"]>>;
   faceDetailer: Required<NonNullable<ComfyUiTextToImageRequest["faceDetailer"]>>;
   controlNets: GenerationDraftControlNets;
+  inpaint: GenerationDraftInpaint;
   seedMode: ComfyUiGenerationSeedMode;
 };
 
@@ -161,6 +190,7 @@ const EMPTY_SELECTED_RESOURCES: SelectedCivitaiResourcesPreview = {
   checkpoint: null,
   loras: [],
 };
+const CONTROLNET_MODEL_PATH_STORAGE_KEY = "sceneforge.controlNetModelPath";
 const COMFYUI_HISTORY_POLL_INTERVAL_MS = 2000;
 const COMFYUI_HISTORY_POLL_TIMEOUT_MS = 180000;
 const COMFYUI_PROMPT_WRAPPER_PRESETS = [
@@ -233,6 +263,14 @@ function delay(ms: number) {
   return new Promise((resolve) => {
     window.setTimeout(resolve, ms);
   });
+}
+
+function getStoredControlNetModelPath() {
+  if (typeof window === "undefined") {
+    return "";
+  }
+
+  return window.localStorage.getItem(CONTROLNET_MODEL_PATH_STORAGE_KEY)?.trim() ?? "";
 }
 
 function createComfyUiClientId() {
@@ -525,10 +563,28 @@ function createDraftControlNetUnit(
   };
 }
 
+function createDraftInpaint(savedParameters?: SavedComfyUiGenerationParams | null): GenerationDraftInpaint {
+  const savedMode = COMFYUI_INPAINT_MODE_OPTIONS.some((option) => option.value === savedParameters?.inpaint?.mode)
+    ? savedParameters?.inpaint?.mode
+    : DEFAULT_COMFYUI_INPAINT_MODE;
+
+  return {
+    brushSize: 48,
+    denoise: typeof savedParameters?.inpaint?.denoise === "number"
+      ? Math.min(1, Math.max(0, savedParameters.inpaint.denoise))
+      : DEFAULT_COMFYUI_INPAINT_DENOISE,
+    growMaskBy: typeof savedParameters?.inpaint?.growMaskBy === "number"
+      ? Math.min(512, Math.max(0, Math.round(savedParameters.inpaint.growMaskBy)))
+      : DEFAULT_COMFYUI_INPAINT_GROW_MASK_BY,
+    mode: savedMode ?? DEFAULT_COMFYUI_INPAINT_MODE,
+  };
+}
+
 function toDraft(
   request: ComfyUiTextToImageRequest,
   loraSettings?: ComfyUiGenerationLoraSetting[],
   savedSeedMode?: ComfyUiGenerationSeedMode,
+  savedParameters?: SavedComfyUiGenerationParams | null,
 ): GenerationDraft {
   const samplerSettings = normalizeComfyUiSamplerSettings({
     samplerName: request.samplerName,
@@ -574,6 +630,7 @@ function toDraft(
       depth: createDraftControlNetUnit(request, "depth"),
       normal: createDraftControlNetUnit(request, "normal"),
     },
+    inpaint: createDraftInpaint(savedParameters),
     faceDetailer: {
       bboxCropFactor: request.faceDetailer?.bboxCropFactor ?? COMFYUI_FACE_DETAILER_DEFAULTS.bboxCropFactor,
       bboxDilation: request.faceDetailer?.bboxDilation ?? COMFYUI_FACE_DETAILER_DEFAULTS.bboxDilation,
@@ -618,6 +675,11 @@ function toSavedParameters(draft: GenerationDraft): SavedComfyUiGenerationParams
     imageCount: normalizeComfyUiGenerationImageCount(draft.imageCount),
     latentImageNode: draft.latentImageNode,
     promptWrapper: draft.promptWrapper,
+    inpaint: {
+      denoise: draft.inpaint.denoise,
+      growMaskBy: draft.inpaint.growMaskBy,
+      mode: draft.inpaint.mode,
+    },
     outputPrefix: draft.outputPrefix,
     faceDetailer: draft.faceDetailer,
     loras: draft.loras.map((lora) => ({
@@ -701,6 +763,48 @@ function toRequestPayload(
     outputPrefix: draft.outputPrefix,
     faceDetailer: draft.faceDetailer,
     controlNets: controlNetUnits,
+  };
+}
+
+type InpaintSubmitInput = {
+  denoise: number;
+  growMaskBy: number;
+  image: ComfyUiGeneratedImage;
+  maskDataUrl: string;
+  mode: ComfyUiInpaintMode;
+  negativePrompt: string;
+  positivePrompt: string;
+  seed: number;
+};
+
+function toInpaintRequestPayload(draft: GenerationDraft, input: InpaintSubmitInput): ComfyUiInpaintRequest {
+  return {
+    checkpointName: draft.checkpointName,
+    positivePrompt: input.positivePrompt,
+    negativePrompt: input.negativePrompt,
+    loras: draft.loras
+      .filter((lora) => lora.enabled)
+      .map((lora) => ({
+        loraName: lora.loraName,
+        strengthModel: lora.strengthModel,
+        strengthClip: lora.strengthClip,
+      })),
+    seed: input.seed,
+    steps: draft.steps,
+    cfg: draft.cfg,
+    samplerName: draft.samplerName,
+    scheduler: draft.scheduler,
+    denoise: input.denoise,
+    promptWrapper: draft.promptWrapper,
+    outputPrefix: `${draft.outputPrefix}_inpaint`,
+    sourceImage: {
+      filename: input.image.filename,
+      ...(input.image.subfolder !== undefined ? { subfolder: input.image.subfolder } : {}),
+      ...(input.image.type !== undefined ? { type: input.image.type } : {}),
+    },
+    maskDataUrl: input.maskDataUrl,
+    inpaintMode: input.mode,
+    growMaskBy: input.growMaskBy,
   };
 }
 
@@ -862,6 +966,21 @@ function buildDiagnosisDiffRows(
   return rows;
 }
 
+function hasModelParameterDiagnosisAdjustments(adjustments: ComfyUiGenerationDiagnosisResult["adjustments"]) {
+  return (
+    adjustments.cfg !== undefined ||
+    adjustments.denoise !== undefined ||
+    adjustments.height !== undefined ||
+    adjustments.loras !== undefined ||
+    adjustments.samplerName !== undefined ||
+    adjustments.scheduler !== undefined ||
+    adjustments.seed !== undefined ||
+    adjustments.seedMode !== undefined ||
+    adjustments.steps !== undefined ||
+    adjustments.width !== undefined
+  );
+}
+
 function NumberInput({
   label,
   min,
@@ -994,6 +1113,46 @@ function SelectInput({
   );
 }
 
+function ControlNetModelField({
+  label,
+  modelOptions,
+  onChange,
+  value,
+}: {
+  label: string;
+  modelOptions: readonly ControlNetModelOption[];
+  onChange: (value: string) => void;
+  value: string;
+}) {
+  if (modelOptions.length === 0) {
+    return <TextInput label={label} onChange={onChange} value={value} />;
+  }
+
+  const hasCurrentValue = value && !modelOptions.some((option) => option.value === value);
+  const options = [
+    { label: "Auto pick from ComfyUI", value: "" },
+    ...(hasCurrentValue ? [{ label: `Current: ${value}`, value }] : []),
+    ...modelOptions,
+  ];
+
+  return (
+    <label className="grid gap-1">
+      <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">{label}</span>
+      <select
+        className="h-9 min-w-0 rounded-md border border-slate-200 bg-white px-2 text-sm text-slate-700 outline-none transition focus:border-sky-300 focus:ring-2 focus:ring-sky-100"
+        onChange={(event) => onChange(event.target.value)}
+        value={value}
+      >
+        {options.map((option) => (
+          <option key={option.value || "__auto"} value={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
 function GeneratedImageResults({
   generatedImageItems,
   imageClickMode,
@@ -1106,6 +1265,383 @@ function GeneratedImageResults({
   return null;
 }
 
+function InpaintMaskDialog({
+  busy,
+  draft,
+  imageItem,
+  onClose,
+  onSubmit,
+  open,
+}: {
+  busy: boolean;
+  draft: GenerationDraft;
+  imageItem: GeneratedImageItem | null;
+  onClose: () => void;
+  onSubmit: (input: InpaintSubmitInput) => Promise<void>;
+  open: boolean;
+}) {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const drawingRef = useRef(false);
+  const lastPointRef = useRef<{ x: number; y: number } | null>(null);
+  const undoStackRef = useRef<ImageData[]>([]);
+  const [brushSize, setBrushSize] = useState(draft.inpaint.brushSize);
+  const [denoise, setDenoise] = useState(draft.inpaint.denoise);
+  const [error, setError] = useState("");
+  const [growMaskBy, setGrowMaskBy] = useState(draft.inpaint.growMaskBy);
+  const [mode, setMode] = useState<ComfyUiInpaintMode>(draft.inpaint.mode);
+  const [negativePrompt, setNegativePrompt] = useState(draft.negativePrompt);
+  const [positivePrompt, setPositivePrompt] = useState(draft.positivePrompt);
+  const [seed, setSeed] = useState(imageItem?.seed ?? draft.seed);
+  const [sourceSize, setSourceSize] = useState<{ height: number; width: number } | null>(null);
+  const [tool, setTool] = useState<"brush" | "eraser">("brush");
+
+  function resetCanvas(width: number, height: number) {
+    const canvas = canvasRef.current;
+    if (!canvas) {
+      return;
+    }
+
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext("2d");
+    context?.clearRect(0, 0, width, height);
+    undoStackRef.current = [];
+  }
+
+  function pushUndoSnapshot() {
+    const canvas = canvasRef.current;
+    const context = canvas?.getContext("2d");
+    if (!canvas || !context) {
+      return;
+    }
+
+    undoStackRef.current = [
+      ...undoStackRef.current.slice(-9),
+      context.getImageData(0, 0, canvas.width, canvas.height),
+    ];
+  }
+
+  function getCanvasPoint(event: PointerEvent<HTMLCanvasElement>) {
+    const canvas = canvasRef.current;
+    if (!canvas) {
+      return null;
+    }
+
+    const rect = canvas.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) {
+      return null;
+    }
+
+    return {
+      x: ((event.clientX - rect.left) / rect.width) * canvas.width,
+      y: ((event.clientY - rect.top) / rect.height) * canvas.height,
+    };
+  }
+
+  function drawTo(point: { x: number; y: number }) {
+    const canvas = canvasRef.current;
+    const context = canvas?.getContext("2d");
+    const lastPoint = lastPointRef.current ?? point;
+    if (!canvas || !context) {
+      return;
+    }
+
+    context.save();
+    context.globalCompositeOperation = tool === "eraser" ? "destination-out" : "source-over";
+    context.strokeStyle = "#fff";
+    context.lineCap = "round";
+    context.lineJoin = "round";
+    context.lineWidth = brushSize;
+    context.beginPath();
+    context.moveTo(lastPoint.x, lastPoint.y);
+    context.lineTo(point.x, point.y);
+    context.stroke();
+    context.restore();
+    lastPointRef.current = point;
+  }
+
+  function beginStroke(event: PointerEvent<HTMLCanvasElement>) {
+    if (busy) {
+      return;
+    }
+
+    const point = getCanvasPoint(event);
+    if (!point) {
+      return;
+    }
+
+    event.currentTarget.setPointerCapture(event.pointerId);
+    pushUndoSnapshot();
+    drawingRef.current = true;
+    lastPointRef.current = point;
+    drawTo(point);
+  }
+
+  function moveStroke(event: PointerEvent<HTMLCanvasElement>) {
+    if (!drawingRef.current) {
+      return;
+    }
+
+    const point = getCanvasPoint(event);
+    if (point) {
+      drawTo(point);
+    }
+  }
+
+  function endStroke() {
+    drawingRef.current = false;
+    lastPointRef.current = null;
+  }
+
+  function undoMask() {
+    const canvas = canvasRef.current;
+    const context = canvas?.getContext("2d");
+    const snapshot = undoStackRef.current.at(-1);
+    if (!canvas || !context || !snapshot) {
+      return;
+    }
+
+    context.putImageData(snapshot, 0, 0);
+    undoStackRef.current = undoStackRef.current.slice(0, -1);
+  }
+
+  function clearMask() {
+    const canvas = canvasRef.current;
+    const context = canvas?.getContext("2d");
+    if (!canvas || !context) {
+      return;
+    }
+
+    pushUndoSnapshot();
+    context.clearRect(0, 0, canvas.width, canvas.height);
+  }
+
+  function canvasHasMask(canvas: HTMLCanvasElement) {
+    const context = canvas.getContext("2d");
+    if (!context) {
+      return false;
+    }
+
+    const data = context.getImageData(0, 0, canvas.width, canvas.height).data;
+    for (let index = 3; index < data.length; index += 4) {
+      if (data[index] > 0) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  function exportMaskDataUrl() {
+    const sourceCanvas = canvasRef.current;
+    if (!sourceCanvas || !sourceSize) {
+      throw new Error("Mask canvas is not ready.");
+    }
+
+    if (!canvasHasMask(sourceCanvas)) {
+      throw new Error("Paint at least one mask area before inpainting.");
+    }
+
+    const maskCanvas = document.createElement("canvas");
+    maskCanvas.width = sourceCanvas.width;
+    maskCanvas.height = sourceCanvas.height;
+    const context = maskCanvas.getContext("2d");
+    if (!context) {
+      throw new Error("Unable to export mask.");
+    }
+
+    context.fillStyle = "#000";
+    context.fillRect(0, 0, maskCanvas.width, maskCanvas.height);
+    context.drawImage(sourceCanvas, 0, 0);
+
+    return maskCanvas.toDataURL("image/png");
+  }
+
+  async function submit() {
+    if (!imageItem || busy) {
+      return;
+    }
+
+    setError("");
+
+    try {
+      const maskDataUrl = exportMaskDataUrl();
+      await onSubmit({
+        denoise,
+        growMaskBy,
+        image: imageItem.image,
+        maskDataUrl,
+        mode,
+        negativePrompt,
+        positivePrompt,
+        seed,
+      });
+    } catch (submitError) {
+      setError(submitError instanceof Error ? submitError.message : "Inpaint failed.");
+    }
+  }
+
+  if (!open || !imageItem || typeof document === "undefined") {
+    return null;
+  }
+
+  return createPortal(
+    <div
+      aria-modal="true"
+      className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/50 p-4 backdrop-blur-sm"
+      role="dialog"
+    >
+      <div className="flex max-h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xl">
+        <div className="flex items-center justify-between gap-3 border-b border-slate-100 px-4 py-3">
+          <div className="min-w-0">
+            <h3 className="text-sm font-semibold text-slate-900">Inpaint selected image</h3>
+            <p className="mt-0.5 truncate text-[11px] text-slate-500">{imageItem.image.filename}</p>
+          </div>
+          <button
+            className="grid size-8 place-items-center rounded-md text-slate-500 transition hover:bg-slate-100 hover:text-slate-700"
+            disabled={busy}
+            onClick={onClose}
+            title="Close"
+            type="button"
+          >
+            <X className="size-4" />
+          </button>
+        </div>
+        <div className="grid min-h-0 flex-1 gap-4 overflow-y-auto p-4 lg:grid-cols-[minmax(0,1fr)_320px]">
+          <div className="min-w-0">
+            <div className="relative mx-auto overflow-hidden rounded-md border border-slate-200 bg-slate-950">
+              <img
+                alt="Inpaint source"
+                className="block h-auto w-full select-none"
+                draggable={false}
+                onLoad={(event) => {
+                  const image = event.currentTarget;
+                  const width = image.naturalWidth || 1;
+                  const height = image.naturalHeight || 1;
+                  setSourceSize({ width, height });
+                  resetCanvas(width, height);
+                }}
+                src={imageItem.image.url}
+              />
+              <canvas
+                className="absolute inset-0 h-full w-full cursor-crosshair touch-none"
+                onPointerCancel={endStroke}
+                onPointerDown={beginStroke}
+                onPointerLeave={endStroke}
+                onPointerMove={moveStroke}
+                onPointerUp={endStroke}
+                ref={canvasRef}
+              />
+            </div>
+          </div>
+          <div className="grid content-start gap-3">
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                aria-pressed={tool === "brush"}
+                className={`flex h-9 items-center justify-center gap-1.5 rounded-md border text-xs font-semibold transition ${
+                  tool === "brush" ? "border-sky-300 bg-sky-50 text-sky-700" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+                }`}
+                onClick={() => setTool("brush")}
+                type="button"
+              >
+                <Paintbrush className="size-3.5" />
+                Brush
+              </button>
+              <button
+                aria-pressed={tool === "eraser"}
+                className={`flex h-9 items-center justify-center gap-1.5 rounded-md border text-xs font-semibold transition ${
+                  tool === "eraser" ? "border-sky-300 bg-sky-50 text-sky-700" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+                }`}
+                onClick={() => setTool("eraser")}
+                type="button"
+              >
+                <Eraser className="size-3.5" />
+                Eraser
+              </button>
+            </div>
+            <label className="grid gap-1">
+              <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">brush size</span>
+              <input
+                className="h-2 accent-sky-600"
+                max={160}
+                min={4}
+                onChange={(event) => setBrushSize(Number(event.target.value))}
+                type="range"
+                value={brushSize}
+              />
+              <span className="text-[11px] text-slate-500">{brushSize}px</span>
+            </label>
+            <div className="grid grid-cols-2 gap-2">
+              <Button
+                className="h-9 rounded-md border-slate-200 bg-white text-xs text-slate-700 hover:bg-slate-50"
+                disabled={busy}
+                onClick={undoMask}
+                type="button"
+                variant="secondary"
+              >
+                <Undo2 className="size-3.5" />
+                Undo
+              </Button>
+              <Button
+                className="h-9 rounded-md border-slate-200 bg-white text-xs text-slate-700 hover:bg-slate-50"
+                disabled={busy}
+                onClick={clearMask}
+                type="button"
+                variant="secondary"
+              >
+                Clear
+              </Button>
+            </div>
+            <TextAreaInput label="prompt" onChange={setPositivePrompt} value={positivePrompt} />
+            <TextAreaInput label="negative" onChange={setNegativePrompt} value={negativePrompt} />
+            <SelectInput
+              label="mode"
+              onChange={(value) => setMode(value as ComfyUiInpaintMode)}
+              options={COMFYUI_INPAINT_MODE_OPTIONS}
+              value={mode}
+            />
+            <NumberInput label="denoise" max={1} min={0} onChange={setDenoise} step={0.05} value={denoise} />
+            <NumberInput label="seed" min={0} onChange={(value) => setSeed(Math.max(0, Math.round(value)))} value={seed} />
+            <NumberInput
+              label="grow mask"
+              max={512}
+              min={0}
+              onChange={(value) => setGrowMaskBy(Math.max(0, Math.round(value)))}
+              value={growMaskBy}
+            />
+            {error ? (
+              <p className="rounded-md border border-rose-100 bg-rose-50 px-3 py-2 text-[11px] leading-relaxed text-rose-700">
+                {error}
+              </p>
+            ) : null}
+          </div>
+        </div>
+        <div className="flex items-center justify-end gap-3 border-t border-slate-100 bg-slate-50 px-4 py-3">
+          <Button
+            className="h-10 rounded-md border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+            disabled={busy}
+            onClick={onClose}
+            type="button"
+            variant="secondary"
+          >
+            Cancel
+          </Button>
+          <Button
+            className="h-10 rounded-md bg-sky-600 text-white hover:bg-sky-700 disabled:opacity-60"
+            disabled={busy || !sourceSize}
+            onClick={() => void submit()}
+            type="button"
+          >
+            {busy ? <Loader2 className="size-4 animate-spin" /> : <Paintbrush className="size-4" />}
+            Start inpaint
+          </Button>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
 function getControlNetOpenPoseUnavailableMessage(reason: ComfyUiControlNetOpenPosePreview["reason"]) {
   if (reason === "scene-not-3d") {
     return "Switch the canvas to 3D mode and add a 3D character to preview ControlNet maps.";
@@ -1208,6 +1744,7 @@ function ControlNetUnitCard({
   helpText,
   height,
   label,
+  modelOptions,
   onChange,
   preview,
   previewAvailable,
@@ -1218,6 +1755,7 @@ function ControlNetUnitCard({
   helpText: string;
   height: number;
   label: string;
+  modelOptions: readonly ControlNetModelOption[];
   onChange: (patch: Partial<GenerationDraftControlNetUnit>) => void;
   preview: {
     depthRange?: ComfyUiControlNetOpenPosePreview["depth"]["depthRange"];
@@ -1284,8 +1822,9 @@ function ControlNetUnitCard({
       {enabled ? (
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <div className="sm:col-span-2 lg:col-span-4">
-            <TextInput
+            <ControlNetModelField
               label={`${label.toLowerCase()} model`}
+              modelOptions={modelOptions}
               onChange={(value) => onChange({ modelName: value })}
               value={unit.modelName}
             />
@@ -1411,6 +1950,58 @@ function ControlNetOpenPoseFoldout({
     : "ControlNet previews are not ready yet.";
   const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "success" | "error">("idle");
   const [saveError, setSaveError] = useState("");
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [controlNetModelPath, setControlNetModelPath] = useState(getStoredControlNetModelPath);
+  const [controlNetModelPathDraft, setControlNetModelPathDraft] = useState(getStoredControlNetModelPath);
+  const [controlNetModelOptions, setControlNetModelOptions] = useState<ControlNetModelOption[]>([]);
+  const [controlNetModelLoadStatus, setControlNetModelLoadStatus] = useState<LoadStatus>("idle");
+  const [controlNetModelLoadError, setControlNetModelLoadError] = useState("");
+
+  async function loadControlNetModels(modelPath: string) {
+    const trimmedPath = modelPath.trim();
+
+    if (!trimmedPath) {
+      window.localStorage.removeItem(CONTROLNET_MODEL_PATH_STORAGE_KEY);
+      setControlNetModelPath("");
+      setControlNetModelPathDraft("");
+      setControlNetModelOptions([]);
+      setControlNetModelLoadStatus("idle");
+      setControlNetModelLoadError("");
+      return;
+    }
+
+    setControlNetModelLoadStatus("loading");
+    setControlNetModelLoadError("");
+
+    try {
+      const params = new URLSearchParams({ path: trimmedPath });
+      const payload = await fetchJson<ControlNetModelsResponse>(`/api/comfyui/controlnet-models?${params.toString()}`);
+      const resolvedPath = payload.modelPath || trimmedPath;
+
+      window.localStorage.setItem(CONTROLNET_MODEL_PATH_STORAGE_KEY, resolvedPath);
+      setControlNetModelPath(resolvedPath);
+      setControlNetModelPathDraft(resolvedPath);
+      setControlNetModelOptions(payload.models);
+      setControlNetModelLoadStatus("success");
+    } catch (error) {
+      setControlNetModelOptions([]);
+      setControlNetModelLoadStatus("error");
+      setControlNetModelLoadError(error instanceof Error ? error.message : "Unable to load ControlNet models.");
+    }
+  }
+
+  useEffect(() => {
+    const storedPath = getStoredControlNetModelPath();
+    if (!storedPath) {
+      return;
+    }
+
+    const timeout = window.setTimeout(() => {
+      void loadControlNetModels(storedPath);
+    }, 0);
+
+    return () => window.clearTimeout(timeout);
+  }, []);
 
   async function savePng() {
     if (!preview?.available || !preview.svg || saveStatus === "saving") {
@@ -1440,33 +2031,94 @@ function ControlNetOpenPoseFoldout({
         available ? "border-sky-200 bg-sky-50/60" : "border-slate-200 bg-slate-50"
       }`}
     >
-      <button
-        aria-expanded={available ? expanded : false}
-        className={`flex w-full items-start justify-between gap-3 text-left ${
-          available ? "cursor-pointer" : "cursor-not-allowed opacity-70"
-        }`}
-        disabled={!available}
-        onClick={onToggle}
-        type="button"
-      >
-        <span className="min-w-0">
-          <span className="block text-xs font-semibold text-slate-800">ControlNet</span>
-          <span className="mt-0.5 block text-[11px] leading-relaxed text-slate-500">
-            {available
-              ? `OpenPose, Depth, and Normal previews from ${preview?.characterCount ?? 0} 3D character(s).`
-              : message}
+      <div className="flex items-start gap-3">
+        <button
+          aria-expanded={available ? expanded : false}
+          className={`min-w-0 flex-1 text-left ${
+            available ? "cursor-pointer" : "cursor-not-allowed opacity-70"
+          }`}
+          disabled={!available}
+          onClick={onToggle}
+          type="button"
+        >
+          <span className="block min-w-0">
+            <span className="block text-xs font-semibold text-slate-800">ControlNet</span>
+            <span className="mt-0.5 block text-[11px] leading-relaxed text-slate-500">
+              {available
+                ? `OpenPose, Depth, and Normal previews from ${preview?.characterCount ?? 0} 3D character(s).`
+                : message}
+            </span>
           </span>
-        </span>
-        {available ? (
-          expanded ? (
-            <ChevronDown className="mt-0.5 size-4 shrink-0 text-sky-600" />
-          ) : (
-            <ChevronRight className="mt-0.5 size-4 shrink-0 text-sky-600" />
-          )
-        ) : (
-          <ChevronRight className="mt-0.5 size-4 shrink-0 text-slate-400" />
-        )}
-      </button>
+        </button>
+        <div className="flex shrink-0 items-center gap-0.5 rounded-md border border-sky-100 bg-white/90 p-0.5 shadow-sm shadow-sky-100/60">
+          <button
+            aria-label="ControlNet model settings"
+            aria-pressed={settingsOpen}
+            className={`grid size-7 place-items-center rounded text-sky-700 transition ${
+              settingsOpen ? "bg-sky-600 text-white shadow-sm" : "hover:bg-sky-50"
+            }`}
+            onClick={() => setSettingsOpen((current) => !current)}
+            title="ControlNet model settings"
+            type="button"
+          >
+            <Settings className="size-3.5" />
+          </button>
+          <button
+            aria-expanded={available ? expanded : false}
+            aria-label={expanded ? "Collapse ControlNet" : "Expand ControlNet"}
+            className="grid size-7 place-items-center rounded text-sky-700 transition hover:bg-sky-50 disabled:cursor-not-allowed disabled:text-slate-400 disabled:hover:bg-transparent"
+            disabled={!available}
+            onClick={onToggle}
+            title={expanded ? "Collapse ControlNet" : "Expand ControlNet"}
+            type="button"
+          >
+            {expanded ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4" />}
+          </button>
+        </div>
+      </div>
+      {settingsOpen ? (
+        <div className="min-w-0 overflow-hidden rounded-md border border-sky-100 bg-white p-3">
+          <div className="grid min-w-0 gap-2">
+            <label className="grid min-w-0 gap-1">
+              <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+                ControlNet model path
+              </span>
+              <input
+                className="h-9 w-full min-w-0 rounded-md border border-slate-200 bg-white px-2 text-xs text-slate-700 outline-none transition focus:border-sky-300 focus:ring-2 focus:ring-sky-100"
+                onChange={(event) => setControlNetModelPathDraft(event.target.value)}
+                placeholder="例如：D:\\ComfyUI\\models\\controlnet"
+                type="text"
+                value={controlNetModelPathDraft}
+              />
+            </label>
+            <div className="flex min-w-0 justify-end">
+              <Button
+                className="h-9 w-full rounded-md bg-sky-600 px-3 text-xs text-white hover:bg-sky-700 disabled:opacity-60 sm:w-auto sm:min-w-[116px]"
+                disabled={controlNetModelLoadStatus === "loading"}
+                onClick={() => void loadControlNetModels(controlNetModelPathDraft)}
+                type="button"
+              >
+                {controlNetModelLoadStatus === "loading" ? (
+                  <Loader2 className="size-3.5 animate-spin" />
+                ) : (
+                  <Settings className="size-3.5" />
+                )}
+                保存并扫描
+              </Button>
+            </div>
+          </div>
+          {controlNetModelLoadStatus === "success" ? (
+            <p className="mt-2 text-[11px] leading-relaxed text-emerald-700 [overflow-wrap:anywhere]">
+              已从 {controlNetModelPath} 读取 {controlNetModelOptions.length} 个 ControlNet 模型。
+            </p>
+          ) : null}
+          {controlNetModelLoadStatus === "error" && controlNetModelLoadError ? (
+            <p className="mt-2 rounded-md border border-rose-100 bg-rose-50 px-3 py-2 text-[11px] leading-relaxed text-rose-700">
+              {controlNetModelLoadError}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
       {!available ? (
         <p className="rounded-md border border-slate-200 bg-white px-3 py-2 text-[11px] leading-relaxed text-slate-500">
           {message}
@@ -1492,8 +2144,9 @@ function ControlNetOpenPoseFoldout({
             {controlNetEnabled ? (
               <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
                 <div className="sm:col-span-2 lg:col-span-4">
-                  <TextInput
+                  <ControlNetModelField
                     label="controlnet model"
+                    modelOptions={controlNetModelOptions}
                     onChange={(value) => onChange("openpose", { modelName: value })}
                     value={controlNet.modelName}
                   />
@@ -1564,6 +2217,7 @@ function ControlNetOpenPoseFoldout({
             helpText="Leave blank to auto-pick a depth-like ControlNet model from ComfyUI."
             height={preview.height}
             label="Depth"
+            modelOptions={controlNetModelOptions}
             onChange={(patch) => onChange("depth", patch)}
             preview={preview.depth}
             previewAvailable={available}
@@ -1575,6 +2229,7 @@ function ControlNetOpenPoseFoldout({
             helpText="Leave blank to auto-pick a normal-like ControlNet model from ComfyUI."
             height={preview.height}
             label="Normal"
+            modelOptions={controlNetModelOptions}
             onChange={(patch) => onChange("normal", patch)}
             preview={{
               error: normalPreview?.error,
@@ -1604,7 +2259,10 @@ function ControlNetOpenPoseFoldout({
 export type ComfyUiGenerationDialogProps = {
   activePrompt: string;
   advice: CivitaiAiPromptResult | null;
+  allowControlNet?: boolean;
   allowDiagnosis?: boolean;
+  allowInpaint?: boolean;
+  diagnosisScopes?: Partial<ComfyUiGenerationDiagnosisAdjustmentScopes>;
   baseNegativePrompt: string;
   description?: ReactNode;
   introContent?: ReactNode;
@@ -1622,7 +2280,10 @@ export type ComfyUiGenerationDialogProps = {
 export function ComfyUiGenerationDialog({
   activePrompt,
   advice,
+  allowControlNet = true,
   allowDiagnosis = true,
+  allowInpaint = true,
+  diagnosisScopes,
   baseNegativePrompt,
   description,
   introContent,
@@ -1637,6 +2298,8 @@ export function ComfyUiGenerationDialog({
   title = "ComfyUI 生图",
 }: ComfyUiGenerationDialogProps) {
   const scene = useEditorStore((state) => state.project.scene);
+  const diagnosisPromptAllowed = diagnosisScopes?.prompt ?? true;
+  const diagnosisParameterAllowed = diagnosisScopes?.parameters ?? true;
   const selectedLoraIdsKey = selectedLoraIds.join(",");
   const [selectedResources, setSelectedResources] = useState<SelectedCivitaiResourcesPreview>(EMPTY_SELECTED_RESOURCES);
   const [loadStatus, setLoadStatus] = useState<LoadStatus>("idle");
@@ -1658,7 +2321,10 @@ export function ComfyUiGenerationDialog({
   const [generationProgress, setGenerationProgress] = useState<GenerationProgress | null>(null);
   const [results, setResults] = useState<GenerationResult[]>([]);
   const [selectedGeneratedImageKey, setSelectedGeneratedImageKey] = useState("");
+  const [inpaintImageItem, setInpaintImageItem] = useState<GeneratedImageItem | null>(null);
   const [diagnosisInput, setDiagnosisInput] = useState("");
+  const [diagnosisParameterEnabled, setDiagnosisParameterEnabled] = useState(diagnosisParameterAllowed);
+  const [diagnosisPromptEnabled, setDiagnosisPromptEnabled] = useState(diagnosisPromptAllowed);
   const [diagnosisWebEnabled, setDiagnosisWebEnabled] = useState(false);
   const [diagnosisWebContext, setDiagnosisWebContext] = useState<ComfyUiDiagnosisWebContext | null>(null);
   const [diagnosisStatus, setDiagnosisStatus] = useState<DiagnosisStatus>("idle");
@@ -1689,17 +2355,17 @@ export function ComfyUiGenerationDialog({
     allResourceDownloadsReady;
   const controlNetOpenPosePreview = useMemo(
     () =>
-      draft
+      allowControlNet && draft
         ? buildComfyUiControlNetOpenPosePreview(scene, {
             width: draft.width,
             height: draft.height,
           })
         : null,
-    [draft, scene],
+    [allowControlNet, draft, scene],
   );
 
   useEffect(() => {
-    if (!draft || !open) {
+    if (!allowControlNet || !draft || !open) {
       return;
     }
 
@@ -1724,7 +2390,7 @@ export function ComfyUiGenerationDialog({
       cancelled = true;
       window.clearTimeout(timeout);
     };
-  }, [draft, open, scene]);
+  }, [allowControlNet, draft, open, scene]);
 
   function clearDiagnosisReview() {
     setDiagnosisStatus("idle");
@@ -1739,6 +2405,8 @@ export function ComfyUiGenerationDialog({
   function resetDiagnosisState() {
     setSelectedGeneratedImageKey("");
     setDiagnosisInput("");
+    setDiagnosisParameterEnabled(diagnosisParameterAllowed);
+    setDiagnosisPromptEnabled(diagnosisPromptAllowed);
     setDiagnosisWebEnabled(false);
     clearDiagnosisReview();
   }
@@ -1756,6 +2424,7 @@ export function ComfyUiGenerationDialog({
     setWaitMessage("");
     setGenerationProgress(null);
     setResults([]);
+    setInpaintImageItem(null);
     setControlNetExpanded(false);
     setControlNetNormalPreview(null);
     setControlNetNormalPreviewLoading(false);
@@ -1779,7 +2448,7 @@ export function ComfyUiGenerationDialog({
       });
 
       setSelectedResources(resources);
-      setDraft(toDraft(settings.request, settings.loras, savedParameters?.seedMode));
+      setDraft(toDraft(settings.request, settings.loras, savedParameters?.seedMode, savedParameters));
       setLoraSettings(settings.loras);
       setParameterSource(settings.parameterSource);
       setDownloadItems(await loadResourceDownloadItems(resources));
@@ -1983,7 +2652,12 @@ export function ComfyUiGenerationDialog({
       setDraft((current) => (current ? { ...current, imageCount, seed } : current));
       setWaitMessage(`已准备生成 ${imageCount} 张图片，正在提交到 ComfyUI...`);
 
-      const requestPayload = toRequestPayload({ ...draft, imageCount }, seed, controlNetOpenPosePreview, controlNetNormalPreview);
+      const requestPayload = toRequestPayload(
+        { ...draft, imageCount },
+        seed,
+        allowControlNet ? controlNetOpenPosePreview : null,
+        allowControlNet ? controlNetNormalPreview : null,
+      );
       const payload = await fetchJson<Omit<GenerationResult, "imageCount" | "images" | "seed">>("/api/comfyui/generate-image", {
         method: "POST",
         headers: {
@@ -2029,8 +2703,113 @@ export function ComfyUiGenerationDialog({
     }
   }
 
+  async function submitInpaint(input: InpaintSubmitInput) {
+    if (!draft) {
+      throw new Error("Inpaint settings are not ready.");
+    }
+
+    if (!allResourceDownloadsReady) {
+      const message = "Download the selected checkpoint / LoRA files before inpainting.";
+      setSubmitStatus("error");
+      setSubmitError(message);
+      throw new Error(message);
+    }
+
+    setSubmitStatus("loading");
+    setSubmitError("");
+    setWaitMessage("");
+    setGenerationProgress(null);
+    clearDiagnosisReview();
+    setDraft((current) => (
+      current
+        ? {
+            ...current,
+            inpaint: {
+              ...current.inpaint,
+              denoise: input.denoise,
+              growMaskBy: input.growMaskBy,
+              mode: input.mode,
+            },
+          }
+        : current
+    ));
+
+    try {
+      const clientId = createComfyUiClientId();
+      const requestPayload = toInpaintRequestPayload(draft, input);
+
+      setWaitMessage("Submitting inpaint job to ComfyUI...");
+
+      const payload = await fetchJson<Omit<GenerationResult, "imageCount" | "images" | "seed">>("/api/comfyui/inpaint-image", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ ...requestPayload, clientId }),
+      });
+      const queuedResult: GenerationResult = {
+        imageCount: 1,
+        images: [],
+        promptId: payload.promptId,
+        number: payload.number,
+        outputNodeId: payload.outputNodeId,
+        seed: input.seed,
+      };
+
+      setResults((current) => [...current, queuedResult]);
+      setWaitMessage(`Inpaint job submitted to ComfyUI, seed ${input.seed}.`);
+
+      const history = await waitForComfyUiGeneratedImages(clientId, payload.promptId, 1, (historyUpdate) => {
+        const progress = readComfyUiProgress(historyUpdate.raw);
+        if (progress) {
+          setGenerationProgress(progress);
+          setWaitMessage(`KSampler progress ${progress.value}/${progress.max}`);
+        }
+
+        if (historyUpdate.images.length > 0) {
+          setResults((current) =>
+            current.map((result) => (
+              result.promptId === payload.promptId
+                ? { ...queuedResult, images: historyUpdate.images }
+                : result
+            )),
+          );
+          setWaitMessage(`Received ${historyUpdate.images.length}/1 inpaint image, seed ${input.seed}.`);
+        }
+      });
+
+      setResults((current) =>
+        current.map((result) => (
+          result.promptId === payload.promptId
+            ? { ...queuedResult, images: history.images }
+            : result
+        )),
+      );
+      setGenerationProgress({ value: 1, max: 1 });
+      setWaitMessage("");
+      setSubmitStatus("success");
+      setInpaintImageItem(null);
+    } catch (error) {
+      setWaitMessage("");
+      setGenerationProgress(null);
+      setSubmitStatus("error");
+      setSubmitError(error instanceof Error ? error.message : "ComfyUI inpaint request failed.");
+      throw error;
+    }
+  }
+
   async function runDiagnosis() {
     if (!draft || !selectedGeneratedImage) {
+      return;
+    }
+
+    const adjustmentScopes: ComfyUiGenerationDiagnosisAdjustmentScopes = {
+      parameters: diagnosisParameterAllowed && diagnosisParameterEnabled,
+      prompt: diagnosisPromptAllowed && diagnosisPromptEnabled,
+    };
+    if (!adjustmentScopes.prompt && !adjustmentScopes.parameters) {
+      setDiagnosisStatus("error");
+      setDiagnosisError("请至少启用 Prompt 诊断或模型参数诊断。");
       return;
     }
 
@@ -2127,6 +2906,7 @@ export function ComfyUiGenerationDialog({
         body: JSON.stringify({
           purpose: "comfyui-generation-diagnosis",
           messages: buildComfyUiGenerationAdjustmentMessages({
+            adjustmentScopes,
             config: baseConfig,
             userInput: diagnosisInput,
             visualDiagnosis: visualParsed,
@@ -2146,7 +2926,7 @@ export function ComfyUiGenerationDialog({
         throw new Error("AI 参数建议返回格式不正确，请重试。");
       }
 
-      const parsed = parseComfyUiGenerationDiagnosisResponse(adjustmentPayload.content, baseConfig);
+      const parsed = parseComfyUiGenerationDiagnosisResponse(adjustmentPayload.content, baseConfig, adjustmentScopes);
       if (!parsed) {
         throw new Error("AI 参数建议没有返回可用 JSON，请重试。");
       }
@@ -2169,6 +2949,7 @@ export function ComfyUiGenerationDialog({
     const nextConfig = applyComfyUiGenerationDiagnosisAdjustments(currentConfig, diagnosisResult.adjustments);
     const nextLoraByName = new Map(nextConfig.loras.map((lora) => [lora.loraName, lora]));
     const adjustedLoraNames = new Set((diagnosisResult.adjustments.loras ?? []).map((lora) => lora.loraName));
+    const hasParameterAdjustments = hasModelParameterDiagnosisAdjustments(diagnosisResult.adjustments);
 
     setDraft((current) => {
       if (!current) {
@@ -2201,15 +2982,28 @@ export function ComfyUiGenerationDialog({
         width: nextConfig.width,
       };
     });
-    setLoraSettings((current) =>
-      current.map((setting) => (adjustedLoraNames.has(setting.loraName) ? { ...setting, source: "diagnosis" } : setting)),
-    );
-    setParameterSource("diagnosis");
+    if (adjustedLoraNames.size > 0) {
+      setLoraSettings((current) =>
+        current.map((setting) => (adjustedLoraNames.has(setting.loraName) ? { ...setting, source: "diagnosis" } : setting)),
+      );
+    }
+
+    if (hasParameterAdjustments) {
+      setParameterSource("diagnosis");
+    }
+
     setDiagnosisApplied(true);
   }
 
   const workflowPreview = draft
-    ? buildBasicTextToImageWorkflow(toRequestPayload(draft, draft.seed, controlNetOpenPosePreview, controlNetNormalPreview))
+    ? buildBasicTextToImageWorkflow(
+        toRequestPayload(
+          draft,
+          draft.seed,
+          allowControlNet ? controlNetOpenPosePreview : null,
+          allowControlNet ? controlNetNormalPreview : null,
+        ),
+      )
     : null;
   const generatedImageItems = results.flatMap((result) =>
     result.images.map((image): GeneratedImageItem => ({
@@ -2218,14 +3012,18 @@ export function ComfyUiGenerationDialog({
     })),
   );
   const generatedImages = generatedImageItems.map((item) => item.image);
-  const selectedGeneratedImage =
-    generatedImageItems.find((item, index) => getGeneratedImageKey(item.image, index) === selectedGeneratedImageKey)?.image ??
-    generatedImageItems[0]?.image ??
+  const selectedGeneratedImageItem =
+    generatedImageItems.find((item, index) => getGeneratedImageKey(item.image, index) === selectedGeneratedImageKey) ??
+    generatedImageItems[0] ??
     null;
+  const selectedGeneratedImage = selectedGeneratedImageItem?.image ?? null;
   const diagnosisDiffRows = diagnosisResult && diagnosisBaseConfig
     ? buildDiagnosisDiffRows(diagnosisBaseConfig, diagnosisResult)
     : [];
   const diagnosisBusy = diagnosisStatus === "analyzing" || diagnosisStatus === "searching" || diagnosisStatus === "suggesting";
+  const diagnosisHasEnabledScope =
+    (diagnosisPromptAllowed && diagnosisPromptEnabled) ||
+    (diagnosisParameterAllowed && diagnosisParameterEnabled);
 
   if (!open || typeof document === "undefined") {
     return null;
@@ -2546,15 +3344,17 @@ export function ComfyUiGenerationDialog({
                               value={draft.latentImageNode}
                             />
                             <TextInput label="output" onChange={(value) => patchDraft({ outputPrefix: value })} value={draft.outputPrefix} />
-                            <ControlNetOpenPoseFoldout
-                              controlNets={draft.controlNets}
-                              expanded={Boolean(controlNetOpenPosePreview?.available && controlNetExpanded)}
-                              normalPreview={controlNetNormalPreview}
-                              normalPreviewLoading={controlNetNormalPreviewLoading}
-                              onChange={patchControlNet}
-                              onToggle={() => setControlNetExpanded((value) => !value)}
-                              preview={controlNetOpenPosePreview}
-                            />
+                            {allowControlNet ? (
+                              <ControlNetOpenPoseFoldout
+                                controlNets={draft.controlNets}
+                                expanded={Boolean(controlNetOpenPosePreview?.available && controlNetExpanded)}
+                                normalPreview={controlNetNormalPreview}
+                                normalPreviewLoading={controlNetNormalPreviewLoading}
+                                onChange={patchControlNet}
+                                onToggle={() => setControlNetExpanded((value) => !value)}
+                                preview={controlNetOpenPosePreview}
+                              />
+                            ) : null}
                             <div className="grid gap-3 rounded-md border border-slate-200 bg-white p-3 sm:col-span-2 lg:col-span-3">
                               <label className="flex items-center gap-2 text-xs font-semibold text-slate-700">
                                 <input
@@ -2744,6 +3544,19 @@ export function ComfyUiGenerationDialog({
                               submitStatus={submitStatus}
                               waitMessage={waitMessage}
                             />
+                            {allowInpaint && selectedGeneratedImageItem ? (
+                              <div className="mt-3 flex justify-end">
+                                <Button
+                                  className="h-9 rounded-md bg-sky-600 px-3 text-xs text-white hover:bg-sky-700 disabled:opacity-60"
+                                  disabled={submitStatus === "loading" || downloadActionStatus === "loading" || !allResourceDownloadsReady}
+                                  onClick={() => setInpaintImageItem(selectedGeneratedImageItem)}
+                                  type="button"
+                                >
+                                  <Paintbrush className="size-3.5" />
+                                  Inpaint selected image
+                                </Button>
+                              </div>
+                            ) : null}
                           </div>
                           {allowDiagnosis && submitStatus === "success" && selectedGeneratedImage ? (
                             <div className="mt-5 rounded-md border border-violet-100 bg-violet-50/70 p-3">
@@ -2756,7 +3569,7 @@ export function ComfyUiGenerationDialog({
                                 </div>
                                 <Button
                                   className="h-8 shrink-0 rounded-md bg-violet-600 px-3 text-xs text-white hover:bg-violet-700 disabled:opacity-60"
-                                  disabled={diagnosisBusy}
+                                  disabled={diagnosisBusy || !diagnosisHasEnabledScope}
                                   onClick={() => void runDiagnosis()}
                                   type="button"
                                 >
@@ -2775,6 +3588,55 @@ export function ComfyUiGenerationDialog({
                                 placeholder="例如：人物脸部不够清晰、画面太灰、LoRA 风格太重，帮我调整下一次生成参数。"
                                 value={diagnosisInput}
                               />
+                              <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                                {diagnosisPromptAllowed ? (
+                                <button
+                                  aria-pressed={diagnosisPromptEnabled}
+                                  className={`rounded-md border px-3 py-2 text-left text-xs transition ${
+                                    diagnosisPromptEnabled
+                                      ? "border-violet-300 bg-violet-100 text-violet-900"
+                                      : "border-violet-100 bg-white text-slate-600 hover:bg-violet-50"
+                                  } disabled:cursor-not-allowed disabled:opacity-60`}
+                                  disabled={diagnosisBusy}
+                                  onClick={() => {
+                                    clearDiagnosisReview();
+                                    setDiagnosisPromptEnabled((value) => !value);
+                                  }}
+                                  type="button"
+                                >
+                                  <span className="block font-semibold">Prompt 诊断</span>
+                                  <span className="mt-0.5 block text-[11px] leading-relaxed">
+                                    启用后只允许 AI 修改 Positive / Negative Prompt。
+                                  </span>
+                                </button>
+                                ) : null}
+                                {diagnosisParameterAllowed ? (
+                                <button
+                                  aria-pressed={diagnosisParameterEnabled}
+                                  className={`rounded-md border px-3 py-2 text-left text-xs transition ${
+                                    diagnosisParameterEnabled
+                                      ? "border-violet-300 bg-violet-100 text-violet-900"
+                                      : "border-violet-100 bg-white text-slate-600 hover:bg-violet-50"
+                                  } disabled:cursor-not-allowed disabled:opacity-60`}
+                                  disabled={diagnosisBusy}
+                                  onClick={() => {
+                                    clearDiagnosisReview();
+                                    setDiagnosisParameterEnabled((value) => !value);
+                                  }}
+                                  type="button"
+                                >
+                                  <span className="block font-semibold">模型参数诊断</span>
+                                  <span className="mt-0.5 block text-[11px] leading-relaxed">
+                                    启用后只允许 AI 修改尺寸、采样、CFG、Seed 与 LoRA 权重。
+                                  </span>
+                                </button>
+                                ) : null}
+                              </div>
+                              {!diagnosisHasEnabledScope ? (
+                                <p className="mt-2 rounded-md border border-amber-100 bg-white px-3 py-2 text-[11px] leading-relaxed text-amber-800">
+                                  请至少启用 Prompt 诊断或模型参数诊断后再运行 AI 诊断。
+                                </p>
+                              ) : null}
                               <label className="mt-3 flex items-start gap-2 rounded-md border border-violet-100 bg-white px-3 py-2 text-xs text-slate-700">
                                 <input
                                   checked={diagnosisWebEnabled}
@@ -3073,6 +3935,16 @@ export function ComfyUiGenerationDialog({
                   </div>
                 </div>
               </div>
+              {allowInpaint && draft && inpaintImageItem ? (
+                <InpaintMaskDialog
+                  busy={submitStatus === "loading"}
+                  draft={draft}
+                  imageItem={inpaintImageItem}
+                  onClose={() => setInpaintImageItem(null)}
+                  onSubmit={submitInpaint}
+                  open
+                />
+              ) : null}
             </div>,
             document.body,
   );

@@ -3,9 +3,11 @@ import type {
   ComfyUiControlNetType,
   ComfyUiControlNetUnitConfig,
   ComfyUiFaceDetailerConfig,
+  ComfyUiInpaintRequest,
   ComfyUiLoraInput,
   ComfyUiTextToImageRequest,
   ResolvedComfyUiControlNetUnitConfig,
+  ResolvedComfyUiInpaintRequest,
   ResolvedComfyUiTextToImageRequest,
 } from "./types";
 import {
@@ -18,6 +20,12 @@ import {
   COMFYUI_FACE_DETAILER_SAM_MASK_HINT_USE_NEGATIVE_OPTIONS,
   DEFAULT_COMFYUI_FACE_DETAILER_DETECTOR_MODEL,
 } from "./face-detailer";
+import {
+  DEFAULT_COMFYUI_INPAINT_DENOISE,
+  DEFAULT_COMFYUI_INPAINT_GROW_MASK_BY,
+  DEFAULT_COMFYUI_INPAINT_MODE,
+  normalizeComfyUiInpaintMode,
+} from "./inpaint";
 
 const DEFAULT_TEXT_TO_IMAGE_REQUEST = {
   negativePrompt: "",
@@ -57,16 +65,47 @@ const DEFAULT_CONTROLNET_UNIT = {
   imageDataUrl: "",
   imageName: "",
 };
+const DEFAULT_INPAINT_REQUEST = {
+  negativePrompt: "",
+  loras: [],
+  steps: 30,
+  cfg: 7,
+  samplerName: "euler",
+  scheduler: "normal",
+  denoise: DEFAULT_COMFYUI_INPAINT_DENOISE,
+  promptWrapper: {
+    positivePrefix: "",
+    negativePrefix: "",
+  },
+  outputPrefix: "SceneForge_inpaint",
+  imageName: "",
+  maskDataUrl: "",
+  maskName: "",
+  inpaintMode: DEFAULT_COMFYUI_INPAINT_MODE,
+  growMaskBy: DEFAULT_COMFYUI_INPAINT_GROW_MASK_BY,
+} satisfies Omit<ResolvedComfyUiInpaintRequest, "checkpointName" | "positivePrompt" | "seed">;
 const RANDOM_SEED_UPPER_BOUND = 2 ** 50;
 const RANDOM_SEED_RANGE = RANDOM_SEED_UPPER_BOUND + 1;
 const MAX_CONTROLNET_SVG_LENGTH = 2_000_000;
 const MAX_CONTROLNET_IMAGE_DATA_URL_LENGTH = 12_000_000;
+const MAX_INPAINT_MASK_DATA_URL_LENGTH = 24_000_000;
 const CONTROLNET_TYPES = ["openpose", "depth", "normal"] as const satisfies readonly ComfyUiControlNetType[];
 
 export type ComfyUiTextToImageValidationResult =
   | {
       ok: true;
       request: ComfyUiTextToImageRequest;
+    }
+  | {
+      ok: false;
+      message: string;
+      details?: unknown;
+    };
+
+export type ComfyUiInpaintValidationResult =
+  | {
+      ok: true;
+      request: ComfyUiInpaintRequest;
     }
   | {
       ok: false;
@@ -194,6 +233,29 @@ function isControlNetType(value: unknown): value is ComfyUiControlNetType {
 
 function isPngDataUrl(value: string) {
   return /^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(value.trim());
+}
+
+function normalizeImageReference(value: unknown) {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (!isRecord(value) || !hasNonEmptyString(value.filename)) {
+    return null;
+  }
+
+  if (
+    (value.subfolder !== undefined && typeof value.subfolder !== "string") ||
+    (value.type !== undefined && typeof value.type !== "string")
+  ) {
+    return null;
+  }
+
+  return {
+    filename: value.filename.trim(),
+    ...(typeof value.subfolder === "string" ? { subfolder: value.subfolder } : {}),
+    ...(typeof value.type === "string" ? { type: value.type } : {}),
+  };
 }
 
 function normalizeFaceDetailerConfig(value: unknown): ComfyUiFaceDetailerConfig | null | undefined {
@@ -657,6 +719,205 @@ export function validateComfyUiTextToImageRequest(value: unknown): ComfyUiTextTo
   };
 }
 
+export function validateComfyUiInpaintRequest(value: unknown): ComfyUiInpaintValidationResult {
+  if (!isRecord(value)) {
+    return {
+      ok: false,
+      message: "Request body must be a JSON object.",
+    };
+  }
+
+  if (!hasNonEmptyString(value.checkpointName)) {
+    return {
+      ok: false,
+      message: "checkpointName is required.",
+    };
+  }
+
+  if (!hasNonEmptyString(value.positivePrompt)) {
+    return {
+      ok: false,
+      message: "positivePrompt is required.",
+    };
+  }
+
+  if (value.negativePrompt !== undefined && typeof value.negativePrompt !== "string") {
+    return {
+      ok: false,
+      message: "negativePrompt must be a string when provided.",
+    };
+  }
+
+  const sourceImage = normalizeImageReference(value.sourceImage);
+  if (sourceImage === null) {
+    return {
+      ok: false,
+      message: "sourceImage must include a generated ComfyUI image filename when provided.",
+    };
+  }
+
+  if (sourceImage === undefined && !hasNonEmptyString(value.imageName)) {
+    return {
+      ok: false,
+      message: "sourceImage is required.",
+    };
+  }
+
+  if (value.maskDataUrl !== undefined) {
+    if (typeof value.maskDataUrl !== "string" || value.maskDataUrl.length > MAX_INPAINT_MASK_DATA_URL_LENGTH) {
+      return {
+        ok: false,
+        message: "maskDataUrl must be a PNG data URL within the size limit.",
+      };
+    }
+
+    if (!isPngDataUrl(value.maskDataUrl)) {
+      return {
+        ok: false,
+        message: "maskDataUrl must be a PNG data URL.",
+      };
+    }
+  }
+
+  if (value.maskDataUrl === undefined && !hasNonEmptyString(value.maskName)) {
+    return {
+      ok: false,
+      message: "maskDataUrl is required.",
+    };
+  }
+
+  if (value.imageName !== undefined && !isOptionalString(value.imageName)) {
+    return {
+      ok: false,
+      message: "imageName must be a non-empty string when provided.",
+    };
+  }
+
+  if (value.maskName !== undefined && !isOptionalString(value.maskName)) {
+    return {
+      ok: false,
+      message: "maskName must be a non-empty string when provided.",
+    };
+  }
+
+  const promptWrapper = normalizePromptWrapper(value.promptWrapper);
+  if (promptWrapper === null) {
+    return {
+      ok: false,
+      message: "promptWrapper must include string positivePrefix and negativePrefix values when provided.",
+    };
+  }
+
+  if (value.inpaintMode !== undefined && !normalizeComfyUiInpaintMode(value.inpaintMode)) {
+    return {
+      ok: false,
+      message: "inpaintMode must be latent-noise-mask or vae-inpaint when provided.",
+    };
+  }
+
+  if (!isOptionalIntegerInRange(value.growMaskBy, 0, 512)) {
+    return {
+      ok: false,
+      message: "growMaskBy must be an integer between 0 and 512 when provided.",
+    };
+  }
+
+  if (value.loras !== undefined) {
+    if (!Array.isArray(value.loras)) {
+      return {
+        ok: false,
+        message: "loras must be an array when provided.",
+      };
+    }
+
+    for (const lora of value.loras) {
+      if (!normalizeLoraInput(lora)) {
+        return {
+          ok: false,
+          message: "Each LoRA must include loraName and finite strength values when provided.",
+        };
+      }
+    }
+  }
+
+  if (!isOptionalString(value.samplerName)) {
+    return {
+      ok: false,
+      message: "samplerName must be a non-empty string when provided.",
+    };
+  }
+
+  if (!isOptionalString(value.scheduler)) {
+    return {
+      ok: false,
+      message: "scheduler must be a non-empty string when provided.",
+    };
+  }
+
+  if (!isOptionalString(value.outputPrefix)) {
+    return {
+      ok: false,
+      message: "outputPrefix must be a non-empty string when provided.",
+    };
+  }
+
+  for (const field of ["steps"] as const) {
+    if (!isOptionalPositiveInteger(value[field])) {
+      return {
+        ok: false,
+        message: `${field} must be a positive integer when provided.`,
+      };
+    }
+  }
+
+  if (!isOptionalSafeSeed(value.seed)) {
+    return {
+      ok: false,
+      message: "seed must be a non-negative safe integer when provided.",
+    };
+  }
+
+  for (const field of ["cfg", "denoise"] as const) {
+    if (!isOptionalFiniteNumber(value[field])) {
+      return {
+        ok: false,
+        message: `${field} must be a finite number when provided.`,
+      };
+    }
+  }
+
+  if (typeof value.denoise === "number" && (value.denoise < 0 || value.denoise > 1)) {
+    return {
+      ok: false,
+      message: "denoise must be between 0 and 1.",
+    };
+  }
+
+  return {
+    ok: true,
+    request: {
+      checkpointName: value.checkpointName.trim(),
+      positivePrompt: value.positivePrompt.trim(),
+      negativePrompt: typeof value.negativePrompt === "string" ? value.negativePrompt.trim() : undefined,
+      loras: normalizeOptionalLoras(value.loras),
+      seed: getOptionalNumber(value.seed),
+      steps: getOptionalNumber(value.steps),
+      cfg: getOptionalNumber(value.cfg),
+      samplerName: value.samplerName?.trim(),
+      scheduler: value.scheduler?.trim(),
+      denoise: getOptionalNumber(value.denoise),
+      promptWrapper,
+      outputPrefix: value.outputPrefix?.trim(),
+      sourceImage,
+      imageName: value.imageName?.trim(),
+      maskDataUrl: typeof value.maskDataUrl === "string" ? value.maskDataUrl.trim() : undefined,
+      maskName: value.maskName?.trim(),
+      inpaintMode: normalizeComfyUiInpaintMode(value.inpaintMode),
+      growMaskBy: getOptionalNumber(value.growMaskBy),
+    },
+  };
+}
+
 function toResolvedControlNetUnit(unit: ComfyUiControlNetUnitConfig): ResolvedComfyUiControlNetUnitConfig {
   return {
     type: unit.type,
@@ -741,5 +1002,35 @@ export function resolveComfyUiTextToImageRequest(
       wildcard: request.faceDetailer?.wildcard ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.faceDetailer.wildcard,
     },
     controlNets: resolveControlNetUnits(request),
+  };
+}
+
+export function resolveComfyUiInpaintRequest(request: ComfyUiInpaintRequest): ResolvedComfyUiInpaintRequest {
+  return {
+    checkpointName: request.checkpointName.trim(),
+    positivePrompt: request.positivePrompt.trim(),
+    negativePrompt: getString(request.negativePrompt, DEFAULT_INPAINT_REQUEST.negativePrompt),
+    loras: (request.loras ?? []).map((lora) => ({
+      loraName: lora.loraName.trim(),
+      strengthModel: lora.strengthModel,
+      strengthClip: lora.strengthClip ?? lora.strengthModel,
+    })),
+    seed: request.seed ?? createRandomSeed(),
+    steps: request.steps ?? DEFAULT_INPAINT_REQUEST.steps,
+    cfg: request.cfg ?? DEFAULT_INPAINT_REQUEST.cfg,
+    samplerName: getString(request.samplerName, DEFAULT_INPAINT_REQUEST.samplerName),
+    scheduler: getString(request.scheduler, DEFAULT_INPAINT_REQUEST.scheduler),
+    denoise: request.denoise ?? DEFAULT_INPAINT_REQUEST.denoise,
+    promptWrapper: {
+      positivePrefix: request.promptWrapper?.positivePrefix ?? DEFAULT_INPAINT_REQUEST.promptWrapper.positivePrefix,
+      negativePrefix: request.promptWrapper?.negativePrefix ?? DEFAULT_INPAINT_REQUEST.promptWrapper.negativePrefix,
+    },
+    outputPrefix: getString(request.outputPrefix, DEFAULT_INPAINT_REQUEST.outputPrefix),
+    ...(request.sourceImage ? { sourceImage: request.sourceImage } : {}),
+    imageName: getString(request.imageName, DEFAULT_INPAINT_REQUEST.imageName),
+    maskDataUrl: request.maskDataUrl ?? DEFAULT_INPAINT_REQUEST.maskDataUrl,
+    maskName: getString(request.maskName, DEFAULT_INPAINT_REQUEST.maskName),
+    inpaintMode: request.inpaintMode ?? DEFAULT_INPAINT_REQUEST.inpaintMode,
+    growMaskBy: request.growMaskBy ?? DEFAULT_INPAINT_REQUEST.growMaskBy,
   };
 }

@@ -1,12 +1,14 @@
 import type {
   ComfyUiControlNetType,
   ComfyUiControlNetUnitConfig,
+  ComfyUiInpaintRequest,
   ComfyUiTextToImageRequest,
 } from "./types";
 import {
   COMFYUI_FACE_DETAILER_DETECTOR_MODEL_PREFERENCES,
   DEFAULT_COMFYUI_FACE_DETAILER_DETECTOR_MODEL,
 } from "./face-detailer";
+import { DEFAULT_COMFYUI_INPAINT_MODE } from "./inpaint";
 import { normalizeComfyUiLatentImageNode } from "./latent-image-node";
 
 type ComfyUiObjectInfoNode = {
@@ -20,6 +22,12 @@ export type ComfyUiObjectInfo = Record<string, ComfyUiObjectInfoNode>;
 export type ComfyUiRequestObjectInfoValidation = {
   errors: string[];
   request: ComfyUiTextToImageRequest;
+  warnings: string[];
+};
+
+export type ComfyUiInpaintRequestObjectInfoValidation = {
+  errors: string[];
+  request: ComfyUiInpaintRequest;
   warnings: string[];
 };
 
@@ -422,6 +430,100 @@ export function validateComfyUiRequestAgainstObjectInfo(
       latentImageNode: latentImageNode ?? request.latentImageNode,
       faceDetailer,
       controlNets,
+      loras,
+    },
+  };
+}
+
+export function validateComfyUiInpaintRequestAgainstObjectInfo(
+  request: ComfyUiInpaintRequest,
+  objectInfo: unknown,
+): ComfyUiInpaintRequestObjectInfoValidation {
+  const errors: string[] = [];
+  const warnings: string[] = [];
+  const checkpointOptions = readInputOptions(objectInfo, "CheckpointLoaderSimple", "ckpt_name");
+  const loraOptions = readInputOptions(objectInfo, "LoraLoader", "lora_name");
+  const samplerOptions = readInputOptions(objectInfo, "KSampler", "sampler_name");
+  const schedulerOptions = readInputOptions(objectInfo, "KSampler", "scheduler");
+  const checkpointName = findOption(request.checkpointName, checkpointOptions);
+  const sampler = findSampler(request.samplerName, samplerOptions, schedulerOptions);
+  const samplerName = sampler.samplerName;
+  const requestedScheduler = request.scheduler ? findOption(request.scheduler, schedulerOptions) : null;
+  const scheduler = sampler.scheduler ?? requestedScheduler;
+  const inpaintMode = request.inpaintMode ?? DEFAULT_COMFYUI_INPAINT_MODE;
+  const loras = (request.loras ?? []).map((lora, index) => {
+    const loraName = findOption(lora.loraName, loraOptions);
+    if (!loraName) {
+      errors.push(`LoRA ${index + 1} is not available in ComfyUI: ${lora.loraName}`);
+    }
+
+    return {
+      ...lora,
+      loraName: loraName ?? lora.loraName,
+    };
+  });
+
+  if (!checkpointName) {
+    errors.push(`Checkpoint is not available in ComfyUI: ${request.checkpointName}`);
+  }
+
+  if (request.samplerName && !samplerName) {
+    errors.push(`Sampler is not available in ComfyUI: ${request.samplerName}`);
+  }
+
+  if (request.scheduler && !scheduler) {
+    errors.push(`Scheduler is not available in ComfyUI: ${request.scheduler}`);
+  }
+
+  if (!hasNodeInfo(objectInfo, "LoadImage")) {
+    errors.push("LoadImage node is not available in ComfyUI. It is required for inpaint source images.");
+  }
+
+  if (!hasNodeInfo(objectInfo, "LoadImageMask")) {
+    errors.push("LoadImageMask node is not available in ComfyUI. It is required for inpaint masks.");
+  }
+
+  if (!hasNodeInfo(objectInfo, "VAEDecode")) {
+    errors.push("VAEDecode node is not available in ComfyUI. It is required for inpaint output images.");
+  }
+
+  if (inpaintMode === "vae-inpaint") {
+    if (!hasNodeInfo(objectInfo, "VAEEncodeForInpaint")) {
+      errors.push("VAEEncodeForInpaint node is not available in ComfyUI. It is required for VAE inpaint mode.");
+    }
+  } else {
+    if (!hasNodeInfo(objectInfo, "VAEEncode")) {
+      errors.push("VAEEncode node is not available in ComfyUI. It is required for latent noise mask inpaint mode.");
+    }
+
+    if (!hasNodeInfo(objectInfo, "SetLatentNoiseMask")) {
+      errors.push("SetLatentNoiseMask node is not available in ComfyUI. It is required for latent noise mask inpaint mode.");
+    }
+  }
+
+  if (request.samplerName && samplerName && samplerName !== request.samplerName) {
+    warnings.push(`Normalized sampler ${request.samplerName} to ${samplerName}.`);
+  }
+
+  if (request.samplerName && sampler.scheduler) {
+    warnings.push(`Extracted scheduler ${sampler.scheduler} from sampler ${request.samplerName}.`);
+  }
+
+  if (request.scheduler && sampler.scheduler && sampler.scheduler !== request.scheduler) {
+    warnings.push(`Normalized scheduler ${request.scheduler} to ${sampler.scheduler}.`);
+  } else if (request.scheduler && scheduler && scheduler !== request.scheduler) {
+    warnings.push(`Normalized scheduler ${request.scheduler} to ${scheduler}.`);
+  }
+
+  return {
+    errors,
+    warnings,
+    request: {
+      ...request,
+      checkpointName: checkpointName ?? request.checkpointName,
+      samplerName: samplerName ?? request.samplerName,
+      scheduler: scheduler ?? request.scheduler,
+      inpaintMode,
       loras,
     },
   };

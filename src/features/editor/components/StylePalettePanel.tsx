@@ -1286,8 +1286,11 @@ export function StylePalettePanel() {
       <ComfyUiGenerationDialog
         activePrompt={positivePrompt}
         advice={advice.result}
-        allowDiagnosis={false}
+        allowDiagnosis
+        allowControlNet={false}
+        allowInpaint={false}
         baseNegativePrompt={preset.negative}
+        diagnosisScopes={{ parameters: true, prompt: false }}
         description="使用固定预设 prompt 初始化风格测试；Active Prompt 可临时编辑，Locked Positive 不会被改写。"
         introContent={introContent}
         negativePromptLocked

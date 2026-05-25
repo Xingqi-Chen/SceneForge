@@ -907,6 +907,13 @@ function sanitizeSavedComfyUiGenerationParams(
         ];
       })
     : [];
+  const inpaint = isRecord(raw.inpaint)
+    ? {
+        denoise: sanitizeNumberInRangeLoose(raw.inpaint.denoise, 0.65, 0, 1),
+        growMaskBy: sanitizeIntegerInRangeLoose(raw.inpaint.growMaskBy, 6, 0, 512),
+        mode: raw.inpaint.mode === "vae-inpaint" ? "vae-inpaint" as const : "latent-noise-mask" as const,
+      }
+    : undefined;
 
   return {
     width: sanitizePositiveInteger(raw.width, 1024),
@@ -921,6 +928,7 @@ function sanitizeSavedComfyUiGenerationParams(
     imageCount: sanitizePositiveInteger(raw.imageCount, 1),
     ...(latentImageNode ? { latentImageNode } : {}),
     ...(promptWrapper ? { promptWrapper } : {}),
+    ...(inpaint ? { inpaint } : {}),
     outputPrefix: typeof raw.outputPrefix === "string" && raw.outputPrefix.trim() ? raw.outputPrefix.trim() : "SceneForge",
     ...(faceDetailer ? { faceDetailer } : {}),
     loras,

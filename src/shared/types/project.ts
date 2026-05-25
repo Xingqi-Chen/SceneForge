@@ -16,6 +16,12 @@ export type SavedComfyUiPromptWrapper = {
   negativePrefix?: string;
 };
 
+export type SavedComfyUiInpaintParams = {
+  denoise?: number;
+  growMaskBy?: number;
+  mode?: "latent-noise-mask" | "vae-inpaint";
+};
+
 export type SavedComfyUiFaceDetailerParams = {
   bboxCropFactor?: number;
   bboxDilation?: number;
@@ -57,6 +63,7 @@ export type SavedComfyUiGenerationParams = {
   imageCount: number;
   latentImageNode?: "EmptyLatentImage" | "EmptySD3LatentImage";
   promptWrapper?: SavedComfyUiPromptWrapper;
+  inpaint?: SavedComfyUiInpaintParams;
   outputPrefix: string;
   faceDetailer?: SavedComfyUiFaceDetailerParams;
   loras: SavedComfyUiGenerationLoraParams[];

@@ -1,6 +1,7 @@
 export * from "./client";
 export * from "./face-detailer";
 export * from "./history";
+export * from "./inpaint";
 export * from "./latent-image-node";
 export * from "./object-info";
 export * from "./openpose-skeleton";

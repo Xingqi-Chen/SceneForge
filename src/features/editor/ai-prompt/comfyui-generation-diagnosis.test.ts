@@ -140,6 +140,10 @@ describe("ComfyUI generation diagnosis", () => {
 
   it("builds stage 2 adjustment messages from visual diagnosis without resending image", () => {
     const messages = buildComfyUiGenerationAdjustmentMessages({
+      adjustmentScopes: {
+        parameters: true,
+        prompt: true,
+      },
       config: currentConfig,
       userInput: "make the face sharper",
       visualDiagnosis,
@@ -165,14 +169,33 @@ describe("ComfyUI generation diagnosis", () => {
     expect(messages).toHaveLength(2);
     expect(messages[0].content).toContain("Stage 2 task");
     expect(messages[0].content).toContain("changeRationale");
+    expect(messages[0].content).toContain("Allowed adjustment scope: prompt and model parameters");
     expect(messages[0].content).toContain("samplerName and scheduler separately");
     expect(typeof messages[1].content).toBe("string");
     expect(messages[1].content).toContain("Face needs sharper details");
+    expect(messages[1].content).toContain("\"prompt\": true");
+    expect(messages[1].content).toContain("\"parameters\": true");
     expect(messages[1].content).toContain("webContext");
     expect(messages[1].content).toContain("Style LoRA guide");
     expect(messages[1].content).toContain("parameter-adjustment");
     expect(messages[1].content).not.toContain("data:image");
     expect(messages[1].content).not.toContain("new checkpoint");
+  });
+
+  it("omits prompt rewrite guidance when only model parameter diagnosis is enabled", () => {
+    const messages = buildComfyUiGenerationAdjustmentMessages({
+      adjustmentScopes: {
+        parameters: true,
+        prompt: false,
+      },
+      config: currentConfig,
+      userInput: "make the face sharper",
+      visualDiagnosis,
+    });
+
+    expect(messages[0].content).toContain("Allowed adjustment scope: model parameters only.");
+    expect(messages[0].content).toContain("Do not return positivePrompt or negativePrompt.");
+    expect(messages[0].content).not.toContain("When rewriting prompts");
   });
 
   it("parses fenced visual diagnosis JSON", () => {
@@ -269,6 +292,67 @@ describe("ComfyUI generation diagnosis", () => {
       ],
       warnings: ["建议重新生成确认。"],
     });
+  });
+
+  it("filters model parameter changes when only prompt diagnosis is enabled", () => {
+    const parsed = parseComfyUiGenerationDiagnosisResponse(
+      JSON.stringify({
+        adjustments: {
+          cfg: 5,
+          negativePrompt: "bad hands, blurry",
+          positivePrompt: "sharp portrait, detailed eyes",
+          seed: 999,
+          steps: 40,
+        },
+      }),
+      currentConfig,
+      {
+        parameters: false,
+        prompt: true,
+      },
+    );
+
+    expect(parsed).toMatchObject({
+      adjustments: {
+        negativePrompt: "bad hands, blurry",
+        positivePrompt: "sharp portrait, detailed eyes",
+      },
+      ignored: ["Ignored model parameter changes because model parameter diagnosis is disabled."],
+    });
+    expect(parsed?.adjustments).not.toHaveProperty("cfg");
+    expect(parsed?.adjustments).not.toHaveProperty("seed");
+    expect(parsed?.adjustments).not.toHaveProperty("steps");
+  });
+
+  it("filters prompt changes when only model parameter diagnosis is enabled", () => {
+    const parsed = parseComfyUiGenerationDiagnosisResponse(
+      JSON.stringify({
+        adjustments: {
+          cfg: 5,
+          negativePrompt: "bad hands, blurry",
+          positivePrompt: "sharp portrait, detailed eyes",
+          seed: 999,
+          steps: 40,
+        },
+      }),
+      currentConfig,
+      {
+        parameters: true,
+        prompt: false,
+      },
+    );
+
+    expect(parsed).toMatchObject({
+      adjustments: {
+        cfg: 5,
+        seed: 999,
+        seedMode: "fixed",
+        steps: 40,
+      },
+      ignored: ["Ignored prompt changes because Prompt diagnosis is disabled."],
+    });
+    expect(parsed?.adjustments).not.toHaveProperty("negativePrompt");
+    expect(parsed?.adjustments).not.toHaveProperty("positivePrompt");
   });
 
   it("applies prompt, sampler, seed, and current LoRA changes", () => {

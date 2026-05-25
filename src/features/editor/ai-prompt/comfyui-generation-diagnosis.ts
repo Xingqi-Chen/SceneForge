@@ -107,6 +107,11 @@ export type ComfyUiGenerationDiagnosisAdjustments = {
   width?: number;
 };
 
+export type ComfyUiGenerationDiagnosisAdjustmentScopes = {
+  parameters: boolean;
+  prompt: boolean;
+};
+
 export type ComfyUiGenerationDiagnosisResult = {
   adjustments: ComfyUiGenerationDiagnosisAdjustments;
   changeRationale: ComfyUiGenerationDiagnosisChangeRationale[];
@@ -124,6 +129,7 @@ export type BuildComfyUiGenerationDiagnosisMessagesInput = {
 };
 
 export type BuildComfyUiGenerationAdjustmentMessagesInput = {
+  adjustmentScopes?: ComfyUiGenerationDiagnosisAdjustmentScopes;
   config: ComfyUiGenerationDiagnosisConfig;
   userInput: string;
   visualDiagnosis: ComfyUiGenerationVisualDiagnosisResult;
@@ -134,6 +140,22 @@ const MAX_DIMENSION = 16384;
 const MIN_DIMENSION = 16;
 const MAX_STEPS = 1000;
 const MAX_SEED = Number.MAX_SAFE_INTEGER;
+const PARAMETER_ADJUSTMENT_KEYS = [
+  "cfg",
+  "denoise",
+  "height",
+  "loras",
+  "samplerName",
+  "scheduler",
+  "seed",
+  "seedMode",
+  "steps",
+  "width",
+] as const satisfies readonly (keyof ComfyUiGenerationDiagnosisAdjustments)[];
+const PROMPT_ADJUSTMENT_KEYS = [
+  "negativePrompt",
+  "positivePrompt",
+] as const satisfies readonly (keyof ComfyUiGenerationDiagnosisAdjustments)[];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -208,6 +230,45 @@ function readBoolean(record: Record<string, unknown>, keys: string[]) {
 
 function clampNumber(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
+}
+
+function resolveAdjustmentScopes(
+  scopes: ComfyUiGenerationDiagnosisAdjustmentScopes | undefined,
+): ComfyUiGenerationDiagnosisAdjustmentScopes {
+  return {
+    parameters: scopes?.parameters ?? true,
+    prompt: scopes?.prompt ?? true,
+  };
+}
+
+function readAdjustmentScopeInstructions(scopes: ComfyUiGenerationDiagnosisAdjustmentScopes) {
+  if (scopes.prompt && scopes.parameters) {
+    return [
+      "Allowed adjustment scope: prompt and model parameters.",
+      "You may edit positivePrompt, negativePrompt, sampler/latent parameters, seed mode, and current LoRA enabled/weight values.",
+    ];
+  }
+
+  if (scopes.prompt) {
+    return [
+      "Allowed adjustment scope: prompt only.",
+      "Return only positivePrompt and/or negativePrompt inside adjustments.",
+      "Do not return width, height, steps, cfg, samplerName, scheduler, denoise, seedMode, seed, or loras.",
+    ];
+  }
+
+  if (scopes.parameters) {
+    return [
+      "Allowed adjustment scope: model parameters only.",
+      "Do not return positivePrompt or negativePrompt.",
+      "You may edit width, height, steps, cfg, samplerName, scheduler, denoise, seedMode, seed, and current LoRA enabled/weight values.",
+    ];
+  }
+
+  return [
+    "Allowed adjustment scope: none.",
+    "Return an empty adjustments object and explain that no diagnosis adjustment scope is enabled.",
+  ];
 }
 
 function sanitizeDimension(value: unknown) {
@@ -444,6 +505,45 @@ function sanitizeAdjustments(
   return adjustments;
 }
 
+export function filterComfyUiGenerationDiagnosisAdjustmentsByScope(
+  adjustments: ComfyUiGenerationDiagnosisAdjustments,
+  adjustmentScopes: ComfyUiGenerationDiagnosisAdjustmentScopes | undefined,
+  ignored: string[] = [],
+): ComfyUiGenerationDiagnosisAdjustments {
+  const scopes = resolveAdjustmentScopes(adjustmentScopes);
+  const filtered = { ...adjustments };
+
+  if (!scopes.prompt) {
+    let removedPromptChange = false;
+    for (const key of PROMPT_ADJUSTMENT_KEYS) {
+      if (key in filtered) {
+        delete filtered[key];
+        removedPromptChange = true;
+      }
+    }
+
+    if (removedPromptChange) {
+      ignored.push("Ignored prompt changes because Prompt diagnosis is disabled.");
+    }
+  }
+
+  if (!scopes.parameters) {
+    let removedParameterChange = false;
+    for (const key of PARAMETER_ADJUSTMENT_KEYS) {
+      if (key in filtered) {
+        delete filtered[key];
+        removedParameterChange = true;
+      }
+    }
+
+    if (removedParameterChange) {
+      ignored.push("Ignored model parameter changes because model parameter diagnosis is disabled.");
+    }
+  }
+
+  return filtered;
+}
+
 function readWarnings(value: unknown) {
   if (!Array.isArray(value)) {
     return [];
@@ -631,11 +731,18 @@ export function buildComfyUiGenerationVisualDiagnosisMessages({
 }
 
 export function buildComfyUiGenerationAdjustmentMessages({
+  adjustmentScopes,
   config,
   userInput,
   visualDiagnosis,
   webContext,
 }: BuildComfyUiGenerationAdjustmentMessagesInput): LlmChatMessage[] {
+  const scopes = resolveAdjustmentScopes(adjustmentScopes);
+  const scopeInstructions = readAdjustmentScopeInstructions(scopes);
+  const promptInstructions = scopes.prompt
+    ? ["When rewriting prompts, preserve the original subject, composition intent, and scene. Do not copy checkpoint reference prompt subjects unless the user asks."]
+    : [];
+
   return [
     {
       role: "system",
@@ -645,9 +752,9 @@ export function buildComfyUiGenerationAdjustmentMessages({
         "Return JSON only. Do not wrap it in markdown.",
         "Schema: { \"summary\": string, \"reasoning\": string, \"adjustments\": { \"positivePrompt\"?: string, \"negativePrompt\"?: string, \"width\"?: number, \"height\"?: number, \"steps\"?: number, \"cfg\"?: number, \"samplerName\"?: string, \"scheduler\"?: string, \"denoise\"?: number, \"seedMode\"?: \"random\"|\"fixed\", \"seed\"?: number, \"loras\"?: [{ \"loraName\": string, \"enabled\"?: boolean, \"strengthModel\"?: number, \"strengthClip\"?: number, \"reason\"?: string }] }, \"confidence\": number, \"changeRationale\"?: [{ \"field\": string, \"reason\": string, \"expectedEffect\": string, \"risk\": string }], \"warnings\"?: string[] }.",
         "If changing sampler settings, return ComfyUI samplerName and scheduler separately. Do not combine scheduler words into samplerName.",
-        "Balanced adjustment policy: you may edit positivePrompt, negativePrompt, sampler/latent parameters, seed mode, and current LoRA enabled/weight values.",
+        ...scopeInstructions,
         "Do not suggest a new checkpoint or new LoRA. You may only adjust or disable LoRAs already listed in currentConfig.loras.",
-        "When rewriting prompts, preserve the original subject, composition intent, and scene. Do not copy checkpoint reference prompt subjects unless the user asks.",
+        ...promptInstructions,
         "If webContext is present, use it only as supporting evidence for current resources and parameter behavior. Do not introduce checkpoint or LoRA resources that are not already in currentConfig.",
         "When a web source directly informs a change, mention that source title or domain in changeRationale.reason.",
         "Prefer targeted changes over generic quality-word stuffing. Include a changeRationale entry for each changed field.",
@@ -658,6 +765,7 @@ export function buildComfyUiGenerationAdjustmentMessages({
       role: "user",
       content: JSON.stringify(
         {
+          adjustmentScopes: scopes,
           currentConfig: compactDiagnosisConfigForLlm(config),
           stage: "parameter-adjustment",
           userDiagnosisRequest: userInput.trim() || "请根据当前图片诊断并优化下一次 ComfyUI 生图配置。",
@@ -692,6 +800,7 @@ export function parseComfyUiGenerationVisualDiagnosisResponse(
 export function parseComfyUiGenerationDiagnosisResponse(
   rawContent: string,
   current: ComfyUiGenerationDiagnosisConfig,
+  adjustmentScopes?: ComfyUiGenerationDiagnosisAdjustmentScopes,
 ): ComfyUiGenerationDiagnosisResult | null {
   const parsed = parseJsonCandidate(rawContent);
   if (!isRecord(parsed)) {
@@ -699,7 +808,11 @@ export function parseComfyUiGenerationDiagnosisResponse(
   }
 
   const ignored: string[] = [];
-  const adjustments = sanitizeAdjustments(parsed.adjustments, current, ignored);
+  const adjustments = filterComfyUiGenerationDiagnosisAdjustmentsByScope(
+    sanitizeAdjustments(parsed.adjustments, current, ignored),
+    adjustmentScopes,
+    ignored,
+  );
   const summary = readString(parsed, ["summary"]) ?? "";
   const reasoning = readString(parsed, ["reasoning"]) ?? "";
 

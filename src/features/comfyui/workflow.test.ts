@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { buildBasicTextToImageWorkflow, ComfyUiWorkflowBuilder } from "./workflow";
+import { buildBasicInpaintWorkflow, buildBasicTextToImageWorkflow, ComfyUiWorkflowBuilder } from "./workflow";
 
 describe("ComfyUI workflow builder", () => {
   it("creates stable node ids and connection tuples", () => {
@@ -167,6 +167,130 @@ describe("ComfyUI workflow builder", () => {
     expect(result.workflow["9"].inputs).toEqual({
       filename_prefix: "SceneForge",
       images: ["8", 0],
+    });
+  });
+
+  it("builds a latent noise mask inpaint workflow", () => {
+    const result = buildBasicInpaintWorkflow({
+      checkpointName: "dream.safetensors",
+      positivePrompt: "replace the window with a neon sign",
+      negativePrompt: "blurry",
+      imageName: "SceneForge/source.png",
+      maskName: "SceneForge/mask.png",
+      seed: 123,
+      denoise: 0.62,
+    });
+
+    expect(result.nodeIds).toEqual({
+      checkpoint: "1",
+      loraLoaders: [],
+      positivePrompt: "2",
+      negativePrompt: "3",
+      sourceImage: "4",
+      maskImage: "5",
+      vaeEncode: "6",
+      setLatentNoiseMask: "7",
+      sampler: "8",
+      vaeDecode: "9",
+      saveImage: "10",
+    });
+    expect(result.outputNodeId).toBe("10");
+    expect(result.workflow["4"]).toMatchObject({
+      class_type: "LoadImage",
+      inputs: {
+        image: "SceneForge/source.png",
+      },
+    });
+    expect(result.workflow["5"]).toMatchObject({
+      class_type: "LoadImageMask",
+      inputs: {
+        image: "SceneForge/mask.png",
+        channel: "red",
+      },
+    });
+    expect(result.workflow["6"]).toMatchObject({
+      class_type: "VAEEncode",
+      inputs: {
+        pixels: ["4", 0],
+        vae: ["1", 2],
+      },
+    });
+    expect(result.workflow["7"]).toMatchObject({
+      class_type: "SetLatentNoiseMask",
+      inputs: {
+        samples: ["6", 0],
+        mask: ["5", 0],
+      },
+    });
+    expect(result.workflow["8"].inputs).toMatchObject({
+      seed: 123,
+      denoise: 0.62,
+      latent_image: ["7", 0],
+    });
+    expect(result.workflow["10"].inputs).toEqual({
+      filename_prefix: "SceneForge_inpaint",
+      images: ["9", 0],
+    });
+  });
+
+  it("builds a VAE inpaint workflow with LoRA and grow mask", () => {
+    const result = buildBasicInpaintWorkflow({
+      checkpointName: "dream.safetensors",
+      positivePrompt: "new hair style",
+      imageName: "SceneForge/source.png",
+      maskName: "SceneForge/mask.png",
+      inpaintMode: "vae-inpaint",
+      growMaskBy: 12,
+      seed: 321,
+      loras: [
+        {
+          loraName: "style.safetensors",
+          strengthModel: 0.75,
+          strengthClip: 0.65,
+        },
+      ],
+      promptWrapper: {
+        positivePrefix: "best quality, ",
+        negativePrefix: "low quality, ",
+      },
+    });
+
+    expect(result.nodeIds).toEqual({
+      checkpoint: "1",
+      loraLoaders: ["2"],
+      positivePrompt: "3",
+      negativePrompt: "4",
+      sourceImage: "5",
+      maskImage: "6",
+      vaeEncodeForInpaint: "7",
+      sampler: "8",
+      vaeDecode: "9",
+      saveImage: "10",
+    });
+    expect(result.workflow["2"]).toMatchObject({
+      class_type: "LoraLoader",
+      inputs: {
+        lora_name: "style.safetensors",
+        strength_model: 0.75,
+        strength_clip: 0.65,
+      },
+    });
+    expect(result.workflow["3"].inputs.text).toBe("best quality, new hair style");
+    expect(result.workflow["4"].inputs.text).toBe("low quality, ");
+    expect(result.workflow["7"]).toMatchObject({
+      class_type: "VAEEncodeForInpaint",
+      inputs: {
+        pixels: ["5", 0],
+        vae: ["1", 2],
+        mask: ["6", 0],
+        grow_mask_by: 12,
+      },
+    });
+    expect(result.workflow["8"].inputs).toMatchObject({
+      model: ["2", 0],
+      positive: ["3", 0],
+      negative: ["4", 0],
+      latent_image: ["7", 0],
     });
   });
 

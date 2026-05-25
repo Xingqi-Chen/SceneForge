@@ -1,13 +1,15 @@
 import type {
+  BasicInpaintWorkflow,
   BasicTextToImageWorkflow,
   ComfyUiNodeConnection,
   ComfyUiNodeInputs,
+  ComfyUiInpaintRequest,
   ComfyUiTextToImageRequest,
   ComfyUiWorkflow,
   ComfyUiWorkflowNode,
 } from "./types";
 import { getComfyUiLatentImageNodeTitle } from "./latent-image-node";
-import { resolveComfyUiTextToImageRequest } from "./validation";
+import { resolveComfyUiInpaintRequest, resolveComfyUiTextToImageRequest } from "./validation";
 
 function cloneWorkflowNode(node: ComfyUiWorkflowNode): ComfyUiWorkflowNode {
   return JSON.parse(JSON.stringify(node)) as ComfyUiWorkflowNode;
@@ -257,6 +259,160 @@ export function buildBasicTextToImageWorkflow(request: ComfyUiTextToImageRequest
       vaeDecode,
       ...(ultralyticsDetectorProvider ? { ultralyticsDetectorProvider } : {}),
       ...(faceDetailer ? { faceDetailer } : {}),
+      saveImage,
+    },
+    outputNodeId: saveImage,
+    request: resolvedRequest,
+  };
+}
+
+export function buildBasicInpaintWorkflow(request: ComfyUiInpaintRequest): BasicInpaintWorkflow {
+  const resolvedRequest = resolveComfyUiInpaintRequest(request);
+  const builder = new ComfyUiWorkflowBuilder();
+
+  const checkpoint = builder.addNode(
+    "CheckpointLoaderSimple",
+    {
+      ckpt_name: resolvedRequest.checkpointName,
+    },
+    "Load Checkpoint",
+  );
+  let modelConnection = builder.connect(checkpoint, 0);
+  let clipConnection = builder.connect(checkpoint, 1);
+  const vaeConnection = builder.connect(checkpoint, 2);
+  const loraLoaders = resolvedRequest.loras.map((lora, index) => {
+    const loraLoader = builder.addNode(
+      "LoraLoader",
+      {
+        lora_name: lora.loraName,
+        strength_model: lora.strengthModel,
+        strength_clip: lora.strengthClip,
+        model: modelConnection,
+        clip: clipConnection,
+      },
+      `Load LoRA ${index + 1}`,
+    );
+
+    modelConnection = builder.connect(loraLoader, 0);
+    clipConnection = builder.connect(loraLoader, 1);
+
+    return loraLoader;
+  });
+  const positivePrompt = builder.addNode(
+    "CLIPTextEncode",
+    {
+      text: applyPromptPrefix(resolvedRequest.promptWrapper.positivePrefix, resolvedRequest.positivePrompt),
+      clip: clipConnection,
+    },
+    "Positive Prompt",
+  );
+  const negativePrompt = builder.addNode(
+    "CLIPTextEncode",
+    {
+      text: applyPromptPrefix(resolvedRequest.promptWrapper.negativePrefix, resolvedRequest.negativePrompt),
+      clip: clipConnection,
+    },
+    "Negative Prompt",
+  );
+  const sourceImage = builder.addNode(
+    "LoadImage",
+    {
+      image: resolvedRequest.imageName,
+    },
+    "Load Inpaint Source",
+  );
+  const maskImage = builder.addNode(
+    "LoadImageMask",
+    {
+      image: resolvedRequest.maskName,
+      channel: "red",
+    },
+    "Load Inpaint Mask",
+  );
+  let latentImageConnection: ComfyUiNodeConnection;
+  let vaeEncode: string | undefined;
+  let vaeEncodeForInpaint: string | undefined;
+  let setLatentNoiseMask: string | undefined;
+
+  if (resolvedRequest.inpaintMode === "vae-inpaint") {
+    vaeEncodeForInpaint = builder.addNode(
+      "VAEEncodeForInpaint",
+      {
+        pixels: builder.connect(sourceImage, 0),
+        vae: vaeConnection,
+        mask: builder.connect(maskImage, 0),
+        grow_mask_by: resolvedRequest.growMaskBy,
+      },
+      "Encode Inpaint Latent",
+    );
+    latentImageConnection = builder.connect(vaeEncodeForInpaint, 0);
+  } else {
+    vaeEncode = builder.addNode(
+      "VAEEncode",
+      {
+        pixels: builder.connect(sourceImage, 0),
+        vae: vaeConnection,
+      },
+      "Encode Source Latent",
+    );
+    setLatentNoiseMask = builder.addNode(
+      "SetLatentNoiseMask",
+      {
+        samples: builder.connect(vaeEncode, 0),
+        mask: builder.connect(maskImage, 0),
+      },
+      "Apply Inpaint Mask",
+    );
+    latentImageConnection = builder.connect(setLatentNoiseMask, 0);
+  }
+
+  const sampler = builder.addNode(
+    "KSampler",
+    {
+      seed: resolvedRequest.seed,
+      steps: resolvedRequest.steps,
+      cfg: resolvedRequest.cfg,
+      sampler_name: resolvedRequest.samplerName,
+      scheduler: resolvedRequest.scheduler,
+      denoise: resolvedRequest.denoise,
+      model: modelConnection,
+      positive: builder.connect(positivePrompt, 0),
+      negative: builder.connect(negativePrompt, 0),
+      latent_image: latentImageConnection,
+    },
+    "KSampler",
+  );
+  const vaeDecode = builder.addNode(
+    "VAEDecode",
+    {
+      samples: builder.connect(sampler, 0),
+      vae: vaeConnection,
+    },
+    "Decode Image",
+  );
+  const saveImage = builder.addNode(
+    "SaveImage",
+    {
+      filename_prefix: resolvedRequest.outputPrefix,
+      images: builder.connect(vaeDecode, 0),
+    },
+    "Save Image",
+  );
+
+  return {
+    workflow: builder.toWorkflow(),
+    nodeIds: {
+      checkpoint,
+      loraLoaders,
+      positivePrompt,
+      negativePrompt,
+      sourceImage,
+      maskImage,
+      ...(vaeEncode ? { vaeEncode } : {}),
+      ...(vaeEncodeForInpaint ? { vaeEncodeForInpaint } : {}),
+      ...(setLatentNoiseMask ? { setLatentNoiseMask } : {}),
+      sampler,
+      vaeDecode,
       saveImage,
     },
     outputNodeId: saveImage,
