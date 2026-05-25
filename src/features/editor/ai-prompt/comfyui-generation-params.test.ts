@@ -314,6 +314,12 @@ describe("ComfyUI generation parameters", () => {
           samplerName: "DPM++ 2M SDE Karras",
           scheduler: "normal",
         },
+        handDetailer: {
+          enabled: true,
+          detectorModelName: "bbox/hand_yolov8s.pt",
+          samplerName: "DPM++ 2M Karras",
+          scheduler: "normal",
+        },
         samplerName: "DPM++ 2M Karras",
         savedAt: "2026-05-23T00:00:00.000Z",
         scheduler: "normal",
@@ -339,6 +345,12 @@ describe("ComfyUI generation parameters", () => {
       faceDetailer: {
         enabled: true,
         samplerName: "dpmpp_2m_sde",
+        scheduler: "karras",
+      },
+      handDetailer: {
+        enabled: true,
+        detectorModelName: "bbox/hand_yolov8s.pt",
+        samplerName: "dpmpp_2m",
         scheduler: "karras",
       },
     });

@@ -50,6 +50,8 @@ export type SavedComfyUiFaceDetailerParams = {
   wildcard?: string;
 };
 
+export type SavedComfyUiHandDetailerParams = SavedComfyUiFaceDetailerParams;
+
 export type SavedComfyUiGenerationParams = {
   width: number;
   height: number;
@@ -66,6 +68,7 @@ export type SavedComfyUiGenerationParams = {
   inpaint?: SavedComfyUiInpaintParams;
   outputPrefix: string;
   faceDetailer?: SavedComfyUiFaceDetailerParams;
+  handDetailer?: SavedComfyUiHandDetailerParams;
   loras: SavedComfyUiGenerationLoraParams[];
   savedAt: string;
 };

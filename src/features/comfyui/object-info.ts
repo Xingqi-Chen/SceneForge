@@ -1,4 +1,5 @@
 import type {
+  ComfyUiFaceDetailerConfig,
   ComfyUiControlNetType,
   ComfyUiControlNetUnitConfig,
   ComfyUiInpaintRequest,
@@ -6,7 +7,9 @@ import type {
 } from "./types";
 import {
   COMFYUI_FACE_DETAILER_DETECTOR_MODEL_PREFERENCES,
+  COMFYUI_HAND_DETAILER_DETECTOR_MODEL_PREFERENCES,
   DEFAULT_COMFYUI_FACE_DETAILER_DETECTOR_MODEL,
+  DEFAULT_COMFYUI_HAND_DETAILER_DETECTOR_MODEL,
 } from "./face-detailer";
 import { DEFAULT_COMFYUI_INPAINT_MODE } from "./inpaint";
 import { normalizeComfyUiLatentImageNode } from "./latent-image-node";
@@ -169,8 +172,23 @@ function findPreferredFaceDetailerDetectorModel(options: string[]) {
     ?? null;
 }
 
-function shouldFallbackFromRequestedFaceDetailerDetectorModel(value: string | undefined) {
-  return !value || normalizeOptionName(value) === normalizeOptionName(DEFAULT_COMFYUI_FACE_DETAILER_DETECTOR_MODEL);
+function findPreferredHandDetailerDetectorModel(options: string[]) {
+  for (const preferred of COMFYUI_HAND_DETAILER_DETECTOR_MODEL_PREFERENCES) {
+    const matched = findOption(preferred, options);
+    if (matched) {
+      return matched;
+    }
+  }
+
+  return options.find((option) => option.toLowerCase().startsWith("bbox/") && option.toLowerCase().includes("hand"))
+    ?? options.find((option) => option.toLowerCase().includes("hand"))
+    ?? options.find((option) => option.toLowerCase().startsWith("bbox/"))
+    ?? options[0]
+    ?? null;
+}
+
+function shouldFallbackFromRequestedDetailerDetectorModel(value: string | undefined, defaultModel: string) {
+  return !value || normalizeOptionName(value) === normalizeOptionName(defaultModel);
 }
 
 function findPreferredOpenPoseControlNetModel(options: string[]) {
@@ -255,6 +273,91 @@ function validateDimension(value: number | undefined, label: string, latentImage
   }
 }
 
+function validateDetailerAgainstObjectInfo({
+  defaultDetectorModel,
+  detailer,
+  errors,
+  findPreferredDetectorModel,
+  label,
+  objectInfo,
+  samplerOptions,
+  schedulerOptions,
+  ultralyticsDetectorOptions,
+}: {
+  defaultDetectorModel: string;
+  detailer: ComfyUiFaceDetailerConfig | undefined;
+  errors: string[];
+  findPreferredDetectorModel: (options: string[]) => string | null;
+  label: "FaceDetailer" | "HandDetailer";
+  objectInfo: unknown;
+  samplerOptions: string[];
+  schedulerOptions: string[];
+  ultralyticsDetectorOptions: string[];
+}): ComfyUiFaceDetailerConfig | undefined {
+  if (!detailer?.enabled) {
+    return detailer;
+  }
+
+  let resolvedDetailer = detailer;
+
+  if (!hasNodeInfo(objectInfo, "FaceDetailer")) {
+    errors.push(`FaceDetailer node is not available in ComfyUI. Install ComfyUI Impact Pack to use ${label}.`);
+  }
+
+  if (!hasNodeInfo(objectInfo, "UltralyticsDetectorProvider")) {
+    errors.push(`UltralyticsDetectorProvider node is not available in ComfyUI. Install ComfyUI Impact Subpack to use ${label}.`);
+  }
+
+  const detectorModelName = detailer.detectorModelName;
+  const requestedDetectorModel = shouldFallbackFromRequestedDetailerDetectorModel(detectorModelName, defaultDetectorModel)
+    ? (
+        detectorModelName
+          ? findOption(detectorModelName, ultralyticsDetectorOptions)
+          : null
+      ) ?? findPreferredDetectorModel(ultralyticsDetectorOptions)
+    : detectorModelName
+      ? findOption(detectorModelName, ultralyticsDetectorOptions)
+      : null;
+
+  if (!requestedDetectorModel) {
+    errors.push(
+      detailer.detectorModelName
+        ? `${label} detector model is not available in ComfyUI: ${detailer.detectorModelName}`
+        : `${label} detector model is not available in ComfyUI.`,
+    );
+  } else {
+    resolvedDetailer = {
+      ...resolvedDetailer,
+      detectorModelName: requestedDetectorModel,
+    };
+  }
+
+  const sampler = findSampler(detailer.samplerName, samplerOptions, schedulerOptions);
+  const samplerName = sampler.samplerName;
+  const requestedScheduler = detailer.scheduler
+    ? findOption(detailer.scheduler, schedulerOptions)
+    : null;
+  const scheduler = sampler.scheduler ?? requestedScheduler;
+
+  if (detailer.samplerName && !samplerName) {
+    errors.push(`${label} sampler is not available in ComfyUI: ${detailer.samplerName}`);
+  }
+
+  if (detailer.scheduler && !scheduler) {
+    errors.push(`${label} scheduler is not available in ComfyUI: ${detailer.scheduler}`);
+  }
+
+  if (samplerName || scheduler) {
+    resolvedDetailer = {
+      ...resolvedDetailer,
+      ...(samplerName ? { samplerName } : {}),
+      ...(scheduler ? { scheduler } : {}),
+    };
+  }
+
+  return resolvedDetailer;
+}
+
 export function validateComfyUiRequestAgainstObjectInfo(
   request: ComfyUiTextToImageRequest,
   objectInfo: unknown,
@@ -274,6 +377,7 @@ export function validateComfyUiRequestAgainstObjectInfo(
   const scheduler = sampler.scheduler ?? requestedScheduler;
   const latentImageNode = normalizeComfyUiLatentImageNode(request.latentImageNode);
   let faceDetailer = request.faceDetailer;
+  let handDetailer = request.handDetailer;
   const loras = (request.loras ?? []).map((lora, index) => {
     const loraName = findOption(lora.loraName, loraOptions);
     if (!loraName) {
@@ -306,62 +410,28 @@ export function validateComfyUiRequestAgainstObjectInfo(
     errors.push(`Latent image node is not available in ComfyUI: ${latentImageNode}`);
   }
 
-  if (request.faceDetailer?.enabled) {
-    if (!hasNodeInfo(objectInfo, "FaceDetailer")) {
-      errors.push("FaceDetailer node is not available in ComfyUI. Install ComfyUI Impact Pack to use FaceDetailer.");
-    }
-
-    if (!hasNodeInfo(objectInfo, "UltralyticsDetectorProvider")) {
-      errors.push("UltralyticsDetectorProvider node is not available in ComfyUI. Install ComfyUI Impact Subpack to use FaceDetailer.");
-    }
-
-    const detectorModelName = request.faceDetailer.detectorModelName;
-    const requestedDetectorModel = shouldFallbackFromRequestedFaceDetailerDetectorModel(detectorModelName)
-      ? (
-          detectorModelName
-            ? findOption(detectorModelName, ultralyticsDetectorOptions)
-            : null
-        ) ?? findPreferredFaceDetailerDetectorModel(ultralyticsDetectorOptions)
-      : detectorModelName
-        ? findOption(detectorModelName, ultralyticsDetectorOptions)
-        : null;
-
-    if (!requestedDetectorModel) {
-      errors.push(
-        request.faceDetailer.detectorModelName
-          ? `FaceDetailer detector model is not available in ComfyUI: ${request.faceDetailer.detectorModelName}`
-          : "FaceDetailer detector model is not available in ComfyUI.",
-      );
-    } else {
-      faceDetailer = {
-        ...request.faceDetailer,
-        detectorModelName: requestedDetectorModel,
-      };
-    }
-
-    const faceSampler = findSampler(request.faceDetailer.samplerName, samplerOptions, schedulerOptions);
-    const faceSamplerName = faceSampler.samplerName;
-    const requestedFaceScheduler = request.faceDetailer.scheduler
-      ? findOption(request.faceDetailer.scheduler, schedulerOptions)
-      : null;
-    const faceScheduler = faceSampler.scheduler ?? requestedFaceScheduler;
-
-    if (request.faceDetailer.samplerName && !faceSamplerName) {
-      errors.push(`FaceDetailer sampler is not available in ComfyUI: ${request.faceDetailer.samplerName}`);
-    }
-
-    if (request.faceDetailer.scheduler && !faceScheduler) {
-      errors.push(`FaceDetailer scheduler is not available in ComfyUI: ${request.faceDetailer.scheduler}`);
-    }
-
-    if (faceSamplerName || faceScheduler) {
-      faceDetailer = {
-        ...faceDetailer,
-        ...(faceSamplerName ? { samplerName: faceSamplerName } : {}),
-        ...(faceScheduler ? { scheduler: faceScheduler } : {}),
-      };
-    }
-  }
+  faceDetailer = validateDetailerAgainstObjectInfo({
+    defaultDetectorModel: DEFAULT_COMFYUI_FACE_DETAILER_DETECTOR_MODEL,
+    detailer: request.faceDetailer,
+    errors,
+    findPreferredDetectorModel: findPreferredFaceDetailerDetectorModel,
+    label: "FaceDetailer",
+    objectInfo,
+    samplerOptions,
+    schedulerOptions,
+    ultralyticsDetectorOptions,
+  });
+  handDetailer = validateDetailerAgainstObjectInfo({
+    defaultDetectorModel: DEFAULT_COMFYUI_HAND_DETAILER_DETECTOR_MODEL,
+    detailer: request.handDetailer,
+    errors,
+    findPreferredDetectorModel: findPreferredHandDetailerDetectorModel,
+    label: "HandDetailer",
+    objectInfo,
+    samplerOptions,
+    schedulerOptions,
+    ultralyticsDetectorOptions,
+  });
 
   let controlNets = getRequestControlNetUnits(request);
   if (controlNets.some((unit) => unit.enabled)) {
@@ -429,6 +499,7 @@ export function validateComfyUiRequestAgainstObjectInfo(
       scheduler: scheduler ?? request.scheduler,
       latentImageNode: latentImageNode ?? request.latentImageNode,
       faceDetailer,
+      handDetailer,
       controlNets,
       loras,
     },

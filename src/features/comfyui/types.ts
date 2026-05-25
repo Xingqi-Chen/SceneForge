@@ -46,6 +46,7 @@ export type ComfyUiTextToImageRequest = {
   promptWrapper?: ComfyUiPromptWrapper;
   outputPrefix?: string;
   faceDetailer?: ComfyUiFaceDetailerConfig;
+  handDetailer?: ComfyUiHandDetailerConfig;
   controlNet?: ComfyUiControlNetConfig;
   controlNets?: ComfyUiControlNetUnitConfig[];
 };
@@ -104,6 +105,8 @@ export type ComfyUiFaceDetailerConfig = {
   wildcard?: string;
 };
 
+export type ComfyUiHandDetailerConfig = ComfyUiFaceDetailerConfig;
+
 export type ComfyUiControlNetConfig = {
   enabled?: boolean;
   modelName?: string;
@@ -160,6 +163,7 @@ export type ResolvedComfyUiTextToImageRequest = {
   promptWrapper: ResolvedComfyUiPromptWrapper;
   outputPrefix: string;
   faceDetailer: ResolvedComfyUiFaceDetailerConfig;
+  handDetailer: ResolvedComfyUiHandDetailerConfig;
   controlNets: ResolvedComfyUiControlNetUnitConfig[];
 };
 
@@ -217,6 +221,8 @@ export type ResolvedComfyUiFaceDetailerConfig = {
   wildcard: string;
 };
 
+export type ResolvedComfyUiHandDetailerConfig = ResolvedComfyUiFaceDetailerConfig;
+
 export type ResolvedComfyUiControlNetConfig = {
   enabled: boolean;
   modelName: string;
@@ -260,6 +266,8 @@ export type BasicTextToImageNodeIds = {
   latentImage: string;
   sampler: string;
   vaeDecode: string;
+  handUltralyticsDetectorProvider?: string;
+  handDetailer?: string;
   ultralyticsDetectorProvider?: string;
   faceDetailer?: string;
   saveImage: string;

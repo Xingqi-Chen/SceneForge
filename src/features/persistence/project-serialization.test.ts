@@ -37,7 +37,7 @@ describe("project serialization", () => {
     expect(stripSharedPromptStateFromProject(parsed)).toEqual(stripSharedPromptStateFromProject(project));
   });
 
-  it("round-trips saved ComfyUI FaceDetailer parameters", () => {
+  it("round-trips saved ComfyUI FaceDetailer and HandDetailer parameters", () => {
     const project = createDefaultProject();
     project.settings.savedComfyUiGenerationParams = {
       cfg: 7,
@@ -68,6 +68,33 @@ describe("project serialization", () => {
         scheduler: "karras",
         steps: 18,
         wildcard: "[LAB] face",
+      },
+      handDetailer: {
+        bboxCropFactor: 2.8,
+        bboxDilation: 18,
+        bboxThreshold: 0.4,
+        cfg: 6,
+        cycle: 2,
+        denoise: 0.45,
+        enabled: true,
+        detectorModelName: "bbox/hand_yolov8s.pt",
+        dropSize: 20,
+        feather: 6,
+        forceInpaint: true,
+        guideSize: 576,
+        guideSizeFor: true,
+        maxSize: 1152,
+        noiseMask: true,
+        samBBoxExpansion: 8,
+        samDetectionHint: "center-1",
+        samDilation: 4,
+        samMaskHintThreshold: 0.64,
+        samMaskHintUseNegative: "False",
+        samThreshold: 0.9,
+        samplerName: "dpmpp_2m",
+        scheduler: "karras",
+        steps: 20,
+        wildcard: "[LAB] hand",
       },
       height: 1024,
       imageCount: 1,
@@ -115,6 +142,33 @@ describe("project serialization", () => {
       scheduler: "karras",
       steps: 18,
       wildcard: "[LAB] face",
+    });
+    expect(parsed.settings.savedComfyUiGenerationParams?.handDetailer).toEqual({
+      bboxCropFactor: 2.8,
+      bboxDilation: 18,
+      bboxThreshold: 0.4,
+      cfg: 6,
+      cycle: 2,
+      denoise: 0.45,
+      enabled: true,
+      detectorModelName: "bbox/hand_yolov8s.pt",
+      dropSize: 20,
+      feather: 6,
+      forceInpaint: true,
+      guideSize: 576,
+      guideSizeFor: true,
+      maxSize: 1152,
+      noiseMask: true,
+      samBBoxExpansion: 8,
+      samDetectionHint: "center-1",
+      samDilation: 4,
+      samMaskHintThreshold: 0.64,
+      samMaskHintUseNegative: "False",
+      samThreshold: 0.9,
+      samplerName: "dpmpp_2m",
+      scheduler: "karras",
+      steps: 20,
+      wildcard: "[LAB] hand",
     });
   });
 

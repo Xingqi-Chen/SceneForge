@@ -7,6 +7,7 @@ import type {
   ComfyUiLoraInput,
   ComfyUiTextToImageRequest,
   ResolvedComfyUiControlNetUnitConfig,
+  ResolvedComfyUiFaceDetailerConfig,
   ResolvedComfyUiInpaintRequest,
   ResolvedComfyUiTextToImageRequest,
 } from "./types";
@@ -19,6 +20,7 @@ import {
   COMFYUI_FACE_DETAILER_SAM_DETECTION_HINT_OPTIONS,
   COMFYUI_FACE_DETAILER_SAM_MASK_HINT_USE_NEGATIVE_OPTIONS,
   DEFAULT_COMFYUI_FACE_DETAILER_DETECTOR_MODEL,
+  DEFAULT_COMFYUI_HAND_DETAILER_DETECTOR_MODEL,
 } from "./face-detailer";
 import {
   DEFAULT_COMFYUI_INPAINT_DENOISE,
@@ -49,6 +51,15 @@ const DEFAULT_TEXT_TO_IMAGE_REQUEST = {
     cfg: 7,
     enabled: false,
     detectorModelName: DEFAULT_COMFYUI_FACE_DETAILER_DETECTOR_MODEL,
+    samplerName: "euler",
+    scheduler: "normal",
+    steps: 30,
+  },
+  handDetailer: {
+    ...COMFYUI_FACE_DETAILER_DEFAULTS,
+    cfg: 7,
+    enabled: false,
+    detectorModelName: DEFAULT_COMFYUI_HAND_DETAILER_DETECTOR_MODEL,
     samplerName: "euler",
     scheduler: "normal",
     steps: 30,
@@ -570,6 +581,14 @@ export function validateComfyUiTextToImageRequest(value: unknown): ComfyUiTextTo
     };
   }
 
+  const handDetailer = normalizeFaceDetailerConfig(value.handDetailer);
+  if (handDetailer === null) {
+    return {
+      ok: false,
+      message: "handDetailer must be a boolean or an object with valid HandDetailer option values when provided.",
+    };
+  }
+
   const controlNet = normalizeControlNetConfig(value.controlNet);
   if (controlNet === null) {
     return {
@@ -713,6 +732,7 @@ export function validateComfyUiTextToImageRequest(value: unknown): ComfyUiTextTo
       promptWrapper,
       outputPrefix: value.outputPrefix?.trim(),
       faceDetailer,
+      handDetailer,
       controlNet,
       controlNets,
     },
@@ -942,6 +962,40 @@ function resolveControlNetUnits(request: ComfyUiTextToImageRequest): ResolvedCom
     .map(toResolvedControlNetUnit);
 }
 
+function resolveDetailerConfig(
+  detailer: ComfyUiFaceDetailerConfig | undefined,
+  request: Pick<ComfyUiTextToImageRequest, "cfg" | "samplerName" | "scheduler" | "steps">,
+  defaults: ResolvedComfyUiFaceDetailerConfig,
+): ResolvedComfyUiFaceDetailerConfig {
+  return {
+    bboxCropFactor: detailer?.bboxCropFactor ?? defaults.bboxCropFactor,
+    bboxDilation: detailer?.bboxDilation ?? defaults.bboxDilation,
+    bboxThreshold: detailer?.bboxThreshold ?? defaults.bboxThreshold,
+    cfg: detailer?.cfg ?? request.cfg ?? defaults.cfg,
+    cycle: detailer?.cycle ?? defaults.cycle,
+    denoise: detailer?.denoise ?? defaults.denoise,
+    enabled: detailer?.enabled ?? defaults.enabled,
+    detectorModelName: getString(detailer?.detectorModelName, defaults.detectorModelName),
+    dropSize: detailer?.dropSize ?? defaults.dropSize,
+    feather: detailer?.feather ?? defaults.feather,
+    forceInpaint: detailer?.forceInpaint ?? defaults.forceInpaint,
+    guideSize: detailer?.guideSize ?? defaults.guideSize,
+    guideSizeFor: detailer?.guideSizeFor ?? defaults.guideSizeFor,
+    maxSize: detailer?.maxSize ?? defaults.maxSize,
+    noiseMask: detailer?.noiseMask ?? defaults.noiseMask,
+    samBBoxExpansion: detailer?.samBBoxExpansion ?? defaults.samBBoxExpansion,
+    samDetectionHint: detailer?.samDetectionHint ?? defaults.samDetectionHint,
+    samDilation: detailer?.samDilation ?? defaults.samDilation,
+    samMaskHintThreshold: detailer?.samMaskHintThreshold ?? defaults.samMaskHintThreshold,
+    samMaskHintUseNegative: detailer?.samMaskHintUseNegative ?? defaults.samMaskHintUseNegative,
+    samThreshold: detailer?.samThreshold ?? defaults.samThreshold,
+    samplerName: getString(detailer?.samplerName, getString(request.samplerName, defaults.samplerName)),
+    scheduler: getString(detailer?.scheduler, getString(request.scheduler, defaults.scheduler)),
+    steps: detailer?.steps ?? request.steps ?? defaults.steps,
+    wildcard: detailer?.wildcard ?? defaults.wildcard,
+  };
+}
+
 export function resolveComfyUiTextToImageRequest(
   request: ComfyUiTextToImageRequest,
 ): ResolvedComfyUiTextToImageRequest {
@@ -969,38 +1023,8 @@ export function resolveComfyUiTextToImageRequest(
       negativePrefix: request.promptWrapper?.negativePrefix ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.promptWrapper.negativePrefix,
     },
     outputPrefix: getString(request.outputPrefix, DEFAULT_TEXT_TO_IMAGE_REQUEST.outputPrefix),
-    faceDetailer: {
-      bboxCropFactor: request.faceDetailer?.bboxCropFactor ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.faceDetailer.bboxCropFactor,
-      bboxDilation: request.faceDetailer?.bboxDilation ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.faceDetailer.bboxDilation,
-      bboxThreshold: request.faceDetailer?.bboxThreshold ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.faceDetailer.bboxThreshold,
-      cfg: request.faceDetailer?.cfg ?? request.cfg ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.cfg,
-      cycle: request.faceDetailer?.cycle ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.faceDetailer.cycle,
-      denoise: request.faceDetailer?.denoise ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.faceDetailer.denoise,
-      enabled: request.faceDetailer?.enabled ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.faceDetailer.enabled,
-      detectorModelName: getString(
-        request.faceDetailer?.detectorModelName,
-        DEFAULT_TEXT_TO_IMAGE_REQUEST.faceDetailer.detectorModelName,
-      ),
-      dropSize: request.faceDetailer?.dropSize ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.faceDetailer.dropSize,
-      feather: request.faceDetailer?.feather ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.faceDetailer.feather,
-      forceInpaint: request.faceDetailer?.forceInpaint ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.faceDetailer.forceInpaint,
-      guideSize: request.faceDetailer?.guideSize ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.faceDetailer.guideSize,
-      guideSizeFor: request.faceDetailer?.guideSizeFor ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.faceDetailer.guideSizeFor,
-      maxSize: request.faceDetailer?.maxSize ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.faceDetailer.maxSize,
-      noiseMask: request.faceDetailer?.noiseMask ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.faceDetailer.noiseMask,
-      samBBoxExpansion: request.faceDetailer?.samBBoxExpansion ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.faceDetailer.samBBoxExpansion,
-      samDetectionHint: request.faceDetailer?.samDetectionHint ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.faceDetailer.samDetectionHint,
-      samDilation: request.faceDetailer?.samDilation ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.faceDetailer.samDilation,
-      samMaskHintThreshold: request.faceDetailer?.samMaskHintThreshold
-        ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.faceDetailer.samMaskHintThreshold,
-      samMaskHintUseNegative: request.faceDetailer?.samMaskHintUseNegative
-        ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.faceDetailer.samMaskHintUseNegative,
-      samThreshold: request.faceDetailer?.samThreshold ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.faceDetailer.samThreshold,
-      samplerName: getString(request.faceDetailer?.samplerName, getString(request.samplerName, DEFAULT_TEXT_TO_IMAGE_REQUEST.samplerName)),
-      scheduler: getString(request.faceDetailer?.scheduler, getString(request.scheduler, DEFAULT_TEXT_TO_IMAGE_REQUEST.scheduler)),
-      steps: request.faceDetailer?.steps ?? request.steps ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.steps,
-      wildcard: request.faceDetailer?.wildcard ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.faceDetailer.wildcard,
-    },
+    faceDetailer: resolveDetailerConfig(request.faceDetailer, request, DEFAULT_TEXT_TO_IMAGE_REQUEST.faceDetailer),
+    handDetailer: resolveDetailerConfig(request.handDetailer, request, DEFAULT_TEXT_TO_IMAGE_REQUEST.handDetailer),
     controlNets: resolveControlNetUnits(request),
   };
 }

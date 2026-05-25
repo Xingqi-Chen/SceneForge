@@ -35,7 +35,7 @@ const objectInfoWithFaceDetailer = {
   UltralyticsDetectorProvider: {
     input: {
       required: {
-        model_name: [["bbox/face_yolov8s.pt"], {}],
+        model_name: [["bbox/face_yolov8s.pt", "bbox/hand_yolov8s.pt"], {}],
       },
     },
   },
@@ -238,6 +238,77 @@ describe("ComfyUI generate image route", () => {
         faceDetailer: {
           enabled: true,
           detectorModelName: "bbox/face_yolov8s.pt",
+        },
+      },
+    });
+  });
+
+  it("queues HandDetailer before FaceDetailer when both are enabled", async () => {
+    process.env.COMFYUI_BASE_URL = "http://comfyui.test";
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      if (input === "http://comfyui.test/object_info") {
+        return Response.json(objectInfoWithFaceDetailer);
+      }
+
+      expect(input).toBe("http://comfyui.test/prompt");
+      const body = JSON.parse(String(init?.body));
+      expect(body.prompt["7"].class_type).toBe("UltralyticsDetectorProvider");
+      expect(body.prompt["7"].inputs.model_name).toBe("bbox/hand_yolov8s.pt");
+      expect(body.prompt["8"].class_type).toBe("FaceDetailer");
+      expect(body.prompt["8"]._meta.title).toBe("HandDetailer");
+      expect(body.prompt["8"].inputs.image).toEqual(["6", 0]);
+      expect(body.prompt["9"].class_type).toBe("UltralyticsDetectorProvider");
+      expect(body.prompt["9"].inputs.model_name).toBe("bbox/face_yolov8s.pt");
+      expect(body.prompt["10"].class_type).toBe("FaceDetailer");
+      expect(body.prompt["10"].inputs.image).toEqual(["8", 0]);
+      expect(body.prompt["11"].inputs.images).toEqual(["10", 0]);
+
+      return Response.json({
+        prompt_id: "prompt-detailers",
+        number: 11,
+        node_errors: {},
+      });
+    });
+
+    const response = await POST(
+      new Request("http://localhost/api/comfyui/generate-image", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          checkpointName: "model.safetensors",
+          positivePrompt: "a scene",
+          seed: 123,
+          faceDetailer: {
+            enabled: true,
+          },
+          handDetailer: {
+            enabled: true,
+          },
+        }),
+      }),
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(payload).toMatchObject({
+      promptId: "prompt-detailers",
+      outputNodeId: "11",
+      nodeIds: {
+        handUltralyticsDetectorProvider: "7",
+        handDetailer: "8",
+        ultralyticsDetectorProvider: "9",
+        faceDetailer: "10",
+        saveImage: "11",
+      },
+      request: {
+        faceDetailer: {
+          enabled: true,
+          detectorModelName: "bbox/face_yolov8s.pt",
+        },
+        handDetailer: {
+          enabled: true,
+          detectorModelName: "bbox/hand_yolov8s.pt",
         },
       },
     });

@@ -35,7 +35,7 @@ const objectInfo = {
   UltralyticsDetectorProvider: {
     input: {
       required: {
-        model_name: [["bbox/face_yolov8s.pt", "bbox/person_yolov8n.pt"], {}],
+        model_name: [["bbox/face_yolov8s.pt", "bbox/hand_yolov8s.pt", "bbox/person_yolov8n.pt"], {}],
       },
     },
   },
@@ -301,6 +301,43 @@ describe("ComfyUI object info helpers", () => {
     ).toEqual(["FaceDetailer detector model is not available in ComfyUI: missing.pt"]);
   });
 
+  it("validates and normalizes HandDetailer detector settings before queueing", () => {
+    expect(
+      validateComfyUiRequestAgainstObjectInfo(
+        {
+          checkpointName: "model.safetensors",
+          positivePrompt: "scene",
+          handDetailer: {
+            enabled: true,
+          },
+        },
+        objectInfo,
+      ),
+    ).toMatchObject({
+      errors: [],
+      request: {
+        handDetailer: {
+          enabled: true,
+          detectorModelName: "bbox/hand_yolov8s.pt",
+        },
+      },
+    });
+
+    expect(
+      validateComfyUiRequestAgainstObjectInfo(
+        {
+          checkpointName: "model.safetensors",
+          positivePrompt: "scene",
+          handDetailer: {
+            enabled: true,
+            detectorModelName: "missing.pt",
+          },
+        },
+        objectInfo,
+      ).errors,
+    ).toEqual(["HandDetailer detector model is not available in ComfyUI: missing.pt"]);
+  });
+
   it("validates and normalizes ControlNet OpenPose settings before queueing", () => {
     expect(
       validateComfyUiRequestAgainstObjectInfo(
@@ -496,6 +533,29 @@ describe("ComfyUI object info helpers", () => {
       "FaceDetailer node is not available in ComfyUI. Install ComfyUI Impact Pack to use FaceDetailer.",
       "UltralyticsDetectorProvider node is not available in ComfyUI. Install ComfyUI Impact Subpack to use FaceDetailer.",
       "FaceDetailer detector model is not available in ComfyUI.",
+    ]);
+  });
+
+  it("reports missing HandDetailer custom nodes before queueing", () => {
+    expect(
+      validateComfyUiRequestAgainstObjectInfo(
+        {
+          checkpointName: "model.safetensors",
+          positivePrompt: "scene",
+          handDetailer: {
+            enabled: true,
+          },
+        },
+        {
+          ...objectInfo,
+          FaceDetailer: undefined,
+          UltralyticsDetectorProvider: undefined,
+        },
+      ).errors,
+    ).toEqual([
+      "FaceDetailer node is not available in ComfyUI. Install ComfyUI Impact Pack to use HandDetailer.",
+      "UltralyticsDetectorProvider node is not available in ComfyUI. Install ComfyUI Impact Subpack to use HandDetailer.",
+      "HandDetailer detector model is not available in ComfyUI.",
     ]);
   });
 

@@ -30,6 +30,7 @@ import {
   COMFYUI_FACE_DETAILER_SAM_DETECTION_HINT_OPTIONS,
   COMFYUI_FACE_DETAILER_SAM_MASK_HINT_USE_NEGATIVE_OPTIONS,
   DEFAULT_COMFYUI_FACE_DETAILER_DETECTOR_MODEL,
+  DEFAULT_COMFYUI_HAND_DETAILER_DETECTOR_MODEL,
 } from "@/features/comfyui/face-detailer";
 import { migrateAuthoringJoints3DToStickFigure } from "@/features/editor/stick-figure-3d/migrate-legacy-joints3d";
 import { sanitizeStickFigurePoseV1 } from "@/features/editor/stick-figure-3d/stick-figure-pose-io";
@@ -771,6 +772,101 @@ function sanitizeOptionValue<T extends string>(
   return typeof raw === "string" ? options.find((option) => option.value === raw)?.value ?? fallback : fallback;
 }
 
+function sanitizeSavedDetailerParams(rawDetailer: unknown, rawGenerationParams: Record<string, unknown>, defaultDetectorModel: string) {
+  if (!isRecord(rawDetailer)) {
+    return undefined;
+  }
+
+  return {
+    bboxCropFactor: sanitizeNumberInRangeLoose(
+      rawDetailer.bboxCropFactor,
+      COMFYUI_FACE_DETAILER_DEFAULTS.bboxCropFactor,
+      1,
+      10,
+    ),
+    bboxDilation: sanitizeIntegerInRangeLoose(
+      rawDetailer.bboxDilation,
+      COMFYUI_FACE_DETAILER_DEFAULTS.bboxDilation,
+      -512,
+      512,
+    ),
+    bboxThreshold: sanitizeNumberInRangeLoose(
+      rawDetailer.bboxThreshold,
+      COMFYUI_FACE_DETAILER_DEFAULTS.bboxThreshold,
+      0,
+      1,
+    ),
+    cfg: sanitizeFiniteNumber(rawDetailer.cfg, sanitizeFiniteNumber(rawGenerationParams.cfg, 7)),
+    cycle: sanitizeIntegerInRangeLoose(rawDetailer.cycle, COMFYUI_FACE_DETAILER_DEFAULTS.cycle, 1, 10),
+    denoise: sanitizeNumberInRangeLoose(rawDetailer.denoise, COMFYUI_FACE_DETAILER_DEFAULTS.denoise, 0, 1),
+    enabled: rawDetailer.enabled === true,
+    detectorModelName: typeof rawDetailer.detectorModelName === "string" && rawDetailer.detectorModelName.trim()
+      ? rawDetailer.detectorModelName.trim()
+      : defaultDetectorModel,
+    dropSize: sanitizeIntegerInRangeLoose(rawDetailer.dropSize, COMFYUI_FACE_DETAILER_DEFAULTS.dropSize, 1, 16384),
+    feather: sanitizeIntegerInRangeLoose(rawDetailer.feather, COMFYUI_FACE_DETAILER_DEFAULTS.feather, 0, 100),
+    forceInpaint: typeof rawDetailer.forceInpaint === "boolean"
+      ? rawDetailer.forceInpaint
+      : COMFYUI_FACE_DETAILER_DEFAULTS.forceInpaint,
+    guideSize: sanitizeNumberInRangeLoose(rawDetailer.guideSize, COMFYUI_FACE_DETAILER_DEFAULTS.guideSize, 64, 16384),
+    guideSizeFor: typeof rawDetailer.guideSizeFor === "boolean"
+      ? rawDetailer.guideSizeFor
+      : COMFYUI_FACE_DETAILER_DEFAULTS.guideSizeFor,
+    maxSize: sanitizeNumberInRangeLoose(rawDetailer.maxSize, COMFYUI_FACE_DETAILER_DEFAULTS.maxSize, 64, 16384),
+    noiseMask: typeof rawDetailer.noiseMask === "boolean"
+      ? rawDetailer.noiseMask
+      : COMFYUI_FACE_DETAILER_DEFAULTS.noiseMask,
+    samBBoxExpansion: sanitizeIntegerInRangeLoose(
+      rawDetailer.samBBoxExpansion,
+      COMFYUI_FACE_DETAILER_DEFAULTS.samBBoxExpansion,
+      0,
+      1000,
+    ),
+    samDetectionHint: sanitizeOptionValue(
+      rawDetailer.samDetectionHint,
+      COMFYUI_FACE_DETAILER_DEFAULTS.samDetectionHint,
+      COMFYUI_FACE_DETAILER_SAM_DETECTION_HINT_OPTIONS,
+    ),
+    samDilation: sanitizeIntegerInRangeLoose(
+      rawDetailer.samDilation,
+      COMFYUI_FACE_DETAILER_DEFAULTS.samDilation,
+      -512,
+      512,
+    ),
+    samMaskHintThreshold: sanitizeNumberInRangeLoose(
+      rawDetailer.samMaskHintThreshold,
+      COMFYUI_FACE_DETAILER_DEFAULTS.samMaskHintThreshold,
+      0,
+      1,
+    ),
+    samMaskHintUseNegative: sanitizeOptionValue(
+      rawDetailer.samMaskHintUseNegative,
+      COMFYUI_FACE_DETAILER_DEFAULTS.samMaskHintUseNegative,
+      COMFYUI_FACE_DETAILER_SAM_MASK_HINT_USE_NEGATIVE_OPTIONS,
+    ),
+    samThreshold: sanitizeNumberInRangeLoose(
+      rawDetailer.samThreshold,
+      COMFYUI_FACE_DETAILER_DEFAULTS.samThreshold,
+      0,
+      1,
+    ),
+    samplerName: typeof rawDetailer.samplerName === "string" && rawDetailer.samplerName.trim()
+      ? rawDetailer.samplerName.trim()
+      : typeof rawGenerationParams.samplerName === "string" && rawGenerationParams.samplerName.trim()
+        ? rawGenerationParams.samplerName.trim()
+        : "euler",
+    scheduler: typeof rawDetailer.scheduler === "string" && rawDetailer.scheduler.trim()
+      ? rawDetailer.scheduler.trim()
+      : typeof rawGenerationParams.scheduler === "string" && rawGenerationParams.scheduler.trim()
+        ? rawGenerationParams.scheduler.trim()
+        : "normal",
+    steps: sanitizePositiveInteger(rawDetailer.steps, sanitizePositiveInteger(rawGenerationParams.steps, 30)),
+    wildcard: typeof rawDetailer.wildcard === "string"
+      ? rawDetailer.wildcard
+      : COMFYUI_FACE_DETAILER_DEFAULTS.wildcard,
+  };
+}
+
 function sanitizeSavedComfyUiGenerationParams(
   raw: unknown,
 ): SceneForgeProject["settings"]["savedComfyUiGenerationParams"] | undefined {
@@ -801,96 +897,16 @@ function sanitizeSavedComfyUiGenerationParams(
           : {}),
       }
     : undefined;
-  const faceDetailer = isRecord(raw.faceDetailer)
-    ? {
-        bboxCropFactor: sanitizeNumberInRangeLoose(
-          raw.faceDetailer.bboxCropFactor,
-          COMFYUI_FACE_DETAILER_DEFAULTS.bboxCropFactor,
-          1,
-          10,
-        ),
-        bboxDilation: sanitizeIntegerInRangeLoose(
-          raw.faceDetailer.bboxDilation,
-          COMFYUI_FACE_DETAILER_DEFAULTS.bboxDilation,
-          -512,
-          512,
-        ),
-        bboxThreshold: sanitizeNumberInRangeLoose(
-          raw.faceDetailer.bboxThreshold,
-          COMFYUI_FACE_DETAILER_DEFAULTS.bboxThreshold,
-          0,
-          1,
-        ),
-        cfg: sanitizeFiniteNumber(raw.faceDetailer.cfg, sanitizeFiniteNumber(raw.cfg, 7)),
-        cycle: sanitizeIntegerInRangeLoose(raw.faceDetailer.cycle, COMFYUI_FACE_DETAILER_DEFAULTS.cycle, 1, 10),
-        denoise: sanitizeNumberInRangeLoose(raw.faceDetailer.denoise, COMFYUI_FACE_DETAILER_DEFAULTS.denoise, 0, 1),
-        enabled: raw.faceDetailer.enabled === true,
-        detectorModelName: typeof raw.faceDetailer.detectorModelName === "string" && raw.faceDetailer.detectorModelName.trim()
-          ? raw.faceDetailer.detectorModelName.trim()
-          : DEFAULT_COMFYUI_FACE_DETAILER_DETECTOR_MODEL,
-        dropSize: sanitizeIntegerInRangeLoose(raw.faceDetailer.dropSize, COMFYUI_FACE_DETAILER_DEFAULTS.dropSize, 1, 16384),
-        feather: sanitizeIntegerInRangeLoose(raw.faceDetailer.feather, COMFYUI_FACE_DETAILER_DEFAULTS.feather, 0, 100),
-        forceInpaint: typeof raw.faceDetailer.forceInpaint === "boolean"
-          ? raw.faceDetailer.forceInpaint
-          : COMFYUI_FACE_DETAILER_DEFAULTS.forceInpaint,
-        guideSize: sanitizeNumberInRangeLoose(raw.faceDetailer.guideSize, COMFYUI_FACE_DETAILER_DEFAULTS.guideSize, 64, 16384),
-        guideSizeFor: typeof raw.faceDetailer.guideSizeFor === "boolean"
-          ? raw.faceDetailer.guideSizeFor
-          : COMFYUI_FACE_DETAILER_DEFAULTS.guideSizeFor,
-        maxSize: sanitizeNumberInRangeLoose(raw.faceDetailer.maxSize, COMFYUI_FACE_DETAILER_DEFAULTS.maxSize, 64, 16384),
-        noiseMask: typeof raw.faceDetailer.noiseMask === "boolean"
-          ? raw.faceDetailer.noiseMask
-          : COMFYUI_FACE_DETAILER_DEFAULTS.noiseMask,
-        samBBoxExpansion: sanitizeIntegerInRangeLoose(
-          raw.faceDetailer.samBBoxExpansion,
-          COMFYUI_FACE_DETAILER_DEFAULTS.samBBoxExpansion,
-          0,
-          1000,
-        ),
-        samDetectionHint: sanitizeOptionValue(
-          raw.faceDetailer.samDetectionHint,
-          COMFYUI_FACE_DETAILER_DEFAULTS.samDetectionHint,
-          COMFYUI_FACE_DETAILER_SAM_DETECTION_HINT_OPTIONS,
-        ),
-        samDilation: sanitizeIntegerInRangeLoose(
-          raw.faceDetailer.samDilation,
-          COMFYUI_FACE_DETAILER_DEFAULTS.samDilation,
-          -512,
-          512,
-        ),
-        samMaskHintThreshold: sanitizeNumberInRangeLoose(
-          raw.faceDetailer.samMaskHintThreshold,
-          COMFYUI_FACE_DETAILER_DEFAULTS.samMaskHintThreshold,
-          0,
-          1,
-        ),
-        samMaskHintUseNegative: sanitizeOptionValue(
-          raw.faceDetailer.samMaskHintUseNegative,
-          COMFYUI_FACE_DETAILER_DEFAULTS.samMaskHintUseNegative,
-          COMFYUI_FACE_DETAILER_SAM_MASK_HINT_USE_NEGATIVE_OPTIONS,
-        ),
-        samThreshold: sanitizeNumberInRangeLoose(
-          raw.faceDetailer.samThreshold,
-          COMFYUI_FACE_DETAILER_DEFAULTS.samThreshold,
-          0,
-          1,
-        ),
-        samplerName: typeof raw.faceDetailer.samplerName === "string" && raw.faceDetailer.samplerName.trim()
-          ? raw.faceDetailer.samplerName.trim()
-          : typeof raw.samplerName === "string" && raw.samplerName.trim()
-            ? raw.samplerName.trim()
-            : "euler",
-        scheduler: typeof raw.faceDetailer.scheduler === "string" && raw.faceDetailer.scheduler.trim()
-          ? raw.faceDetailer.scheduler.trim()
-          : typeof raw.scheduler === "string" && raw.scheduler.trim()
-            ? raw.scheduler.trim()
-            : "normal",
-        steps: sanitizePositiveInteger(raw.faceDetailer.steps, sanitizePositiveInteger(raw.steps, 30)),
-        wildcard: typeof raw.faceDetailer.wildcard === "string"
-          ? raw.faceDetailer.wildcard
-          : COMFYUI_FACE_DETAILER_DEFAULTS.wildcard,
-      }
-    : undefined;
+  const faceDetailer = sanitizeSavedDetailerParams(
+    raw.faceDetailer,
+    raw,
+    DEFAULT_COMFYUI_FACE_DETAILER_DETECTOR_MODEL,
+  );
+  const handDetailer = sanitizeSavedDetailerParams(
+    raw.handDetailer,
+    raw,
+    DEFAULT_COMFYUI_HAND_DETAILER_DETECTOR_MODEL,
+  );
   const loras = Array.isArray(raw.loras)
     ? raw.loras.flatMap((lora) => {
         if (!isRecord(lora) || typeof lora.loraName !== "string" || !lora.loraName.trim()) {
@@ -931,6 +947,7 @@ function sanitizeSavedComfyUiGenerationParams(
     ...(inpaint ? { inpaint } : {}),
     outputPrefix: typeof raw.outputPrefix === "string" && raw.outputPrefix.trim() ? raw.outputPrefix.trim() : "SceneForge",
     ...(faceDetailer ? { faceDetailer } : {}),
+    ...(handDetailer ? { handDetailer } : {}),
     loras,
     savedAt: typeof raw.savedAt === "string" && raw.savedAt.trim()
       ? raw.savedAt

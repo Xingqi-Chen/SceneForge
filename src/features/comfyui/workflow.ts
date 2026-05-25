@@ -7,6 +7,7 @@ import type {
   ComfyUiTextToImageRequest,
   ComfyUiWorkflow,
   ComfyUiWorkflowNode,
+  ResolvedComfyUiFaceDetailerConfig,
 } from "./types";
 import { getComfyUiLatentImageNodeTitle } from "./latent-image-node";
 import { resolveComfyUiInpaintRequest, resolveComfyUiTextToImageRequest } from "./validation";
@@ -51,6 +52,83 @@ export class ComfyUiWorkflowBuilder {
 
 function applyPromptPrefix(prefix: string, prompt: string) {
   return prefix ? `${prefix}${prompt}` : prompt;
+}
+
+function addDetailerNode({
+  builder,
+  clipConnection,
+  config,
+  detectorTitle,
+  image,
+  modelConnection,
+  negativePrompt,
+  positivePrompt,
+  seed,
+  title,
+  vaeConnection,
+}: {
+  builder: ComfyUiWorkflowBuilder;
+  clipConnection: ComfyUiNodeConnection;
+  config: ResolvedComfyUiFaceDetailerConfig;
+  detectorTitle: string;
+  image: ComfyUiNodeConnection;
+  modelConnection: ComfyUiNodeConnection;
+  negativePrompt: string;
+  positivePrompt: string;
+  seed: number;
+  title: string;
+  vaeConnection: ComfyUiNodeConnection;
+}) {
+  const detector = builder.addNode(
+    "UltralyticsDetectorProvider",
+    {
+      model_name: config.detectorModelName,
+    },
+    detectorTitle,
+  );
+  const detailer = builder.addNode(
+    "FaceDetailer",
+    {
+      image,
+      model: modelConnection,
+      clip: clipConnection,
+      vae: vaeConnection,
+      guide_size: config.guideSize,
+      guide_size_for: config.guideSizeFor ? "bbox" : "crop_region",
+      max_size: config.maxSize,
+      seed,
+      steps: config.steps,
+      cfg: config.cfg,
+      sampler_name: config.samplerName,
+      scheduler: config.scheduler,
+      positive: builder.connect(positivePrompt, 0),
+      negative: builder.connect(negativePrompt, 0),
+      denoise: config.denoise,
+      feather: config.feather,
+      noise_mask: config.noiseMask,
+      force_inpaint: config.forceInpaint,
+      bbox_threshold: config.bboxThreshold,
+      bbox_dilation: config.bboxDilation,
+      bbox_crop_factor: config.bboxCropFactor,
+      sam_detection_hint: config.samDetectionHint,
+      sam_dilation: config.samDilation,
+      sam_threshold: config.samThreshold,
+      sam_bbox_expansion: config.samBBoxExpansion,
+      sam_mask_hint_threshold: config.samMaskHintThreshold,
+      sam_mask_hint_use_negative: config.samMaskHintUseNegative,
+      drop_size: config.dropSize,
+      bbox_detector: builder.connect(detector, 0),
+      wildcard: config.wildcard,
+      cycle: config.cycle,
+    },
+    title,
+  );
+
+  return {
+    detailer,
+    detector,
+    output: builder.connect(detailer, 0),
+  };
 }
 
 export function buildBasicTextToImageWorkflow(request: ComfyUiTextToImageRequest): BasicTextToImageWorkflow {
@@ -183,55 +261,47 @@ export function buildBasicTextToImageWorkflow(request: ComfyUiTextToImageRequest
     "Decode Image",
   );
   let outputImageConnection = builder.connect(vaeDecode, 0);
+  let handUltralyticsDetectorProvider: string | undefined;
+  let handDetailer: string | undefined;
   let ultralyticsDetectorProvider: string | undefined;
   let faceDetailer: string | undefined;
 
+  if (resolvedRequest.handDetailer.enabled) {
+    const handDetailerNodes = addDetailerNode({
+      builder,
+      clipConnection,
+      config: resolvedRequest.handDetailer,
+      detectorTitle: "Hand Detector",
+      image: outputImageConnection,
+      modelConnection,
+      negativePrompt,
+      positivePrompt,
+      seed: resolvedRequest.seed,
+      title: "HandDetailer",
+      vaeConnection,
+    });
+    handUltralyticsDetectorProvider = handDetailerNodes.detector;
+    handDetailer = handDetailerNodes.detailer;
+    outputImageConnection = handDetailerNodes.output;
+  }
+
   if (resolvedRequest.faceDetailer.enabled) {
-    ultralyticsDetectorProvider = builder.addNode(
-      "UltralyticsDetectorProvider",
-      {
-        model_name: resolvedRequest.faceDetailer.detectorModelName,
-      },
-      "Face Detector",
-    );
-    faceDetailer = builder.addNode(
-      "FaceDetailer",
-      {
-        image: outputImageConnection,
-        model: modelConnection,
-        clip: clipConnection,
-        vae: vaeConnection,
-        guide_size: resolvedRequest.faceDetailer.guideSize,
-        guide_size_for: resolvedRequest.faceDetailer.guideSizeFor ? "bbox" : "crop_region",
-        max_size: resolvedRequest.faceDetailer.maxSize,
-        seed: resolvedRequest.seed,
-        steps: resolvedRequest.faceDetailer.steps,
-        cfg: resolvedRequest.faceDetailer.cfg,
-        sampler_name: resolvedRequest.faceDetailer.samplerName,
-        scheduler: resolvedRequest.faceDetailer.scheduler,
-        positive: builder.connect(positivePrompt, 0),
-        negative: builder.connect(negativePrompt, 0),
-        denoise: resolvedRequest.faceDetailer.denoise,
-        feather: resolvedRequest.faceDetailer.feather,
-        noise_mask: resolvedRequest.faceDetailer.noiseMask,
-        force_inpaint: resolvedRequest.faceDetailer.forceInpaint,
-        bbox_threshold: resolvedRequest.faceDetailer.bboxThreshold,
-        bbox_dilation: resolvedRequest.faceDetailer.bboxDilation,
-        bbox_crop_factor: resolvedRequest.faceDetailer.bboxCropFactor,
-        sam_detection_hint: resolvedRequest.faceDetailer.samDetectionHint,
-        sam_dilation: resolvedRequest.faceDetailer.samDilation,
-        sam_threshold: resolvedRequest.faceDetailer.samThreshold,
-        sam_bbox_expansion: resolvedRequest.faceDetailer.samBBoxExpansion,
-        sam_mask_hint_threshold: resolvedRequest.faceDetailer.samMaskHintThreshold,
-        sam_mask_hint_use_negative: resolvedRequest.faceDetailer.samMaskHintUseNegative,
-        drop_size: resolvedRequest.faceDetailer.dropSize,
-        bbox_detector: builder.connect(ultralyticsDetectorProvider, 0),
-        wildcard: resolvedRequest.faceDetailer.wildcard,
-        cycle: resolvedRequest.faceDetailer.cycle,
-      },
-      "FaceDetailer",
-    );
-    outputImageConnection = builder.connect(faceDetailer, 0);
+    const faceDetailerNodes = addDetailerNode({
+      builder,
+      clipConnection,
+      config: resolvedRequest.faceDetailer,
+      detectorTitle: "Face Detector",
+      image: outputImageConnection,
+      modelConnection,
+      negativePrompt,
+      positivePrompt,
+      seed: resolvedRequest.seed,
+      title: "FaceDetailer",
+      vaeConnection,
+    });
+    ultralyticsDetectorProvider = faceDetailerNodes.detector;
+    faceDetailer = faceDetailerNodes.detailer;
+    outputImageConnection = faceDetailerNodes.output;
   }
 
   const saveImage = builder.addNode(
@@ -257,6 +327,8 @@ export function buildBasicTextToImageWorkflow(request: ComfyUiTextToImageRequest
       latentImage,
       sampler,
       vaeDecode,
+      ...(handUltralyticsDetectorProvider ? { handUltralyticsDetectorProvider } : {}),
+      ...(handDetailer ? { handDetailer } : {}),
       ...(ultralyticsDetectorProvider ? { ultralyticsDetectorProvider } : {}),
       ...(faceDetailer ? { faceDetailer } : {}),
       saveImage,

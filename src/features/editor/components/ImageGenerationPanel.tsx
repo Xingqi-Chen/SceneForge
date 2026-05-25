@@ -33,6 +33,7 @@ import {
   COMFYUI_FACE_DETAILER_SAM_MASK_HINT_USE_NEGATIVE_OPTIONS,
   COMFYUI_INPAINT_MODE_OPTIONS,
   DEFAULT_COMFYUI_FACE_DETAILER_DETECTOR_MODEL,
+  DEFAULT_COMFYUI_HAND_DETAILER_DETECTOR_MODEL,
   DEFAULT_COMFYUI_INPAINT_DENOISE,
   DEFAULT_COMFYUI_INPAINT_GROW_MASK_BY,
   DEFAULT_COMFYUI_INPAINT_MODE,
@@ -160,11 +161,12 @@ type GenerationDraftInpaint = {
   mode: ComfyUiInpaintMode;
 };
 
-type GenerationDraft = Required<Omit<ComfyUiTextToImageRequest, "loras" | "promptWrapper" | "faceDetailer" | "controlNet" | "controlNets">> & {
+type GenerationDraft = Required<Omit<ComfyUiTextToImageRequest, "loras" | "promptWrapper" | "faceDetailer" | "handDetailer" | "controlNet" | "controlNets">> & {
   loras: GenerationDraftLora[];
   imageCount: number;
   promptWrapper: Required<NonNullable<ComfyUiTextToImageRequest["promptWrapper"]>>;
   faceDetailer: Required<NonNullable<ComfyUiTextToImageRequest["faceDetailer"]>>;
+  handDetailer: Required<NonNullable<ComfyUiTextToImageRequest["handDetailer"]>>;
   controlNets: GenerationDraftControlNets;
   inpaint: GenerationDraftInpaint;
   seedMode: ComfyUiGenerationSeedMode;
@@ -580,6 +582,41 @@ function createDraftInpaint(savedParameters?: SavedComfyUiGenerationParams | nul
   };
 }
 
+function createDraftDetailer(
+  detailer: ComfyUiTextToImageRequest["faceDetailer"] | undefined,
+  request: ComfyUiTextToImageRequest,
+  samplerSettings: ReturnType<typeof normalizeComfyUiSamplerSettings>,
+  defaultDetectorModel: string,
+): GenerationDraft["faceDetailer"] {
+  return {
+    bboxCropFactor: detailer?.bboxCropFactor ?? COMFYUI_FACE_DETAILER_DEFAULTS.bboxCropFactor,
+    bboxDilation: detailer?.bboxDilation ?? COMFYUI_FACE_DETAILER_DEFAULTS.bboxDilation,
+    bboxThreshold: detailer?.bboxThreshold ?? COMFYUI_FACE_DETAILER_DEFAULTS.bboxThreshold,
+    cfg: detailer?.cfg ?? request.cfg ?? 7,
+    cycle: detailer?.cycle ?? COMFYUI_FACE_DETAILER_DEFAULTS.cycle,
+    denoise: detailer?.denoise ?? COMFYUI_FACE_DETAILER_DEFAULTS.denoise,
+    enabled: detailer?.enabled ?? false,
+    detectorModelName: detailer?.detectorModelName ?? defaultDetectorModel,
+    dropSize: detailer?.dropSize ?? COMFYUI_FACE_DETAILER_DEFAULTS.dropSize,
+    feather: detailer?.feather ?? COMFYUI_FACE_DETAILER_DEFAULTS.feather,
+    forceInpaint: detailer?.forceInpaint ?? COMFYUI_FACE_DETAILER_DEFAULTS.forceInpaint,
+    guideSize: detailer?.guideSize ?? COMFYUI_FACE_DETAILER_DEFAULTS.guideSize,
+    guideSizeFor: detailer?.guideSizeFor ?? COMFYUI_FACE_DETAILER_DEFAULTS.guideSizeFor,
+    maxSize: detailer?.maxSize ?? COMFYUI_FACE_DETAILER_DEFAULTS.maxSize,
+    noiseMask: detailer?.noiseMask ?? COMFYUI_FACE_DETAILER_DEFAULTS.noiseMask,
+    samBBoxExpansion: detailer?.samBBoxExpansion ?? COMFYUI_FACE_DETAILER_DEFAULTS.samBBoxExpansion,
+    samDetectionHint: detailer?.samDetectionHint ?? COMFYUI_FACE_DETAILER_DEFAULTS.samDetectionHint,
+    samDilation: detailer?.samDilation ?? COMFYUI_FACE_DETAILER_DEFAULTS.samDilation,
+    samMaskHintThreshold: detailer?.samMaskHintThreshold ?? COMFYUI_FACE_DETAILER_DEFAULTS.samMaskHintThreshold,
+    samMaskHintUseNegative: detailer?.samMaskHintUseNegative ?? COMFYUI_FACE_DETAILER_DEFAULTS.samMaskHintUseNegative,
+    samThreshold: detailer?.samThreshold ?? COMFYUI_FACE_DETAILER_DEFAULTS.samThreshold,
+    samplerName: detailer?.samplerName ?? samplerSettings.samplerName ?? "euler",
+    scheduler: detailer?.scheduler ?? samplerSettings.scheduler ?? "normal",
+    steps: detailer?.steps ?? request.steps ?? 30,
+    wildcard: detailer?.wildcard ?? COMFYUI_FACE_DETAILER_DEFAULTS.wildcard,
+  };
+}
+
 function toDraft(
   request: ComfyUiTextToImageRequest,
   loraSettings?: ComfyUiGenerationLoraSetting[],
@@ -631,33 +668,18 @@ function toDraft(
       normal: createDraftControlNetUnit(request, "normal"),
     },
     inpaint: createDraftInpaint(savedParameters),
-    faceDetailer: {
-      bboxCropFactor: request.faceDetailer?.bboxCropFactor ?? COMFYUI_FACE_DETAILER_DEFAULTS.bboxCropFactor,
-      bboxDilation: request.faceDetailer?.bboxDilation ?? COMFYUI_FACE_DETAILER_DEFAULTS.bboxDilation,
-      bboxThreshold: request.faceDetailer?.bboxThreshold ?? COMFYUI_FACE_DETAILER_DEFAULTS.bboxThreshold,
-      cfg: request.faceDetailer?.cfg ?? request.cfg ?? 7,
-      cycle: request.faceDetailer?.cycle ?? COMFYUI_FACE_DETAILER_DEFAULTS.cycle,
-      denoise: request.faceDetailer?.denoise ?? COMFYUI_FACE_DETAILER_DEFAULTS.denoise,
-      enabled: request.faceDetailer?.enabled ?? false,
-      detectorModelName: request.faceDetailer?.detectorModelName ?? DEFAULT_COMFYUI_FACE_DETAILER_DETECTOR_MODEL,
-      dropSize: request.faceDetailer?.dropSize ?? COMFYUI_FACE_DETAILER_DEFAULTS.dropSize,
-      feather: request.faceDetailer?.feather ?? COMFYUI_FACE_DETAILER_DEFAULTS.feather,
-      forceInpaint: request.faceDetailer?.forceInpaint ?? COMFYUI_FACE_DETAILER_DEFAULTS.forceInpaint,
-      guideSize: request.faceDetailer?.guideSize ?? COMFYUI_FACE_DETAILER_DEFAULTS.guideSize,
-      guideSizeFor: request.faceDetailer?.guideSizeFor ?? COMFYUI_FACE_DETAILER_DEFAULTS.guideSizeFor,
-      maxSize: request.faceDetailer?.maxSize ?? COMFYUI_FACE_DETAILER_DEFAULTS.maxSize,
-      noiseMask: request.faceDetailer?.noiseMask ?? COMFYUI_FACE_DETAILER_DEFAULTS.noiseMask,
-      samBBoxExpansion: request.faceDetailer?.samBBoxExpansion ?? COMFYUI_FACE_DETAILER_DEFAULTS.samBBoxExpansion,
-      samDetectionHint: request.faceDetailer?.samDetectionHint ?? COMFYUI_FACE_DETAILER_DEFAULTS.samDetectionHint,
-      samDilation: request.faceDetailer?.samDilation ?? COMFYUI_FACE_DETAILER_DEFAULTS.samDilation,
-      samMaskHintThreshold: request.faceDetailer?.samMaskHintThreshold ?? COMFYUI_FACE_DETAILER_DEFAULTS.samMaskHintThreshold,
-      samMaskHintUseNegative: request.faceDetailer?.samMaskHintUseNegative ?? COMFYUI_FACE_DETAILER_DEFAULTS.samMaskHintUseNegative,
-      samThreshold: request.faceDetailer?.samThreshold ?? COMFYUI_FACE_DETAILER_DEFAULTS.samThreshold,
-      samplerName: request.faceDetailer?.samplerName ?? samplerSettings.samplerName ?? "euler",
-      scheduler: request.faceDetailer?.scheduler ?? samplerSettings.scheduler ?? "normal",
-      steps: request.faceDetailer?.steps ?? request.steps ?? 30,
-      wildcard: request.faceDetailer?.wildcard ?? COMFYUI_FACE_DETAILER_DEFAULTS.wildcard,
-    },
+    faceDetailer: createDraftDetailer(
+      request.faceDetailer,
+      request,
+      samplerSettings,
+      DEFAULT_COMFYUI_FACE_DETAILER_DETECTOR_MODEL,
+    ),
+    handDetailer: createDraftDetailer(
+      request.handDetailer,
+      request,
+      samplerSettings,
+      DEFAULT_COMFYUI_HAND_DETAILER_DETECTOR_MODEL,
+    ),
   };
 }
 
@@ -682,6 +704,7 @@ function toSavedParameters(draft: GenerationDraft): SavedComfyUiGenerationParams
     },
     outputPrefix: draft.outputPrefix,
     faceDetailer: draft.faceDetailer,
+    handDetailer: draft.handDetailer,
     loras: draft.loras.map((lora) => ({
       loraName: lora.loraName,
       enabled: lora.enabled,
@@ -762,6 +785,7 @@ function toRequestPayload(
     promptWrapper: draft.promptWrapper,
     outputPrefix: draft.outputPrefix,
     faceDetailer: draft.faceDetailer,
+    handDetailer: draft.handDetailer,
     controlNets: controlNetUnits,
   };
 }
@@ -1110,6 +1134,195 @@ function SelectInput({
         ))}
       </select>
     </label>
+  );
+}
+
+function DetailerFoldout({
+  detailer,
+  label,
+  onChange,
+  parameterLabel,
+}: {
+  detailer: GenerationDraft["faceDetailer"];
+  label: string;
+  onChange: (patch: Partial<GenerationDraft["faceDetailer"]>) => void;
+  parameterLabel: string;
+}) {
+  return (
+    <div className="grid gap-3 rounded-md border border-slate-200 bg-white p-3 sm:col-span-2 lg:col-span-3">
+      <label className="flex items-center gap-2 text-xs font-semibold text-slate-700">
+        <input
+          checked={detailer.enabled}
+          className="size-3.5 rounded border-slate-300 text-sky-600"
+          onChange={(event) => onChange({ enabled: event.target.checked })}
+          type="checkbox"
+        />
+        {label}
+      </label>
+      {detailer.enabled ? (
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          <TextInput
+            label="detector model"
+            onChange={(value) => onChange({ detectorModelName: value })}
+            value={detailer.detectorModelName}
+          />
+          <NumberInput
+            label="guide size"
+            min={64}
+            onChange={(value) => onChange({ guideSize: Math.round(value / 8) * 8 })}
+            step={8}
+            value={detailer.guideSize}
+          />
+          <NumberInput
+            label="max size"
+            min={64}
+            onChange={(value) => onChange({ maxSize: Math.round(value / 8) * 8 })}
+            step={8}
+            value={detailer.maxSize}
+          />
+          <NumberInput
+            label={`${parameterLabel} denoise`}
+            max={1}
+            min={0}
+            onChange={(value) => onChange({ denoise: value })}
+            step={0.05}
+            value={detailer.denoise}
+          />
+          <NumberInput
+            label={`${parameterLabel} steps`}
+            min={1}
+            onChange={(value) => onChange({ steps: Math.round(value) })}
+            value={detailer.steps}
+          />
+          <NumberInput
+            label={`${parameterLabel} cfg`}
+            min={0}
+            onChange={(value) => onChange({ cfg: value })}
+            step={0.5}
+            value={detailer.cfg}
+          />
+          <SelectInput
+            label={`${parameterLabel} sampler`}
+            onChange={(value) => onChange({ samplerName: value })}
+            options={COMFYUI_SAMPLER_OPTIONS}
+            value={detailer.samplerName}
+          />
+          <SelectInput
+            label={`${parameterLabel} scheduler`}
+            onChange={(value) => onChange({ scheduler: value })}
+            options={COMFYUI_SCHEDULER_OPTIONS}
+            value={detailer.scheduler}
+          />
+          <NumberInput
+            label="bbox threshold"
+            max={1}
+            min={0}
+            onChange={(value) => onChange({ bboxThreshold: value })}
+            step={0.01}
+            value={detailer.bboxThreshold}
+          />
+          <NumberInput
+            label="bbox dilation"
+            max={512}
+            min={-512}
+            onChange={(value) => onChange({ bboxDilation: Math.round(value) })}
+            value={detailer.bboxDilation}
+          />
+          <NumberInput
+            label="bbox crop"
+            max={10}
+            min={1}
+            onChange={(value) => onChange({ bboxCropFactor: value })}
+            step={0.1}
+            value={detailer.bboxCropFactor}
+          />
+          <NumberInput
+            label="feather"
+            max={100}
+            min={0}
+            onChange={(value) => onChange({ feather: Math.round(value) })}
+            value={detailer.feather}
+          />
+          <NumberInput
+            label="drop size"
+            min={1}
+            onChange={(value) => onChange({ dropSize: Math.round(value) })}
+            value={detailer.dropSize}
+          />
+          <NumberInput
+            label="cycle"
+            max={10}
+            min={1}
+            onChange={(value) => onChange({ cycle: Math.round(value) })}
+            value={detailer.cycle}
+          />
+          <BooleanInput
+            checked={detailer.guideSizeFor}
+            label="guide size for bbox"
+            onChange={(value) => onChange({ guideSizeFor: value })}
+          />
+          <BooleanInput
+            checked={detailer.noiseMask}
+            label="noise mask"
+            onChange={(value) => onChange({ noiseMask: value })}
+          />
+          <BooleanInput
+            checked={detailer.forceInpaint}
+            label="force inpaint"
+            onChange={(value) => onChange({ forceInpaint: value })}
+          />
+          <SelectInput
+            label="sam hint"
+            onChange={(value) => onChange({ samDetectionHint: value as GenerationDraft["faceDetailer"]["samDetectionHint"] })}
+            options={COMFYUI_FACE_DETAILER_SAM_DETECTION_HINT_OPTIONS}
+            value={detailer.samDetectionHint}
+          />
+          <NumberInput
+            label="sam dilation"
+            max={512}
+            min={-512}
+            onChange={(value) => onChange({ samDilation: Math.round(value) })}
+            value={detailer.samDilation}
+          />
+          <NumberInput
+            label="sam threshold"
+            max={1}
+            min={0}
+            onChange={(value) => onChange({ samThreshold: value })}
+            step={0.01}
+            value={detailer.samThreshold}
+          />
+          <NumberInput
+            label="sam bbox expansion"
+            max={1000}
+            min={0}
+            onChange={(value) => onChange({ samBBoxExpansion: Math.round(value) })}
+            value={detailer.samBBoxExpansion}
+          />
+          <NumberInput
+            label="sam mask threshold"
+            max={1}
+            min={0}
+            onChange={(value) => onChange({ samMaskHintThreshold: value })}
+            step={0.01}
+            value={detailer.samMaskHintThreshold}
+          />
+          <SelectInput
+            label="sam negative"
+            onChange={(value) => onChange({ samMaskHintUseNegative: value as GenerationDraft["faceDetailer"]["samMaskHintUseNegative"] })}
+            options={COMFYUI_FACE_DETAILER_SAM_MASK_HINT_USE_NEGATIVE_OPTIONS}
+            value={detailer.samMaskHintUseNegative}
+          />
+          <div className="sm:col-span-2 lg:col-span-3">
+            <TextAreaInput
+              label="wildcard"
+              onChange={(value) => onChange({ wildcard: value })}
+              value={detailer.wildcard}
+            />
+          </div>
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -2523,6 +2736,22 @@ export function ComfyUiGenerationDialog({
     ));
   }
 
+  function patchHandDetailer(patch: Partial<GenerationDraft["handDetailer"]>) {
+    clearDiagnosisReview();
+    setSaveMessage("");
+    setDraft((current) => (
+      current
+        ? {
+            ...current,
+            handDetailer: {
+              ...current.handDetailer,
+              ...patch,
+            },
+          }
+        : current
+    ));
+  }
+
   function patchControlNet(
     type: GenerationDraftControlNetUnit["type"],
     patch: Partial<GenerationDraftControlNetUnit>,
@@ -3355,180 +3584,18 @@ export function ComfyUiGenerationDialog({
                                 preview={controlNetOpenPosePreview}
                               />
                             ) : null}
-                            <div className="grid gap-3 rounded-md border border-slate-200 bg-white p-3 sm:col-span-2 lg:col-span-3">
-                              <label className="flex items-center gap-2 text-xs font-semibold text-slate-700">
-                                <input
-                                  checked={draft.faceDetailer.enabled}
-                                  className="size-3.5 rounded border-slate-300 text-sky-600"
-                                  onChange={(event) => patchFaceDetailer({ enabled: event.target.checked })}
-                                  type="checkbox"
-                                />
-                                FaceDetailer
-                              </label>
-                              {draft.faceDetailer.enabled ? (
-                                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                                  <TextInput
-                                    label="detector model"
-                                    onChange={(value) => patchFaceDetailer({ detectorModelName: value })}
-                                    value={draft.faceDetailer.detectorModelName}
-                                  />
-                                  <NumberInput
-                                    label="guide size"
-                                    min={64}
-                                    onChange={(value) => patchFaceDetailer({ guideSize: Math.round(value / 8) * 8 })}
-                                    step={8}
-                                    value={draft.faceDetailer.guideSize}
-                                  />
-                                  <NumberInput
-                                    label="max size"
-                                    min={64}
-                                    onChange={(value) => patchFaceDetailer({ maxSize: Math.round(value / 8) * 8 })}
-                                    step={8}
-                                    value={draft.faceDetailer.maxSize}
-                                  />
-                                  <NumberInput
-                                    label="face denoise"
-                                    max={1}
-                                    min={0}
-                                    onChange={(value) => patchFaceDetailer({ denoise: value })}
-                                    step={0.05}
-                                    value={draft.faceDetailer.denoise}
-                                  />
-                                  <NumberInput
-                                    label="face steps"
-                                    min={1}
-                                    onChange={(value) => patchFaceDetailer({ steps: Math.round(value) })}
-                                    value={draft.faceDetailer.steps}
-                                  />
-                                  <NumberInput
-                                    label="face cfg"
-                                    min={0}
-                                    onChange={(value) => patchFaceDetailer({ cfg: value })}
-                                    step={0.5}
-                                    value={draft.faceDetailer.cfg}
-                                  />
-                                  <SelectInput
-                                    label="face sampler"
-                                    onChange={(value) => patchFaceDetailer({ samplerName: value })}
-                                    options={COMFYUI_SAMPLER_OPTIONS}
-                                    value={draft.faceDetailer.samplerName}
-                                  />
-                                  <SelectInput
-                                    label="face scheduler"
-                                    onChange={(value) => patchFaceDetailer({ scheduler: value })}
-                                    options={COMFYUI_SCHEDULER_OPTIONS}
-                                    value={draft.faceDetailer.scheduler}
-                                  />
-                                  <NumberInput
-                                    label="bbox threshold"
-                                    max={1}
-                                    min={0}
-                                    onChange={(value) => patchFaceDetailer({ bboxThreshold: value })}
-                                    step={0.01}
-                                    value={draft.faceDetailer.bboxThreshold}
-                                  />
-                                  <NumberInput
-                                    label="bbox dilation"
-                                    max={512}
-                                    min={-512}
-                                    onChange={(value) => patchFaceDetailer({ bboxDilation: Math.round(value) })}
-                                    value={draft.faceDetailer.bboxDilation}
-                                  />
-                                  <NumberInput
-                                    label="bbox crop"
-                                    max={10}
-                                    min={1}
-                                    onChange={(value) => patchFaceDetailer({ bboxCropFactor: value })}
-                                    step={0.1}
-                                    value={draft.faceDetailer.bboxCropFactor}
-                                  />
-                                  <NumberInput
-                                    label="feather"
-                                    max={100}
-                                    min={0}
-                                    onChange={(value) => patchFaceDetailer({ feather: Math.round(value) })}
-                                    value={draft.faceDetailer.feather}
-                                  />
-                                  <NumberInput
-                                    label="drop size"
-                                    min={1}
-                                    onChange={(value) => patchFaceDetailer({ dropSize: Math.round(value) })}
-                                    value={draft.faceDetailer.dropSize}
-                                  />
-                                  <NumberInput
-                                    label="cycle"
-                                    max={10}
-                                    min={1}
-                                    onChange={(value) => patchFaceDetailer({ cycle: Math.round(value) })}
-                                    value={draft.faceDetailer.cycle}
-                                  />
-                                  <BooleanInput
-                                    checked={draft.faceDetailer.guideSizeFor}
-                                    label="guide size for bbox"
-                                    onChange={(value) => patchFaceDetailer({ guideSizeFor: value })}
-                                  />
-                                  <BooleanInput
-                                    checked={draft.faceDetailer.noiseMask}
-                                    label="noise mask"
-                                    onChange={(value) => patchFaceDetailer({ noiseMask: value })}
-                                  />
-                                  <BooleanInput
-                                    checked={draft.faceDetailer.forceInpaint}
-                                    label="force inpaint"
-                                    onChange={(value) => patchFaceDetailer({ forceInpaint: value })}
-                                  />
-                                  <SelectInput
-                                    label="sam hint"
-                                    onChange={(value) => patchFaceDetailer({ samDetectionHint: value as GenerationDraft["faceDetailer"]["samDetectionHint"] })}
-                                    options={COMFYUI_FACE_DETAILER_SAM_DETECTION_HINT_OPTIONS}
-                                    value={draft.faceDetailer.samDetectionHint}
-                                  />
-                                  <NumberInput
-                                    label="sam dilation"
-                                    max={512}
-                                    min={-512}
-                                    onChange={(value) => patchFaceDetailer({ samDilation: Math.round(value) })}
-                                    value={draft.faceDetailer.samDilation}
-                                  />
-                                  <NumberInput
-                                    label="sam threshold"
-                                    max={1}
-                                    min={0}
-                                    onChange={(value) => patchFaceDetailer({ samThreshold: value })}
-                                    step={0.01}
-                                    value={draft.faceDetailer.samThreshold}
-                                  />
-                                  <NumberInput
-                                    label="sam bbox expansion"
-                                    max={1000}
-                                    min={0}
-                                    onChange={(value) => patchFaceDetailer({ samBBoxExpansion: Math.round(value) })}
-                                    value={draft.faceDetailer.samBBoxExpansion}
-                                  />
-                                  <NumberInput
-                                    label="sam mask threshold"
-                                    max={1}
-                                    min={0}
-                                    onChange={(value) => patchFaceDetailer({ samMaskHintThreshold: value })}
-                                    step={0.01}
-                                    value={draft.faceDetailer.samMaskHintThreshold}
-                                  />
-                                  <SelectInput
-                                    label="sam negative"
-                                    onChange={(value) => patchFaceDetailer({ samMaskHintUseNegative: value as GenerationDraft["faceDetailer"]["samMaskHintUseNegative"] })}
-                                    options={COMFYUI_FACE_DETAILER_SAM_MASK_HINT_USE_NEGATIVE_OPTIONS}
-                                    value={draft.faceDetailer.samMaskHintUseNegative}
-                                  />
-                                  <div className="sm:col-span-2 lg:col-span-3">
-                                    <TextAreaInput
-                                      label="wildcard"
-                                      onChange={(value) => patchFaceDetailer({ wildcard: value })}
-                                      value={draft.faceDetailer.wildcard}
-                                    />
-                                  </div>
-                                </div>
-                              ) : null}
-                            </div>
+                            <DetailerFoldout
+                              detailer={draft.handDetailer}
+                              label="HandDetailer"
+                              onChange={patchHandDetailer}
+                              parameterLabel="hand"
+                            />
+                            <DetailerFoldout
+                              detailer={draft.faceDetailer}
+                              label="FaceDetailer"
+                              onChange={patchFaceDetailer}
+                              parameterLabel="face"
+                            />
                           </div>
                           <div className="mt-5">
                             <GeneratedImageResults

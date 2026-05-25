@@ -1,4 +1,5 @@
 export const DEFAULT_COMFYUI_FACE_DETAILER_DETECTOR_MODEL = "bbox/face_yolov8m.pt";
+export const DEFAULT_COMFYUI_HAND_DETAILER_DETECTOR_MODEL = "bbox/hand_yolov8s.pt";
 
 export const COMFYUI_FACE_DETAILER_DETECTOR_MODEL_PREFERENCES = [
   DEFAULT_COMFYUI_FACE_DETAILER_DETECTOR_MODEL,
@@ -7,6 +8,13 @@ export const COMFYUI_FACE_DETAILER_DETECTOR_MODEL_PREFERENCES = [
   "face_yolov8m.pt",
   "face_yolov8s.pt",
   "face_yolov8n.pt",
+] as const;
+
+export const COMFYUI_HAND_DETAILER_DETECTOR_MODEL_PREFERENCES = [
+  DEFAULT_COMFYUI_HAND_DETAILER_DETECTOR_MODEL,
+  "bbox/hand_yolov8n.pt",
+  "hand_yolov8s.pt",
+  "hand_yolov8n.pt",
 ] as const;
 
 export const COMFYUI_FACE_DETAILER_SAM_DETECTION_HINT_OPTIONS = [

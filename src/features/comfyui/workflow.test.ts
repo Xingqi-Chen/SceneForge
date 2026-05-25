@@ -170,6 +170,112 @@ describe("ComfyUI workflow builder", () => {
     });
   });
 
+  it("adds HandDetailer as a titled FaceDetailer node when enabled", () => {
+    const result = buildBasicTextToImageWorkflow({
+      checkpointName: "dream.safetensors",
+      positivePrompt: "hands",
+      seed: 123,
+      handDetailer: {
+        enabled: true,
+      },
+    });
+
+    expect(result.nodeIds).toEqual({
+      checkpoint: "1",
+      loraLoaders: [],
+      positivePrompt: "2",
+      negativePrompt: "3",
+      latentImage: "4",
+      sampler: "5",
+      vaeDecode: "6",
+      handUltralyticsDetectorProvider: "7",
+      handDetailer: "8",
+      saveImage: "9",
+    });
+    expect(result.workflow["7"]).toMatchObject({
+      class_type: "UltralyticsDetectorProvider",
+      inputs: {
+        model_name: "bbox/hand_yolov8s.pt",
+      },
+      _meta: {
+        title: "Hand Detector",
+      },
+    });
+    expect(result.workflow["8"]).toMatchObject({
+      class_type: "FaceDetailer",
+      _meta: {
+        title: "HandDetailer",
+      },
+      inputs: {
+        image: ["6", 0],
+        bbox_detector: ["7", 0],
+      },
+    });
+    expect(result.workflow["9"].inputs).toEqual({
+      filename_prefix: "SceneForge",
+      images: ["8", 0],
+    });
+    expect(result.request.handDetailer).toMatchObject({
+      enabled: true,
+      detectorModelName: "bbox/hand_yolov8s.pt",
+    });
+  });
+
+  it("runs HandDetailer before FaceDetailer when both are enabled", () => {
+    const result = buildBasicTextToImageWorkflow({
+      checkpointName: "dream.safetensors",
+      positivePrompt: "portrait with hands",
+      seed: 123,
+      faceDetailer: {
+        enabled: true,
+        detectorModelName: "bbox/face_yolov8s.pt",
+      },
+      handDetailer: {
+        enabled: true,
+        detectorModelName: "bbox/hand_yolov8s.pt",
+      },
+    });
+
+    expect(result.nodeIds).toEqual({
+      checkpoint: "1",
+      loraLoaders: [],
+      positivePrompt: "2",
+      negativePrompt: "3",
+      latentImage: "4",
+      sampler: "5",
+      vaeDecode: "6",
+      handUltralyticsDetectorProvider: "7",
+      handDetailer: "8",
+      ultralyticsDetectorProvider: "9",
+      faceDetailer: "10",
+      saveImage: "11",
+    });
+    expect(result.workflow["8"]).toMatchObject({
+      class_type: "FaceDetailer",
+      _meta: {
+        title: "HandDetailer",
+      },
+      inputs: {
+        image: ["6", 0],
+        bbox_detector: ["7", 0],
+      },
+    });
+    expect(result.workflow["10"]).toMatchObject({
+      class_type: "FaceDetailer",
+      _meta: {
+        title: "FaceDetailer",
+      },
+      inputs: {
+        image: ["8", 0],
+        bbox_detector: ["9", 0],
+      },
+    });
+    expect(result.workflow["11"].inputs).toEqual({
+      filename_prefix: "SceneForge",
+      images: ["10", 0],
+    });
+  });
+
   it("builds a latent noise mask inpaint workflow", () => {
     const result = buildBasicInpaintWorkflow({
       checkpointName: "dream.safetensors",
