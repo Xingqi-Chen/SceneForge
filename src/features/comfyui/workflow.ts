@@ -98,6 +98,54 @@ export function buildBasicTextToImageWorkflow(request: ComfyUiTextToImageRequest
     },
     "Negative Prompt",
   );
+  let positiveConditioningConnection = builder.connect(positivePrompt, 0);
+  let negativeConditioningConnection = builder.connect(negativePrompt, 0);
+  const controlNetNodeIds = resolvedRequest.controlNets
+    .filter((controlNet) => controlNet.enabled && controlNet.imageName)
+    .map((controlNet) => {
+      const label = controlNet.type === "depth"
+        ? "Depth"
+        : controlNet.type === "normal"
+          ? "Normal"
+          : "OpenPose";
+      const controlNetImage = builder.addNode(
+        "LoadImage",
+        {
+          image: controlNet.imageName,
+        },
+        `Load ${label} Control Image`,
+      );
+      const controlNetLoader = builder.addNode(
+        "ControlNetLoader",
+        {
+          control_net_name: controlNet.modelName,
+        },
+        `Load ${label} ControlNet`,
+      );
+      const controlNetApply = builder.addNode(
+        "ControlNetApplyAdvanced",
+        {
+          positive: positiveConditioningConnection,
+          negative: negativeConditioningConnection,
+          control_net: builder.connect(controlNetLoader, 0),
+          image: builder.connect(controlNetImage, 0),
+          strength: controlNet.strength,
+          start_percent: controlNet.startPercent,
+          end_percent: controlNet.endPercent,
+        },
+        `Apply ControlNet ${label}`,
+      );
+      positiveConditioningConnection = builder.connect(controlNetApply, 0);
+      negativeConditioningConnection = builder.connect(controlNetApply, 1);
+
+      return {
+        type: controlNet.type,
+        image: controlNetImage,
+        loader: controlNetLoader,
+        apply: controlNetApply,
+      };
+    });
+
   const latentImage = builder.addNode(
     resolvedRequest.latentImageNode,
     {
@@ -117,8 +165,8 @@ export function buildBasicTextToImageWorkflow(request: ComfyUiTextToImageRequest
       scheduler: resolvedRequest.scheduler,
       denoise: resolvedRequest.denoise,
       model: modelConnection,
-      positive: builder.connect(positivePrompt, 0),
-      negative: builder.connect(negativePrompt, 0),
+      positive: positiveConditioningConnection,
+      negative: negativeConditioningConnection,
       latent_image: builder.connect(latentImage, 0),
     },
     "KSampler",
@@ -200,6 +248,10 @@ export function buildBasicTextToImageWorkflow(request: ComfyUiTextToImageRequest
       loraLoaders,
       positivePrompt,
       negativePrompt,
+      ...(controlNetNodeIds.length > 0 ? { controlNets: controlNetNodeIds } : {}),
+      ...(controlNetNodeIds[0] ? { controlNetImage: controlNetNodeIds[0].image } : {}),
+      ...(controlNetNodeIds[0] ? { controlNetLoader: controlNetNodeIds[0].loader } : {}),
+      ...(controlNetNodeIds[0] ? { controlNetApply: controlNetNodeIds[0].apply } : {}),
       latentImage,
       sampler,
       vaeDecode,

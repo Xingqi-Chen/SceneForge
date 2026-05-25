@@ -7,17 +7,17 @@ import { sanitizeGlobalPromptLibraryPayload, type GlobalPromptLibraryState } fro
 export function getResolvedPromptLibraryFilePath(): string {
   const override = process.env.SCENEFORGE_PROMPT_LIBRARY_FILE?.trim();
   if (override) {
-    return path.resolve(override);
+    return override;
   }
 
-  return path.join(process.cwd(), "data", "prompt-library.json");
+  return path.join(/*turbopackIgnore: true*/ process.cwd(), "data", "prompt-library.json");
 }
 
 export async function loadPromptLibraryFromDisk(): Promise<GlobalPromptLibraryState> {
   const fullPath = getResolvedPromptLibraryFilePath();
 
   try {
-    const text = await fs.readFile(fullPath, "utf8");
+    const text = await fs.readFile(/*turbopackIgnore: true*/ fullPath, "utf8");
     const parsed: unknown = JSON.parse(text);
     return sanitizeGlobalPromptLibraryPayload(parsed);
   } catch (error) {
@@ -35,8 +35,8 @@ export async function savePromptLibraryToDisk(state: GlobalPromptLibraryState) {
   const fullPath = getResolvedPromptLibraryFilePath();
   const dir = path.dirname(fullPath);
 
-  await fs.mkdir(dir, { recursive: true });
-  await fs.writeFile(fullPath, JSON.stringify({ version: 1, ...normalized }, null, 2), "utf8");
+  await fs.mkdir(/*turbopackIgnore: true*/ dir, { recursive: true });
+  await fs.writeFile(/*turbopackIgnore: true*/ fullPath, JSON.stringify({ version: 1, ...normalized }, null, 2), "utf8");
   console.info("[SceneForge] [persistence] wrote shared prompt library file", {
     path: fullPath,
     tagCount: normalized.promptLibraryTags.length,

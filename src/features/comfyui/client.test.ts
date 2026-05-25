@@ -114,6 +114,41 @@ describe("createComfyUiClient", () => {
     ).toBe("http://localhost:8188/view?filename=image.png&subfolder=sub+folder&type=output");
   });
 
+  it("uploads images to ComfyUI input storage", async () => {
+    const fetcher: typeof fetch = async (input, init) => {
+      expect(input).toBe("http://localhost:8188/upload/image");
+      expect(init?.method).toBe("POST");
+      expect(init?.headers).toMatchObject({
+        accept: "application/json",
+        authorization: "Bearer test-key",
+      });
+      expect(init?.body).toBeInstanceOf(FormData);
+
+      return Response.json({
+        name: "pose.png",
+        subfolder: "SceneForge",
+        type: "input",
+      });
+    };
+    const client = createComfyUiClient({
+      baseUrl: "http://localhost:8188",
+      apiKey: "test-key",
+      fetcher,
+    });
+
+    await expect(
+      client.uploadImage({
+        filename: "pose.png",
+        bytes: new Uint8Array([1, 2, 3]),
+      }),
+    ).resolves.toMatchObject({
+      filename: "pose.png",
+      imageName: "SceneForge/pose.png",
+      subfolder: "SceneForge",
+      type: "input",
+    });
+  });
+
   it("throws ComfyUiApiError with response status and details", async () => {
     const client = createComfyUiClient({
       baseUrl: "http://localhost:8188",

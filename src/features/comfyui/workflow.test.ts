@@ -170,6 +170,257 @@ describe("ComfyUI workflow builder", () => {
     });
   });
 
+  it("adds OpenPose ControlNet nodes before sampling when an uploaded control image is available", () => {
+    const result = buildBasicTextToImageWorkflow({
+      checkpointName: "dream.safetensors",
+      positivePrompt: "pose controlled portrait",
+      negativePrompt: "low quality",
+      seed: 123,
+      controlNet: {
+        enabled: true,
+        modelName: "control_v11p_sd15_openpose.pth",
+        strength: 0.72,
+        startPercent: 0.1,
+        endPercent: 0.88,
+        imageName: "SceneForge/openpose.png",
+      },
+    });
+
+    expect(result.nodeIds).toEqual({
+      checkpoint: "1",
+      loraLoaders: [],
+      positivePrompt: "2",
+      negativePrompt: "3",
+      controlNets: [{ type: "openpose", image: "4", loader: "5", apply: "6" }],
+      controlNetImage: "4",
+      controlNetLoader: "5",
+      controlNetApply: "6",
+      latentImage: "7",
+      sampler: "8",
+      vaeDecode: "9",
+      saveImage: "10",
+    });
+    expect(result.workflow["4"]).toMatchObject({
+      class_type: "LoadImage",
+      inputs: {
+        image: "SceneForge/openpose.png",
+      },
+    });
+    expect(result.workflow["5"]).toMatchObject({
+      class_type: "ControlNetLoader",
+      inputs: {
+        control_net_name: "control_v11p_sd15_openpose.pth",
+      },
+    });
+    expect(result.workflow["6"]).toMatchObject({
+      class_type: "ControlNetApplyAdvanced",
+      inputs: {
+        positive: ["2", 0],
+        negative: ["3", 0],
+        control_net: ["5", 0],
+        image: ["4", 0],
+        strength: 0.72,
+        start_percent: 0.1,
+        end_percent: 0.88,
+      },
+    });
+    expect(result.workflow["8"].inputs).toMatchObject({
+      positive: ["6", 0],
+      negative: ["6", 1],
+      latent_image: ["7", 0],
+    });
+    expect(result.outputNodeId).toBe("10");
+  });
+
+  it("adds Depth ControlNet nodes before sampling when an uploaded depth image is available", () => {
+    const result = buildBasicTextToImageWorkflow({
+      checkpointName: "dream.safetensors",
+      positivePrompt: "depth controlled portrait",
+      seed: 123,
+      controlNets: [
+        {
+          type: "depth",
+          enabled: true,
+          modelName: "control_v11f1p_sd15_depth.pth",
+          strength: 0.66,
+          startPercent: 0.05,
+          endPercent: 0.9,
+          imageName: "SceneForge/depth.png",
+        },
+      ],
+    });
+
+    expect(result.nodeIds.controlNets).toEqual([{ type: "depth", image: "4", loader: "5", apply: "6" }]);
+    expect(result.workflow["4"]).toMatchObject({
+      class_type: "LoadImage",
+      inputs: {
+        image: "SceneForge/depth.png",
+      },
+    });
+    expect(result.workflow["5"]).toMatchObject({
+      class_type: "ControlNetLoader",
+      inputs: {
+        control_net_name: "control_v11f1p_sd15_depth.pth",
+      },
+    });
+    expect(result.workflow["6"]).toMatchObject({
+      class_type: "ControlNetApplyAdvanced",
+      inputs: {
+        positive: ["2", 0],
+        negative: ["3", 0],
+        control_net: ["5", 0],
+        image: ["4", 0],
+        strength: 0.66,
+        start_percent: 0.05,
+        end_percent: 0.9,
+      },
+    });
+    expect(result.workflow["8"].inputs).toMatchObject({
+      positive: ["6", 0],
+      negative: ["6", 1],
+    });
+  });
+
+  it("adds Normal ControlNet nodes before sampling when an uploaded normal image is available", () => {
+    const result = buildBasicTextToImageWorkflow({
+      checkpointName: "dream.safetensors",
+      positivePrompt: "normal controlled portrait",
+      seed: 123,
+      controlNets: [
+        {
+          type: "normal",
+          enabled: true,
+          modelName: "control_v11p_sd15_normalbae.pth",
+          strength: 0.7,
+          startPercent: 0.15,
+          endPercent: 0.95,
+          imageName: "SceneForge/normal.png",
+        },
+      ],
+    });
+
+    expect(result.nodeIds.controlNets).toEqual([{ type: "normal", image: "4", loader: "5", apply: "6" }]);
+    expect(result.workflow["4"]).toMatchObject({
+      class_type: "LoadImage",
+      inputs: {
+        image: "SceneForge/normal.png",
+      },
+    });
+    expect(result.workflow["5"]).toMatchObject({
+      class_type: "ControlNetLoader",
+      inputs: {
+        control_net_name: "control_v11p_sd15_normalbae.pth",
+      },
+    });
+    expect(result.workflow["6"]).toMatchObject({
+      class_type: "ControlNetApplyAdvanced",
+      inputs: {
+        positive: ["2", 0],
+        negative: ["3", 0],
+        control_net: ["5", 0],
+        image: ["4", 0],
+        strength: 0.7,
+        start_percent: 0.15,
+        end_percent: 0.95,
+      },
+    });
+    expect(result.workflow["8"].inputs).toMatchObject({
+      positive: ["6", 0],
+      negative: ["6", 1],
+    });
+  });
+
+  it("chains OpenPose before Depth when both ControlNet units are enabled", () => {
+    const result = buildBasicTextToImageWorkflow({
+      checkpointName: "dream.safetensors",
+      positivePrompt: "pose and depth controlled portrait",
+      seed: 123,
+      controlNets: [
+        {
+          type: "depth",
+          enabled: true,
+          modelName: "depth.safetensors",
+          imageName: "SceneForge/depth.png",
+        },
+        {
+          type: "openpose",
+          enabled: true,
+          modelName: "openpose.safetensors",
+          imageName: "SceneForge/openpose.png",
+        },
+      ],
+    });
+
+    expect(result.nodeIds.controlNets).toEqual([
+      { type: "openpose", image: "4", loader: "5", apply: "6" },
+      { type: "depth", image: "7", loader: "8", apply: "9" },
+    ]);
+    expect(result.workflow["6"].inputs).toMatchObject({
+      positive: ["2", 0],
+      negative: ["3", 0],
+    });
+    expect(result.workflow["9"].inputs).toMatchObject({
+      positive: ["6", 0],
+      negative: ["6", 1],
+    });
+    expect(result.workflow["11"].inputs).toMatchObject({
+      positive: ["9", 0],
+      negative: ["9", 1],
+      latent_image: ["10", 0],
+    });
+  });
+
+  it("chains OpenPose before Depth before Normal when all ControlNet units are enabled", () => {
+    const result = buildBasicTextToImageWorkflow({
+      checkpointName: "dream.safetensors",
+      positivePrompt: "pose depth and normal controlled portrait",
+      seed: 123,
+      controlNets: [
+        {
+          type: "normal",
+          enabled: true,
+          modelName: "normalbae.safetensors",
+          imageName: "SceneForge/normal.png",
+        },
+        {
+          type: "depth",
+          enabled: true,
+          modelName: "depth.safetensors",
+          imageName: "SceneForge/depth.png",
+        },
+        {
+          type: "openpose",
+          enabled: true,
+          modelName: "openpose.safetensors",
+          imageName: "SceneForge/openpose.png",
+        },
+      ],
+    });
+
+    expect(result.nodeIds.controlNets).toEqual([
+      { type: "openpose", image: "4", loader: "5", apply: "6" },
+      { type: "depth", image: "7", loader: "8", apply: "9" },
+      { type: "normal", image: "10", loader: "11", apply: "12" },
+    ]);
+    expect(result.workflow["6"].inputs).toMatchObject({
+      positive: ["2", 0],
+      negative: ["3", 0],
+    });
+    expect(result.workflow["9"].inputs).toMatchObject({
+      positive: ["6", 0],
+      negative: ["6", 1],
+    });
+    expect(result.workflow["12"].inputs).toMatchObject({
+      positive: ["9", 0],
+      negative: ["9", 1],
+    });
+    expect(result.workflow["14"].inputs).toMatchObject({
+      positive: ["12", 0],
+      negative: ["12", 1],
+      latent_image: ["13", 0],
+    });
+  });
+
   it("writes custom generation parameters to KSampler and latent nodes", () => {
     const result = buildBasicTextToImageWorkflow({
       checkpointName: "scene.ckpt",

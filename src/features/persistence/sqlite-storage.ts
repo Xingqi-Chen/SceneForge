@@ -133,10 +133,10 @@ function newId(prefix: string): string {
 export function getResolvedSqliteFilePath(): string {
   const override = process.env.SCENEFORGE_SQLITE_FILE?.trim();
   if (override) {
-    return path.resolve(override);
+    return override;
   }
 
-  return path.join(process.cwd(), "data", "sceneforge.sqlite");
+  return path.join(/*turbopackIgnore: true*/ process.cwd(), "data", "sceneforge.sqlite");
 }
 
 function getTableColumns(db: SceneForgeSqliteDatabase, tableName: string): Set<string> {
@@ -387,7 +387,7 @@ export async function openSceneForgeSqliteDatabase(
   filePath = getResolvedSqliteFilePath(),
 ): Promise<SceneForgeSqliteDatabase> {
   const resolved = path.resolve(filePath);
-  await fs.mkdir(path.dirname(resolved), { recursive: true });
+  await fs.mkdir(/*turbopackIgnore: true*/ path.dirname(resolved), { recursive: true });
 
   const sqlite = (await import("node:sqlite")) as NodeSqliteModule;
   const db = new sqlite.DatabaseSync(resolved);

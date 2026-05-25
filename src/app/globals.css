@@ -3,19 +3,21 @@
 :root {
   --background: #f8fafc;
   --foreground: #0f172a;
+  --font-scene-sans: Arial, Helvetica, sans-serif;
+  --font-scene-mono: "Cascadia Code", "Consolas", "SFMono-Regular", monospace;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --font-sans: var(--font-scene-sans);
+  --font-mono: var(--font-scene-mono);
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-scene-sans);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }

@@ -1,4 +1,8 @@
-import type { ComfyUiTextToImageRequest } from "./types";
+import type {
+  ComfyUiControlNetType,
+  ComfyUiControlNetUnitConfig,
+  ComfyUiTextToImageRequest,
+} from "./types";
 import {
   COMFYUI_FACE_DETAILER_DETECTOR_MODEL_PREFERENCES,
   DEFAULT_COMFYUI_FACE_DETAILER_DETECTOR_MODEL,
@@ -161,6 +165,78 @@ function shouldFallbackFromRequestedFaceDetailerDetectorModel(value: string | un
   return !value || normalizeOptionName(value) === normalizeOptionName(DEFAULT_COMFYUI_FACE_DETAILER_DETECTOR_MODEL);
 }
 
+function findPreferredOpenPoseControlNetModel(options: string[]) {
+  return options.find((option) => normalizeOptionName(option).includes("openpose"))
+    ?? options.find((option) => normalizeOptionName(option).includes("dwpose"))
+    ?? options[0]
+    ?? null;
+}
+
+function findPreferredDepthControlNetModel(options: string[]) {
+  return options.find((option) => normalizeOptionName(option).includes("depth"))
+    ?? options.find((option) => normalizeOptionName(option).includes("depthanything"))
+    ?? options.find((option) => normalizeOptionName(option).includes("midas"))
+    ?? options.find((option) => normalizeOptionName(option).includes("zoe"))
+    ?? options.find((option) => normalizeOptionName(option).includes("leres"))
+    ?? null;
+}
+
+function findPreferredNormalControlNetModel(options: string[]) {
+  return options.find((option) => normalizeOptionName(option).includes("normalbae"))
+    ?? options.find((option) => normalizeOptionName(option).includes("normal"))
+    ?? options.find((option) => normalizeOptionName(option).includes("bae"))
+    ?? options.find((option) => normalizeOptionName(option).includes("dsine"))
+    ?? null;
+}
+
+function findPreferredControlNetModel(type: ComfyUiControlNetType, options: string[]) {
+  if (type === "depth") {
+    return findPreferredDepthControlNetModel(options);
+  }
+
+  if (type === "normal") {
+    return findPreferredNormalControlNetModel(options);
+  }
+
+  return findPreferredOpenPoseControlNetModel(options);
+}
+
+function formatControlNetType(type: ComfyUiControlNetType) {
+  if (type === "depth") {
+    return "Depth";
+  }
+
+  if (type === "normal") {
+    return "Normal";
+  }
+
+  return "OpenPose";
+}
+
+function getRequestControlNetUnits(request: ComfyUiTextToImageRequest): ComfyUiControlNetUnitConfig[] {
+  if (request.controlNets !== undefined) {
+    return request.controlNets;
+  }
+
+  if (!request.controlNet) {
+    return [];
+  }
+
+  return [
+    {
+      type: "openpose",
+      enabled: request.controlNet.enabled,
+      modelName: request.controlNet.modelName,
+      strength: request.controlNet.strength,
+      startPercent: request.controlNet.startPercent,
+      endPercent: request.controlNet.endPercent,
+      svg: request.controlNet.svg ?? request.controlNet.openPoseSvg,
+      imageDataUrl: request.controlNet.imageDataUrl,
+      imageName: request.controlNet.imageName,
+    },
+  ];
+}
+
 function validateDimension(value: number | undefined, label: string, latentImageNode: string, errors: string[]) {
   if (value === undefined) {
     return;
@@ -182,6 +258,7 @@ export function validateComfyUiRequestAgainstObjectInfo(
   const samplerOptions = readInputOptions(objectInfo, "KSampler", "sampler_name");
   const schedulerOptions = readInputOptions(objectInfo, "KSampler", "scheduler");
   const ultralyticsDetectorOptions = readInputOptions(objectInfo, "UltralyticsDetectorProvider", "model_name");
+  const controlNetOptions = readInputOptions(objectInfo, "ControlNetLoader", "control_net_name");
   const checkpointName = findOption(request.checkpointName, checkpointOptions);
   const sampler = findSampler(request.samplerName, samplerOptions, schedulerOptions);
   const samplerName = sampler.samplerName;
@@ -278,6 +355,45 @@ export function validateComfyUiRequestAgainstObjectInfo(
     }
   }
 
+  let controlNets = getRequestControlNetUnits(request);
+  if (controlNets.some((unit) => unit.enabled)) {
+    if (!hasNodeInfo(objectInfo, "LoadImage")) {
+      errors.push("LoadImage node is not available in ComfyUI. It is required for ControlNet images.");
+    }
+
+    if (!hasNodeInfo(objectInfo, "ControlNetLoader")) {
+      errors.push("ControlNetLoader node is not available in ComfyUI. Install ControlNet support to use ControlNet.");
+    }
+
+    if (!hasNodeInfo(objectInfo, "ControlNetApplyAdvanced")) {
+      errors.push("ControlNetApplyAdvanced node is not available in ComfyUI. Update ComfyUI or install ControlNet support.");
+    }
+
+    controlNets = controlNets.map((unit) => {
+      if (!unit.enabled) {
+        return unit;
+      }
+
+      const requestedControlNetModel = unit.modelName
+        ? findOption(unit.modelName, controlNetOptions)
+        : findPreferredControlNetModel(unit.type, controlNetOptions);
+
+      if (!requestedControlNetModel) {
+        errors.push(
+          unit.modelName
+            ? `${formatControlNetType(unit.type)} ControlNet model is not available in ComfyUI: ${unit.modelName}`
+            : `${formatControlNetType(unit.type)} ControlNet model is not available in ComfyUI.`,
+        );
+        return unit;
+      }
+
+      return {
+        ...unit,
+        modelName: requestedControlNetModel,
+      };
+    });
+  }
+
   validateDimension(request.width, "width", latentImageNode ?? "EmptyLatentImage", errors);
   validateDimension(request.height, "height", latentImageNode ?? "EmptyLatentImage", errors);
 
@@ -305,6 +421,7 @@ export function validateComfyUiRequestAgainstObjectInfo(
       scheduler: scheduler ?? request.scheduler,
       latentImageNode: latentImageNode ?? request.latentImageNode,
       faceDetailer,
+      controlNets,
       loras,
     },
   };

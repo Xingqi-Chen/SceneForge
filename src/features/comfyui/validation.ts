@@ -1,7 +1,11 @@
 import type {
+  ComfyUiControlNetConfig,
+  ComfyUiControlNetType,
+  ComfyUiControlNetUnitConfig,
   ComfyUiFaceDetailerConfig,
   ComfyUiLoraInput,
   ComfyUiTextToImageRequest,
+  ResolvedComfyUiControlNetUnitConfig,
   ResolvedComfyUiTextToImageRequest,
 } from "./types";
 import {
@@ -41,9 +45,23 @@ const DEFAULT_TEXT_TO_IMAGE_REQUEST = {
     scheduler: "normal",
     steps: 30,
   },
+  controlNets: [],
 } satisfies Omit<ResolvedComfyUiTextToImageRequest, "checkpointName" | "positivePrompt" | "seed">;
+const DEFAULT_CONTROLNET_UNIT = {
+  enabled: false,
+  modelName: "",
+  strength: 0.85,
+  startPercent: 0,
+  endPercent: 1,
+  svg: "",
+  imageDataUrl: "",
+  imageName: "",
+};
 const RANDOM_SEED_UPPER_BOUND = 2 ** 50;
 const RANDOM_SEED_RANGE = RANDOM_SEED_UPPER_BOUND + 1;
+const MAX_CONTROLNET_SVG_LENGTH = 2_000_000;
+const MAX_CONTROLNET_IMAGE_DATA_URL_LENGTH = 12_000_000;
+const CONTROLNET_TYPES = ["openpose", "depth", "normal"] as const satisfies readonly ComfyUiControlNetType[];
 
 export type ComfyUiTextToImageValidationResult =
   | {
@@ -170,6 +188,14 @@ function isOptionalFaceDetailerOption<T extends string>(
   return value === undefined || (typeof value === "string" && options.some((option) => option.value === value));
 }
 
+function isControlNetType(value: unknown): value is ComfyUiControlNetType {
+  return typeof value === "string" && CONTROLNET_TYPES.some((type) => type === value);
+}
+
+function isPngDataUrl(value: string) {
+  return /^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(value.trim());
+}
+
 function normalizeFaceDetailerConfig(value: unknown): ComfyUiFaceDetailerConfig | null | undefined {
   if (value === undefined) {
     return undefined;
@@ -273,6 +299,166 @@ function normalizeFaceDetailerConfig(value: unknown): ComfyUiFaceDetailerConfig 
   };
 }
 
+function normalizeControlNetConfig(value: unknown): ComfyUiControlNetConfig | null | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (typeof value === "boolean") {
+    return {
+      enabled: value,
+    };
+  }
+
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  if (value.enabled !== undefined && typeof value.enabled !== "boolean") {
+    return null;
+  }
+
+  if (
+    !isOptionalStringValue(value.modelName) ||
+    !isOptionalStringValue(value.openPoseSvg) ||
+    !isOptionalStringValue(value.svg) ||
+    !isOptionalStringValue(value.imageDataUrl) ||
+    !isOptionalStringValue(value.imageName)
+  ) {
+    return null;
+  }
+
+  if (
+    !isOptionalNumberInRange(value.strength, 0, 2) ||
+    !isOptionalNumberInRange(value.startPercent, 0, 1) ||
+    !isOptionalNumberInRange(value.endPercent, 0, 1)
+  ) {
+    return null;
+  }
+
+  if (
+    (typeof value.openPoseSvg === "string" && value.openPoseSvg.length > MAX_CONTROLNET_SVG_LENGTH) ||
+    (typeof value.svg === "string" && value.svg.length > MAX_CONTROLNET_SVG_LENGTH) ||
+    (typeof value.imageDataUrl === "string" && value.imageDataUrl.length > MAX_CONTROLNET_IMAGE_DATA_URL_LENGTH)
+  ) {
+    return null;
+  }
+
+  if (hasNonEmptyString(value.imageDataUrl) && !isPngDataUrl(value.imageDataUrl)) {
+    return null;
+  }
+
+  return {
+    ...(typeof value.enabled === "boolean" ? { enabled: value.enabled } : {}),
+    ...(hasNonEmptyString(value.modelName) ? { modelName: value.modelName.trim() } : {}),
+    ...(typeof value.strength === "number" ? { strength: value.strength } : {}),
+    ...(typeof value.startPercent === "number" ? { startPercent: value.startPercent } : {}),
+    ...(typeof value.endPercent === "number" ? { endPercent: value.endPercent } : {}),
+    ...(typeof value.openPoseSvg === "string" ? { openPoseSvg: value.openPoseSvg } : {}),
+    ...(typeof value.svg === "string" ? { svg: value.svg } : {}),
+    ...(typeof value.imageDataUrl === "string" ? { imageDataUrl: value.imageDataUrl } : {}),
+    ...(hasNonEmptyString(value.imageName) ? { imageName: value.imageName.trim() } : {}),
+  };
+}
+
+function normalizeControlNetUnitConfig(value: unknown): ComfyUiControlNetUnitConfig | null {
+  if (!isRecord(value) || !isControlNetType(value.type)) {
+    return null;
+  }
+
+  if (value.enabled !== undefined && typeof value.enabled !== "boolean") {
+    return null;
+  }
+
+  if (
+    !isOptionalStringValue(value.modelName) ||
+    !isOptionalStringValue(value.svg) ||
+    !isOptionalStringValue(value.imageDataUrl) ||
+    !isOptionalStringValue(value.imageName)
+  ) {
+    return null;
+  }
+
+  if (
+    !isOptionalNumberInRange(value.strength, 0, 2) ||
+    !isOptionalNumberInRange(value.startPercent, 0, 1) ||
+    !isOptionalNumberInRange(value.endPercent, 0, 1)
+  ) {
+    return null;
+  }
+
+  if (
+    (typeof value.svg === "string" && value.svg.length > MAX_CONTROLNET_SVG_LENGTH) ||
+    (typeof value.imageDataUrl === "string" && value.imageDataUrl.length > MAX_CONTROLNET_IMAGE_DATA_URL_LENGTH)
+  ) {
+    return null;
+  }
+
+  if (hasNonEmptyString(value.imageDataUrl) && !isPngDataUrl(value.imageDataUrl)) {
+    return null;
+  }
+
+  return {
+    type: value.type,
+    ...(typeof value.enabled === "boolean" ? { enabled: value.enabled } : {}),
+    ...(hasNonEmptyString(value.modelName) ? { modelName: value.modelName.trim() } : {}),
+    ...(typeof value.strength === "number" ? { strength: value.strength } : {}),
+    ...(typeof value.startPercent === "number" ? { startPercent: value.startPercent } : {}),
+    ...(typeof value.endPercent === "number" ? { endPercent: value.endPercent } : {}),
+    ...(typeof value.svg === "string" ? { svg: value.svg } : {}),
+    ...(typeof value.imageDataUrl === "string" ? { imageDataUrl: value.imageDataUrl } : {}),
+    ...(hasNonEmptyString(value.imageName) ? { imageName: value.imageName.trim() } : {}),
+  };
+}
+
+function normalizeControlNetUnits(value: unknown): ComfyUiControlNetUnitConfig[] | null | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (!Array.isArray(value)) {
+    return null;
+  }
+
+  const units = value.map(normalizeControlNetUnitConfig);
+  if (units.some((unit) => unit === null)) {
+    return null;
+  }
+
+  return units as ComfyUiControlNetUnitConfig[];
+}
+
+function getLegacyControlNetSvg(controlNet: ComfyUiControlNetConfig | undefined) {
+  return controlNet?.svg ?? controlNet?.openPoseSvg;
+}
+
+function getControlNetValidationUnits(
+  controlNet: ComfyUiControlNetConfig | undefined,
+  controlNets: ComfyUiControlNetUnitConfig[] | undefined,
+): ComfyUiControlNetUnitConfig[] {
+  if (controlNets !== undefined) {
+    return controlNets;
+  }
+
+  if (!controlNet) {
+    return [];
+  }
+
+  return [
+    {
+      type: "openpose",
+      enabled: controlNet.enabled,
+      modelName: controlNet.modelName,
+      strength: controlNet.strength,
+      startPercent: controlNet.startPercent,
+      endPercent: controlNet.endPercent,
+      svg: getLegacyControlNetSvg(controlNet),
+      imageDataUrl: controlNet.imageDataUrl,
+      imageName: controlNet.imageName,
+    },
+  ];
+}
+
 function createRandomSeed() {
   return Math.floor(Math.random() * RANDOM_SEED_RANGE);
 }
@@ -319,6 +505,51 @@ export function validateComfyUiTextToImageRequest(value: unknown): ComfyUiTextTo
     return {
       ok: false,
       message: "faceDetailer must be a boolean or an object with valid FaceDetailer option values when provided.",
+    };
+  }
+
+  const controlNet = normalizeControlNetConfig(value.controlNet);
+  if (controlNet === null) {
+    return {
+      ok: false,
+      message: "controlNet must be a boolean or an object with valid ControlNet option values when provided.",
+    };
+  }
+
+  const controlNets = normalizeControlNetUnits(value.controlNets);
+  if (controlNets === null) {
+    return {
+      ok: false,
+      message: "controlNets must be an array of valid ControlNet unit option values when provided.",
+    };
+  }
+
+  const controlNetUnitsForValidation = getControlNetValidationUnits(controlNet, controlNets);
+  const invalidControlNetUnit = controlNetUnitsForValidation.find((unit) =>
+    unit.enabled &&
+    !hasNonEmptyString(unit.svg) &&
+    !hasNonEmptyString(unit.imageDataUrl) &&
+    !hasNonEmptyString(unit.imageName)
+  );
+
+  if (invalidControlNetUnit) {
+    return {
+      ok: false,
+      message: `controlNets.${invalidControlNetUnit.type}.svg or imageDataUrl is required when ControlNet is enabled.`,
+    };
+  }
+
+  const invalidControlNetTiming = controlNetUnitsForValidation.find((unit) =>
+    unit.enabled &&
+    typeof unit.startPercent === "number" &&
+    typeof unit.endPercent === "number" &&
+    unit.startPercent > unit.endPercent
+  );
+
+  if (invalidControlNetTiming) {
+    return {
+      ok: false,
+      message: `controlNets.${invalidControlNetTiming.type}.startPercent must be less than or equal to endPercent.`,
     };
   }
 
@@ -420,8 +651,34 @@ export function validateComfyUiTextToImageRequest(value: unknown): ComfyUiTextTo
       promptWrapper,
       outputPrefix: value.outputPrefix?.trim(),
       faceDetailer,
+      controlNet,
+      controlNets,
     },
   };
+}
+
+function toResolvedControlNetUnit(unit: ComfyUiControlNetUnitConfig): ResolvedComfyUiControlNetUnitConfig {
+  return {
+    type: unit.type,
+    enabled: unit.enabled ?? DEFAULT_CONTROLNET_UNIT.enabled,
+    modelName: getString(unit.modelName, DEFAULT_CONTROLNET_UNIT.modelName),
+    strength: unit.strength ?? DEFAULT_CONTROLNET_UNIT.strength,
+    startPercent: unit.startPercent ?? DEFAULT_CONTROLNET_UNIT.startPercent,
+    endPercent: unit.endPercent ?? DEFAULT_CONTROLNET_UNIT.endPercent,
+    svg: unit.svg ?? DEFAULT_CONTROLNET_UNIT.svg,
+    imageDataUrl: unit.imageDataUrl ?? DEFAULT_CONTROLNET_UNIT.imageDataUrl,
+    imageName: getString(unit.imageName, DEFAULT_CONTROLNET_UNIT.imageName),
+  };
+}
+
+function resolveControlNetUnits(request: ComfyUiTextToImageRequest): ResolvedComfyUiControlNetUnitConfig[] {
+  const units = request.controlNets !== undefined
+    ? request.controlNets
+    : getControlNetValidationUnits(request.controlNet, undefined);
+
+  return [...units]
+    .sort((left, right) => CONTROLNET_TYPES.indexOf(left.type) - CONTROLNET_TYPES.indexOf(right.type))
+    .map(toResolvedControlNetUnit);
 }
 
 export function resolveComfyUiTextToImageRequest(
@@ -483,5 +740,6 @@ export function resolveComfyUiTextToImageRequest(
       steps: request.faceDetailer?.steps ?? request.steps ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.steps,
       wildcard: request.faceDetailer?.wildcard ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.faceDetailer.wildcard,
     },
+    controlNets: resolveControlNetUnits(request),
   };
 }

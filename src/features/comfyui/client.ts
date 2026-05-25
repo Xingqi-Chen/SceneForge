@@ -4,6 +4,8 @@ import type {
   ComfyUiQueuePromptOptions,
   ComfyUiQueuePromptResponse,
   ComfyUiTextToImageRequest,
+  ComfyUiUploadImageRequest,
+  ComfyUiUploadImageResponse,
   ComfyUiViewImageReference,
   ComfyUiWorkflow,
 } from "./types";
@@ -83,6 +85,26 @@ function makeQueuePromptBody(workflow: ComfyUiWorkflow, options: ComfyUiQueuePro
   };
 }
 
+function normalizeUploadImageResponse(payload: unknown): ComfyUiUploadImageResponse {
+  if (!isRecord(payload) || typeof payload.name !== "string" || !payload.name.trim()) {
+    throw new ComfyUiApiError("ComfyUI image upload response did not include a file name.", {
+      statusCode: 502,
+      details: payload,
+    });
+  }
+
+  const subfolder = typeof payload.subfolder === "string" && payload.subfolder ? payload.subfolder : undefined;
+  const filename = payload.name.trim();
+
+  return {
+    filename,
+    imageName: subfolder ? `${subfolder}/${filename}` : filename,
+    subfolder,
+    type: typeof payload.type === "string" ? payload.type : undefined,
+    raw: payload,
+  };
+}
+
 export function createComfyUiClient(options: ComfyUiClientOptions) {
   const baseUrl = normalizeComfyUiBaseUrl(options.baseUrl);
   const fetcher = options.fetcher ?? fetch;
@@ -122,6 +144,29 @@ export function createComfyUiClient(options: ComfyUiClientOptions) {
       });
 
       return normalizeQueuePromptResponse(payload);
+    },
+
+    async uploadImage(request: ComfyUiUploadImageRequest): Promise<ComfyUiUploadImageResponse> {
+      const form = new FormData();
+      const bytes = request.bytes;
+      const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+      const blob = new Blob([buffer], { type: request.mimeType ?? "image/png" });
+
+      form.append("image", blob, request.filename);
+      form.append("overwrite", request.overwrite === false ? "false" : "true");
+      form.append("type", request.type ?? "input");
+
+      if (request.subfolder) {
+        form.append("subfolder", request.subfolder);
+      }
+
+      const payload = await requestJson("/upload/image", {
+        method: "POST",
+        headers: readHeaders,
+        body: form,
+      });
+
+      return normalizeUploadImageResponse(payload);
     },
 
     async generateImage(

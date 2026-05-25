@@ -45,6 +45,8 @@ export type ComfyUiTextToImageRequest = {
   promptWrapper?: ComfyUiPromptWrapper;
   outputPrefix?: string;
   faceDetailer?: ComfyUiFaceDetailerConfig;
+  controlNet?: ComfyUiControlNetConfig;
+  controlNets?: ComfyUiControlNetUnitConfig[];
 };
 
 export type ComfyUiPromptWrapper = {
@@ -80,6 +82,32 @@ export type ComfyUiFaceDetailerConfig = {
   wildcard?: string;
 };
 
+export type ComfyUiControlNetConfig = {
+  enabled?: boolean;
+  modelName?: string;
+  strength?: number;
+  startPercent?: number;
+  endPercent?: number;
+  openPoseSvg?: string;
+  svg?: string;
+  imageDataUrl?: string;
+  imageName?: string;
+};
+
+export type ComfyUiControlNetType = "openpose" | "depth" | "normal";
+
+export type ComfyUiControlNetUnitConfig = {
+  type: ComfyUiControlNetType;
+  enabled?: boolean;
+  modelName?: string;
+  strength?: number;
+  startPercent?: number;
+  endPercent?: number;
+  svg?: string;
+  imageDataUrl?: string;
+  imageName?: string;
+};
+
 export type ComfyUiLoraInput = {
   loraName: string;
   strengthModel: number;
@@ -110,6 +138,7 @@ export type ResolvedComfyUiTextToImageRequest = {
   promptWrapper: ResolvedComfyUiPromptWrapper;
   outputPrefix: string;
   faceDetailer: ResolvedComfyUiFaceDetailerConfig;
+  controlNets: ResolvedComfyUiControlNetUnitConfig[];
 };
 
 export type ResolvedComfyUiPromptWrapper = {
@@ -145,11 +174,46 @@ export type ResolvedComfyUiFaceDetailerConfig = {
   wildcard: string;
 };
 
+export type ResolvedComfyUiControlNetConfig = {
+  enabled: boolean;
+  modelName: string;
+  strength: number;
+  startPercent: number;
+  endPercent: number;
+  openPoseSvg: string;
+  svg: string;
+  imageDataUrl: string;
+  imageName: string;
+};
+
+export type ResolvedComfyUiControlNetUnitConfig = {
+  type: ComfyUiControlNetType;
+  enabled: boolean;
+  modelName: string;
+  strength: number;
+  startPercent: number;
+  endPercent: number;
+  svg: string;
+  imageDataUrl: string;
+  imageName: string;
+};
+
+export type BasicTextToImageControlNetNodeIds = {
+  type: ComfyUiControlNetType;
+  image: string;
+  loader: string;
+  apply: string;
+};
+
 export type BasicTextToImageNodeIds = {
   checkpoint: string;
   loraLoaders: string[];
   positivePrompt: string;
   negativePrompt: string;
+  controlNets?: BasicTextToImageControlNetNodeIds[];
+  controlNetImage?: string;
+  controlNetLoader?: string;
+  controlNetApply?: string;
   latentImage: string;
   sampler: string;
   vaeDecode: string;
@@ -183,6 +247,23 @@ export type ComfyUiViewImageReference = {
   filename: string;
   subfolder?: string;
   type?: string;
+};
+
+export type ComfyUiUploadImageRequest = {
+  filename: string;
+  bytes: Uint8Array;
+  mimeType?: string;
+  overwrite?: boolean;
+  subfolder?: string;
+  type?: "input" | "output" | "temp";
+};
+
+export type ComfyUiUploadImageResponse = {
+  filename: string;
+  imageName: string;
+  subfolder?: string;
+  type?: string;
+  raw: unknown;
 };
 
 export type ComfyUiGeneratedImage = ComfyUiViewImageReference & {

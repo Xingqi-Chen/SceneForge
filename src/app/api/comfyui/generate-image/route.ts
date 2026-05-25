@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import sharp from "sharp";
 
 import {
   ComfyUiApiError,
@@ -7,6 +8,7 @@ import {
   validateComfyUiTextToImageRequest,
   validateComfyUiRequestAgainstObjectInfo,
 } from "@/features/comfyui";
+import type { ComfyUiTextToImageRequest } from "@/features/comfyui";
 
 export const runtime = "nodejs";
 
@@ -42,6 +44,79 @@ function readClientId(value: unknown) {
   return typeof clientId === "string" && clientId.trim() ? clientId.trim() : undefined;
 }
 
+function sanitizeReturnedRequest(request: ComfyUiTextToImageRequest) {
+  return {
+    ...request,
+    ...(request.controlNet
+      ? {
+          controlNet: {
+            ...request.controlNet,
+            openPoseSvg: "",
+            svg: "",
+            imageDataUrl: "",
+          },
+        }
+      : {}),
+    ...(request.controlNets
+      ? {
+          controlNets: request.controlNets.map((controlNet) => ({
+            ...controlNet,
+            svg: "",
+            imageDataUrl: "",
+          })),
+        }
+      : {}),
+  };
+}
+
+function parsePngDataUrl(value: string) {
+  const match = /^data:image\/png;base64,([A-Za-z0-9+/=]+)$/.exec(value.trim());
+
+  if (!match) {
+    throw new Error("ControlNet imageDataUrl must be a PNG data URL.");
+  }
+
+  return Buffer.from(match[1], "base64");
+}
+
+async function uploadControlNetImages(
+  client: ReturnType<typeof createComfyUiClient>,
+  request: ComfyUiTextToImageRequest,
+) {
+  if (!request.controlNets?.some((controlNet) => controlNet.enabled && (controlNet.svg || controlNet.imageDataUrl))) {
+    return request;
+  }
+
+  const uploadedControlNets = await Promise.all(
+    request.controlNets.map(async (controlNet) => {
+      if (!controlNet.enabled || (!controlNet.svg && !controlNet.imageDataUrl)) {
+        return controlNet;
+      }
+
+      const png = controlNet.imageDataUrl
+        ? parsePngDataUrl(controlNet.imageDataUrl)
+        : await sharp(Buffer.from(controlNet.svg ?? "")).png().toBuffer();
+      const uploaded = await client.uploadImage({
+        filename: `sceneforge-controlnet-${controlNet.type}-${Date.now()}.png`,
+        bytes: png,
+        mimeType: "image/png",
+        overwrite: true,
+        type: "input",
+      });
+
+      return {
+        ...controlNet,
+        imageName: uploaded.imageName,
+      };
+    }),
+  );
+
+  return {
+    ...request,
+    controlNets: uploadedControlNets,
+  };
+}
+
 export async function POST(request: Request) {
   let payload: unknown;
 
@@ -72,7 +147,8 @@ export async function POST(request: Request) {
     }
 
     const clientId = readClientId(payload);
-    const result = await client.generateImage(objectValidation.request, clientId ? { clientId } : undefined);
+    const requestWithControlImage = await uploadControlNetImages(client, objectValidation.request);
+    const result = await client.generateImage(requestWithControlImage, clientId ? { clientId } : undefined);
 
     return NextResponse.json({
       clientId,
@@ -82,7 +158,7 @@ export async function POST(request: Request) {
       workflow: result.workflow,
       nodeIds: result.nodeIds,
       outputNodeId: result.outputNodeId,
-      request: result.request,
+      request: sanitizeReturnedRequest(result.request),
     });
   } catch (error) {
     if (error instanceof ComfyUiApiError) {

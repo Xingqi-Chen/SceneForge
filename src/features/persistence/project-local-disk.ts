@@ -11,10 +11,10 @@ const FILE_SUFFIX = ".json";
 export function getResolvedProjectsDir(): string {
   const override = process.env.SCENEFORGE_PROJECTS_DIR?.trim();
   if (override) {
-    return path.resolve(override);
+    return override;
   }
 
-  return path.join(process.cwd(), "data", "projects");
+  return path.join(/*turbopackIgnore: true*/ process.cwd(), "data", "projects");
 }
 
 export function projectFileName(projectId: string): string {
@@ -34,7 +34,7 @@ export function parseProjectIdFromFileName(name: string): string | null {
 }
 
 async function ensureProjectsDir(dir: string) {
-  await fs.mkdir(dir, { recursive: true });
+  await fs.mkdir(/*turbopackIgnore: true*/ dir, { recursive: true });
 }
 
 async function readProjectFromJson(text: string): Promise<SceneForgeProject | null> {
@@ -56,7 +56,7 @@ async function loadAllProjects(dir: string): Promise<SceneForgeProject[]> {
 
   let entries: string[];
   try {
-    entries = await fs.readdir(dir);
+    entries = await fs.readdir(/*turbopackIgnore: true*/ dir);
   } catch (error) {
     console.warn("[SceneForge] [persistence] failed to read projects directory", { error });
     return [];
@@ -72,7 +72,7 @@ async function loadAllProjects(dir: string): Promise<SceneForgeProject[]> {
 
     const fullPath = path.join(dir, entry);
     try {
-      const text = await fs.readFile(fullPath, "utf8");
+      const text = await fs.readFile(/*turbopackIgnore: true*/ fullPath, "utf8");
       const project = await readProjectFromJson(text);
       if (project) {
         projects.push(project);
@@ -106,11 +106,11 @@ export async function saveProjectToDisk(project: SceneForgeProject) {
 
   const fileName = projectFileName(toWrite.id);
   const fullPath = path.join(dir, fileName);
-  await fs.writeFile(fullPath, JSON.stringify(toWrite), "utf8");
+  await fs.writeFile(/*turbopackIgnore: true*/ fullPath, JSON.stringify(toWrite), "utf8");
 
   for (const id of duplicateIds) {
     try {
-      await fs.unlink(path.join(dir, projectFileName(id)));
+      await fs.unlink(/*turbopackIgnore: true*/ path.join(dir, projectFileName(id)));
     } catch (error) {
       console.warn("[SceneForge] [persistence] failed to remove duplicate project file", { id, error });
     }
@@ -130,7 +130,7 @@ export async function loadProjectFromDisk(projectId: string): Promise<SceneForge
   const fullPath = path.join(dir, fileName);
 
   try {
-    const text = await fs.readFile(fullPath, "utf8");
+    const text = await fs.readFile(/*turbopackIgnore: true*/ fullPath, "utf8");
     const project = await readProjectFromJson(text);
     return project ?? undefined;
   } catch (error) {
@@ -152,8 +152,8 @@ export async function deleteProjectFromDisk(projectId: string): Promise<boolean>
     return false;
   }
 
-  const dir = path.resolve(getResolvedProjectsDir());
-  const fullPath = path.resolve(path.join(dir, projectFileName(trimmed)));
+  const dir = path.resolve(/*turbopackIgnore: true*/ getResolvedProjectsDir());
+  const fullPath = path.resolve(/*turbopackIgnore: true*/ path.join(dir, projectFileName(trimmed)));
   const relative = path.relative(dir, fullPath);
 
   if (relative.startsWith("..") || path.isAbsolute(relative)) {
@@ -164,7 +164,7 @@ export async function deleteProjectFromDisk(projectId: string): Promise<boolean>
   }
 
   try {
-    await fs.unlink(fullPath);
+    await fs.unlink(/*turbopackIgnore: true*/ fullPath);
     console.info("[SceneForge] [persistence] deleted project file", { projectId: trimmed });
     return true;
   } catch (error) {

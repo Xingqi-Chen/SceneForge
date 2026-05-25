@@ -1,6 +1,17 @@
 "use client";
 
-import { AlertTriangle, CheckCircle2, Download, Image as ImageIcon, Loader2, Play, Sparkles, X } from "lucide-react";
+import {
+  AlertTriangle,
+  CheckCircle2,
+  ChevronDown,
+  ChevronRight,
+  Download,
+  Image as ImageIcon,
+  Loader2,
+  Play,
+  Sparkles,
+  X,
+} from "lucide-react";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 
@@ -47,6 +58,14 @@ import {
   normalizeComfyUiSamplerSettings,
 } from "@/features/editor/ai-prompt/comfyui-generation-options";
 import type { CivitaiAiPromptResult } from "@/features/editor/ai-prompt/civitai-ai-context";
+import {
+  buildComfyUiControlNetOpenPosePreview,
+  type ComfyUiControlNetOpenPosePreview,
+} from "@/features/editor/ai-prompt/comfyui-controlnet-preview";
+import {
+  renderComfyUiNormalControlImage,
+  type ComfyUiNormalControlImagePreview,
+} from "@/features/editor/ai-prompt/comfyui-normal-control-image";
 import {
   getComfyUiGenerationDownloadReadiness,
   isComfyUiGenerationResourceReady,
@@ -95,11 +114,30 @@ type GenerationDraftLora = Required<NonNullable<ComfyUiTextToImageRequest["loras
   enabled: boolean;
 };
 
-type GenerationDraft = Required<Omit<ComfyUiTextToImageRequest, "loras" | "promptWrapper" | "faceDetailer">> & {
+type GenerationDraftControlNetUnit = {
+  type: "openpose" | "depth" | "normal";
+  enabled: boolean;
+  modelName: string;
+  strength: number;
+  startPercent: number;
+  endPercent: number;
+  svg: string;
+  imageDataUrl: string;
+  imageName: string;
+};
+
+type GenerationDraftControlNets = {
+  depth: GenerationDraftControlNetUnit;
+  normal: GenerationDraftControlNetUnit;
+  openpose: GenerationDraftControlNetUnit;
+};
+
+type GenerationDraft = Required<Omit<ComfyUiTextToImageRequest, "loras" | "promptWrapper" | "faceDetailer" | "controlNet" | "controlNets">> & {
   loras: GenerationDraftLora[];
   imageCount: number;
   promptWrapper: Required<NonNullable<ComfyUiTextToImageRequest["promptWrapper"]>>;
   faceDetailer: Required<NonNullable<ComfyUiTextToImageRequest["faceDetailer"]>>;
+  controlNets: GenerationDraftControlNets;
   seedMode: ComfyUiGenerationSeedMode;
 };
 
@@ -454,6 +492,39 @@ function ResourceDownloadBadge({ item }: { item: ResourceDownloadItem | undefine
   );
 }
 
+function findRequestControlNetUnit(
+  request: ComfyUiTextToImageRequest,
+  type: GenerationDraftControlNetUnit["type"],
+) {
+  return request.controlNets?.find((unit) => unit.type === type);
+}
+
+function createDraftControlNetUnit(
+  request: ComfyUiTextToImageRequest,
+  type: GenerationDraftControlNetUnit["type"],
+): GenerationDraftControlNetUnit {
+  const unit = findRequestControlNetUnit(request, type);
+  const legacyOpenPose = type === "openpose" ? request.controlNet : undefined;
+  const defaultImageName = type === "depth"
+    ? "SceneForgeControlNetDepth.png"
+    : type === "normal"
+      ? "SceneForgeControlNetNormal.png"
+      : "SceneForgeControlNetOpenPose.png";
+  const defaultStrength = type === "depth" ? 0.75 : type === "normal" ? 0.7 : 0.85;
+
+  return {
+    type,
+    enabled: unit?.enabled ?? legacyOpenPose?.enabled ?? false,
+    modelName: unit?.modelName ?? legacyOpenPose?.modelName ?? "",
+    strength: unit?.strength ?? legacyOpenPose?.strength ?? defaultStrength,
+    startPercent: unit?.startPercent ?? legacyOpenPose?.startPercent ?? 0,
+    endPercent: unit?.endPercent ?? legacyOpenPose?.endPercent ?? 1,
+    svg: "",
+    imageDataUrl: "",
+    imageName: unit?.imageName ?? legacyOpenPose?.imageName ?? defaultImageName,
+  };
+}
+
 function toDraft(
   request: ComfyUiTextToImageRequest,
   loraSettings?: ComfyUiGenerationLoraSetting[],
@@ -498,6 +569,11 @@ function toDraft(
       negativePrefix: request.promptWrapper?.negativePrefix ?? "",
     },
     outputPrefix: request.outputPrefix ?? "SceneForge",
+    controlNets: {
+      openpose: createDraftControlNetUnit(request, "openpose"),
+      depth: createDraftControlNetUnit(request, "depth"),
+      normal: createDraftControlNetUnit(request, "normal"),
+    },
     faceDetailer: {
       bboxCropFactor: request.faceDetailer?.bboxCropFactor ?? COMFYUI_FACE_DETAILER_DEFAULTS.bboxCropFactor,
       bboxDilation: request.faceDetailer?.bboxDilation ?? COMFYUI_FACE_DETAILER_DEFAULTS.bboxDilation,
@@ -554,7 +630,52 @@ function toSavedParameters(draft: GenerationDraft): SavedComfyUiGenerationParams
   };
 }
 
-function toRequestPayload(draft: GenerationDraft, seed: number): ComfyUiTextToImageRequest {
+function toRequestPayload(
+  draft: GenerationDraft,
+  seed: number,
+  controlNetPreview?: ComfyUiControlNetOpenPosePreview | null,
+  normalPreview?: ComfyUiNormalControlImagePreview | null,
+): ComfyUiTextToImageRequest {
+  const controlNetUnits = [
+    {
+      draft: draft.controlNets.openpose,
+      svg: controlNetPreview?.openPose.svg ?? "",
+      imageDataUrl: "",
+    },
+    {
+      draft: draft.controlNets.depth,
+      svg: controlNetPreview?.depth.svg ?? "",
+      imageDataUrl: "",
+    },
+    {
+      draft: draft.controlNets.normal,
+      svg: "",
+      imageDataUrl: normalPreview?.imageDataUrl ?? "",
+    },
+  ].flatMap(({ draft: controlNet, imageDataUrl, svg }) => {
+    const previewAvailable = controlNet.type === "normal"
+      ? normalPreview?.available
+      : controlNetPreview?.available;
+
+    if (!controlNet.enabled || !previewAvailable || (!svg && !imageDataUrl)) {
+      return [];
+    }
+
+    return [
+      {
+        type: controlNet.type,
+        enabled: true,
+        modelName: controlNet.modelName,
+        strength: controlNet.strength,
+        startPercent: Math.min(controlNet.startPercent, controlNet.endPercent),
+        endPercent: Math.max(controlNet.startPercent, controlNet.endPercent),
+        svg,
+        imageDataUrl,
+        imageName: controlNet.imageName,
+      },
+    ];
+  });
+
   return {
     checkpointName: draft.checkpointName,
     positivePrompt: draft.positivePrompt,
@@ -579,6 +700,7 @@ function toRequestPayload(draft: GenerationDraft, seed: number): ComfyUiTextToIm
     promptWrapper: draft.promptWrapper,
     outputPrefix: draft.outputPrefix,
     faceDetailer: draft.faceDetailer,
+    controlNets: controlNetUnits,
   };
 }
 
@@ -984,6 +1106,501 @@ function GeneratedImageResults({
   return null;
 }
 
+function getControlNetOpenPoseUnavailableMessage(reason: ComfyUiControlNetOpenPosePreview["reason"]) {
+  if (reason === "scene-not-3d") {
+    return "Switch the canvas to 3D mode and add a 3D character to preview ControlNet maps.";
+  }
+
+  return "Add at least one visible 3D character skeleton to enable ControlNet previews.";
+}
+
+function loadImage(src: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error("Failed to render ControlNet SVG."));
+    image.src = src;
+  });
+}
+
+function canvasToPngBlob(canvas: HTMLCanvasElement): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (blob) {
+        resolve(blob);
+        return;
+      }
+
+      reject(new Error("Failed to encode ControlNet PNG."));
+    }, "image/png");
+  });
+}
+
+async function downloadControlNetSvgAsPng({
+  filename,
+  height,
+  svg,
+  width,
+}: {
+  filename: string;
+  height: number;
+  svg: string;
+  width: number;
+}) {
+  const svgBlob = new Blob([svg], { type: "image/svg+xml;charset=utf-8" });
+  const svgUrl = URL.createObjectURL(svgBlob);
+
+  try {
+    const image = await loadImage(svgUrl);
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(width));
+    canvas.height = Math.max(1, Math.round(height));
+    const context = canvas.getContext("2d");
+
+    if (!context) {
+      throw new Error("Canvas is not available for ControlNet PNG export.");
+    }
+
+    context.drawImage(image, 0, 0, canvas.width, canvas.height);
+    const pngBlob = await canvasToPngBlob(canvas);
+    const pngUrl = URL.createObjectURL(pngBlob);
+    const link = document.createElement("a");
+
+    try {
+      link.href = pngUrl;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+    } finally {
+      URL.revokeObjectURL(pngUrl);
+    }
+  } finally {
+    URL.revokeObjectURL(svgUrl);
+  }
+}
+
+function downloadPngDataUrl({
+  filename,
+  imageDataUrl,
+}: {
+  filename: string;
+  imageDataUrl: string;
+}) {
+  const link = document.createElement("a");
+  link.href = imageDataUrl;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+}
+
+function formatDepthRange(range: ComfyUiControlNetOpenPosePreview["depth"]["depthRange"] | undefined) {
+  if (!range) {
+    return "depth n/a";
+  }
+
+  return `depth ${range.min.toFixed(2)}-${range.max.toFixed(2)}`;
+}
+
+function ControlNetUnitCard({
+  description,
+  helpText,
+  height,
+  label,
+  onChange,
+  preview,
+  previewAvailable,
+  unit,
+  width,
+}: {
+  description: string;
+  helpText: string;
+  height: number;
+  label: string;
+  onChange: (patch: Partial<GenerationDraftControlNetUnit>) => void;
+  preview: {
+    depthRange?: ComfyUiControlNetOpenPosePreview["depth"]["depthRange"];
+    error?: string;
+    imageDataUrl?: string | null;
+    loading?: boolean;
+    reason?: string;
+    svg: string | null;
+    visibleJointCount: number;
+    visibleSkeletonCount: number;
+  };
+  previewAvailable: boolean;
+  unit: GenerationDraftControlNetUnit;
+  width: number;
+}) {
+  const enabled = previewAvailable && unit.enabled;
+  const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "success" | "error">("idle");
+  const [saveError, setSaveError] = useState("");
+  const hasPreviewImage = Boolean(preview.svg || preview.imageDataUrl);
+
+  async function savePng() {
+    if (!previewAvailable || !hasPreviewImage || saveStatus === "saving") {
+      return;
+    }
+
+    setSaveStatus("saving");
+    setSaveError("");
+
+    try {
+      if (preview.imageDataUrl) {
+        downloadPngDataUrl({
+          filename: `sceneforge-${unit.type}-${width}x${height}.png`,
+          imageDataUrl: preview.imageDataUrl,
+        });
+      } else if (preview.svg) {
+        await downloadControlNetSvgAsPng({
+          filename: `sceneforge-${unit.type}-${width}x${height}.png`,
+          height,
+          svg: preview.svg,
+          width,
+        });
+      }
+      setSaveStatus("success");
+    } catch (error) {
+      setSaveStatus("error");
+      setSaveError(error instanceof Error ? error.message : `Failed to save ${label} PNG.`);
+    }
+  }
+
+  return (
+    <div className="grid gap-3 rounded-md border border-sky-100 bg-white p-3">
+      <label className="flex items-start gap-2 text-xs text-slate-700">
+        <input
+          checked={enabled}
+          className="mt-0.5 size-3.5 rounded border-slate-300 text-sky-600"
+          onChange={(event) => onChange({ enabled: event.target.checked })}
+          type="checkbox"
+        />
+        <span>
+          <span className="font-semibold text-slate-800">Use {label} ControlNet in this generation</span>
+          <span className="mt-0.5 block text-[11px] leading-relaxed text-slate-500">{description}</span>
+        </span>
+      </label>
+      {enabled ? (
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="sm:col-span-2 lg:col-span-4">
+            <TextInput
+              label={`${label.toLowerCase()} model`}
+              onChange={(value) => onChange({ modelName: value })}
+              value={unit.modelName}
+            />
+            <p className="mt-1 text-[10px] leading-relaxed text-slate-500">{helpText}</p>
+          </div>
+          <NumberInput
+            label="strength"
+            max={2}
+            min={0}
+            onChange={(value) => onChange({ strength: value })}
+            step={0.05}
+            value={unit.strength}
+          />
+          <NumberInput
+            label="start"
+            max={1}
+            min={0}
+            onChange={(value) => onChange({ startPercent: value })}
+            step={0.05}
+            value={unit.startPercent}
+          />
+          <NumberInput
+            label="end"
+            max={1}
+            min={0}
+            onChange={(value) => onChange({ endPercent: value })}
+            step={0.05}
+            value={unit.endPercent}
+          />
+        </div>
+      ) : null}
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <p className="text-[11px] leading-relaxed text-slate-500">Preview map can be saved locally as a PNG.</p>
+        <Button
+          className="h-8 shrink-0 rounded-md bg-sky-600 px-3 text-xs text-white hover:bg-sky-700 disabled:opacity-60"
+          disabled={saveStatus === "saving" || !hasPreviewImage}
+          onClick={() => void savePng()}
+          type="button"
+        >
+          {saveStatus === "saving" ? (
+            <Loader2 className="size-3.5 animate-spin" />
+          ) : (
+            <Download className="size-3.5" />
+          )}
+          Save PNG
+        </Button>
+      </div>
+      {preview.loading ? (
+        <div className="flex items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] leading-relaxed text-slate-500">
+          <Loader2 className="size-3.5 animate-spin" />
+          Rendering {label} preview...
+        </div>
+      ) : null}
+      {preview.error ? (
+        <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] leading-relaxed text-amber-800">
+          {preview.error}
+        </p>
+      ) : null}
+      {preview.svg ? (
+        <div
+          className="flex w-full items-center justify-center overflow-hidden rounded-md border border-slate-900/10 bg-black [&_svg]:h-full [&_svg]:w-full"
+          dangerouslySetInnerHTML={{ __html: preview.svg }}
+          style={{ aspectRatio: `${width} / ${height}` }}
+        />
+      ) : null}
+      {preview.imageDataUrl ? (
+        <div
+          className="flex w-full items-center justify-center overflow-hidden rounded-md border border-slate-900/10 bg-black"
+          style={{ aspectRatio: `${width} / ${height}` }}
+        >
+          <img
+            alt={`${label} ControlNet preview`}
+            className="h-full w-full object-contain"
+            src={preview.imageDataUrl}
+          />
+        </div>
+      ) : null}
+      <div className="grid gap-2 text-[11px] text-slate-600 sm:grid-cols-2 lg:grid-cols-4">
+        <span className="rounded-md bg-slate-50 px-2 py-1.5">visible {preview.visibleSkeletonCount}</span>
+        <span className="rounded-md bg-slate-50 px-2 py-1.5">joints {preview.visibleJointCount}</span>
+        <span className="rounded-md bg-slate-50 px-2 py-1.5">
+          size {width} x {height}
+        </span>
+        <span className="rounded-md bg-slate-50 px-2 py-1.5">
+          {unit.type === "normal" ? "normal PNG" : formatDepthRange(preview.depthRange)}
+        </span>
+      </div>
+      {saveStatus === "success" ? (
+        <p className="text-[11px] leading-relaxed text-emerald-700">{label} PNG download started.</p>
+      ) : null}
+      {saveStatus === "error" && saveError ? (
+        <p className="text-[11px] leading-relaxed text-rose-700">{saveError}</p>
+      ) : null}
+    </div>
+  );
+}
+
+function ControlNetOpenPoseFoldout({
+  controlNets,
+  expanded,
+  normalPreview,
+  normalPreviewLoading,
+  onChange,
+  onToggle,
+  preview,
+}: {
+  controlNets: GenerationDraft["controlNets"];
+  expanded: boolean;
+  normalPreview: ComfyUiNormalControlImagePreview | null;
+  normalPreviewLoading: boolean;
+  onChange: (
+    type: GenerationDraftControlNetUnit["type"],
+    patch: Partial<GenerationDraftControlNetUnit>,
+  ) => void;
+  onToggle: () => void;
+  preview: ComfyUiControlNetOpenPosePreview | null;
+}) {
+  const available = Boolean(preview?.available);
+  const controlNet = controlNets.openpose;
+  const controlNetEnabled = available && controlNet.enabled;
+  const message = preview
+    ? getControlNetOpenPoseUnavailableMessage(preview.reason)
+    : "ControlNet previews are not ready yet.";
+  const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "success" | "error">("idle");
+  const [saveError, setSaveError] = useState("");
+
+  async function savePng() {
+    if (!preview?.available || !preview.svg || saveStatus === "saving") {
+      return;
+    }
+
+    setSaveStatus("saving");
+    setSaveError("");
+
+    try {
+      await downloadControlNetSvgAsPng({
+        filename: `sceneforge-openpose-${preview.width}x${preview.height}.png`,
+        height: preview.height,
+        svg: preview.svg,
+        width: preview.width,
+      });
+      setSaveStatus("success");
+    } catch (error) {
+      setSaveStatus("error");
+      setSaveError(error instanceof Error ? error.message : "Failed to save OpenPose PNG.");
+    }
+  }
+
+  return (
+    <div
+      className={`grid gap-3 rounded-md border p-3 sm:col-span-2 lg:col-span-3 ${
+        available ? "border-sky-200 bg-sky-50/60" : "border-slate-200 bg-slate-50"
+      }`}
+    >
+      <button
+        aria-expanded={available ? expanded : false}
+        className={`flex w-full items-start justify-between gap-3 text-left ${
+          available ? "cursor-pointer" : "cursor-not-allowed opacity-70"
+        }`}
+        disabled={!available}
+        onClick={onToggle}
+        type="button"
+      >
+        <span className="min-w-0">
+          <span className="block text-xs font-semibold text-slate-800">ControlNet</span>
+          <span className="mt-0.5 block text-[11px] leading-relaxed text-slate-500">
+            {available
+              ? `OpenPose, Depth, and Normal previews from ${preview?.characterCount ?? 0} 3D character(s).`
+              : message}
+          </span>
+        </span>
+        {available ? (
+          expanded ? (
+            <ChevronDown className="mt-0.5 size-4 shrink-0 text-sky-600" />
+          ) : (
+            <ChevronRight className="mt-0.5 size-4 shrink-0 text-sky-600" />
+          )
+        ) : (
+          <ChevronRight className="mt-0.5 size-4 shrink-0 text-slate-400" />
+        )}
+      </button>
+      {!available ? (
+        <p className="rounded-md border border-slate-200 bg-white px-3 py-2 text-[11px] leading-relaxed text-slate-500">
+          {message}
+        </p>
+      ) : null}
+      {available && expanded && preview?.svg ? (
+        <div className="grid gap-3">
+          <div className="grid gap-3 rounded-md border border-sky-100 bg-white p-3">
+            <label className="flex items-start gap-2 text-xs text-slate-700">
+              <input
+                checked={controlNetEnabled}
+                className="mt-0.5 size-3.5 rounded border-slate-300 text-sky-600"
+                onChange={(event) => onChange("openpose", { enabled: event.target.checked })}
+                type="checkbox"
+              />
+              <span>
+                <span className="font-semibold text-slate-800">Use OpenPose ControlNet in this generation</span>
+                <span className="mt-0.5 block text-[11px] leading-relaxed text-slate-500">
+                  When enabled, SceneForge uploads this OpenPose PNG to ComfyUI and inserts ControlNet nodes before KSampler.
+                </span>
+              </span>
+            </label>
+            {controlNetEnabled ? (
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                <div className="sm:col-span-2 lg:col-span-4">
+                  <TextInput
+                    label="controlnet model"
+                    onChange={(value) => onChange("openpose", { modelName: value })}
+                    value={controlNet.modelName}
+                  />
+                  <p className="mt-1 text-[10px] leading-relaxed text-slate-500">
+                    Leave blank to auto-pick the first available OpenPose/DWPose ControlNet model from ComfyUI.
+                  </p>
+                </div>
+                <NumberInput
+                  label="strength"
+                  max={2}
+                  min={0}
+                  onChange={(value) => onChange("openpose", { strength: value })}
+                  step={0.05}
+                  value={controlNet.strength}
+                />
+                <NumberInput
+                  label="start"
+                  max={1}
+                  min={0}
+                  onChange={(value) => onChange("openpose", { startPercent: value })}
+                  step={0.05}
+                  value={controlNet.startPercent}
+                />
+                <NumberInput
+                  label="end"
+                  max={1}
+                  min={0}
+                  onChange={(value) => onChange("openpose", { endPercent: value })}
+                  step={0.05}
+                  value={controlNet.endPercent}
+                />
+              </div>
+            ) : null}
+          </div>
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <p className="text-[11px] leading-relaxed text-slate-500">
+              Preview only. Save this OpenPose map locally as a PNG when you need a ControlNet reference image.
+            </p>
+            <Button
+              className="h-8 shrink-0 rounded-md bg-sky-600 px-3 text-xs text-white hover:bg-sky-700 disabled:opacity-60"
+              disabled={saveStatus === "saving"}
+              onClick={() => void savePng()}
+              type="button"
+            >
+              {saveStatus === "saving" ? (
+                <Loader2 className="size-3.5 animate-spin" />
+              ) : (
+                <Download className="size-3.5" />
+              )}
+              保存 PNG
+            </Button>
+          </div>
+          <div
+            className="flex w-full items-center justify-center overflow-hidden rounded-md border border-slate-900/10 bg-black [&_svg]:h-full [&_svg]:w-full"
+            dangerouslySetInnerHTML={{ __html: preview.svg }}
+            style={{ aspectRatio: `${preview.width} / ${preview.height}` }}
+          />
+          <div className="grid gap-2 text-[11px] text-slate-600 sm:grid-cols-2 lg:grid-cols-4">
+            <span className="rounded-md bg-white px-2 py-1.5">characters {preview.characterCount}</span>
+            <span className="rounded-md bg-white px-2 py-1.5">visible {preview.visibleSkeletonCount}</span>
+            <span className="rounded-md bg-white px-2 py-1.5">joints {preview.visibleJointCount}</span>
+            <span className="rounded-md bg-white px-2 py-1.5">
+              size {preview.width} x {preview.height}
+            </span>
+          </div>
+          <ControlNetUnitCard
+            description="Uploads the current 3D skeleton depth map and chains a Depth ControlNet after OpenPose when both are enabled."
+            helpText="Leave blank to auto-pick a depth-like ControlNet model from ComfyUI."
+            height={preview.height}
+            label="Depth"
+            onChange={(patch) => onChange("depth", patch)}
+            preview={preview.depth}
+            previewAvailable={available}
+            unit={controlNets.depth}
+            width={preview.width}
+          />
+          <ControlNetUnitCard
+            description="Uploads a browser-rendered Three.js normal map from the current 3D mannequin meshes and chains Normal ControlNet after Depth."
+            helpText="Leave blank to auto-pick a normal-like ControlNet model from ComfyUI."
+            height={preview.height}
+            label="Normal"
+            onChange={(patch) => onChange("normal", patch)}
+            preview={{
+              error: normalPreview?.error,
+              imageDataUrl: normalPreview?.imageDataUrl ?? null,
+              loading: normalPreviewLoading,
+              reason: normalPreview?.reason,
+              svg: null,
+              visibleJointCount: 0,
+              visibleSkeletonCount: normalPreview?.available ? normalPreview.characterCount : 0,
+            }}
+            previewAvailable={Boolean(available && normalPreview?.available)}
+            unit={controlNets.normal}
+            width={preview.width}
+          />
+          {saveStatus === "success" ? (
+            <p className="text-[11px] leading-relaxed text-emerald-700">OpenPose PNG 已开始保存。</p>
+          ) : null}
+          {saveStatus === "error" && saveError ? (
+            <p className="text-[11px] leading-relaxed text-rose-700">{saveError}</p>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 export type ComfyUiGenerationDialogProps = {
   activePrompt: string;
   advice: CivitaiAiPromptResult | null;
@@ -1019,11 +1636,15 @@ export function ComfyUiGenerationDialog({
   selectedLoraIds,
   title = "ComfyUI 生图",
 }: ComfyUiGenerationDialogProps) {
+  const scene = useEditorStore((state) => state.project.scene);
   const selectedLoraIdsKey = selectedLoraIds.join(",");
   const [selectedResources, setSelectedResources] = useState<SelectedCivitaiResourcesPreview>(EMPTY_SELECTED_RESOURCES);
   const [loadStatus, setLoadStatus] = useState<LoadStatus>("idle");
   const [loadError, setLoadError] = useState("");
   const [draft, setDraft] = useState<GenerationDraft | null>(null);
+  const [controlNetExpanded, setControlNetExpanded] = useState(false);
+  const [controlNetNormalPreview, setControlNetNormalPreview] = useState<ComfyUiNormalControlImagePreview | null>(null);
+  const [controlNetNormalPreviewLoading, setControlNetNormalPreviewLoading] = useState(false);
   const [loraSettings, setLoraSettings] = useState<ComfyUiGenerationLoraSetting[]>([]);
   const [parameterSource, setParameterSource] = useState<ComfyUiGenerationParameterSource>("reference");
   const [downloadItems, setDownloadItems] = useState<ResourceDownloadItem[]>([]);
@@ -1066,6 +1687,44 @@ export function ComfyUiGenerationDialog({
     loadStatus === "success" &&
     Boolean(draft) &&
     allResourceDownloadsReady;
+  const controlNetOpenPosePreview = useMemo(
+    () =>
+      draft
+        ? buildComfyUiControlNetOpenPosePreview(scene, {
+            width: draft.width,
+            height: draft.height,
+          })
+        : null,
+    [draft, scene],
+  );
+
+  useEffect(() => {
+    if (!draft || !open) {
+      return;
+    }
+
+    let cancelled = false;
+    const timeout = window.setTimeout(() => {
+      setControlNetNormalPreviewLoading(true);
+
+      void renderComfyUiNormalControlImage(scene, {
+        width: draft.width,
+        height: draft.height,
+      }).then((preview) => {
+        if (cancelled) {
+          return;
+        }
+
+        setControlNetNormalPreview(preview);
+        setControlNetNormalPreviewLoading(false);
+      });
+    }, 0);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeout);
+    };
+  }, [draft, open, scene]);
 
   function clearDiagnosisReview() {
     setDiagnosisStatus("idle");
@@ -1097,6 +1756,9 @@ export function ComfyUiGenerationDialog({
     setWaitMessage("");
     setGenerationProgress(null);
     setResults([]);
+    setControlNetExpanded(false);
+    setControlNetNormalPreview(null);
+    setControlNetNormalPreviewLoading(false);
     resetDiagnosisState();
 
     try {
@@ -1186,6 +1848,27 @@ export function ComfyUiGenerationDialog({
             faceDetailer: {
               ...current.faceDetailer,
               ...patch,
+            },
+          }
+        : current
+    ));
+  }
+
+  function patchControlNet(
+    type: GenerationDraftControlNetUnit["type"],
+    patch: Partial<GenerationDraftControlNetUnit>,
+  ) {
+    setSaveMessage("");
+    setDraft((current) => (
+      current
+        ? {
+            ...current,
+            controlNets: {
+              ...current.controlNets,
+              [type]: {
+                ...current.controlNets[type],
+                ...patch,
+              },
             },
           }
         : current
@@ -1300,7 +1983,7 @@ export function ComfyUiGenerationDialog({
       setDraft((current) => (current ? { ...current, imageCount, seed } : current));
       setWaitMessage(`已准备生成 ${imageCount} 张图片，正在提交到 ComfyUI...`);
 
-      const requestPayload = toRequestPayload({ ...draft, imageCount }, seed);
+      const requestPayload = toRequestPayload({ ...draft, imageCount }, seed, controlNetOpenPosePreview, controlNetNormalPreview);
       const payload = await fetchJson<Omit<GenerationResult, "imageCount" | "images" | "seed">>("/api/comfyui/generate-image", {
         method: "POST",
         headers: {
@@ -1525,7 +2208,9 @@ export function ComfyUiGenerationDialog({
     setDiagnosisApplied(true);
   }
 
-  const workflowPreview = draft ? buildBasicTextToImageWorkflow(toRequestPayload(draft, draft.seed)) : null;
+  const workflowPreview = draft
+    ? buildBasicTextToImageWorkflow(toRequestPayload(draft, draft.seed, controlNetOpenPosePreview, controlNetNormalPreview))
+    : null;
   const generatedImageItems = results.flatMap((result) =>
     result.images.map((image): GeneratedImageItem => ({
       image,
@@ -1861,6 +2546,15 @@ export function ComfyUiGenerationDialog({
                               value={draft.latentImageNode}
                             />
                             <TextInput label="output" onChange={(value) => patchDraft({ outputPrefix: value })} value={draft.outputPrefix} />
+                            <ControlNetOpenPoseFoldout
+                              controlNets={draft.controlNets}
+                              expanded={Boolean(controlNetOpenPosePreview?.available && controlNetExpanded)}
+                              normalPreview={controlNetNormalPreview}
+                              normalPreviewLoading={controlNetNormalPreviewLoading}
+                              onChange={patchControlNet}
+                              onToggle={() => setControlNetExpanded((value) => !value)}
+                              preview={controlNetOpenPosePreview}
+                            />
                             <div className="grid gap-3 rounded-md border border-slate-200 bg-white p-3 sm:col-span-2 lg:col-span-3">
                               <label className="flex items-center gap-2 text-xs font-semibold text-slate-700">
                                 <input

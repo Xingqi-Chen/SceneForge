@@ -40,6 +40,27 @@ const objectInfo = {
   },
 };
 
+const objectInfoWithControlNet = {
+  ...objectInfo,
+  LoadImage: {},
+  ControlNetApplyAdvanced: {},
+  ControlNetLoader: {
+    input: {
+      required: {
+        control_net_name: [
+          [
+            "control_v11p_sd15_openpose.pth",
+            "control_v11f1p_sd15_depth.pth",
+            "control_v11p_sd15_normalbae.pth",
+            "other-controlnet.safetensors",
+          ],
+          {},
+        ],
+      },
+    },
+  },
+};
+
 describe("ComfyUI object info helpers", () => {
   it("normalizes common sampler display names", () => {
     expect(
@@ -267,6 +288,181 @@ describe("ComfyUI object info helpers", () => {
         objectInfo,
       ).errors,
     ).toEqual(["FaceDetailer detector model is not available in ComfyUI: missing.pt"]);
+  });
+
+  it("validates and normalizes ControlNet OpenPose settings before queueing", () => {
+    expect(
+      validateComfyUiRequestAgainstObjectInfo(
+        {
+          checkpointName: "model.safetensors",
+          positivePrompt: "scene",
+          controlNet: {
+            enabled: true,
+            openPoseSvg: "<svg />",
+          },
+        },
+        objectInfoWithControlNet,
+      ),
+    ).toMatchObject({
+      errors: [],
+      request: {
+        controlNets: [
+          {
+            enabled: true,
+            modelName: "control_v11p_sd15_openpose.pth",
+            type: "openpose",
+          },
+        ],
+      },
+    });
+
+    expect(
+      validateComfyUiRequestAgainstObjectInfo(
+        {
+          checkpointName: "model.safetensors",
+          positivePrompt: "scene",
+          controlNet: {
+            enabled: true,
+            modelName: "missing-controlnet.safetensors",
+            openPoseSvg: "<svg />",
+          },
+        },
+        objectInfoWithControlNet,
+      ).errors,
+    ).toEqual(["OpenPose ControlNet model is not available in ComfyUI: missing-controlnet.safetensors"]);
+  });
+
+  it("validates and normalizes ControlNet Depth settings before queueing", () => {
+    expect(
+      validateComfyUiRequestAgainstObjectInfo(
+        {
+          checkpointName: "model.safetensors",
+          positivePrompt: "scene",
+          controlNets: [
+            {
+              type: "depth",
+              enabled: true,
+              svg: "<svg />",
+            },
+          ],
+        },
+        objectInfoWithControlNet,
+      ),
+    ).toMatchObject({
+      errors: [],
+      request: {
+        controlNets: [
+          {
+            enabled: true,
+            modelName: "control_v11f1p_sd15_depth.pth",
+            type: "depth",
+          },
+        ],
+      },
+    });
+
+    expect(
+      validateComfyUiRequestAgainstObjectInfo(
+        {
+          checkpointName: "model.safetensors",
+          positivePrompt: "scene",
+          controlNets: [
+            {
+              type: "depth",
+              enabled: true,
+              svg: "<svg />",
+            },
+          ],
+        },
+        {
+          ...objectInfoWithControlNet,
+          ControlNetLoader: {
+            input: {
+              required: {
+                control_net_name: [["control_v11p_sd15_openpose.pth"], {}],
+              },
+            },
+          },
+        },
+      ).errors,
+    ).toEqual(["Depth ControlNet model is not available in ComfyUI."]);
+  });
+
+  it("validates and normalizes ControlNet Normal settings before queueing", () => {
+    expect(
+      validateComfyUiRequestAgainstObjectInfo(
+        {
+          checkpointName: "model.safetensors",
+          positivePrompt: "scene",
+          controlNets: [
+            {
+              type: "normal",
+              enabled: true,
+              imageDataUrl: "data:image/png;base64,aGVsbG8=",
+            },
+          ],
+        },
+        objectInfoWithControlNet,
+      ),
+    ).toMatchObject({
+      errors: [],
+      request: {
+        controlNets: [
+          {
+            enabled: true,
+            modelName: "control_v11p_sd15_normalbae.pth",
+            type: "normal",
+          },
+        ],
+      },
+    });
+
+    expect(
+      validateComfyUiRequestAgainstObjectInfo(
+        {
+          checkpointName: "model.safetensors",
+          positivePrompt: "scene",
+          controlNets: [
+            {
+              type: "normal",
+              enabled: true,
+              imageDataUrl: "data:image/png;base64,aGVsbG8=",
+            },
+          ],
+        },
+        {
+          ...objectInfoWithControlNet,
+          ControlNetLoader: {
+            input: {
+              required: {
+                control_net_name: [["control_v11f1p_sd15_depth.pth"], {}],
+              },
+            },
+          },
+        },
+      ).errors,
+    ).toEqual(["Normal ControlNet model is not available in ComfyUI."]);
+  });
+
+  it("reports missing ControlNet nodes before queueing", () => {
+    expect(
+      validateComfyUiRequestAgainstObjectInfo(
+        {
+          checkpointName: "model.safetensors",
+          positivePrompt: "scene",
+          controlNet: {
+            enabled: true,
+            openPoseSvg: "<svg />",
+          },
+        },
+        objectInfo,
+      ).errors,
+    ).toEqual([
+      "LoadImage node is not available in ComfyUI. It is required for ControlNet images.",
+      "ControlNetLoader node is not available in ComfyUI. Install ControlNet support to use ControlNet.",
+      "ControlNetApplyAdvanced node is not available in ComfyUI. Update ComfyUI or install ControlNet support.",
+      "OpenPose ControlNet model is not available in ComfyUI.",
+    ]);
   });
 
   it("reports missing FaceDetailer custom nodes before queueing", () => {

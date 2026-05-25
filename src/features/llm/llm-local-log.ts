@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
-const DEFAULT_LLM_LOG_FILE = path.join(process.cwd(), "data", "logs", "llm-chat.jsonl");
+const DEFAULT_LLM_LOG_FILE = path.join(/*turbopackIgnore: true*/ process.cwd(), "data", "logs", "llm-chat.jsonl");
 
 type LlmLocalLogRecord = {
   requestId: string;
@@ -31,8 +31,8 @@ export async function appendLlmLocalLog(record: LlmLocalLogRecord) {
   const filePath = getLlmLogFilePath();
 
   try {
-    await fs.mkdir(path.dirname(filePath), { recursive: true });
-    await fs.appendFile(filePath, `${JSON.stringify(record)}\n`, "utf8");
+    await fs.mkdir(/*turbopackIgnore: true*/ path.dirname(filePath), { recursive: true });
+    await fs.appendFile(/*turbopackIgnore: true*/ filePath, `${JSON.stringify(record)}\n`, "utf8");
   } catch (error) {
     console.error("[SceneForge] [llm] failed to write local LLM log", {
       filePath,
