@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
-import type { CharacterSkeleton, PromptTag } from "@/shared/types";
+import type { CharacterSkeleton, PromptTag, SavedComfyUiGeneratedImage } from "@/shared/types";
 
 import { cloneStickFigurePose } from "@/features/editor/stick-figure-3d/stick-figure-pose-io";
 import { getCharacterStickFigurePose } from "@/features/editor/stick-figure-3d/get-character-stick-pose";
@@ -17,6 +17,47 @@ const testTag: PromptTag = {
   category: "lighting",
   weight: { enabled: false, value: 1 },
 };
+
+function createSavedComfyUiImage(
+  patch: Partial<SavedComfyUiGeneratedImage> = {},
+): SavedComfyUiGeneratedImage {
+  return {
+    id: "image-1",
+    promptId: "prompt-1",
+    batchId: "prompt-1:1",
+    nodeId: "9",
+    filename: "SceneForge_00001_.png",
+    type: "output",
+    url: "/api/comfyui/view?filename=SceneForge_00001_.png&type=output",
+    seed: 42,
+    source: "text-to-image",
+    createdAt: "2026-05-26T10:00:00.000Z",
+    favorited: false,
+    outputNodeId: "9",
+    width: 1024,
+    height: 1024,
+    positivePrompt: "cinematic portrait",
+    negativePrompt: "low quality",
+    parameters: {
+      cfg: 7,
+      denoise: 1,
+      height: 1024,
+      imageCount: 1,
+      loras: [],
+      outputPrefix: "SceneForge",
+      samplerName: "euler",
+      savedAt: "2026-05-26T10:00:00.000Z",
+      scheduler: "normal",
+      seed: 42,
+      seedMode: "fixed",
+      steps: 30,
+      width: 1024,
+    },
+    selectedCheckpointId: "checkpoint-1",
+    selectedLoraIds: ["lora-1"],
+    ...patch,
+  };
+}
 
 function stickGroundSnapY(character: CharacterSkeleton): number {
   const pose = getCharacterStickFigurePose(character);
@@ -248,6 +289,56 @@ describe("editor store", () => {
       promptLibraryTags: [],
       deletedBuiltInPromptLibraryTagIds: [],
     });
+  });
+
+  it("appends, favorites, and removes ComfyUI generated image history", () => {
+    const firstImage = createSavedComfyUiImage({ id: "history-1" });
+    const duplicateImage = createSavedComfyUiImage({
+      id: "history-duplicate",
+      createdAt: "2026-05-26T11:00:00.000Z",
+      favorited: false,
+    });
+    const secondImage = createSavedComfyUiImage({
+      id: "history-2",
+      filename: "SceneForge_00002_.png",
+      createdAt: "2026-05-26T12:00:00.000Z",
+      source: "inpaint",
+    });
+
+    useEditorStore.getState().appendComfyUiGeneratedImages([firstImage]);
+    useEditorStore.getState().toggleComfyUiGeneratedImageFavorite("history-1");
+    useEditorStore.getState().appendComfyUiGeneratedImages([duplicateImage, secondImage]);
+
+    expect(useEditorStore.getState().project.settings.comfyUiGeneratedImages).toEqual([
+      secondImage,
+      {
+        ...duplicateImage,
+        id: "history-1",
+        createdAt: "2026-05-26T10:00:00.000Z",
+        favorited: true,
+      },
+    ]);
+
+    useEditorStore.getState().deleteComfyUiGeneratedImage("history-1");
+
+    expect(useEditorStore.getState().project.settings.comfyUiGeneratedImages).toEqual([secondImage]);
+  });
+
+  it("does not add ComfyUI generated image history changes to the undo stack", () => {
+    useEditorStore.getState().addObject({
+      kind: "rectangle",
+      name: "marker",
+      fill: "#facc15",
+    });
+    const undoLength = useEditorStore.getState().undoStack.length;
+
+    useEditorStore.getState().appendComfyUiGeneratedImages([
+      createSavedComfyUiImage({ id: "history-1" }),
+    ]);
+    useEditorStore.getState().toggleComfyUiGeneratedImageFavorite("history-1");
+    useEditorStore.getState().deleteComfyUiGeneratedImage("history-1");
+
+    expect(useEditorStore.getState().undoStack).toHaveLength(undoLength);
   });
 
   it("selects one Civitai checkpoint and toggles Civitai LoRAs in order", () => {

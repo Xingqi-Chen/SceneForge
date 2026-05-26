@@ -311,6 +311,7 @@ export function createDefaultProject(): SceneForgeProject {
       selectedArtistStringIds: [],
       selectedArtistStringPrompts: [],
       artistStringPromptRenderMode: "artist-weight",
+      comfyUiGeneratedImages: [],
       promptLibraryTags: [],
       deletedBuiltInPromptLibraryTagIds: [],
     },

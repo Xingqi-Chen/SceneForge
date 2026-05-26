@@ -27,6 +27,7 @@ const objectInfo = {
       },
     },
   },
+  PreviewImage: {},
 };
 
 const objectInfoWithFaceDetailer = {
@@ -176,7 +177,7 @@ describe("ComfyUI generate image route", () => {
       nodeErrors: {},
       outputNodeId: "7",
       nodeIds: {
-        saveImage: "7",
+        previewImage: "7",
       },
       request: {
         seed: 123,
@@ -232,7 +233,7 @@ describe("ComfyUI generate image route", () => {
       nodeIds: {
         ultralyticsDetectorProvider: "7",
         faceDetailer: "8",
-        saveImage: "9",
+        previewImage: "9",
       },
       request: {
         faceDetailer: {
@@ -299,7 +300,7 @@ describe("ComfyUI generate image route", () => {
         handDetailer: "8",
         ultralyticsDetectorProvider: "9",
         faceDetailer: "10",
-        saveImage: "11",
+        previewImage: "11",
       },
       request: {
         faceDetailer: {
@@ -398,7 +399,7 @@ describe("ComfyUI generate image route", () => {
         controlNetImage: "4",
         controlNetLoader: "5",
         controlNetApply: "6",
-        saveImage: "10",
+        previewImage: "10",
       },
       request: {
         controlNets: [
@@ -484,7 +485,7 @@ describe("ComfyUI generate image route", () => {
           { type: "openpose", image: "4", loader: "5", apply: "6" },
           { type: "depth", image: "7", loader: "8", apply: "9" },
         ],
-        saveImage: "13",
+        previewImage: "13",
       },
       request: {
         controlNets: [
@@ -586,7 +587,7 @@ describe("ComfyUI generate image route", () => {
           { type: "depth", image: "7", loader: "8", apply: "9" },
           { type: "normal", image: "10", loader: "11", apply: "12" },
         ],
-        saveImage: "16",
+        previewImage: "16",
       },
       request: {
         controlNets: [
@@ -623,7 +624,7 @@ describe("ComfyUI generate image route", () => {
 
       expect(input).toBe("http://comfyui.test/prompt");
       const body = JSON.parse(String(init?.body));
-      expect(body.prompt["7"].class_type).toBe("SaveImage");
+      expect(body.prompt["7"].class_type).toBe("PreviewImage");
       expect(body.prompt["8"]).toBeUndefined();
 
       return Response.json({

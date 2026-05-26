@@ -376,7 +376,7 @@ export type BasicTextToImageNodeIds = {
   handDetailer?: string;
   ultralyticsDetectorProvider?: string;
   faceDetailer?: string;
-  saveImage: string;
+  previewImage: string;
 };
 
 export type BasicInpaintNodeIds = {
@@ -409,7 +409,7 @@ export type BasicInpaintNodeIds = {
   handDetailer?: string;
   ultralyticsDetectorProvider?: string;
   faceDetailer?: string;
-  saveImage: string;
+  previewImage: string;
 };
 
 export type BasicSam2MaskNodeIds = {

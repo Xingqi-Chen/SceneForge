@@ -73,6 +73,42 @@ export type SavedComfyUiGenerationParams = {
   savedAt: string;
 };
 
+export type SavedComfyUiGeneratedImageSource = "text-to-image" | "inpaint";
+export type SavedComfyUiGeneratedImageStorage = "sceneforge" | "comfyui";
+
+export type SavedComfyUiImageReference = {
+  filename: string;
+  subfolder?: string;
+  type?: string;
+};
+
+export type SavedComfyUiGeneratedImage = {
+  id: string;
+  promptId: string;
+  batchId: string;
+  nodeId: string;
+  filename: string;
+  subfolder?: string;
+  type?: string;
+  url: string;
+  seed: number;
+  source: SavedComfyUiGeneratedImageSource;
+  storage?: SavedComfyUiGeneratedImageStorage;
+  localFilename?: string;
+  sourceReference?: SavedComfyUiImageReference;
+  createdAt: string;
+  favorited: boolean;
+  parentImageId?: string;
+  outputNodeId?: string;
+  width: number;
+  height: number;
+  positivePrompt: string;
+  negativePrompt: string;
+  parameters: SavedComfyUiGenerationParams;
+  selectedCheckpointId: string | null;
+  selectedLoraIds: string[];
+};
+
 export type ProjectSettings = {
   modelFormat: PromptModelFormat;
   includeSpatialHints: boolean;
@@ -83,6 +119,7 @@ export type ProjectSettings = {
   selectedArtistStringPrompts: string[];
   artistStringPromptRenderMode: ArtistStringPromptRenderMode;
   savedComfyUiGenerationParams?: SavedComfyUiGenerationParams | null;
+  comfyUiGeneratedImages: SavedComfyUiGeneratedImage[];
   /** User-imported prompt library entries, loaded from the shared prompt library file at runtime. */
   promptLibraryTags: PromptTag[];
   /** Built-in prompt library entries hidden by the user, loaded from the shared prompt library file at runtime. */

@@ -55,7 +55,7 @@ describe("createComfyUiClient", () => {
       expect(body.prompt["1"].class_type).toBe("CheckpointLoaderSimple");
       expect(body.prompt["1"].inputs.ckpt_name).toBe("model.safetensors");
       expect(body.prompt["5"].inputs.seed).toBe(123);
-      expect(body.prompt["7"].class_type).toBe("SaveImage");
+      expect(body.prompt["7"].class_type).toBe("PreviewImage");
 
       return Response.json({
         prompt_id: "prompt-2",
@@ -78,7 +78,7 @@ describe("createComfyUiClient", () => {
       number: 7,
       outputNodeId: "7",
       nodeIds: {
-        saveImage: "7",
+        previewImage: "7",
       },
     });
   });

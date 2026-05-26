@@ -14,6 +14,7 @@ import type {
   PromptTag,
   PromptTagCategory,
   PromptTagSubcategory,
+  SavedComfyUiGeneratedImage,
   Scene,
   SceneForgeProject,
   SceneMode,
@@ -137,6 +138,9 @@ type EditorState = {
   setSceneMode: (mode: SceneMode) => void;
   updateProjectDocument: (patch: Partial<Pick<SceneForgeProject, "name">>) => void;
   updateProjectSettings: (patch: Partial<ProjectSettings>) => void;
+  appendComfyUiGeneratedImages: (records: SavedComfyUiGeneratedImage[]) => void;
+  toggleComfyUiGeneratedImageFavorite: (id: string) => void;
+  deleteComfyUiGeneratedImage: (id: string) => void;
   selectCivitaiCheckpoint: (resourceId: string) => void;
   toggleCivitaiLora: (resourceId: string) => void;
   setSelectedCivitaiResources: (checkpointId: string | null, loraIds: string[]) => void;
@@ -223,6 +227,72 @@ function sanitizeCivitaiSelectionIds(ids: string[]) {
   }
 
   return cleanIds;
+}
+
+const comfyUiGeneratedImageHistoryLimit = 200;
+
+function getComfyUiGeneratedImageDedupeKey(
+  image: Pick<SavedComfyUiGeneratedImage, "filename" | "nodeId" | "promptId" | "subfolder" | "type">,
+) {
+  return [
+    image.promptId,
+    image.nodeId,
+    image.filename,
+    image.subfolder ?? "",
+    image.type ?? "",
+  ].join("\u0000");
+}
+
+function getCreatedAtTime(value: string) {
+  const time = Date.parse(value);
+  return Number.isFinite(time) ? time : 0;
+}
+
+function trimComfyUiGeneratedImageHistory(
+  images: SavedComfyUiGeneratedImage[],
+): SavedComfyUiGeneratedImage[] {
+  const ordered = [...images].sort(
+    (a, b) => getCreatedAtTime(b.createdAt) - getCreatedAtTime(a.createdAt),
+  );
+  const favorites = ordered.filter((image) => image.favorited);
+  const favoriteIds = new Set(favorites.map((image) => image.id));
+  const remainingSlots = Math.max(0, comfyUiGeneratedImageHistoryLimit - favorites.length);
+  const recentUnfavorited = ordered
+    .filter((image) => !favoriteIds.has(image.id) && !image.favorited)
+    .slice(0, remainingSlots);
+
+  return [...favorites, ...recentUnfavorited].sort(
+    (a, b) => getCreatedAtTime(b.createdAt) - getCreatedAtTime(a.createdAt),
+  );
+}
+
+function mergeComfyUiGeneratedImageHistory(
+  existingImages: SavedComfyUiGeneratedImage[],
+  incomingImages: SavedComfyUiGeneratedImage[],
+): SavedComfyUiGeneratedImage[] {
+  const byKey = new Map<string, SavedComfyUiGeneratedImage>();
+
+  for (const image of existingImages) {
+    byKey.set(getComfyUiGeneratedImageDedupeKey(image), image);
+  }
+
+  for (const image of incomingImages) {
+    const key = getComfyUiGeneratedImageDedupeKey(image);
+    const existing = byKey.get(key);
+    if (!existing) {
+      byKey.set(key, image);
+      continue;
+    }
+
+    byKey.set(key, {
+      ...image,
+      id: existing.id,
+      createdAt: existing.createdAt,
+      favorited: existing.favorited || image.favorited,
+    });
+  }
+
+  return trimComfyUiGeneratedImageHistory(Array.from(byKey.values()));
 }
 
 const maxUndoSteps = 50;
@@ -689,6 +759,7 @@ export const useEditorStore = create<EditorState>((set) => ({
               selectedArtistStringIds: project.settings.selectedArtistStringIds ?? [],
               selectedArtistStringPrompts: project.settings.selectedArtistStringPrompts ?? [],
               artistStringPromptRenderMode: project.settings.artistStringPromptRenderMode ?? "artist-weight",
+              comfyUiGeneratedImages: project.settings.comfyUiGeneratedImages ?? [],
               ...(project.settings.savedComfyUiGenerationParams
                 ? { savedComfyUiGenerationParams: project.settings.savedComfyUiGenerationParams }
                 : {}),
@@ -939,6 +1010,86 @@ export const useEditorStore = create<EditorState>((set) => ({
         },
       }),
     })),
+  appendComfyUiGeneratedImages: (records) =>
+    withoutUndoHistory(() => {
+      if (records.length === 0) {
+        return;
+      }
+
+      set((state) => {
+        const nextImages = mergeComfyUiGeneratedImageHistory(
+          state.project.settings.comfyUiGeneratedImages ?? [],
+          records,
+        );
+
+        if (nextImages === state.project.settings.comfyUiGeneratedImages) {
+          return state;
+        }
+
+        return {
+          project: touchProject({
+            ...state.project,
+            settings: {
+              ...state.project.settings,
+              comfyUiGeneratedImages: nextImages,
+            },
+          }),
+        };
+      });
+    }),
+  toggleComfyUiGeneratedImageFavorite: (id) =>
+    withoutUndoHistory(() =>
+      set((state) => {
+        const currentImages = state.project.settings.comfyUiGeneratedImages ?? [];
+        let changed = false;
+        const nextImages = currentImages.map((image) => {
+          if (image.id !== id) {
+            return image;
+          }
+
+          changed = true;
+          return {
+            ...image,
+            favorited: !image.favorited,
+          };
+        });
+
+        if (!changed) {
+          return state;
+        }
+
+        return {
+          project: touchProject({
+            ...state.project,
+            settings: {
+              ...state.project.settings,
+              comfyUiGeneratedImages: trimComfyUiGeneratedImageHistory(nextImages),
+            },
+          }),
+        };
+      }),
+    ),
+  deleteComfyUiGeneratedImage: (id) =>
+    withoutUndoHistory(() =>
+      set((state) => {
+        const currentImages = state.project.settings.comfyUiGeneratedImages ?? [];
+        const nextImages = currentImages.filter((image) => image.id !== id);
+
+        if (nextImages.length === currentImages.length) {
+          return state;
+        }
+
+        return {
+          project: touchProject({
+            ...state.project,
+            settings: {
+              ...state.project.settings,
+              comfyUiGeneratedImages: nextImages,
+            },
+          }),
+        };
+      }),
+    ),
   selectCivitaiCheckpoint: (resourceId) =>
     set((state) => ({
       project: touchProject({

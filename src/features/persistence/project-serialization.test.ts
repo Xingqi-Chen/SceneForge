@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import type { SavedComfyUiGeneratedImage } from "@/shared/types";
 import { createDefaultProject, defaultCharacter, defaultCharacterMannequinJoints3D } from "@/features/editor/store/defaults";
 import { serializePromptExport } from "@/features/prompt-engine";
 import { isThreeDViewportPrimitive, sceneObjectsVisibleOn2DCanvas } from "@/features/editor/scene-viewport-objects";
@@ -18,6 +19,47 @@ import {
   stripPromptBindingsFromScene,
   stripSharedPromptStateFromProject,
 } from "./project-serialization";
+
+function createSavedComfyUiImage(
+  patch: Partial<SavedComfyUiGeneratedImage> = {},
+): SavedComfyUiGeneratedImage {
+  return {
+    id: "image-1",
+    promptId: "prompt-1",
+    batchId: "prompt-1:1",
+    nodeId: "9",
+    filename: "SceneForge_00001_.png",
+    type: "output",
+    url: "/api/comfyui/view?filename=SceneForge_00001_.png&type=output",
+    seed: 42,
+    source: "text-to-image",
+    createdAt: "2026-05-26T10:00:00.000Z",
+    favorited: false,
+    outputNodeId: "9",
+    width: 1024,
+    height: 1024,
+    positivePrompt: "cinematic portrait",
+    negativePrompt: "low quality",
+    parameters: {
+      cfg: 7,
+      denoise: 1,
+      height: 1024,
+      imageCount: 1,
+      loras: [],
+      outputPrefix: "SceneForge",
+      samplerName: "euler",
+      savedAt: "2026-05-26T10:00:00.000Z",
+      scheduler: "normal",
+      seed: 42,
+      seedMode: "fixed",
+      steps: 30,
+      width: 1024,
+    },
+    selectedCheckpointId: "checkpoint-1",
+    selectedLoraIds: ["lora-1"],
+    ...patch,
+  };
+}
 
 describe("project serialization", () => {
   it("round-trips valid project data without embedding prompt library in project JSON", () => {
@@ -170,6 +212,140 @@ describe("project serialization", () => {
       steps: 20,
       wildcard: "[LAB] hand",
     });
+  });
+
+  it("defaults missing ComfyUI generated image history to an empty array", () => {
+    const project = createDefaultProject();
+    const raw = JSON.parse(serializeProject(project));
+    delete raw.settings.comfyUiGeneratedImages;
+
+    const imported = importProjectFromJson(JSON.stringify(raw));
+
+    expect(imported.settings.comfyUiGeneratedImages).toEqual([]);
+  });
+
+  it("round-trips valid ComfyUI generated image history", () => {
+    const project = createDefaultProject();
+    const historyImage = createSavedComfyUiImage({
+      id: "history-image",
+      source: "inpaint",
+      parentImageId: "parent-image",
+      favorited: true,
+    });
+    project.settings.comfyUiGeneratedImages = [historyImage];
+
+    const imported = importProjectFromJson(serializeProject(project));
+
+    expect(imported.settings.comfyUiGeneratedImages).toEqual([historyImage]);
+  });
+
+  it("round-trips SceneForge-managed ComfyUI generated image storage metadata", () => {
+    const project = createDefaultProject();
+    const historyImage = createSavedComfyUiImage({
+      storage: "sceneforge",
+      localFilename: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png",
+      url: "/api/comfyui/generated-images/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png",
+      sourceReference: {
+        filename: "ComfyUI_temp_00001_.png",
+        type: "temp",
+      },
+    });
+    project.settings.comfyUiGeneratedImages = [historyImage];
+
+    const imported = importProjectFromJson(serializeProject(project));
+
+    expect(imported.settings.comfyUiGeneratedImages).toEqual([historyImage]);
+  });
+
+  it("infers SceneForge-managed image filenames from generated image URLs", () => {
+    const project = createDefaultProject();
+    const historyImage = createSavedComfyUiImage({
+      url: "/api/comfyui/generated-images/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png",
+    });
+    project.settings.comfyUiGeneratedImages = [historyImage];
+
+    const imported = importProjectFromJson(serializeProject(project));
+
+    expect(imported.settings.comfyUiGeneratedImages[0]).toMatchObject({
+      storage: "sceneforge",
+      localFilename: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png",
+    });
+  });
+
+  it("filters invalid ComfyUI generated image history records", () => {
+    const project = createDefaultProject();
+    const raw = JSON.parse(serializeProject(project));
+    raw.settings.comfyUiGeneratedImages = [
+      createSavedComfyUiImage({ id: "valid-image" }),
+      { id: "missing-required-fields" },
+      createSavedComfyUiImage({ id: "missing-parameters", parameters: null as never }),
+    ];
+
+    const imported = importProjectFromJson(JSON.stringify(raw));
+
+    expect(imported.settings.comfyUiGeneratedImages).toHaveLength(1);
+    expect(imported.settings.comfyUiGeneratedImages[0].id).toBe("valid-image");
+  });
+
+  it("merges duplicate ComfyUI generated image history records and preserves favorites", () => {
+    const project = createDefaultProject();
+    const raw = JSON.parse(serializeProject(project));
+    raw.settings.comfyUiGeneratedImages = [
+      createSavedComfyUiImage({
+        id: "older-favorite",
+        createdAt: "2026-05-26T10:00:00.000Z",
+        favorited: true,
+      }),
+      createSavedComfyUiImage({
+        id: "newer-duplicate",
+        createdAt: "2026-05-26T11:00:00.000Z",
+        favorited: false,
+      }),
+    ];
+
+    const imported = importProjectFromJson(JSON.stringify(raw));
+
+    expect(imported.settings.comfyUiGeneratedImages).toHaveLength(1);
+    expect(imported.settings.comfyUiGeneratedImages[0]).toMatchObject({
+      id: "newer-duplicate",
+      favorited: true,
+    });
+  });
+
+  it("keeps favorites and trims old unfavorited ComfyUI generated images over the history limit", () => {
+    const project = createDefaultProject();
+    const raw = JSON.parse(serializeProject(project));
+    raw.settings.comfyUiGeneratedImages = [
+      createSavedComfyUiImage({
+        id: "favorite-old-1",
+        filename: "favorite-old-1.png",
+        createdAt: "2026-05-20T00:00:00.000Z",
+        favorited: true,
+      }),
+      createSavedComfyUiImage({
+        id: "favorite-old-2",
+        filename: "favorite-old-2.png",
+        createdAt: "2026-05-20T00:01:00.000Z",
+        favorited: true,
+      }),
+      ...Array.from({ length: 205 }, (_, index) =>
+        createSavedComfyUiImage({
+          id: `unfavorited-${index}`,
+          filename: `unfavorited-${index}.png`,
+          createdAt: new Date(Date.UTC(2026, 4, 21, 0, index)).toISOString(),
+          favorited: false,
+        }),
+      ),
+    ];
+
+    const imported = importProjectFromJson(JSON.stringify(raw));
+    const ids = imported.settings.comfyUiGeneratedImages.map((image) => image.id);
+
+    expect(imported.settings.comfyUiGeneratedImages).toHaveLength(200);
+    expect(ids).toContain("favorite-old-1");
+    expect(ids).toContain("favorite-old-2");
+    expect(ids).toContain("unfavorited-204");
+    expect(ids).not.toContain("unfavorited-0");
   });
 
   it("rejects invalid imported data", () => {

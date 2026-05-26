@@ -29,6 +29,6 @@ describe("ComfyUI text-to-image workflow route", () => {
     expect(payload.outputNodeId).toBe("7");
     expect(payload.workflow["1"].class_type).toBe("CheckpointLoaderSimple");
     expect(payload.workflow["5"].inputs.seed).toBe(123);
-    expect(payload.workflow["7"].class_type).toBe("SaveImage");
+    expect(payload.workflow["7"].class_type).toBe("PreviewImage");
   });
 });

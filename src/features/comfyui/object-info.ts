@@ -433,6 +433,10 @@ export function validateComfyUiRequestAgainstObjectInfo(
     errors.push(`Latent image node is not available in ComfyUI: ${latentImageNode}`);
   }
 
+  if (!hasNodeInfo(objectInfo, "PreviewImage")) {
+    errors.push("PreviewImage node is not available in ComfyUI. It is required to preview generated images before saving.");
+  }
+
   faceDetailer = validateDetailerAgainstObjectInfo({
     defaultDetectorModel: DEFAULT_COMFYUI_FACE_DETAILER_DETECTOR_MODEL,
     detailer: request.faceDetailer,
@@ -601,6 +605,10 @@ export function validateComfyUiInpaintRequestAgainstObjectInfo(
 
   if (!hasNodeInfo(objectInfo, "LoadImage")) {
     errors.push("LoadImage node is not available in ComfyUI. It is required for inpaint source images.");
+  }
+
+  if (!hasNodeInfo(objectInfo, "PreviewImage")) {
+    errors.push("PreviewImage node is not available in ComfyUI. It is required to preview inpaint results before saving.");
   }
 
   if (!hasNodeInfo(objectInfo, "LoadImageMask")) {

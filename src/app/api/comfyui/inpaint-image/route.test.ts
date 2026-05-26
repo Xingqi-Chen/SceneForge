@@ -37,6 +37,7 @@ const objectInfoWithInpaint = {
   VAEEncodeForInpaint: {},
   VAEDecode: {},
   VAEDecodeTiled: {},
+  PreviewImage: {},
   FaceDetailer: {},
   UltralyticsDetectorProvider: {
     input: {
@@ -233,7 +234,7 @@ describe("ComfyUI inpaint image route", () => {
         sourceImage: "4",
         maskImage: "5",
         setLatentNoiseMask: "7",
-        saveImage: "10",
+        previewImage: "10",
       },
       request: {
         imageName: "SceneForge/uploaded-source.png",
@@ -361,7 +362,7 @@ describe("ComfyUI inpaint image route", () => {
         maskToImage: "8",
         maskImageScaleBy: "9",
         imageToMask: "10",
-        saveImage: "15",
+        previewImage: "15",
       },
       request: {
         imageHeight: 8,
@@ -489,7 +490,7 @@ describe("ComfyUI inpaint image route", () => {
         compositeMaskFeather: "8",
         localPatchScale: "17",
         localComposite: "18",
-        saveImage: "19",
+        previewImage: "19",
       },
       request: {
         imageHeight: 16,
@@ -689,7 +690,7 @@ describe("ComfyUI inpaint image route", () => {
         handDetailer: "11",
         ultralyticsDetectorProvider: "12",
         faceDetailer: "13",
-        saveImage: "14",
+        previewImage: "14",
       },
       request: {
         faceDetailer: {

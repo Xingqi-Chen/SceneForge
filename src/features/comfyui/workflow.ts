@@ -333,13 +333,12 @@ export function buildBasicTextToImageWorkflow(request: ComfyUiTextToImageRequest
     faceDetailer = faceDetailerNodes.detailer;
     outputImageConnection = faceDetailerNodes.output;
   }
-  const saveImage = builder.addNode(
-    "SaveImage",
+  const previewImage = builder.addNode(
+    "PreviewImage",
     {
-      filename_prefix: resolvedRequest.outputPrefix,
       images: outputImageConnection,
     },
-    "Save Image",
+    "Preview Image",
   );
 
   return {
@@ -360,9 +359,9 @@ export function buildBasicTextToImageWorkflow(request: ComfyUiTextToImageRequest
       ...(handDetailer ? { handDetailer } : {}),
       ...(ultralyticsDetectorProvider ? { ultralyticsDetectorProvider } : {}),
       ...(faceDetailer ? { faceDetailer } : {}),
-      saveImage,
+      previewImage,
     },
-    outputNodeId: saveImage,
+    outputNodeId: previewImage,
     request: resolvedRequest,
   };
 }
@@ -748,13 +747,12 @@ export function buildBasicInpaintWorkflow(request: ComfyUiInpaintRequest): Basic
     }
   }
 
-  const saveImage = builder.addNode(
-    "SaveImage",
+  const previewImage = builder.addNode(
+    "PreviewImage",
     {
-      filename_prefix: resolvedRequest.outputPrefix,
       images: outputImageConnection,
     },
-    "Save Image",
+    "Preview Image",
   );
 
   return {
@@ -789,9 +787,9 @@ export function buildBasicInpaintWorkflow(request: ComfyUiInpaintRequest): Basic
       ...(harmonizeVaeEncode ? { harmonizeVaeEncode } : {}),
       ...(harmonizeSampler ? { harmonizeSampler } : {}),
       ...(harmonizeVaeDecode ? { harmonizeVaeDecode } : {}),
-      saveImage,
+      previewImage,
     },
-    outputNodeId: saveImage,
+    outputNodeId: previewImage,
     request: resolvedRequest,
   };
 }

@@ -39,7 +39,7 @@ describe("ComfyUI workflow builder", () => {
       latentImage: "4",
       sampler: "5",
       vaeDecode: "6",
-      saveImage: "7",
+      previewImage: "7",
     });
     expect(result.outputNodeId).toBe("7");
     expect(result.request).toMatchObject({
@@ -71,7 +71,6 @@ describe("ComfyUI workflow builder", () => {
       latent_image: ["4", 0],
     });
     expect(result.workflow["7"].inputs).toEqual({
-      filename_prefix: "SceneForge",
       images: ["6", 0],
     });
   });
@@ -120,7 +119,7 @@ describe("ComfyUI workflow builder", () => {
       vaeDecode: "6",
       ultralyticsDetectorProvider: "7",
       faceDetailer: "8",
-      saveImage: "9",
+      previewImage: "9",
     });
     expect(result.outputNodeId).toBe("9");
     expect(result.workflow["7"]).toMatchObject({
@@ -166,7 +165,6 @@ describe("ComfyUI workflow builder", () => {
       },
     });
     expect(result.workflow["9"].inputs).toEqual({
-      filename_prefix: "SceneForge",
       images: ["8", 0],
     });
   });
@@ -191,7 +189,7 @@ describe("ComfyUI workflow builder", () => {
       vaeDecode: "6",
       handUltralyticsDetectorProvider: "7",
       handDetailer: "8",
-      saveImage: "9",
+      previewImage: "9",
     });
     expect(result.workflow["7"]).toMatchObject({
       class_type: "UltralyticsDetectorProvider",
@@ -213,7 +211,6 @@ describe("ComfyUI workflow builder", () => {
       },
     });
     expect(result.workflow["9"].inputs).toEqual({
-      filename_prefix: "SceneForge",
       images: ["8", 0],
     });
     expect(result.request.handDetailer).toMatchObject({
@@ -249,7 +246,7 @@ describe("ComfyUI workflow builder", () => {
       handDetailer: "8",
       ultralyticsDetectorProvider: "9",
       faceDetailer: "10",
-      saveImage: "11",
+      previewImage: "11",
     });
     expect(result.workflow["8"]).toMatchObject({
       class_type: "FaceDetailer",
@@ -272,7 +269,6 @@ describe("ComfyUI workflow builder", () => {
       },
     });
     expect(result.workflow["11"].inputs).toEqual({
-      filename_prefix: "SceneForge",
       images: ["10", 0],
     });
   });
@@ -299,7 +295,7 @@ describe("ComfyUI workflow builder", () => {
       setLatentNoiseMask: "7",
       sampler: "8",
       vaeDecode: "9",
-      saveImage: "10",
+      previewImage: "10",
     });
     expect(result.outputNodeId).toBe("10");
     expect(result.workflow["4"]).toMatchObject({
@@ -335,7 +331,6 @@ describe("ComfyUI workflow builder", () => {
       latent_image: ["7", 0],
     });
     expect(result.workflow["10"].inputs).toEqual({
-      filename_prefix: "SceneForge_inpaint",
       images: ["9", 0],
     });
   });
@@ -369,7 +364,7 @@ describe("ComfyUI workflow builder", () => {
       setLatentNoiseMask: "11",
       sampler: "12",
       vaeDecode: "13",
-      saveImage: "14",
+      previewImage: "14",
     });
     expect(result.workflow["6"]).toMatchObject({
       class_type: "ImageScaleBy",
@@ -602,7 +597,7 @@ describe("ComfyUI workflow builder", () => {
       handDetailer: "11",
       ultralyticsDetectorProvider: "12",
       faceDetailer: "13",
-      saveImage: "14",
+      previewImage: "14",
     });
     expect(result.workflow["11"]).toMatchObject({
       class_type: "FaceDetailer",
@@ -625,7 +620,6 @@ describe("ComfyUI workflow builder", () => {
       },
     });
     expect(result.workflow["14"].inputs).toEqual({
-      filename_prefix: "SceneForge_inpaint",
       images: ["13", 0],
     });
   });
@@ -662,7 +656,7 @@ describe("ComfyUI workflow builder", () => {
       vaeEncodeForInpaint: "7",
       sampler: "8",
       vaeDecode: "9",
-      saveImage: "10",
+      previewImage: "10",
     });
     expect(result.workflow["2"]).toMatchObject({
       class_type: "LoraLoader",
@@ -737,7 +731,7 @@ describe("ComfyUI workflow builder", () => {
       vaeEncodeForInpaint: "11",
       sampler: "12",
       vaeDecode: "13",
-      saveImage: "14",
+      previewImage: "14",
     });
     expect(result.workflow["6"]).toMatchObject({
       class_type: "UpscaleModelLoader",
@@ -849,7 +843,7 @@ describe("ComfyUI workflow builder", () => {
       latentImage: "7",
       sampler: "8",
       vaeDecode: "9",
-      saveImage: "10",
+      previewImage: "10",
     });
     expect(result.workflow["4"]).toMatchObject({
       class_type: "LoadImage",
@@ -1103,7 +1097,7 @@ describe("ComfyUI workflow builder", () => {
       denoise: 0.72,
     });
     expect(result.workflow["3"].inputs.text).toBe("low quality");
-    expect(result.workflow["7"].inputs.filename_prefix).toBe("CustomScene");
+    expect(result.workflow["7"].inputs.images).toEqual(["6", 0]);
   });
 
   it("applies configured prompt wrappers before CLIP encoding", () => {
@@ -1167,7 +1161,7 @@ describe("ComfyUI workflow builder", () => {
       latentImage: "6",
       sampler: "7",
       vaeDecode: "8",
-      saveImage: "9",
+      previewImage: "9",
     });
     expect(result.workflow["2"]).toMatchObject({
       class_type: "LoraLoader",

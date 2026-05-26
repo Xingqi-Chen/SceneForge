@@ -9,6 +9,7 @@ import type {
   PromptTag,
   PromptTagCategory,
   PromptTagSubcategory,
+  SavedComfyUiGeneratedImage,
   Scene,
   SceneForgeProject,
   SceneObject,
@@ -133,6 +134,9 @@ function sanitizeStringList(value: unknown): string[] {
 }
 
 const PROMPT_EXPORT_KIND = "sceneforge-prompt";
+const COMFYUI_GENERATED_IMAGE_HISTORY_LIMIT = 200;
+const COMFYUI_MANAGED_GENERATED_IMAGE_ROUTE_PREFIX = "/api/comfyui/generated-images/";
+const COMFYUI_MANAGED_GENERATED_IMAGE_FILENAME_PATTERN = /^[a-f0-9]{32}\.(?:gif|jpg|jpeg|png|webp)$/i;
 
 /** 画布（场景）专用 JSON 导出，`importCanvasBundleFromJson` 与之配对。 */
 export const SCENEFORGE_CANVAS_EXPORT_KIND = "sceneforge-canvas" as const;
@@ -955,6 +959,200 @@ function sanitizeSavedComfyUiGenerationParams(
   };
 }
 
+function readNonEmptyString(raw: unknown): string | null {
+  return typeof raw === "string" && raw.trim() ? raw.trim() : null;
+}
+
+function readOptionalNonEmptyString(raw: unknown): string | undefined {
+  return readNonEmptyString(raw) ?? undefined;
+}
+
+function readTimestamp(raw: unknown): string | null {
+  const value = readNonEmptyString(raw);
+  if (!value) {
+    return null;
+  }
+
+  const time = Date.parse(value);
+  return Number.isFinite(time) ? value : null;
+}
+
+function getComfyUiGeneratedImageDedupeKey(image: Pick<
+  SavedComfyUiGeneratedImage,
+  "filename" | "nodeId" | "promptId" | "subfolder" | "type"
+>): string {
+  return [
+    image.promptId,
+    image.nodeId,
+    image.filename,
+    image.subfolder ?? "",
+    image.type ?? "",
+  ].join("\u0000");
+}
+
+function getCreatedAtTime(value: string): number {
+  const time = Date.parse(value);
+  return Number.isFinite(time) ? time : 0;
+}
+
+function sanitizeComfyUiImageReference(raw: unknown) {
+  if (!isRecord(raw)) {
+    return null;
+  }
+
+  const filename = readNonEmptyString(raw.filename);
+  if (!filename) {
+    return null;
+  }
+  const subfolder = readOptionalNonEmptyString(raw.subfolder);
+  const type = readOptionalNonEmptyString(raw.type);
+
+  return {
+    filename,
+    ...(subfolder ? { subfolder } : {}),
+    ...(type ? { type } : {}),
+  };
+}
+
+function readManagedGeneratedImageFilename(raw: unknown): string | undefined {
+  const value = readOptionalNonEmptyString(raw);
+  return value && COMFYUI_MANAGED_GENERATED_IMAGE_FILENAME_PATTERN.test(value) ? value : undefined;
+}
+
+function readManagedGeneratedImageFilenameFromUrl(url: string): string | undefined {
+  if (!url.startsWith(COMFYUI_MANAGED_GENERATED_IMAGE_ROUTE_PREFIX)) {
+    return undefined;
+  }
+
+  const rawFilename = url
+    .slice(COMFYUI_MANAGED_GENERATED_IMAGE_ROUTE_PREFIX.length)
+    .split(/[?#]/)[0];
+
+  try {
+    return readManagedGeneratedImageFilename(decodeURIComponent(rawFilename));
+  } catch {
+    return undefined;
+  }
+}
+
+function sanitizeComfyUiGeneratedImage(raw: unknown): SavedComfyUiGeneratedImage | null {
+  if (!isRecord(raw)) {
+    return null;
+  }
+
+  const parameters = sanitizeSavedComfyUiGenerationParams(raw.parameters);
+  if (!parameters) {
+    return null;
+  }
+
+  const id = readNonEmptyString(raw.id);
+  const promptId = readNonEmptyString(raw.promptId);
+  const batchId = readNonEmptyString(raw.batchId);
+  const nodeId = readNonEmptyString(raw.nodeId);
+  const filename = readNonEmptyString(raw.filename);
+  const url = readNonEmptyString(raw.url);
+  const createdAt = readTimestamp(raw.createdAt);
+
+  if (!id || !promptId || !batchId || !nodeId || !filename || !url || !createdAt) {
+    return null;
+  }
+
+  const fallbackWidth = parameters.width;
+  const fallbackHeight = parameters.height;
+  const sourceReference = sanitizeComfyUiImageReference(raw.sourceReference);
+  const inferredLocalFilename = readManagedGeneratedImageFilenameFromUrl(url);
+  const storage = raw.storage === "sceneforge"
+    ? "sceneforge"
+    : raw.storage === "comfyui"
+      ? "comfyui"
+      : inferredLocalFilename
+        ? "sceneforge"
+        : undefined;
+  const localFilename = readManagedGeneratedImageFilename(raw.localFilename) ?? inferredLocalFilename;
+  const subfolder = readOptionalNonEmptyString(raw.subfolder);
+  const type = readOptionalNonEmptyString(raw.type);
+  const parentImageId = readOptionalNonEmptyString(raw.parentImageId);
+  const outputNodeId = readOptionalNonEmptyString(raw.outputNodeId);
+
+  return {
+    id,
+    promptId,
+    batchId,
+    nodeId,
+    filename,
+    ...(subfolder ? { subfolder } : {}),
+    ...(type ? { type } : {}),
+    url,
+    seed: typeof raw.seed === "number" && Number.isSafeInteger(raw.seed) && raw.seed >= 0
+      ? raw.seed
+      : parameters.seed,
+    source: raw.source === "inpaint" ? "inpaint" : "text-to-image",
+    ...(storage ? { storage } : {}),
+    ...(localFilename ? { localFilename } : {}),
+    ...(sourceReference ? { sourceReference } : {}),
+    createdAt,
+    favorited: raw.favorited === true,
+    ...(parentImageId ? { parentImageId } : {}),
+    ...(outputNodeId ? { outputNodeId } : {}),
+    width: sanitizePositiveInteger(raw.width, fallbackWidth),
+    height: sanitizePositiveInteger(raw.height, fallbackHeight),
+    positivePrompt: typeof raw.positivePrompt === "string" ? raw.positivePrompt : "",
+    negativePrompt: typeof raw.negativePrompt === "string" ? raw.negativePrompt : "",
+    parameters,
+    selectedCheckpointId: readOptionalNonEmptyString(raw.selectedCheckpointId) ?? null,
+    selectedLoraIds: sanitizeStringIdList(raw.selectedLoraIds),
+  };
+}
+
+function mergeComfyUiGeneratedImages(
+  images: SavedComfyUiGeneratedImage[],
+): SavedComfyUiGeneratedImage[] {
+  const byKey = new Map<string, SavedComfyUiGeneratedImage>();
+
+  for (const image of images) {
+    const key = getComfyUiGeneratedImageDedupeKey(image);
+    const existing = byKey.get(key);
+    if (!existing) {
+      byKey.set(key, image);
+      continue;
+    }
+
+    const next = getCreatedAtTime(image.createdAt) >= getCreatedAtTime(existing.createdAt)
+      ? image
+      : existing;
+    byKey.set(key, {
+      ...next,
+      favorited: existing.favorited || image.favorited,
+    });
+  }
+
+  const ordered = Array.from(byKey.values()).sort(
+    (a, b) => getCreatedAtTime(b.createdAt) - getCreatedAtTime(a.createdAt),
+  );
+  const favorites = ordered.filter((image) => image.favorited);
+  const favoriteIds = new Set(favorites.map((image) => image.id));
+  const remainingSlots = Math.max(0, COMFYUI_GENERATED_IMAGE_HISTORY_LIMIT - favorites.length);
+  const recentUnfavorited = ordered
+    .filter((image) => !favoriteIds.has(image.id) && !image.favorited)
+    .slice(0, remainingSlots);
+
+  return [...favorites, ...recentUnfavorited].sort(
+    (a, b) => getCreatedAtTime(b.createdAt) - getCreatedAtTime(a.createdAt),
+  );
+}
+
+function sanitizeComfyUiGeneratedImages(raw: unknown): SavedComfyUiGeneratedImage[] {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+
+  return mergeComfyUiGeneratedImages(
+    raw
+      .map(sanitizeComfyUiGeneratedImage)
+      .filter((image): image is SavedComfyUiGeneratedImage => image !== null),
+  );
+}
+
 function sanitizeSettings(settings: unknown): SceneForgeProject["settings"] {
   if (!isRecord(settings)) {
     return {
@@ -968,6 +1166,7 @@ function sanitizeSettings(settings: unknown): SceneForgeProject["settings"] {
       artistStringPromptRenderMode: "artist-weight",
       promptLibraryTags: [],
       deletedBuiltInPromptLibraryTagIds: [],
+      comfyUiGeneratedImages: [],
     };
   }
 
@@ -1025,6 +1224,7 @@ function sanitizeSettings(settings: unknown): SceneForgeProject["settings"] {
     ...(savedComfyUiGenerationParams !== undefined ? { savedComfyUiGenerationParams } : {}),
     promptLibraryTags: libraryTags,
     deletedBuiltInPromptLibraryTagIds: [...new Set(deletedBuiltIns)],
+    comfyUiGeneratedImages: sanitizeComfyUiGeneratedImages(settings.comfyUiGeneratedImages),
   };
 }
 

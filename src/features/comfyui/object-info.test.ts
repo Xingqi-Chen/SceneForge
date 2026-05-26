@@ -31,6 +31,7 @@ const objectInfo = {
   },
   EmptyLatentImage: {},
   EmptySD3LatentImage: {},
+  PreviewImage: {},
   FaceDetailer: {},
   UltralyticsDetectorProvider: {
     input: {

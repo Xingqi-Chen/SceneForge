@@ -7,6 +7,7 @@ import {
   ChevronRight,
   Download,
   Eraser,
+  ExternalLink,
   Image as ImageIcon,
   Loader2,
   Maximize2,
@@ -14,9 +15,12 @@ import {
   Paintbrush,
   Play,
   Plus,
+  Save,
   Settings,
   Sparkles,
   Square,
+  Star,
+  Trash2,
   Undo2,
   X,
 } from "lucide-react";
@@ -122,10 +126,17 @@ import {
   resolveComfyUiGenerationSeed,
   type ComfyUiGenerationSeedMode,
 } from "@/features/editor/ai-prompt/comfyui-generation-seed";
+import { saveProject } from "@/features/persistence";
 import { useEditorStore } from "@/features/editor/store/editor-store";
 import { getLlmProxyErrorMessage, isLlmChatResponse } from "@/features/llm";
 import { generatePrompt } from "@/features/prompt-engine";
-import type { SavedComfyUiGenerationParams } from "@/shared/types";
+import type {
+  SavedComfyUiGeneratedImage,
+  SavedComfyUiGeneratedImageSource,
+  SavedComfyUiGeneratedImageStorage,
+  SavedComfyUiImageReference,
+  SavedComfyUiGenerationParams,
+} from "@/shared/types";
 
 type LoadStatus = "idle" | "loading" | "success" | "error";
 type SubmitStatus = "idle" | "loading" | "success" | "error";
@@ -156,24 +167,61 @@ type UpscaleModelsResponse = {
   modelUpscaleOptions: InpaintModelUpscaleOption[];
 };
 
+type GenerationHistoryContext = {
+  draftSnapshot: GenerationDraft;
+  negativePrompt: string;
+  parentImageId?: string;
+  positivePrompt: string;
+  selectedCheckpointId: string | null;
+  selectedLoraIds: string[];
+};
+
 type GenerationResult = {
+  historyContext: GenerationHistoryContext;
   imageCount: number;
   images: ComfyUiGeneratedImage[];
   promptId: string;
   number?: number;
   outputNodeId: string;
   seed: number;
+  source: SavedComfyUiGeneratedImageSource;
 };
 
 type GeneratedImageItem = {
+  createdAt?: string;
+  favorited: boolean;
+  historyId?: string;
+  id: string;
   image: ComfyUiGeneratedImage;
+  localFilename?: string;
+  persisted: boolean;
+  promptId?: string;
+  resultSource: SavedComfyUiGeneratedImageSource;
+  sessionGenerated: boolean;
+  sourceReference?: SavedComfyUiImageReference;
+  storage?: SavedComfyUiGeneratedImageStorage;
   seed: number;
 };
+
+type GeneratedImageFilter = "all" | "favorites" | "session";
 
 type GenerationProgress = {
   value: number;
   max: number;
   node?: string;
+};
+
+type SavedGeneratedImageResponse = {
+  byteLength: number;
+  contentType: string;
+  filename: string;
+  sourceDeletion?: {
+    attempted: boolean;
+    deleted: boolean;
+    error?: string;
+    reason?: string;
+  };
+  url: string;
 };
 
 type GenerationDraftLora = Required<NonNullable<ComfyUiTextToImageRequest["loras"]>[number]> & {
@@ -363,8 +411,52 @@ function getProgressPercent(progress: GenerationProgress | null) {
   return Math.round((progress.value / progress.max) * 100);
 }
 
-function getGeneratedImageKey(image: ComfyUiGeneratedImage, index: number) {
-  return [image.nodeId, image.filename, image.subfolder ?? "", image.type ?? "", index].join("|");
+function getGeneratedImageReferenceKey(image: Pick<ComfyUiGeneratedImage, "filename" | "nodeId" | "subfolder" | "type">) {
+  return [image.nodeId, image.filename, image.subfolder ?? "", image.type ?? ""].join("\u0000");
+}
+
+function getGeneratedImageItemKey(item: GeneratedImageItem) {
+  return item.id;
+}
+
+function getGeneratedImageItemReferenceKey(item: GeneratedImageItem) {
+  return [item.promptId ?? "", getGeneratedImageReferenceKey(item.image)].join("\u0000");
+}
+
+function getGeneratedImageSessionKey(promptId: string, image: Pick<ComfyUiGeneratedImage, "filename" | "nodeId" | "subfolder" | "type">) {
+  return [promptId, getGeneratedImageReferenceKey(image)].join("\u0000");
+}
+
+function createGeneratedImageHistoryId() {
+  return `comfyui-image-${createComfyUiClientId()}`;
+}
+
+function toGeneratedImageFromHistory(record: SavedComfyUiGeneratedImage): ComfyUiGeneratedImage {
+  return {
+    filename: record.filename,
+    nodeId: record.nodeId,
+    ...(record.subfolder !== undefined ? { subfolder: record.subfolder } : {}),
+    ...(record.type !== undefined ? { type: record.type } : {}),
+    url: record.url,
+  };
+}
+
+function historyRecordToGeneratedImageItem(record: SavedComfyUiGeneratedImage): GeneratedImageItem {
+  return {
+    createdAt: record.createdAt,
+    favorited: record.favorited,
+    historyId: record.id,
+    id: `history:${record.id}`,
+    image: toGeneratedImageFromHistory(record),
+    ...(record.localFilename ? { localFilename: record.localFilename } : {}),
+    persisted: true,
+    promptId: record.promptId,
+    resultSource: record.source,
+    sessionGenerated: false,
+    ...(record.sourceReference ? { sourceReference: record.sourceReference } : {}),
+    ...(record.storage ? { storage: record.storage } : {}),
+    seed: record.seed,
+  };
 }
 
 function blobToDataUrl(blob: Blob): Promise<string> {
@@ -472,7 +564,7 @@ async function waitForComfyUiGeneratedImages(
     }
 
     if (history.completed) {
-      throw new Error("ComfyUI 生成已完成，但 history 中没有找到 SaveImage 输出。");
+      throw new Error("ComfyUI 生成已完成，但 history 中没有找到预览输出。");
     }
 
     await delay(COMFYUI_HISTORY_POLL_INTERVAL_MS);
@@ -765,6 +857,88 @@ function toSavedParameters(draft: GenerationDraft): SavedComfyUiGenerationParams
     })),
     savedAt: new Date().toISOString(),
   };
+}
+
+function createComfyUiGeneratedImageRecords({
+  draft,
+  images,
+  negativePrompt,
+  parentImageId,
+  positivePrompt,
+  result,
+  savedImage,
+  selectedCheckpointId,
+  selectedLoraIds,
+}: {
+  draft: GenerationDraft;
+  images: ComfyUiGeneratedImage[];
+  negativePrompt: string;
+  parentImageId?: string;
+  positivePrompt: string;
+  result: GenerationResult;
+  savedImage: SavedGeneratedImageResponse;
+  selectedCheckpointId: string | null;
+  selectedLoraIds: string[];
+}): SavedComfyUiGeneratedImage[] {
+  if (images.length === 0) {
+    return [];
+  }
+
+  const createdAt = new Date().toISOString();
+  const parameters = toSavedParameters({
+    ...draft,
+    imageCount: result.imageCount,
+    seed: result.seed,
+  });
+  const batchId = result.number !== undefined
+    ? `${result.promptId}:${result.number}`
+    : result.promptId;
+
+  return images.map((image) => ({
+    id: createGeneratedImageHistoryId(),
+    promptId: result.promptId,
+    batchId,
+    nodeId: image.nodeId,
+    filename: image.filename,
+    ...(image.subfolder !== undefined ? { subfolder: image.subfolder } : {}),
+    ...(image.type !== undefined ? { type: image.type } : {}),
+    url: savedImage.url,
+    seed: result.seed,
+    source: result.source,
+    storage: "sceneforge",
+    localFilename: savedImage.filename,
+    sourceReference: {
+      filename: image.filename,
+      ...(image.subfolder !== undefined ? { subfolder: image.subfolder } : {}),
+      ...(image.type !== undefined ? { type: image.type } : {}),
+    },
+    createdAt,
+    favorited: false,
+    ...(parentImageId ? { parentImageId } : {}),
+    outputNodeId: result.outputNodeId,
+    width: draft.width,
+    height: draft.height,
+    positivePrompt,
+    negativePrompt,
+    parameters,
+    selectedCheckpointId,
+    selectedLoraIds: [...selectedLoraIds],
+  }));
+}
+
+function formatSavedImageSourceDeletionMessage(savedImage: SavedGeneratedImageResponse) {
+  const sourceDeletion = savedImage.sourceDeletion;
+  if (!sourceDeletion?.attempted) {
+    return "";
+  }
+
+  if (sourceDeletion.deleted) {
+    return "ComfyUI 临时文件已清理。";
+  }
+
+  return sourceDeletion.error
+    ? `但 ComfyUI 临时文件未清理：${sourceDeletion.error}`
+    : "但 ComfyUI 临时文件未清理。";
 }
 
 function toRequestPayload(
@@ -1688,18 +1862,32 @@ function ControlNetModelField({
 }
 
 function GeneratedImageResults({
+  allGeneratedImageItems,
+  filter,
   generatedImageItems,
-  imageClickMode,
+  historySaveMessage,
+  historySaveStatus,
+  onDeleteImage,
+  onFilterChange,
+  onSaveImage,
   onSelectImage,
+  onToggleFavorite,
   progress,
   resultsCount,
   selectedImageKey,
   submitStatus,
   waitMessage,
 }: {
+  allGeneratedImageItems: GeneratedImageItem[];
+  filter: GeneratedImageFilter;
   generatedImageItems: GeneratedImageItem[];
-  imageClickMode: "open" | "select";
+  historySaveMessage: string;
+  historySaveStatus: "idle" | "saving" | "success" | "error";
+  onDeleteImage: (item: GeneratedImageItem) => void;
+  onFilterChange: (filter: GeneratedImageFilter) => void;
+  onSaveImage: (item: GeneratedImageItem) => void;
   onSelectImage: (imageKey: string) => void;
+  onToggleFavorite: (id: string) => void;
   progress: GenerationProgress | null;
   resultsCount: number;
   selectedImageKey: string;
@@ -1724,72 +1912,127 @@ function GeneratedImageResults({
   }, [previewImageItem]);
 
   const previewImage = previewImageItem?.image ?? null;
+  const filterCounts: Record<GeneratedImageFilter, number> = {
+    all: allGeneratedImageItems.length,
+    favorites: allGeneratedImageItems.filter((item) => item.favorited).length,
+    session: allGeneratedImageItems.filter((item) => item.sessionGenerated).length,
+  };
+  const progressPercent = getProgressPercent(progress);
+  const progressContent = resultsCount > 0 && submitStatus === "loading"
+    ? (
+        <div className="rounded-md border border-sky-100 bg-sky-50 p-3 text-xs leading-relaxed text-sky-700">
+          <div>
+            <Loader2 className="mr-1.5 inline size-3.5 animate-spin" />
+            {waitMessage || "正在等待 ComfyUI 生成完成..."}
+          </div>
+          <div
+            aria-label="ComfyUI generation progress"
+            aria-valuemax={100}
+            aria-valuemin={0}
+            aria-valuenow={progress ? progressPercent : 0}
+            className="mt-3 h-2 overflow-hidden rounded-full bg-sky-100"
+            role="progressbar"
+          >
+            <div
+              className="h-full rounded-full bg-sky-600 transition-all duration-300"
+              style={{ width: (progress ? progressPercent : 8) + "%" }}
+            />
+          </div>
+          <div className="mt-1.5 flex items-center justify-between gap-3 text-[10px] font-medium text-sky-600">
+            <span>{progress ? String(progress.value) + "/" + String(progress.max) + (progress.node ? " · node " + progress.node : "") : "等待进度事件"}</span>
+            <span>{progress ? String(progressPercent) + "%" : ""}</span>
+          </div>
+        </div>
+      )
+    : null;
 
-  if (generatedImageItems.length > 0) {
-    return (
-      <div>
-        <p className="mb-2 text-[11px] font-bold uppercase tracking-wider text-slate-500">生成结果</p>
+  if (allGeneratedImageItems.length === 0 && !progressContent) {
+    return null;
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500">生成图片</p>
+          <p className="mt-0.5 text-[11px] text-slate-500">点击图片设为当前诊断 / inpaint 图。</p>
+        </div>
+        <div className="inline-flex rounded-md border border-slate-200 bg-white p-0.5 text-[11px] font-medium">
+          {[
+            { label: "全部", value: "all" as const },
+            { label: "收藏", value: "favorites" as const },
+            { label: "本轮", value: "session" as const },
+          ].map((option) => (
+            <button
+              className={"rounded px-2 py-1 transition " + (filter === option.value ? "bg-slate-900 text-white" : "text-slate-500 hover:bg-slate-50")}
+              key={option.value}
+              onClick={() => onFilterChange(option.value)}
+              type="button"
+            >
+              {option.label} {filterCounts[option.value]}
+            </button>
+          ))}
+        </div>
+      </div>
+      {historySaveMessage ? (
+        <p
+          className={
+            "rounded-md border px-3 py-2 text-[11px] leading-relaxed " +
+            (historySaveStatus === "error"
+              ? "border-rose-100 bg-rose-50 text-rose-700"
+              : historySaveStatus === "success"
+                ? "border-emerald-100 bg-emerald-50 text-emerald-700"
+                : "border-sky-100 bg-sky-50 text-sky-700")
+          }
+        >
+          {historySaveStatus === "saving" ? <Loader2 className="mr-1.5 inline size-3.5 animate-spin" /> : null}
+          {historySaveMessage}
+        </p>
+      ) : null}
+      {progressContent}
+      {generatedImageItems.length > 0 ? (
         <div className="grid grid-cols-2 gap-2">
           {generatedImageItems.map((item, index) => {
             const { image } = item;
-            const imageKey = getGeneratedImageKey(image, index);
-            const selected = imageClickMode === "select" && (selectedImageKey ? selectedImageKey === imageKey : index === 0);
-            const imageContent = (
-              <>
-                <img
-                  alt={`ComfyUI generated image ${index + 1}`}
-                  className="aspect-square w-full object-cover transition group-hover:scale-[1.02]"
-                  src={image.url}
-                />
-                <div className="border-t border-slate-200 bg-white px-2 py-1 text-[10px] text-slate-500">
-                  <span className="block truncate">
-                    {selected ? "诊断图 · " : ""}
-                    {image.filename}
-                  </span>
-                  <span className="mt-0.5 block font-mono text-[10px] text-slate-600">seed {item.seed}</span>
-                </div>
-              </>
-            );
-
-            if (imageClickMode === "open") {
-              return (
-                <div className="relative" key={imageKey}>
-                  <a
-                    className="group block overflow-hidden rounded-md border border-slate-200 bg-slate-50 text-left transition hover:border-sky-200"
-                    href={image.url}
-                    rel="noreferrer"
-                    target="_blank"
-                    title={`打开原图：${image.filename}`}
-                  >
-                    {imageContent}
-                  </a>
-                  <button
-                    aria-label={`放大图片：${image.filename}`}
-                    className="absolute right-1.5 top-1.5 z-10 grid size-8 place-items-center rounded-md border border-white/70 bg-slate-950/70 text-white shadow-sm backdrop-blur transition hover:bg-slate-900 focus:outline-none focus:ring-2 focus:ring-sky-300"
-                    onClick={() => setPreviewImageItem(item)}
-                    title="放大图片"
-                    type="button"
-                  >
-                    <Maximize2 className="size-4" />
-                  </button>
-                </div>
-              );
-            }
+            const imageKey = getGeneratedImageItemKey(item);
+            const selected = selectedImageKey ? selectedImageKey === imageKey : index === 0;
 
             return (
-              <div className="relative" key={imageKey}>
+              <div
+                className={
+                  "relative overflow-hidden rounded-md border bg-slate-50 transition " +
+                  (selected ? "border-sky-400 ring-2 ring-sky-100" : "border-slate-200 hover:border-sky-200")
+                }
+                key={imageKey}
+              >
                 <button
-                  className={`group block w-full overflow-hidden rounded-md border bg-slate-50 text-left transition ${
-                    selected ? "border-sky-400 ring-2 ring-sky-100" : "border-slate-200 hover:border-sky-200"
-                  }`}
+                  className="group block w-full text-left"
                   onClick={() => onSelectImage(imageKey)}
                   title={image.filename}
                   type="button"
                 >
-                  {imageContent}
+                  <img
+                    alt={"ComfyUI generated image " + String(index + 1)}
+                    className="aspect-square w-full object-cover transition group-hover:scale-[1.02]"
+                    src={image.url}
+                  />
+                  <div className="border-t border-slate-200 bg-white px-2 py-1 text-[10px] text-slate-500">
+                    <span className="block truncate">
+                      {selected ? "当前图 · " : ""}
+                      {image.filename}
+                    </span>
+                    <span className="mt-0.5 block font-mono text-[10px] text-slate-600">seed {item.seed}</span>
+                    <span className="mt-0.5 block text-[10px] text-slate-500">
+                      {item.sessionGenerated
+                        ? item.persisted
+                          ? (item.resultSource === "inpaint" ? "本轮 · inpaint" : "本轮 · 文生图")
+                          : "本轮临时结果"
+                        : (item.resultSource === "inpaint" ? "历史 · inpaint" : "历史 · 文生图")}
+                    </span>
+                  </div>
                 </button>
                 <button
-                  aria-label={`放大图片：${image.filename}`}
+                  aria-label={"放大图片：" + image.filename}
                   className="absolute right-1.5 top-1.5 z-10 grid size-8 place-items-center rounded-md border border-white/70 bg-slate-950/70 text-white shadow-sm backdrop-blur transition hover:bg-slate-900 focus:outline-none focus:ring-2 focus:ring-sky-300"
                   onClick={() => setPreviewImageItem(item)}
                   title="放大图片"
@@ -1797,82 +2040,108 @@ function GeneratedImageResults({
                 >
                   <Maximize2 className="size-4" />
                 </button>
+                <div className="flex items-center gap-1 border-t border-slate-200 bg-white px-1.5 py-1.5">
+                  {item.persisted && item.historyId ? (
+                    <button
+                      aria-label={item.favorited ? "取消收藏" : "收藏图片"}
+                      className={
+                        "grid size-7 place-items-center rounded-md transition " +
+                        (item.favorited
+                          ? "bg-amber-100 text-amber-700 hover:bg-amber-200"
+                          : "text-slate-500 hover:bg-slate-100 hover:text-slate-800")
+                      }
+                      onClick={() => onToggleFavorite(item.historyId!)}
+                      title={item.favorited ? "取消收藏" : "收藏图片"}
+                      type="button"
+                    >
+                      <Star className={"size-3.5 " + (item.favorited ? "fill-current" : "")} />
+                    </button>
+                  ) : null}
+                  <a
+                    aria-label={"打开原图：" + image.filename}
+                    className="grid size-7 place-items-center rounded-md text-slate-500 transition hover:bg-slate-100 hover:text-slate-800"
+                    href={image.url}
+                    rel="noreferrer"
+                    target="_blank"
+                    title="打开原图"
+                  >
+                    <ExternalLink className="size-3.5" />
+                  </a>
+                  {!item.persisted ? (
+                    <button
+                      aria-label={"保存到项目历史：" + image.filename}
+                      className="grid size-7 place-items-center rounded-md text-slate-500 transition hover:bg-emerald-50 hover:text-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
+                      disabled={historySaveStatus === "saving"}
+                      onClick={() => onSaveImage(item)}
+                      title="保存到项目历史"
+                      type="button"
+                    >
+                      {historySaveStatus === "saving" ? (
+                        <Loader2 className="size-3.5 animate-spin" />
+                      ) : (
+                        <Save className="size-3.5" />
+                      )}
+                    </button>
+                  ) : null}
+                  <button
+                    aria-label={(item.persisted ? "删除图片：" : "删除临时图片：") + image.filename}
+                    className="ml-auto grid size-7 place-items-center rounded-md text-slate-500 transition hover:bg-rose-50 hover:text-rose-700 disabled:cursor-not-allowed disabled:opacity-50"
+                    disabled={historySaveStatus === "saving"}
+                    onClick={() => onDeleteImage(item)}
+                    title={item.persisted ? "删除图片" : "删除临时图片"}
+                    type="button"
+                  >
+                    <Trash2 className="size-3.5" />
+                  </button>
+                </div>
               </div>
             );
           })}
         </div>
-        {previewImage && typeof document !== "undefined"
-          ? createPortal(
-              <div
-                aria-modal="true"
-                className="fixed inset-0 z-[80] flex flex-col bg-slate-950/95 p-3 text-white sm:p-5"
-                onClick={() => setPreviewImageItem(null)}
-                role="dialog"
-              >
-                <div className="mb-3 flex min-h-10 items-center justify-between gap-3">
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-semibold">{previewImage.filename}</p>
-                    <p className="mt-0.5 text-[11px] text-slate-300">seed {previewImageItem?.seed}</p>
-                  </div>
-                  <button
-                    aria-label="关闭放大预览"
-                    className="grid size-9 shrink-0 place-items-center rounded-md border border-white/20 bg-white/10 text-white transition hover:bg-white/20 focus:outline-none focus:ring-2 focus:ring-sky-300"
-                    onClick={() => setPreviewImageItem(null)}
-                    title="关闭"
-                    type="button"
-                  >
-                    <X className="size-5" />
-                  </button>
+      ) : (
+        <p className="rounded-md border border-slate-100 bg-slate-50 px-3 py-2 text-[11px] text-slate-500">
+          当前筛选下没有图片。
+        </p>
+      )}
+      {previewImage && typeof document !== "undefined"
+        ? createPortal(
+            <div
+              aria-modal="true"
+              className="fixed inset-0 z-[80] flex flex-col bg-slate-950/95 p-3 text-white sm:p-5"
+              onClick={() => setPreviewImageItem(null)}
+              role="dialog"
+            >
+              <div className="mb-3 flex min-h-10 items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-semibold">{previewImage.filename}</p>
+                  <p className="mt-0.5 text-[11px] text-slate-300">seed {previewImageItem?.seed}</p>
                 </div>
-                <div className="relative flex min-h-0 flex-1 items-center justify-center" onClick={(event) => event.stopPropagation()}>
-                  <NextImage
-                    alt={`ComfyUI generated image preview: ${previewImage.filename}`}
-                    className="object-contain"
-                    fill
-                    sizes="100vw"
-                    src={previewImage.url}
-                    unoptimized
-                  />
-                </div>
-              </div>,
-              document.body,
-            )
-          : null}
-      </div>
-    );
-  }
-
-  if (resultsCount > 0 && submitStatus === "loading") {
-    const progressPercent = getProgressPercent(progress);
-
-    return (
-      <div className="rounded-md border border-sky-100 bg-sky-50 p-3 text-xs leading-relaxed text-sky-700">
-        <div>
-          <Loader2 className="mr-1.5 inline size-3.5 animate-spin" />
-          {waitMessage || "正在等待 ComfyUI 生成完成..."}
-        </div>
-        <div
-          aria-label="ComfyUI generation progress"
-          aria-valuemax={100}
-          aria-valuemin={0}
-          aria-valuenow={progress ? progressPercent : 0}
-          className="mt-3 h-2 overflow-hidden rounded-full bg-sky-100"
-          role="progressbar"
-        >
-          <div
-            className="h-full rounded-full bg-sky-600 transition-all duration-300"
-            style={{ width: `${progress ? progressPercent : 8}%` }}
-          />
-        </div>
-        <div className="mt-1.5 flex items-center justify-between gap-3 text-[10px] font-medium text-sky-600">
-          <span>{progress ? `${progress.value}/${progress.max}${progress.node ? ` · node ${progress.node}` : ""}` : "等待进度事件"}</span>
-          <span>{progress ? `${progressPercent}%` : ""}</span>
-        </div>
-      </div>
-    );
-  }
-
-  return null;
+                <button
+                  aria-label="关闭放大预览"
+                  className="grid size-9 shrink-0 place-items-center rounded-md border border-white/20 bg-white/10 text-white transition hover:bg-white/20 focus:outline-none focus:ring-2 focus:ring-sky-300"
+                  onClick={() => setPreviewImageItem(null)}
+                  title="关闭"
+                  type="button"
+                >
+                  <X className="size-5" />
+                </button>
+              </div>
+              <div className="relative flex min-h-0 flex-1 items-center justify-center" onClick={(event) => event.stopPropagation()}>
+                <NextImage
+                  alt={"ComfyUI generated image preview: " + previewImage.filename}
+                  className="object-contain"
+                  fill
+                  sizes="100vw"
+                  src={previewImage.url}
+                  unoptimized
+                />
+              </div>
+            </div>,
+            document.body,
+          )
+        : null}
+    </div>
+  );
 }
 
 function InpaintMaskDialog({
@@ -3821,6 +4090,14 @@ export function ComfyUiGenerationDialog({
   title = "ComfyUI 生图",
 }: ComfyUiGenerationDialogProps) {
   const scene = useEditorStore((state) => state.project.scene);
+  const comfyUiGeneratedImages = useEditorStore(
+    (state) => state.project.settings.comfyUiGeneratedImages ?? [],
+  );
+  const appendComfyUiGeneratedImages = useEditorStore((state) => state.appendComfyUiGeneratedImages);
+  const toggleComfyUiGeneratedImageFavorite = useEditorStore(
+    (state) => state.toggleComfyUiGeneratedImageFavorite,
+  );
+  const deleteComfyUiGeneratedImage = useEditorStore((state) => state.deleteComfyUiGeneratedImage);
   const diagnosisPromptAllowed = diagnosisScopes?.prompt ?? true;
   const diagnosisParameterAllowed = diagnosisScopes?.parameters ?? true;
   const selectedLoraIdsKey = selectedLoraIds.join(",");
@@ -3844,6 +4121,10 @@ export function ComfyUiGenerationDialog({
   const [generationProgress, setGenerationProgress] = useState<GenerationProgress | null>(null);
   const [results, setResults] = useState<GenerationResult[]>([]);
   const [selectedGeneratedImageKey, setSelectedGeneratedImageKey] = useState("");
+  const [generatedImageFilter, setGeneratedImageFilter] = useState<GeneratedImageFilter>("all");
+  const [sessionGeneratedImageKeys, setSessionGeneratedImageKeys] = useState<Set<string>>(() => new Set());
+  const [historySaveStatus, setHistorySaveStatus] = useState<"idle" | "saving" | "success" | "error">("idle");
+  const [historySaveMessage, setHistorySaveMessage] = useState("");
   const [inpaintImageItem, setInpaintImageItem] = useState<GeneratedImageItem | null>(null);
   const [diagnosisInput, setDiagnosisInput] = useState("");
   const [diagnosisParameterEnabled, setDiagnosisParameterEnabled] = useState(diagnosisParameterAllowed);
@@ -3947,6 +4228,10 @@ export function ComfyUiGenerationDialog({
     setWaitMessage("");
     setGenerationProgress(null);
     setResults([]);
+    setGeneratedImageFilter("all");
+    setSessionGeneratedImageKeys(new Set());
+    setHistorySaveStatus("idle");
+    setHistorySaveMessage("");
     setInpaintImageItem(null);
     setControlNetExpanded(false);
     setControlNetNormalPreview(null);
@@ -4121,6 +4406,8 @@ export function ComfyUiGenerationDialog({
     setWaitMessage("");
     setGenerationProgress(null);
     setResults([]);
+    setHistorySaveStatus("idle");
+    setHistorySaveMessage("");
     resetDiagnosisState();
 
     try {
@@ -4160,6 +4447,235 @@ export function ComfyUiGenerationDialog({
     }
   }
 
+  async function persistGeneratedImageHistory({
+    images,
+    result,
+    savedImage,
+  }: {
+    images: ComfyUiGeneratedImage[];
+    result: GenerationResult;
+    savedImage: SavedGeneratedImageResponse;
+  }) {
+    const {
+      draftSnapshot,
+      negativePrompt,
+      parentImageId,
+      positivePrompt,
+      selectedCheckpointId: checkpointId,
+      selectedLoraIds: loraIds,
+    } = result.historyContext;
+    const records = createComfyUiGeneratedImageRecords({
+      draft: draftSnapshot,
+      images,
+      negativePrompt,
+      parentImageId,
+      positivePrompt,
+      result,
+      savedImage,
+      selectedCheckpointId: checkpointId,
+      selectedLoraIds: loraIds,
+    });
+
+    if (records.length === 0) {
+      return;
+    }
+
+    setSessionGeneratedImageKeys((current) => {
+      const next = new Set(current);
+      for (const image of images) {
+        next.add(getGeneratedImageSessionKey(result.promptId, image));
+      }
+      return next;
+    });
+    appendComfyUiGeneratedImages(records);
+    setHistorySaveStatus("saving");
+    setHistorySaveMessage("正在保存到当前项目图片历史...");
+
+    try {
+      await saveProject(useEditorStore.getState().project);
+      setHistorySaveStatus("success");
+      const sourceDeletionMessage = formatSavedImageSourceDeletionMessage(savedImage);
+      setHistorySaveMessage(
+        `已保存 ${records.length} 张图到当前项目历史。${sourceDeletionMessage ? ` ${sourceDeletionMessage}` : ""}`,
+      );
+    } catch (error) {
+      setHistorySaveStatus("error");
+      setHistorySaveMessage(
+        error instanceof Error
+          ? `图片已生成，但保存到项目历史失败：${error.message}`
+          : "图片已生成，但保存到项目历史失败。",
+      );
+    }
+  }
+
+  async function persistHistoryMutation(successMessage: string, failurePrefix: string) {
+    setHistorySaveStatus("saving");
+    setHistorySaveMessage("正在保存项目图片历史...");
+
+    try {
+      await saveProject(useEditorStore.getState().project);
+      setHistorySaveStatus("success");
+      setHistorySaveMessage(successMessage);
+    } catch (error) {
+      setHistorySaveStatus("error");
+      setHistorySaveMessage(
+        error instanceof Error
+          ? `${failurePrefix}：${error.message}`
+          : failurePrefix,
+      );
+    }
+  }
+
+  function handleToggleGeneratedImageFavorite(id: string) {
+    toggleComfyUiGeneratedImageFavorite(id);
+    void persistHistoryMutation("收藏状态已保存。", "收藏状态已更新，但保存项目失败");
+  }
+
+  function removeCurrentGeneratedImage(image: Pick<ComfyUiGeneratedImage, "filename" | "nodeId" | "subfolder" | "type">) {
+    const targetKey = getGeneratedImageReferenceKey(image);
+    setResults((current) =>
+      current
+        .map((result) => ({
+          ...result,
+          images: result.images.filter((candidate) => getGeneratedImageReferenceKey(candidate) !== targetKey),
+        }))
+        .filter((result) => result.images.length > 0 || submitStatus === "loading"),
+    );
+  }
+
+  async function deleteComfyUiSourceImage(image: SavedComfyUiImageReference) {
+    await fetchJson<{ deleted: boolean }>("/api/comfyui/files", {
+      method: "DELETE",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ image }),
+    });
+  }
+
+  async function deletePersistedGeneratedImageFile(record: SavedComfyUiGeneratedImage) {
+    if (record.storage === "sceneforge" && record.localFilename) {
+      await fetchJson<{ deleted: boolean }>(
+        `/api/comfyui/generated-images/${encodeURIComponent(record.localFilename)}`,
+        { method: "DELETE" },
+      );
+      return true;
+    }
+
+    return false;
+  }
+
+  async function handleDeleteGeneratedImage(id: string) {
+    const record = comfyUiGeneratedImages.find((image) => image.id === id);
+    if (!record) {
+      return;
+    }
+
+    setHistorySaveStatus("saving");
+    setHistorySaveMessage("正在删除图片文件...");
+
+    const previousProject = useEditorStore.getState().project;
+    deleteComfyUiGeneratedImage(id);
+
+    try {
+      await saveProject(useEditorStore.getState().project);
+    } catch (error) {
+      useEditorStore.getState().setProject(previousProject);
+      setHistorySaveStatus("error");
+      setHistorySaveMessage(
+        error instanceof Error
+          ? `项目历史保存失败，未删除图片文件：${error.message}`
+          : "项目历史保存失败，未删除图片文件。",
+      );
+      return;
+    }
+
+    try {
+      const deletedSourceFile = await deletePersistedGeneratedImageFile(record);
+      removeCurrentGeneratedImage({
+        ...(record.sourceReference ?? record),
+        nodeId: record.nodeId,
+      });
+      if (selectedGeneratedImageKey === `history:${id}`) {
+        setSelectedGeneratedImageKey("");
+        clearDiagnosisReview();
+      }
+      await saveProject(useEditorStore.getState().project);
+      setHistorySaveStatus("success");
+      setHistorySaveMessage(
+        deletedSourceFile
+          ? "图片文件已删除，并已从项目历史移除。"
+          : "已从项目历史移除；旧 ComfyUI output 记录不再尝试删除源文件。",
+      );
+    } catch (error) {
+      setHistorySaveStatus("error");
+      setHistorySaveMessage(
+        error instanceof Error
+          ? `已从项目历史移除，但图片文件删除失败：${error.message}`
+          : "已从项目历史移除，但图片文件删除失败。",
+      );
+    }
+  }
+
+  async function handleDeleteGeneratedImageItem(item: GeneratedImageItem) {
+    if (item.persisted && item.historyId) {
+      await handleDeleteGeneratedImage(item.historyId);
+      return;
+    }
+
+    setHistorySaveStatus("saving");
+    setHistorySaveMessage("正在删除 ComfyUI 临时图片...");
+
+    try {
+      await deleteComfyUiSourceImage(item.image);
+      removeCurrentGeneratedImage(item.image);
+      if (selectedGeneratedImageKey === getGeneratedImageItemKey(item)) {
+        setSelectedGeneratedImageKey("");
+        clearDiagnosisReview();
+      }
+      setHistorySaveStatus("success");
+      setHistorySaveMessage("ComfyUI 临时图片已删除。");
+    } catch (error) {
+      setHistorySaveStatus("error");
+      setHistorySaveMessage(error instanceof Error ? error.message : "删除 ComfyUI 临时图片失败。");
+    }
+  }
+
+  async function handleSaveGeneratedImage(item: GeneratedImageItem) {
+    if (item.persisted || !item.promptId) {
+      return;
+    }
+
+    const result = results.find((candidate) => candidate.promptId === item.promptId);
+    if (!result) {
+      setHistorySaveStatus("error");
+      setHistorySaveMessage("未找到这张图的生成记录，无法保存到项目历史。");
+      return;
+    }
+
+    setHistorySaveStatus("saving");
+    setHistorySaveMessage("正在复制图片到本地保存目录...");
+
+    try {
+      const savedImage = await fetchJson<SavedGeneratedImageResponse>("/api/comfyui/generated-images", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ image: item.image }),
+      });
+
+      await persistGeneratedImageHistory({
+        images: [item.image],
+        result,
+        savedImage,
+      });
+    } catch (error) {
+      setHistorySaveStatus("error");
+      setHistorySaveMessage(error instanceof Error ? error.message : "保存图片到本地失败。");
+    }
+  }
+
   async function submitGeneration() {
     if (!draft) {
       return;
@@ -4178,6 +4694,8 @@ export function ComfyUiGenerationDialog({
     setWaitMessage("");
     setGenerationProgress(null);
     setResults([]);
+    setHistorySaveStatus("idle");
+    setHistorySaveMessage("");
     resetDiagnosisState();
 
     try {
@@ -4197,7 +4715,7 @@ export function ComfyUiGenerationDialog({
         allowControlNet ? controlNetOpenPosePreview : null,
         allowControlNet ? controlNetNormalPreview : null,
       );
-      const payload = await fetchJson<Omit<GenerationResult, "imageCount" | "images" | "seed">>("/api/comfyui/generate-image", {
+      const payload = await fetchJson<Omit<GenerationResult, "historyContext" | "imageCount" | "images" | "seed" | "source">>("/api/comfyui/generate-image", {
         method: "POST",
         headers: {
           "content-type": "application/json",
@@ -4206,12 +4724,20 @@ export function ComfyUiGenerationDialog({
       });
 
       const queuedResult: GenerationResult = {
+        historyContext: {
+          draftSnapshot: { ...draft, imageCount, seed },
+          negativePrompt: draft.negativePrompt,
+          positivePrompt: draft.positivePrompt,
+          selectedCheckpointId,
+          selectedLoraIds: [...selectedLoraIds],
+        },
         imageCount,
         images: [],
         promptId: payload.promptId,
         number: payload.number,
         outputNodeId: payload.outputNodeId,
         seed,
+        source: "text-to-image",
       };
 
       setResults([queuedResult]);
@@ -4230,10 +4756,13 @@ export function ComfyUiGenerationDialog({
         }
       });
 
-      setResults([{ ...queuedResult, images: history.images }]);
+      const finalResult = { ...queuedResult, images: history.images };
+      setResults([finalResult]);
       setGenerationProgress({ value: 1, max: 1 });
       setWaitMessage("");
       setSubmitStatus("success");
+      setHistorySaveStatus("idle");
+      setHistorySaveMessage("图片已生成，默认不保存到项目历史；需要保留时请点击图片下方的保存按钮。");
     } catch (error) {
       setWaitMessage("");
       setGenerationProgress(null);
@@ -4258,6 +4787,8 @@ export function ComfyUiGenerationDialog({
     setSubmitError("");
     setWaitMessage("");
     setGenerationProgress(null);
+    setHistorySaveStatus("idle");
+    setHistorySaveMessage("");
     clearDiagnosisReview();
     setDraft((current) => (
       current
@@ -4279,20 +4810,39 @@ export function ComfyUiGenerationDialog({
 
       setWaitMessage("Submitting inpaint job to ComfyUI...");
 
-      const payload = await fetchJson<Omit<GenerationResult, "imageCount" | "images" | "seed">>("/api/comfyui/inpaint-image", {
+      const payload = await fetchJson<Omit<GenerationResult, "historyContext" | "imageCount" | "images" | "seed" | "source">>("/api/comfyui/inpaint-image", {
         method: "POST",
         headers: {
           "content-type": "application/json",
         },
         body: JSON.stringify({ ...requestPayload, clientId }),
       });
+      const parentImageId = inpaintImageItem?.historyId;
       const queuedResult: GenerationResult = {
+        historyContext: {
+          draftSnapshot: {
+            ...draft,
+            seed: input.seed,
+            inpaint: {
+              ...draft.inpaint,
+              denoise: input.denoise,
+              growMaskBy: input.growMaskBy,
+              mode: input.mode,
+            },
+          },
+          negativePrompt: input.negativePrompt,
+          ...(parentImageId ? { parentImageId } : {}),
+          positivePrompt: input.positivePrompt,
+          selectedCheckpointId,
+          selectedLoraIds: [...selectedLoraIds],
+        },
         imageCount: 1,
         images: [],
         promptId: payload.promptId,
         number: payload.number,
         outputNodeId: payload.outputNodeId,
         seed: input.seed,
+        source: "inpaint",
       };
 
       setResults((current) => [...current, queuedResult]);
@@ -4317,16 +4867,19 @@ export function ComfyUiGenerationDialog({
         }
       });
 
+      const finalResult = { ...queuedResult, images: history.images };
       setResults((current) =>
         current.map((result) => (
           result.promptId === payload.promptId
-            ? { ...queuedResult, images: history.images }
+            ? finalResult
             : result
         )),
       );
       setGenerationProgress({ value: 1, max: 1 });
       setWaitMessage("");
       setSubmitStatus("success");
+      setHistorySaveStatus("idle");
+      setHistorySaveMessage("Inpaint 图片已生成，默认不保存到项目历史；需要保留时请点击图片下方的保存按钮。");
       setInpaintImageItem(null);
     } catch (error) {
       setWaitMessage("");
@@ -4544,15 +5097,49 @@ export function ComfyUiGenerationDialog({
         ),
       )
     : null;
-  const generatedImageItems = results.flatMap((result) =>
-    result.images.map((image): GeneratedImageItem => ({
+  const historyGeneratedImageItems = comfyUiGeneratedImages.map((record) => ({
+    ...historyRecordToGeneratedImageItem(record),
+    sessionGenerated: sessionGeneratedImageKeys.has(getGeneratedImageSessionKey(record.promptId, record)),
+  }));
+  const currentGeneratedImageItems = results.flatMap((result) =>
+    result.images.map((image, index): GeneratedImageItem => ({
+      favorited: false,
+      id: `current:${result.promptId}:${getGeneratedImageReferenceKey(image)}:${index}`,
       image,
+      persisted: false,
+      promptId: result.promptId,
+      resultSource: result.source,
+      sessionGenerated: true,
       seed: result.seed,
     })),
   );
+  const historyReferenceKeys = new Set(
+    historyGeneratedImageItems.map(getGeneratedImageItemReferenceKey),
+  );
+  const generatedImageItems = [
+    ...currentGeneratedImageItems.filter((item) => !historyReferenceKeys.has(getGeneratedImageItemReferenceKey(item))),
+    ...historyGeneratedImageItems,
+  ].sort((a, b) => {
+    const aTime = a.createdAt ? Date.parse(a.createdAt) : Number.POSITIVE_INFINITY;
+    const bTime = b.createdAt ? Date.parse(b.createdAt) : Number.POSITIVE_INFINITY;
+    return (Number.isFinite(bTime) ? bTime : 0) - (Number.isFinite(aTime) ? aTime : 0);
+  });
+  const filteredGeneratedImageItems = generatedImageItems.filter((item) => {
+    if (generatedImageFilter === "favorites") {
+      return item.favorited;
+    }
+
+    if (generatedImageFilter === "session") {
+      return item.sessionGenerated;
+    }
+
+    return true;
+  });
   const generatedImages = generatedImageItems.map((item) => item.image);
   const selectedGeneratedImageItem =
-    generatedImageItems.find((item, index) => getGeneratedImageKey(item.image, index) === selectedGeneratedImageKey) ??
+    filteredGeneratedImageItems.find((item) => getGeneratedImageItemKey(item) === selectedGeneratedImageKey) ??
+    generatedImageItems.find((item) => getGeneratedImageItemKey(item) === selectedGeneratedImageKey) ??
+    filteredGeneratedImageItems[0] ??
     generatedImageItems[0] ??
     null;
   const selectedGeneratedImage = selectedGeneratedImageItem?.image ?? null;
@@ -4909,15 +5496,22 @@ export function ComfyUiGenerationDialog({
                           </div>
                           <div className="mt-5">
                             <GeneratedImageResults
-                              generatedImageItems={generatedImageItems}
-                              imageClickMode={allowDiagnosis ? "select" : "open"}
+                              allGeneratedImageItems={generatedImageItems}
+                              filter={generatedImageFilter}
+                              generatedImageItems={filteredGeneratedImageItems}
+                              historySaveMessage={historySaveMessage}
+                              historySaveStatus={historySaveStatus}
+                              onDeleteImage={(item) => void handleDeleteGeneratedImageItem(item)}
+                              onFilterChange={setGeneratedImageFilter}
+                              onSaveImage={(item) => void handleSaveGeneratedImage(item)}
                               onSelectImage={(imageKey) => {
                                 setSelectedGeneratedImageKey(imageKey);
                                 clearDiagnosisReview();
                               }}
+                              onToggleFavorite={handleToggleGeneratedImageFavorite}
                               progress={generationProgress}
                               resultsCount={results.length}
-                              selectedImageKey={selectedGeneratedImageKey}
+                              selectedImageKey={selectedGeneratedImageItem ? getGeneratedImageItemKey(selectedGeneratedImageItem) : selectedGeneratedImageKey}
                               submitStatus={submitStatus}
                               waitMessage={waitMessage}
                             />
