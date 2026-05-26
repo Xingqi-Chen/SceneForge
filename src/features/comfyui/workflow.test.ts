@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { buildBasicInpaintWorkflow, buildBasicTextToImageWorkflow, ComfyUiWorkflowBuilder } from "./workflow";
+import { MIN_COMFYUI_VAE_INPAINT_DENOISE } from "./inpaint";
+import { buildBasicInpaintWorkflow, buildBasicTextToImageWorkflow, buildSam2MaskWorkflow, ComfyUiWorkflowBuilder } from "./workflow";
 
 describe("ComfyUI workflow builder", () => {
   it("creates stable node ids and connection tuples", () => {
@@ -339,6 +340,296 @@ describe("ComfyUI workflow builder", () => {
     });
   });
 
+  it("upscales source and mask before latent noise mask inpaint with lanczos mode", () => {
+    const result = buildBasicInpaintWorkflow({
+      checkpointName: "dream.safetensors",
+      positivePrompt: "replace the window with a neon sign",
+      imageName: "SceneForge/source.png",
+      maskName: "SceneForge/mask.png",
+      seed: 123,
+      upscaleBeforeInpaint: {
+        enabled: true,
+        mode: "lanczos",
+        scaleBy: 2,
+      },
+    });
+
+    expect(result.nodeIds).toEqual({
+      checkpoint: "1",
+      loraLoaders: [],
+      positivePrompt: "2",
+      negativePrompt: "3",
+      sourceImage: "4",
+      maskImage: "5",
+      sourceImageScaleBy: "6",
+      maskToImage: "7",
+      maskImageScaleBy: "8",
+      imageToMask: "9",
+      vaeEncode: "10",
+      setLatentNoiseMask: "11",
+      sampler: "12",
+      vaeDecode: "13",
+      saveImage: "14",
+    });
+    expect(result.workflow["6"]).toMatchObject({
+      class_type: "ImageScaleBy",
+      inputs: {
+        image: ["4", 0],
+        scale_by: 2,
+        upscale_method: "lanczos",
+      },
+    });
+    expect(result.workflow["7"]).toMatchObject({
+      class_type: "MaskToImage",
+      inputs: {
+        mask: ["5", 0],
+      },
+    });
+    expect(result.workflow["8"]).toMatchObject({
+      class_type: "ImageScaleBy",
+      inputs: {
+        image: ["7", 0],
+        scale_by: 2,
+        upscale_method: "nearest-exact",
+      },
+    });
+    expect(result.workflow["9"]).toMatchObject({
+      class_type: "ImageToMask",
+      inputs: {
+        channel: "red",
+        image: ["8", 0],
+      },
+    });
+    expect(result.workflow["10"].inputs.pixels).toEqual(["6", 0]);
+    expect(result.workflow["10"]).toMatchObject({
+      class_type: "VAEEncodeTiled",
+      inputs: {
+        overlap: 64,
+        temporal_overlap: 8,
+        temporal_size: 64,
+        tile_size: 512,
+      },
+    });
+    expect(result.workflow["11"].inputs.mask).toEqual(["9", 0]);
+    expect(result.workflow["12"].inputs.latent_image).toEqual(["11", 0]);
+    expect(result.workflow["13"]).toMatchObject({
+      class_type: "VAEDecodeTiled",
+      inputs: {
+        overlap: 64,
+        temporal_overlap: 8,
+        temporal_size: 64,
+        tile_size: 512,
+      },
+    });
+  });
+
+  it("runs local-region lanczos high-res inpaint on a crop and composites it back", () => {
+    const result = buildBasicInpaintWorkflow({
+      checkpointName: "dream.safetensors",
+      positivePrompt: "repair the sleeve",
+      imageName: "SceneForge/source.png",
+      imageWidth: 1024,
+      imageHeight: 768,
+      maskName: "SceneForge/mask.png",
+      seed: 123,
+      upscaleBeforeInpaint: {
+        enabled: true,
+        mode: "lanczos",
+        scaleBy: 2,
+        strategy: "local-region",
+        localRegion: {
+          x: 128,
+          y: 96,
+          width: 320,
+          height: 256,
+          source: "mask-bounds",
+          padding: 128,
+          feather: 32,
+        },
+      },
+    });
+
+    expect(result.workflow["6"]).toMatchObject({
+      class_type: "ImageCrop",
+      inputs: {
+        image: ["4", 0],
+        x: 128,
+        y: 96,
+        width: 320,
+        height: 256,
+      },
+    });
+    expect(result.workflow["7"]).toMatchObject({
+      class_type: "CropMask",
+      inputs: {
+        mask: ["5", 0],
+        x: 128,
+        y: 96,
+        width: 320,
+        height: 256,
+      },
+    });
+    expect(result.workflow["8"]).toMatchObject({
+      class_type: "FeatherMask",
+      inputs: {
+        mask: ["7", 0],
+        left: 32,
+        top: 32,
+        right: 32,
+        bottom: 32,
+      },
+    });
+    expect(result.workflow["9"]).toMatchObject({
+      class_type: "ImageScaleBy",
+      inputs: {
+        image: ["6", 0],
+        scale_by: 2,
+        upscale_method: "lanczos",
+      },
+    });
+    expect(result.workflow["13"]).toMatchObject({
+      class_type: "VAEEncodeTiled",
+      inputs: {
+        pixels: ["9", 0],
+      },
+    });
+    expect(result.workflow["14"].inputs.mask).toEqual(["12", 0]);
+    expect(result.workflow["17"]).toMatchObject({
+      class_type: "ImageScale",
+      inputs: {
+        image: ["16", 0],
+        width: 320,
+        height: 256,
+        upscale_method: "lanczos",
+        crop: "disabled",
+      },
+    });
+    expect(result.workflow["18"]).toMatchObject({
+      class_type: "ImageCompositeMasked",
+      inputs: {
+        destination: ["4", 0],
+        source: ["17", 0],
+        x: 128,
+        y: 96,
+        resize_source: false,
+        mask: ["8", 0],
+      },
+    });
+    expect(result.workflow["19"].inputs.images).toEqual(["18", 0]);
+  });
+
+  it("can harmonize a local-region composite with a low-denoise global pass", () => {
+    const result = buildBasicInpaintWorkflow({
+      checkpointName: "dream.safetensors",
+      positivePrompt: "repair the sleeve",
+      imageName: "SceneForge/source.png",
+      imageWidth: 1024,
+      imageHeight: 768,
+      maskName: "SceneForge/mask.png",
+      seed: 123,
+      upscaleBeforeInpaint: {
+        enabled: true,
+        mode: "lanczos",
+        scaleBy: 2,
+        strategy: "local-region",
+        localRegion: {
+          x: 128,
+          y: 96,
+          width: 320,
+          height: 256,
+          source: "box",
+          padding: 128,
+          feather: 32,
+          harmonizeAfter: {
+            enabled: true,
+            denoise: 0.12,
+          },
+        },
+      },
+    });
+
+    expect(result.workflow["19"]).toMatchObject({
+      class_type: "VAEEncodeTiled",
+      inputs: {
+        pixels: ["18", 0],
+      },
+    });
+    expect(result.workflow["20"]).toMatchObject({
+      class_type: "KSampler",
+      inputs: {
+        denoise: 0.12,
+        latent_image: ["19", 0],
+      },
+    });
+    expect(result.workflow["21"]).toMatchObject({
+      class_type: "VAEDecodeTiled",
+      inputs: {
+        samples: ["20", 0],
+      },
+    });
+    expect(result.workflow["22"].inputs.images).toEqual(["21", 0]);
+  });
+
+  it("adds HandDetailer before FaceDetailer to an inpaint workflow when enabled", () => {
+    const result = buildBasicInpaintWorkflow({
+      checkpointName: "dream.safetensors",
+      positivePrompt: "fix fingers and face",
+      imageName: "SceneForge/source.png",
+      maskName: "SceneForge/mask.png",
+      seed: 123,
+      faceDetailer: {
+        enabled: true,
+        detectorModelName: "bbox/face_yolov8s.pt",
+      },
+      handDetailer: {
+        enabled: true,
+        detectorModelName: "bbox/hand_yolov8s.pt",
+      },
+    });
+
+    expect(result.nodeIds).toEqual({
+      checkpoint: "1",
+      loraLoaders: [],
+      positivePrompt: "2",
+      negativePrompt: "3",
+      sourceImage: "4",
+      maskImage: "5",
+      vaeEncode: "6",
+      setLatentNoiseMask: "7",
+      sampler: "8",
+      vaeDecode: "9",
+      handUltralyticsDetectorProvider: "10",
+      handDetailer: "11",
+      ultralyticsDetectorProvider: "12",
+      faceDetailer: "13",
+      saveImage: "14",
+    });
+    expect(result.workflow["11"]).toMatchObject({
+      class_type: "FaceDetailer",
+      _meta: {
+        title: "HandDetailer",
+      },
+      inputs: {
+        image: ["9", 0],
+        bbox_detector: ["10", 0],
+      },
+    });
+    expect(result.workflow["13"]).toMatchObject({
+      class_type: "FaceDetailer",
+      _meta: {
+        title: "FaceDetailer",
+      },
+      inputs: {
+        image: ["11", 0],
+        bbox_detector: ["12", 0],
+      },
+    });
+    expect(result.workflow["14"].inputs).toEqual({
+      filename_prefix: "SceneForge_inpaint",
+      images: ["13", 0],
+    });
+  });
+
   it("builds a VAE inpaint workflow with LoRA and grow mask", () => {
     const result = buildBasicInpaintWorkflow({
       checkpointName: "dream.safetensors",
@@ -398,6 +689,136 @@ describe("ComfyUI workflow builder", () => {
       negative: ["4", 0],
       latent_image: ["7", 0],
     });
+  });
+
+  it("raises too-low denoise for VAE inpaint to avoid gray masked fills", () => {
+    const result = buildBasicInpaintWorkflow({
+      checkpointName: "dream.safetensors",
+      positivePrompt: "repair hands",
+      imageName: "SceneForge/source.png",
+      maskName: "SceneForge/mask.png",
+      inpaintMode: "vae-inpaint",
+      denoise: 0.2,
+      seed: 321,
+    });
+
+    expect(result.request.denoise).toBe(MIN_COMFYUI_VAE_INPAINT_DENOISE);
+    expect(result.workflow["7"].inputs.denoise).toBe(MIN_COMFYUI_VAE_INPAINT_DENOISE);
+  });
+
+  it("upscales source with a true 2x model and doubles VAE inpaint grow mask", () => {
+    const result = buildBasicInpaintWorkflow({
+      checkpointName: "dream.safetensors",
+      positivePrompt: "new hair style",
+      imageName: "SceneForge/source.png",
+      maskName: "SceneForge/mask.png",
+      inpaintMode: "vae-inpaint",
+      growMaskBy: 6,
+      seed: 321,
+      upscaleBeforeInpaint: {
+        enabled: true,
+        mode: "aniscale2-x2",
+        scaleBy: 2,
+      },
+    });
+
+    expect(result.nodeIds).toEqual({
+      checkpoint: "1",
+      loraLoaders: [],
+      positivePrompt: "2",
+      negativePrompt: "3",
+      sourceImage: "4",
+      maskImage: "5",
+      upscaleModelLoader: "6",
+      imageUpscaleWithModel: "7",
+      maskToImage: "8",
+      maskImageScaleBy: "9",
+      imageToMask: "10",
+      vaeEncodeForInpaint: "11",
+      sampler: "12",
+      vaeDecode: "13",
+      saveImage: "14",
+    });
+    expect(result.workflow["6"]).toMatchObject({
+      class_type: "UpscaleModelLoader",
+      inputs: {
+        model_name: "2x_AniScale2_ESRGAN_i16_110K.pth",
+      },
+    });
+    expect(result.workflow["7"]).toMatchObject({
+      class_type: "ImageUpscaleWithModel",
+      inputs: {
+        image: ["4", 0],
+        upscale_model: ["6", 0],
+      },
+    });
+    expect(result.workflow["9"].inputs).toMatchObject({
+      image: ["8", 0],
+      scale_by: 2,
+      upscale_method: "nearest-exact",
+    });
+    expect(result.workflow["11"]).toMatchObject({
+      class_type: "VAEEncodeForInpaint",
+      inputs: {
+        pixels: ["7", 0],
+        mask: ["10", 0],
+        grow_mask_by: 12,
+      },
+    });
+    expect(result.workflow["12"].inputs.latent_image).toEqual(["11", 0]);
+    expect(result.workflow["13"]).toMatchObject({
+      class_type: "VAEDecodeTiled",
+      inputs: {
+        overlap: 64,
+        temporal_overlap: 8,
+        temporal_size: 64,
+        tile_size: 512,
+      },
+    });
+  });
+
+  it("uses the 2x model only on the local crop in local-region mode", () => {
+    const result = buildBasicInpaintWorkflow({
+      checkpointName: "dream.safetensors",
+      positivePrompt: "new hair style",
+      imageName: "SceneForge/source.png",
+      imageWidth: 1024,
+      imageHeight: 768,
+      maskName: "SceneForge/mask.png",
+      seed: 321,
+      upscaleBeforeInpaint: {
+        enabled: true,
+        mode: "aniscale2-x2",
+        scaleBy: 2,
+        strategy: "local-region",
+        localRegion: {
+          x: 128,
+          y: 96,
+          width: 256,
+          height: 256,
+          source: "box",
+          padding: 128,
+          feather: 24,
+        },
+      },
+    });
+
+    expect(result.workflow["6"].class_type).toBe("ImageCrop");
+    expect(result.workflow["9"]).toMatchObject({
+      class_type: "UpscaleModelLoader",
+      inputs: {
+        model_name: "2x_AniScale2_ESRGAN_i16_110K.pth",
+      },
+    });
+    expect(result.workflow["10"]).toMatchObject({
+      class_type: "ImageUpscaleWithModel",
+      inputs: {
+        image: ["6", 0],
+        upscale_model: ["9", 0],
+      },
+    });
+    expect(result.workflow["21"]).toBeUndefined();
+    expect(result.workflow["20"].inputs.images).toEqual(["19", 0]);
   });
 
   it("adds OpenPose ControlNet nodes before sampling when an uploaded control image is available", () => {
@@ -771,5 +1192,67 @@ describe("ComfyUI workflow builder", () => {
     expect(result.workflow["4"].inputs.clip).toEqual(["3", 1]);
     expect(result.workflow["5"].inputs.clip).toEqual(["3", 1]);
     expect(result.workflow["7"].inputs.model).toEqual(["3", 0]);
+  });
+
+  it("builds a SAM2 mask workflow with point and box prompts", () => {
+    const result = buildSam2MaskWorkflow({
+      imageName: "SceneForge/source.png",
+      imageWidth: 1024,
+      imageHeight: 768,
+      positivePoints: [{ x: 300, y: 420 }],
+      negativePoints: [{ x: 120, y: 220 }],
+      bbox: {
+        x: 240,
+        y: 320,
+        width: 280,
+        height: 180,
+      },
+    });
+
+    expect(result.nodeIds).toEqual({
+      sourceImage: "1",
+      sam2Model: "2",
+      sam2Segmentation: "3",
+      maskToImage: "4",
+      saveImage: "5",
+    });
+    expect(result.outputNodeId).toBe("5");
+    expect(result.workflow["1"]).toMatchObject({
+      class_type: "LoadImage",
+      inputs: {
+        image: "SceneForge/source.png",
+      },
+    });
+    expect(result.workflow["2"]).toMatchObject({
+      class_type: "DownloadAndLoadSAM2Model",
+      inputs: {
+        model: "sam2.1_hiera_small.safetensors",
+        segmentor: "single_image",
+        device: "cuda",
+        precision: "fp16",
+      },
+    });
+    expect(result.workflow["3"]).toMatchObject({
+      class_type: "Sam2Segmentation",
+      inputs: {
+        sam2_model: ["2", 0],
+        image: ["1", 0],
+        keep_model_loaded: true,
+        individual_objects: false,
+        coordinates_positive: JSON.stringify([{ x: 300, y: 420 }]),
+        coordinates_negative: JSON.stringify([{ x: 120, y: 220 }]),
+        bboxes: [[240, 320, 520, 500]],
+      },
+    });
+    expect(result.workflow["4"]).toMatchObject({
+      class_type: "MaskToImage",
+      inputs: {
+        mask: ["3", 0],
+      },
+    });
+    expect(result.workflow["5"].inputs).toEqual({
+      filename_prefix: "SceneForge_sam_mask",
+      images: ["4", 0],
+    });
   });
 });

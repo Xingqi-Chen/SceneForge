@@ -4,10 +4,21 @@ import { useMemo } from "react";
 import { type ThreeEvent } from "@react-three/fiber";
 import { Quaternion, Vector3 as ThreeVector3 } from "three";
 
-import type { BodyPartId } from "@/shared/types";
+import type { BodyPartId, Vector3 } from "@/shared/types";
 import type { StickFigurePoseV1 } from "@/shared/types/stick-figure-pose";
+import {
+  resolveStickFigureHeadBasis,
+  resolveStickFigureHeadPoint,
+  type StickFigureHeadBasis,
+  type StickFigureHeadOffset,
+} from "@/shared/utils/stick-figure-head-basis";
 
 const Y_UP = new ThreeVector3(0, 1, 0);
+const HEAD_SPHERE_RADIUS = 0.11;
+const FACE_CROSSHAIR_SAMPLES = 18;
+const FACE_CROSSHAIR_SURFACE_LIFT = 0.004;
+
+type Point3Tuple = [number, number, number];
 
 type SelectionClickEvent = ThreeEvent<MouseEvent>;
 
@@ -116,6 +127,166 @@ function StickJointSphere({
   );
 }
 
+function StickFaceCrosshairSegment({
+  color,
+  from,
+  opacity,
+  radius,
+  renderOrder,
+  to,
+}: {
+  color: string;
+  from: Point3Tuple;
+  opacity: number;
+  radius: number;
+  renderOrder: number;
+  to: Point3Tuple;
+}) {
+  const [fromX, fromY, fromZ] = from;
+  const [toX, toY, toZ] = to;
+  const { position, quat, length } = useMemo(() => {
+    const a = new ThreeVector3(fromX, fromY, fromZ);
+    const b = new ThreeVector3(toX, toY, toZ);
+    const position = new ThreeVector3().addVectors(a, b).multiplyScalar(0.5);
+    const length = a.distanceTo(b);
+    const quat = boneQuat(a, b);
+
+    return { position, quat, length };
+  }, [fromX, fromY, fromZ, toX, toY, toZ]);
+
+  if (length < 1e-5) {
+    return null;
+  }
+
+  return (
+    <mesh position={position} quaternion={quat} raycast={() => undefined} renderOrder={renderOrder}>
+      <cylinderGeometry args={[radius, radius, length, 8]} />
+      <meshBasicMaterial color={color} depthWrite={false} opacity={opacity} toneMapped={false} transparent />
+    </mesh>
+  );
+}
+
+function StickFaceCrosshairPath({
+  color,
+  opacity,
+  points,
+  radius,
+  renderOrder,
+}: {
+  color: string;
+  opacity: number;
+  points: Point3Tuple[];
+  radius: number;
+  renderOrder: number;
+}) {
+  return (
+    <>
+      {points.slice(1).map((point, index) => (
+        <StickFaceCrosshairSegment
+          color={color}
+          from={points[index]}
+          key={`${index}-${point[0]}-${point[1]}-${point[2]}`}
+          opacity={opacity}
+          radius={radius}
+          renderOrder={renderOrder}
+          to={point}
+        />
+      ))}
+    </>
+  );
+}
+
+function resolveFaceSurfacePoint(
+  basis: StickFigureHeadBasis,
+  offset: Omit<StickFigureHeadOffset, "z">,
+  rotation: Vector3 | undefined,
+  lift: number,
+): Point3Tuple {
+  const worldX = offset.x * basis.scale;
+  const worldY = offset.y * basis.scale;
+  const surfaceZ = Math.sqrt(Math.max(0, HEAD_SPHERE_RADIUS ** 2 - worldX ** 2 - worldY ** 2)) + lift;
+  const point = resolveStickFigureHeadPoint(
+    basis,
+    {
+      ...offset,
+      z: surfaceZ / Math.max(0.0001, basis.scale),
+    },
+    rotation,
+  );
+
+  return [point.x, point.y, point.z];
+}
+
+function sampleFaceSurfaceLine(
+  basis: StickFigureHeadBasis,
+  from: Omit<StickFigureHeadOffset, "z">,
+  to: Omit<StickFigureHeadOffset, "z">,
+  rotation: Vector3 | undefined,
+  lift: number,
+): Point3Tuple[] {
+  return Array.from({ length: FACE_CROSSHAIR_SAMPLES }, (_, index) => {
+    const t = index / (FACE_CROSSHAIR_SAMPLES - 1);
+
+    return resolveFaceSurfacePoint(
+      basis,
+      {
+        x: from.x + (to.x - from.x) * t,
+        y: from.y + (to.y - from.y) * t,
+      },
+      rotation,
+      lift,
+    );
+  });
+}
+
+function StickFaceCrosshair({
+  headRotation3D,
+  pose,
+}: {
+  headRotation3D?: Vector3;
+  pose: StickFigurePoseV1;
+}) {
+  const segments = useMemo(() => {
+    const basis = resolveStickFigureHeadBasis(pose);
+
+    return {
+      horizontal: sampleFaceSurfaceLine(
+        basis,
+        { x: -0.5, y: 0.1 },
+        { x: 0.5, y: 0.1 },
+        headRotation3D,
+        FACE_CROSSHAIR_SURFACE_LIFT,
+      ),
+      vertical: sampleFaceSurfaceLine(
+        basis,
+        { x: 0, y: 0.78 },
+        { x: 0, y: -0.82 },
+        headRotation3D,
+        FACE_CROSSHAIR_SURFACE_LIFT,
+      ),
+    };
+  }, [headRotation3D, pose]);
+
+  return (
+    <group raycast={() => undefined}>
+      <StickFaceCrosshairPath
+        color="#020617"
+        opacity={0.88}
+        points={segments.vertical}
+        radius={0.004}
+        renderOrder={4}
+      />
+      <StickFaceCrosshairPath
+        color="#020617"
+        opacity={0.88}
+        points={segments.horizontal}
+        radius={0.004}
+        renderOrder={4}
+      />
+    </group>
+  );
+}
+
 export type StickmanRendererProps = {
   pose: StickFigurePoseV1;
   selectedBodyPartId?: BodyPartId;
@@ -126,6 +297,7 @@ export type StickmanRendererProps = {
   limbColor: string;
   torsoColor: string;
   headColor: string;
+  headRotation3D?: Vector3;
 };
 
 export function StickmanRenderer({
@@ -137,6 +309,7 @@ export function StickmanRenderer({
   limbColor,
   torsoColor,
   headColor,
+  headRotation3D,
 }: StickmanRendererProps) {
   const j = pose.joints;
   const partSel = (id: BodyPartId) => selectedBodyPartId === id || focusWholeCharacter;
@@ -284,6 +457,7 @@ export function StickmanRenderer({
           roughness={0.42}
         />
       </mesh>
+      <StickFaceCrosshair headRotation3D={headRotation3D} pose={pose} />
 
       <mesh
         castShadow

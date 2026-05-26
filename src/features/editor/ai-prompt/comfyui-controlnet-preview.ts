@@ -102,6 +102,7 @@ export function buildComfyUiControlNetOpenPosePreview(
     id: character.id,
     pose: getCharacterStickFigurePose(character),
     characterTransform: character.transform3D,
+    headRotation3D: character.headRotation3D,
   }));
   const openPose = buildComfyUiOpenPoseSceneSkeletonSvg(
     skeletons,

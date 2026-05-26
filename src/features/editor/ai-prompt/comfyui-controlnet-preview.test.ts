@@ -22,11 +22,12 @@ function make3dScene(characters: CharacterSkeleton[] = []): Scene {
   };
 }
 
-function makeCharacter(id: string, x: number): CharacterSkeleton {
+function makeCharacter(id: string, x: number, headRotation3D?: CharacterSkeleton["headRotation3D"]): CharacterSkeleton {
   return {
     ...defaultCharacter,
     id,
     characterSpace: "3d",
+    headRotation3D,
     transform3D: {
       position: { x, y: 0, z: 0 },
       rotation: { x: 0, y: 0, z: 0 },
@@ -63,11 +64,34 @@ describe("ComfyUI ControlNet OpenPose preview", () => {
     expect(result.available).toBe(true);
     expect(result.characterCount).toBe(1);
     expect(result.visibleSkeletonCount).toBe(1);
+    expect(result.visibleJointCount).toBe(15);
     expect(result.svg).toContain("<svg");
     expect(result.svg).toContain("<line ");
+    expect(result.svg).toContain('data-openpose-keypoint="nose"');
+    expect(result.svg).toContain('data-openpose-face-index="0"');
     expect(result.openPose.svg).toContain("<line ");
     expect(result.depth.svg).toContain("<line ");
+    expect(result.depth.svg).not.toContain("data-openpose-face-index");
     expect(result.depth.depthRange).not.toBeNull();
+  });
+
+  it("uses character head rotation for the synthesized OpenPose head keypoints", () => {
+    const base = buildComfyUiControlNetOpenPosePreview(
+      make3dScene([makeCharacter("hero", 0)]),
+      { width: 512, height: 512 },
+    );
+    const rotated = buildComfyUiControlNetOpenPosePreview(
+      make3dScene([makeCharacter("hero", 0, { x: 0, y: 55, z: 0 })]),
+      { width: 512, height: 512 },
+    );
+
+    expect(base.skeletons[0].headKeypoints.nose.visible).toBe(true);
+    expect(rotated.skeletons[0].headKeypoints.nose.visible).toBe(true);
+    expect(rotated.skeletons[0].headKeypoints.nose.x).not.toBeCloseTo(
+      base.skeletons[0].headKeypoints.nose.x,
+      3,
+    );
+    expect(rotated.visibleJointCount).toBe(15);
   });
 
   it("composes multiple visible 3D characters into one OpenPose and Depth SVG", () => {
@@ -80,6 +104,7 @@ describe("ComfyUI ControlNet OpenPose preview", () => {
     expect(result.characterCount).toBe(2);
     expect(result.skeletons.map((skeleton) => skeleton.id)).toEqual(["left", "right"]);
     expect(result.visibleSkeletonCount).toBe(2);
+    expect(result.visibleJointCount).toBe(30);
     expect(result.openPose.skeletons.map((skeleton) => skeleton.id)).toEqual(["left", "right"]);
     expect(result.depth.skeletons.map((skeleton) => skeleton.id)).toEqual(["left", "right"]);
     expect(result.depth.visibleSkeletonCount).toBe(2);

@@ -6,12 +6,17 @@ import {
   Vector3 as ThreeVector3,
 } from "three";
 
-import type { Scene3DConfig, SceneObject3DTransform } from "@/shared/types";
+import type { Scene3DConfig, SceneObject3DTransform, Vector3 } from "@/shared/types";
 import type {
   StickFigureJointId,
   StickFigurePoseV1,
   StickFigureVec3,
 } from "@/shared/types/stick-figure-pose";
+import {
+  resolveStickFigureHeadBasis,
+  resolveStickFigureHeadPoint,
+  type StickFigureHeadOffset,
+} from "@/shared/utils/stick-figure-head-basis";
 
 const DEG2RAD = Math.PI / 180;
 const DEFAULT_CAMERA_NEAR = 0.1;
@@ -21,6 +26,7 @@ const DEFAULT_STROKE_WIDTH = 8;
 const DEFAULT_JOINT_RADIUS = 5;
 const DEFAULT_DEPTH_STROKE_WIDTH = 22;
 const DEFAULT_DEPTH_JOINT_RADIUS = 10;
+const DEFAULT_FACE_KEYPOINT_RADIUS = 2.2;
 
 const OPENPOSE_JOINT_IDS = [
   "pelvis",
@@ -78,14 +84,123 @@ const OPENPOSE_SEGMENTS = [
   ["rightKnee", "rightFoot"],
 ] as const satisfies ReadonlyArray<readonly [StickFigureJointId, StickFigureJointId]>;
 
+const OPENPOSE_HEAD_KEYPOINT_IDS = [
+  "neck",
+  "nose",
+  "leftEye",
+  "rightEye",
+  "leftEar",
+  "rightEar",
+] as const;
+
+const OPENPOSE_HEAD_KEYPOINT_COLORS = {
+  neck: "#ff0000",
+  nose: "#ff5500",
+  leftEye: "#ffaa00",
+  rightEye: "#ffff00",
+  leftEar: "#aaff00",
+  rightEar: "#55ff00",
+} as const satisfies Record<ComfyUiOpenPoseHeadKeypointId, string>;
+
+const OPENPOSE_HEAD_SEGMENTS = [
+  ["neck", "nose"],
+  ["nose", "leftEye"],
+  ["leftEye", "leftEar"],
+  ["nose", "rightEye"],
+  ["rightEye", "rightEar"],
+] as const satisfies ReadonlyArray<readonly [ComfyUiOpenPoseHeadKeypointId, ComfyUiOpenPoseHeadKeypointId]>;
+
 const DEFAULT_CHARACTER_TRANSFORM: SceneObject3DTransform = {
   position: { x: 0, y: 0, z: 0 },
   rotation: { x: 0, y: 0, z: 0 },
   scale: { x: 1, y: 1, z: 1 },
 };
 
+type FacePointTemplate = StickFigureHeadOffset;
+
+function createEllipseTemplates(
+  centerX: number,
+  centerY: number,
+  radiusX: number,
+  radiusY: number,
+  count: number,
+  startRadians: number,
+  endRadians: number,
+): FacePointTemplate[] {
+  const denominator = count > 1 ? count - 1 : 1;
+
+  return Array.from({ length: count }, (_, index) => {
+    const t = startRadians + ((endRadians - startRadians) * index) / denominator;
+
+    return {
+      x: centerX + Math.cos(t) * radiusX,
+      y: centerY + Math.sin(t) * radiusY,
+      z: 0.14,
+    };
+  });
+}
+
+function createFacePointTemplates(): FacePointTemplate[] {
+  const jaw = createEllipseTemplates(0, -0.08, 0.78, 0.85, 17, Math.PI, Math.PI * 2);
+  const leftBrow: FacePointTemplate[] = [
+    { x: -0.54, y: 0.32, z: 0.12 },
+    { x: -0.43, y: 0.39, z: 0.14 },
+    { x: -0.31, y: 0.42, z: 0.16 },
+    { x: -0.19, y: 0.39, z: 0.14 },
+    { x: -0.08, y: 0.32, z: 0.12 },
+  ];
+  const rightBrow: FacePointTemplate[] = [
+    { x: 0.08, y: 0.32, z: 0.12 },
+    { x: 0.19, y: 0.39, z: 0.14 },
+    { x: 0.31, y: 0.42, z: 0.16 },
+    { x: 0.43, y: 0.39, z: 0.14 },
+    { x: 0.54, y: 0.32, z: 0.12 },
+  ];
+  const noseBridge: FacePointTemplate[] = [
+    { x: 0, y: 0.24, z: 0.26 },
+    { x: 0, y: 0.11, z: 0.31 },
+    { x: 0, y: -0.02, z: 0.34 },
+    { x: 0, y: -0.15, z: 0.36 },
+  ];
+  const noseBase: FacePointTemplate[] = [
+    { x: -0.22, y: -0.21, z: 0.25 },
+    { x: -0.11, y: -0.27, z: 0.32 },
+    { x: 0, y: -0.29, z: 0.36 },
+    { x: 0.11, y: -0.27, z: 0.32 },
+    { x: 0.22, y: -0.21, z: 0.25 },
+  ];
+  const leftEye = createEllipseTemplates(-0.29, 0.12, 0.15, 0.065, 6, 0, Math.PI * 2);
+  const rightEye = createEllipseTemplates(0.29, 0.12, 0.15, 0.065, 6, 0, Math.PI * 2);
+  const outerMouth = createEllipseTemplates(0, -0.48, 0.34, 0.13, 12, 0, Math.PI * 2);
+  const innerMouth = createEllipseTemplates(0, -0.48, 0.18, 0.055, 8, 0, Math.PI * 2);
+
+  return [
+    ...jaw,
+    ...leftBrow,
+    ...rightBrow,
+    ...noseBridge,
+    ...noseBase,
+    ...leftEye,
+    ...rightEye,
+    ...outerMouth,
+    ...innerMouth,
+  ];
+}
+
+const OPENPOSE_FACE_POINT_TEMPLATES = createFacePointTemplates();
+
 export type ComfyUiOpenPosePoint = {
   jointId: StickFigureJointId;
+  x: number;
+  y: number;
+  depth: number;
+  visible: boolean;
+};
+
+export type ComfyUiOpenPoseHeadKeypointId = (typeof OPENPOSE_HEAD_KEYPOINT_IDS)[number];
+
+export type ComfyUiOpenPoseVirtualPoint = {
+  id: ComfyUiOpenPoseHeadKeypointId | `face-${number}`;
   x: number;
   y: number;
   depth: number;
@@ -97,6 +212,7 @@ export type ComfyUiOpenPoseSvgOptions = {
   height: number;
   camera: Scene3DConfig["camera"];
   characterTransform?: SceneObject3DTransform;
+  headRotation3D?: Vector3;
   background?: string;
   strokeWidth?: number;
   jointRadius?: number;
@@ -105,6 +221,8 @@ export type ComfyUiOpenPoseSvgOptions = {
 export type ComfyUiOpenPoseSvgResult = {
   svg: string;
   points: Record<StickFigureJointId, ComfyUiOpenPosePoint>;
+  headKeypoints: Record<ComfyUiOpenPoseHeadKeypointId, ComfyUiOpenPoseVirtualPoint>;
+  facePoints: ComfyUiOpenPoseVirtualPoint[];
   visibleJointIds: StickFigureJointId[];
 };
 
@@ -112,13 +230,18 @@ export type ComfyUiOpenPoseSceneSkeleton = {
   id: string;
   pose: StickFigurePoseV1;
   characterTransform?: SceneObject3DTransform;
+  headRotation3D?: Vector3;
 };
 
 export type ComfyUiOpenPoseProjectedSkeleton = {
   id: string;
   points: Record<StickFigureJointId, ComfyUiOpenPosePoint>;
+  headKeypoints: Record<ComfyUiOpenPoseHeadKeypointId, ComfyUiOpenPoseVirtualPoint>;
+  facePoints: ComfyUiOpenPoseVirtualPoint[];
   visibleJointIds: StickFigureJointId[];
   visibleJointCount: number;
+  visibleHeadKeypointCount: number;
+  visibleFacePointCount: number;
 };
 
 export type ComfyUiOpenPoseSceneSvgOptions = Omit<ComfyUiOpenPoseSvgOptions, "characterTransform">;
@@ -238,14 +361,13 @@ function createCamera(options: ComfyUiOpenPoseSvgOptions) {
   return camera;
 }
 
-function projectPoint(
-  jointId: StickFigureJointId,
+function projectLocalPoint(
   localPoint: StickFigureVec3,
   transformMatrix: Matrix4,
   camera: PerspectiveCamera,
   width: number,
   height: number,
-): ComfyUiOpenPosePoint {
+): Omit<ComfyUiOpenPosePoint, "jointId"> {
   const worldPoint = new ThreeVector3(localPoint.x, localPoint.y, localPoint.z).applyMatrix4(transformMatrix);
   const cameraSpacePoint = worldPoint.clone().applyMatrix4(camera.matrixWorldInverse);
   const depth = -cameraSpacePoint.z;
@@ -265,12 +387,34 @@ function projectPoint(
     projectedPoint.z >= -1 &&
     projectedPoint.z <= 1;
 
+  return { x, y, depth, visible };
+}
+
+function projectPoint(
+  jointId: StickFigureJointId,
+  localPoint: StickFigureVec3,
+  transformMatrix: Matrix4,
+  camera: PerspectiveCamera,
+  width: number,
+  height: number,
+): ComfyUiOpenPosePoint {
   return {
     jointId,
-    x,
-    y,
-    depth,
-    visible,
+    ...projectLocalPoint(localPoint, transformMatrix, camera, width, height),
+  };
+}
+
+function projectVirtualPoint(
+  id: ComfyUiOpenPoseVirtualPoint["id"],
+  localPoint: ThreeVector3,
+  transformMatrix: Matrix4,
+  camera: PerspectiveCamera,
+  width: number,
+  height: number,
+): ComfyUiOpenPoseVirtualPoint {
+  return {
+    id,
+    ...projectLocalPoint(localPoint, transformMatrix, camera, width, height),
   };
 }
 
@@ -295,6 +439,91 @@ function renderJoint(point: ComfyUiOpenPosePoint, color: string, radius: number)
   return `<circle cx="${svgNumber(point.x)}" cy="${svgNumber(point.y)}" r="${svgNumber(radius)}" fill="${color}" />`;
 }
 
+function renderVirtualPoint(
+  point: ComfyUiOpenPoseVirtualPoint,
+  color: string,
+  radius: number,
+  attributes: Record<string, string>,
+) {
+  if (!point.visible) {
+    return "";
+  }
+
+  const renderedAttributes = Object.entries(attributes)
+    .map(([key, value]) => `${key}="${escapeSvgAttribute(value)}"`)
+    .join(" ");
+  const attributeSuffix = renderedAttributes ? ` ${renderedAttributes}` : "";
+
+  return `<circle cx="${svgNumber(point.x)}" cy="${svgNumber(point.y)}" r="${svgNumber(radius)}" fill="${color}"${attributeSuffix} />`;
+}
+
+function renderVirtualSegment(
+  from: ComfyUiOpenPoseVirtualPoint,
+  to: ComfyUiOpenPoseVirtualPoint,
+  color: string,
+  strokeWidth: number,
+  keypoint: string,
+) {
+  if (!from.visible || !to.visible) {
+    return "";
+  }
+
+  return `<line x1="${svgNumber(from.x)}" y1="${svgNumber(from.y)}" x2="${svgNumber(to.x)}" y2="${svgNumber(to.y)}" stroke="${color}" stroke-width="${svgNumber(strokeWidth)}" stroke-linecap="round" opacity="0.92" data-openpose-keypoint="${escapeSvgAttribute(keypoint)}" />`;
+}
+
+function buildHeadKeypoints(
+  skeleton: ComfyUiOpenPoseSceneSkeleton,
+  transformMatrix: Matrix4,
+  camera: PerspectiveCamera,
+  width: number,
+  height: number,
+) {
+  const basis = resolveStickFigureHeadBasis(skeleton.pose);
+  const headKeypointOffsets = {
+    neck: null,
+    nose: { x: 0, y: -0.08, z: 0.42 },
+    leftEye: { x: -0.26, y: 0.13, z: 0.26 },
+    rightEye: { x: 0.26, y: 0.13, z: 0.26 },
+    leftEar: { x: -0.68, y: 0.03, z: 0.06 },
+    rightEar: { x: 0.68, y: 0.03, z: 0.06 },
+  } as const satisfies Record<ComfyUiOpenPoseHeadKeypointId, FacePointTemplate | null>;
+
+  return Object.fromEntries(
+    OPENPOSE_HEAD_KEYPOINT_IDS.map((id) => {
+      const offset = headKeypointOffsets[id];
+      const localPoint = offset
+        ? resolveStickFigureHeadPoint(basis, offset, skeleton.headRotation3D)
+        : basis.neck;
+
+      return [id, projectVirtualPoint(id, localPoint, transformMatrix, camera, width, height)];
+    }),
+  ) as Record<ComfyUiOpenPoseHeadKeypointId, ComfyUiOpenPoseVirtualPoint>;
+}
+
+function buildFacePoints(
+  skeleton: ComfyUiOpenPoseSceneSkeleton,
+  transformMatrix: Matrix4,
+  camera: PerspectiveCamera,
+  width: number,
+  height: number,
+) {
+  const basis = resolveStickFigureHeadBasis(skeleton.pose);
+
+  return OPENPOSE_FACE_POINT_TEMPLATES.map((offset, index) => {
+    const localPoint = resolveStickFigureHeadPoint(
+      basis,
+      {
+        x: offset.x,
+        y: offset.y - 0.08,
+        z: (offset.z ?? 0) + 0.22,
+      },
+      skeleton.headRotation3D,
+    );
+
+    return projectVirtualPoint(`face-${index}`, localPoint, transformMatrix, camera, width, height);
+  });
+}
+
 function projectSkeleton(
   skeleton: ComfyUiOpenPoseSceneSkeleton,
   camera: PerspectiveCamera,
@@ -309,13 +538,19 @@ function projectSkeleton(
       projectPoint(jointId, skeleton.pose.joints[jointId], transformMatrix, camera, width, height),
     ]),
   ) as Record<StickFigureJointId, ComfyUiOpenPosePoint>;
+  const headKeypoints = buildHeadKeypoints(skeleton, transformMatrix, camera, width, height);
+  const facePoints = buildFacePoints(skeleton, transformMatrix, camera, width, height);
   const visibleJointIds = OPENPOSE_JOINT_IDS.filter((jointId) => points[jointId].visible);
 
   return {
     id: skeleton.id,
     points,
+    headKeypoints,
+    facePoints,
     visibleJointIds,
     visibleJointCount: visibleJointIds.length,
+    visibleHeadKeypointCount: OPENPOSE_HEAD_KEYPOINT_IDS.filter((id) => headKeypoints[id].visible).length,
+    visibleFacePointCount: facePoints.filter((point) => point.visible).length,
   };
 }
 
@@ -341,8 +576,33 @@ function renderSkeletonElements(
       jointRadius,
     ),
   ).filter(Boolean);
+  const headSegmentElements = OPENPOSE_HEAD_SEGMENTS.map(([from, to]) =>
+    renderVirtualSegment(
+      skeleton.headKeypoints[from],
+      skeleton.headKeypoints[to],
+      OPENPOSE_HEAD_KEYPOINT_COLORS[to],
+      Math.max(1, strokeWidth * 0.62),
+      `${from}-${to}`,
+    ),
+  ).filter(Boolean);
+  const headKeypointElements = OPENPOSE_HEAD_KEYPOINT_IDS.map((id) =>
+    renderVirtualPoint(
+      skeleton.headKeypoints[id],
+      OPENPOSE_HEAD_KEYPOINT_COLORS[id],
+      Math.max(1, jointRadius * 0.9),
+      { "data-openpose-keypoint": id },
+    ),
+  ).filter(Boolean);
+  const facePointElements = skeleton.facePoints.map((point, index) =>
+    renderVirtualPoint(
+      point,
+      "#ffffff",
+      DEFAULT_FACE_KEYPOINT_RADIUS,
+      { "data-openpose-face-index": String(index) },
+    ),
+  ).filter(Boolean);
 
-  return [...segmentElements, ...jointElements];
+  return [...segmentElements, ...jointElements, ...headSegmentElements, ...headKeypointElements, ...facePointElements];
 }
 
 function renderSvg(width: number, height: number, background: string, elements: string[]) {
@@ -467,6 +727,7 @@ export function buildComfyUiOpenPoseSkeletonSvg(
         id: "skeleton",
         pose,
         characterTransform: options.characterTransform,
+        headRotation3D: options.headRotation3D,
       },
     ],
     options,
@@ -476,6 +737,8 @@ export function buildComfyUiOpenPoseSkeletonSvg(
   return {
     svg: sceneResult.svg,
     points: skeleton.points,
+    headKeypoints: skeleton.headKeypoints,
+    facePoints: skeleton.facePoints,
     visibleJointIds: skeleton.visibleJointIds,
   };
 }

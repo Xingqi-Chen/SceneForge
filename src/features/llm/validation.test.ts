@@ -20,4 +20,13 @@ describe("isLlmChatRequest", () => {
       }),
     ).toBe(true);
   });
+
+  it("accepts ComfyUI inpaint diagnosis purpose", () => {
+    expect(
+      isLlmChatRequest({
+        purpose: "comfyui-inpaint-diagnosis",
+        messages: [{ role: "user", content: "Diagnose this inpaint" }],
+      }),
+    ).toBe(true);
+  });
 });

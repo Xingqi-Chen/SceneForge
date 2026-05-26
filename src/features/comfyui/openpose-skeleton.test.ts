@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { Scene3DConfig, SceneObject3DTransform } from "@/shared/types";
+import type { Scene3DConfig, SceneObject3DTransform, Vector3 } from "@/shared/types";
 
 import { createDefaultStickFigurePoseV1 } from "@/features/editor/store/defaults";
 
@@ -17,12 +17,13 @@ const CAMERA: Scene3DConfig["camera"] = {
   fov: 45,
 };
 
-function buildDefaultResult(transform?: SceneObject3DTransform) {
+function buildDefaultResult(transform?: SceneObject3DTransform, headRotation3D?: Vector3) {
   return buildComfyUiOpenPoseSkeletonSvg(createDefaultStickFigurePoseV1(), {
     width: 512,
     height: 512,
     camera: CAMERA,
     characterTransform: transform,
+    headRotation3D,
   });
 }
 
@@ -34,7 +35,13 @@ describe("ComfyUI OpenPose skeleton SVG", () => {
     expect(result.svg).toContain('<rect width="100%" height="100%" fill="#000000"');
     expect(result.svg).toContain("<line ");
     expect(result.svg).toContain("<circle ");
+    expect(result.svg).toContain('data-openpose-keypoint="nose"');
+    expect(result.svg).toContain('data-openpose-keypoint="leftEye"');
+    expect(result.svg).toContain('data-openpose-keypoint="rightEye"');
+    expect(result.svg).toContain('data-openpose-face-index="0"');
     expect(result.points.head.visible).toBe(true);
+    expect(result.headKeypoints.nose.visible).toBe(true);
+    expect(result.facePoints).toHaveLength(68);
     expect(result.visibleJointIds).toContain("head");
   });
 
@@ -72,6 +79,17 @@ describe("ComfyUI OpenPose skeleton SVG", () => {
     expect(result.visibleJointIds).toEqual([]);
     expect(result.svg).not.toContain("<line ");
     expect(result.svg).not.toContain("<circle ");
+    expect(result.svg).not.toContain("data-openpose-face-index");
+  });
+
+  it("moves synthesized head keypoints with the character head rotation", () => {
+    const base = buildDefaultResult();
+    const rotated = buildDefaultResult(undefined, { x: 0, y: 55, z: 0 });
+
+    expect(base.headKeypoints.nose.visible).toBe(true);
+    expect(rotated.headKeypoints.nose.visible).toBe(true);
+    expect(rotated.headKeypoints.nose.x).not.toBeCloseTo(base.headKeypoints.nose.x, 3);
+    expect(rotated.headKeypoints.leftEye.x).not.toBeCloseTo(base.headKeypoints.leftEye.x, 3);
   });
 
   it("composes multiple 3D skeletons into one OpenPose-style SVG", () => {
@@ -106,12 +124,16 @@ describe("ComfyUI OpenPose skeleton SVG", () => {
 
     const lineCount = (result.svg.match(/<line /g) ?? []).length;
     const circleCount = (result.svg.match(/<circle /g) ?? []).length;
+    const facePointCount = (result.svg.match(/data-openpose-face-index=/g) ?? []).length;
 
     expect(result.skeletons).toHaveLength(2);
     expect(result.visibleSkeletonCount).toBe(2);
     expect(result.visibleJointCount).toBe(30);
+    expect(result.skeletons[0].facePoints).toHaveLength(68);
+    expect(result.skeletons[1].facePoints).toHaveLength(68);
     expect(lineCount).toBeGreaterThan(14);
-    expect(circleCount).toBe(30);
+    expect(circleCount).toBeGreaterThan(30);
+    expect(facePointCount).toBe(136);
   });
 });
 
@@ -128,6 +150,8 @@ describe("ComfyUI Depth skeleton SVG", () => {
     expect(result.svg).toContain("<line ");
     expect(result.svg).toContain("<circle ");
     expect(result.svg).toMatch(/stroke="#[0-9a-f]{6}"/);
+    expect(result.svg).not.toContain("data-openpose-face-index");
+    expect(result.svg).not.toContain("data-openpose-keypoint");
     expect(result.depthRange).not.toBeNull();
     expect(result.points.head.visible).toBe(true);
   });

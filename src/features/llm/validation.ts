@@ -68,7 +68,8 @@ function isOptionalPurpose(value: unknown): value is LlmChatRequest["purpose"] {
     value === "civitai-resource-enrichment" ||
     value === "civitai-combination-recommendation" ||
     value === "stable-diffusion-prompt-generation" ||
-    value === "comfyui-generation-diagnosis"
+    value === "comfyui-generation-diagnosis" ||
+    value === "comfyui-inpaint-diagnosis"
   );
 }
 

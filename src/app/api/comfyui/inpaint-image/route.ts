@@ -132,6 +132,8 @@ async function normalizeInpaintImages(sourceBytes: Buffer, maskBytes: Buffer) {
     ]);
 
     return {
+      imageHeight: sourceMetadata.height,
+      imageWidth: sourceMetadata.width,
       maskPng,
       sourcePng,
     };
@@ -160,7 +162,7 @@ async function uploadInpaintImages(
 
   const sourceBytes = await readSourceImageBytes(client, request.sourceImage);
   const maskBytes = parsePngDataUrl(request.maskDataUrl);
-  const { maskPng, sourcePng } = await normalizeInpaintImages(sourceBytes, maskBytes);
+  const { imageHeight, imageWidth, maskPng, sourcePng } = await normalizeInpaintImages(sourceBytes, maskBytes);
   const suffix = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const [sourceUpload, maskUpload] = await Promise.all([
     client.uploadImage({
@@ -181,6 +183,8 @@ async function uploadInpaintImages(
 
   return {
     ...request,
+    imageHeight,
+    imageWidth,
     imageName: sourceUpload.imageName,
     maskName: maskUpload.imageName,
   };
@@ -217,7 +221,16 @@ export async function POST(request: Request) {
 
     const clientId = readClientId(payload);
     const requestWithImages = await uploadInpaintImages(client, objectValidation.request);
-    const workflow = buildBasicInpaintWorkflow(requestWithImages);
+    const imageObjectValidation = validateComfyUiInpaintRequestAgainstObjectInfo(requestWithImages, objectInfo);
+
+    if (imageObjectValidation.errors.length > 0) {
+      return errorResponse("ComfyUI inpaint request does not match the current ComfyUI model/node options.", 400, {
+        errors: imageObjectValidation.errors,
+        warnings: imageObjectValidation.warnings,
+      });
+    }
+
+    const workflow = buildBasicInpaintWorkflow(imageObjectValidation.request);
     const queued = await client.queuePrompt(workflow.workflow, clientId ? { clientId } : undefined);
 
     return NextResponse.json({

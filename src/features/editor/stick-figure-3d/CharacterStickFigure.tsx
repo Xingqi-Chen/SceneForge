@@ -144,11 +144,13 @@ export function CharacterStickFigure({
 
   const headAltRotatePointerDownFilter = useCallback(
     (event: ThreeEvent<PointerEvent>): boolean => {
-      if (event.button !== 0 || !event.altKey) {
+      const startedWithFaceYawOnly = event.button === 1;
+      if ((event.button !== 0 && event.button !== 1) || (!event.altKey && !startedWithFaceYawOnly)) {
         return false;
       }
       onCloseContextMenu?.();
       event.stopPropagation();
+      event.nativeEvent.preventDefault();
       endHeadAltRotateDrag();
       selectCharacter(character.id);
       selectBodyPart(character.id, "head");
@@ -169,11 +171,17 @@ export function CharacterStickFigure({
         }
         const cur = ch.headRotation3D ?? { x: 0, y: 0, z: 0 };
         store.updateCharacter(character.id, {
-          headRotation3D: {
-            x: clampHeadRotationEulerDeg(cur.x - dy * HEAD_ROTATE_DRAG_SENS, "x"),
-            y: clampHeadRotationEulerDeg(cur.y + dx * HEAD_ROTATE_DRAG_SENS, "y"),
-            z: cur.z,
-          },
+          headRotation3D: startedWithFaceYawOnly
+            ? {
+                x: cur.x,
+                y: clampHeadRotationEulerDeg(cur.y + dx * HEAD_ROTATE_DRAG_SENS, "y"),
+                z: cur.z,
+              }
+            : {
+                x: clampHeadRotationEulerDeg(cur.x - dy * HEAD_ROTATE_DRAG_SENS, "x"),
+                y: clampHeadRotationEulerDeg(cur.y + dx * HEAD_ROTATE_DRAG_SENS, "y"),
+                z: cur.z,
+              },
         });
       };
       const onUp = () => {
@@ -253,6 +261,7 @@ export function CharacterStickFigure({
       <StickmanRenderer
         focusWholeCharacter={focusWholeCharacter}
         headColor={headColor}
+        headRotation3D={headRotDeg}
         jointColor={jointColor}
         limbColor={jointColor}
         onSelectBodyPart={handleSelectBodyPart}

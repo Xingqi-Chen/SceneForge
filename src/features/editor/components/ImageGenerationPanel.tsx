@@ -9,10 +9,13 @@ import {
   Eraser,
   Image as ImageIcon,
   Loader2,
+  Minus,
   Paintbrush,
   Play,
+  Plus,
   Settings,
   Sparkles,
+  Square,
   Undo2,
   X,
 } from "lucide-react";
@@ -31,18 +34,28 @@ import {
   COMFYUI_FACE_DETAILER_DEFAULTS,
   COMFYUI_FACE_DETAILER_SAM_DETECTION_HINT_OPTIONS,
   COMFYUI_FACE_DETAILER_SAM_MASK_HINT_USE_NEGATIVE_OPTIONS,
+  COMFYUI_INPAINT_UPSCALE_MODEL_PRESETS,
   COMFYUI_INPAINT_MODE_OPTIONS,
   DEFAULT_COMFYUI_FACE_DETAILER_DETECTOR_MODEL,
   DEFAULT_COMFYUI_HAND_DETAILER_DETECTOR_MODEL,
   DEFAULT_COMFYUI_INPAINT_DENOISE,
   DEFAULT_COMFYUI_INPAINT_GROW_MASK_BY,
   DEFAULT_COMFYUI_INPAINT_MODE,
+  MIN_COMFYUI_VAE_INPAINT_DENOISE,
   COMFYUI_LATENT_IMAGE_NODE_OPTIONS,
+  normalizeComfyUiInpaintDenoiseForMode,
   type ComfyUiGeneratedImage,
+  type ComfyUiGenerateSam2MaskResponse,
   type ComfyUiInpaintMode,
+  type ComfyUiInpaintLocalRegionConfig,
   type ComfyUiInpaintRequest,
+  type ComfyUiInpaintUpscaleModelPresetMode,
+  type ComfyUiInpaintUpscaleMode,
+  type ComfyUiInpaintUpscaleStrategy,
   type ComfyUiInputValue,
   type ComfyUiPromptHistoryResponse,
+  type ComfyUiSam2Bbox,
+  type ComfyUiSam2Point,
   type ComfyUiTextToImageRequest,
 } from "@/features/comfyui";
 import {
@@ -60,6 +73,15 @@ import {
   type ComfyUiGenerationVisualDiagnosisResult,
 } from "@/features/editor/ai-prompt/comfyui-generation-diagnosis";
 import {
+  applyComfyUiInpaintDiagnosisAdjustments,
+  buildComfyUiInpaintDiagnosisMessages,
+  parseComfyUiInpaintDiagnosisResponse,
+  type ComfyUiInpaintDiagnosisConfig,
+  type ComfyUiInpaintDiagnosisLoraConfig,
+  type ComfyUiInpaintDiagnosisMaskShape,
+  type ComfyUiInpaintDiagnosisResult,
+} from "@/features/editor/ai-prompt/comfyui-inpaint-diagnosis";
+import {
   resolveComfyUiGenerationSettings,
   type ComfyUiGenerationLoraSetting,
   type ComfyUiGenerationParameterSource,
@@ -70,6 +92,12 @@ import {
   normalizeComfyUiSamplerSettings,
 } from "@/features/editor/ai-prompt/comfyui-generation-options";
 import type { CivitaiAiPromptResult } from "@/features/editor/ai-prompt/civitai-ai-context";
+import {
+  findMaskAlphaBounds,
+  padAndAlignLocalRegion,
+  resolveInpaintLocalRegion,
+  type InpaintLocalRegionRect,
+} from "@/features/editor/inpaint-local-region";
 import {
   buildComfyUiControlNetOpenPosePreview,
   type ComfyUiControlNetOpenPosePreview,
@@ -101,6 +129,8 @@ type LoadStatus = "idle" | "loading" | "success" | "error";
 type SubmitStatus = "idle" | "loading" | "success" | "error";
 type DownloadActionStatus = "idle" | "loading" | "success" | "error";
 type DiagnosisStatus = "idle" | "analyzing" | "searching" | "suggesting" | "success" | "error";
+type InpaintMaskTool = "brush" | "eraser" | "sam-positive" | "sam-negative" | "sam-box";
+type SamMaskStatus = "idle" | "generating" | "success" | "error";
 
 type ControlNetModelOption = {
   label: string;
@@ -110,6 +140,18 @@ type ControlNetModelOption = {
 type ControlNetModelsResponse = {
   modelPath: string;
   models: ControlNetModelOption[];
+};
+
+type InpaintModelUpscaleOption = {
+  available: boolean;
+  label: string;
+  mode: ComfyUiInpaintUpscaleModelPresetMode;
+  modelName: string;
+};
+
+type UpscaleModelsResponse = {
+  models: string[];
+  modelUpscaleOptions: InpaintModelUpscaleOption[];
 };
 
 type GenerationResult = {
@@ -195,6 +237,14 @@ const EMPTY_SELECTED_RESOURCES: SelectedCivitaiResourcesPreview = {
 const CONTROLNET_MODEL_PATH_STORAGE_KEY = "sceneforge.controlNetModelPath";
 const COMFYUI_HISTORY_POLL_INTERVAL_MS = 2000;
 const COMFYUI_HISTORY_POLL_TIMEOUT_MS = 180000;
+const DEFAULT_INPAINT_MODEL_UPSCALE_OPTIONS = Object.entries(COMFYUI_INPAINT_UPSCALE_MODEL_PRESETS).map(
+  ([mode, preset]): InpaintModelUpscaleOption => ({
+    available: false,
+    label: preset.label,
+    mode: mode as ComfyUiInpaintUpscaleModelPresetMode,
+    modelName: preset.modelName,
+  }),
+);
 const COMFYUI_PROMPT_WRAPPER_PRESETS = [
   {
     id: "none",
@@ -792,13 +842,23 @@ function toRequestPayload(
 
 type InpaintSubmitInput = {
   denoise: number;
+  faceDetailer: GenerationDraft["faceDetailer"];
   growMaskBy: number;
+  handDetailer: GenerationDraft["handDetailer"];
   image: ComfyUiGeneratedImage;
   maskDataUrl: string;
   mode: ComfyUiInpaintMode;
   negativePrompt: string;
   positivePrompt: string;
   seed: number;
+  upscaleBeforeInpaint: {
+    enabled: boolean;
+    localRegion?: ComfyUiInpaintLocalRegionConfig;
+    mode: ComfyUiInpaintUpscaleMode;
+    scaleBy: 2;
+    modelName?: string;
+    strategy?: ComfyUiInpaintUpscaleStrategy;
+  };
 };
 
 function toInpaintRequestPayload(draft: GenerationDraft, input: InpaintSubmitInput): ComfyUiInpaintRequest {
@@ -819,6 +879,8 @@ function toInpaintRequestPayload(draft: GenerationDraft, input: InpaintSubmitInp
     samplerName: draft.samplerName,
     scheduler: draft.scheduler,
     denoise: input.denoise,
+    faceDetailer: input.faceDetailer,
+    handDetailer: input.handDetailer,
     promptWrapper: draft.promptWrapper,
     outputPrefix: `${draft.outputPrefix}_inpaint`,
     sourceImage: {
@@ -829,6 +891,7 @@ function toInpaintRequestPayload(draft: GenerationDraft, input: InpaintSubmitInp
     maskDataUrl: input.maskDataUrl,
     inpaintMode: input.mode,
     growMaskBy: input.growMaskBy,
+    upscaleBeforeInpaint: input.upscaleBeforeInpaint,
   };
 }
 
@@ -903,6 +966,78 @@ function toDiagnosisConfig(
     seedMode: draft.seedMode,
     steps: draft.steps,
     width: draft.width,
+  };
+}
+
+function toInpaintDiagnosisConfig({
+  brushSize,
+  denoise,
+  draft,
+  faceDetailerEnabled,
+  growMaskBy,
+  handDetailerEnabled,
+  imageItem,
+  loraSettings,
+  mode,
+  negativePrompt,
+  positivePrompt,
+  resources,
+  seed,
+  sourceSize,
+}: {
+  brushSize: number;
+  denoise: number;
+  draft: GenerationDraft;
+  faceDetailerEnabled: boolean;
+  growMaskBy: number;
+  handDetailerEnabled: boolean;
+  imageItem: GeneratedImageItem;
+  loraSettings: ComfyUiGenerationLoraSetting[];
+  mode: ComfyUiInpaintMode;
+  negativePrompt: string;
+  positivePrompt: string;
+  resources: SelectedCivitaiResourcesPreview;
+  seed: number;
+  sourceSize: { height: number; width: number };
+}): ComfyUiInpaintDiagnosisConfig {
+  return {
+    brushSize,
+    checkpointBaseModel: resources.checkpoint?.baseModel,
+    checkpointName: draft.checkpointName,
+    checkpointPromptReferences: resources.checkpoint?.promptReferences ?? [],
+    checkpointResourceName: resources.checkpoint?.name,
+    checkpointTags: resources.checkpoint?.tags,
+    denoise,
+    faceDetailerEnabled,
+    growMaskBy,
+    handDetailerEnabled,
+    image: {
+      filename: imageItem.image.filename,
+      height: sourceSize.height,
+      seed,
+      width: sourceSize.width,
+    },
+    loras: draft.loras.map((lora, index): ComfyUiInpaintDiagnosisLoraConfig => {
+      const resource = loraSettings[index]?.resource;
+      return {
+        averageWeight: resource?.averageWeight,
+        categories: resource?.categories,
+        enabled: lora.enabled,
+        loraName: lora.loraName,
+        maxWeight: resource?.maxWeight,
+        minWeight: resource?.minWeight,
+        recommendations: resource?.recommendations,
+        resourceName: resource?.name,
+        strengthClip: lora.strengthClip,
+        strengthModel: lora.strengthModel,
+        tags: resource?.tags,
+        trainedWords: resource?.trainedWords,
+        usageGuide: resource?.usageGuide,
+      };
+    }),
+    mode,
+    negativePrompt,
+    positivePrompt,
   };
 }
 
@@ -1003,6 +1138,190 @@ function hasModelParameterDiagnosisAdjustments(adjustments: ComfyUiGenerationDia
     adjustments.steps !== undefined ||
     adjustments.width !== undefined
   );
+}
+
+function buildInpaintDiagnosisDiffRows(
+  baseConfig: ComfyUiInpaintDiagnosisConfig,
+  result: ComfyUiInpaintDiagnosisResult,
+) {
+  const nextConfig = applyComfyUiInpaintDiagnosisAdjustments(baseConfig, result.adjustments);
+  const rows: DiagnosisDiffRow[] = [];
+  const rationales = result.changeRationale;
+
+  addDiffRow(rows, "Positive Prompt", baseConfig.positivePrompt, nextConfig.positivePrompt, findChangeRationale(rationales, ["positivePrompt", "prompt"]));
+  addDiffRow(rows, "Negative Prompt", baseConfig.negativePrompt, nextConfig.negativePrompt, findChangeRationale(rationales, ["negativePrompt"]));
+  addDiffRow(rows, "denoise", baseConfig.denoise, nextConfig.denoise, findChangeRationale(rationales, ["denoise"]));
+  addDiffRow(rows, "grow mask", baseConfig.growMaskBy, nextConfig.growMaskBy, findChangeRationale(rationales, ["growMaskBy", "growMask"]));
+  addDiffRow(rows, "mode", baseConfig.mode, nextConfig.mode, findChangeRationale(rationales, ["mode", "inpaintMode"]));
+  addDiffRow(rows, "seed", baseConfig.image.seed, nextConfig.image.seed, findChangeRationale(rationales, ["seed"]));
+  addDiffRow(rows, "brush size", baseConfig.brushSize, nextConfig.brushSize, findChangeRationale(rationales, ["brushSize"]));
+  addDiffRow(rows, "FaceDetailer", baseConfig.faceDetailerEnabled, nextConfig.faceDetailerEnabled, findChangeRationale(rationales, ["faceDetailer"]));
+  addDiffRow(rows, "HandDetailer", baseConfig.handDetailerEnabled, nextConfig.handDetailerEnabled, findChangeRationale(rationales, ["handDetailer"]));
+
+  return rows;
+}
+
+function getScaledPoint(point: { x: number; y: number }, width: number, height: number) {
+  return {
+    x: point.x * width,
+    y: point.y * height,
+  };
+}
+
+function drawInpaintDiagnosisMaskShape(
+  context: CanvasRenderingContext2D,
+  shape: ComfyUiInpaintDiagnosisMaskShape,
+  canvasWidth: number,
+  canvasHeight: number,
+  fallbackBrushSize: number,
+) {
+  context.save();
+
+  if (shape.type === "stroke") {
+    const firstPoint = getScaledPoint(shape.points[0], canvasWidth, canvasHeight);
+    const brushSize = shape.brushSize ?? fallbackBrushSize;
+    context.lineCap = "round";
+    context.lineJoin = "round";
+    context.lineWidth = brushSize;
+    context.beginPath();
+    context.moveTo(firstPoint.x, firstPoint.y);
+
+    if (shape.points.length === 1) {
+      context.arc(firstPoint.x, firstPoint.y, brushSize / 2, 0, Math.PI * 2);
+      context.fill();
+      context.restore();
+      return;
+    }
+
+    for (const point of shape.points.slice(1)) {
+      const scaled = getScaledPoint(point, canvasWidth, canvasHeight);
+      context.lineTo(scaled.x, scaled.y);
+    }
+
+    context.stroke();
+    context.restore();
+    return;
+  }
+
+  if (shape.type === "ellipse") {
+    context.beginPath();
+    context.ellipse(
+      shape.x * canvasWidth,
+      shape.y * canvasHeight,
+      shape.radiusX * canvasWidth,
+      shape.radiusY * canvasHeight,
+      ((shape.rotation ?? 0) / 180) * Math.PI,
+      0,
+      Math.PI * 2,
+    );
+    context.fill();
+    context.restore();
+    return;
+  }
+
+  if (shape.type === "rect") {
+    context.translate(shape.x * canvasWidth, shape.y * canvasHeight);
+    context.rotate(((shape.rotation ?? 0) / 180) * Math.PI);
+    context.fillRect(
+      (-shape.width * canvasWidth) / 2,
+      (-shape.height * canvasHeight) / 2,
+      shape.width * canvasWidth,
+      shape.height * canvasHeight,
+    );
+    context.restore();
+    return;
+  }
+
+  const firstPoint = getScaledPoint(shape.points[0], canvasWidth, canvasHeight);
+  context.beginPath();
+  context.moveTo(firstPoint.x, firstPoint.y);
+  for (const point of shape.points.slice(1)) {
+    const scaled = getScaledPoint(point, canvasWidth, canvasHeight);
+    context.lineTo(scaled.x, scaled.y);
+  }
+  context.closePath();
+  context.fill();
+  context.restore();
+}
+
+function drawInpaintDiagnosisMaskShapes(
+  canvas: HTMLCanvasElement,
+  shapes: ComfyUiInpaintDiagnosisMaskShape[],
+  fallbackBrushSize: number,
+) {
+  const context = canvas.getContext("2d");
+  if (!context || shapes.length === 0) {
+    return false;
+  }
+
+  context.clearRect(0, 0, canvas.width, canvas.height);
+  context.fillStyle = "#fff";
+  context.strokeStyle = "#fff";
+  for (const shape of shapes) {
+    drawInpaintDiagnosisMaskShape(context, shape, canvas.width, canvas.height, fallbackBrushSize);
+  }
+
+  return true;
+}
+
+function normalizeSamMaskBox(
+  start: ComfyUiSam2Point,
+  end: ComfyUiSam2Point,
+  sourceSize: { height: number; width: number },
+): ComfyUiSam2Bbox | null {
+  const x0 = Math.max(0, Math.min(sourceSize.width, Math.round(Math.min(start.x, end.x))));
+  const y0 = Math.max(0, Math.min(sourceSize.height, Math.round(Math.min(start.y, end.y))));
+  const x1 = Math.max(0, Math.min(sourceSize.width, Math.round(Math.max(start.x, end.x))));
+  const y1 = Math.max(0, Math.min(sourceSize.height, Math.round(Math.max(start.y, end.y))));
+
+  if (x1 <= x0 || y1 <= y0 || x1 - x0 < 2 || y1 - y0 < 2) {
+    return null;
+  }
+
+  return {
+    x: x0,
+    y: y0,
+    width: x1 - x0,
+    height: y1 - y0,
+  };
+}
+
+function getSamMaskBoxStyle(box: ComfyUiSam2Bbox, sourceSize: { height: number; width: number }) {
+  return {
+    height: `${(box.height / sourceSize.height) * 100}%`,
+    left: `${(box.x / sourceSize.width) * 100}%`,
+    top: `${(box.y / sourceSize.height) * 100}%`,
+    width: `${(box.width / sourceSize.width) * 100}%`,
+  };
+}
+
+async function createCanvasMaskDataUrlFromSamMaskUrl(
+  imageUrl: string,
+  sourceSize: { height: number; width: number },
+) {
+  const imageDataUrl = await loadOriginalImageUrlToDataUrl(imageUrl);
+  const image = await loadImage(imageDataUrl);
+  const canvas = document.createElement("canvas");
+  canvas.width = sourceSize.width;
+  canvas.height = sourceSize.height;
+  const context = canvas.getContext("2d");
+  if (!context) {
+    throw new Error("Unable to prepare SAM mask preview.");
+  }
+
+  context.drawImage(image, 0, 0, sourceSize.width, sourceSize.height);
+  const imageData = context.getImageData(0, 0, sourceSize.width, sourceSize.height);
+  const data = imageData.data;
+  for (let index = 0; index < data.length; index += 4) {
+    const alpha = Math.max(data[index], data[index + 1], data[index + 2]);
+    data[index] = 255;
+    data[index + 1] = 255;
+    data[index + 2] = 255;
+    data[index + 3] = alpha;
+  }
+  context.putImageData(imageData, 0, 0);
+
+  return canvas.toDataURL("image/png");
 }
 
 function NumberInput({
@@ -1482,31 +1801,190 @@ function InpaintMaskDialog({
   busy,
   draft,
   imageItem,
+  loraSettings,
   onClose,
   onSubmit,
   open,
+  selectedResources,
 }: {
   busy: boolean;
   draft: GenerationDraft;
   imageItem: GeneratedImageItem | null;
+  loraSettings: ComfyUiGenerationLoraSetting[];
   onClose: () => void;
   onSubmit: (input: InpaintSubmitInput) => Promise<void>;
   open: boolean;
+  selectedResources: SelectedCivitaiResourcesPreview;
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const drawingRef = useRef(false);
   const lastPointRef = useRef<{ x: number; y: number } | null>(null);
+  const samBoxDrawingRef = useRef(false);
+  const samBoxStartRef = useRef<ComfyUiSam2Point | null>(null);
   const undoStackRef = useRef<ImageData[]>([]);
   const [brushSize, setBrushSize] = useState(draft.inpaint.brushSize);
   const [denoise, setDenoise] = useState(draft.inpaint.denoise);
   const [error, setError] = useState("");
+  const [faceDetailerEnabled, setFaceDetailerEnabled] = useState(draft.faceDetailer.enabled);
   const [growMaskBy, setGrowMaskBy] = useState(draft.inpaint.growMaskBy);
+  const [highResInpaintEnabled, setHighResInpaintEnabled] = useState(false);
+  const [highResInpaintMode, setHighResInpaintMode] = useState<ComfyUiInpaintUpscaleMode>("lanczos");
+  const [highResInpaintStrategy, setHighResInpaintStrategy] = useState<ComfyUiInpaintUpscaleStrategy>("local-region");
+  const [localRegionPadding, setLocalRegionPadding] = useState(128);
+  const [localRegionFeather, setLocalRegionFeather] = useState(32);
+  const [localRegionHarmonizeEnabled, setLocalRegionHarmonizeEnabled] = useState(false);
+  const [localRegionHarmonizeDenoise, setLocalRegionHarmonizeDenoise] = useState(0.12);
+  const [maskBounds, setMaskBounds] = useState<InpaintLocalRegionRect | null>(null);
+  const [upscaleModelStatus, setUpscaleModelStatus] = useState<LoadStatus>("idle");
+  const [upscaleModelError, setUpscaleModelError] = useState("");
+  const [modelUpscaleOptions, setModelUpscaleOptions] = useState<InpaintModelUpscaleOption[]>(DEFAULT_INPAINT_MODEL_UPSCALE_OPTIONS);
+  const [handDetailerEnabled, setHandDetailerEnabled] = useState(draft.handDetailer.enabled);
   const [mode, setMode] = useState<ComfyUiInpaintMode>(draft.inpaint.mode);
   const [negativePrompt, setNegativePrompt] = useState(draft.negativePrompt);
   const [positivePrompt, setPositivePrompt] = useState(draft.positivePrompt);
   const [seed, setSeed] = useState(imageItem?.seed ?? draft.seed);
   const [sourceSize, setSourceSize] = useState<{ height: number; width: number } | null>(null);
-  const [tool, setTool] = useState<"brush" | "eraser">("brush");
+  const [tool, setTool] = useState<InpaintMaskTool>("brush");
+  const [samPositivePoints, setSamPositivePoints] = useState<ComfyUiSam2Point[]>([]);
+  const [samNegativePoints, setSamNegativePoints] = useState<ComfyUiSam2Point[]>([]);
+  const [samBox, setSamBox] = useState<ComfyUiSam2Bbox | null>(null);
+  const [samBoxDraft, setSamBoxDraft] = useState<ComfyUiSam2Bbox | null>(null);
+  const [samMaskStatus, setSamMaskStatus] = useState<SamMaskStatus>("idle");
+  const [samMaskError, setSamMaskError] = useState("");
+  const [samMaskPreviewUrl, setSamMaskPreviewUrl] = useState("");
+  const [samMaskApplied, setSamMaskApplied] = useState(false);
+  const [aiDiagnosisInput, setAiDiagnosisInput] = useState("");
+  const [aiDiagnosisStatus, setAiDiagnosisStatus] = useState<DiagnosisStatus>("idle");
+  const [aiDiagnosisError, setAiDiagnosisError] = useState("");
+  const [aiDiagnosisResult, setAiDiagnosisResult] = useState<ComfyUiInpaintDiagnosisResult | null>(null);
+  const [aiDiagnosisBaseConfig, setAiDiagnosisBaseConfig] = useState<ComfyUiInpaintDiagnosisConfig | null>(null);
+  const [aiDiagnosisApplied, setAiDiagnosisApplied] = useState(false);
+  const aiDiagnosisBusy = aiDiagnosisStatus === "analyzing";
+  const samMaskBusy = samMaskStatus === "generating";
+  const maskToolBusy = busy || aiDiagnosisBusy || samMaskBusy;
+  const aiDiagnosisDiffRows = aiDiagnosisResult && aiDiagnosisBaseConfig
+    ? buildInpaintDiagnosisDiffRows(aiDiagnosisBaseConfig, aiDiagnosisResult)
+    : [];
+  const localRegionPreview = useMemo(() => {
+    if (!highResInpaintEnabled || highResInpaintStrategy !== "local-region" || !sourceSize) {
+      return null;
+    }
+
+    const source = samBox ? "box" : "mask-bounds";
+    const baseRegion = samBox ?? maskBounds;
+    if (!baseRegion) {
+      return null;
+    }
+
+    const region = padAndAlignLocalRegion(baseRegion, sourceSize, localRegionPadding);
+    if (!region) {
+      return null;
+    }
+
+    return {
+      ...region,
+      source,
+      padding: localRegionPadding,
+      feather: localRegionFeather,
+      harmonizeAfter: {
+        enabled: localRegionHarmonizeEnabled,
+        denoise: localRegionHarmonizeDenoise,
+      },
+    };
+  }, [
+    highResInpaintEnabled,
+    highResInpaintStrategy,
+    localRegionFeather,
+    localRegionHarmonizeDenoise,
+    localRegionHarmonizeEnabled,
+    localRegionPadding,
+    maskBounds,
+    samBox,
+    sourceSize,
+  ]);
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled) {
+        return;
+      }
+
+      setUpscaleModelStatus("loading");
+      setUpscaleModelError("");
+    });
+    void fetchJson<UpscaleModelsResponse>("/api/comfyui/upscale-models")
+      .then((payload) => {
+        if (cancelled) {
+          return;
+        }
+
+        const options = payload.modelUpscaleOptions.length > 0 ? payload.modelUpscaleOptions : DEFAULT_INPAINT_MODEL_UPSCALE_OPTIONS;
+        const availableModes = new Set(options.filter((option) => option.available).map((option) => option.mode));
+        setModelUpscaleOptions(options);
+        setHighResInpaintMode((current) => (
+          current !== "lanczos" && !availableModes.has(current as ComfyUiInpaintUpscaleModelPresetMode) ? "lanczos" : current
+        ));
+        setUpscaleModelStatus("success");
+      })
+      .catch((loadError) => {
+        if (cancelled) {
+          return;
+        }
+
+        setModelUpscaleOptions(DEFAULT_INPAINT_MODEL_UPSCALE_OPTIONS);
+        setHighResInpaintMode("lanczos");
+        setUpscaleModelStatus("error");
+        setUpscaleModelError(loadError instanceof Error ? loadError.message : "Unable to load ComfyUI upscale models.");
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
+
+  function clearAiDiagnosisReview() {
+    setAiDiagnosisStatus("idle");
+    setAiDiagnosisError("");
+    setAiDiagnosisResult(null);
+    setAiDiagnosisBaseConfig(null);
+    setAiDiagnosisApplied(false);
+  }
+
+  function clearSamMaskResult() {
+    setSamMaskStatus("idle");
+    setSamMaskError("");
+    setSamMaskPreviewUrl("");
+    setSamMaskApplied(false);
+  }
+
+  function clearSamHints() {
+    setSamPositivePoints([]);
+    setSamNegativePoints([]);
+    setSamBox(null);
+    setSamBoxDraft(null);
+    samBoxDrawingRef.current = false;
+    samBoxStartRef.current = null;
+    clearSamMaskResult();
+  }
+
+  function readCurrentMaskBounds() {
+    const canvas = canvasRef.current;
+    const context = canvas?.getContext("2d");
+    if (!canvas || !context) {
+      return null;
+    }
+
+    return findMaskAlphaBounds(context.getImageData(0, 0, canvas.width, canvas.height));
+  }
+
+  function refreshMaskBounds() {
+    setMaskBounds(readCurrentMaskBounds());
+  }
 
   function resetCanvas(width: number, height: number) {
     const canvas = canvasRef.current;
@@ -1519,6 +1997,9 @@ function InpaintMaskDialog({
     const context = canvas.getContext("2d");
     context?.clearRect(0, 0, width, height);
     undoStackRef.current = [];
+    setMaskBounds(null);
+    clearAiDiagnosisReview();
+    clearSamHints();
   }
 
   function pushUndoSnapshot() {
@@ -1574,7 +2055,7 @@ function InpaintMaskDialog({
   }
 
   function beginStroke(event: PointerEvent<HTMLCanvasElement>) {
-    if (busy) {
+    if (maskToolBusy) {
       return;
     }
 
@@ -1584,13 +2065,45 @@ function InpaintMaskDialog({
     }
 
     event.currentTarget.setPointerCapture(event.pointerId);
+    clearAiDiagnosisReview();
+    if (tool === "sam-positive") {
+      setSamPositivePoints((current) => [...current, { x: Math.round(point.x), y: Math.round(point.y) }]);
+      clearSamMaskResult();
+      return;
+    }
+
+    if (tool === "sam-negative") {
+      setSamNegativePoints((current) => [...current, { x: Math.round(point.x), y: Math.round(point.y) }]);
+      clearSamMaskResult();
+      return;
+    }
+
+    if (tool === "sam-box") {
+      samBoxDrawingRef.current = true;
+      samBoxStartRef.current = { x: point.x, y: point.y };
+      setSamBox(null);
+      setSamBoxDraft(sourceSize ? normalizeSamMaskBox(point, point, sourceSize) : null);
+      clearSamMaskResult();
+      return;
+    }
+
     pushUndoSnapshot();
+    clearSamMaskResult();
     drawingRef.current = true;
     lastPointRef.current = point;
     drawTo(point);
   }
 
   function moveStroke(event: PointerEvent<HTMLCanvasElement>) {
+    if (samBoxDrawingRef.current && sourceSize) {
+      const point = getCanvasPoint(event);
+      const start = samBoxStartRef.current;
+      if (point && start) {
+        setSamBoxDraft(normalizeSamMaskBox(start, point, sourceSize));
+      }
+      return;
+    }
+
     if (!drawingRef.current) {
       return;
     }
@@ -1601,9 +2114,25 @@ function InpaintMaskDialog({
     }
   }
 
-  function endStroke() {
+  function endStroke(event?: PointerEvent<HTMLCanvasElement>) {
+    const wasDrawing = drawingRef.current;
+    if (samBoxDrawingRef.current) {
+      const start = samBoxStartRef.current;
+      const point = event ? getCanvasPoint(event) : null;
+      const nextBox = start && point && sourceSize ? normalizeSamMaskBox(start, point, sourceSize) : samBoxDraft;
+      if (nextBox) {
+        setSamBox(nextBox);
+      }
+      setSamBoxDraft(null);
+      samBoxDrawingRef.current = false;
+      samBoxStartRef.current = null;
+    }
+
     drawingRef.current = false;
     lastPointRef.current = null;
+    if (wasDrawing) {
+      refreshMaskBounds();
+    }
   }
 
   function undoMask() {
@@ -1616,6 +2145,9 @@ function InpaintMaskDialog({
 
     context.putImageData(snapshot, 0, 0);
     undoStackRef.current = undoStackRef.current.slice(0, -1);
+    refreshMaskBounds();
+    clearAiDiagnosisReview();
+    clearSamMaskResult();
   }
 
   function clearMask() {
@@ -1627,6 +2159,9 @@ function InpaintMaskDialog({
 
     pushUndoSnapshot();
     context.clearRect(0, 0, canvas.width, canvas.height);
+    setMaskBounds(null);
+    clearAiDiagnosisReview();
+    clearSamMaskResult();
   }
 
   function canvasHasMask(canvas: HTMLCanvasElement) {
@@ -1670,8 +2205,228 @@ function InpaintMaskDialog({
     return maskCanvas.toDataURL("image/png");
   }
 
+  function readCurrentLocalRegion() {
+    const canvas = canvasRef.current;
+    const context = canvas?.getContext("2d");
+    if (!canvas || !context || !sourceSize) {
+      return null;
+    }
+
+    return resolveInpaintLocalRegion({
+      box: samBox,
+      feather: localRegionFeather,
+      harmonizeAfter: {
+        enabled: localRegionHarmonizeEnabled,
+        denoise: localRegionHarmonizeDenoise,
+      },
+      mask: context.getImageData(0, 0, canvas.width, canvas.height),
+      padding: localRegionPadding,
+      sourceSize,
+    });
+  }
+
+  function getCurrentInpaintDiagnosisConfig() {
+    if (!imageItem || !sourceSize) {
+      return null;
+    }
+
+    return toInpaintDiagnosisConfig({
+      brushSize,
+      denoise,
+      draft,
+      faceDetailerEnabled,
+      growMaskBy,
+      handDetailerEnabled,
+      imageItem,
+      loraSettings,
+      mode,
+      negativePrompt,
+      positivePrompt,
+      resources: selectedResources,
+      seed,
+      sourceSize,
+    });
+  }
+
+  async function runAiInpaintDiagnosis() {
+    if (!imageItem || !sourceSize || maskToolBusy) {
+      return;
+    }
+
+    const baseConfig = getCurrentInpaintDiagnosisConfig();
+    if (!baseConfig) {
+      setAiDiagnosisStatus("error");
+      setAiDiagnosisError("Mask canvas is not ready.");
+      return;
+    }
+
+    setAiDiagnosisStatus("analyzing");
+    setAiDiagnosisError("");
+    setAiDiagnosisResult(null);
+    setAiDiagnosisBaseConfig(null);
+    setAiDiagnosisApplied(false);
+
+    try {
+      const imageDataUrl = await loadOriginalImageUrlToDataUrl(imageItem.image.url);
+      const response = await fetch("/api/llm/chat", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          purpose: "comfyui-inpaint-diagnosis",
+          messages: buildComfyUiInpaintDiagnosisMessages({
+            config: baseConfig,
+            imageDataUrl,
+            userInput: aiDiagnosisInput,
+          }),
+          temperature: 0.15,
+          maxTokens: 1600,
+        }),
+      });
+      const payload: unknown = await response.json().catch(() => null);
+
+      if (!response.ok) {
+        throw new Error(getLlmProxyErrorMessage(payload));
+      }
+
+      if (!isLlmChatResponse(payload)) {
+        throw new Error("AI inpaint diagnosis returned an invalid response.");
+      }
+
+      const parsed = parseComfyUiInpaintDiagnosisResponse(payload.content, baseConfig);
+      if (!parsed) {
+        throw new Error("AI inpaint diagnosis did not return usable JSON.");
+      }
+
+      setAiDiagnosisResult(parsed);
+      setAiDiagnosisBaseConfig(baseConfig);
+      setAiDiagnosisStatus("success");
+    } catch (diagnosisError) {
+      console.error("[SceneForge] [comfyui] AI inpaint diagnosis failed", { error: diagnosisError });
+      setAiDiagnosisStatus("error");
+      setAiDiagnosisError(
+        diagnosisError instanceof Error
+          ? diagnosisError.message
+          : "AI inpaint diagnosis failed. Check LiteLLM configuration and retry.",
+      );
+    }
+  }
+
+  function applyAiInpaintDiagnosis() {
+    if (!aiDiagnosisResult || !aiDiagnosisBaseConfig) {
+      return;
+    }
+
+    const nextConfig = applyComfyUiInpaintDiagnosisAdjustments(aiDiagnosisBaseConfig, aiDiagnosisResult.adjustments);
+    setBrushSize(nextConfig.brushSize);
+    setDenoise(nextConfig.denoise);
+    setFaceDetailerEnabled(nextConfig.faceDetailerEnabled);
+    setGrowMaskBy(nextConfig.growMaskBy);
+    setHandDetailerEnabled(nextConfig.handDetailerEnabled);
+    setMode(nextConfig.mode);
+    setNegativePrompt(nextConfig.negativePrompt);
+    setPositivePrompt(nextConfig.positivePrompt);
+    setSeed(nextConfig.image.seed);
+    if (sourceSize && aiDiagnosisResult.mask.shapes.length > 0) {
+      const canvas = canvasRef.current;
+      if (canvas) {
+        pushUndoSnapshot();
+        if (drawInpaintDiagnosisMaskShapes(canvas, aiDiagnosisResult.mask.shapes, nextConfig.brushSize)) {
+          clearSamHints();
+          refreshMaskBounds();
+        }
+      }
+    }
+    setTool("brush");
+    setAiDiagnosisApplied(true);
+    setAiDiagnosisError("");
+    setAiDiagnosisStatus("success");
+  }
+
+  async function runSamMaskGeneration() {
+    if (!imageItem || !sourceSize || maskToolBusy) {
+      return;
+    }
+
+    if (samPositivePoints.length === 0 && !samBox) {
+      setSamMaskStatus("error");
+      setSamMaskError("Add at least one positive point or draw a box before generating a SAM mask.");
+      return;
+    }
+
+    setSamMaskStatus("generating");
+    setSamMaskError("");
+    setSamMaskPreviewUrl("");
+    setSamMaskApplied(false);
+
+    try {
+      const clientId = createComfyUiClientId();
+      const payload = await fetchJson<ComfyUiGenerateSam2MaskResponse>("/api/comfyui/sam2-mask", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          sourceImage: {
+            filename: imageItem.image.filename,
+            subfolder: imageItem.image.subfolder,
+            type: imageItem.image.type,
+          },
+          imageWidth: sourceSize.width,
+          imageHeight: sourceSize.height,
+          positivePoints: samPositivePoints,
+          negativePoints: samNegativePoints,
+          ...(samBox ? { bbox: samBox } : {}),
+          model: "sam2.1_hiera_small.safetensors",
+          device: "cuda",
+          precision: "fp16",
+          keepModelLoaded: true,
+          clientId,
+        }),
+      });
+      const history = await waitForComfyUiGeneratedImages(clientId, payload.promptId, 1);
+      const maskImage = history.images.find((image) => image.nodeId === payload.outputNodeId) ?? history.images.at(-1);
+
+      if (!maskImage) {
+        throw new Error("SAM2 finished without a mask image.");
+      }
+
+      setSamMaskPreviewUrl(await createCanvasMaskDataUrlFromSamMaskUrl(maskImage.url, sourceSize));
+      setSamMaskStatus("success");
+    } catch (samError) {
+      console.error("[SceneForge] [comfyui] SAM2 mask generation failed", { error: samError });
+      setSamMaskStatus("error");
+      setSamMaskError(samError instanceof Error ? samError.message : "SAM2 mask generation failed.");
+    }
+  }
+
+  async function applySamMaskPreview() {
+    const canvas = canvasRef.current;
+    const context = canvas?.getContext("2d");
+    if (!canvas || !context || !samMaskPreviewUrl || maskToolBusy) {
+      return;
+    }
+
+    try {
+      const maskImage = await loadImage(samMaskPreviewUrl);
+      pushUndoSnapshot();
+      context.clearRect(0, 0, canvas.width, canvas.height);
+      context.drawImage(maskImage, 0, 0, canvas.width, canvas.height);
+      setTool("brush");
+      refreshMaskBounds();
+      setSamMaskApplied(true);
+      setSamMaskError("");
+      setSamMaskStatus("success");
+      clearAiDiagnosisReview();
+    } catch (samError) {
+      setSamMaskStatus("error");
+      setSamMaskError(samError instanceof Error ? samError.message : "Unable to apply SAM mask.");
+    }
+  }
+
   async function submit() {
-    if (!imageItem || busy) {
+    if (!imageItem || maskToolBusy) {
       return;
     }
 
@@ -1679,15 +2434,50 @@ function InpaintMaskDialog({
 
     try {
       const maskDataUrl = exportMaskDataUrl();
+      const submitDenoise = normalizeComfyUiInpaintDenoiseForMode(denoise, mode);
+      if (submitDenoise !== denoise) {
+        setDenoise(submitDenoise);
+      }
+      const selectedModelUpscaleOption = highResInpaintMode === "lanczos"
+        ? null
+        : modelUpscaleOptions.find((option) => option.mode === highResInpaintMode && option.available) ?? null;
+      const resolvedHighResInpaintMode = highResInpaintMode !== "lanczos" && !selectedModelUpscaleOption
+        ? "lanczos"
+        : highResInpaintMode;
+      const localRegion = highResInpaintEnabled && highResInpaintStrategy === "local-region"
+        ? readCurrentLocalRegion()
+        : null;
+      if (highResInpaintEnabled && highResInpaintStrategy === "local-region" && !localRegion) {
+        throw new Error("Local region 2x needs a painted mask or a SAM box.");
+      }
+
       await onSubmit({
-        denoise,
+        denoise: submitDenoise,
+        faceDetailer: {
+          ...draft.faceDetailer,
+          enabled: faceDetailerEnabled,
+        },
         growMaskBy,
+        handDetailer: {
+          ...draft.handDetailer,
+          enabled: handDetailerEnabled,
+        },
         image: imageItem.image,
         maskDataUrl,
         mode,
         negativePrompt,
         positivePrompt,
         seed,
+        upscaleBeforeInpaint: {
+          enabled: highResInpaintEnabled,
+          ...(localRegion ? { localRegion } : {}),
+          mode: resolvedHighResInpaintMode,
+          scaleBy: 2,
+          ...(selectedModelUpscaleOption && resolvedHighResInpaintMode !== "lanczos"
+            ? { modelName: selectedModelUpscaleOption.modelName }
+            : {}),
+          strategy: highResInpaintEnabled ? highResInpaintStrategy : "full-image",
+        },
       });
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : "Inpaint failed.");
@@ -1697,6 +2487,12 @@ function InpaintMaskDialog({
   if (!open || !imageItem || typeof document === "undefined") {
     return null;
   }
+
+  const renderedSamBox = samBoxDraft ?? samBox;
+  const selectedModelUpscaleOption = highResInpaintMode === "lanczos"
+    ? null
+    : modelUpscaleOptions.find((option) => option.mode === highResInpaintMode) ?? null;
+  const missingModelUpscaleOptions = modelUpscaleOptions.filter((option) => !option.available);
 
   return createPortal(
     <div
@@ -1712,7 +2508,7 @@ function InpaintMaskDialog({
           </div>
           <button
             className="grid size-8 place-items-center rounded-md text-slate-500 transition hover:bg-slate-100 hover:text-slate-700"
-            disabled={busy}
+            disabled={maskToolBusy}
             onClick={onClose}
             title="Close"
             type="button"
@@ -1745,40 +2541,123 @@ function InpaintMaskDialog({
                 onPointerUp={endStroke}
                 ref={canvasRef}
               />
+              {sourceSize ? (
+                <div className="pointer-events-none absolute inset-0">
+                  {renderedSamBox ? (
+                    <div
+                      className="absolute border-2 border-sky-300 bg-sky-300/15 shadow-[0_0_0_1px_rgba(15,23,42,0.4)]"
+                      style={getSamMaskBoxStyle(renderedSamBox, sourceSize)}
+                    />
+                  ) : null}
+                  {localRegionPreview ? (
+                    <div
+                      className="absolute border-2 border-amber-300 bg-amber-300/10 shadow-[0_0_0_1px_rgba(15,23,42,0.35)]"
+                      style={getSamMaskBoxStyle(localRegionPreview, sourceSize)}
+                    />
+                  ) : null}
+                  {samPositivePoints.map((point, index) => (
+                    <span
+                      className="absolute grid size-4 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full border border-white bg-emerald-500 text-[10px] font-bold leading-none text-white shadow"
+                      key={`sam-positive-${index}-${point.x}-${point.y}`}
+                      style={{
+                        left: `${(point.x / sourceSize.width) * 100}%`,
+                        top: `${(point.y / sourceSize.height) * 100}%`,
+                      }}
+                    >
+                      +
+                    </span>
+                  ))}
+                  {samNegativePoints.map((point, index) => (
+                    <span
+                      className="absolute grid size-4 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full border border-white bg-rose-500 text-[10px] font-bold leading-none text-white shadow"
+                      key={`sam-negative-${index}-${point.x}-${point.y}`}
+                      style={{
+                        left: `${(point.x / sourceSize.width) * 100}%`,
+                        top: `${(point.y / sourceSize.height) * 100}%`,
+                      }}
+                    >
+                      -
+                    </span>
+                  ))}
+                </div>
+              ) : null}
             </div>
           </div>
           <div className="grid content-start gap-3">
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-5 gap-1.5">
               <button
                 aria-pressed={tool === "brush"}
                 className={`flex h-9 items-center justify-center gap-1.5 rounded-md border text-xs font-semibold transition ${
                   tool === "brush" ? "border-sky-300 bg-sky-50 text-sky-700" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
                 }`}
+                disabled={maskToolBusy}
                 onClick={() => setTool("brush")}
+                title="Brush"
                 type="button"
               >
                 <Paintbrush className="size-3.5" />
-                Brush
               </button>
               <button
                 aria-pressed={tool === "eraser"}
                 className={`flex h-9 items-center justify-center gap-1.5 rounded-md border text-xs font-semibold transition ${
                   tool === "eraser" ? "border-sky-300 bg-sky-50 text-sky-700" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
                 }`}
+                disabled={maskToolBusy}
                 onClick={() => setTool("eraser")}
+                title="Eraser"
                 type="button"
               >
                 <Eraser className="size-3.5" />
-                Eraser
+              </button>
+              <button
+                aria-pressed={tool === "sam-positive"}
+                className={`flex h-9 items-center justify-center rounded-md border text-xs font-semibold transition ${
+                  tool === "sam-positive" ? "border-emerald-300 bg-emerald-50 text-emerald-700" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+                }`}
+                disabled={maskToolBusy}
+                onClick={() => setTool("sam-positive")}
+                title="SAM positive point"
+                type="button"
+              >
+                <Plus className="size-3.5" />
+              </button>
+              <button
+                aria-pressed={tool === "sam-negative"}
+                className={`flex h-9 items-center justify-center rounded-md border text-xs font-semibold transition ${
+                  tool === "sam-negative" ? "border-rose-300 bg-rose-50 text-rose-700" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+                }`}
+                disabled={maskToolBusy}
+                onClick={() => setTool("sam-negative")}
+                title="SAM negative point"
+                type="button"
+              >
+                <Minus className="size-3.5" />
+              </button>
+              <button
+                aria-pressed={tool === "sam-box"}
+                className={`flex h-9 items-center justify-center rounded-md border text-xs font-semibold transition ${
+                  tool === "sam-box" ? "border-sky-300 bg-sky-50 text-sky-700" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+                }`}
+                disabled={maskToolBusy}
+                onClick={() => setTool("sam-box")}
+                title="SAM box"
+                type="button"
+              >
+                <Square className="size-3.5" />
               </button>
             </div>
             <label className="grid gap-1">
               <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">brush size</span>
               <input
                 className="h-2 accent-sky-600"
+                disabled={maskToolBusy}
                 max={160}
                 min={4}
-                onChange={(event) => setBrushSize(Number(event.target.value))}
+                onChange={(event) => {
+                  setBrushSize(Number(event.target.value));
+                  clearAiDiagnosisReview();
+                  clearSamMaskResult();
+                }}
                 type="range"
                 value={brushSize}
               />
@@ -1787,7 +2666,7 @@ function InpaintMaskDialog({
             <div className="grid grid-cols-2 gap-2">
               <Button
                 className="h-9 rounded-md border-slate-200 bg-white text-xs text-slate-700 hover:bg-slate-50"
-                disabled={busy}
+                disabled={maskToolBusy}
                 onClick={undoMask}
                 type="button"
                 variant="secondary"
@@ -1797,7 +2676,7 @@ function InpaintMaskDialog({
               </Button>
               <Button
                 className="h-9 rounded-md border-slate-200 bg-white text-xs text-slate-700 hover:bg-slate-50"
-                disabled={busy}
+                disabled={maskToolBusy}
                 onClick={clearMask}
                 type="button"
                 variant="secondary"
@@ -1805,22 +2684,375 @@ function InpaintMaskDialog({
                 Clear
               </Button>
             </div>
-            <TextAreaInput label="prompt" onChange={setPositivePrompt} value={positivePrompt} />
-            <TextAreaInput label="negative" onChange={setNegativePrompt} value={negativePrompt} />
+            <div className="rounded-md border border-emerald-100 bg-emerald-50/70 p-3">
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-[11px] font-bold uppercase tracking-wider text-emerald-700">SAM mask</p>
+                  <p className="mt-0.5 truncate text-[11px] text-emerald-600">
+                    {samPositivePoints.length} positive / {samNegativePoints.length} negative{samBox ? " / box" : ""}
+                  </p>
+                </div>
+                <Button
+                  className="h-8 shrink-0 rounded-md bg-emerald-600 px-3 text-xs text-white hover:bg-emerald-700 disabled:opacity-60"
+                  disabled={maskToolBusy || !sourceSize || (samPositivePoints.length === 0 && !samBox)}
+                  onClick={() => void runSamMaskGeneration()}
+                  type="button"
+                >
+                  {samMaskBusy ? <Loader2 className="size-3.5 animate-spin" /> : <Sparkles className="size-3.5" />}
+                  Generate
+                </Button>
+              </div>
+              <div className="mt-3 grid grid-cols-2 gap-2">
+                <Button
+                  className="h-8 rounded-md border-emerald-100 bg-white text-xs text-emerald-700 hover:bg-emerald-50"
+                  disabled={maskToolBusy}
+                  onClick={clearSamHints}
+                  type="button"
+                  variant="secondary"
+                >
+                  Clear hints
+                </Button>
+                <Button
+                  className="h-8 rounded-md bg-slate-900 px-3 text-xs text-white hover:bg-slate-800 disabled:opacity-60"
+                  disabled={maskToolBusy || !samMaskPreviewUrl || samMaskApplied}
+                  onClick={() => void applySamMaskPreview()}
+                  type="button"
+                >
+                  Apply mask
+                </Button>
+              </div>
+              {samMaskBusy ? (
+                <p className="mt-2 rounded-md border border-emerald-100 bg-white px-3 py-2 text-xs leading-relaxed text-emerald-700">
+                  <Loader2 className="mr-1.5 inline size-3.5 animate-spin" />
+                  Generating mask with SAM2...
+                </p>
+              ) : null}
+              {samMaskStatus === "error" && samMaskError ? (
+                <p className="mt-2 rounded-md border border-rose-100 bg-white px-3 py-2 text-xs leading-relaxed text-rose-700">
+                  {samMaskError}
+                </p>
+              ) : null}
+              {samMaskPreviewUrl ? (
+                <div className="mt-3 space-y-2 rounded-md border border-emerald-100 bg-white p-2">
+                  <div className="overflow-hidden rounded-md border border-slate-200 bg-slate-950">
+                    <div className="relative">
+                      <img alt="SAM source preview" className="block h-auto w-full select-none" draggable={false} src={imageItem.image.url} />
+                      <img alt="SAM mask preview" className="absolute inset-0 h-full w-full object-fill opacity-70" src={samMaskPreviewUrl} />
+                    </div>
+                  </div>
+                  {samMaskApplied ? (
+                    <p className="text-[11px] text-emerald-700">Applied to the current mask canvas. Start inpaint is still manual.</p>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+            <div className="rounded-md border border-sky-100 bg-sky-50/70 p-3">
+              <label className="flex items-center gap-2 text-xs font-semibold text-sky-800">
+                <input
+                  checked={highResInpaintEnabled}
+                  className="size-3.5 rounded border-slate-300 text-sky-600"
+                  disabled={maskToolBusy}
+                  onChange={(event) => setHighResInpaintEnabled(event.target.checked)}
+                  type="checkbox"
+                />
+                High-res inpaint 2x
+              </label>
+              {highResInpaintEnabled ? (
+                <div className="mt-3 grid gap-2">
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      aria-pressed={highResInpaintStrategy === "local-region"}
+                      className={`h-8 rounded-md border px-2 text-xs font-semibold transition ${
+                        highResInpaintStrategy === "local-region"
+                          ? "border-sky-300 bg-white text-sky-700"
+                          : "border-sky-100 bg-sky-50 text-sky-700 hover:bg-white"
+                      }`}
+                      disabled={maskToolBusy}
+                      onClick={() => setHighResInpaintStrategy("local-region")}
+                      type="button"
+                    >
+                      Local region 2x
+                    </button>
+                    <button
+                      aria-pressed={highResInpaintStrategy === "full-image"}
+                      className={`h-8 rounded-md border px-2 text-xs font-semibold transition ${
+                        highResInpaintStrategy === "full-image"
+                          ? "border-sky-300 bg-white text-sky-700"
+                          : "border-sky-100 bg-sky-50 text-sky-700 hover:bg-white"
+                      }`}
+                      disabled={maskToolBusy}
+                      onClick={() => setHighResInpaintStrategy("full-image")}
+                      type="button"
+                    >
+                      Full image 2x
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2">
+                    <button
+                      aria-pressed={highResInpaintMode === "lanczos"}
+                      className={`h-8 rounded-md border px-2 text-xs font-semibold transition ${
+                        highResInpaintMode === "lanczos"
+                          ? "border-sky-300 bg-white text-sky-700"
+                          : "border-sky-100 bg-sky-50 text-sky-700 hover:bg-white"
+                      }`}
+                      disabled={maskToolBusy}
+                      onClick={() => setHighResInpaintMode("lanczos")}
+                      type="button"
+                    >
+                      Fast lanczos
+                    </button>
+                    {modelUpscaleOptions.map((option) => (
+                      <button
+                        aria-pressed={highResInpaintMode === option.mode}
+                        className={`min-h-8 rounded-md border px-2 py-1 text-xs font-semibold leading-tight transition ${
+                          highResInpaintMode === option.mode
+                            ? "border-sky-300 bg-white text-sky-700"
+                            : "border-sky-100 bg-sky-50 text-sky-700 hover:bg-white"
+                        }`}
+                        disabled={maskToolBusy || !option.available}
+                        key={option.mode}
+                        onClick={() => setHighResInpaintMode(option.mode)}
+                        title={option.available ? `Use ${option.modelName}` : `${option.modelName} is not available in ComfyUI`}
+                        type="button"
+                      >
+                        {option.label}
+                      </button>
+                    ))}
+                  </div>
+                  <p className="text-[11px] leading-relaxed text-sky-700">
+                    {highResInpaintStrategy === "local-region"
+                      ? `Only upscales the ${localRegionPreview?.source === "box" ? "box" : "mask"} region, then composites it back into the original image.`
+                      : highResInpaintMode !== "lanczos" && selectedModelUpscaleOption?.available
+                        ? `Uses ${selectedModelUpscaleOption.modelName} for true 2x source upscale and nearest-exact 2x for the mask before inpaint.`
+                        : "Uses lanczos 2x for the source and nearest-exact 2x for the mask before inpaint."}
+                  </p>
+                  {highResInpaintStrategy === "local-region" ? (
+                    <div className="grid gap-2 rounded-md border border-sky-100 bg-white/70 p-2">
+                      <div className="grid grid-cols-2 gap-2">
+                        <NumberInput
+                          label="padding"
+                          max={2048}
+                          min={0}
+                          onChange={(value) => setLocalRegionPadding(Math.max(0, Math.round(value)))}
+                          step={8}
+                          value={localRegionPadding}
+                        />
+                        <NumberInput
+                          label="feather"
+                          max={1024}
+                          min={0}
+                          onChange={(value) => setLocalRegionFeather(Math.max(0, Math.round(value)))}
+                          step={4}
+                          value={localRegionFeather}
+                        />
+                      </div>
+                      <label className="flex items-center gap-2 text-[11px] font-semibold text-sky-700">
+                        <input
+                          checked={localRegionHarmonizeEnabled}
+                          className="size-3.5 rounded border-slate-300 text-sky-600"
+                          disabled={maskToolBusy}
+                          onChange={(event) => setLocalRegionHarmonizeEnabled(event.target.checked)}
+                          type="checkbox"
+                        />
+                        Global harmonize
+                      </label>
+                      {localRegionHarmonizeEnabled ? (
+                        <NumberInput
+                          label="harmonize denoise"
+                          max={0.3}
+                          min={0}
+                          onChange={(value) => setLocalRegionHarmonizeDenoise(Math.max(0, Math.min(0.3, value)))}
+                          step={0.01}
+                          value={localRegionHarmonizeDenoise}
+                        />
+                      ) : null}
+                      {localRegionPreview ? (
+                        <p className="text-[11px] leading-relaxed text-sky-700">
+                          Region: {localRegionPreview.x}, {localRegionPreview.y}, {localRegionPreview.width}x{localRegionPreview.height}
+                        </p>
+                      ) : (
+                        <p className="text-[11px] leading-relaxed text-amber-700">Paint a mask or draw a SAM box to preview the local crop.</p>
+                      )}
+                    </div>
+                  ) : null}
+                  {upscaleModelStatus === "loading" || upscaleModelStatus === "error" || missingModelUpscaleOptions.length > 0 ? (
+                    <p className="text-[11px] leading-relaxed text-amber-700">
+                      {upscaleModelStatus === "loading"
+                        ? "Checking 2x upscale model availability..."
+                        : upscaleModelError || `Missing 2x model: ${missingModelUpscaleOptions.map((option) => option.modelName).join(", ")}`}
+                    </p>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+            <div className="rounded-md border border-violet-100 bg-violet-50/70 p-3">
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-[11px] font-bold uppercase tracking-wider text-violet-700">AI 诊断</p>
+                  <p className="mt-0.5 truncate text-[11px] text-violet-600">Prompt / inpaint params</p>
+                </div>
+                <Button
+                  className="h-8 shrink-0 rounded-md bg-violet-600 px-3 text-xs text-white hover:bg-violet-700 disabled:opacity-60"
+                  disabled={maskToolBusy || !sourceSize}
+                  onClick={() => void runAiInpaintDiagnosis()}
+                  type="button"
+                >
+                  {aiDiagnosisBusy ? <Loader2 className="size-3.5 animate-spin" /> : <Sparkles className="size-3.5" />}
+                  AI 诊断
+                </Button>
+              </div>
+              <textarea
+                className="mt-3 min-h-[64px] w-full resize-y rounded-md border border-violet-100 bg-white px-3 py-2 text-xs leading-relaxed text-slate-800 outline-none transition focus:border-violet-300 focus:ring-2 focus:ring-violet-100"
+                disabled={maskToolBusy}
+                onChange={(event) => {
+                  setAiDiagnosisInput(event.target.value);
+                  clearAiDiagnosisReview();
+                }}
+                placeholder="例如：只修复左眼、去掉多余手指、重绘背景灯牌"
+                value={aiDiagnosisInput}
+              />
+              {aiDiagnosisBusy ? (
+                <p className="mt-2 rounded-md border border-violet-100 bg-white px-3 py-2 text-xs leading-relaxed text-violet-700">
+                  <Loader2 className="mr-1.5 inline size-3.5 animate-spin" />
+                  正在分析图片并生成 inpaint 建议...
+                </p>
+              ) : null}
+              {aiDiagnosisStatus === "error" && aiDiagnosisError ? (
+                <p className="mt-2 rounded-md border border-rose-100 bg-white px-3 py-2 text-xs leading-relaxed text-rose-700">
+                  {aiDiagnosisError}
+                </p>
+              ) : null}
+              {aiDiagnosisResult ? (
+                <div className="mt-3 space-y-3 rounded-md border border-violet-100 bg-white p-3 text-xs">
+                  {aiDiagnosisResult.summary ? (
+                    <p className="leading-relaxed text-slate-800">{aiDiagnosisResult.summary}</p>
+                  ) : null}
+                  {aiDiagnosisResult.reasoning ? (
+                    <p className="leading-relaxed text-slate-600">{aiDiagnosisResult.reasoning}</p>
+                  ) : null}
+                  {aiDiagnosisResult.confidence !== null ? (
+                    <p className="text-[11px] font-medium text-violet-700">confidence {aiDiagnosisResult.confidence}</p>
+                  ) : null}
+                  {aiDiagnosisResult.mask.note || aiDiagnosisResult.mask.shapes.length > 0 ? (
+                    <p className="rounded-md bg-violet-50 px-3 py-2 text-[11px] leading-relaxed text-violet-800">
+                      {aiDiagnosisResult.mask.note || `${aiDiagnosisResult.mask.shapes.length} mask shape(s) suggested.`}
+                    </p>
+                  ) : null}
+                  {aiDiagnosisResult.warnings.length > 0 || aiDiagnosisResult.ignored.length > 0 ? (
+                    <div className="space-y-1 rounded-md bg-amber-50 px-3 py-2 text-[11px] leading-relaxed text-amber-800">
+                      {[...aiDiagnosisResult.warnings, ...aiDiagnosisResult.ignored].map((warning, index) => (
+                        <p key={`${warning}-${index}`}>{warning}</p>
+                      ))}
+                    </div>
+                  ) : null}
+                  {aiDiagnosisDiffRows.length > 0 ? (
+                    <div className="space-y-1.5">
+                      <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">变更预览</p>
+                      <div className="max-h-40 space-y-1 overflow-y-auto pr-1">
+                        {aiDiagnosisDiffRows.map((row) => (
+                          <div className="rounded-md bg-slate-50 px-2 py-1.5" key={`${row.label}-${row.current}-${row.next}`}>
+                            <p className="font-medium text-slate-700">{row.label}</p>
+                            <p className="mt-0.5 break-words text-[11px] text-slate-500">
+                              {row.current || "空"} → <span className="text-violet-700">{row.next || "空"}</span>
+                            </p>
+                            {row.reason ? <p className="mt-1 text-[11px] leading-relaxed text-slate-500">{row.reason}</p> : null}
+                            {row.expectedEffect ? (
+                              <p className="mt-1 text-[11px] leading-relaxed text-emerald-700">预期：{row.expectedEffect}</p>
+                            ) : null}
+                            {row.risk ? <p className="mt-1 text-[11px] leading-relaxed text-amber-700">风险：{row.risk}</p> : null}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="text-[11px] text-emerald-700">
+                      {aiDiagnosisApplied ? "已应用到当前 inpaint 弹窗，尚未提交 ComfyUI。" : ""}
+                    </p>
+                    <Button
+                      className="h-8 rounded-md bg-slate-900 px-3 text-xs text-white hover:bg-slate-800 disabled:opacity-60"
+                      disabled={aiDiagnosisApplied}
+                      onClick={applyAiInpaintDiagnosis}
+                      type="button"
+                    >
+                      应用建议
+                    </Button>
+                  </div>
+                </div>
+              ) : null}
+            </div>
+            <TextAreaInput
+              label="prompt"
+              onChange={(value) => {
+                setPositivePrompt(value);
+                clearAiDiagnosisReview();
+              }}
+              value={positivePrompt}
+            />
+            <TextAreaInput
+              label="negative"
+              onChange={(value) => {
+                setNegativePrompt(value);
+                clearAiDiagnosisReview();
+              }}
+              value={negativePrompt}
+            />
             <SelectInput
               label="mode"
-              onChange={(value) => setMode(value as ComfyUiInpaintMode)}
+              onChange={(value) => {
+                const nextMode = value as ComfyUiInpaintMode;
+                setMode(nextMode);
+                setDenoise((current) => normalizeComfyUiInpaintDenoiseForMode(current, nextMode));
+                clearAiDiagnosisReview();
+              }}
               options={COMFYUI_INPAINT_MODE_OPTIONS}
               value={mode}
             />
-            <NumberInput label="denoise" max={1} min={0} onChange={setDenoise} step={0.05} value={denoise} />
-            <NumberInput label="seed" min={0} onChange={(value) => setSeed(Math.max(0, Math.round(value)))} value={seed} />
+            <NumberInput
+              label="denoise"
+              max={1}
+              min={mode === "vae-inpaint" ? MIN_COMFYUI_VAE_INPAINT_DENOISE : 0}
+              onChange={(value) => {
+                setDenoise(normalizeComfyUiInpaintDenoiseForMode(value, mode));
+                clearAiDiagnosisReview();
+              }}
+              step={0.05}
+              value={denoise}
+            />
+            <NumberInput
+              label="seed"
+              min={0}
+              onChange={(value) => {
+                setSeed(Math.max(0, Math.round(value)));
+                clearAiDiagnosisReview();
+              }}
+              value={seed}
+            />
             <NumberInput
               label="grow mask"
               max={512}
               min={0}
-              onChange={(value) => setGrowMaskBy(Math.max(0, Math.round(value)))}
+              onChange={(value) => {
+                setGrowMaskBy(Math.max(0, Math.round(value)));
+                clearAiDiagnosisReview();
+              }}
               value={growMaskBy}
+            />
+            <BooleanInput
+              checked={handDetailerEnabled}
+              label="HandDetailer"
+              onChange={(value) => {
+                setHandDetailerEnabled(value);
+                clearAiDiagnosisReview();
+              }}
+            />
+            <BooleanInput
+              checked={faceDetailerEnabled}
+              label="FaceDetailer"
+              onChange={(value) => {
+                setFaceDetailerEnabled(value);
+                clearAiDiagnosisReview();
+              }}
             />
             {error ? (
               <p className="rounded-md border border-rose-100 bg-rose-50 px-3 py-2 text-[11px] leading-relaxed text-rose-700">
@@ -1832,7 +3064,7 @@ function InpaintMaskDialog({
         <div className="flex items-center justify-end gap-3 border-t border-slate-100 bg-slate-50 px-4 py-3">
           <Button
             className="h-10 rounded-md border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
-            disabled={busy}
+            disabled={maskToolBusy}
             onClick={onClose}
             type="button"
             variant="secondary"
@@ -1841,7 +3073,7 @@ function InpaintMaskDialog({
           </Button>
           <Button
             className="h-10 rounded-md bg-sky-600 text-white hover:bg-sky-700 disabled:opacity-60"
-            disabled={busy || !sourceSize}
+            disabled={maskToolBusy || !sourceSize}
             onClick={() => void submit()}
             type="button"
           >
@@ -4007,9 +5239,11 @@ export function ComfyUiGenerationDialog({
                   busy={submitStatus === "loading"}
                   draft={draft}
                   imageItem={inpaintImageItem}
+                  loraSettings={loraSettings}
                   onClose={() => setInpaintImageItem(null)}
                   onSubmit={submitInpaint}
                   open
+                  selectedResources={selectedResources}
                 />
               ) : null}
             </div>,

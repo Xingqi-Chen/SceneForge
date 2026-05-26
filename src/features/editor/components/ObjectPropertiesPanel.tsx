@@ -773,7 +773,7 @@ export function ObjectPropertiesPanel() {
                 <p className="mt-1 text-[11px] leading-relaxed text-indigo-700/80">
                   调整火柴人在 3D 舞台中的根位置、朝向和整体比例。拖拽骨盆、胸、头与手脚的 IK
                   控制点摆姿（默认在正面平面）；按住 Shift 可在深度方向（局部 Z）微调同一控制点。选中头部后可在下方微调头部转动，或在视口按住 Alt
-                  在头部拖拽。四肢骨长由 IK 固定、不会拉伸。与 2D 画布的骨骼拖拽彼此独立。
+                  在头部拖拽；鼠标中键横向拖拽头部可单独左右转动脸部。四肢骨长由 IK 固定、不会拉伸。与 2D 画布的骨骼拖拽彼此独立。
                 </p>
               </div>
               <div className="space-y-1.5">
@@ -918,7 +918,7 @@ export function ObjectPropertiesPanel() {
                 <div className="space-y-2 border-t border-indigo-200/80 pt-3">
                   <div className="text-[11px] font-semibold text-indigo-800">头部转动（相对颈部）</div>
                   <p className="text-[10px] leading-snug text-indigo-700/85">
-                    单位：度（XYZ 顺序）。视口中按住 Alt 在头部或颈—头连接处拖拽可同步调整俯仰与水平转头。
+                    单位：度（XYZ 顺序）。视口中按住 Alt 在头部或颈—头连接处拖拽可同步调整俯仰与水平转头；鼠标中键横向拖拽头部可单独左右转动脸部。
                   </p>
                   <Vector3Fields
                     labels={["俯仰 X", "转头 Y", "侧倾 Z"]}

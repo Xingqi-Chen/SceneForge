@@ -3,6 +3,10 @@ import type {
   ComfyUiControlNetType,
   ComfyUiControlNetUnitConfig,
   ComfyUiInpaintRequest,
+  ComfyUiInpaintLocalRegionConfig,
+  ComfyUiInpaintUpscaleMode,
+  ComfyUiInpaintUpscaleStrategy,
+  ComfyUiSam2MaskRequest,
   ComfyUiTextToImageRequest,
 } from "./types";
 import {
@@ -13,6 +17,11 @@ import {
 } from "./face-detailer";
 import { DEFAULT_COMFYUI_INPAINT_MODE } from "./inpaint";
 import { normalizeComfyUiLatentImageNode } from "./latent-image-node";
+import {
+  DEFAULT_COMFYUI_INPAINT_UPSCALE_MODEL_NAME,
+  getComfyUiInpaintUpscaleModelName,
+  isComfyUiInpaintModelUpscaleMode,
+} from "./validation";
 
 type ComfyUiObjectInfoNode = {
   input?: {
@@ -31,6 +40,12 @@ export type ComfyUiRequestObjectInfoValidation = {
 export type ComfyUiInpaintRequestObjectInfoValidation = {
   errors: string[];
   request: ComfyUiInpaintRequest;
+  warnings: string[];
+};
+
+export type ComfyUiSam2MaskRequestObjectInfoValidation = {
+  errors: string[];
+  request: ComfyUiSam2MaskRequest;
   warnings: string[];
 };
 
@@ -72,11 +87,19 @@ function readInputOptions(objectInfo: unknown, classType: string, inputName: str
   }
 
   const inputInfo = nodeInfo.input.required[inputName];
-  if (!Array.isArray(inputInfo) || !Array.isArray(inputInfo[0])) {
+  if (!Array.isArray(inputInfo)) {
     return [];
   }
 
-  return inputInfo[0].filter((value): value is string => typeof value === "string");
+  if (Array.isArray(inputInfo[0])) {
+    return inputInfo[0].filter((value): value is string => typeof value === "string");
+  }
+
+  if (isRecord(inputInfo[1]) && Array.isArray(inputInfo[1].options)) {
+    return inputInfo[1].options.filter((value): value is string => typeof value === "string");
+  }
+
+  return [];
 }
 
 function hasNodeInfo(objectInfo: unknown, classType: string) {
@@ -516,12 +539,42 @@ export function validateComfyUiInpaintRequestAgainstObjectInfo(
   const loraOptions = readInputOptions(objectInfo, "LoraLoader", "lora_name");
   const samplerOptions = readInputOptions(objectInfo, "KSampler", "sampler_name");
   const schedulerOptions = readInputOptions(objectInfo, "KSampler", "scheduler");
+  const ultralyticsDetectorOptions = readInputOptions(objectInfo, "UltralyticsDetectorProvider", "model_name");
+  const imageScaleByMethodOptions = readInputOptions(objectInfo, "ImageScaleBy", "upscale_method");
+  const imageScaleMethodOptions = readInputOptions(objectInfo, "ImageScale", "upscale_method");
+  const upscaleModelOptions = readInputOptions(objectInfo, "UpscaleModelLoader", "model_name");
   const checkpointName = findOption(request.checkpointName, checkpointOptions);
   const sampler = findSampler(request.samplerName, samplerOptions, schedulerOptions);
   const samplerName = sampler.samplerName;
   const requestedScheduler = request.scheduler ? findOption(request.scheduler, schedulerOptions) : null;
   const scheduler = sampler.scheduler ?? requestedScheduler;
   const inpaintMode = request.inpaintMode ?? DEFAULT_COMFYUI_INPAINT_MODE;
+  const highResInpaint: {
+    enabled: boolean;
+    mode: ComfyUiInpaintUpscaleMode;
+    modelName: string;
+    scaleBy: number;
+    strategy: ComfyUiInpaintUpscaleStrategy;
+    localRegion?: ComfyUiInpaintLocalRegionConfig;
+  } = request.upscaleBeforeInpaint?.enabled === true
+    ? {
+        enabled: true,
+        mode: request.upscaleBeforeInpaint.mode ?? "lanczos" as const,
+        scaleBy: request.upscaleBeforeInpaint.scaleBy ?? 2,
+        modelName: getComfyUiInpaintUpscaleModelName(request.upscaleBeforeInpaint.mode ?? "lanczos"),
+        strategy: request.upscaleBeforeInpaint.strategy ?? "full-image",
+        ...(request.upscaleBeforeInpaint.localRegion ? { localRegion: request.upscaleBeforeInpaint.localRegion } : {}),
+      }
+    : {
+        enabled: false,
+        mode: request.upscaleBeforeInpaint?.mode ?? "lanczos" as const,
+        scaleBy: request.upscaleBeforeInpaint?.scaleBy ?? 2,
+        modelName: getComfyUiInpaintUpscaleModelName(request.upscaleBeforeInpaint?.mode ?? "lanczos"),
+        strategy: request.upscaleBeforeInpaint?.strategy ?? "full-image",
+        ...(request.upscaleBeforeInpaint?.localRegion ? { localRegion: request.upscaleBeforeInpaint.localRegion } : {}),
+      };
+  let faceDetailer = request.faceDetailer;
+  let handDetailer = request.handDetailer;
   const loras = (request.loras ?? []).map((lora, index) => {
     const loraName = findOption(lora.loraName, loraOptions);
     if (!loraName) {
@@ -554,8 +607,113 @@ export function validateComfyUiInpaintRequestAgainstObjectInfo(
     errors.push("LoadImageMask node is not available in ComfyUI. It is required for inpaint masks.");
   }
 
-  if (!hasNodeInfo(objectInfo, "VAEDecode")) {
+  if (highResInpaint.enabled) {
+    if (!hasNodeInfo(objectInfo, "VAEDecodeTiled")) {
+      errors.push("VAEDecodeTiled node is not available in ComfyUI. It is required for high-res inpaint output images.");
+    }
+  } else if (!hasNodeInfo(objectInfo, "VAEDecode")) {
     errors.push("VAEDecode node is not available in ComfyUI. It is required for inpaint output images.");
+  }
+
+  if (highResInpaint.enabled) {
+    if (!hasNodeInfo(objectInfo, "ImageScaleBy")) {
+      errors.push("ImageScaleBy node is not available in ComfyUI. It is required for high-res inpaint upscaling.");
+    }
+
+    if (!hasNodeInfo(objectInfo, "MaskToImage")) {
+      errors.push("MaskToImage node is not available in ComfyUI. It is required to upscale high-res inpaint masks.");
+    }
+
+    if (!hasNodeInfo(objectInfo, "ImageToMask")) {
+      errors.push("ImageToMask node is not available in ComfyUI. It is required to restore high-res inpaint masks.");
+    }
+
+    if (imageScaleByMethodOptions.length > 0 && !findOption("nearest-exact", imageScaleByMethodOptions)) {
+      errors.push("ImageScaleBy nearest-exact upscale method is not available in ComfyUI. It is required for high-res inpaint masks.");
+    }
+
+    if (highResInpaint.strategy === "local-region") {
+      const localRegion = highResInpaint.localRegion;
+      if (!localRegion) {
+        errors.push("localRegion is required for local-region high-res inpaint.");
+      } else {
+        const x = localRegion.x;
+        const y = localRegion.y;
+        const width = localRegion.width;
+        const height = localRegion.height;
+        if (
+          !Number.isInteger(x) ||
+          !Number.isInteger(y) ||
+          !Number.isInteger(width) ||
+          !Number.isInteger(height) ||
+          x === undefined ||
+          y === undefined ||
+          width === undefined ||
+          height === undefined ||
+          x < 0 ||
+          y < 0 ||
+          width <= 0 ||
+          height <= 0
+        ) {
+          errors.push("localRegion must describe a non-empty rectangle using integer x, y, width, and height values.");
+        } else if (
+          request.imageWidth !== undefined &&
+          request.imageHeight !== undefined &&
+          (x + width > request.imageWidth || y + height > request.imageHeight)
+        ) {
+          errors.push("localRegion must stay inside the source image bounds.");
+        }
+      }
+
+      if (!hasNodeInfo(objectInfo, "ImageCrop")) {
+        errors.push("ImageCrop node is not available in ComfyUI. It is required for local-region high-res inpaint.");
+      }
+
+      if (!hasNodeInfo(objectInfo, "CropMask")) {
+        errors.push("CropMask node is not available in ComfyUI. It is required for local-region high-res inpaint masks.");
+      }
+
+      if (!hasNodeInfo(objectInfo, "FeatherMask")) {
+        errors.push("FeatherMask node is not available in ComfyUI. It is required to blend local-region inpaint patches.");
+      }
+
+      if (!hasNodeInfo(objectInfo, "ImageScale")) {
+        errors.push("ImageScale node is not available in ComfyUI. It is required to resize local-region inpaint patches.");
+      }
+
+      if (imageScaleMethodOptions.length > 0 && !findOption("lanczos", imageScaleMethodOptions)) {
+        errors.push("ImageScale lanczos upscale method is not available in ComfyUI. It is required to resize local-region inpaint patches.");
+      }
+
+      if (!hasNodeInfo(objectInfo, "ImageCompositeMasked")) {
+        errors.push("ImageCompositeMasked node is not available in ComfyUI. It is required to paste local-region inpaint patches.");
+      }
+    }
+
+    if (highResInpaint.mode === "lanczos") {
+      if (imageScaleByMethodOptions.length > 0 && !findOption("lanczos", imageScaleByMethodOptions)) {
+        errors.push("ImageScaleBy lanczos upscale method is not available in ComfyUI. It is required for high-res inpaint source images.");
+      }
+    } else if (isComfyUiInpaintModelUpscaleMode(highResInpaint.mode)) {
+      const requestedModelName = getComfyUiInpaintUpscaleModelName(highResInpaint.mode);
+      const upscaleModel = findOption(requestedModelName, upscaleModelOptions);
+
+      if (!hasNodeInfo(objectInfo, "UpscaleModelLoader")) {
+        errors.push("UpscaleModelLoader node is not available in ComfyUI. It is required for model-based high-res inpaint.");
+      }
+
+      if (!hasNodeInfo(objectInfo, "ImageUpscaleWithModel")) {
+        errors.push("ImageUpscaleWithModel node is not available in ComfyUI. It is required for model-based high-res inpaint.");
+      }
+
+      if (upscaleModelOptions.length > 0 && !upscaleModel) {
+        errors.push(`2x upscale model is not available in ComfyUI: ${requestedModelName}`);
+      }
+
+      highResInpaint.modelName = upscaleModel ?? requestedModelName;
+    } else {
+      highResInpaint.modelName = DEFAULT_COMFYUI_INPAINT_UPSCALE_MODEL_NAME;
+    }
   }
 
   if (inpaintMode === "vae-inpaint") {
@@ -563,7 +721,11 @@ export function validateComfyUiInpaintRequestAgainstObjectInfo(
       errors.push("VAEEncodeForInpaint node is not available in ComfyUI. It is required for VAE inpaint mode.");
     }
   } else {
-    if (!hasNodeInfo(objectInfo, "VAEEncode")) {
+    if (highResInpaint.enabled) {
+      if (!hasNodeInfo(objectInfo, "VAEEncodeTiled")) {
+        errors.push("VAEEncodeTiled node is not available in ComfyUI. It is required for high-res latent noise mask inpaint mode.");
+      }
+    } else if (!hasNodeInfo(objectInfo, "VAEEncode")) {
       errors.push("VAEEncode node is not available in ComfyUI. It is required for latent noise mask inpaint mode.");
     }
 
@@ -571,6 +733,29 @@ export function validateComfyUiInpaintRequestAgainstObjectInfo(
       errors.push("SetLatentNoiseMask node is not available in ComfyUI. It is required for latent noise mask inpaint mode.");
     }
   }
+
+  faceDetailer = validateDetailerAgainstObjectInfo({
+    defaultDetectorModel: DEFAULT_COMFYUI_FACE_DETAILER_DETECTOR_MODEL,
+    detailer: request.faceDetailer,
+    errors,
+    findPreferredDetectorModel: findPreferredFaceDetailerDetectorModel,
+    label: "FaceDetailer",
+    objectInfo,
+    samplerOptions,
+    schedulerOptions,
+    ultralyticsDetectorOptions,
+  });
+  handDetailer = validateDetailerAgainstObjectInfo({
+    defaultDetectorModel: DEFAULT_COMFYUI_HAND_DETAILER_DETECTOR_MODEL,
+    detailer: request.handDetailer,
+    errors,
+    findPreferredDetectorModel: findPreferredHandDetailerDetectorModel,
+    label: "HandDetailer",
+    objectInfo,
+    samplerOptions,
+    schedulerOptions,
+    ultralyticsDetectorOptions,
+  });
 
   if (request.samplerName && samplerName && samplerName !== request.samplerName) {
     warnings.push(`Normalized sampler ${request.samplerName} to ${samplerName}.`);
@@ -595,7 +780,78 @@ export function validateComfyUiInpaintRequestAgainstObjectInfo(
       samplerName: samplerName ?? request.samplerName,
       scheduler: scheduler ?? request.scheduler,
       inpaintMode,
+      faceDetailer,
+      handDetailer,
+      upscaleBeforeInpaint: highResInpaint,
       loras,
+    },
+  };
+}
+
+export function readComfyUiUpscaleModelOptions(objectInfo: unknown) {
+  return readInputOptions(objectInfo, "UpscaleModelLoader", "model_name");
+}
+
+export function validateComfyUiSam2MaskRequestAgainstObjectInfo(
+  request: ComfyUiSam2MaskRequest,
+  objectInfo: unknown,
+): ComfyUiSam2MaskRequestObjectInfoValidation {
+  const errors: string[] = [];
+  const warnings: string[] = [];
+  const modelOptions = readInputOptions(objectInfo, "DownloadAndLoadSAM2Model", "model");
+  const deviceOptions = readInputOptions(objectInfo, "DownloadAndLoadSAM2Model", "device");
+  const precisionOptions = readInputOptions(objectInfo, "DownloadAndLoadSAM2Model", "precision");
+  const requestedModel = request.model ?? "sam2.1_hiera_small.safetensors";
+  const requestedDevice = request.device ?? "cuda";
+  const requestedPrecision = requestedDevice === "cpu" ? "fp32" : request.precision ?? "fp16";
+  const model = findOption(requestedModel, modelOptions);
+  const device = findOption(requestedDevice, deviceOptions);
+  const precision = findOption(requestedPrecision, precisionOptions);
+
+  if (!hasNodeInfo(objectInfo, "DownloadAndLoadSAM2Model")) {
+    errors.push("DownloadAndLoadSAM2Model node is not available in ComfyUI. It is required for SAM2 mask generation.");
+  }
+
+  if (!hasNodeInfo(objectInfo, "Sam2Segmentation")) {
+    errors.push("Sam2Segmentation node is not available in ComfyUI. It is required for SAM2 mask generation.");
+  }
+
+  if (!hasNodeInfo(objectInfo, "LoadImage")) {
+    errors.push("LoadImage node is not available in ComfyUI. It is required for SAM2 source images.");
+  }
+
+  if (!hasNodeInfo(objectInfo, "MaskToImage")) {
+    errors.push("MaskToImage node is not available in ComfyUI. It is required to preview SAM2 masks.");
+  }
+
+  if (!hasNodeInfo(objectInfo, "SaveImage")) {
+    errors.push("SaveImage node is not available in ComfyUI. It is required to return SAM2 mask previews.");
+  }
+
+  if (modelOptions.length > 0 && !model) {
+    errors.push(`SAM2 model is not available in ComfyUI: ${requestedModel}`);
+  }
+
+  if (deviceOptions.length > 0 && !device) {
+    errors.push(`SAM2 device is not available in ComfyUI: ${requestedDevice}`);
+  }
+
+  if (precisionOptions.length > 0 && !precision) {
+    errors.push(`SAM2 precision is not available in ComfyUI: ${requestedPrecision}`);
+  }
+
+  if (request.device === "cpu" && request.precision && request.precision !== "fp32") {
+    warnings.push(`Normalized SAM2 precision ${request.precision} to fp32 because CPU does not support fp16/bf16.`);
+  }
+
+  return {
+    errors,
+    warnings,
+    request: {
+      ...request,
+      model: model ?? requestedModel,
+      device: (device ?? requestedDevice) as ComfyUiSam2MaskRequest["device"],
+      precision: (precision ?? requestedPrecision) as ComfyUiSam2MaskRequest["precision"],
     },
   };
 }

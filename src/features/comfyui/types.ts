@@ -65,11 +65,88 @@ export type ComfyUiInpaintRequest = {
   promptWrapper?: ComfyUiPromptWrapper;
   outputPrefix?: string;
   sourceImage?: ComfyUiViewImageReference;
+  imageWidth?: number;
+  imageHeight?: number;
   imageName?: string;
   maskDataUrl?: string;
   maskName?: string;
   inpaintMode?: ComfyUiInpaintMode;
   growMaskBy?: number;
+  faceDetailer?: ComfyUiFaceDetailerConfig;
+  handDetailer?: ComfyUiHandDetailerConfig;
+  upscaleBeforeInpaint?: ComfyUiInpaintUpscaleConfig;
+};
+
+export type ComfyUiInpaintUpscaleMode = "lanczos" | "real-esrgan-x2" | "aniscale2-x2";
+export type ComfyUiInpaintUpscaleStrategy = "full-image" | "local-region";
+export type ComfyUiInpaintLocalRegionSource = "mask-bounds" | "box";
+
+export type ComfyUiInpaintLocalRegionConfig = {
+  x?: number;
+  y?: number;
+  width?: number;
+  height?: number;
+  source?: ComfyUiInpaintLocalRegionSource;
+  padding?: number;
+  feather?: number;
+  harmonizeAfter?: {
+    enabled?: boolean;
+    denoise?: number;
+  };
+};
+
+export type ResolvedComfyUiInpaintLocalRegionConfig = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  source: ComfyUiInpaintLocalRegionSource;
+  padding: number;
+  feather: number;
+  harmonizeAfter: {
+    enabled: boolean;
+    denoise: number;
+  };
+};
+
+export type ComfyUiInpaintUpscaleConfig = {
+  enabled?: boolean;
+  mode?: ComfyUiInpaintUpscaleMode;
+  scaleBy?: number;
+  modelName?: string;
+  strategy?: ComfyUiInpaintUpscaleStrategy;
+  localRegion?: ComfyUiInpaintLocalRegionConfig;
+};
+
+export type ComfyUiSam2Device = "cuda" | "cpu" | "mps";
+
+export type ComfyUiSam2Precision = "fp16" | "bf16" | "fp32";
+
+export type ComfyUiSam2Point = {
+  x: number;
+  y: number;
+};
+
+export type ComfyUiSam2Bbox = {
+  height: number;
+  width: number;
+  x: number;
+  y: number;
+};
+
+export type ComfyUiSam2MaskRequest = {
+  sourceImage?: ComfyUiViewImageReference;
+  imageName?: string;
+  imageWidth: number;
+  imageHeight: number;
+  positivePoints?: ComfyUiSam2Point[];
+  negativePoints?: ComfyUiSam2Point[];
+  bbox?: ComfyUiSam2Bbox;
+  model?: string;
+  device?: ComfyUiSam2Device;
+  precision?: ComfyUiSam2Precision;
+  keepModelLoaded?: boolean;
+  outputPrefix?: string;
 };
 
 export type ComfyUiPromptWrapper = {
@@ -181,11 +258,40 @@ export type ResolvedComfyUiInpaintRequest = {
   promptWrapper: ResolvedComfyUiPromptWrapper;
   outputPrefix: string;
   sourceImage?: ComfyUiViewImageReference;
+  imageWidth?: number;
+  imageHeight?: number;
   imageName: string;
   maskDataUrl: string;
   maskName: string;
   inpaintMode: ComfyUiInpaintMode;
   growMaskBy: number;
+  faceDetailer: ResolvedComfyUiFaceDetailerConfig;
+  handDetailer: ResolvedComfyUiHandDetailerConfig;
+  upscaleBeforeInpaint: ResolvedComfyUiInpaintUpscaleConfig;
+};
+
+export type ResolvedComfyUiInpaintUpscaleConfig = {
+  enabled: boolean;
+  mode: ComfyUiInpaintUpscaleMode;
+  scaleBy: number;
+  modelName: string;
+  strategy: ComfyUiInpaintUpscaleStrategy;
+  localRegion?: ResolvedComfyUiInpaintLocalRegionConfig;
+};
+
+export type ResolvedComfyUiSam2MaskRequest = {
+  sourceImage?: ComfyUiViewImageReference;
+  imageName: string;
+  imageWidth: number;
+  imageHeight: number;
+  positivePoints: ComfyUiSam2Point[];
+  negativePoints: ComfyUiSam2Point[];
+  bbox?: ComfyUiSam2Bbox;
+  model: string;
+  device: ComfyUiSam2Device;
+  precision: ComfyUiSam2Precision;
+  keepModelLoaded: boolean;
+  outputPrefix: string;
 };
 
 export type ResolvedComfyUiPromptWrapper = {
@@ -280,11 +386,37 @@ export type BasicInpaintNodeIds = {
   negativePrompt: string;
   sourceImage: string;
   maskImage: string;
+  sourceImageScaleBy?: string;
+  maskToImage?: string;
+  maskImageScaleBy?: string;
+  imageToMask?: string;
+  upscaleModelLoader?: string;
+  imageUpscaleWithModel?: string;
+  sourceImageCrop?: string;
+  maskCrop?: string;
+  compositeMaskFeather?: string;
   vaeEncode?: string;
   vaeEncodeForInpaint?: string;
   setLatentNoiseMask?: string;
   sampler: string;
   vaeDecode: string;
+  localPatchScale?: string;
+  localComposite?: string;
+  harmonizeVaeEncode?: string;
+  harmonizeSampler?: string;
+  harmonizeVaeDecode?: string;
+  handUltralyticsDetectorProvider?: string;
+  handDetailer?: string;
+  ultralyticsDetectorProvider?: string;
+  faceDetailer?: string;
+  saveImage: string;
+};
+
+export type BasicSam2MaskNodeIds = {
+  sourceImage: string;
+  sam2Model: string;
+  sam2Segmentation: string;
+  maskToImage: string;
   saveImage: string;
 };
 
@@ -302,6 +434,13 @@ export type BasicInpaintWorkflow = {
   request: ResolvedComfyUiInpaintRequest;
 };
 
+export type BasicSam2MaskWorkflow = {
+  workflow: ComfyUiWorkflow;
+  nodeIds: BasicSam2MaskNodeIds;
+  outputNodeId: string;
+  request: ResolvedComfyUiSam2MaskRequest;
+};
+
 export type ComfyUiQueuePromptOptions = {
   clientId?: string;
   extraData?: Record<string, unknown>;
@@ -317,6 +456,8 @@ export type ComfyUiQueuePromptResponse = {
 export type ComfyUiGenerateImageResponse = ComfyUiQueuePromptResponse & BasicTextToImageWorkflow;
 
 export type ComfyUiGenerateInpaintResponse = ComfyUiQueuePromptResponse & BasicInpaintWorkflow;
+
+export type ComfyUiGenerateSam2MaskResponse = ComfyUiQueuePromptResponse & BasicSam2MaskWorkflow;
 
 export type ComfyUiViewImageReference = {
   filename: string;

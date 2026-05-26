@@ -3,12 +3,23 @@ import type {
   ComfyUiControlNetType,
   ComfyUiControlNetUnitConfig,
   ComfyUiFaceDetailerConfig,
+  ComfyUiInpaintLocalRegionConfig,
+  ComfyUiInpaintLocalRegionSource,
   ComfyUiInpaintRequest,
+  ComfyUiInpaintUpscaleConfig,
+  ComfyUiInpaintUpscaleMode,
+  ComfyUiInpaintUpscaleStrategy,
   ComfyUiLoraInput,
+  ComfyUiSam2Bbox,
+  ComfyUiSam2Device,
+  ComfyUiSam2MaskRequest,
+  ComfyUiSam2Point,
+  ComfyUiSam2Precision,
   ComfyUiTextToImageRequest,
   ResolvedComfyUiControlNetUnitConfig,
   ResolvedComfyUiFaceDetailerConfig,
   ResolvedComfyUiInpaintRequest,
+  ResolvedComfyUiSam2MaskRequest,
   ResolvedComfyUiTextToImageRequest,
 } from "./types";
 import {
@@ -26,8 +37,38 @@ import {
   DEFAULT_COMFYUI_INPAINT_DENOISE,
   DEFAULT_COMFYUI_INPAINT_GROW_MASK_BY,
   DEFAULT_COMFYUI_INPAINT_MODE,
+  normalizeComfyUiInpaintDenoiseForMode,
   normalizeComfyUiInpaintMode,
 } from "./inpaint";
+
+export const COMFYUI_INPAINT_UPSCALE_MODEL_PRESETS = {
+  "real-esrgan-x2": {
+    label: "RealESRGAN x2",
+    modelName: "RealESRGAN_x2plus.pth",
+  },
+  "aniscale2-x2": {
+    label: "AniScale2 x2",
+    modelName: "2x_AniScale2_ESRGAN_i16_110K.pth",
+  },
+} as const satisfies Partial<Record<ComfyUiInpaintUpscaleMode, { label: string; modelName: string }>>;
+
+export type ComfyUiInpaintUpscaleModelPresetMode = keyof typeof COMFYUI_INPAINT_UPSCALE_MODEL_PRESETS;
+
+export const DEFAULT_COMFYUI_INPAINT_UPSCALE_MODEL_MODE: ComfyUiInpaintUpscaleModelPresetMode = "real-esrgan-x2";
+export const DEFAULT_COMFYUI_INPAINT_UPSCALE_MODEL_NAME =
+  COMFYUI_INPAINT_UPSCALE_MODEL_PRESETS[DEFAULT_COMFYUI_INPAINT_UPSCALE_MODEL_MODE].modelName;
+
+export function isComfyUiInpaintModelUpscaleMode(
+  mode: ComfyUiInpaintUpscaleMode,
+): mode is ComfyUiInpaintUpscaleModelPresetMode {
+  return mode in COMFYUI_INPAINT_UPSCALE_MODEL_PRESETS;
+}
+
+export function getComfyUiInpaintUpscaleModelName(mode: ComfyUiInpaintUpscaleMode) {
+  return isComfyUiInpaintModelUpscaleMode(mode)
+    ? COMFYUI_INPAINT_UPSCALE_MODEL_PRESETS[mode].modelName
+    : DEFAULT_COMFYUI_INPAINT_UPSCALE_MODEL_NAME;
+}
 
 const DEFAULT_TEXT_TO_IMAGE_REQUEST = {
   negativePrompt: "",
@@ -94,13 +135,50 @@ const DEFAULT_INPAINT_REQUEST = {
   maskName: "",
   inpaintMode: DEFAULT_COMFYUI_INPAINT_MODE,
   growMaskBy: DEFAULT_COMFYUI_INPAINT_GROW_MASK_BY,
+  faceDetailer: {
+    ...COMFYUI_FACE_DETAILER_DEFAULTS,
+    cfg: 7,
+    enabled: false,
+    detectorModelName: DEFAULT_COMFYUI_FACE_DETAILER_DETECTOR_MODEL,
+    samplerName: "euler",
+    scheduler: "normal",
+    steps: 30,
+  },
+  handDetailer: {
+    ...COMFYUI_FACE_DETAILER_DEFAULTS,
+    cfg: 7,
+    enabled: false,
+    detectorModelName: DEFAULT_COMFYUI_HAND_DETAILER_DETECTOR_MODEL,
+    samplerName: "euler",
+    scheduler: "normal",
+    steps: 30,
+  },
+  upscaleBeforeInpaint: {
+    enabled: false,
+    mode: "lanczos",
+    scaleBy: 2,
+    modelName: DEFAULT_COMFYUI_INPAINT_UPSCALE_MODEL_NAME,
+    strategy: "full-image",
+  },
 } satisfies Omit<ResolvedComfyUiInpaintRequest, "checkpointName" | "positivePrompt" | "seed">;
+const DEFAULT_SAM2_MASK_REQUEST = {
+  model: "sam2.1_hiera_small.safetensors",
+  device: "cuda",
+  precision: "fp16",
+  keepModelLoaded: true,
+  outputPrefix: "SceneForge_sam_mask",
+} satisfies Pick<ResolvedComfyUiSam2MaskRequest, "device" | "keepModelLoaded" | "model" | "outputPrefix" | "precision">;
 const RANDOM_SEED_UPPER_BOUND = 2 ** 50;
 const RANDOM_SEED_RANGE = RANDOM_SEED_UPPER_BOUND + 1;
 const MAX_CONTROLNET_SVG_LENGTH = 2_000_000;
 const MAX_CONTROLNET_IMAGE_DATA_URL_LENGTH = 12_000_000;
 const MAX_INPAINT_MASK_DATA_URL_LENGTH = 24_000_000;
 const CONTROLNET_TYPES = ["openpose", "depth", "normal"] as const satisfies readonly ComfyUiControlNetType[];
+const INPAINT_UPSCALE_MODES = ["lanczos", "real-esrgan-x2", "aniscale2-x2"] as const satisfies readonly ComfyUiInpaintUpscaleMode[];
+const INPAINT_UPSCALE_STRATEGIES = ["full-image", "local-region"] as const satisfies readonly ComfyUiInpaintUpscaleStrategy[];
+const INPAINT_LOCAL_REGION_SOURCES = ["mask-bounds", "box"] as const satisfies readonly ComfyUiInpaintLocalRegionSource[];
+const SAM2_DEVICES = ["cuda", "cpu", "mps"] as const satisfies readonly ComfyUiSam2Device[];
+const SAM2_PRECISIONS = ["fp16", "bf16", "fp32"] as const satisfies readonly ComfyUiSam2Precision[];
 
 export type ComfyUiTextToImageValidationResult =
   | {
@@ -117,6 +195,17 @@ export type ComfyUiInpaintValidationResult =
   | {
       ok: true;
       request: ComfyUiInpaintRequest;
+    }
+  | {
+      ok: false;
+      message: string;
+      details?: unknown;
+    };
+
+export type ComfyUiSam2MaskValidationResult =
+  | {
+      ok: true;
+      request: ComfyUiSam2MaskRequest;
     }
   | {
       ok: false;
@@ -242,6 +331,18 @@ function isControlNetType(value: unknown): value is ComfyUiControlNetType {
   return typeof value === "string" && CONTROLNET_TYPES.some((type) => type === value);
 }
 
+function isInpaintUpscaleMode(value: unknown): value is ComfyUiInpaintUpscaleMode {
+  return typeof value === "string" && INPAINT_UPSCALE_MODES.some((mode) => mode === value);
+}
+
+function isInpaintUpscaleStrategy(value: unknown): value is ComfyUiInpaintUpscaleStrategy {
+  return typeof value === "string" && INPAINT_UPSCALE_STRATEGIES.some((strategy) => strategy === value);
+}
+
+function isInpaintLocalRegionSource(value: unknown): value is ComfyUiInpaintLocalRegionSource {
+  return typeof value === "string" && INPAINT_LOCAL_REGION_SOURCES.some((source) => source === value);
+}
+
 function isPngDataUrl(value: string) {
   return /^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(value.trim());
 }
@@ -266,6 +367,191 @@ function normalizeImageReference(value: unknown) {
     filename: value.filename.trim(),
     ...(typeof value.subfolder === "string" ? { subfolder: value.subfolder } : {}),
     ...(typeof value.type === "string" ? { type: value.type } : {}),
+  };
+}
+
+function normalizeInpaintLocalRegionConfig(value: unknown): ComfyUiInpaintLocalRegionConfig | null | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  if (
+    !isOptionalIntegerInRange(value.x, 0, 16_384) ||
+    !isOptionalIntegerInRange(value.y, 0, 16_384) ||
+    !isOptionalIntegerInRange(value.width, 1, 16_384) ||
+    !isOptionalIntegerInRange(value.height, 1, 16_384) ||
+    !isOptionalIntegerInRange(value.padding, 0, 2048) ||
+    !isOptionalIntegerInRange(value.feather, 0, 1024) ||
+    (value.source !== undefined && !isInpaintLocalRegionSource(value.source))
+  ) {
+    return null;
+  }
+
+  const harmonizeAfter = value.harmonizeAfter;
+  if (
+    harmonizeAfter !== undefined &&
+    (
+      !isRecord(harmonizeAfter) ||
+      !isOptionalBoolean(harmonizeAfter.enabled) ||
+      !isOptionalNumberInRange(harmonizeAfter.denoise, 0, 1)
+    )
+  ) {
+    return null;
+  }
+
+  return {
+    ...(typeof value.x === "number" ? { x: value.x } : {}),
+    ...(typeof value.y === "number" ? { y: value.y } : {}),
+    ...(typeof value.width === "number" ? { width: value.width } : {}),
+    ...(typeof value.height === "number" ? { height: value.height } : {}),
+    ...(typeof value.source === "string" ? { source: value.source } : {}),
+    ...(typeof value.padding === "number" ? { padding: value.padding } : {}),
+    ...(typeof value.feather === "number" ? { feather: value.feather } : {}),
+    ...(isRecord(harmonizeAfter)
+      ? {
+          harmonizeAfter: {
+            ...(typeof harmonizeAfter.enabled === "boolean" ? { enabled: harmonizeAfter.enabled } : {}),
+            ...(typeof harmonizeAfter.denoise === "number" ? { denoise: harmonizeAfter.denoise } : {}),
+          },
+        }
+      : {}),
+  };
+}
+
+function normalizeInpaintUpscaleConfig(value: unknown): ComfyUiInpaintUpscaleConfig | null | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  if (!isOptionalBoolean(value.enabled)) {
+    return null;
+  }
+
+  if (value.mode !== undefined && !isInpaintUpscaleMode(value.mode)) {
+    return null;
+  }
+
+  if (value.scaleBy !== undefined && value.scaleBy !== 2) {
+    return null;
+  }
+
+  if (!isOptionalString(value.modelName)) {
+    return null;
+  }
+
+  if (value.strategy !== undefined && !isInpaintUpscaleStrategy(value.strategy)) {
+    return null;
+  }
+
+  const localRegion = normalizeInpaintLocalRegionConfig(value.localRegion);
+  if (localRegion === null) {
+    return null;
+  }
+
+  return {
+    ...(value.enabled !== undefined ? { enabled: value.enabled } : {}),
+    ...(value.mode !== undefined ? { mode: value.mode } : {}),
+    ...(value.scaleBy !== undefined ? { scaleBy: value.scaleBy } : {}),
+    ...(typeof value.modelName === "string" ? { modelName: value.modelName.trim() } : {}),
+    ...(typeof value.strategy === "string" ? { strategy: value.strategy } : {}),
+    ...(localRegion !== undefined ? { localRegion } : {}),
+  };
+}
+
+function isSam2Device(value: unknown): value is ComfyUiSam2Device {
+  return typeof value === "string" && SAM2_DEVICES.some((device) => device === value);
+}
+
+function isSam2Precision(value: unknown): value is ComfyUiSam2Precision {
+  return typeof value === "string" && SAM2_PRECISIONS.some((precision) => precision === value);
+}
+
+function clampNumber(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function normalizeSam2Point(value: unknown, imageWidth: number, imageHeight: number): ComfyUiSam2Point | null {
+  if (!isRecord(value) || typeof value.x !== "number" || typeof value.y !== "number") {
+    return null;
+  }
+
+  if (!Number.isFinite(value.x) || !Number.isFinite(value.y)) {
+    return null;
+  }
+
+  return {
+    x: Math.round(clampNumber(value.x, 0, imageWidth - 1)),
+    y: Math.round(clampNumber(value.y, 0, imageHeight - 1)),
+  };
+}
+
+function normalizeSam2Points(value: unknown, imageWidth: number, imageHeight: number): ComfyUiSam2Point[] | null {
+  if (value === undefined) {
+    return [];
+  }
+
+  if (!Array.isArray(value)) {
+    return null;
+  }
+
+  const points: ComfyUiSam2Point[] = [];
+  for (const point of value) {
+    const normalized = normalizeSam2Point(point, imageWidth, imageHeight);
+    if (!normalized) {
+      return null;
+    }
+
+    points.push(normalized);
+  }
+
+  return points;
+}
+
+function normalizeSam2Bbox(value: unknown, imageWidth: number, imageHeight: number): ComfyUiSam2Bbox | null | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (
+    !isRecord(value) ||
+    typeof value.x !== "number" ||
+    typeof value.y !== "number" ||
+    typeof value.width !== "number" ||
+    typeof value.height !== "number" ||
+    !Number.isFinite(value.x) ||
+    !Number.isFinite(value.y) ||
+    !Number.isFinite(value.width) ||
+    !Number.isFinite(value.height)
+  ) {
+    return null;
+  }
+
+  const rawX0 = Math.min(value.x, value.x + value.width);
+  const rawY0 = Math.min(value.y, value.y + value.height);
+  const rawX1 = Math.max(value.x, value.x + value.width);
+  const rawY1 = Math.max(value.y, value.y + value.height);
+  const x0 = Math.round(clampNumber(rawX0, 0, imageWidth));
+  const y0 = Math.round(clampNumber(rawY0, 0, imageHeight));
+  const x1 = Math.round(clampNumber(rawX1, 0, imageWidth));
+  const y1 = Math.round(clampNumber(rawY1, 0, imageHeight));
+
+  if (x1 <= x0 || y1 <= y0) {
+    return null;
+  }
+
+  return {
+    x: x0,
+    y: y0,
+    width: x1 - x0,
+    height: y1 - y0,
   };
 }
 
@@ -813,6 +1099,13 @@ export function validateComfyUiInpaintRequest(value: unknown): ComfyUiInpaintVal
     };
   }
 
+  if (!isOptionalPositiveInteger(value.imageWidth) || !isOptionalPositiveInteger(value.imageHeight)) {
+    return {
+      ok: false,
+      message: "imageWidth and imageHeight must be positive integers when provided.",
+    };
+  }
+
   if (value.maskName !== undefined && !isOptionalString(value.maskName)) {
     return {
       ok: false,
@@ -825,6 +1118,37 @@ export function validateComfyUiInpaintRequest(value: unknown): ComfyUiInpaintVal
     return {
       ok: false,
       message: "promptWrapper must include string positivePrefix and negativePrefix values when provided.",
+    };
+  }
+
+  const faceDetailer = normalizeFaceDetailerConfig(value.faceDetailer);
+  if (faceDetailer === null) {
+    return {
+      ok: false,
+      message: "faceDetailer must be a boolean or an object with valid FaceDetailer option values when provided.",
+    };
+  }
+
+  const handDetailer = normalizeFaceDetailerConfig(value.handDetailer);
+  if (handDetailer === null) {
+    return {
+      ok: false,
+      message: "handDetailer must be a boolean or an object with valid HandDetailer option values when provided.",
+    };
+  }
+
+  const upscaleBeforeInpaint = normalizeInpaintUpscaleConfig(value.upscaleBeforeInpaint);
+  if (upscaleBeforeInpaint === null) {
+    return {
+      ok: false,
+      message: "upscaleBeforeInpaint must be an object with enabled, mode, scaleBy, strategy, modelName, and localRegion values when provided.",
+    };
+  }
+
+  if (upscaleBeforeInpaint?.enabled === true && upscaleBeforeInpaint.strategy === "local-region" && !upscaleBeforeInpaint.localRegion) {
+    return {
+      ok: false,
+      message: "localRegion is required when high-res inpaint strategy is local-region.",
     };
   }
 
@@ -929,11 +1253,147 @@ export function validateComfyUiInpaintRequest(value: unknown): ComfyUiInpaintVal
       promptWrapper,
       outputPrefix: value.outputPrefix?.trim(),
       sourceImage,
+      imageWidth: getOptionalNumber(value.imageWidth),
+      imageHeight: getOptionalNumber(value.imageHeight),
       imageName: value.imageName?.trim(),
       maskDataUrl: typeof value.maskDataUrl === "string" ? value.maskDataUrl.trim() : undefined,
       maskName: value.maskName?.trim(),
       inpaintMode: normalizeComfyUiInpaintMode(value.inpaintMode),
       growMaskBy: getOptionalNumber(value.growMaskBy),
+      faceDetailer,
+      handDetailer,
+      upscaleBeforeInpaint,
+    },
+  };
+}
+
+export function validateComfyUiSam2MaskRequest(value: unknown): ComfyUiSam2MaskValidationResult {
+  if (!isRecord(value)) {
+    return {
+      ok: false,
+      message: "Request body must be an object.",
+    };
+  }
+
+  const sourceImage = normalizeImageReference(value.sourceImage);
+  if (sourceImage === null) {
+    return {
+      ok: false,
+      message: "sourceImage must include a ComfyUI filename and optional subfolder/type values.",
+    };
+  }
+
+  if (!isOptionalString(value.imageName)) {
+    return {
+      ok: false,
+      message: "imageName must be a non-empty string when provided.",
+    };
+  }
+
+  if (
+    typeof value.imageWidth !== "number" ||
+    typeof value.imageHeight !== "number" ||
+    !Number.isInteger(value.imageWidth) ||
+    value.imageWidth <= 0 ||
+    !Number.isInteger(value.imageHeight) ||
+    value.imageHeight <= 0
+  ) {
+    return {
+      ok: false,
+      message: "imageWidth and imageHeight must be positive integers.",
+    };
+  }
+
+  const imageWidth = value.imageWidth;
+  const imageHeight = value.imageHeight;
+  const positivePoints = normalizeSam2Points(value.positivePoints, imageWidth, imageHeight);
+  if (!positivePoints) {
+    return {
+      ok: false,
+      message: "positivePoints must be an array of finite {x, y} coordinates when provided.",
+    };
+  }
+
+  const negativePoints = normalizeSam2Points(value.negativePoints, imageWidth, imageHeight);
+  if (!negativePoints) {
+    return {
+      ok: false,
+      message: "negativePoints must be an array of finite {x, y} coordinates when provided.",
+    };
+  }
+
+  const bbox = normalizeSam2Bbox(value.bbox, imageWidth, imageHeight);
+  if (bbox === null) {
+    return {
+      ok: false,
+      message: "bbox must describe a non-empty rectangle inside the image when provided.",
+    };
+  }
+
+  if (positivePoints.length === 0 && !bbox) {
+    return {
+      ok: false,
+      message: "Add at least one positive point or one box before generating a SAM mask.",
+    };
+  }
+
+  if (negativePoints.length > 0 && positivePoints.length === 0) {
+    return {
+      ok: false,
+      message: "negativePoints require at least one positive point.",
+    };
+  }
+
+  if (!isOptionalString(value.model)) {
+    return {
+      ok: false,
+      message: "model must be a non-empty string when provided.",
+    };
+  }
+
+  if (value.device !== undefined && !isSam2Device(value.device)) {
+    return {
+      ok: false,
+      message: "device must be cuda, cpu, or mps when provided.",
+    };
+  }
+
+  if (value.precision !== undefined && !isSam2Precision(value.precision)) {
+    return {
+      ok: false,
+      message: "precision must be fp16, bf16, or fp32 when provided.",
+    };
+  }
+
+  if (!isOptionalBoolean(value.keepModelLoaded)) {
+    return {
+      ok: false,
+      message: "keepModelLoaded must be a boolean when provided.",
+    };
+  }
+
+  if (!isOptionalString(value.outputPrefix)) {
+    return {
+      ok: false,
+      message: "outputPrefix must be a non-empty string when provided.",
+    };
+  }
+
+  return {
+    ok: true,
+    request: {
+      ...(sourceImage ? { sourceImage } : {}),
+      imageName: value.imageName?.trim(),
+      imageWidth,
+      imageHeight,
+      positivePoints,
+      negativePoints,
+      ...(bbox ? { bbox } : {}),
+      model: value.model?.trim(),
+      device: value.device,
+      precision: value.precision,
+      keepModelLoaded: value.keepModelLoaded,
+      outputPrefix: value.outputPrefix?.trim(),
     },
   };
 }
@@ -964,7 +1424,7 @@ function resolveControlNetUnits(request: ComfyUiTextToImageRequest): ResolvedCom
 
 function resolveDetailerConfig(
   detailer: ComfyUiFaceDetailerConfig | undefined,
-  request: Pick<ComfyUiTextToImageRequest, "cfg" | "samplerName" | "scheduler" | "steps">,
+  request: Pick<ComfyUiTextToImageRequest | ComfyUiInpaintRequest, "cfg" | "samplerName" | "scheduler" | "steps">,
   defaults: ResolvedComfyUiFaceDetailerConfig,
 ): ResolvedComfyUiFaceDetailerConfig {
   return {
@@ -993,6 +1453,39 @@ function resolveDetailerConfig(
     scheduler: getString(detailer?.scheduler, getString(request.scheduler, defaults.scheduler)),
     steps: detailer?.steps ?? request.steps ?? defaults.steps,
     wildcard: detailer?.wildcard ?? defaults.wildcard,
+  };
+}
+
+function resolveInpaintUpscaleConfig(upscale: ComfyUiInpaintUpscaleConfig | undefined) {
+  const mode = upscale?.mode ?? DEFAULT_INPAINT_REQUEST.upscaleBeforeInpaint.mode;
+  const strategy = upscale?.strategy ?? DEFAULT_INPAINT_REQUEST.upscaleBeforeInpaint.strategy;
+  const localRegion = upscale?.localRegion;
+
+  return {
+    enabled: upscale?.enabled ?? DEFAULT_INPAINT_REQUEST.upscaleBeforeInpaint.enabled,
+    mode,
+    scaleBy: upscale?.scaleBy ?? DEFAULT_INPAINT_REQUEST.upscaleBeforeInpaint.scaleBy,
+    modelName: isComfyUiInpaintModelUpscaleMode(mode)
+      ? getComfyUiInpaintUpscaleModelName(mode)
+      : DEFAULT_INPAINT_REQUEST.upscaleBeforeInpaint.modelName,
+    strategy,
+    ...(localRegion
+      ? {
+          localRegion: {
+            x: localRegion.x ?? 0,
+            y: localRegion.y ?? 0,
+            width: localRegion.width ?? 1,
+            height: localRegion.height ?? 1,
+            source: localRegion.source ?? "mask-bounds",
+            padding: localRegion.padding ?? 128,
+            feather: localRegion.feather ?? 32,
+            harmonizeAfter: {
+              enabled: localRegion.harmonizeAfter?.enabled ?? false,
+              denoise: localRegion.harmonizeAfter?.denoise ?? 0.12,
+            },
+          },
+        }
+      : {}),
   };
 }
 
@@ -1030,6 +1523,8 @@ export function resolveComfyUiTextToImageRequest(
 }
 
 export function resolveComfyUiInpaintRequest(request: ComfyUiInpaintRequest): ResolvedComfyUiInpaintRequest {
+  const inpaintMode = request.inpaintMode ?? DEFAULT_INPAINT_REQUEST.inpaintMode;
+
   return {
     checkpointName: request.checkpointName.trim(),
     positivePrompt: request.positivePrompt.trim(),
@@ -1044,17 +1539,42 @@ export function resolveComfyUiInpaintRequest(request: ComfyUiInpaintRequest): Re
     cfg: request.cfg ?? DEFAULT_INPAINT_REQUEST.cfg,
     samplerName: getString(request.samplerName, DEFAULT_INPAINT_REQUEST.samplerName),
     scheduler: getString(request.scheduler, DEFAULT_INPAINT_REQUEST.scheduler),
-    denoise: request.denoise ?? DEFAULT_INPAINT_REQUEST.denoise,
+    denoise: normalizeComfyUiInpaintDenoiseForMode(request.denoise ?? DEFAULT_INPAINT_REQUEST.denoise, inpaintMode),
     promptWrapper: {
       positivePrefix: request.promptWrapper?.positivePrefix ?? DEFAULT_INPAINT_REQUEST.promptWrapper.positivePrefix,
       negativePrefix: request.promptWrapper?.negativePrefix ?? DEFAULT_INPAINT_REQUEST.promptWrapper.negativePrefix,
     },
     outputPrefix: getString(request.outputPrefix, DEFAULT_INPAINT_REQUEST.outputPrefix),
     ...(request.sourceImage ? { sourceImage: request.sourceImage } : {}),
+    ...(request.imageWidth ? { imageWidth: request.imageWidth } : {}),
+    ...(request.imageHeight ? { imageHeight: request.imageHeight } : {}),
     imageName: getString(request.imageName, DEFAULT_INPAINT_REQUEST.imageName),
     maskDataUrl: request.maskDataUrl ?? DEFAULT_INPAINT_REQUEST.maskDataUrl,
     maskName: getString(request.maskName, DEFAULT_INPAINT_REQUEST.maskName),
-    inpaintMode: request.inpaintMode ?? DEFAULT_INPAINT_REQUEST.inpaintMode,
+    inpaintMode,
     growMaskBy: request.growMaskBy ?? DEFAULT_INPAINT_REQUEST.growMaskBy,
+    faceDetailer: resolveDetailerConfig(request.faceDetailer, request, DEFAULT_INPAINT_REQUEST.faceDetailer),
+    handDetailer: resolveDetailerConfig(request.handDetailer, request, DEFAULT_INPAINT_REQUEST.handDetailer),
+    upscaleBeforeInpaint: resolveInpaintUpscaleConfig(request.upscaleBeforeInpaint),
+  };
+}
+
+export function resolveComfyUiSam2MaskRequest(request: ComfyUiSam2MaskRequest): ResolvedComfyUiSam2MaskRequest {
+  const device = request.device ?? DEFAULT_SAM2_MASK_REQUEST.device;
+  const requestedPrecision = request.precision ?? DEFAULT_SAM2_MASK_REQUEST.precision;
+
+  return {
+    ...(request.sourceImage ? { sourceImage: request.sourceImage } : {}),
+    imageName: getString(request.imageName, ""),
+    imageWidth: request.imageWidth,
+    imageHeight: request.imageHeight,
+    positivePoints: request.positivePoints ?? [],
+    negativePoints: request.negativePoints ?? [],
+    ...(request.bbox ? { bbox: request.bbox } : {}),
+    model: getString(request.model, DEFAULT_SAM2_MASK_REQUEST.model),
+    device,
+    precision: device === "cpu" ? "fp32" : requestedPrecision,
+    keepModelLoaded: request.keepModelLoaded ?? DEFAULT_SAM2_MASK_REQUEST.keepModelLoaded,
+    outputPrefix: getString(request.outputPrefix, DEFAULT_SAM2_MASK_REQUEST.outputPrefix),
   };
 }

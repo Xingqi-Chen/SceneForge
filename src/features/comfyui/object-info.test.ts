@@ -68,8 +68,46 @@ const objectInfoWithInpaint = {
   LoadImageMask: {},
   SetLatentNoiseMask: {},
   VAEEncode: {},
+  VAEEncodeTiled: {},
   VAEEncodeForInpaint: {},
   VAEDecode: {},
+  VAEDecodeTiled: {},
+};
+
+const objectInfoWithHighResInpaint = {
+  ...objectInfoWithInpaint,
+  ImageScaleBy: {
+    input: {
+      required: {
+        upscale_method: [["nearest-exact", "lanczos"], {}],
+      },
+    },
+  },
+  MaskToImage: {},
+  ImageToMask: {},
+  ImageScale: {
+    input: {
+      required: {
+        upscale_method: [["lanczos"], {}],
+      },
+    },
+  },
+  UpscaleModelLoader: {
+    input: {
+      required: {
+        model_name: ["COMBO", { options: ["RealESRGAN_x2plus.pth", "2x_AniScale2_ESRGAN_i16_110K.pth"] }],
+      },
+    },
+  },
+  ImageUpscaleWithModel: {},
+};
+
+const objectInfoWithLocalRegionInpaint = {
+  ...objectInfoWithHighResInpaint,
+  ImageCrop: {},
+  CropMask: {},
+  FeatherMask: {},
+  ImageCompositeMasked: {},
 };
 
 describe("ComfyUI object info helpers", () => {
@@ -598,6 +636,38 @@ describe("ComfyUI object info helpers", () => {
     ).toContain("SetLatentNoiseMask node is not available in ComfyUI. It is required for latent noise mask inpaint mode.");
   });
 
+  it("validates and normalizes inpaint detailer settings before queueing", () => {
+    expect(
+      validateComfyUiInpaintRequestAgainstObjectInfo(
+        {
+          checkpointName: "model.safetensors",
+          positivePrompt: "replace the window",
+          sourceImage: { filename: "source.png", type: "output" },
+          maskName: "mask.png",
+          faceDetailer: {
+            enabled: true,
+          },
+          handDetailer: {
+            enabled: true,
+          },
+        },
+        objectInfoWithInpaint,
+      ),
+    ).toMatchObject({
+      errors: [],
+      request: {
+        faceDetailer: {
+          enabled: true,
+          detectorModelName: "bbox/face_yolov8s.pt",
+        },
+        handDetailer: {
+          enabled: true,
+          detectorModelName: "bbox/hand_yolov8s.pt",
+        },
+      },
+    });
+  });
+
   it("validates VAE inpaint nodes before queueing", () => {
     expect(
       validateComfyUiInpaintRequestAgainstObjectInfo(
@@ -626,7 +696,218 @@ describe("ComfyUI object info helpers", () => {
           VAEEncodeForInpaint: undefined,
         },
       ).errors,
-    ).toContain("VAEEncodeForInpaint node is not available in ComfyUI. It is required for VAE inpaint mode.");
+      ).toContain("VAEEncodeForInpaint node is not available in ComfyUI. It is required for VAE inpaint mode.");
+  });
+
+  it("validates high-res lanczos inpaint nodes before queueing", () => {
+    expect(
+      validateComfyUiInpaintRequestAgainstObjectInfo(
+        {
+          checkpointName: "model.safetensors",
+          positivePrompt: "replace the window",
+          sourceImage: { filename: "source.png", type: "output" },
+          maskName: "mask.png",
+          upscaleBeforeInpaint: {
+            enabled: true,
+            mode: "lanczos",
+            scaleBy: 2,
+          },
+        },
+        objectInfoWithHighResInpaint,
+      ),
+    ).toMatchObject({
+      errors: [],
+      request: {
+        upscaleBeforeInpaint: {
+          enabled: true,
+          mode: "lanczos",
+          scaleBy: 2,
+          modelName: "RealESRGAN_x2plus.pth",
+        },
+      },
+    });
+
+    expect(
+      validateComfyUiInpaintRequestAgainstObjectInfo(
+        {
+          checkpointName: "model.safetensors",
+          positivePrompt: "replace the window",
+          sourceImage: { filename: "source.png", type: "output" },
+          maskName: "mask.png",
+          upscaleBeforeInpaint: {
+            enabled: true,
+            mode: "lanczos",
+            scaleBy: 2,
+          },
+        },
+        objectInfoWithInpaint,
+      ).errors,
+    ).toEqual([
+      "ImageScaleBy node is not available in ComfyUI. It is required for high-res inpaint upscaling.",
+      "MaskToImage node is not available in ComfyUI. It is required to upscale high-res inpaint masks.",
+      "ImageToMask node is not available in ComfyUI. It is required to restore high-res inpaint masks.",
+    ]);
+  });
+
+  it("validates model-based 2x high-res inpaint before queueing", () => {
+    expect(
+      validateComfyUiInpaintRequestAgainstObjectInfo(
+        {
+          checkpointName: "model.safetensors",
+          positivePrompt: "replace the window",
+          sourceImage: { filename: "source.png", type: "output" },
+          maskName: "mask.png",
+          upscaleBeforeInpaint: {
+            enabled: true,
+            mode: "aniscale2-x2",
+            scaleBy: 2,
+          },
+        },
+        objectInfoWithHighResInpaint,
+      ),
+    ).toMatchObject({
+      errors: [],
+      request: {
+        upscaleBeforeInpaint: {
+          enabled: true,
+          mode: "aniscale2-x2",
+          scaleBy: 2,
+          modelName: "2x_AniScale2_ESRGAN_i16_110K.pth",
+        },
+      },
+    });
+
+    expect(
+      validateComfyUiInpaintRequestAgainstObjectInfo(
+        {
+          checkpointName: "model.safetensors",
+          positivePrompt: "replace the window",
+          sourceImage: { filename: "source.png", type: "output" },
+          maskName: "mask.png",
+          upscaleBeforeInpaint: {
+            enabled: true,
+            mode: "aniscale2-x2",
+            scaleBy: 2,
+          },
+        },
+        {
+          ...objectInfoWithHighResInpaint,
+          UpscaleModelLoader: {
+            input: {
+              required: {
+                model_name: ["COMBO", { options: ["other-upscale.safetensors"] }],
+              },
+            },
+          },
+        },
+      ).errors,
+    ).toContain("2x upscale model is not available in ComfyUI: 2x_AniScale2_ESRGAN_i16_110K.pth");
+  });
+
+  it("validates local-region high-res inpaint nodes and bounds", () => {
+    expect(
+      validateComfyUiInpaintRequestAgainstObjectInfo(
+        {
+          checkpointName: "model.safetensors",
+          positivePrompt: "replace the window",
+          sourceImage: { filename: "source.png", type: "output" },
+          imageWidth: 512,
+          imageHeight: 512,
+          maskName: "mask.png",
+          upscaleBeforeInpaint: {
+            enabled: true,
+            mode: "lanczos",
+            scaleBy: 2,
+            strategy: "local-region",
+            localRegion: {
+              x: 64,
+              y: 80,
+              width: 192,
+              height: 160,
+              source: "mask-bounds",
+              padding: 128,
+              feather: 32,
+            },
+          },
+        },
+        objectInfoWithLocalRegionInpaint,
+      ),
+    ).toMatchObject({
+      errors: [],
+      request: {
+        upscaleBeforeInpaint: {
+          enabled: true,
+          strategy: "local-region",
+          localRegion: {
+            x: 64,
+            y: 80,
+            width: 192,
+            height: 160,
+          },
+        },
+      },
+    });
+
+    expect(
+      validateComfyUiInpaintRequestAgainstObjectInfo(
+        {
+          checkpointName: "model.safetensors",
+          positivePrompt: "replace the window",
+          sourceImage: { filename: "source.png", type: "output" },
+          imageWidth: 512,
+          imageHeight: 512,
+          maskName: "mask.png",
+          upscaleBeforeInpaint: {
+            enabled: true,
+            mode: "lanczos",
+            scaleBy: 2,
+            strategy: "local-region",
+            localRegion: {
+              x: 480,
+              y: 80,
+              width: 64,
+              height: 160,
+              source: "mask-bounds",
+              padding: 128,
+              feather: 32,
+            },
+          },
+        },
+        objectInfoWithLocalRegionInpaint,
+      ).errors,
+    ).toContain("localRegion must stay inside the source image bounds.");
+
+    expect(
+      validateComfyUiInpaintRequestAgainstObjectInfo(
+        {
+          checkpointName: "model.safetensors",
+          positivePrompt: "replace the window",
+          sourceImage: { filename: "source.png", type: "output" },
+          maskName: "mask.png",
+          upscaleBeforeInpaint: {
+            enabled: true,
+            mode: "lanczos",
+            scaleBy: 2,
+            strategy: "local-region",
+            localRegion: {
+              x: 64,
+              y: 80,
+              width: 192,
+              height: 160,
+              source: "mask-bounds",
+              padding: 128,
+              feather: 32,
+            },
+          },
+        },
+        objectInfoWithHighResInpaint,
+      ).errors,
+    ).toEqual([
+      "ImageCrop node is not available in ComfyUI. It is required for local-region high-res inpaint.",
+      "CropMask node is not available in ComfyUI. It is required for local-region high-res inpaint masks.",
+      "FeatherMask node is not available in ComfyUI. It is required to blend local-region inpaint patches.",
+      "ImageCompositeMasked node is not available in ComfyUI. It is required to paste local-region inpaint patches.",
+    ]);
   });
 
   it("summarizes nested ComfyUI node errors", () => {
