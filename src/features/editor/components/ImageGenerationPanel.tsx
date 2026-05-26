@@ -9,6 +9,7 @@ import {
   Eraser,
   Image as ImageIcon,
   Loader2,
+  Maximize2,
   Minus,
   Paintbrush,
   Play,
@@ -19,6 +20,7 @@ import {
   Undo2,
   X,
 } from "lucide-react";
+import NextImage from "next/image";
 import { useEffect, useMemo, useRef, useState, type PointerEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 
@@ -1704,6 +1706,25 @@ function GeneratedImageResults({
   submitStatus: SubmitStatus;
   waitMessage: string;
 }) {
+  const [previewImageItem, setPreviewImageItem] = useState<GeneratedImageItem | null>(null);
+
+  useEffect(() => {
+    if (!previewImageItem) {
+      return;
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setPreviewImageItem(null);
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [previewImageItem]);
+
+  const previewImage = previewImageItem?.image ?? null;
+
   if (generatedImageItems.length > 0) {
     return (
       <div>
@@ -1732,34 +1753,91 @@ function GeneratedImageResults({
 
             if (imageClickMode === "open") {
               return (
-                <a
-                  className="group block overflow-hidden rounded-md border border-slate-200 bg-slate-50 text-left transition hover:border-sky-200"
-                  href={image.url}
-                  key={imageKey}
-                  rel="noreferrer"
-                  target="_blank"
-                  title={`打开原图：${image.filename}`}
-                >
-                  {imageContent}
-                </a>
+                <div className="relative" key={imageKey}>
+                  <a
+                    className="group block overflow-hidden rounded-md border border-slate-200 bg-slate-50 text-left transition hover:border-sky-200"
+                    href={image.url}
+                    rel="noreferrer"
+                    target="_blank"
+                    title={`打开原图：${image.filename}`}
+                  >
+                    {imageContent}
+                  </a>
+                  <button
+                    aria-label={`放大图片：${image.filename}`}
+                    className="absolute right-1.5 top-1.5 z-10 grid size-8 place-items-center rounded-md border border-white/70 bg-slate-950/70 text-white shadow-sm backdrop-blur transition hover:bg-slate-900 focus:outline-none focus:ring-2 focus:ring-sky-300"
+                    onClick={() => setPreviewImageItem(item)}
+                    title="放大图片"
+                    type="button"
+                  >
+                    <Maximize2 className="size-4" />
+                  </button>
+                </div>
               );
             }
 
             return (
-              <button
-                className={`group block overflow-hidden rounded-md border bg-slate-50 text-left transition ${
-                  selected ? "border-sky-400 ring-2 ring-sky-100" : "border-slate-200 hover:border-sky-200"
-                }`}
-                key={imageKey}
-                onClick={() => onSelectImage(imageKey)}
-                title={image.filename}
-                type="button"
-              >
-                {imageContent}
-              </button>
+              <div className="relative" key={imageKey}>
+                <button
+                  className={`group block w-full overflow-hidden rounded-md border bg-slate-50 text-left transition ${
+                    selected ? "border-sky-400 ring-2 ring-sky-100" : "border-slate-200 hover:border-sky-200"
+                  }`}
+                  onClick={() => onSelectImage(imageKey)}
+                  title={image.filename}
+                  type="button"
+                >
+                  {imageContent}
+                </button>
+                <button
+                  aria-label={`放大图片：${image.filename}`}
+                  className="absolute right-1.5 top-1.5 z-10 grid size-8 place-items-center rounded-md border border-white/70 bg-slate-950/70 text-white shadow-sm backdrop-blur transition hover:bg-slate-900 focus:outline-none focus:ring-2 focus:ring-sky-300"
+                  onClick={() => setPreviewImageItem(item)}
+                  title="放大图片"
+                  type="button"
+                >
+                  <Maximize2 className="size-4" />
+                </button>
+              </div>
             );
           })}
         </div>
+        {previewImage && typeof document !== "undefined"
+          ? createPortal(
+              <div
+                aria-modal="true"
+                className="fixed inset-0 z-[80] flex flex-col bg-slate-950/95 p-3 text-white sm:p-5"
+                onClick={() => setPreviewImageItem(null)}
+                role="dialog"
+              >
+                <div className="mb-3 flex min-h-10 items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-semibold">{previewImage.filename}</p>
+                    <p className="mt-0.5 text-[11px] text-slate-300">seed {previewImageItem?.seed}</p>
+                  </div>
+                  <button
+                    aria-label="关闭放大预览"
+                    className="grid size-9 shrink-0 place-items-center rounded-md border border-white/20 bg-white/10 text-white transition hover:bg-white/20 focus:outline-none focus:ring-2 focus:ring-sky-300"
+                    onClick={() => setPreviewImageItem(null)}
+                    title="关闭"
+                    type="button"
+                  >
+                    <X className="size-5" />
+                  </button>
+                </div>
+                <div className="relative flex min-h-0 flex-1 items-center justify-center" onClick={(event) => event.stopPropagation()}>
+                  <NextImage
+                    alt={`ComfyUI generated image preview: ${previewImage.filename}`}
+                    className="object-contain"
+                    fill
+                    sizes="100vw"
+                    src={previewImage.url}
+                    unoptimized
+                  />
+                </div>
+              </div>,
+              document.body,
+            )
+          : null}
       </div>
     );
   }
