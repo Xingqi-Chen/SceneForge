@@ -26,10 +26,11 @@ Configure the LiteLLM proxy with server-only environment variables:
 LITELLM_BASE_URL=http://localhost:4000
 LITELLM_API_KEY=your-litellm-proxy-key
 LITELLM_DEFAULT_MODEL=your-model-name
+LITELLM_NSFW_MODEL=optional-nsfw-reverse-model
 LITELLM_CIVITAI_RECOMMENDATION_MODEL=optional-civitai-recommendation-model
 ```
 
-The endpoint accepts `model`, `messages`, `temperature`, and `maxTokens`, then forwards the request to LiteLLM's OpenAI-compatible `/v1/chat/completions` API.
+The endpoint accepts `model`, `messages`, `temperature`, `maxTokens`, and optional `nsfw`. When a project has NSFW enabled, reverse prompt/pose operations use `LITELLM_NSFW_MODEL` by default if it is configured, then forward the request to LiteLLM's OpenAI-compatible `/v1/chat/completions` API.
 
 You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
 

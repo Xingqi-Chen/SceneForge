@@ -1158,6 +1158,7 @@ function sanitizeSettings(settings: unknown): SceneForgeProject["settings"] {
     return {
       modelFormat: "generic",
       includeSpatialHints: true,
+      supportsNsfw: false,
       negativePrompt: "",
       selectedCivitaiCheckpointId: null,
       selectedCivitaiLoraIds: [],
@@ -1207,6 +1208,7 @@ function sanitizeSettings(settings: unknown): SceneForgeProject["settings"] {
   return {
     modelFormat: mf,
     includeSpatialHints: typeof settings.includeSpatialHints === "boolean" ? settings.includeSpatialHints : true,
+    supportsNsfw: typeof settings.supportsNsfw === "boolean" ? settings.supportsNsfw : false,
     negativePrompt: typeof settings.negativePrompt === "string" ? settings.negativePrompt : "",
     selectedCivitaiCheckpointId:
       typeof settings.selectedCivitaiCheckpointId === "string" && settings.selectedCivitaiCheckpointId.trim()
@@ -1264,6 +1266,7 @@ export function sanitizeGlobalPromptLibraryPayload(payload: unknown): GlobalProm
       ? {
           modelFormat: "generic",
           includeSpatialHints: true,
+          supportsNsfw: false,
           negativePrompt: "",
           promptLibraryTags: payload.promptLibraryTags,
           deletedBuiltInPromptLibraryTagIds: payload.deletedBuiltInPromptLibraryTagIds,
@@ -1579,6 +1582,7 @@ export function importPromptLibraryBundleFromJson(
   const coerced = sanitizeSettings({
     modelFormat: "generic",
     includeSpatialHints: true,
+    supportsNsfw: false,
     negativePrompt: "",
     promptLibraryTags: parsed.promptLibraryTags,
     deletedBuiltInPromptLibraryTagIds: parsed.deletedBuiltInPromptLibraryTagIds,

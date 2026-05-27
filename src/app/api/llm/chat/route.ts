@@ -30,9 +30,19 @@ function errorResponse(message: string, status: number, details?: unknown) {
   );
 }
 
-function resolveDefaultModel(payload: LlmChatRequest) {
+const NSFW_REVERSE_PURPOSES = new Set<LlmChatRequest["purpose"]>([
+  "scene-prompt-reverse",
+  "prompt-tag-reverse",
+  "stick-figure-pose-generation",
+]);
+
+function resolvePurposeDefaultModel(payload: LlmChatRequest) {
   if (payload.purpose === "prompt-library-classification") {
     return process.env.LITELLM_CLASSIFICATION_MODEL || process.env.LITELLM_DEFAULT_MODEL;
+  }
+
+  if (payload.purpose === "scene-prompt-reverse" || payload.purpose === "prompt-tag-reverse") {
+    return process.env.LITELLM_DEFAULT_MODEL;
   }
 
   if (payload.purpose === "stick-figure-pose-generation") {
@@ -60,6 +70,14 @@ function resolveDefaultModel(payload: LlmChatRequest) {
   }
 
   return process.env.LITELLM_DEFAULT_MODEL;
+}
+
+export function resolveDefaultModel(payload: LlmChatRequest) {
+  if (payload.nsfw === true && NSFW_REVERSE_PURPOSES.has(payload.purpose)) {
+    return process.env.LITELLM_NSFW_MODEL || resolvePurposeDefaultModel(payload);
+  }
+
+  return resolvePurposeDefaultModel(payload);
 }
 
 export async function POST(request: Request) {
@@ -90,6 +108,7 @@ export async function POST(request: Request) {
     route: "/api/llm/chat",
     payload: {
       purpose: resolvedRequest.purpose,
+      nsfw: resolvedRequest.nsfw,
       model: resolvedRequest.model,
       temperature: resolvedRequest.temperature,
       maxTokens: resolvedRequest.maxTokens,

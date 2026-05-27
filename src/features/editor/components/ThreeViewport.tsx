@@ -37,6 +37,7 @@ import type { BodyPartId, CharacterSkeleton, SceneObject, SceneObject3DTransform
 import { characterAppearsInThreeViewport } from "@/shared/utils/character-space";
 
 import type { CanvasCapture } from "./CanvasStage";
+import { useTabletEditorLayout } from "./useTabletEditorLayout";
 
 const DEG2RAD = Math.PI / 180;
 const canvasGlProps = { preserveDrawingBuffer: true };
@@ -469,6 +470,7 @@ function SceneObjectMesh({
 }
 
 function TransformableSceneObject({
+  gizmoSize,
   mode,
   object,
   onCloseContextMenu,
@@ -478,6 +480,7 @@ function TransformableSceneObject({
   selected,
   shouldIgnoreSelectionPointerEvent,
 }: {
+  gizmoSize: number;
   mode: TransformMode;
   object: SceneObject;
   onCloseContextMenu?: () => void;
@@ -533,7 +536,7 @@ function TransformableSceneObject({
         object={controlObject ?? undefined}
         onMouseUp={() => onTransformEnd(object, groupRef.current)}
         ref={setTransformControlsRef}
-        size={0.82}
+        size={gizmoSize}
         space="world"
       />
     </>
@@ -542,6 +545,7 @@ function TransformableSceneObject({
 
 function TransformableCharacterMannequin({
   character,
+  gizmoSize,
   mode,
   onCloseContextMenu,
   onOpenContextMenu,
@@ -554,6 +558,7 @@ function TransformableCharacterMannequin({
   transformGizmoEnabled,
 }: {
   character: CharacterSkeleton;
+  gizmoSize: number;
   mode: TransformMode;
   onCloseContextMenu?: () => void;
   onOpenContextMenu?: (clientX: number, clientY: number) => void;
@@ -627,7 +632,7 @@ function TransformableCharacterMannequin({
         object={controlObject ?? undefined}
         onMouseUp={() => onTransformEnd(character, groupRef.current)}
         ref={setTransformControlsRef}
-        size={0.82}
+        size={gizmoSize}
         space="world"
       />
     </>
@@ -769,7 +774,7 @@ function Css3DViewport({
 
   return (
     <div
-      className="relative h-full w-full overflow-hidden bg-slate-950"
+      className="touch-pan-surface relative h-full w-full overflow-hidden bg-slate-950"
       onMouseDown={(event) => {
         if (objectContextMenu) {
           closeObjectContextMenu();
@@ -1021,6 +1026,7 @@ function ThreeViewportWeb({
   onCaptureReady,
   onWebGLError,
 }: ThreeViewportProps & { onWebGLError: () => void }) {
+  const isTabletEditor = useTabletEditorLayout();
   const three = useEditorStore((state) => state.project.scene.three);
   const sceneObjects = useEditorStore((state) => state.project.scene.objects);
   const sceneCharacters = useEditorStore((state) => state.project.scene.characters);
@@ -1049,14 +1055,17 @@ function ThreeViewportWeb({
   const [mannequinGizmoEnabled, setMannequinGizmoEnabled] = useState(false);
   const [objectContextMenu, setObjectContextMenu] = useState<{ x: number; y: number } | null>(null);
   const [viewportHintsExpanded, setViewportHintsExpanded] = useState(true);
+  const gizmoSize = isTabletEditor ? 1.08 : 0.82;
 
   /* eslint-disable react-hooks/set-state-in-effect -- one-time hydrate from localStorage (see VIEWPORT_HINTS_EXPANDED_KEY) */
   useLayoutEffect(() => {
     const stored = readStoredViewportHintsExpanded();
     if (stored !== null) {
       setViewportHintsExpanded(stored);
+    } else if (isTabletEditor) {
+      setViewportHintsExpanded(false);
     }
-  }, []);
+  }, [isTabletEditor]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
   const persistViewportHintsExpanded = useCallback((expanded: boolean) => {
@@ -1247,16 +1256,18 @@ function ThreeViewportWeb({
   }
 
   return (
-    <div className="relative h-full w-full bg-slate-950" ref={containerRef}>
+    <div className="touch-pan-surface relative h-full w-full bg-slate-950" ref={containerRef}>
       {objects.length === 0 && characters.length === 0 ? (
         <div className="pointer-events-none absolute left-1/2 top-6 z-10 -translate-x-1/2 rounded-full border border-white/10 bg-slate-900/80 px-4 py-2 text-xs text-slate-200 shadow-lg">
           从左侧添加「3D 人体」或 3D 基础体
         </div>
       ) : null}
-      <div className="absolute left-4 top-4 z-10 flex items-center gap-2 rounded-xl border border-white/10 bg-slate-900/85 p-1.5 shadow-xl backdrop-blur">
+      <div className={`absolute z-10 flex items-center gap-2 rounded-xl border border-white/10 bg-slate-900/85 p-1.5 shadow-xl backdrop-blur ${
+        isTabletEditor ? "left-3 top-3 max-w-[calc(100%-1.5rem)] flex-wrap" : "left-4 top-4"
+      }`}>
         {transformModeOptions.map((option) => (
           <Button
-            className="h-7 rounded-lg px-2.5 text-xs"
+            className={`${isTabletEditor ? "h-11 px-3 text-sm" : "h-7 px-2.5 text-xs"} rounded-lg`}
             key={option.mode}
             onClick={() => setTransformMode(option.mode)}
             size="sm"
@@ -1268,7 +1279,7 @@ function ThreeViewportWeb({
         ))}
         {showMannequinGizmoToggle ? (
           <Button
-            className="h-7 rounded-lg px-2.5 text-xs"
+            className={`${isTabletEditor ? "h-11 px-3 text-sm" : "h-7 px-2.5 text-xs"} rounded-lg`}
             onClick={() => setMannequinGizmoEnabled((value) => !value)}
             size="sm"
             type="button"
@@ -1279,7 +1290,7 @@ function ThreeViewportWeb({
         ) : null}
         {showMannequinGizmoToggle ? <div className="mx-1 h-4 w-px bg-white/10" /> : null}
         <Button
-          className="h-7 rounded-lg px-2.5 text-xs text-slate-200 hover:bg-white/10"
+          className={`${isTabletEditor ? "h-11 px-3 text-sm" : "h-7 px-2.5 text-xs"} rounded-lg text-slate-200 hover:bg-white/10`}
           onClick={resetCamera}
           size="sm"
           type="button"
@@ -1295,7 +1306,7 @@ function ThreeViewportWeb({
             <Button
               aria-expanded
               aria-label="收起操作提示"
-              className="h-7 shrink-0 px-2 text-slate-300 hover:bg-white/10 hover:text-slate-100"
+              className={`${isTabletEditor ? "h-11 w-11 px-0" : "h-7 px-2"} shrink-0 text-slate-300 hover:bg-white/10 hover:text-slate-100`}
               onClick={() => persistViewportHintsExpanded(false)}
               size="sm"
               type="button"
@@ -1318,7 +1329,7 @@ function ThreeViewportWeb({
           <Button
             aria-expanded={false}
             aria-label="展开操作提示"
-            className="h-8 gap-1 rounded-lg border border-white/10 bg-slate-900/85 px-2.5 text-xs text-slate-200 shadow-lg backdrop-blur hover:bg-slate-800/90"
+            className={`${isTabletEditor ? "h-11 px-3 text-sm" : "h-8 px-2.5 text-xs"} gap-1 rounded-lg border border-white/10 bg-slate-900/85 text-slate-200 shadow-lg backdrop-blur hover:bg-slate-800/90`}
             onClick={() => persistViewportHintsExpanded(true)}
             size="sm"
             type="button"
@@ -1382,6 +1393,7 @@ function ThreeViewportWeb({
           {objects.map((object) => (
             <TransformableSceneObject
               key={object.id}
+              gizmoSize={gizmoSize}
               mode={transformMode}
               object={object}
               onCloseContextMenu={closeObjectContextMenu}
@@ -1396,6 +1408,7 @@ function ThreeViewportWeb({
             <TransformableCharacterMannequin
               key={character.id}
               character={character}
+              gizmoSize={gizmoSize}
               mode={transformMode}
               onCloseContextMenu={closeObjectContextMenu}
               onOpenContextMenu={openObjectContextMenu}

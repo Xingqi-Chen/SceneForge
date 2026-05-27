@@ -1,7 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import { ChevronLeft, ChevronRight, Trash2, X } from "lucide-react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { ChevronLeft, ChevronRight, Layers, ShieldAlert, SlidersHorizontal, Trash2, X } from "lucide-react";
 import { createPortal } from "react-dom";
 
 import { Button } from "@/components/ui/button";
@@ -25,15 +25,73 @@ import { PromptPreviewPanel } from "./PromptPreviewPanel";
 import { PromptTagPickerPanel } from "./PromptTagPickerPanel";
 import { CharacterImagePromptTagPanel } from "./CharacterImagePromptTagPanel";
 import type { CanvasCapture } from "./CanvasStage";
+import { useTabletEditorLayout } from "./useTabletEditorLayout";
+
+type TabletDrawer = "left" | "right";
+
+function TabletEditorDrawer({
+  children,
+  onClose,
+  open,
+  side,
+  title,
+}: {
+  children: ReactNode;
+  onClose: () => void;
+  open: boolean;
+  side: TabletDrawer;
+  title: string;
+}) {
+  return (
+    <>
+      <button
+        aria-label="关闭面板遮罩"
+        className={`fixed inset-0 z-[60] bg-slate-950/30 backdrop-blur-[2px] transition-opacity ${
+          open ? "opacity-100" : "pointer-events-none opacity-0"
+        }`}
+        onClick={onClose}
+        type="button"
+      />
+      <aside
+        aria-hidden={!open}
+        className={`fixed inset-y-0 z-[70] flex w-[min(92vw,430px)] flex-col overflow-hidden border-slate-200 bg-white shadow-2xl transition-transform duration-300 ease-out ${
+          side === "left"
+            ? `left-0 border-r ${open ? "translate-x-0" : "-translate-x-full"}`
+            : `right-0 border-l ${open ? "translate-x-0" : "translate-x-full"}`
+        }`}
+      >
+        <header className="flex shrink-0 items-center justify-between gap-3 border-b border-slate-100 px-4 pb-3 pt-[max(1rem,env(safe-area-inset-top))]">
+          <h2 className="text-sm font-semibold text-slate-900">{title}</h2>
+          <Button
+            aria-label="关闭面板"
+            className="touch-target h-11 w-11 rounded-full p-0"
+            onClick={onClose}
+            type="button"
+            variant="secondary"
+          >
+            <X className="size-4" />
+          </Button>
+        </header>
+        <div className="touch-scroll-region min-h-0 flex-1 overflow-y-auto p-4 pb-[calc(1rem+env(safe-area-inset-bottom))]">
+          {children}
+        </div>
+      </aside>
+    </>
+  );
+}
 
 export function EditorShell() {
   const canvasCaptureRef = useRef<CanvasCapture | null>(null);
+  const isTabletEditor = useTabletEditorLayout();
   const resetProject = useEditorStore((state) => state.resetProject);
   const resetCanvas = useEditorStore((state) => state.resetCanvas);
   const setProject = useEditorStore((state) => state.setProject);
+  const supportsNsfw = useEditorStore((state) => state.project.settings.supportsNsfw);
+  const updateProjectSettings = useEditorStore((state) => state.updateProjectSettings);
   const [loadState, setLoadState] = useState<"loading" | "ready">("loading");
   const [leftPanelOpen, setLeftPanelOpen] = useState(true);
   const [rightPanelOpen, setRightPanelOpen] = useState(true);
+  const [tabletDrawer, setTabletDrawer] = useState<TabletDrawer | null>(null);
   const [clearCanvasConfirmOpen, setClearCanvasConfirmOpen] = useState(false);
 
   const registerCanvasCapture = useCallback((capture: CanvasCapture | null) => {
@@ -46,6 +104,10 @@ export function EditorShell() {
     resetCanvas();
     setClearCanvasConfirmOpen(false);
   }, [resetCanvas]);
+
+  const openTabletDrawer = useCallback((drawer: TabletDrawer) => {
+    setTabletDrawer((current) => (current === drawer ? null : drawer));
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -87,57 +149,127 @@ export function EditorShell() {
     };
   }, [setProject]);
 
+  const leftPanelContent = (
+    <div className="flex flex-col gap-6">
+      <AssetLibraryPanel />
+      <CharacterImagePromptTagPanel />
+      <div className="h-px w-full shrink-0 bg-slate-100" />
+      <PromptTagPickerPanel />
+    </div>
+  );
+
+  const rightPanelContent = (
+    <div className="flex flex-col gap-6">
+      <ObjectPropertiesPanel />
+      <div className="h-px w-full shrink-0 bg-slate-100" />
+      <PromptPreviewPanel onCaptureCanvas={captureCanvas} />
+      <div className="h-px w-full shrink-0 bg-slate-100" />
+      <ImageGenerationPanel />
+      <div className="h-px w-full shrink-0 bg-slate-100" />
+      <ExportControlsPanel />
+    </div>
+  );
+
   return (
-    <main className="h-screen w-screen overflow-hidden flex flex-col bg-slate-50 text-slate-950 font-sans selection:bg-blue-100 selection:text-blue-900">
-      <header className="relative z-50 flex h-14 shrink-0 items-center justify-between border-b border-slate-200 bg-white px-4">
+    <main className="sf-app-shell flex overflow-hidden bg-slate-50 font-sans text-slate-950 selection:bg-blue-100 selection:text-blue-900">
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+      <header className="relative z-50 flex h-14 shrink-0 items-center justify-between border-b border-slate-200 bg-white px-3 sm:px-4">
         <div className="flex min-w-0 flex-1 items-center gap-4">
           <h1 className="shrink-0 text-sm font-bold tracking-tight text-slate-900">
             SceneForge | 提示词工作台
           </h1>
           <ProjectMenu />
         </div>
-        <div className="flex items-center gap-3">
-          <span className="flex items-center rounded-md border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-600">
+        <div className="flex items-center gap-2 sm:gap-3">
+          {isTabletEditor ? (
+            <div className="flex items-center gap-2">
+              <Button
+                aria-pressed={tabletDrawer === "left"}
+                className="touch-target h-11 gap-1.5 px-3 text-xs shadow-none"
+                onClick={() => openTabletDrawer("left")}
+                type="button"
+                variant={tabletDrawer === "left" ? "primary" : "secondary"}
+              >
+                <Layers className="size-4" />
+                元素
+              </Button>
+              <Button
+                aria-pressed={tabletDrawer === "right"}
+                className="touch-target h-11 gap-1.5 px-3 text-xs shadow-none"
+                onClick={() => openTabletDrawer("right")}
+                type="button"
+                variant={tabletDrawer === "right" ? "primary" : "secondary"}
+              >
+                <SlidersHorizontal className="size-4" />
+                面板
+              </Button>
+            </div>
+          ) : null}
+          <span className="hidden items-center rounded-md border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-600 sm:flex">
             <span className="mr-1.5 inline-block h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
             {loadState === "loading" ? "加载中..." : "已就绪"}
           </span>
+          <Button
+            aria-pressed={supportsNsfw}
+            onClick={() => updateProjectSettings({ supportsNsfw: !supportsNsfw })}
+            type="button"
+            size="sm"
+            variant={supportsNsfw ? "primary" : "secondary"}
+            className={`${isTabletEditor ? "touch-target h-11" : "h-8"} shadow-none ${
+              supportsNsfw
+                ? "bg-rose-600 text-white hover:bg-rose-700 focus-visible:outline-rose-600"
+                : "border-rose-200 bg-white text-rose-600 hover:bg-rose-50 hover:text-rose-700"
+            }`}
+            title={
+              supportsNsfw
+                ? "NSFW support is enabled for reverse AI operations"
+                : "Enable NSFW support for reverse AI operations"
+            }
+          >
+            <ShieldAlert className="size-4" />
+            NSFW
+          </Button>
           <Button
             onClick={() => setClearCanvasConfirmOpen(true)}
             type="button"
             size="sm"
             variant="secondary"
-            className="h-8 border-rose-200 bg-white text-rose-600 shadow-none hover:bg-rose-50 hover:text-rose-700"
+            className={`${isTabletEditor ? "touch-target h-11" : "h-8"} border-rose-200 bg-white text-rose-600 shadow-none hover:bg-rose-50 hover:text-rose-700`}
             title="清空当前画布内容"
           >
             <Trash2 className="size-4" />
             清空画布
           </Button>
-          <Button onClick={resetProject} type="button" size="sm" className="h-8 shadow-none">
+          <Button
+            onClick={resetProject}
+            type="button"
+            size="sm"
+            className={`${isTabletEditor ? "touch-target h-11" : "h-8"} shadow-none`}
+          >
             新建场景
           </Button>
         </div>
       </header>
 
       <div className="relative z-0 flex min-h-0 flex-1 overflow-hidden">
-        <div
-          className={`transition-all duration-300 ease-in-out shrink-0 flex flex-col border-r border-slate-200 bg-white ${
-            leftPanelOpen ? "w-[300px]" : "w-0 overflow-hidden border-r-0"
-          }`}
-        >
-          <div className="flex-1 overflow-y-auto custom-scrollbar p-4 flex flex-col gap-6">
-            <AssetLibraryPanel />
-            <CharacterImagePromptTagPanel />
-            <div className="h-px w-full bg-slate-100 shrink-0" />
-            <PromptTagPickerPanel />
+        {!isTabletEditor ? (
+          <div
+            className={`transition-all duration-300 ease-in-out shrink-0 flex flex-col border-r border-slate-200 bg-white ${
+              leftPanelOpen ? "w-[300px]" : "w-0 overflow-hidden border-r-0"
+            }`}
+          >
+            <div className="touch-scroll-region custom-scrollbar flex-1 overflow-y-auto p-4">
+              {leftPanelContent}
+            </div>
           </div>
-        </div>
+        ) : null}
 
         <div className="flex-1 min-w-0 relative flex flex-col bg-slate-50">
           <Button
             variant="secondary"
             size="sm"
             onClick={() => setLeftPanelOpen(!leftPanelOpen)}
-            className={`absolute top-1/2 -translate-y-1/2 z-20 hidden lg:flex h-8 w-8 items-center justify-center rounded-full border border-slate-200 bg-white p-0 text-slate-500 shadow-sm transition-all hover:text-blue-600 -left-4`}
+            className={`${isTabletEditor ? "hidden" : "hidden lg:flex"} absolute top-1/2 -translate-y-1/2 z-20 h-8 w-8 items-center justify-center rounded-full border border-slate-200 bg-white p-0 text-slate-500 shadow-sm transition-all hover:text-blue-600 -left-4`}
             title={leftPanelOpen ? "收起左侧面板" : "展开左侧面板"}
           >
             {leftPanelOpen ? <ChevronLeft className="size-4" /> : <ChevronRight className="size-4" />}
@@ -149,28 +281,45 @@ export function EditorShell() {
             variant="secondary"
             size="sm"
             onClick={() => setRightPanelOpen(!rightPanelOpen)}
-            className={`absolute top-1/2 -translate-y-1/2 z-20 hidden lg:flex h-8 w-8 items-center justify-center rounded-full border border-slate-200 bg-white p-0 text-slate-500 shadow-sm transition-all hover:text-blue-600 -right-4`}
+            className={`${isTabletEditor ? "hidden" : "hidden lg:flex"} absolute top-1/2 -translate-y-1/2 z-20 h-8 w-8 items-center justify-center rounded-full border border-slate-200 bg-white p-0 text-slate-500 shadow-sm transition-all hover:text-blue-600 -right-4`}
             title={rightPanelOpen ? "收起右侧面板" : "展开右侧面板"}
           >
             {rightPanelOpen ? <ChevronRight className="size-4" /> : <ChevronLeft className="size-4" />}
           </Button>
         </div>
 
-        <div
-          className={`transition-all duration-300 ease-in-out shrink-0 flex flex-col border-l border-slate-200 bg-white ${
-            rightPanelOpen ? "w-[380px]" : "w-0 overflow-hidden border-l-0"
-          }`}
-        >
-          <div className="flex-1 overflow-y-auto custom-scrollbar p-4 flex flex-col gap-6">
-            <ObjectPropertiesPanel />
-            <div className="h-px w-full bg-slate-100 shrink-0" />
-            <PromptPreviewPanel onCaptureCanvas={captureCanvas} />
-            <div className="h-px w-full bg-slate-100 shrink-0" />
-            <ImageGenerationPanel />
-            <div className="h-px w-full bg-slate-100 shrink-0" />
-            <ExportControlsPanel />
+        {!isTabletEditor ? (
+          <div
+            className={`transition-all duration-300 ease-in-out shrink-0 flex flex-col border-l border-slate-200 bg-white ${
+              rightPanelOpen ? "w-[380px]" : "w-0 overflow-hidden border-l-0"
+            }`}
+          >
+            <div className="touch-scroll-region custom-scrollbar flex-1 overflow-y-auto p-4">
+              {rightPanelContent}
+            </div>
           </div>
-        </div>
+        ) : null}
+        {isTabletEditor ? (
+          <>
+            <TabletEditorDrawer
+              onClose={() => setTabletDrawer(null)}
+              open={tabletDrawer === "left"}
+              side="left"
+              title="元素库"
+            >
+              {leftPanelContent}
+            </TabletEditorDrawer>
+            <TabletEditorDrawer
+              onClose={() => setTabletDrawer(null)}
+              open={tabletDrawer === "right"}
+              side="right"
+              title="属性与 Prompt"
+            >
+              {rightPanelContent}
+            </TabletEditorDrawer>
+          </>
+        ) : null}
+      </div>
       </div>
 
       {clearCanvasConfirmOpen && typeof document !== "undefined"

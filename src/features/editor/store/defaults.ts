@@ -305,6 +305,7 @@ export function createDefaultProject(): SceneForgeProject {
     settings: {
       modelFormat: "generic",
       includeSpatialHints: true,
+      supportsNsfw: false,
       negativePrompt: "",
       selectedCivitaiCheckpointId: null,
       selectedCivitaiLoraIds: [],

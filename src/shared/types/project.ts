@@ -112,6 +112,7 @@ export type SavedComfyUiGeneratedImage = {
 export type ProjectSettings = {
   modelFormat: PromptModelFormat;
   includeSpatialHints: boolean;
+  supportsNsfw: boolean;
   negativePrompt: string;
   selectedCivitaiCheckpointId: string | null;
   selectedCivitaiLoraIds: string[];

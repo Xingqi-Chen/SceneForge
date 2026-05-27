@@ -14,7 +14,8 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const DEFAULT_COMFYUI_BASE_URL = "http://127.0.0.1:8188";
-const COMFYUI_EVENT_TIMEOUT_MS = 180000;
+const COMFYUI_EVENT_TIMEOUT_MS = 60 * 60 * 1000;
+const COMFYUI_EVENT_HEARTBEAT_MS = 15000;
 const COMFYUI_HISTORY_RETRY_INTERVAL_MS = 500;
 
 function getComfyUiBaseUrl() {
@@ -49,6 +50,10 @@ function toGeneratedImages(
 
 function sse(event: string, data: unknown) {
   return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+}
+
+function sseComment(comment: string) {
+  return `: ${comment}\n\n`;
 }
 
 function errorPayload(error: unknown) {
@@ -99,6 +104,7 @@ export async function GET(request: Request, context: { params: Promise<{ clientI
       let waitingForFinalHistory = false;
       let websocket: WebSocket | null = null;
       let timeout: ReturnType<typeof setTimeout> | null = null;
+      let heartbeat: ReturnType<typeof setInterval> | null = null;
 
       const send = (event: string, data: unknown) => {
         if (!closed) {
@@ -106,10 +112,21 @@ export async function GET(request: Request, context: { params: Promise<{ clientI
         }
       };
 
+      const sendComment = (comment: string) => {
+        if (!closed) {
+          controller.enqueue(encoder.encode(sseComment(comment)));
+        }
+      };
+
       const cleanup = () => {
         if (timeout) {
           clearTimeout(timeout);
           timeout = null;
+        }
+
+        if (heartbeat) {
+          clearInterval(heartbeat);
+          heartbeat = null;
         }
 
         if (websocket && websocket.readyState < WebSocket.CLOSING) {
@@ -127,8 +144,11 @@ export async function GET(request: Request, context: { params: Promise<{ clientI
         controller.close();
       };
 
-      const fail = (error: unknown) => {
-        send("comfyui-error", errorPayload(error));
+      const fail = (error: unknown, options?: { retryable?: boolean }) => {
+        send("comfyui-error", {
+          ...errorPayload(error),
+          retryable: options?.retryable ?? false,
+        });
         close();
       };
 
@@ -181,8 +201,15 @@ export async function GET(request: Request, context: { params: Promise<{ clientI
         }
       };
 
+      heartbeat = setInterval(() => {
+        sendComment("heartbeat");
+      }, COMFYUI_EVENT_HEARTBEAT_MS);
+
       timeout = setTimeout(() => {
-        fail(new Error("Timed out waiting for ComfyUI websocket completion."));
+        send("listener-timeout", {
+          message: "Timed out waiting for ComfyUI websocket completion; falling back to history polling.",
+        });
+        close();
       }, COMFYUI_EVENT_TIMEOUT_MS);
 
       request.signal.addEventListener("abort", close, { once: true });
@@ -246,12 +273,12 @@ export async function GET(request: Request, context: { params: Promise<{ clientI
       });
 
       websocket.addEventListener("error", () => {
-        fail(new Error("ComfyUI websocket connection failed."));
+        fail(new Error("ComfyUI websocket connection failed."), { retryable: true });
       });
 
       websocket.addEventListener("close", () => {
         if (!closed && !waitingForFinalHistory) {
-          fail(new Error("ComfyUI websocket connection closed before generation completed."));
+          fail(new Error("ComfyUI websocket connection closed before generation completed."), { retryable: true });
         }
       });
     },

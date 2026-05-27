@@ -12,6 +12,33 @@ describe("isLlmChatRequest", () => {
     ).toBe(true);
   });
 
+  it("accepts reverse prompt purposes with nsfw flag", () => {
+    expect(
+      isLlmChatRequest({
+        purpose: "scene-prompt-reverse",
+        nsfw: true,
+        messages: [{ role: "user", content: "Reverse this canvas" }],
+      }),
+    ).toBe(true);
+
+    expect(
+      isLlmChatRequest({
+        purpose: "prompt-tag-reverse",
+        nsfw: false,
+        messages: [{ role: "user", content: "Reverse these tags" }],
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects non-boolean nsfw values", () => {
+    expect(
+      isLlmChatRequest({
+        nsfw: "true",
+        messages: [{ role: "user", content: "Hello" }],
+      }),
+    ).toBe(false);
+  });
+
   it("accepts ComfyUI generation diagnosis purpose", () => {
     expect(
       isLlmChatRequest({

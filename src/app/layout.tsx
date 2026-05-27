@@ -1,10 +1,16 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import Script from "next/script";
 import "./globals.css";
 
 export const metadata: Metadata = {
   title: "SceneForge",
   description: "Visual prompt editor for scene building and structured prompt generation.",
+};
+
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  viewportFit: "cover",
 };
 
 const stripExtensionHydrationAttributesScript = `

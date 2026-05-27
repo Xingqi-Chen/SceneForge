@@ -3,6 +3,7 @@ import type { CivitaiLibrarySettings } from "./types";
 export const DEFAULT_CIVITAI_LIBRARY_SETTINGS: CivitaiLibrarySettings = {
   loraDownloadPath: "",
   checkpointDownloadPath: "",
+  controlNetModelPath: "",
 };
 
 function readTrimmedString(value: unknown): string {
@@ -18,5 +19,6 @@ export function sanitizeCivitaiLibrarySettingsPayload(payload: unknown): Civitai
   return {
     loraDownloadPath: readTrimmedString(record.loraDownloadPath),
     checkpointDownloadPath: readTrimmedString(record.checkpointDownloadPath),
+    controlNetModelPath: readTrimmedString(record.controlNetModelPath),
   };
 }

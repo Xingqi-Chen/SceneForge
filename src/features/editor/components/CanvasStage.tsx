@@ -37,9 +37,11 @@ export type CanvasStageProps = {
   zoom: number;
   pan: Vector2;
   panMode: boolean;
+  multiSelectMode?: boolean;
   onPanChange: (pan: Vector2) => void;
   onZoomChange: (zoom: number) => void;
   onCaptureReady?: (capture: CanvasCapture | null) => void;
+  touchOptimized?: boolean;
 };
 
 type CanvasContextMenu = {
@@ -53,6 +55,13 @@ type MultiDragSnapshot = {
   primaryId: string;
   objectStarts: Record<string, Vector2>;
   characterStarts: Record<string, Vector2>;
+};
+
+type TouchGestureSnapshot = {
+  center: Vector2;
+  distance: number;
+  pan: Vector2;
+  zoom: number;
 };
 
 function computeMultiDragPayload(
@@ -129,6 +138,24 @@ function isMultiSelectModifier(event: KonvaEventObject<MouseEvent | TouchEvent>)
   );
 }
 
+function touchMetrics(touches: TouchList): { center: Vector2; distance: number } | null {
+  if (touches.length < 2) {
+    return null;
+  }
+
+  const [first, second] = [touches[0], touches[1]];
+  const dx = second.clientX - first.clientX;
+  const dy = second.clientY - first.clientY;
+
+  return {
+    center: {
+      x: (first.clientX + second.clientX) / 2,
+      y: (first.clientY + second.clientY) / 2,
+    },
+    distance: Math.hypot(dx, dy),
+  };
+}
+
 function SceneObjectNode({
   object,
   onContextMenu,
@@ -136,12 +163,14 @@ function SceneObjectNode({
   selected,
   transformRef,
   multiDrag,
+  multiSelectMode = false,
 }: {
   object: SceneObject;
   onContextMenu: (event: KonvaEventObject<MouseEvent>) => void;
   panMode: boolean;
   selected: boolean;
   transformRef?: Ref<KonvaGroup>;
+  multiSelectMode?: boolean;
   multiDrag?: {
     onDragStart: () => void;
     onDragMove: (event: KonvaEventObject<DragEvent>) => void;
@@ -160,7 +189,7 @@ function SceneObjectNode({
 
     event.cancelBubble = true;
 
-    if (isMultiSelectModifier(event)) {
+    if (multiSelectMode || isMultiSelectModifier(event)) {
       toggleObjectInSelection(object.id);
       return;
     }
@@ -378,6 +407,7 @@ function CharacterNode({
   selectedBodyPartId,
   transformRef,
   multiDrag,
+  multiSelectMode = false,
 }: {
   character: CharacterSkeleton;
   onContextMenu: (event: KonvaEventObject<MouseEvent>) => void;
@@ -385,6 +415,7 @@ function CharacterNode({
   selected: boolean;
   selectedBodyPartId?: BodyPartId;
   transformRef?: Ref<KonvaGroup>;
+  multiSelectMode?: boolean;
   multiDrag?: {
     onDragStart: () => void;
     onDragMove: (event: KonvaEventObject<DragEvent>) => void;
@@ -407,7 +438,7 @@ function CharacterNode({
 
     event.cancelBubble = true;
 
-    if (isMultiSelectModifier(event)) {
+    if (multiSelectMode || isMultiSelectModifier(event)) {
       toggleCharacterInSelection(character.id);
       return;
     }
@@ -425,7 +456,7 @@ function CharacterNode({
 
     event.cancelBubble = true;
 
-    if (isMultiSelectModifier(event)) {
+    if (multiSelectMode || isMultiSelectModifier(event)) {
       toggleCharacterInSelection(character.id);
       return;
     }
@@ -434,7 +465,7 @@ function CharacterNode({
   }
 
   function handleJointSelect(jointId: JointId, event: KonvaEventObject<MouseEvent | TouchEvent>) {
-    if (isMultiSelectModifier(event)) {
+    if (multiSelectMode || isMultiSelectModifier(event)) {
       event.cancelBubble = true;
       toggleCharacterInSelection(character.id);
       return;
@@ -604,9 +635,11 @@ export function CanvasStage({
   zoom,
   pan,
   panMode,
+  multiSelectMode = false,
   onPanChange,
   onZoomChange,
   onCaptureReady,
+  touchOptimized = false,
 }: CanvasStageProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<KonvaStage>(null);
@@ -616,6 +649,7 @@ export function CanvasStage({
   const transformerRef = useRef<KonvaTransformer>(null);
   const lastPanPoint = useRef<Vector2 | null>(null);
   const multiDragSnapshotRef = useRef<MultiDragSnapshot | null>(null);
+  const touchGestureRef = useRef<TouchGestureSnapshot | null>(null);
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
   const [contextMenu, setContextMenu] = useState<CanvasContextMenu | null>(null);
   const [panning, setPanning] = useState(false);
@@ -840,6 +874,10 @@ export function CanvasStage({
   }, [selection, sortedObjects, characters]);
 
   function handleStagePointer(event: KonvaEventObject<MouseEvent | TouchEvent>) {
+    if ("touches" in event.evt && event.evt.touches.length > 1) {
+      return;
+    }
+
     if (panMode) {
       return;
     }
@@ -848,6 +886,47 @@ export function CanvasStage({
 
     if (event.target === event.target.getStage()) {
       selectScene();
+    }
+  }
+
+  function handleStageTouchStart(event: KonvaEventObject<TouchEvent>) {
+    const metrics = touchMetrics(event.evt.touches);
+
+    if (metrics) {
+      event.evt.preventDefault();
+      touchGestureRef.current = {
+        ...metrics,
+        pan,
+        zoom,
+      };
+      setContextMenu(null);
+      return;
+    }
+
+    handleStagePointer(event);
+  }
+
+  function handleStageTouchMove(event: KonvaEventObject<TouchEvent>) {
+    const start = touchGestureRef.current;
+    const metrics = touchMetrics(event.evt.touches);
+
+    if (!start || !metrics || start.distance <= 0) {
+      return;
+    }
+
+    event.evt.preventDefault();
+
+    const scale = metrics.distance / start.distance;
+    onZoomChange(start.zoom * scale);
+    onPanChange({
+      x: start.pan.x + metrics.center.x - start.center.x,
+      y: start.pan.y + metrics.center.y - start.center.y,
+    });
+  }
+
+  function handleStageTouchEnd(event: KonvaEventObject<TouchEvent>) {
+    if (event.evt.touches.length < 2) {
+      touchGestureRef.current = null;
     }
   }
 
@@ -1001,7 +1080,7 @@ export function CanvasStage({
 
   return (
     <div
-      className={`relative flex flex-1 items-center justify-center overflow-hidden w-full h-full p-4 ${
+      className={`touch-pan-surface relative flex flex-1 items-center justify-center overflow-hidden w-full h-full p-4 ${
         panMode || panning ? "cursor-grab" : marqueeDrag ? "cursor-crosshair" : "cursor-default"
       }`}
       onContextMenu={(event) => event.preventDefault()}
@@ -1021,7 +1100,10 @@ export function CanvasStage({
         <Stage
           height={stageHeight}
           onMouseDown={handleStagePointer}
-          onTouchStart={handleStagePointer}
+          onTouchCancel={handleStageTouchEnd}
+          onTouchEnd={handleStageTouchEnd}
+          onTouchMove={handleStageTouchMove}
+          onTouchStart={handleStageTouchStart}
           ref={stageRef}
           scaleX={stageScale}
           scaleY={stageScale}
@@ -1063,6 +1145,7 @@ export function CanvasStage({
                         }
                       : undefined
                   }
+                  multiSelectMode={multiSelectMode}
                   object={object}
                   onContextMenu={(event) => handleObjectContextMenu(object.id, event)}
                   panMode={panMode}
@@ -1094,6 +1177,7 @@ export function CanvasStage({
                         }
                       : undefined
                   }
+                  multiSelectMode={multiSelectMode}
                   onContextMenu={(event) => handleCharacterContextMenu(character.id, event)}
                   panMode={panMode}
                   selected={selected}
@@ -1135,6 +1219,7 @@ export function CanvasStage({
               })()
             ) : null}
             <Transformer
+              anchorSize={touchOptimized ? 16 : 10}
               borderEnabled={selection.kind !== "character"}
               boundBoxFunc={(oldBox, newBox) =>
                 newBox.width < 16 || newBox.height < 16 ? oldBox : newBox

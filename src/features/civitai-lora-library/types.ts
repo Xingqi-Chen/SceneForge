@@ -26,6 +26,7 @@ export type CivitaiAiNsfwLevel = "sfw" | "suggestive" | "mature" | "explicit" | 
 export type CivitaiLibrarySettings = {
   loraDownloadPath: string;
   checkpointDownloadPath: string;
+  controlNetModelPath: string;
 };
 
 export type CivitaiResourceDownloadState =

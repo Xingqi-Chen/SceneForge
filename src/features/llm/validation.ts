@@ -60,10 +60,16 @@ function isOptionalString(value: unknown): value is string | undefined {
   return value === undefined || (typeof value === "string" && value.trim().length > 0);
 }
 
+function isOptionalBoolean(value: unknown): value is boolean | undefined {
+  return value === undefined || typeof value === "boolean";
+}
+
 function isOptionalPurpose(value: unknown): value is LlmChatRequest["purpose"] {
   return (
     value === undefined ||
     value === "prompt-library-classification" ||
+    value === "scene-prompt-reverse" ||
+    value === "prompt-tag-reverse" ||
     value === "stick-figure-pose-generation" ||
     value === "civitai-resource-enrichment" ||
     value === "civitai-combination-recommendation" ||
@@ -83,6 +89,7 @@ export function isLlmChatRequest(value: unknown): value is LlmChatRequest {
     value.messages.length > 0 &&
     value.messages.every(isChatMessage) &&
     isOptionalString(value.model) &&
+    isOptionalBoolean(value.nsfw) &&
     isOptionalPurpose(value.purpose) &&
     isOptionalNumber(value.temperature) &&
     isOptionalNumber(value.maxTokens)

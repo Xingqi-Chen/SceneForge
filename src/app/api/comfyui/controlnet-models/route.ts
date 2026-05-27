@@ -3,6 +3,11 @@ import path from "node:path";
 
 import { NextResponse } from "next/server";
 
+import {
+  loadCivitaiLibrarySettingsFromSqlite,
+  openSceneForgeSqliteDatabase,
+} from "@/features/persistence/sqlite-storage";
+
 export const runtime = "nodejs";
 
 const CONTROLNET_MODEL_EXTENSIONS = new Set([".safetensors", ".ckpt", ".pt", ".pth", ".bin"]);
@@ -40,14 +45,14 @@ async function collectControlNetModels(
     return;
   }
 
-  const entries = await fs.readdir(currentPath, { withFileTypes: true });
+  const entries = await fs.readdir(/*turbopackIgnore: true*/ currentPath, { withFileTypes: true });
 
   for (const entry of entries) {
     if (models.length >= MAX_MODEL_COUNT) {
       return;
     }
 
-    const entryPath = path.join(currentPath, entry.name);
+    const entryPath = path.join(/*turbopackIgnore: true*/ currentPath, entry.name);
 
     if (entry.isDirectory()) {
       try {
@@ -70,9 +75,20 @@ async function collectControlNetModels(
   }
 }
 
+async function getConfiguredControlNetModelPath() {
+  const db = await openSceneForgeSqliteDatabase();
+
+  try {
+    return loadCivitaiLibrarySettingsFromSqlite(db).controlNetModelPath;
+  } finally {
+    db.close();
+  }
+}
+
 export async function GET(request: Request) {
   const requestUrl = new URL(request.url);
-  const modelPath = requestUrl.searchParams.get("path")?.trim() ?? "";
+  const explicitModelPath = requestUrl.searchParams.get("path")?.trim() ?? "";
+  const modelPath = explicitModelPath || await getConfiguredControlNetModelPath();
 
   if (!modelPath) {
     return NextResponse.json({
@@ -81,10 +97,10 @@ export async function GET(request: Request) {
     });
   }
 
-  const resolvedPath = path.resolve(modelPath);
+  const resolvedPath = path.resolve(/*turbopackIgnore: true*/ modelPath);
 
   try {
-    const stat = await fs.stat(resolvedPath);
+    const stat = await fs.stat(/*turbopackIgnore: true*/ resolvedPath);
     if (!stat.isDirectory()) {
       return errorResponse("ControlNet 模型路径必须是一个文件夹。", 400);
     }

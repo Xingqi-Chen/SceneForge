@@ -754,6 +754,7 @@ export const useEditorStore = create<EditorState>((set) => ({
               promptLibraryTags: project.settings.promptLibraryTags ?? [],
               deletedBuiltInPromptLibraryTagIds:
                 project.settings.deletedBuiltInPromptLibraryTagIds ?? [],
+              supportsNsfw: project.settings.supportsNsfw ?? false,
               selectedCivitaiCheckpointId: project.settings.selectedCivitaiCheckpointId ?? null,
               selectedCivitaiLoraIds: project.settings.selectedCivitaiLoraIds ?? [],
               selectedArtistStringIds: project.settings.selectedArtistStringIds ?? [],

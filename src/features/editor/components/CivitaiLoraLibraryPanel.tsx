@@ -41,6 +41,7 @@ type CacheRepairResult = {
 const EMPTY_CIVITAI_LIBRARY_SETTINGS: CivitaiLibrarySettings = {
   loraDownloadPath: "",
   checkpointDownloadPath: "",
+  controlNetModelPath: "",
 };
 
 const CATEGORY_OPTIONS: Array<{ value: CivitaiLoraCategory | "all"; label: string }> = [
@@ -778,7 +779,7 @@ export function CivitaiLoraLibraryPanel() {
       setSettingsLoadStatus("success");
     } catch (error) {
       setSettingsLoadStatus("error");
-      setSettingsLoadError(error instanceof Error ? error.message : "无法读取下载路径设置。");
+      setSettingsLoadError(error instanceof Error ? error.message : "无法读取路径设置。");
     }
   }
 
@@ -800,6 +801,7 @@ export function CivitaiLoraLibraryPanel() {
     const nextSettings: CivitaiLibrarySettings = {
       loraDownloadPath: settingsDraft.loraDownloadPath.trim(),
       checkpointDownloadPath: settingsDraft.checkpointDownloadPath.trim(),
+      controlNetModelPath: settingsDraft.controlNetModelPath.trim(),
     };
 
     setSettingsSaveStatus("loading");
@@ -821,7 +823,7 @@ export function CivitaiLoraLibraryPanel() {
       }
     } catch (error) {
       setSettingsSaveStatus("error");
-      setSettingsSaveError(error instanceof Error ? error.message : "无法保存下载路径设置。");
+      setSettingsSaveError(error instanceof Error ? error.message : "无法保存路径设置。");
     }
   }
 
@@ -1199,14 +1201,14 @@ export function CivitaiLoraLibraryPanel() {
                     <p className="mt-1 text-xs leading-relaxed text-slate-500">{METADATA_NOTICE}</p>
                   </div>
                   <button
-                    aria-label={settingsOpen ? "关闭下载路径设置" : "打开下载路径设置"}
+                    aria-label={settingsOpen ? "关闭路径设置" : "打开路径设置"}
                     className={`rounded-full p-2 transition ${
                       settingsOpen
                         ? "bg-indigo-50 text-indigo-700"
                         : "text-slate-400 hover:bg-slate-100 hover:text-slate-700"
                     }`}
                     onClick={settingsOpen ? handleCancelSettings : handleOpenSettings}
-                    title="下载路径设置"
+                    title="路径设置"
                     type="button"
                   >
                     <Settings className="size-5" />
@@ -1225,8 +1227,10 @@ export function CivitaiLoraLibraryPanel() {
                   <div className="shrink-0 border-b border-slate-100 bg-slate-50 p-5">
                     <div className="flex flex-wrap items-start justify-between gap-3">
                       <div>
-                        <h4 className="text-sm font-bold text-slate-900">下载路径设置</h4>
-                        <p className="mt-1 text-xs text-slate-500">LoRA 和 Checkpoint 将分别使用这里配置的路径。</p>
+                        <h4 className="text-sm font-bold text-slate-900">路径设置</h4>
+                        <p className="mt-1 text-xs text-slate-500">
+                          LoRA、Checkpoint 下载目录与 ControlNet 模型扫描目录在这里统一配置。
+                        </p>
                       </div>
                       {settingsLoadStatus === "loading" ? (
                         <span className="inline-flex items-center gap-2 rounded-md bg-white px-2.5 py-1.5 text-xs text-slate-500">
@@ -1235,7 +1239,7 @@ export function CivitaiLoraLibraryPanel() {
                         </span>
                       ) : null}
                     </div>
-                    <div className="mt-4 grid gap-3 md:grid-cols-2">
+                    <div className="mt-4 grid gap-3 md:grid-cols-3">
                       <label className="block text-xs font-medium text-slate-600">
                         <span>LoRA 下载路径</span>
                         <input
@@ -1258,6 +1262,18 @@ export function CivitaiLoraLibraryPanel() {
                           }
                           placeholder="D:/StableDiffusion/models/Stable-diffusion"
                           value={settingsDraft.checkpointDownloadPath}
+                        />
+                      </label>
+                      <label className="block text-xs font-medium text-slate-600">
+                        <span>ControlNet 模型路径</span>
+                        <input
+                          className="mt-1 h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm font-normal text-slate-800 outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 disabled:opacity-60"
+                          disabled={settingsLoadStatus === "loading" || settingsSaveStatus === "loading"}
+                          onChange={(event) =>
+                            setSettingsDraft((current) => ({ ...current, controlNetModelPath: event.target.value }))
+                          }
+                          placeholder="D:/ComfyUI/models/controlnet"
+                          value={settingsDraft.controlNetModelPath}
                         />
                       </label>
                     </div>

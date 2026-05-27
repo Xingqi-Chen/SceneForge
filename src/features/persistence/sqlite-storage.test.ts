@@ -111,20 +111,24 @@ describe("sqlite persistence support", () => {
     expect(loadCivitaiLibrarySettingsFromSqlite(db)).toEqual({
       loraDownloadPath: "",
       checkpointDownloadPath: "",
+      controlNetModelPath: "",
     });
 
     expect(
       saveCivitaiLibrarySettingsToSqlite(db, {
         loraDownloadPath: "  D:/models/loras  ",
         checkpointDownloadPath: "  D:/models/checkpoints  ",
+        controlNetModelPath: "  D:/ComfyUI/models/controlnet  ",
       }),
     ).toEqual({
       loraDownloadPath: "D:/models/loras",
       checkpointDownloadPath: "D:/models/checkpoints",
+      controlNetModelPath: "D:/ComfyUI/models/controlnet",
     });
     expect(loadCivitaiLibrarySettingsFromSqlite(db)).toEqual({
       loraDownloadPath: "D:/models/loras",
       checkpointDownloadPath: "D:/models/checkpoints",
+      controlNetModelPath: "D:/ComfyUI/models/controlnet",
     });
 
     saveCivitaiLibrarySettingsToSqlite(db, {
@@ -133,6 +137,7 @@ describe("sqlite persistence support", () => {
     expect(loadCivitaiLibrarySettingsFromSqlite(db)).toEqual({
       loraDownloadPath: "",
       checkpointDownloadPath: "",
+      controlNetModelPath: "",
     });
   });
 

@@ -1,7 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { BringToFront, Copy, MoveDown, MoveUp, Trash2, ZoomIn, ZoomOut, Maximize } from "lucide-react";
+import { BringToFront, Copy, Maximize, MousePointer2, MoveDown, MoveUp, Trash2, ZoomIn, ZoomOut } from "lucide-react";
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 
 import { type EditorSelection, useEditorStore } from "@/features/editor/store/editor-store";
@@ -14,6 +14,7 @@ import {
 import { Button } from "@/components/ui/button";
 
 import type { CanvasCapture, CanvasStageProps } from "./CanvasStage";
+import { useTabletEditorLayout } from "./useTabletEditorLayout";
 
 const minZoom = 0.5;
 const maxZoom = 2;
@@ -77,6 +78,7 @@ type CanvasViewportProps = {
 export function CanvasViewport({ onCanvasCaptureReady }: CanvasViewportProps) {
   const viewportRef = useRef<HTMLElement>(null);
   const copiedSelectionRef = useRef<EditorSelection | null>(null);
+  const isTabletEditor = useTabletEditorLayout();
   const {
     bringSelectionForward,
     deleteSelection,
@@ -94,15 +96,19 @@ export function CanvasViewport({ onCanvasCaptureReady }: CanvasViewportProps) {
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState<Vector2>({ x: 0, y: 0 });
   const [spacePressed, setSpacePressed] = useState(false);
+  const [multiSelectMode, setMultiSelectMode] = useState(false);
   const canDuplicateOrDelete = isCopyableSelection(selection);
   const is3DMode = project.scene.mode === "3d";
   const canAdjustLayer = selection.kind === "object" && !is3DMode;
 
+  /* eslint-disable react-hooks/set-state-in-effect -- leaving 2D clears tablet-only multi-select mode */
   useEffect(() => {
     if (is3DMode) {
       onCanvasCaptureReady?.(null);
+      setMultiSelectMode(false);
     }
   }, [is3DMode, onCanvasCaptureReady]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   function updateZoom(nextZoom: number) {
     setZoom(clampZoom(nextZoom));
@@ -265,28 +271,30 @@ export function CanvasViewport({ onCanvasCaptureReady }: CanvasViewportProps) {
       ref={viewportRef}
       tabIndex={0}
     >
-      <div className="flex items-center justify-between border-b border-slate-200 bg-white px-4 py-2 shrink-0 z-10">
-        <div className="flex items-center gap-3">
-          <div className="flex h-8 w-8 items-center justify-center rounded-md bg-indigo-50 text-indigo-600">
+      <div className={`flex shrink-0 items-center justify-between gap-3 border-b border-slate-200 bg-white z-10 ${
+        isTabletEditor ? "min-h-16 flex-wrap px-3 py-2" : "px-4 py-2"
+      }`}>
+        <div className="flex min-w-0 items-center gap-3">
+          <div className={`${isTabletEditor ? "h-11 w-11" : "h-8 w-8"} flex shrink-0 items-center justify-center rounded-md bg-indigo-50 text-indigo-600`}>
             <BringToFront className="size-4" />
           </div>
-          <div>
+          <div className="min-w-0">
             <h2 className="text-sm font-bold text-slate-800 whitespace-nowrap">{project.scene.name}</h2>
-            <p className="text-[11px] text-slate-500">
+            <p className={`${isTabletEditor ? "hidden" : "block"} text-[11px] text-slate-500`}>
               {is3DMode
                 ? "3D 模式：1/2/3 切换工具 · 方向键移动 · PageUp/PageDown 升降 · F 聚焦"
                 : "Ctrl/Cmd+Z 撤回 · Ctrl/Cmd+A 全选 · Ctrl/Cmd+C/V 复制粘贴 · 方向键移动"}
             </p>
           </div>
         </div>
-        <div className="flex items-center gap-3">
-          <div className="flex items-center p-0.5 rounded-lg border border-slate-200 bg-white shadow-sm">
+        <div className={`flex min-w-0 items-center gap-2 ${isTabletEditor ? "flex-1 justify-end overflow-x-auto" : "gap-3"}`}>
+          <div className={`${isTabletEditor ? "h-11" : ""} flex items-center rounded-lg border border-slate-200 bg-white p-0.5 shadow-sm`}>
             <button
               onClick={() => {
                 setSpacePressed(false);
                 setSceneMode("2d");
               }}
-              className={`flex h-7 items-center justify-center rounded-md px-3 text-xs font-medium transition-colors ${!is3DMode ? "bg-slate-900 text-white shadow-sm" : "text-slate-600 hover:text-slate-900 hover:bg-slate-100"}`}
+              className={`flex ${isTabletEditor ? "h-11 px-4 text-sm" : "h-7 px-3 text-xs"} items-center justify-center rounded-md font-medium transition-colors ${!is3DMode ? "bg-slate-900 text-white shadow-sm" : "text-slate-600 hover:text-slate-900 hover:bg-slate-100"}`}
             >
               2D
             </button>
@@ -295,12 +303,12 @@ export function CanvasViewport({ onCanvasCaptureReady }: CanvasViewportProps) {
                 setSpacePressed(false);
                 setSceneMode("3d");
               }}
-              className={`flex h-7 items-center justify-center rounded-md px-3 text-xs font-medium transition-colors ${is3DMode ? "bg-slate-900 text-white shadow-sm" : "text-slate-600 hover:text-slate-900 hover:bg-slate-100"}`}
+              className={`flex ${isTabletEditor ? "h-11 px-4 text-sm" : "h-7 px-3 text-xs"} items-center justify-center rounded-md font-medium transition-colors ${is3DMode ? "bg-slate-900 text-white shadow-sm" : "text-slate-600 hover:text-slate-900 hover:bg-slate-100"}`}
             >
               3D
             </button>
           </div>
-          <div className="flex h-8 shrink-0 items-center gap-3 rounded-md border border-slate-200 bg-white px-3 text-xs font-medium shadow-sm">
+          <div className={`${isTabletEditor ? "h-11" : "h-8"} flex shrink-0 items-center gap-3 rounded-md border border-slate-200 bg-white px-3 text-xs font-medium shadow-sm`}>
             <div className="flex shrink-0 items-center gap-1.5 text-slate-600">
               <span className="inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-slate-400" />
               <span className="whitespace-nowrap">{project.scene.canvas.aspectRatio}</span>
@@ -322,14 +330,14 @@ export function CanvasViewport({ onCanvasCaptureReady }: CanvasViewportProps) {
             )}
           </div>
           {!is3DMode ? (
-          <div className="flex h-8 items-center rounded-md border border-slate-200 bg-white p-0.5 shadow-sm">
+          <div className={`${isTabletEditor ? "h-11" : "h-8"} flex items-center rounded-md border border-slate-200 bg-white p-0.5 shadow-sm`}>
             <Button
               aria-label="缩小画布"
               onClick={() => updateZoom(zoom - zoomStep)}
               size="sm"
               type="button"
               variant="ghost"
-              className="flex h-7 w-7 shrink-0 items-center justify-center rounded p-0 text-slate-500 hover:bg-slate-50 hover:text-slate-900"
+              className={`${isTabletEditor ? "h-11 w-11" : "h-7 w-7"} flex shrink-0 items-center justify-center rounded p-0 text-slate-500 hover:bg-slate-50 hover:text-slate-900`}
             >
               <ZoomOut className="size-3.5" />
             </Button>
@@ -339,7 +347,7 @@ export function CanvasViewport({ onCanvasCaptureReady }: CanvasViewportProps) {
               size="sm"
               type="button"
               variant="ghost"
-              className="flex h-7 w-7 shrink-0 items-center justify-center rounded p-0 text-slate-500 hover:bg-slate-50 hover:text-slate-900"
+              className={`${isTabletEditor ? "h-11 w-11" : "h-7 w-7"} flex shrink-0 items-center justify-center rounded p-0 text-slate-500 hover:bg-slate-50 hover:text-slate-900`}
             >
               <ZoomIn className="size-3.5" />
             </Button>
@@ -349,14 +357,30 @@ export function CanvasViewport({ onCanvasCaptureReady }: CanvasViewportProps) {
               size="sm" 
               type="button" 
               variant="ghost"
-              className="flex h-7 shrink-0 items-center justify-center gap-1.5 rounded px-2 text-xs font-medium whitespace-nowrap text-slate-500 hover:bg-slate-50 hover:text-slate-900"
+              className={`flex ${isTabletEditor ? "h-11 px-3 text-sm" : "h-7 px-2 text-xs"} shrink-0 items-center justify-center gap-1.5 rounded font-medium whitespace-nowrap text-slate-500 hover:bg-slate-50 hover:text-slate-900`}
             >
               <Maximize className="size-3.5 shrink-0" />
               重置视图
             </Button>
+            {isTabletEditor ? (
+              <>
+                <div className="mx-1 h-5 w-px shrink-0 bg-slate-200" />
+                <Button
+                  aria-pressed={multiSelectMode}
+                  onClick={() => setMultiSelectMode((value) => !value)}
+                  size="sm"
+                  type="button"
+                  variant={multiSelectMode ? "primary" : "ghost"}
+                  className="flex h-11 shrink-0 items-center justify-center gap-1.5 rounded px-3 text-sm font-medium whitespace-nowrap"
+                >
+                  <MousePointer2 className="size-3.5 shrink-0" />
+                  多选
+                </Button>
+              </>
+            ) : null}
           </div>
           ) : null}
-          <div className="flex h-8 items-center rounded-md border border-slate-200 bg-white p-0.5 shadow-sm">
+          <div className={`${isTabletEditor ? "hidden" : "flex"} h-8 items-center rounded-md border border-slate-200 bg-white p-0.5 shadow-sm`}>
             <Button
               disabled={!canDuplicateOrDelete}
               onClick={() => duplicateSelection()}
@@ -410,14 +434,66 @@ export function CanvasViewport({ onCanvasCaptureReady }: CanvasViewportProps) {
           <ThreeViewport onCaptureReady={onCanvasCaptureReady} />
         ) : (
           <CanvasStage
+            multiSelectMode={multiSelectMode}
             onCaptureReady={onCanvasCaptureReady}
             onPanChange={setPan}
             onZoomChange={updateZoom}
             pan={pan}
             panMode={spacePressed}
+            touchOptimized={isTabletEditor}
             zoom={zoom}
           />
         )}
+        {isTabletEditor && canDuplicateOrDelete ? (
+          <div className="pointer-events-auto absolute bottom-[calc(1rem+env(safe-area-inset-bottom))] left-1/2 z-20 flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-slate-200 bg-white/95 p-1.5 shadow-xl backdrop-blur">
+            <Button
+              onClick={() => duplicateSelection()}
+              size="sm"
+              type="button"
+              variant="ghost"
+              className="touch-target h-11 rounded-full px-3 text-sm text-slate-600"
+            >
+              <Copy className="size-4" />
+              复制
+            </Button>
+            {!is3DMode ? (
+              <>
+                <Button
+                  disabled={!canAdjustLayer}
+                  onClick={sendSelectionBackward}
+                  size="sm"
+                  type="button"
+                  variant="ghost"
+                  className="touch-target h-11 w-11 rounded-full p-0 text-slate-600 disabled:opacity-40"
+                  title="下移一层"
+                >
+                  <MoveDown className="size-4" />
+                </Button>
+                <Button
+                  disabled={!canAdjustLayer}
+                  onClick={bringSelectionForward}
+                  size="sm"
+                  type="button"
+                  variant="ghost"
+                  className="touch-target h-11 w-11 rounded-full p-0 text-slate-600 disabled:opacity-40"
+                  title="上移一层"
+                >
+                  <MoveUp className="size-4" />
+                </Button>
+              </>
+            ) : null}
+            <Button
+              onClick={deleteSelection}
+              size="sm"
+              type="button"
+              variant="ghost"
+              className="touch-target h-11 rounded-full px-3 text-sm text-rose-600 hover:bg-rose-50 hover:text-rose-700"
+            >
+              <Trash2 className="size-4" />
+              删除
+            </Button>
+          </div>
+        ) : null}
       </div>
     </section>
   );

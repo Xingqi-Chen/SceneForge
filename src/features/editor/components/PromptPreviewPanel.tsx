@@ -538,6 +538,7 @@ export function PromptPreviewPanel({ onCaptureCanvas }: PromptPreviewPanelProps)
   const [selectedArtistStringError, setSelectedArtistStringError] = useState("");
   const [selectedArtistStringResultKey, setSelectedArtistStringResultKey] = useState("");
   const generatedPrompt = generatePrompt(project);
+  const nsfwEnabled = project.settings.supportsNsfw === true;
   const selectedCheckpointId = project.settings.selectedCivitaiCheckpointId;
   const selectedLoraIds = project.settings.selectedCivitaiLoraIds ?? [];
   const selectedArtistStringIds = project.settings.selectedArtistStringIds ?? [];
@@ -742,6 +743,8 @@ export function PromptPreviewPanel({ onCaptureCanvas }: PromptPreviewPanelProps)
         structuredSummary,
       });
       const requestBody = {
+        purpose: "scene-prompt-reverse" as const,
+        nsfw: nsfwEnabled,
         messages: [
           {
             role: "system" as const,
@@ -775,6 +778,7 @@ export function PromptPreviewPanel({ onCaptureCanvas }: PromptPreviewPanelProps)
         layoutConstraintsEnabled: useLayoutConstraints,
         poseConstraintsEnabled: usePoseConstraints,
         visualConstraintsEnabled: useVisualConstraints,
+        nsfw: requestBody.nsfw,
         promptPreviewChars: (promptForAi.prompt ?? "").length,
         structuredSummaryChars: structuredSummary.length,
         canvasImageDataUrlChars: canvasImage.length,

@@ -43,6 +43,7 @@ function summarizeContentForLog(content: LlmChatContent): string | Array<Record<
 export function summarizeLlmChatRequestForLog(request: LlmChatRequest): Record<string, unknown> {
   return {
     model: request.model ?? "(default)",
+    nsfw: request.nsfw,
     temperature: request.temperature,
     maxTokens: request.maxTokens,
     messageCount: request.messages.length,

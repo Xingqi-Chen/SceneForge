@@ -240,6 +240,7 @@ export function ObjectPropertiesPanel() {
     selection.kind === "bodyPart" && selectedCharacter
       ? selectedCharacter.bodyParts.find((bodyPart) => bodyPart.id === selection.bodyPartId)
       : undefined;
+  const nsfwEnabled = project.settings.supportsNsfw === true;
 
   function updateSelectedObject(patch: Partial<SceneObject>) {
     if (selectedObject) {
@@ -370,6 +371,7 @@ export function ObjectPropertiesPanel() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           purpose: "stick-figure-pose-generation",
+          nsfw: nsfwEnabled,
           messages: buildStickFigurePoseGenerationMessages(description, currentPose),
           temperature: 0.2,
           maxTokens: 900,
@@ -422,6 +424,7 @@ export function ObjectPropertiesPanel() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           purpose: "stick-figure-pose-generation",
+          nsfw: nsfwEnabled,
           messages: buildStickFigurePoseImageGenerationMessages(
             imageDataUrl,
             currentPose,

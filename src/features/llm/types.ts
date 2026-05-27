@@ -22,8 +22,11 @@ export type LlmChatMessage = {
 
 export type LlmChatRequest = {
   model?: string;
+  nsfw?: boolean;
   purpose?:
     | "prompt-library-classification"
+    | "scene-prompt-reverse"
+    | "prompt-tag-reverse"
     | "stick-figure-pose-generation"
     | "civitai-resource-enrichment"
     | "civitai-combination-recommendation"

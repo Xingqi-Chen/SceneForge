@@ -79,6 +79,25 @@ describe("project serialization", () => {
     expect(stripSharedPromptStateFromProject(parsed)).toEqual(stripSharedPromptStateFromProject(project));
   });
 
+  it("round-trips the project NSFW support setting", () => {
+    const project = createDefaultProject();
+    project.settings.supportsNsfw = true;
+
+    const imported = importProjectFromJson(serializeProject(project));
+
+    expect(imported.settings.supportsNsfw).toBe(true);
+  });
+
+  it("defaults missing project NSFW support to false", () => {
+    const project = createDefaultProject();
+    const raw = JSON.parse(serializeProject(project));
+    delete raw.settings.supportsNsfw;
+
+    const imported = importProjectFromJson(JSON.stringify(raw));
+
+    expect(imported.settings.supportsNsfw).toBe(false);
+  });
+
   it("round-trips saved ComfyUI FaceDetailer and HandDetailer parameters", () => {
     const project = createDefaultProject();
     project.settings.savedComfyUiGenerationParams = {

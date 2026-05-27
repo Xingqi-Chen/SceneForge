@@ -25,7 +25,7 @@ import {
   X,
 } from "lucide-react";
 import NextImage from "next/image";
-import { useEffect, useMemo, useRef, useState, type PointerEvent, type ReactNode } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type PointerEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 
 import { Button } from "@/components/ui/button";
@@ -280,13 +280,17 @@ type DiagnosisDiffRow = {
   risk?: string;
 };
 
+const COMFYUI_TEXT_FIELD_CLASS =
+  "h-9 min-w-0 rounded-md border border-slate-200 bg-white px-2 text-sm text-slate-700 outline-none transition focus:border-sky-300 focus:ring-2 focus:ring-sky-100";
+const COMFYUI_SELECT_FIELD_CLASS =
+  `${COMFYUI_TEXT_FIELD_CLASS} w-full appearance-none pr-9`;
+
 const EMPTY_SELECTED_RESOURCES: SelectedCivitaiResourcesPreview = {
   checkpoint: null,
   loras: [],
 };
-const CONTROLNET_MODEL_PATH_STORAGE_KEY = "sceneforge.controlNetModelPath";
 const COMFYUI_HISTORY_POLL_INTERVAL_MS = 2000;
-const COMFYUI_HISTORY_POLL_TIMEOUT_MS = 180000;
+const COMFYUI_HISTORY_POLL_TIMEOUT_MS = 60 * 60 * 1000;
 const DEFAULT_INPAINT_MODEL_UPSCALE_OPTIONS = Object.entries(COMFYUI_INPAINT_UPSCALE_MODEL_PRESETS).map(
   ([mode, preset]): InpaintModelUpscaleOption => ({
     available: false,
@@ -365,14 +369,6 @@ function delay(ms: number) {
   return new Promise((resolve) => {
     window.setTimeout(resolve, ms);
   });
-}
-
-function getStoredControlNetModelPath() {
-  if (typeof window === "undefined") {
-    return "";
-  }
-
-  return window.localStorage.getItem(CONTROLNET_MODEL_PATH_STORAGE_KEY)?.trim() ?? "";
 }
 
 function createComfyUiClientId() {
@@ -490,6 +486,33 @@ async function waitForComfyUiGeneratedImages(
   expectedImageCount: number,
   onPoll?: (history: ComfyUiPromptHistoryResponse) => void,
 ) {
+  const pollHistoryUntilComplete = async () => {
+    const deadline = Date.now() + COMFYUI_HISTORY_POLL_TIMEOUT_MS;
+
+    while (Date.now() < deadline) {
+      const history = await fetchJson<ComfyUiPromptHistoryResponse>(
+        `/api/comfyui/history/${encodeURIComponent(promptId)}`,
+      );
+      onPoll?.(history);
+
+      if (history.images.length >= expectedImageCount) {
+        return history;
+      }
+
+      if (history.completed && history.images.length > 0) {
+        return history;
+      }
+
+      if (history.completed) {
+        throw new Error("ComfyUI 生成已完成，但 history 中没有找到预览输出。");
+      }
+
+      await delay(COMFYUI_HISTORY_POLL_INTERVAL_MS);
+    }
+
+    throw new Error("等待 ComfyUI 生成结果超时。任务可能仍在 ComfyUI 队列中，请稍后在 ComfyUI history 中查看该 prompt。");
+  };
+
   if (clientId) {
     const params = new URLSearchParams({
       expectedImages: String(expectedImageCount),
@@ -508,6 +531,12 @@ async function waitForComfyUiGeneratedImages(
         settled = true;
         events.close();
         callback();
+      };
+
+      const fallbackToHistoryPolling = () => {
+        finish(() => {
+          void pollHistoryUntilComplete().then(resolve, reject);
+        });
       };
 
       events.addEventListener("connected", () => {
@@ -536,41 +565,27 @@ async function waitForComfyUiGeneratedImages(
         finish(() => resolve(parseEventData<ComfyUiPromptHistoryResponse>(event as MessageEvent<string>)));
       });
 
+      events.addEventListener("listener-timeout", () => {
+        fallbackToHistoryPolling();
+      });
+
       events.addEventListener("comfyui-error", (event) => {
-        const payload = parseEventData<{ message?: string }>(event as MessageEvent<string>);
+        const payload = parseEventData<{ message?: string; retryable?: boolean }>(event as MessageEvent<string>);
+        if (payload.retryable) {
+          fallbackToHistoryPolling();
+          return;
+        }
+
         finish(() => reject(new Error(payload.message ?? "ComfyUI WebSocket 监听失败。")));
       });
 
       events.onerror = () => {
-        finish(() => reject(new Error("ComfyUI WebSocket 监听连接中断。")));
+        fallbackToHistoryPolling();
       };
     });
   }
 
-  const deadline = Date.now() + COMFYUI_HISTORY_POLL_TIMEOUT_MS;
-
-  while (Date.now() < deadline) {
-    const history = await fetchJson<ComfyUiPromptHistoryResponse>(
-      `/api/comfyui/history/${encodeURIComponent(promptId)}`,
-    );
-    onPoll?.(history);
-
-    if (history.images.length >= expectedImageCount) {
-      return history;
-    }
-
-    if (history.completed && history.images.length > 0) {
-      return history;
-    }
-
-    if (history.completed) {
-      throw new Error("ComfyUI 生成已完成，但 history 中没有找到预览输出。");
-    }
-
-    await delay(COMFYUI_HISTORY_POLL_INTERVAL_MS);
-  }
-
-  throw new Error("等待 ComfyUI 生成结果超时，请稍后在 ComfyUI history 中查看该 prompt。");
+  return pollHistoryUntilComplete();
 }
 
 function buildSelectedCivitaiResourcesQuery(checkpointId: string | null, loraIds: string[]) {
@@ -1519,7 +1534,7 @@ function NumberInput({
     <label className="grid gap-1">
       <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">{label}</span>
       <input
-        className="h-9 min-w-0 rounded-md border border-slate-200 bg-white px-2 text-sm text-slate-700 outline-none transition focus:border-sky-300 focus:ring-2 focus:ring-sky-100"
+        className={COMFYUI_TEXT_FIELD_CLASS}
         max={max}
         min={min}
         onChange={(event) => {
@@ -1539,18 +1554,21 @@ function NumberInput({
 function TextInput({
   label,
   onChange,
+  placeholder,
   value,
 }: {
   label: string;
   onChange: (value: string) => void;
+  placeholder?: string;
   value: string;
 }) {
   return (
     <label className="grid gap-1">
       <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">{label}</span>
       <input
-        className="h-9 min-w-0 rounded-md border border-slate-200 bg-white px-2 text-sm text-slate-700 outline-none transition focus:border-sky-300 focus:ring-2 focus:ring-sky-100"
+        className={COMFYUI_TEXT_FIELD_CLASS}
         onChange={(event) => onChange(event.target.value)}
+        placeholder={placeholder}
         type="text"
         value={value}
       />
@@ -1617,17 +1635,20 @@ function SelectInput({
   return (
     <label className="grid gap-1">
       <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">{label}</span>
-      <select
-        className="h-9 min-w-0 rounded-md border border-slate-200 bg-white px-2 text-sm text-slate-700 outline-none transition focus:border-sky-300 focus:ring-2 focus:ring-sky-100"
-        onChange={(event) => onChange(event.target.value)}
-        value={selectedValue}
-      >
-        {options.map((option) => (
-          <option key={option.value} value={option.value}>
-            {option.label}
-          </option>
-        ))}
-      </select>
+      <span className="relative min-w-0">
+        <select
+          className={COMFYUI_SELECT_FIELD_CLASS}
+          onChange={(event) => onChange(event.target.value)}
+          value={selectedValue}
+        >
+          {options.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+        <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 size-4 -translate-y-1/2 text-slate-400" />
+      </span>
     </label>
   );
 }
@@ -1832,32 +1853,68 @@ function ControlNetModelField({
   onChange: (value: string) => void;
   value: string;
 }) {
-  if (modelOptions.length === 0) {
-    return <TextInput label={label} onChange={onChange} value={value} />;
-  }
-
-  const hasCurrentValue = value && !modelOptions.some((option) => option.value === value);
+  const selectId = useId();
+  const manualInputId = useId();
+  const [manualEntryOpen, setManualEntryOpen] = useState(() => Boolean(value.trim()));
+  const hasModelChoices = modelOptions.length > 0;
+  const hasCurrentValue = Boolean(value) && !modelOptions.some((option) => option.value === value);
   const options = [
     { label: "Auto pick from ComfyUI", value: "" },
     ...(hasCurrentValue ? [{ label: `Current: ${value}`, value }] : []),
     ...modelOptions,
   ];
+  const selectedValue = options.some((option) => option.value === value) ? value : "";
 
   return (
-    <label className="grid gap-1">
-      <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">{label}</span>
-      <select
-        className="h-9 min-w-0 rounded-md border border-slate-200 bg-white px-2 text-sm text-slate-700 outline-none transition focus:border-sky-300 focus:ring-2 focus:ring-sky-100"
-        onChange={(event) => onChange(event.target.value)}
-        value={value}
-      >
-        {options.map((option) => (
-          <option key={option.value || "__auto"} value={option.value}>
-            {option.label}
-          </option>
-        ))}
-      </select>
-    </label>
+    <div className="grid gap-1">
+      <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-500" htmlFor={selectId}>
+        {label}
+      </label>
+      <div className="relative min-w-0">
+        <select
+          className={COMFYUI_SELECT_FIELD_CLASS}
+          id={selectId}
+          onChange={(event) => onChange(event.target.value)}
+          value={selectedValue}
+        >
+          {options.map((option) => (
+            <option key={option.value || "__auto"} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+        <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 size-4 -translate-y-1/2 text-slate-400" />
+      </div>
+      {!hasModelChoices ? (
+        <div className="grid gap-2 rounded-md border border-slate-200 bg-slate-50 p-2 sm:grid-cols-[auto_minmax(0,1fr)] sm:items-center">
+          <Button
+            className="h-9 justify-center rounded-md border-slate-200 bg-white px-3 text-xs text-slate-700 shadow-none hover:bg-slate-100"
+            onClick={() => setManualEntryOpen((current) => !current)}
+            type="button"
+            variant="secondary"
+          >
+            {manualEntryOpen ? "隐藏手动输入" : "手动输入模型名"}
+          </Button>
+          {manualEntryOpen ? (
+            <label className="grid min-w-0 gap-1" htmlFor={manualInputId}>
+              <span className="sr-only">{label} manual model name</span>
+              <input
+                className={COMFYUI_TEXT_FIELD_CLASS}
+                id={manualInputId}
+                onChange={(event) => onChange(event.target.value)}
+                placeholder="可选：control_xxx.safetensors"
+                type="text"
+                value={value}
+              />
+            </label>
+          ) : (
+            <p className="min-w-0 text-[11px] leading-relaxed text-slate-500">
+              未扫描到模型列表时会自动选择匹配模型；需要固定文件名时可手动输入。
+            </p>
+          )}
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -3743,39 +3800,23 @@ function ControlNetOpenPoseFoldout({
   const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "success" | "error">("idle");
   const [saveError, setSaveError] = useState("");
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [controlNetModelPath, setControlNetModelPath] = useState(getStoredControlNetModelPath);
-  const [controlNetModelPathDraft, setControlNetModelPathDraft] = useState(getStoredControlNetModelPath);
+  const [controlNetModelPath, setControlNetModelPath] = useState("");
   const [controlNetModelOptions, setControlNetModelOptions] = useState<ControlNetModelOption[]>([]);
   const [controlNetModelLoadStatus, setControlNetModelLoadStatus] = useState<LoadStatus>("idle");
   const [controlNetModelLoadError, setControlNetModelLoadError] = useState("");
 
-  async function loadControlNetModels(modelPath: string) {
-    const trimmedPath = modelPath.trim();
-
-    if (!trimmedPath) {
-      window.localStorage.removeItem(CONTROLNET_MODEL_PATH_STORAGE_KEY);
-      setControlNetModelPath("");
-      setControlNetModelPathDraft("");
-      setControlNetModelOptions([]);
-      setControlNetModelLoadStatus("idle");
-      setControlNetModelLoadError("");
-      return;
-    }
-
+  async function loadControlNetModels() {
     setControlNetModelLoadStatus("loading");
     setControlNetModelLoadError("");
 
     try {
-      const params = new URLSearchParams({ path: trimmedPath });
-      const payload = await fetchJson<ControlNetModelsResponse>(`/api/comfyui/controlnet-models?${params.toString()}`);
-      const resolvedPath = payload.modelPath || trimmedPath;
+      const payload = await fetchJson<ControlNetModelsResponse>("/api/comfyui/controlnet-models");
 
-      window.localStorage.setItem(CONTROLNET_MODEL_PATH_STORAGE_KEY, resolvedPath);
-      setControlNetModelPath(resolvedPath);
-      setControlNetModelPathDraft(resolvedPath);
+      setControlNetModelPath(payload.modelPath);
       setControlNetModelOptions(payload.models);
-      setControlNetModelLoadStatus("success");
+      setControlNetModelLoadStatus(payload.modelPath ? "success" : "idle");
     } catch (error) {
+      setControlNetModelPath("");
       setControlNetModelOptions([]);
       setControlNetModelLoadStatus("error");
       setControlNetModelLoadError(error instanceof Error ? error.message : "Unable to load ControlNet models.");
@@ -3783,13 +3824,8 @@ function ControlNetOpenPoseFoldout({
   }
 
   useEffect(() => {
-    const storedPath = getStoredControlNetModelPath();
-    if (!storedPath) {
-      return;
-    }
-
     const timeout = window.setTimeout(() => {
-      void loadControlNetModels(storedPath);
+      void loadControlNetModels();
     }, 0);
 
     return () => window.clearTimeout(timeout);
@@ -3870,34 +3906,32 @@ function ControlNetOpenPoseFoldout({
       </div>
       {settingsOpen ? (
         <div className="min-w-0 overflow-hidden rounded-md border border-sky-100 bg-white p-3">
-          <div className="grid min-w-0 gap-2">
-            <label className="grid min-w-0 gap-1">
-              <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div className="min-w-0">
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">
                 ControlNet model path
-              </span>
-              <input
-                className="h-9 w-full min-w-0 rounded-md border border-slate-200 bg-white px-2 text-xs text-slate-700 outline-none transition focus:border-sky-300 focus:ring-2 focus:ring-sky-100"
-                onChange={(event) => setControlNetModelPathDraft(event.target.value)}
-                placeholder="例如：D:\\ComfyUI\\models\\controlnet"
-                type="text"
-                value={controlNetModelPathDraft}
-              />
-            </label>
-            <div className="flex min-w-0 justify-end">
-              <Button
-                className="h-9 w-full rounded-md bg-sky-600 px-3 text-xs text-white hover:bg-sky-700 disabled:opacity-60 sm:w-auto sm:min-w-[116px]"
-                disabled={controlNetModelLoadStatus === "loading"}
-                onClick={() => void loadControlNetModels(controlNetModelPathDraft)}
-                type="button"
-              >
-                {controlNetModelLoadStatus === "loading" ? (
-                  <Loader2 className="size-3.5 animate-spin" />
-                ) : (
-                  <Settings className="size-3.5" />
-                )}
-                保存并扫描
-              </Button>
+              </p>
+              {controlNetModelPath ? (
+                <p className="mt-1 break-words text-[11px] leading-relaxed text-slate-700">{controlNetModelPath}</p>
+              ) : (
+                <p className="mt-1 text-[11px] leading-relaxed text-slate-500">
+                  未配置。请在 Civitai 收藏库右上角齿轮的“路径设置”里统一设置 ControlNet 模型路径。
+                </p>
+              )}
             </div>
+            <Button
+              className="h-9 shrink-0 rounded-md bg-sky-600 px-3 text-xs text-white hover:bg-sky-700 disabled:opacity-60"
+              disabled={controlNetModelLoadStatus === "loading"}
+              onClick={() => void loadControlNetModels()}
+              type="button"
+            >
+              {controlNetModelLoadStatus === "loading" ? (
+                <Loader2 className="size-3.5 animate-spin" />
+              ) : (
+                <Settings className="size-3.5" />
+              )}
+              刷新模型列表
+            </Button>
           </div>
           {controlNetModelLoadStatus === "success" ? (
             <p className="mt-2 text-[11px] leading-relaxed text-emerald-700 [overflow-wrap:anywhere]">

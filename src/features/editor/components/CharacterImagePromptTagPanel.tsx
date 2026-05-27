@@ -46,6 +46,8 @@ type PendingImportReview = {
   newSuggestions: BoundPromptTagSuggestion[];
 };
 
+type NewPromptTagApplyMode = "skip" | "temporary" | "import";
+
 const SCENE_REVERSE_PROMPT_CATEGORY_SET = new Set<PromptTagCategory>(
   SCENE_PROMPT_TAG_CATEGORIES,
 );
@@ -201,6 +203,7 @@ export function CharacterImagePromptTagPanel() {
   );
   const visibleForSelection = isSceneTarget || isCharacterTarget;
   const shouldInferPose = !isSceneTarget && inferPoseFromImage;
+  const nsfwEnabled = project.settings.supportsNsfw === true;
   const targetTagLabel = isSceneTarget ? "场景标签" : "部位标签";
 
   const allLibraryTags = useMemo(() => {
@@ -240,11 +243,13 @@ export function CharacterImagePromptTagPanel() {
     };
   }
 
-  async function applySuggestions(review: PendingImportReview, importNewTags: boolean) {
+  async function applySuggestions(review: PendingImportReview, newTagMode: NewPromptTagApplyMode) {
     const character = selectedCharacter;
     if (!isSceneTarget && !character) {
       return;
     }
+    const importNewTags = newTagMode === "import";
+    const applyNewTags = newTagMode !== "skip";
 
     setSavingReview(true);
     setError("");
@@ -265,7 +270,7 @@ export function CharacterImagePromptTagPanel() {
           ...suggestion,
           tagToApply: suggestion.libraryTag,
         })),
-        ...(importNewTags
+        ...(applyNewTags
           ? review.newSuggestions.map((suggestion) => ({
               ...suggestion,
               tagToApply: makeTransientPromptTag(suggestion.tag),
@@ -317,11 +322,13 @@ export function CharacterImagePromptTagPanel() {
       await saveProject(useEditorStore.getState().project);
       setPendingReview(null);
       setStatus("success");
-      setFeedback(
-        importNewTags
-          ? `已导入 ${review.newSuggestions.length} 个新词条，并选中 ${tagsToApply.length} 个${targetTagLabel}。`
-          : `已跳过新词条，选中 ${tagsToApply.length} 个已有${targetTagLabel}。`,
-      );
+      if (newTagMode === "import") {
+        setFeedback(`已导入 ${review.newSuggestions.length} 个新词条，并选中 ${tagsToApply.length} 个${targetTagLabel}。`);
+      } else if (newTagMode === "temporary") {
+        setFeedback(`已本次保留 ${review.newSuggestions.length} 个新词条，未写入词库，并选中 ${tagsToApply.length} 个${targetTagLabel}。`);
+      } else {
+        setFeedback(`已跳过新词条，选中 ${tagsToApply.length} 个已有${targetTagLabel}。`);
+      }
     } catch (caught) {
       console.error("[SceneForge] [prompt-library] failed to apply image prompt tags", {
         error: caught,
@@ -349,6 +356,7 @@ export function CharacterImagePromptTagPanel() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           purpose: "stick-figure-pose-generation",
+          nsfw: nsfwEnabled,
           messages: buildStickFigurePoseImageGenerationMessages(imageDataUrl, currentPose),
           temperature: 0.2,
           maxTokens: 900,
@@ -400,6 +408,7 @@ export function CharacterImagePromptTagPanel() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           purpose: "stick-figure-pose-generation",
+          nsfw: nsfwEnabled,
           messages: buildStickFigurePoseGenerationMessages(prompt, currentPose),
           temperature: 0.2,
           maxTokens: 900,
@@ -451,6 +460,8 @@ export function CharacterImagePromptTagPanel() {
         "content-type": "application/json",
       },
       body: JSON.stringify({
+        purpose: "prompt-tag-reverse",
+        nsfw: nsfwEnabled,
         messages,
         temperature,
         maxTokens: 2200,
@@ -581,7 +592,7 @@ export function CharacterImagePromptTagPanel() {
         return;
       }
 
-      await applySuggestions(review, false);
+      await applySuggestions(review, "skip");
       if (shouldInferPose) {
         await generatePoseFromImage(file, character);
       }
@@ -655,7 +666,7 @@ export function CharacterImagePromptTagPanel() {
         return;
       }
 
-      await applySuggestions(review, false);
+      await applySuggestions(review, "skip");
       if (shouldInferPose) {
         await generatePoseFromText(prompt, character);
       }
@@ -821,7 +832,7 @@ export function CharacterImagePromptTagPanel() {
               className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4 backdrop-blur-sm"
               role="dialog"
             >
-              <div className="flex max-h-[88vh] w-full max-w-lg flex-col overflow-hidden rounded-md border border-slate-200 bg-white shadow-2xl">
+              <div className="flex max-h-[88vh] w-full max-w-xl flex-col overflow-hidden rounded-md border border-slate-200 bg-white shadow-2xl">
                 <div className="flex items-start gap-3 border-b border-slate-100 bg-pink-50 p-5">
                   <div className="rounded-md bg-white p-2 text-pink-600">
                     <Sparkles className="size-5" />
@@ -831,7 +842,7 @@ export function CharacterImagePromptTagPanel() {
                       {isSceneTarget ? "导入新的场景提示词" : "导入新的部位提示词"}
                     </h3>
                     <p className="mt-1 text-xs leading-relaxed text-slate-500">
-                      AI 识别到 {pendingReview.newSuggestions.length} 个词库中不存在的词条。确认后会先导入词库，再选中这些标签。
+                      AI 识别到 {pendingReview.newSuggestions.length} 个词库中不存在的词条。可导入词库，也可仅本次保留并应用到当前目标。
                     </p>
                   </div>
                   <button
@@ -877,20 +888,29 @@ export function CharacterImagePromptTagPanel() {
                   </ul>
                 </div>
 
-                <div className="grid grid-cols-2 gap-3 border-t border-slate-100 bg-slate-50 p-4">
+                <div className="flex flex-col gap-2 border-t border-slate-100 bg-slate-50 p-4 sm:flex-row sm:flex-wrap sm:items-center sm:justify-end sm:gap-3">
                   <Button
-                    className="h-10 rounded-md border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+                    className="h-10 w-full whitespace-nowrap rounded-md border-slate-200 bg-white px-5 text-slate-700 hover:bg-slate-50 sm:w-auto sm:min-w-[148px]"
                     disabled={savingReview}
-                    onClick={() => void applySuggestions(pendingReview, false)}
+                    onClick={() => void applySuggestions(pendingReview, "skip")}
                     type="button"
                     variant="secondary"
                   >
                     仅选中已有词条
                   </Button>
                   <Button
-                    className="h-10 rounded-md bg-pink-600 text-white hover:bg-pink-700 disabled:opacity-60"
+                    className="h-10 w-full whitespace-nowrap rounded-md border-pink-200 bg-white px-5 text-pink-700 hover:bg-pink-50 disabled:opacity-60 sm:w-auto sm:min-w-[190px]"
                     disabled={savingReview}
-                    onClick={() => void applySuggestions(pendingReview, true)}
+                    onClick={() => void applySuggestions(pendingReview, "temporary")}
+                    type="button"
+                    variant="secondary"
+                  >
+                    本次保留，不入词库
+                  </Button>
+                  <Button
+                    className="h-10 w-full whitespace-nowrap rounded-md bg-pink-600 px-5 text-white hover:bg-pink-700 disabled:opacity-60 sm:w-auto sm:min-w-[148px]"
+                    disabled={savingReview}
+                    onClick={() => void applySuggestions(pendingReview, "import")}
                     type="button"
                   >
                     {savingReview ? <Loader2 className="size-4 animate-spin" /> : null}
