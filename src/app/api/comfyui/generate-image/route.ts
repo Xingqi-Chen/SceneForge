@@ -158,6 +158,7 @@ export async function POST(request: Request) {
       workflow: result.workflow,
       nodeIds: result.nodeIds,
       outputNodeId: result.outputNodeId,
+      warnings: objectValidation.warnings,
       request: sanitizeReturnedRequest(result.request),
     });
   } catch (error) {

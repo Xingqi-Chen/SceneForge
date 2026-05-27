@@ -9,6 +9,10 @@ import type {
   PromptTag,
   PromptTagCategory,
   PromptTagSubcategory,
+  SavedComicSequenceReferenceChannelParams,
+  SavedComicSequenceControlNetParams,
+  SavedComicSequenceReferenceImage,
+  SavedComicSequenceReferenceParams,
   SavedComfyUiGeneratedImage,
   Scene,
   SceneForgeProject,
@@ -959,6 +963,178 @@ function sanitizeSavedComfyUiGenerationParams(
   };
 }
 
+function sanitizeSavedComicSequenceControlNet(raw: unknown): SavedComicSequenceControlNetParams | null {
+  if (!isRecord(raw)) {
+    return null;
+  }
+
+  const type = raw.type === "depth" || raw.type === "normal" ? raw.type : "openpose";
+
+  return {
+    type,
+    enabled: raw.enabled === true,
+    modelName: typeof raw.modelName === "string" ? raw.modelName : "",
+    strength: sanitizeNumberInRangeLoose(raw.strength, 0.75, 0, 2),
+    startPercent: sanitizeNumberInRangeLoose(raw.startPercent, 0, 0, 1),
+    endPercent: sanitizeNumberInRangeLoose(raw.endPercent, 1, 0, 1),
+  };
+}
+
+function sanitizeSavedComicSequenceReferenceImage(raw: unknown): SavedComicSequenceReferenceImage | null {
+  if (!isRecord(raw) || typeof raw.id !== "string" || !raw.id.trim()) {
+    return null;
+  }
+
+  if (raw.source === "history") {
+    return typeof raw.imageId === "string" && raw.imageId.trim()
+      ? {
+          id: raw.id.trim(),
+          source: "history" as const,
+          imageId: raw.imageId.trim(),
+        }
+      : null;
+  }
+
+  if (raw.source === "upload") {
+    const filename = readManagedGeneratedImageFilename(raw.filename);
+    const url = typeof raw.url === "string" && raw.url.trim() ? raw.url.trim() : "";
+    if (!filename || !url) {
+      return null;
+    }
+
+    return {
+      id: raw.id.trim(),
+      source: "upload" as const,
+      filename,
+      name: typeof raw.name === "string" && raw.name.trim() ? raw.name.trim() : filename,
+      url,
+    };
+  }
+
+  return null;
+}
+
+function sanitizeSavedComicSequenceReferenceChannel(
+  raw: unknown,
+  fallback: SavedComicSequenceReferenceChannelParams,
+): SavedComicSequenceReferenceChannelParams {
+  const channel = isRecord(raw) ? raw : {};
+  const rawMode = channel.mode;
+  const mode = rawMode === "ipadapter" || rawMode === "faceid" || rawMode === "face"
+    ? rawMode
+    : fallback.mode;
+  const images = Array.isArray(channel.images)
+    ? channel.images
+        .map(sanitizeSavedComicSequenceReferenceImage)
+        .filter((image): image is NonNullable<ReturnType<typeof sanitizeSavedComicSequenceReferenceImage>> => image !== null)
+        .slice(0, 4)
+    : fallback.images;
+
+  return {
+    enabled: typeof channel.enabled === "boolean" ? channel.enabled : fallback.enabled,
+    mode,
+    weight: sanitizeNumberInRangeLoose(channel.weight, fallback.weight, 0, 1),
+    startAt: sanitizeNumberInRangeLoose(channel.startAt, fallback.startAt, 0, 1),
+    endAt: sanitizeNumberInRangeLoose(channel.endAt, fallback.endAt, 0, 1),
+    images,
+  };
+}
+
+function sanitizeSavedComicSequenceReference(raw: unknown): SavedComicSequenceReferenceParams {
+  const reference = isRecord(raw) ? raw : {};
+  const rawMode = reference.mode;
+  const mode = rawMode === "ipadapter" || rawMode === "faceid" ? rawMode : "face";
+  const images = Array.isArray(reference.images)
+    ? reference.images
+        .map(sanitizeSavedComicSequenceReferenceImage)
+        .filter((image): image is NonNullable<ReturnType<typeof sanitizeSavedComicSequenceReferenceImage>> => image !== null)
+        .slice(0, 4)
+    : [];
+  const weight = sanitizeNumberInRangeLoose(reference.weight, 0.45, 0, 1);
+  const startAt = sanitizeNumberInRangeLoose(reference.startAt, 0, 0, 1);
+  const endAt = sanitizeNumberInRangeLoose(reference.endAt, 1, 0, 1);
+  const legacyFaceFallback: SavedComicSequenceReferenceChannelParams = {
+    enabled: images.length > 0 && mode !== "ipadapter",
+    mode: mode === "faceid" ? "faceid" : "face",
+    weight,
+    startAt,
+    endAt,
+    images: mode === "ipadapter" ? [] : images,
+  };
+  const legacyCharacterFallback: SavedComicSequenceReferenceChannelParams = {
+    enabled: images.length > 0 && mode === "ipadapter",
+    mode: "ipadapter",
+    weight,
+    startAt,
+    endAt,
+    images: mode === "ipadapter" ? images : [],
+  };
+
+  return {
+    characterName: typeof reference.characterName === "string" && reference.characterName.trim()
+      ? reference.characterName.trim()
+      : "Character 1",
+    characterPrompt: typeof reference.characterPrompt === "string" ? reference.characterPrompt : "",
+    face: sanitizeSavedComicSequenceReferenceChannel(reference.face, legacyFaceFallback),
+    character: sanitizeSavedComicSequenceReferenceChannel(reference.character, legacyCharacterFallback),
+    mode,
+    weight,
+    startAt,
+    endAt,
+    images,
+  };
+}
+
+function sanitizeSavedComicSequence(raw: unknown): SceneForgeProject["settings"]["savedComicSequence"] | undefined {
+  if (!isRecord(raw)) {
+    return undefined;
+  }
+
+  const defaults = sanitizeSavedComfyUiGenerationParams(raw.defaults);
+  const shots = Array.isArray(raw.shots)
+    ? raw.shots.flatMap((shot) => {
+        if (!isRecord(shot) || typeof shot.id !== "string" || !shot.id.trim()) {
+          return [];
+        }
+
+        const parameters = sanitizeSavedComfyUiGenerationParams(shot.parameters);
+        if (!parameters) {
+          return [];
+        }
+
+        return [
+          {
+            id: shot.id.trim(),
+            title: typeof shot.title === "string" && shot.title.trim() ? shot.title.trim() : "Shot",
+            scene: sanitizeScene(shot.scene),
+            positivePrompt: typeof shot.positivePrompt === "string" ? shot.positivePrompt : "",
+            negativePrompt: typeof shot.negativePrompt === "string" ? shot.negativePrompt : "",
+            shotPrompt: typeof shot.shotPrompt === "string" ? shot.shotPrompt : "",
+            parameters,
+            controlNets: Array.isArray(shot.controlNets)
+              ? shot.controlNets
+                  .map(sanitizeSavedComicSequenceControlNet)
+                  .filter((controlNet): controlNet is NonNullable<ReturnType<typeof sanitizeSavedComicSequenceControlNet>> => controlNet !== null)
+              : [],
+            reference: sanitizeSavedComicSequenceReference(shot.reference),
+            createdAt: readTimestamp(shot.createdAt) ?? "1970-01-01T00:00:00.000Z",
+            updatedAt: readTimestamp(shot.updatedAt) ?? "1970-01-01T00:00:00.000Z",
+          },
+        ];
+      })
+    : [];
+  const selectedShotId = typeof raw.selectedShotId === "string" && shots.some((shot) => shot.id === raw.selectedShotId)
+    ? raw.selectedShotId
+    : shots[0]?.id;
+
+  return {
+    version: 1,
+    ...(selectedShotId ? { selectedShotId } : {}),
+    ...(defaults && defaults !== null ? { defaults } : {}),
+    shots,
+  };
+}
+
 function readNonEmptyString(raw: unknown): string | null {
   return typeof raw === "string" && raw.trim() ? raw.trim() : null;
 }
@@ -1073,6 +1249,14 @@ function sanitizeComfyUiGeneratedImage(raw: unknown): SavedComfyUiGeneratedImage
   const type = readOptionalNonEmptyString(raw.type);
   const parentImageId = readOptionalNonEmptyString(raw.parentImageId);
   const outputNodeId = readOptionalNonEmptyString(raw.outputNodeId);
+  const sequenceId = readOptionalNonEmptyString(raw.sequenceId);
+  const shotId = readOptionalNonEmptyString(raw.shotId);
+  const characterReferenceIds = sanitizeStringIdList(raw.characterReferenceIds);
+  const source = raw.source === "sequence"
+    ? "sequence"
+    : raw.source === "inpaint"
+      ? "inpaint"
+      : "text-to-image";
 
   return {
     id,
@@ -1086,7 +1270,7 @@ function sanitizeComfyUiGeneratedImage(raw: unknown): SavedComfyUiGeneratedImage
     seed: typeof raw.seed === "number" && Number.isSafeInteger(raw.seed) && raw.seed >= 0
       ? raw.seed
       : parameters.seed,
-    source: raw.source === "inpaint" ? "inpaint" : "text-to-image",
+    source,
     ...(storage ? { storage } : {}),
     ...(localFilename ? { localFilename } : {}),
     ...(sourceReference ? { sourceReference } : {}),
@@ -1094,6 +1278,9 @@ function sanitizeComfyUiGeneratedImage(raw: unknown): SavedComfyUiGeneratedImage
     favorited: raw.favorited === true,
     ...(parentImageId ? { parentImageId } : {}),
     ...(outputNodeId ? { outputNodeId } : {}),
+    ...(sequenceId ? { sequenceId } : {}),
+    ...(shotId ? { shotId } : {}),
+    ...(characterReferenceIds.length > 0 ? { characterReferenceIds } : {}),
     width: sanitizePositiveInteger(raw.width, fallbackWidth),
     height: sanitizePositiveInteger(raw.height, fallbackHeight),
     positivePrompt: typeof raw.positivePrompt === "string" ? raw.positivePrompt : "",
@@ -1174,6 +1361,7 @@ function sanitizeSettings(settings: unknown): SceneForgeProject["settings"] {
   const savedComfyUiGenerationParams = sanitizeSavedComfyUiGenerationParams(
     settings.savedComfyUiGenerationParams,
   );
+  const savedComicSequence = sanitizeSavedComicSequence(settings.savedComicSequence);
   const modelFormat = settings.modelFormat;
   const mf: SceneForgeProject["settings"]["modelFormat"] =
     typeof modelFormat === "string" &&
@@ -1224,6 +1412,7 @@ function sanitizeSettings(settings: unknown): SceneForgeProject["settings"] {
         ? settings.artistStringPromptRenderMode
         : "artist-weight",
     ...(savedComfyUiGenerationParams !== undefined ? { savedComfyUiGenerationParams } : {}),
+    ...(savedComicSequence !== undefined ? { savedComicSequence } : {}),
     promptLibraryTags: libraryTags,
     deletedBuiltInPromptLibraryTagIds: [...new Set(deletedBuiltIns)],
     comfyUiGeneratedImages: sanitizeComfyUiGeneratedImages(settings.comfyUiGeneratedImages),

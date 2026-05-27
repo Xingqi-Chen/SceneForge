@@ -10,6 +10,7 @@ import type {
   ComfyUiTextToImageRequest,
   ComfyUiWorkflow,
   ComfyUiWorkflowNode,
+  ResolvedComfyUiCharacterReferenceConfig,
   ResolvedComfyUiFaceDetailerConfig,
 } from "./types";
 import { getComfyUiLatentImageNodeTitle } from "./latent-image-node";
@@ -81,6 +82,104 @@ function getTiledVaeInputs() {
     overlap: HIGH_RES_INPAINT_VAE_TILE_OVERLAP,
     temporal_size: HIGH_RES_INPAINT_VAE_TEMPORAL_SIZE,
     temporal_overlap: HIGH_RES_INPAINT_VAE_TEMPORAL_OVERLAP,
+  };
+}
+
+function addCharacterReferenceNodes({
+  builder,
+  modelConnection,
+  references,
+}: {
+  builder: ComfyUiWorkflowBuilder;
+  modelConnection: ComfyUiNodeConnection;
+  references: ResolvedComfyUiCharacterReferenceConfig[];
+}) {
+  const nodeIds = references
+    .filter((reference) => reference.enabled && reference.images.length > 0)
+    .map((reference) => {
+      const imageLoaders = reference.images.map((image, imageIndex) =>
+        builder.addNode(
+          "LoadImage",
+          {
+            image: image.imageName,
+          },
+          `Load ${reference.name} Reference ${imageIndex + 1}`,
+        ),
+      );
+      const imageBatchers: string[] = [];
+      let imageConnection = builder.connect(imageLoaders[0], 0);
+
+      for (const imageLoader of imageLoaders.slice(1)) {
+        const batcher = builder.addNode(
+          "ImageBatch",
+          {
+            image1: imageConnection,
+            image2: builder.connect(imageLoader, 0),
+          },
+          `Batch ${reference.name} References ${imageBatchers.length + 1}`,
+        );
+        imageBatchers.push(batcher);
+        imageConnection = builder.connect(batcher, 0);
+      }
+
+      const maskImage = reference.maskImageName
+        ? builder.addNode(
+            "LoadImage",
+            {
+              image: reference.maskImageName,
+            },
+            `Load ${reference.name} Attention Mask`,
+          )
+        : undefined;
+      const loaderClassType = reference.mode === "faceid"
+        ? "IPAdapterUnifiedLoaderFaceID"
+        : "IPAdapterUnifiedLoader";
+      const loader = builder.addNode(
+        loaderClassType,
+        {
+          model: modelConnection,
+          preset: reference.preset,
+          ...(reference.mode === "faceid"
+            ? {
+                lora_strength: reference.loraStrength,
+                provider: reference.provider,
+              }
+            : {}),
+        },
+        `Load ${reference.name} IPAdapter`,
+      );
+      const apply = builder.addNode(
+        "IPAdapterAdvanced",
+        {
+          model: builder.connect(loader, 0),
+          ipadapter: builder.connect(loader, 1),
+          image: imageConnection,
+          weight: reference.weight,
+          weight_type: reference.weightType,
+          combine_embeds: reference.combineEmbeds,
+          start_at: reference.startPercent,
+          end_at: reference.endPercent,
+          embeds_scaling: reference.embedsScaling,
+          ...(maskImage ? { attn_mask: builder.connect(maskImage, 1) } : {}),
+        },
+        `Apply ${reference.name} IPAdapter`,
+      );
+
+      modelConnection = builder.connect(apply, 0);
+
+      return {
+        characterId: reference.id,
+        imageLoaders,
+        imageBatchers,
+        ...(maskImage ? { maskImage } : {}),
+        loader,
+        apply,
+      };
+    });
+
+  return {
+    modelConnection,
+    nodeIds,
   };
 }
 
@@ -256,6 +355,13 @@ export function buildBasicTextToImageWorkflow(request: ComfyUiTextToImageRequest
       };
     });
 
+  const characterReferenceNodes = addCharacterReferenceNodes({
+    builder,
+    modelConnection,
+    references: resolvedRequest.characterReferences,
+  });
+  modelConnection = characterReferenceNodes.modelConnection;
+
   const latentImage = builder.addNode(
     resolvedRequest.latentImageNode,
     {
@@ -352,6 +458,7 @@ export function buildBasicTextToImageWorkflow(request: ComfyUiTextToImageRequest
       ...(controlNetNodeIds[0] ? { controlNetImage: controlNetNodeIds[0].image } : {}),
       ...(controlNetNodeIds[0] ? { controlNetLoader: controlNetNodeIds[0].loader } : {}),
       ...(controlNetNodeIds[0] ? { controlNetApply: controlNetNodeIds[0].apply } : {}),
+      ...(characterReferenceNodes.nodeIds.length > 0 ? { characterReferences: characterReferenceNodes.nodeIds } : {}),
       latentImage,
       sampler,
       vaeDecode,

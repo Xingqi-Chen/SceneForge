@@ -59,6 +59,7 @@ import {
   type ComfyUiInpaintUpscaleMode,
   type ComfyUiInpaintUpscaleStrategy,
   type ComfyUiInputValue,
+  type ComfyUiIpAdapterReferenceMode,
   type ComfyUiPromptHistoryResponse,
   type ComfyUiSam2Bbox,
   type ComfyUiSam2Point,
@@ -131,11 +132,18 @@ import { useEditorStore } from "@/features/editor/store/editor-store";
 import { getLlmProxyErrorMessage, isLlmChatResponse } from "@/features/llm";
 import { generatePrompt } from "@/features/prompt-engine";
 import type {
+  SavedComicSequence,
+  SavedComicSequenceReferenceChannelParams,
+  SavedComicSequenceControlNetParams,
+  SavedComicSequenceReferenceImage,
+  SavedComicSequenceShot,
   SavedComfyUiGeneratedImage,
   SavedComfyUiGeneratedImageSource,
   SavedComfyUiGeneratedImageStorage,
   SavedComfyUiImageReference,
   SavedComfyUiGenerationParams,
+  Scene,
+  SceneForgeProject,
 } from "@/shared/types";
 
 type LoadStatus = "idle" | "loading" | "success" | "error";
@@ -177,13 +185,16 @@ type GenerationHistoryContext = {
 };
 
 type GenerationResult = {
+  characterReferenceIds?: string[];
   historyContext: GenerationHistoryContext;
   imageCount: number;
   images: ComfyUiGeneratedImage[];
   promptId: string;
   number?: number;
   outputNodeId: string;
+  sequenceId?: string;
   seed: number;
+  shotId?: string;
   source: SavedComfyUiGeneratedImageSource;
 };
 
@@ -253,7 +264,7 @@ type GenerationDraftInpaint = {
   mode: ComfyUiInpaintMode;
 };
 
-type GenerationDraft = Required<Omit<ComfyUiTextToImageRequest, "loras" | "promptWrapper" | "faceDetailer" | "handDetailer" | "controlNet" | "controlNets">> & {
+type GenerationDraft = Required<Omit<ComfyUiTextToImageRequest, "loras" | "promptWrapper" | "faceDetailer" | "handDetailer" | "controlNet" | "controlNets" | "characterReferences">> & {
   loras: GenerationDraftLora[];
   imageCount: number;
   promptWrapper: Required<NonNullable<ComfyUiTextToImageRequest["promptWrapper"]>>;
@@ -930,6 +941,9 @@ function createComfyUiGeneratedImageRecords({
     createdAt,
     favorited: false,
     ...(parentImageId ? { parentImageId } : {}),
+    ...(result.sequenceId ? { sequenceId: result.sequenceId } : {}),
+    ...(result.shotId ? { shotId: result.shotId } : {}),
+    ...(result.characterReferenceIds?.length ? { characterReferenceIds: [...result.characterReferenceIds] } : {}),
     outputNodeId: result.outputNodeId,
     width: draft.width,
     height: draft.height,
@@ -3660,6 +3674,7 @@ function ControlNetUnitCard({
         <input
           checked={enabled}
           className="mt-0.5 size-3.5 rounded border-slate-300 text-sky-600"
+          disabled={!previewAvailable}
           onChange={(event) => onChange({ enabled: event.target.checked })}
           type="checkbox"
         />
@@ -5957,6 +5972,2271 @@ export function ComfyUiGenerationDialog({
   );
 }
 
+type SequenceImageRouteResponse = {
+  sequenceId: string;
+  warnings: string[];
+  shots: Array<{
+    characterReferenceIds: string[];
+    clientId?: string;
+    imageCount: number;
+    negativePrompt: string;
+    number?: number;
+    outputNodeId: string;
+    positivePrompt: string;
+    promptId: string;
+    request?: ComfyUiTextToImageRequest;
+    seed: number;
+    shotId: string;
+    title?: string;
+    warnings: string[];
+  }>;
+};
+
+type StoredSequenceReferenceResponse = {
+  byteLength: number;
+  contentType: string;
+  filename: string;
+  url: string;
+};
+
+type SequenceUploadedReference = {
+  dataUrl: string;
+  id: string;
+  name: string;
+};
+
+const DEFAULT_SEQUENCE_REFERENCE_STRENGTH = 0.45;
+const SEQUENCE_REFERENCE_MODE_OPTIONS = [
+  {
+    description: "Best for portraits and close-ups. Requires ip-adapter-plus-face_sdxl_vit-h for Illustrious.",
+    label: "Face",
+    value: "face",
+  },
+  {
+    description: "Best for outfit, silhouette, and full-body consistency.",
+    label: "Character",
+    value: "ipadapter",
+  },
+] as const satisfies ReadonlyArray<{
+  description: string;
+  label: string;
+  value: Extract<ComfyUiIpAdapterReferenceMode, "face" | "ipadapter">;
+}>;
+
+type ComicSequenceReferenceChannelKey = "face" | "character";
+
+const SEQUENCE_REFERENCE_CHANNEL_CONFIGS = {
+  face: {
+    description: "Locks identity and facial details with face reference images.",
+    label: "Face",
+    mode: "face",
+  },
+  character: {
+    description: "Locks outfit, body silhouette, palette, and full-character consistency.",
+    label: "Character",
+    mode: "ipadapter",
+  },
+} as const satisfies Record<ComicSequenceReferenceChannelKey, {
+  description: string;
+  label: string;
+  mode: Extract<ComfyUiIpAdapterReferenceMode, "face" | "ipadapter">;
+}>;
+
+function parseSequenceShotsText(value: string) {
+  return value
+    .split(/\r?\n+/)
+    .map((line) => line.trim().replace(/^[-*\d.、)\s]+/, "").trim())
+    .filter(Boolean);
+}
+
+function clampUnitInput(value: string) {
+  const next = Number(value);
+  if (!Number.isFinite(next)) {
+    return 0;
+  }
+
+  return Math.min(1, Math.max(0, next));
+}
+
+function createLocalId(prefix: string) {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return `${prefix}-${crypto.randomUUID()}`;
+  }
+
+  return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function cloneSceneSnapshot(scene: Scene): Scene {
+  if (typeof structuredClone === "function") {
+    return structuredClone(scene);
+  }
+
+  return JSON.parse(JSON.stringify(scene)) as Scene;
+}
+
+function joinSequencePrompt(parts: Array<string | undefined>) {
+  return parts.map((part) => part?.trim()).filter(Boolean).join(", ");
+}
+
+function getComicSequenceShotPrompt(project: SceneForgeProject, scene: Scene) {
+  return generatePrompt({
+    ...project,
+    scene,
+  });
+}
+
+function createComicSequenceReferenceChannel(
+  mode: Extract<ComfyUiIpAdapterReferenceMode, "face" | "ipadapter">,
+): SavedComicSequenceReferenceChannelParams {
+  return {
+    enabled: false,
+    mode,
+    weight: DEFAULT_SEQUENCE_REFERENCE_STRENGTH,
+    startAt: 0,
+    endAt: 1,
+    images: [],
+  };
+}
+
+function getComicSequenceReferenceChannel(
+  reference: SavedComicSequenceShot["reference"],
+  key: ComicSequenceReferenceChannelKey,
+): SavedComicSequenceReferenceChannelParams {
+  return reference[key] ?? createComicSequenceReferenceChannel(SEQUENCE_REFERENCE_CHANNEL_CONFIGS[key].mode);
+}
+
+function cloneComicSequenceReferenceImage(image: SavedComicSequenceReferenceImage) {
+  return {
+    ...image,
+    id: createLocalId(image.source),
+  };
+}
+
+function getComicSequenceReferenceCount(reference: SavedComicSequenceShot["reference"]) {
+  return (["face", "character"] as const).reduce((count, key) => (
+    count + getComicSequenceReferenceChannel(reference, key).images.length
+  ), 0);
+}
+
+function getComicSequenceControlNetParams(draft: GenerationDraft): SavedComicSequenceControlNetParams[] {
+  return (["openpose", "depth", "normal"] as const).map((type) => {
+    const unit = draft.controlNets[type];
+    return {
+      type,
+      enabled: unit.enabled,
+      modelName: unit.modelName,
+      strength: unit.strength,
+      startPercent: unit.startPercent,
+      endPercent: unit.endPercent,
+    };
+  });
+}
+
+function applyComicSequenceControlNetParams(
+  draft: GenerationDraft,
+  controlNets: SavedComicSequenceControlNetParams[],
+): GenerationDraft {
+  const next = {
+    ...draft,
+    controlNets: {
+      ...draft.controlNets,
+    },
+  };
+
+  for (const controlNet of controlNets) {
+    if (controlNet.type !== "openpose" && controlNet.type !== "depth" && controlNet.type !== "normal") {
+      continue;
+    }
+
+    next.controlNets[controlNet.type] = {
+      ...next.controlNets[controlNet.type],
+      enabled: controlNet.enabled,
+      modelName: controlNet.modelName,
+      strength: controlNet.strength,
+      startPercent: controlNet.startPercent,
+      endPercent: controlNet.endPercent,
+    };
+  }
+
+  return next;
+}
+
+function findSavedComicSequenceShot(sequence: SavedComicSequence | null, shotId: string | undefined) {
+  return sequence?.shots.find((shot) => shot.id === shotId) ?? sequence?.shots[0] ?? null;
+}
+
+// Legacy text-only sequence dialog is kept until saved projects have fully moved to the shot workspace flow.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+function ComicSequenceDialog({
+  activePrompt,
+  baseNegativePrompt,
+  onClose,
+  open,
+  savedParameters,
+  selectedCheckpointId,
+  selectedLoraIds,
+}: {
+  activePrompt: string;
+  baseNegativePrompt: string;
+  onClose: () => void;
+  open: boolean;
+  savedParameters?: SavedComfyUiGenerationParams | null;
+  selectedCheckpointId: string | null;
+  selectedLoraIds: string[];
+}) {
+  const scene = useEditorStore((state) => state.project.scene);
+  const comfyUiGeneratedImages = useEditorStore(
+    (state) => state.project.settings.comfyUiGeneratedImages ?? [],
+  );
+  const appendComfyUiGeneratedImages = useEditorStore((state) => state.appendComfyUiGeneratedImages);
+  const selectedLoraIdsKey = selectedLoraIds.join(",");
+  const [selectedResources, setSelectedResources] = useState<SelectedCivitaiResourcesPreview>(EMPTY_SELECTED_RESOURCES);
+  const [loadStatus, setLoadStatus] = useState<LoadStatus>("idle");
+  const [loadError, setLoadError] = useState("");
+  const [draft, setDraft] = useState<GenerationDraft | null>(null);
+  const [downloadItems, setDownloadItems] = useState<ResourceDownloadItem[]>([]);
+  const [submitStatus, setSubmitStatus] = useState<SubmitStatus>("idle");
+  const [submitError, setSubmitError] = useState("");
+  const [waitMessage, setWaitMessage] = useState("");
+  const [historySaveStatus, setHistorySaveStatus] = useState<"idle" | "saving" | "success" | "error">("idle");
+  const [historySaveMessage, setHistorySaveMessage] = useState("");
+  const [shotsText, setShotsText] = useState(activePrompt);
+  const [characterName, setCharacterName] = useState("Character 1");
+  const [characterPrompt, setCharacterPrompt] = useState("");
+  const [referenceMode, setReferenceMode] = useState<Extract<ComfyUiIpAdapterReferenceMode, "face" | "ipadapter">>("face");
+  const [referenceStrength, setReferenceStrength] = useState(DEFAULT_SEQUENCE_REFERENCE_STRENGTH);
+  const [referenceStartAt, setReferenceStartAt] = useState(0);
+  const [referenceEndAt, setReferenceEndAt] = useState(1);
+  const [selectedReferenceIds, setSelectedReferenceIds] = useState<Set<string>>(() => new Set());
+  const [uploadedReferences, setUploadedReferences] = useState<SequenceUploadedReference[]>([]);
+  const [results, setResults] = useState<GenerationResult[]>([]);
+  const [savedCurrentImageKeys, setSavedCurrentImageKeys] = useState<Set<string>>(() => new Set());
+  const referenceCandidates = comfyUiGeneratedImages.slice(0, 24);
+  const allResourceDownloadsReady =
+    downloadItems.length > 0 && downloadItems.every((item) => !item.error && isComfyUiGenerationResourceReady(item.status));
+  const shotPrompts = parseSequenceShotsText(shotsText);
+  const canSubmit =
+    submitStatus !== "loading" &&
+    loadStatus === "success" &&
+    Boolean(draft) &&
+    allResourceDownloadsReady &&
+    shotPrompts.length > 0;
+  const controlNetOpenPosePreview = useMemo(
+    () =>
+      draft
+        ? buildComfyUiControlNetOpenPosePreview(scene, {
+            width: draft.width,
+            height: draft.height,
+          })
+        : null,
+    [draft, scene],
+  );
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+
+    const timeout = window.setTimeout(() => {
+      setShotsText(activePrompt);
+      setReferenceMode("face");
+      setReferenceStrength(DEFAULT_SEQUENCE_REFERENCE_STRENGTH);
+      setReferenceStartAt(0);
+      setReferenceEndAt(1);
+      setSelectedReferenceIds(new Set());
+      setUploadedReferences([]);
+      setResults([]);
+      setSavedCurrentImageKeys(new Set());
+      setSubmitStatus("idle");
+      setSubmitError("");
+      setWaitMessage("");
+      setHistorySaveStatus("idle");
+      setHistorySaveMessage("");
+      setLoadStatus("loading");
+      setLoadError("");
+      setDownloadItems([]);
+
+      void (async () => {
+        try {
+          const query = buildSelectedCivitaiResourcesQuery(selectedCheckpointId, selectedLoraIds);
+          const resources = query
+            ? await fetchJson<SelectedCivitaiResourcesPreview>(`/api/civitai-lora-library/selected-resources?${query}`)
+            : EMPTY_SELECTED_RESOURCES;
+          if (!resources.checkpoint) {
+            throw new Error("Select a Civitai checkpoint first.");
+          }
+
+          const settings = resolveComfyUiGenerationSettings({
+            activePrompt,
+            baseNegativePrompt,
+            selectedResources: resources,
+            aiAdvice: null,
+            savedParameters,
+          });
+
+          setSelectedResources(resources);
+          setDraft(toDraft(settings.request, settings.loras, savedParameters?.seedMode, savedParameters));
+          setDownloadItems(await loadResourceDownloadItems(resources));
+          setLoadStatus("success");
+        } catch (error) {
+          setSelectedResources(EMPTY_SELECTED_RESOURCES);
+          setDraft(null);
+          setDownloadItems([]);
+          setLoadStatus("error");
+          setLoadError(error instanceof Error ? error.message : "Unable to load ComfyUI context.");
+        }
+      })();
+    }, 0);
+
+    return () => window.clearTimeout(timeout);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, selectedCheckpointId, selectedLoraIdsKey, activePrompt, baseNegativePrompt]);
+
+  function closeModal() {
+    if (submitStatus === "loading" || historySaveStatus === "saving") {
+      return;
+    }
+
+    onClose();
+  }
+
+  function toggleReference(id: string) {
+    setSelectedReferenceIds((current) => {
+      const next = new Set(current);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  }
+
+  async function handleUploadReferenceFiles(files: FileList | null) {
+    if (!files || files.length === 0) {
+      return;
+    }
+
+    const nextReferences = await Promise.all(
+      Array.from(files)
+        .filter((file) => file.type.startsWith("image/"))
+        .slice(0, 4)
+        .map(async (file) => ({
+          dataUrl: await blobToDataUrl(file),
+          id: `upload:${file.name}:${file.lastModified}`,
+          name: file.name,
+        })),
+    );
+
+    setUploadedReferences((current) => [...current, ...nextReferences].slice(0, 4));
+  }
+
+  async function buildSequenceReferences() {
+    const selectedHistoryImages = referenceCandidates.filter((image) => selectedReferenceIds.has(image.id));
+    const historyReferences = await Promise.all(
+      selectedHistoryImages.map(async (image) => ({
+        id: image.id,
+        imageDataUrl: await loadOriginalImageUrlToDataUrl(image.url),
+      })),
+    );
+    const uploaded = uploadedReferences.map((image) => ({
+      id: image.id,
+      imageDataUrl: image.dataUrl,
+    }));
+
+    return [...historyReferences, ...uploaded].slice(0, 4);
+  }
+
+  function patchDraft(patch: Partial<GenerationDraft>) {
+    setDraft((current) => (current ? { ...current, ...patch } : current));
+  }
+
+  async function submitSequence() {
+    if (!draft) {
+      return;
+    }
+
+    if (!allResourceDownloadsReady) {
+      setSubmitStatus("error");
+      setSubmitError("Download the selected checkpoint / LoRA files before generating.");
+      return;
+    }
+
+    const shots = parseSequenceShotsText(shotsText);
+    if (shots.length === 0) {
+      setSubmitStatus("error");
+      setSubmitError("Add at least one shot.");
+      return;
+    }
+
+    setSubmitStatus("loading");
+    setSubmitError("");
+    setWaitMessage("Submitting sequence to ComfyUI...");
+    setHistorySaveStatus("idle");
+    setHistorySaveMessage("");
+    setResults([]);
+    setSavedCurrentImageKeys(new Set());
+
+    try {
+      const imageCount = normalizeComfyUiGenerationImageCount(draft.imageCount);
+      const seed = resolveComfyUiGenerationSeed({
+        currentSeed: draft.seed,
+        mode: draft.seedMode,
+      });
+      const baseRequest = toRequestPayload(
+        { ...draft, imageCount },
+        seed,
+        controlNetOpenPosePreview,
+        null,
+      );
+      const references = await buildSequenceReferences();
+      const clientId = createComfyUiClientId();
+      const payload = await fetchJson<SequenceImageRouteResponse>("/api/comfyui/sequence-image", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          baseRequest,
+          baseSeed: seed,
+          characters: references.length > 0
+            ? [
+                {
+                  id: "character-1",
+                  mode: referenceMode,
+                  name: characterName.trim() || "Character 1",
+                  prompt: characterPrompt,
+                  references,
+                  startPercent: Math.min(referenceStartAt, referenceEndAt),
+                  endPercent: Math.max(referenceStartAt, referenceEndAt),
+                  weight: referenceStrength,
+                },
+              ]
+            : [],
+          clientId,
+          globalPrompt: draft.positivePrompt,
+          imageCount,
+          negativePrompt: draft.negativePrompt,
+          shots: shots.map((prompt, index) => ({
+            id: `shot-${index + 1}`,
+            prompt,
+          })),
+        }),
+      });
+      const queuedResults: GenerationResult[] = payload.shots.map((shot) => ({
+        characterReferenceIds: shot.characterReferenceIds,
+        historyContext: {
+          draftSnapshot: { ...draft, imageCount, seed: shot.seed },
+          negativePrompt: shot.negativePrompt,
+          positivePrompt: shot.positivePrompt,
+          selectedCheckpointId,
+          selectedLoraIds: [...selectedLoraIds],
+        },
+        imageCount: shot.imageCount,
+        images: [],
+        number: shot.number,
+        outputNodeId: shot.outputNodeId,
+        promptId: shot.promptId,
+        sequenceId: payload.sequenceId,
+        seed: shot.seed,
+        shotId: shot.shotId,
+        source: "sequence",
+      }));
+
+      setResults(queuedResults);
+
+      for (const shot of payload.shots) {
+        setWaitMessage(`Waiting for ${shot.shotId} (${shot.imageCount} images)...`);
+        const history = await waitForComfyUiGeneratedImages(shot.clientId ?? "", shot.promptId, shot.imageCount, (historyUpdate) => {
+          if (historyUpdate.images.length > 0) {
+            setResults((current) =>
+              current.map((result) =>
+                result.promptId === shot.promptId ? { ...result, images: historyUpdate.images } : result,
+              ),
+            );
+          }
+        });
+
+        setResults((current) =>
+          current.map((result) =>
+            result.promptId === shot.promptId ? { ...result, images: history.images } : result,
+          ),
+        );
+      }
+
+      setWaitMessage("");
+      setSubmitStatus("success");
+      setHistorySaveMessage(
+        payload.warnings.length > 0
+          ? payload.warnings.join(" ")
+          : "Sequence images generated. Save the candidates you want to keep.",
+      );
+      setHistorySaveStatus(payload.warnings.length > 0 ? "error" : "idle");
+    } catch (error) {
+      setWaitMessage("");
+      setSubmitStatus("error");
+      setSubmitError(error instanceof Error ? error.message : "ComfyUI sequence request failed.");
+    }
+  }
+
+  async function saveSequenceImage(result: GenerationResult, image: ComfyUiGeneratedImage) {
+    if (!draft) {
+      return;
+    }
+
+    const imageKey = `${result.promptId}:${getGeneratedImageReferenceKey(image)}`;
+    if (savedCurrentImageKeys.has(imageKey)) {
+      return;
+    }
+
+    setHistorySaveStatus("saving");
+    setHistorySaveMessage("Saving image to project history...");
+
+    try {
+      const savedImage = await fetchJson<SavedGeneratedImageResponse>("/api/comfyui/generated-images", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ image }),
+      });
+      const records = createComfyUiGeneratedImageRecords({
+        draft,
+        images: [image],
+        negativePrompt: result.historyContext.negativePrompt,
+        positivePrompt: result.historyContext.positivePrompt,
+        result,
+        savedImage,
+        selectedCheckpointId,
+        selectedLoraIds,
+      });
+
+      appendComfyUiGeneratedImages(records);
+      await saveProject(useEditorStore.getState().project);
+      setSavedCurrentImageKeys((current) => new Set(current).add(imageKey));
+      setHistorySaveStatus("success");
+      setHistorySaveMessage("Saved to project image history.");
+    } catch (error) {
+      setHistorySaveStatus("error");
+      setHistorySaveMessage(error instanceof Error ? error.message : "Failed to save image.");
+    }
+  }
+
+  if (!open || typeof document === "undefined") {
+    return null;
+  }
+
+  return createPortal(
+    <div
+      aria-modal="true"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4 backdrop-blur-sm"
+      role="dialog"
+    >
+      <div className="flex max-h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xl">
+        <div className="flex items-start gap-3 border-b border-slate-100 bg-sky-50 p-5">
+          <div className="rounded-md bg-white p-2 text-sky-600">
+            <Sparkles className="size-5" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <h3 className="text-base font-bold text-slate-900">Comic Sequence</h3>
+            <p className="mt-1 text-xs leading-relaxed text-slate-500">
+              {selectedResources.checkpoint ? selectedResources.checkpoint.name : "ComfyUI sequence generation"}
+            </p>
+          </div>
+          <button
+            aria-label="Close Comic Sequence"
+            className="rounded-full bg-white/80 p-1.5 text-slate-400 shadow-sm transition hover:bg-white hover:text-slate-700"
+            onClick={closeModal}
+            type="button"
+          >
+            <X className="size-4" />
+          </button>
+        </div>
+
+        <div className="min-h-0 flex-1 overflow-y-auto p-5">
+          {loadStatus === "loading" ? (
+            <div className="rounded-md border border-sky-100 bg-sky-50 p-3 text-sm text-sky-700">
+              <Loader2 className="mr-2 inline size-4 animate-spin" />
+              Loading ComfyUI context...
+            </div>
+          ) : null}
+          {loadStatus === "error" ? (
+            <div className="rounded-md border border-rose-100 bg-rose-50 p-3 text-sm text-rose-700">{loadError}</div>
+          ) : null}
+          {loadStatus === "success" && draft ? (
+            <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_320px]">
+              <div className="space-y-4">
+                <label className="grid gap-1.5">
+                  <span className="text-xs font-semibold text-slate-700">Shot prompts</span>
+                  <textarea
+                    className="min-h-40 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none transition focus:border-sky-300 focus:ring-2 focus:ring-sky-100"
+                    onChange={(event) => setShotsText(event.target.value)}
+                    placeholder={"One shot per line\nClose-up of the hero looking left\nWide shot of the alley confrontation"}
+                    value={shotsText}
+                  />
+                </label>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <label className="grid gap-1.5">
+                    <span className="text-xs font-semibold text-slate-700">Character name</span>
+                    <input
+                      className={COMFYUI_TEXT_FIELD_CLASS}
+                      onChange={(event) => setCharacterName(event.target.value)}
+                      value={characterName}
+                    />
+                  </label>
+                  <label className="grid gap-1.5">
+                    <span className="text-xs font-semibold text-slate-700">Character prompt</span>
+                    <input
+                      className={COMFYUI_TEXT_FIELD_CLASS}
+                      onChange={(event) => setCharacterPrompt(event.target.value)}
+                      placeholder="hair, outfit, face notes"
+                      value={characterPrompt}
+                    />
+                  </label>
+                </div>
+                <div className="rounded-md border border-slate-200 bg-slate-50/60 p-3">
+                  <div className="grid gap-4 lg:grid-cols-[minmax(0,1.15fr)_minmax(280px,0.85fr)]">
+                    <div className="grid gap-2">
+                      <span className="text-xs font-semibold text-slate-700">Reference mode</span>
+                      <div className="grid grid-cols-2 gap-2">
+                        {SEQUENCE_REFERENCE_MODE_OPTIONS.map((option) => (
+                          <button
+                            className={
+                              "min-h-24 rounded-md border bg-white px-3 py-2 text-left text-xs transition " +
+                              (referenceMode === option.value
+                                ? "border-sky-300 text-sky-800 ring-2 ring-sky-100"
+                                : "border-slate-200 text-slate-600 hover:bg-slate-50")
+                            }
+                            key={option.value}
+                            onClick={() => setReferenceMode(option.value)}
+                            title={option.description}
+                            type="button"
+                          >
+                            <span className="block font-semibold">{option.label}</span>
+                            <span className="mt-1 block text-[10px] leading-snug text-slate-500">{option.description}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="grid gap-3">
+                      <div className="grid grid-cols-3 gap-2">
+                        <label className="grid gap-1.5">
+                          <span className="text-[11px] font-semibold text-slate-600">weight</span>
+                          <input
+                            className="h-9 rounded-md border border-slate-200 bg-white px-2 text-sm text-slate-800 outline-none transition focus:border-sky-300 focus:ring-2 focus:ring-sky-100"
+                            max={1}
+                            min={0}
+                            onChange={(event) => setReferenceStrength(clampUnitInput(event.target.value))}
+                            step={0.01}
+                            type="number"
+                            value={referenceStrength}
+                          />
+                        </label>
+                        <label className="grid gap-1.5">
+                          <span className="text-[11px] font-semibold text-slate-600">start_at</span>
+                          <input
+                            className="h-9 rounded-md border border-slate-200 bg-white px-2 text-sm text-slate-800 outline-none transition focus:border-sky-300 focus:ring-2 focus:ring-sky-100"
+                            max={1}
+                            min={0}
+                            onChange={(event) => setReferenceStartAt(clampUnitInput(event.target.value))}
+                            step={0.01}
+                            type="number"
+                            value={referenceStartAt}
+                          />
+                        </label>
+                        <label className="grid gap-1.5">
+                          <span className="text-[11px] font-semibold text-slate-600">end_at</span>
+                          <input
+                            className="h-9 rounded-md border border-slate-200 bg-white px-2 text-sm text-slate-800 outline-none transition focus:border-sky-300 focus:ring-2 focus:ring-sky-100"
+                            max={1}
+                            min={0}
+                            onChange={(event) => setReferenceEndAt(clampUnitInput(event.target.value))}
+                            step={0.01}
+                            type="number"
+                            value={referenceEndAt}
+                          />
+                        </label>
+                      </div>
+                      <div className="rounded-md border border-slate-200 bg-white px-3 py-2 text-[10px] leading-relaxed text-slate-500">
+                        Effective range {Math.min(referenceStartAt, referenceEndAt).toFixed(2)}-{Math.max(referenceStartAt, referenceEndAt).toFixed(2)}. Lower weight or shorter end_at reduces color and glow over-transfer.
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div className="rounded-md border border-slate-200 p-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="text-xs font-semibold text-slate-700">Reference images</p>
+                    <label className="inline-flex h-8 cursor-pointer items-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-xs font-medium text-slate-600 transition hover:bg-slate-50">
+                      <Plus className="size-3.5" />
+                      Upload
+                      <input
+                        accept="image/png,image/jpeg,image/webp"
+                        className="sr-only"
+                        multiple
+                        onChange={(event) => void handleUploadReferenceFiles(event.currentTarget.files)}
+                        type="file"
+                      />
+                    </label>
+                  </div>
+                  <div className="mt-3 grid grid-cols-3 gap-2 sm:grid-cols-4">
+                    {referenceCandidates.map((image) => (
+                      <button
+                        className={
+                          "overflow-hidden rounded-md border text-left transition " +
+                          (selectedReferenceIds.has(image.id)
+                            ? "border-sky-400 ring-2 ring-sky-100"
+                            : "border-slate-200 hover:border-sky-200")
+                        }
+                        key={image.id}
+                        onClick={() => toggleReference(image.id)}
+                        title={image.filename}
+                        type="button"
+                      >
+                        <img alt={image.filename} className="aspect-square w-full object-cover" src={image.url} />
+                      </button>
+                    ))}
+                    {uploadedReferences.map((image) => (
+                      <div className="overflow-hidden rounded-md border border-emerald-200" key={image.id}>
+                        <img alt={image.name} className="aspect-square w-full object-cover" src={image.dataUrl} />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              <aside className="space-y-3">
+                <div className="rounded-md border border-slate-200 bg-slate-50/60 p-3">
+                  <p className="text-xs font-semibold text-slate-700">KSampler constants</p>
+                  <div className="mt-3 grid grid-cols-2 gap-2">
+                    <NumberInput
+                      label="steps"
+                      min={1}
+                      onChange={(value) => patchDraft({ steps: Math.round(value) })}
+                      value={draft.steps}
+                    />
+                    <NumberInput
+                      label="cfg"
+                      min={0}
+                      onChange={(value) => patchDraft({ cfg: value })}
+                      step={0.5}
+                      value={draft.cfg}
+                    />
+                    <NumberInput
+                      label="denoise"
+                      max={1}
+                      min={0}
+                      onChange={(value) => patchDraft({ denoise: value })}
+                      step={0.05}
+                      value={draft.denoise}
+                    />
+                    <NumberInput
+                      label="images / shot"
+                      max={MAX_COMFYUI_GENERATION_IMAGE_COUNT}
+                      min={1}
+                      onChange={(value) => patchDraft({ imageCount: normalizeComfyUiGenerationImageCount(value) })}
+                      value={draft.imageCount}
+                    />
+                    <div className="col-span-2 grid gap-1">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">seed</span>
+                        <div className="inline-flex rounded-md border border-slate-200 bg-white p-0.5">
+                          {(["random", "fixed"] as const).map((mode) => (
+                            <button
+                              className={`rounded px-2 py-0.5 text-[10px] font-medium transition ${
+                                draft.seedMode === mode ? "bg-sky-600 text-white" : "text-slate-500 hover:bg-slate-50"
+                              }`}
+                              key={mode}
+                              onClick={() => patchDraft({ seedMode: mode })}
+                              title={mode === "random" ? "Generate a fresh seed when the sequence starts" : "Reuse the current seed"}
+                              type="button"
+                            >
+                              {mode}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                      <input
+                        className="h-9 min-w-0 rounded-md border border-slate-200 bg-white px-2 text-sm text-slate-700 outline-none transition focus:border-sky-300 focus:ring-2 focus:ring-sky-100"
+                        min={0}
+                        onChange={(event) => {
+                          const parsed = Number(event.target.value);
+                          if (Number.isFinite(parsed)) {
+                            patchDraft({ seed: Math.round(parsed), seedMode: "fixed" });
+                          }
+                        }}
+                        step={1}
+                        type="number"
+                        value={draft.seed}
+                      />
+                    </div>
+                  </div>
+                  <div className="mt-3 grid gap-2">
+                    <SelectInput
+                      label="sampler"
+                      onChange={(value) => patchDraft({ samplerName: value })}
+                      options={COMFYUI_SAMPLER_OPTIONS}
+                      value={draft.samplerName}
+                    />
+                    <SelectInput
+                      label="scheduler"
+                      onChange={(value) => patchDraft({ scheduler: value })}
+                      options={COMFYUI_SCHEDULER_OPTIONS}
+                      value={draft.scheduler}
+                    />
+                  </div>
+                </div>
+                <div className="rounded-md border border-slate-200 p-3 text-xs text-slate-600">
+                  <div className="flex justify-between gap-3">
+                    <span>Shots</span>
+                    <strong className="text-slate-900">{shotPrompts.length}</strong>
+                  </div>
+                  <div className="mt-2 flex justify-between gap-3">
+                    <span>Candidates per shot</span>
+                    <strong className="text-slate-900">{normalizeComfyUiGenerationImageCount(draft.imageCount)}</strong>
+                  </div>
+                  <div className="mt-2 flex justify-between gap-3">
+                    <span>Reference images</span>
+                    <strong className="text-slate-900">{selectedReferenceIds.size + uploadedReferences.length}</strong>
+                  </div>
+                </div>
+                {waitMessage ? (
+                  <div className="rounded-md border border-sky-100 bg-sky-50 p-3 text-xs text-sky-700">
+                    {submitStatus === "loading" ? <Loader2 className="mr-1.5 inline size-3.5 animate-spin" /> : null}
+                    {waitMessage}
+                  </div>
+                ) : null}
+                {submitStatus === "error" ? (
+                  <div className="rounded-md border border-rose-100 bg-rose-50 p-3 text-xs text-rose-700">{submitError}</div>
+                ) : null}
+                {historySaveMessage ? (
+                  <div
+                    className={
+                      "rounded-md border p-3 text-xs " +
+                      (historySaveStatus === "error"
+                        ? "border-rose-100 bg-rose-50 text-rose-700"
+                        : historySaveStatus === "success"
+                          ? "border-emerald-100 bg-emerald-50 text-emerald-700"
+                          : "border-sky-100 bg-sky-50 text-sky-700")
+                    }
+                  >
+                    {historySaveStatus === "saving" ? <Loader2 className="mr-1.5 inline size-3.5 animate-spin" /> : null}
+                    {historySaveMessage}
+                  </div>
+                ) : null}
+                {!allResourceDownloadsReady ? (
+                  <div className="rounded-md border border-amber-100 bg-amber-50 p-3 text-xs text-amber-700">
+                    Selected checkpoint / LoRA files are not ready.
+                  </div>
+                ) : null}
+              </aside>
+            </div>
+          ) : null}
+
+          {results.length > 0 ? (
+            <div className="mt-5 space-y-4">
+              {results.map((result, shotIndex) => (
+                <section className="space-y-2" key={result.promptId}>
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <p className="text-xs font-bold text-slate-800">Shot {shotIndex + 1}</p>
+                      <p className="text-[11px] text-slate-500">seed {result.seed} - promptId {result.promptId}</p>
+                    </div>
+                    <span className="text-[11px] text-slate-500">
+                      {result.images.length}/{result.imageCount}
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
+                    {result.images.map((image, imageIndex) => {
+                      const imageKey = `${result.promptId}:${getGeneratedImageReferenceKey(image)}`;
+                      const saved = savedCurrentImageKeys.has(imageKey);
+
+                      return (
+                        <div className="overflow-hidden rounded-md border border-slate-200 bg-white" key={imageKey}>
+                          <a href={image.url} rel="noreferrer" target="_blank">
+                            <img
+                              alt={`Shot ${shotIndex + 1} candidate ${imageIndex + 1}`}
+                              className="aspect-square w-full object-cover"
+                              src={image.url}
+                            />
+                          </a>
+                          <div className="flex items-center gap-1 border-t border-slate-200 px-1.5 py-1.5">
+                            <span className="min-w-0 flex-1 truncate text-[10px] text-slate-500">{image.filename}</span>
+                            <button
+                              aria-label="Save sequence image"
+                              className="grid size-7 place-items-center rounded-md text-slate-500 transition hover:bg-emerald-50 hover:text-emerald-700 disabled:opacity-50"
+                              disabled={saved || historySaveStatus === "saving"}
+                              onClick={() => void saveSequenceImage(result, image)}
+                              title={saved ? "Saved" : "Save"}
+                              type="button"
+                            >
+                              {saved ? <CheckCircle2 className="size-3.5" /> : <Save className="size-3.5" />}
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </section>
+              ))}
+            </div>
+          ) : null}
+        </div>
+
+        <div className="flex flex-col gap-3 border-t border-slate-100 bg-slate-50 p-4 sm:flex-row sm:items-center sm:justify-between">
+          <p className="text-xs text-slate-500">
+            base seed {draft?.seed ?? "-"} - {selectedLoraIds.length} LoRA
+          </p>
+          <div className="flex shrink-0 gap-3">
+            <Button
+              className="h-10 rounded-md border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+              disabled={submitStatus === "loading" || historySaveStatus === "saving"}
+              onClick={closeModal}
+              type="button"
+              variant="secondary"
+            >
+              Close
+            </Button>
+            <Button
+              className="h-10 rounded-md bg-sky-600 text-white hover:bg-sky-700"
+              disabled={!canSubmit}
+              onClick={() => void submitSequence()}
+              type="button"
+            >
+              {submitStatus === "loading" ? <Loader2 className="size-4 animate-spin" /> : <Play className="size-4" />}
+              Generate sequence
+            </Button>
+          </div>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+function ComicSequenceWorkspaceDialog({
+  activePrompt,
+  aiGeneratedPrompt,
+  baseNegativePrompt,
+  onClose,
+  open,
+  savedParameters,
+  selectedCheckpointId,
+  selectedLoraIds,
+}: {
+  activePrompt: string;
+  aiGeneratedPrompt: string;
+  baseNegativePrompt: string;
+  onClose: () => void;
+  open: boolean;
+  savedParameters?: SavedComfyUiGenerationParams | null;
+  selectedCheckpointId: string | null;
+  selectedLoraIds: string[];
+}) {
+  const project = useEditorStore((state) => state.project);
+  const updateProjectSettings = useEditorStore((state) => state.updateProjectSettings);
+  const updateScene = useEditorStore((state) => state.updateScene);
+  const appendComfyUiGeneratedImages = useEditorStore((state) => state.appendComfyUiGeneratedImages);
+  const selectedLoraIdsKey = selectedLoraIds.join(",");
+  const [selectedResources, setSelectedResources] = useState<SelectedCivitaiResourcesPreview>(EMPTY_SELECTED_RESOURCES);
+  const [loadStatus, setLoadStatus] = useState<LoadStatus>("idle");
+  const [loadError, setLoadError] = useState("");
+  const [sequence, setSequence] = useState<SavedComicSequence | null>(null);
+  const [draft, setDraft] = useState<GenerationDraft | null>(null);
+  const [downloadItems, setDownloadItems] = useState<ResourceDownloadItem[]>([]);
+  const [controlNetExpanded, setControlNetExpanded] = useState(false);
+  const [controlNetNormalPreview, setControlNetNormalPreview] = useState<ComfyUiNormalControlImagePreview | null>(null);
+  const [controlNetNormalPreviewLoading, setControlNetNormalPreviewLoading] = useState(false);
+  const [submitStatus, setSubmitStatus] = useState<SubmitStatus>("idle");
+  const [submitError, setSubmitError] = useState("");
+  const [waitMessage, setWaitMessage] = useState("");
+  const [historySaveStatus, setHistorySaveStatus] = useState<"idle" | "saving" | "success" | "error">("idle");
+  const [historySaveMessage, setHistorySaveMessage] = useState("");
+  const [referenceUploadStatus, setReferenceUploadStatus] = useState<"idle" | "uploading" | "error">("idle");
+  const [referenceUploadError, setReferenceUploadError] = useState("");
+  const [results, setResults] = useState<GenerationResult[]>([]);
+  const [savedCurrentImageKeys, setSavedCurrentImageKeys] = useState<Set<string>>(() => new Set());
+  const allResourceDownloadsReady =
+    downloadItems.length > 0 && downloadItems.every((item) => !item.error && isComfyUiGenerationResourceReady(item.status));
+  const selectedShot = findSavedComicSequenceShot(sequence, sequence?.selectedShotId);
+  const trimmedAiPrompt = aiGeneratedPrompt.trim();
+  const referenceCandidates = project.settings.comfyUiGeneratedImages.slice(0, 24);
+  const selectedShotFaceReference = selectedShot
+    ? getComicSequenceReferenceChannel(selectedShot.reference, "face")
+    : createComicSequenceReferenceChannel("face");
+  const selectedShotCharacterReference = selectedShot
+    ? getComicSequenceReferenceChannel(selectedShot.reference, "character")
+    : createComicSequenceReferenceChannel("ipadapter");
+  const selectedShotScene = selectedShot?.scene;
+  const draftWidth = draft?.width;
+  const draftHeight = draft?.height;
+  const shotOpenPosePreview =
+    selectedShotScene && typeof draftWidth === "number" && typeof draftHeight === "number"
+      ? buildComfyUiControlNetOpenPosePreview(selectedShotScene, {
+          width: draftWidth,
+          height: draftHeight,
+        })
+      : null;
+
+  useEffect(() => {
+    if (!open || !selectedShotScene || typeof draftWidth !== "number" || typeof draftHeight !== "number") {
+      return;
+    }
+
+    let cancelled = false;
+    const timeout = window.setTimeout(() => {
+      setControlNetNormalPreviewLoading(true);
+
+      void renderComfyUiNormalControlImage(selectedShotScene, {
+        width: draftWidth,
+        height: draftHeight,
+      }).then((preview) => {
+        if (cancelled) {
+          return;
+        }
+
+        setControlNetNormalPreview(preview);
+        setControlNetNormalPreviewLoading(false);
+      });
+    }, 0);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeout);
+    };
+  }, [draftHeight, draftWidth, open, selectedShotScene]);
+
+  function createDefaultParameters(resources: SelectedCivitaiResourcesPreview) {
+    const settings = resolveComfyUiGenerationSettings({
+      activePrompt,
+      baseNegativePrompt,
+      selectedResources: resources,
+      aiAdvice: null,
+      savedParameters,
+    });
+    const draft = toDraft(settings.request, settings.loras, savedParameters?.seedMode, savedParameters);
+
+    return {
+      draft,
+      parameters: toSavedParameters(draft),
+    };
+  }
+
+  function createDraftFromShot(shot: SavedComicSequenceShot, resources: SelectedCivitaiResourcesPreview) {
+    const settings = resolveComfyUiGenerationSettings({
+      activePrompt: shot.positivePrompt || activePrompt,
+      baseNegativePrompt: shot.negativePrompt || baseNegativePrompt,
+      selectedResources: resources,
+      aiAdvice: null,
+      savedParameters: shot.parameters,
+    });
+
+    return applyComicSequenceControlNetParams(
+      toDraft(settings.request, settings.loras, shot.parameters.seedMode, shot.parameters),
+      shot.controlNets,
+    );
+  }
+
+  function resolveShotPositivePrompt(generatedPrompt: string, fallbackPrompt = "") {
+    return trimmedAiPrompt || generatedPrompt || fallbackPrompt || activePrompt;
+  }
+
+  function persistSequence(nextSequence: SavedComicSequence) {
+    setSequence(nextSequence);
+    updateProjectSettings({ savedComicSequence: nextSequence });
+  }
+
+  function patchSequence(updater: (current: SavedComicSequence) => SavedComicSequence) {
+    if (!sequence) {
+      return;
+    }
+
+    persistSequence(updater(sequence));
+  }
+
+  function patchSelectedShot(patch: Partial<SavedComicSequenceShot>) {
+    if (!selectedShot) {
+      return;
+    }
+
+    patchSequence((current) => ({
+      ...current,
+      shots: current.shots.map((shot) =>
+        shot.id === selectedShot.id
+          ? {
+              ...shot,
+              ...patch,
+              updatedAt: new Date().toISOString(),
+            }
+          : shot,
+      ),
+    }));
+  }
+
+  function patchSelectedReference(patch: Partial<SavedComicSequenceShot["reference"]>) {
+    if (!selectedShot) {
+      return;
+    }
+
+    patchSelectedShot({
+      reference: {
+        ...selectedShot.reference,
+        ...patch,
+      },
+    });
+  }
+
+  function patchSelectedReferenceChannel(
+    channelKey: ComicSequenceReferenceChannelKey,
+    patch: Partial<SavedComicSequenceReferenceChannelParams>,
+  ) {
+    if (!selectedShot) {
+      return;
+    }
+
+    const currentChannel = getComicSequenceReferenceChannel(selectedShot.reference, channelKey);
+    patchSelectedReference({
+      [channelKey]: {
+        ...currentChannel,
+        ...patch,
+      },
+    });
+  }
+
+  function persistDraftForSelectedShot(nextDraft: GenerationDraft, options: { updateDefaults?: boolean } = {}) {
+    if (!selectedShot) {
+      return;
+    }
+
+    const nextParameters = toSavedParameters(nextDraft);
+    const nextControlNets = getComicSequenceControlNetParams(nextDraft);
+    if (options.updateDefaults) {
+      patchSequence((currentSequence) => ({
+        ...currentSequence,
+        defaults: nextParameters,
+        shots: currentSequence.shots.map((shot) =>
+          shot.id === selectedShot.id
+            ? {
+                ...shot,
+                controlNets: nextControlNets,
+                parameters: nextParameters,
+                updatedAt: new Date().toISOString(),
+              }
+            : shot,
+        ),
+      }));
+      return;
+    }
+
+    patchSelectedShot({
+      controlNets: nextControlNets,
+      parameters: nextParameters,
+    });
+  }
+
+  function patchDraft(patch: Partial<GenerationDraft>) {
+    if (!draft || !selectedShot) {
+      return;
+    }
+
+    const nextDraft = { ...draft, ...patch };
+    setDraft(nextDraft);
+    persistDraftForSelectedShot(nextDraft, { updateDefaults: true });
+  }
+
+  function patchFaceDetailer(patch: Partial<GenerationDraft["faceDetailer"]>) {
+    if (!draft || !selectedShot) {
+      return;
+    }
+
+    const nextDraft = {
+      ...draft,
+      faceDetailer: {
+        ...draft.faceDetailer,
+        ...patch,
+      },
+    };
+    setDraft(nextDraft);
+    persistDraftForSelectedShot(nextDraft);
+  }
+
+  function patchHandDetailer(patch: Partial<GenerationDraft["handDetailer"]>) {
+    if (!draft || !selectedShot) {
+      return;
+    }
+
+    const nextDraft = {
+      ...draft,
+      handDetailer: {
+        ...draft.handDetailer,
+        ...patch,
+      },
+    };
+    setDraft(nextDraft);
+    persistDraftForSelectedShot(nextDraft);
+  }
+
+  function patchControlNet(
+    type: GenerationDraftControlNetUnit["type"],
+    patch: Partial<GenerationDraftControlNetUnit>,
+  ) {
+    if (!draft || !selectedShot) {
+      return;
+    }
+
+    const nextDraft = {
+      ...draft,
+      controlNets: {
+        ...draft.controlNets,
+        [type]: {
+          ...draft.controlNets[type],
+          ...patch,
+        },
+      },
+    };
+    setDraft(nextDraft);
+    persistDraftForSelectedShot(nextDraft);
+  }
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+
+    const timeout = window.setTimeout(() => {
+      setLoadStatus("loading");
+      setLoadError("");
+      setDownloadItems([]);
+      setSubmitStatus("idle");
+      setSubmitError("");
+      setWaitMessage("");
+      setHistorySaveStatus("idle");
+      setHistorySaveMessage("");
+      setResults([]);
+      setSavedCurrentImageKeys(new Set());
+      setControlNetNormalPreview(null);
+      setControlNetNormalPreviewLoading(false);
+
+      void (async () => {
+        try {
+          const query = buildSelectedCivitaiResourcesQuery(selectedCheckpointId, selectedLoraIds);
+          const resources = query
+            ? await fetchJson<SelectedCivitaiResourcesPreview>(`/api/civitai-lora-library/selected-resources?${query}`)
+            : EMPTY_SELECTED_RESOURCES;
+          if (!resources.checkpoint) {
+            throw new Error("Select a Civitai checkpoint first.");
+          }
+
+          const { parameters } = createDefaultParameters(resources);
+          const existing = project.settings.savedComicSequence;
+          const nextSequence: SavedComicSequence = existing
+            ? {
+                ...existing,
+                defaults: existing.defaults ?? parameters,
+                selectedShotId: existing.selectedShotId ?? existing.shots[0]?.id,
+              }
+            : {
+                version: 1,
+                defaults: parameters,
+                shots: [],
+              };
+
+          setSelectedResources(resources);
+          setSequence(nextSequence);
+          updateProjectSettings({ savedComicSequence: nextSequence });
+          setDownloadItems(await loadResourceDownloadItems(resources));
+          setLoadStatus("success");
+          const shot = findSavedComicSequenceShot(nextSequence, nextSequence.selectedShotId);
+          setDraft(shot ? createDraftFromShot(shot, resources) : null);
+        } catch (error) {
+          setSelectedResources(EMPTY_SELECTED_RESOURCES);
+          setSequence(null);
+          setDraft(null);
+          setDownloadItems([]);
+          setLoadStatus("error");
+          setLoadError(error instanceof Error ? error.message : "Unable to load Comic Sequence context.");
+        }
+      })();
+    }, 0);
+
+    return () => window.clearTimeout(timeout);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, selectedCheckpointId, selectedLoraIdsKey]);
+
+  function selectShot(shotId: string) {
+    if (!sequence) {
+      return;
+    }
+
+    const nextSequence = {
+      ...sequence,
+      selectedShotId: shotId,
+    };
+    const shot = findSavedComicSequenceShot(nextSequence, shotId);
+    persistSequence(nextSequence);
+    setDraft(shot ? createDraftFromShot(shot, selectedResources) : null);
+    setControlNetExpanded(false);
+    setControlNetNormalPreview(null);
+    setControlNetNormalPreviewLoading(false);
+  }
+
+  function createShotFromScene(scene: Scene, sourceShot?: SavedComicSequenceShot | null): SavedComicSequenceShot | null {
+    if (!sequence) {
+      return null;
+    }
+
+    const generated = getComicSequenceShotPrompt(project, scene);
+    const now = new Date().toISOString();
+    const defaultParameters = sourceShot?.parameters ?? sequence.defaults;
+    if (!defaultParameters) {
+      return null;
+    }
+    const sourceReference = sourceShot?.reference;
+    const sourceFaceReference = sourceReference
+      ? getComicSequenceReferenceChannel(sourceReference, "face")
+      : createComicSequenceReferenceChannel("face");
+    const sourceCharacterReference = sourceReference
+      ? getComicSequenceReferenceChannel(sourceReference, "character")
+      : createComicSequenceReferenceChannel("ipadapter");
+    const sourceDraft = draft ?? (sourceShot ? createDraftFromShot(sourceShot, selectedResources) : null);
+
+    return {
+      id: createLocalId("shot"),
+      title: `Shot ${sequence.shots.length + 1}`,
+      scene: cloneSceneSnapshot(scene),
+      positivePrompt: resolveShotPositivePrompt(generated.prompt),
+      negativePrompt: generated.negativePrompt || baseNegativePrompt,
+      shotPrompt: "",
+      parameters: defaultParameters,
+      controlNets: sourceDraft ? getComicSequenceControlNetParams(sourceDraft) : sourceShot?.controlNets ?? [],
+      reference: {
+        characterName: sourceReference?.characterName ?? "Character 1",
+        characterPrompt: sourceReference?.characterPrompt ?? "",
+        mode: sourceReference?.mode ?? "face",
+        weight: sourceReference?.weight ?? DEFAULT_SEQUENCE_REFERENCE_STRENGTH,
+        startAt: sourceReference?.startAt ?? 0,
+        endAt: sourceReference?.endAt ?? 1,
+        images: sourceReference?.images.map(cloneComicSequenceReferenceImage) ?? [],
+        face: {
+          ...sourceFaceReference,
+          images: sourceFaceReference.images.map(cloneComicSequenceReferenceImage),
+        },
+        character: {
+          ...sourceCharacterReference,
+          images: sourceCharacterReference.images.map(cloneComicSequenceReferenceImage),
+        },
+      },
+      createdAt: now,
+      updatedAt: now,
+    };
+  }
+
+  function addShotFromCurrentCanvas() {
+    const shot = createShotFromScene(project.scene, selectedShot);
+    if (!sequence || !shot) {
+      return;
+    }
+
+    const nextSequence = {
+      ...sequence,
+      selectedShotId: shot.id,
+      shots: [...sequence.shots, shot],
+    };
+    persistSequence(nextSequence);
+    setDraft(createDraftFromShot(shot, selectedResources));
+    setControlNetExpanded(false);
+  }
+
+  function updateSelectedShotFromCurrentCanvas() {
+    if (!selectedShot) {
+      return;
+    }
+
+    const generated = getComicSequenceShotPrompt(project, project.scene);
+    patchSelectedShot({
+      scene: cloneSceneSnapshot(project.scene),
+      positivePrompt: resolveShotPositivePrompt(generated.prompt, selectedShot.positivePrompt),
+      negativePrompt: generated.negativePrompt || selectedShot.negativePrompt,
+    });
+    setControlNetNormalPreview(null);
+    setControlNetNormalPreviewLoading(false);
+  }
+
+  function duplicateSelectedShot() {
+    if (!sequence || !selectedShot) {
+      return;
+    }
+
+    const now = new Date().toISOString();
+    const faceReference = getComicSequenceReferenceChannel(selectedShot.reference, "face");
+    const characterReference = getComicSequenceReferenceChannel(selectedShot.reference, "character");
+    const duplicate: SavedComicSequenceShot = {
+      ...selectedShot,
+      id: createLocalId("shot"),
+      title: `${selectedShot.title} Copy`,
+      scene: cloneSceneSnapshot(selectedShot.scene),
+      reference: {
+        ...selectedShot.reference,
+        images: selectedShot.reference.images.map(cloneComicSequenceReferenceImage),
+        face: {
+          ...faceReference,
+          images: faceReference.images.map(cloneComicSequenceReferenceImage),
+        },
+        character: {
+          ...characterReference,
+          images: characterReference.images.map(cloneComicSequenceReferenceImage),
+        },
+      },
+      createdAt: now,
+      updatedAt: now,
+    };
+    const nextSequence = {
+      ...sequence,
+      selectedShotId: duplicate.id,
+      shots: [...sequence.shots, duplicate],
+    };
+    persistSequence(nextSequence);
+    setDraft(createDraftFromShot(duplicate, selectedResources));
+  }
+
+  function deleteSelectedShot() {
+    if (!sequence || !selectedShot) {
+      return;
+    }
+
+    const nextShots = sequence.shots.filter((shot) => shot.id !== selectedShot.id);
+    const nextSelectedShotId = nextShots[0]?.id;
+    const nextSequence = {
+      ...sequence,
+      ...(nextSelectedShotId ? { selectedShotId: nextSelectedShotId } : { selectedShotId: undefined }),
+      shots: nextShots,
+    };
+    persistSequence(nextSequence);
+    const nextShot = findSavedComicSequenceShot(nextSequence, nextSelectedShotId);
+    setDraft(nextShot ? createDraftFromShot(nextShot, selectedResources) : null);
+  }
+
+  function loadSelectedShotToCanvas() {
+    if (!sequence || !selectedShot) {
+      return;
+    }
+
+    persistSequence({
+      ...sequence,
+      selectedShotId: selectedShot.id,
+    });
+    updateScene(cloneSceneSnapshot(selectedShot.scene));
+    onClose();
+  }
+
+  function toggleHistoryReference(channelKey: ComicSequenceReferenceChannelKey, image: SavedComfyUiGeneratedImage) {
+    if (!selectedShot) {
+      return;
+    }
+
+    const currentChannel = getComicSequenceReferenceChannel(selectedShot.reference, channelKey);
+    const exists = currentChannel.images.some((reference) =>
+      reference.source === "history" && reference.imageId === image.id,
+    );
+    const nextImages: SavedComicSequenceReferenceImage[] = exists
+      ? currentChannel.images.filter((reference) =>
+          !(reference.source === "history" && reference.imageId === image.id),
+        )
+      : [
+          ...currentChannel.images,
+          {
+            id: createLocalId("history-ref"),
+            source: "history" as const,
+            imageId: image.id,
+          },
+        ].slice(0, 4);
+
+    patchSelectedReferenceChannel(channelKey, {
+      enabled: nextImages.length > 0 ? true : currentChannel.enabled,
+      images: nextImages,
+    });
+  }
+
+  async function handleUploadReferenceFiles(channelKey: ComicSequenceReferenceChannelKey, files: FileList | null) {
+    if (!selectedShot || !files || files.length === 0) {
+      return;
+    }
+
+    setReferenceUploadStatus("uploading");
+    setReferenceUploadError("");
+
+    try {
+      const uploaded = await Promise.all(
+        Array.from(files)
+          .filter((file) => file.type.startsWith("image/"))
+          .slice(0, 4)
+          .map(async (file) => {
+            const dataUrl = await blobToDataUrl(file);
+            const stored = await fetchJson<StoredSequenceReferenceResponse>("/api/comfyui/sequence-references", {
+              method: "POST",
+              headers: {
+                "content-type": "application/json",
+              },
+              body: JSON.stringify({ dataUrl }),
+            });
+
+            return {
+              id: createLocalId("upload-ref"),
+              source: "upload" as const,
+              filename: stored.filename,
+              name: file.name,
+              url: stored.url,
+            };
+          }),
+      );
+
+      const currentChannel = getComicSequenceReferenceChannel(selectedShot.reference, channelKey);
+      patchSelectedReferenceChannel(channelKey, {
+        enabled: true,
+        images: [...currentChannel.images, ...uploaded].slice(0, 4),
+      });
+      setReferenceUploadStatus("idle");
+    } catch (error) {
+      setReferenceUploadStatus("error");
+      setReferenceUploadError(error instanceof Error ? error.message : "Failed to upload reference image.");
+    }
+  }
+
+  function removeReferenceImage(channelKey: ComicSequenceReferenceChannelKey, referenceId: string) {
+    if (!selectedShot) {
+      return;
+    }
+
+    const currentChannel = getComicSequenceReferenceChannel(selectedShot.reference, channelKey);
+    patchSelectedReferenceChannel(channelKey, {
+      images: currentChannel.images.filter((image) => image.id !== referenceId),
+    });
+  }
+
+  async function buildShotReferenceImages(images: SavedComicSequenceReferenceImage[]) {
+    const references = await Promise.all(
+      images.map(async (reference) => {
+        if (reference.source === "upload") {
+          return {
+            id: reference.id,
+            storedFilename: reference.filename,
+          };
+        }
+
+        const image = project.settings.comfyUiGeneratedImages.find((candidate) => candidate.id === reference.imageId);
+        if (!image) {
+          return null;
+        }
+
+        return {
+          id: reference.id,
+          imageDataUrl: await loadOriginalImageUrlToDataUrl(image.url),
+        };
+      }),
+    );
+
+    return references.filter((reference): reference is NonNullable<(typeof references)[number]> => reference !== null);
+  }
+
+  async function submitSequence() {
+    if (!sequence || sequence.shots.length === 0) {
+      setSubmitStatus("error");
+      setSubmitError("Add at least one shot from the current canvas.");
+      return;
+    }
+
+    if (!allResourceDownloadsReady) {
+      setSubmitStatus("error");
+      setSubmitError("Download the selected checkpoint / LoRA files before generating.");
+      return;
+    }
+
+    setSubmitStatus("loading");
+    setSubmitError("");
+    setWaitMessage("Preparing independent shot requests...");
+    setHistorySaveStatus("idle");
+    setHistorySaveMessage("");
+    setResults([]);
+    setSavedCurrentImageKeys(new Set());
+
+    try {
+      const clientId = createComfyUiClientId();
+      const generationDrafts = new Map<string, GenerationDraft>();
+      const payloadShots = [];
+
+      for (const [shotIndex, shot] of sequence.shots.entries()) {
+        const shotDraft = createDraftFromShot(shot, selectedResources);
+        const imageCount = normalizeComfyUiGenerationImageCount(shotDraft.imageCount);
+        const seed = resolveComfyUiGenerationSeed({
+          currentSeed: shotDraft.seed,
+          mode: shotDraft.seedMode,
+        });
+        const faceReference = getComicSequenceReferenceChannel(shot.reference, "face");
+        const characterReference = getComicSequenceReferenceChannel(shot.reference, "character");
+        const faceReferences = faceReference.enabled ? await buildShotReferenceImages(faceReference.images) : [];
+        const characterReferences = characterReference.enabled ? await buildShotReferenceImages(characterReference.images) : [];
+        const hasReferenceImages = faceReferences.length > 0 || characterReferences.length > 0;
+        const referencePrompt = hasReferenceImages
+          ? shot.reference.characterPrompt
+            ? `${shot.reference.characterName}: ${shot.reference.characterPrompt}`
+            : shot.reference.characterName
+          : undefined;
+        const positivePrompt = joinSequencePrompt([
+          shot.positivePrompt,
+          referencePrompt,
+          shot.shotPrompt,
+        ]);
+        const shotPreview = buildComfyUiControlNetOpenPosePreview(shot.scene, {
+          width: shotDraft.width,
+          height: shotDraft.height,
+        });
+        const shotNormalPreview = shotDraft.controlNets.normal.enabled
+          ? await renderComfyUiNormalControlImage(shot.scene, {
+              width: shotDraft.width,
+              height: shotDraft.height,
+            })
+          : null;
+        const request = toRequestPayload(
+          { ...shotDraft, positivePrompt, negativePrompt: shot.negativePrompt, imageCount },
+          seed,
+          shotPreview,
+          shotNormalPreview,
+        );
+
+        generationDrafts.set(shot.id, { ...shotDraft, positivePrompt, negativePrompt: shot.negativePrompt, imageCount, seed });
+        payloadShots.push({
+          id: shot.id,
+          title: shot.title,
+          prompt: shot.shotPrompt || shot.title || `Shot ${shotIndex + 1}`,
+          request,
+          characters: [
+            ...(faceReferences.length > 0
+              ? [
+                  {
+                    id: `${shot.id}-face`,
+                    mode: faceReference.mode,
+                    name: `${shot.reference.characterName.trim() || "Character 1"} face`,
+                    prompt: shot.reference.characterPrompt,
+                    references: faceReferences,
+                    startPercent: Math.min(faceReference.startAt, faceReference.endAt),
+                    endPercent: Math.max(faceReference.startAt, faceReference.endAt),
+                    weight: faceReference.weight,
+                  },
+                ]
+              : []),
+            ...(characterReferences.length > 0
+              ? [
+                  {
+                    id: `${shot.id}-character`,
+                    mode: characterReference.mode,
+                    name: `${shot.reference.characterName.trim() || "Character 1"} character`,
+                    prompt: shot.reference.characterPrompt,
+                    references: characterReferences,
+                    startPercent: Math.min(characterReference.startAt, characterReference.endAt),
+                    endPercent: Math.max(characterReference.startAt, characterReference.endAt),
+                    weight: characterReference.weight,
+                  },
+                ]
+              : []),
+          ],
+        });
+      }
+
+      const firstDraft = generationDrafts.get(sequence.shots[0]?.id ?? "");
+      const baseRequest = firstDraft
+        ? toRequestPayload(firstDraft, firstDraft.seed, null, null)
+        : {
+            checkpointName: selectedResources.checkpoint?.modelFileName ?? "",
+            positivePrompt: activePrompt,
+          };
+      const payload = await fetchJson<SequenceImageRouteResponse>("/api/comfyui/sequence-image", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          baseRequest,
+          characters: [],
+          clientId,
+          sequenceId: createLocalId("sequence"),
+          shots: payloadShots,
+        }),
+      });
+      const queuedResults: GenerationResult[] = payload.shots.map((shot) => {
+        const draftSnapshot = generationDrafts.get(shot.shotId) ?? firstDraft;
+
+        return {
+          characterReferenceIds: shot.characterReferenceIds,
+          historyContext: {
+            draftSnapshot: draftSnapshot ?? (draft as GenerationDraft),
+            negativePrompt: shot.negativePrompt,
+            positivePrompt: shot.positivePrompt,
+            selectedCheckpointId,
+            selectedLoraIds: [...selectedLoraIds],
+          },
+          imageCount: shot.imageCount,
+          images: [],
+          number: shot.number,
+          outputNodeId: shot.outputNodeId,
+          promptId: shot.promptId,
+          sequenceId: payload.sequenceId,
+          seed: shot.seed,
+          shotId: shot.shotId,
+          source: "sequence",
+        };
+      });
+
+      setResults(queuedResults);
+
+      for (const shot of payload.shots) {
+        setWaitMessage(`Waiting for ${shot.title ?? shot.shotId} (${shot.imageCount} images)...`);
+        const history = await waitForComfyUiGeneratedImages(shot.clientId ?? "", shot.promptId, shot.imageCount, (historyUpdate) => {
+          if (historyUpdate.images.length > 0) {
+            setResults((current) =>
+              current.map((result) =>
+                result.promptId === shot.promptId ? { ...result, images: historyUpdate.images } : result,
+              ),
+            );
+          }
+        });
+
+        setResults((current) =>
+          current.map((result) =>
+            result.promptId === shot.promptId ? { ...result, images: history.images } : result,
+          ),
+        );
+      }
+
+      setWaitMessage("");
+      setSubmitStatus("success");
+      setHistorySaveMessage(
+        payload.warnings.length > 0
+          ? payload.warnings.join(" ")
+          : "Sequence images generated. Save the candidates you want to keep.",
+      );
+      setHistorySaveStatus(payload.warnings.length > 0 ? "error" : "idle");
+    } catch (error) {
+      setWaitMessage("");
+      setSubmitStatus("error");
+      setSubmitError(error instanceof Error ? error.message : "ComfyUI sequence request failed.");
+    }
+  }
+
+  async function saveSequenceImage(result: GenerationResult, image: ComfyUiGeneratedImage) {
+    const imageKey = `${result.promptId}:${getGeneratedImageReferenceKey(image)}`;
+    if (savedCurrentImageKeys.has(imageKey)) {
+      return;
+    }
+
+    setHistorySaveStatus("saving");
+    setHistorySaveMessage("Saving image to project history...");
+
+    try {
+      const savedImage = await fetchJson<SavedGeneratedImageResponse>("/api/comfyui/generated-images", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ image }),
+      });
+      const records = createComfyUiGeneratedImageRecords({
+        draft: result.historyContext.draftSnapshot,
+        images: [image],
+        negativePrompt: result.historyContext.negativePrompt,
+        positivePrompt: result.historyContext.positivePrompt,
+        result,
+        savedImage,
+        selectedCheckpointId,
+        selectedLoraIds,
+      });
+
+      appendComfyUiGeneratedImages(records);
+      await saveProject(useEditorStore.getState().project);
+      setSavedCurrentImageKeys((current) => new Set(current).add(imageKey));
+      setHistorySaveStatus("success");
+      setHistorySaveMessage("Saved to project image history.");
+    } catch (error) {
+      setHistorySaveStatus("error");
+      setHistorySaveMessage(error instanceof Error ? error.message : "Failed to save image.");
+    }
+  }
+
+  if (!open || typeof document === "undefined") {
+    return null;
+  }
+
+  return createPortal(
+    <div
+      aria-modal="true"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4 backdrop-blur-sm"
+      role="dialog"
+    >
+      <div className="flex max-h-[92vh] w-full max-w-7xl flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xl">
+        <div className="flex items-start gap-3 border-b border-slate-100 bg-sky-50 p-5">
+          <div className="rounded-md bg-white p-2 text-sky-600">
+            <Sparkles className="size-5" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <h3 className="text-base font-bold text-slate-900">Comic Sequence</h3>
+            <p className="mt-1 text-xs leading-relaxed text-slate-500">
+              {selectedResources.checkpoint ? selectedResources.checkpoint.name : "Independent shot workspace"}
+            </p>
+          </div>
+          <button
+            aria-label="Close Comic Sequence"
+            className="rounded-full bg-white/80 p-1.5 text-slate-400 shadow-sm transition hover:bg-white hover:text-slate-700"
+            onClick={onClose}
+            type="button"
+          >
+            <X className="size-4" />
+          </button>
+        </div>
+
+        <div className="min-h-0 flex-1 overflow-y-auto p-5">
+          {loadStatus === "loading" ? (
+            <div className="rounded-md border border-sky-100 bg-sky-50 p-3 text-sm text-sky-700">
+              <Loader2 className="mr-2 inline size-4 animate-spin" />
+              Loading Comic Sequence context...
+            </div>
+          ) : null}
+          {loadStatus === "error" ? (
+            <div className="rounded-md border border-rose-100 bg-rose-50 p-3 text-sm text-rose-700">{loadError}</div>
+          ) : null}
+          {loadStatus === "success" ? (
+            <div className="grid gap-5 lg:grid-cols-[300px_minmax(0,1fr)]">
+              <aside className="space-y-3">
+                <Button
+                  className="h-10 w-full rounded-md bg-sky-600 text-white hover:bg-sky-700"
+                  disabled={!allResourceDownloadsReady}
+                  onClick={addShotFromCurrentCanvas}
+                  type="button"
+                >
+                  <Plus className="size-4" />
+                  Add shot from current canvas
+                </Button>
+                <div className="rounded-md border border-slate-200 bg-white p-2">
+                  {sequence?.shots.length ? (
+                    <div className="space-y-2">
+                      {sequence.shots.map((shot, index) => (
+                        <button
+                          className={
+                            "w-full rounded-md border p-3 text-left transition " +
+                            (selectedShot?.id === shot.id
+                              ? "border-sky-300 bg-sky-50 text-sky-900 ring-2 ring-sky-100"
+                              : "border-slate-200 text-slate-700 hover:bg-slate-50")
+                          }
+                          key={shot.id}
+                          onClick={() => selectShot(shot.id)}
+                          type="button"
+                        >
+                          <span className="block text-xs font-semibold">
+                            {index + 1}. {shot.title}
+                          </span>
+                          <span className="mt-1 line-clamp-2 block text-[11px] leading-relaxed text-slate-500">
+                            {shot.shotPrompt || shot.positivePrompt || "No prompt"}
+                          </span>
+                          <span className="mt-2 block text-[10px] text-slate-400">
+                            {getComicSequenceReferenceCount(shot.reference)} refs · {shot.controlNets.filter((unit) => unit.enabled).length} control
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="rounded-md border border-dashed border-slate-200 p-4 text-xs leading-relaxed text-slate-500">
+                      No shots yet. Add the current canvas to start an independent sequence.
+                    </div>
+                  )}
+                </div>
+                {selectedShot ? (
+                  <div className="grid gap-2 rounded-md border border-slate-200 bg-slate-50/70 p-3">
+                    <Button className="h-9 rounded-md bg-white text-slate-700" onClick={updateSelectedShotFromCurrentCanvas} type="button" variant="secondary">
+                      <Save className="size-3.5" />
+                      Update from canvas
+                    </Button>
+                    <Button className="h-9 rounded-md bg-white text-slate-700" onClick={loadSelectedShotToCanvas} type="button" variant="secondary">
+                      <Undo2 className="size-3.5" />
+                      Load to canvas
+                    </Button>
+                    <Button className="h-9 rounded-md bg-white text-slate-700" onClick={duplicateSelectedShot} type="button" variant="secondary">
+                      <Plus className="size-3.5" />
+                      Duplicate
+                    </Button>
+                    <Button className="h-9 rounded-md border-rose-200 bg-white text-rose-700 hover:bg-rose-50" onClick={deleteSelectedShot} type="button" variant="secondary">
+                      <Trash2 className="size-3.5" />
+                      Delete
+                    </Button>
+                  </div>
+                ) : null}
+                <div className="rounded-md border border-slate-200 p-3 text-xs text-slate-600">
+                  <div className="flex justify-between gap-3">
+                    <span>Shots</span>
+                    <strong className="text-slate-900">{sequence?.shots.length ?? 0}</strong>
+                  </div>
+                  <div className="mt-2 flex justify-between gap-3">
+                    <span>LoRA</span>
+                    <strong className="text-slate-900">{selectedLoraIds.length}</strong>
+                  </div>
+                  <div className="mt-2 flex justify-between gap-3">
+                    <span>Ready</span>
+                    <strong className={allResourceDownloadsReady ? "text-emerald-700" : "text-amber-700"}>
+                      {allResourceDownloadsReady ? "yes" : "no"}
+                    </strong>
+                  </div>
+                </div>
+              </aside>
+
+              <div className="min-w-0 space-y-4">
+                {selectedShot && draft ? (
+                  <>
+                    <div className="grid gap-3 rounded-md border border-slate-200 bg-white p-3 sm:grid-cols-2">
+                      <label className="grid gap-1.5">
+                        <span className="text-xs font-semibold text-slate-700">Shot title</span>
+                        <input
+                          className={COMFYUI_TEXT_FIELD_CLASS}
+                          onChange={(event) => patchSelectedShot({ title: event.target.value })}
+                          value={selectedShot.title}
+                        />
+                      </label>
+                      <label className="grid gap-1.5">
+                        <span className="text-xs font-semibold text-slate-700">Manual shot prompt</span>
+                        <input
+                          className={COMFYUI_TEXT_FIELD_CLASS}
+                          onChange={(event) => patchSelectedShot({ shotPrompt: event.target.value })}
+                          placeholder="camera move, emotion, local action"
+                          value={selectedShot.shotPrompt}
+                        />
+                      </label>
+                      <label className="grid gap-1.5 sm:col-span-2">
+                        <span className="text-xs font-semibold text-slate-700">Canvas prompt</span>
+                        <textarea
+                          className="min-h-24 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700 outline-none transition focus:border-sky-300 focus:ring-2 focus:ring-sky-100"
+                          onChange={(event) => patchSelectedShot({ positivePrompt: event.target.value })}
+                          value={selectedShot.positivePrompt}
+                        />
+                      </label>
+                      <label className="grid gap-1.5 sm:col-span-2">
+                        <span className="text-xs font-semibold text-slate-700">Negative prompt</span>
+                        <textarea
+                          className="min-h-20 rounded-md border border-rose-100 bg-rose-50 px-3 py-2 text-sm text-slate-700 outline-none transition focus:border-rose-300 focus:ring-2 focus:ring-rose-100"
+                          onChange={(event) => patchSelectedShot({ negativePrompt: event.target.value })}
+                          value={selectedShot.negativePrompt}
+                        />
+                      </label>
+                    </div>
+
+                    <div className="rounded-md border border-slate-200 bg-slate-50/60 p-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="text-xs font-semibold text-slate-700">Reference / IPAdapter</p>
+                          <p className="mt-0.5 text-[11px] leading-relaxed text-slate-500">
+                            Face and Character references can both be enabled with separate images.
+                          </p>
+                        </div>
+                      </div>
+                      <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                        <TextInput
+                          label="character"
+                          onChange={(value) => patchSelectedReference({ characterName: value })}
+                          value={selectedShot.reference.characterName}
+                        />
+                        <TextInput
+                          label="character prompt"
+                          onChange={(value) => patchSelectedReference({ characterPrompt: value })}
+                          placeholder="hair, outfit, face notes"
+                          value={selectedShot.reference.characterPrompt}
+                        />
+                      </div>
+                      {referenceUploadStatus === "error" && referenceUploadError ? (
+                        <p className="mt-3 text-[11px] leading-relaxed text-rose-700">{referenceUploadError}</p>
+                      ) : null}
+                      <div className="mt-4 grid gap-3 xl:grid-cols-2">
+                        {(["face", "character"] as const).map((channelKey) => {
+                          const config = SEQUENCE_REFERENCE_CHANNEL_CONFIGS[channelKey];
+                          const channel = channelKey === "face" ? selectedShotFaceReference : selectedShotCharacterReference;
+                          const historyIds = new Set(
+                            channel.images
+                              .filter((image): image is Extract<SavedComicSequenceReferenceImage, { source: "history" }> => image.source === "history")
+                              .map((image) => image.imageId),
+                          );
+                          const uploadedReferences = channel.images.filter(
+                            (image): image is Extract<SavedComicSequenceReferenceImage, { source: "upload" }> => image.source === "upload",
+                          );
+
+                          return (
+                            <div className="rounded-md border border-slate-200 bg-white p-3" key={channelKey}>
+                              <div className="flex items-start justify-between gap-3">
+                                <label className="flex min-w-0 items-start gap-2 text-xs text-slate-700">
+                                  <input
+                                    checked={channel.enabled}
+                                    className="mt-0.5 size-3.5 rounded border-slate-300 text-sky-600"
+                                    onChange={(event) => patchSelectedReferenceChannel(channelKey, { enabled: event.target.checked })}
+                                    type="checkbox"
+                                  />
+                                  <span>
+                                    <span className="block font-semibold text-slate-800">{config.label} reference</span>
+                                    <span className="mt-0.5 block text-[11px] leading-relaxed text-slate-500">{config.description}</span>
+                                  </span>
+                                </label>
+                                <span className="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-500">
+                                  {channel.mode}
+                                </span>
+                              </div>
+                              <div className="mt-3 grid grid-cols-3 gap-2">
+                                <NumberInput
+                                  label="weight"
+                                  max={1}
+                                  min={0}
+                                  onChange={(value) => patchSelectedReferenceChannel(channelKey, { weight: value })}
+                                  step={0.01}
+                                  value={channel.weight}
+                                />
+                                <NumberInput
+                                  label="start_at"
+                                  max={1}
+                                  min={0}
+                                  onChange={(value) => patchSelectedReferenceChannel(channelKey, { startAt: value })}
+                                  step={0.01}
+                                  value={channel.startAt}
+                                />
+                                <NumberInput
+                                  label="end_at"
+                                  max={1}
+                                  min={0}
+                                  onChange={(value) => patchSelectedReferenceChannel(channelKey, { endAt: value })}
+                                  step={0.01}
+                                  value={channel.endAt}
+                                />
+                              </div>
+                              <div className="mt-3 flex items-center justify-between gap-3">
+                                <p className="text-[11px] text-slate-500">
+                                  {channel.images.length}/4 images · {Math.min(channel.startAt, channel.endAt).toFixed(2)}-{Math.max(channel.startAt, channel.endAt).toFixed(2)}
+                                </p>
+                                <label className="inline-flex h-8 cursor-pointer items-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-xs font-medium text-slate-600 transition hover:bg-slate-50">
+                                  {referenceUploadStatus === "uploading" ? <Loader2 className="size-3.5 animate-spin" /> : <Plus className="size-3.5" />}
+                                  Upload
+                                  <input
+                                    accept="image/png,image/jpeg,image/webp"
+                                    className="sr-only"
+                                    disabled={referenceUploadStatus === "uploading"}
+                                    multiple
+                                    onChange={(event) => void handleUploadReferenceFiles(channelKey, event.currentTarget.files)}
+                                    type="file"
+                                  />
+                                </label>
+                              </div>
+                              <div className="mt-3 grid grid-cols-4 gap-2 sm:grid-cols-5 lg:grid-cols-6">
+                                {referenceCandidates.map((image) => (
+                                  <button
+                                    className={
+                                      "overflow-hidden rounded-md border text-left transition " +
+                                      (historyIds.has(image.id)
+                                        ? "border-sky-400 ring-2 ring-sky-100"
+                                        : "border-slate-200 hover:border-sky-200")
+                                    }
+                                    key={image.id}
+                                    onClick={() => toggleHistoryReference(channelKey, image)}
+                                    title={image.filename}
+                                    type="button"
+                                  >
+                                    <img alt={image.filename} className="aspect-square w-full object-cover" src={image.url} />
+                                  </button>
+                                ))}
+                                {uploadedReferences.map((image) => (
+                                  <button
+                                    className="relative overflow-hidden rounded-md border border-emerald-200 text-left"
+                                    key={image.id}
+                                    onClick={() => removeReferenceImage(channelKey, image.id)}
+                                    title={`Remove ${image.name}`}
+                                    type="button"
+                                  >
+                                    <img alt={image.name} className="aspect-square w-full object-cover" src={image.url} />
+                                    <span className="absolute right-1 top-1 rounded bg-white/90 px-1 text-[10px] text-emerald-700">upload</span>
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    <div className="grid gap-3 rounded-md border border-slate-200 bg-white p-3 sm:grid-cols-2 lg:grid-cols-4">
+                      <NumberInput label="width" min={16} onChange={(value) => patchDraft({ width: Math.round(value / 8) * 8 })} step={8} value={draft.width} />
+                      <NumberInput label="height" min={16} onChange={(value) => patchDraft({ height: Math.round(value / 8) * 8 })} step={8} value={draft.height} />
+                      <NumberInput label="steps" min={1} onChange={(value) => patchDraft({ steps: Math.round(value) })} value={draft.steps} />
+                      <NumberInput label="cfg" min={0} onChange={(value) => patchDraft({ cfg: value })} step={0.5} value={draft.cfg} />
+                      <NumberInput label="denoise" max={1} min={0} onChange={(value) => patchDraft({ denoise: value })} step={0.05} value={draft.denoise} />
+                      <NumberInput
+                        label="images / shot"
+                        max={MAX_COMFYUI_GENERATION_IMAGE_COUNT}
+                        min={1}
+                        onChange={(value) => patchDraft({ imageCount: normalizeComfyUiGenerationImageCount(value) })}
+                        value={draft.imageCount}
+                      />
+                      <SelectInput label="sampler" onChange={(value) => patchDraft({ samplerName: value })} options={COMFYUI_SAMPLER_OPTIONS} value={draft.samplerName} />
+                      <SelectInput label="scheduler" onChange={(value) => patchDraft({ scheduler: value })} options={COMFYUI_SCHEDULER_OPTIONS} value={draft.scheduler} />
+                      <SelectInput
+                        label="latent"
+                        onChange={(value) => patchDraft({ latentImageNode: value as GenerationDraft["latentImageNode"] })}
+                        options={COMFYUI_LATENT_IMAGE_NODE_OPTIONS}
+                        value={draft.latentImageNode}
+                      />
+                      <TextInput label="output" onChange={(value) => patchDraft({ outputPrefix: value })} value={draft.outputPrefix} />
+                      <div className="grid gap-1 lg:col-span-2">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">seed</span>
+                          <div className="inline-flex rounded-md border border-slate-200 bg-white p-0.5">
+                            {(["random", "fixed"] as const).map((mode) => (
+                              <button
+                                className={`rounded px-2 py-0.5 text-[10px] font-medium transition ${
+                                  draft.seedMode === mode ? "bg-sky-600 text-white" : "text-slate-500 hover:bg-slate-50"
+                                }`}
+                                key={mode}
+                                onClick={() => patchDraft({ seedMode: mode })}
+                                type="button"
+                              >
+                                {mode}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                        <input
+                          className="h-9 min-w-0 rounded-md border border-slate-200 bg-white px-2 text-sm text-slate-700 outline-none transition focus:border-sky-300 focus:ring-2 focus:ring-sky-100"
+                          min={0}
+                          onChange={(event) => {
+                            const parsed = Number(event.target.value);
+                            if (Number.isFinite(parsed)) {
+                              patchDraft({ seed: Math.round(parsed), seedMode: "fixed" });
+                            }
+                          }}
+                          step={1}
+                          type="number"
+                          value={draft.seed}
+                        />
+                      </div>
+                    </div>
+
+                    <ControlNetOpenPoseFoldout
+                      controlNets={draft.controlNets}
+                      expanded={Boolean(shotOpenPosePreview?.available && controlNetExpanded)}
+                      normalPreview={controlNetNormalPreview}
+                      normalPreviewLoading={controlNetNormalPreviewLoading}
+                      onChange={patchControlNet}
+                      onToggle={() => setControlNetExpanded((value) => !value)}
+                      preview={shotOpenPosePreview}
+                    />
+                    <DetailerFoldout
+                      detailer={draft.handDetailer}
+                      label="HandDetailer"
+                      onChange={patchHandDetailer}
+                      parameterLabel="hand"
+                    />
+                    <DetailerFoldout
+                      detailer={draft.faceDetailer}
+                      label="FaceDetailer"
+                      onChange={patchFaceDetailer}
+                      parameterLabel="face"
+                    />
+                  </>
+                ) : (
+                  <div className="rounded-md border border-dashed border-slate-200 p-6 text-sm leading-relaxed text-slate-500">
+                    Add a shot from the current canvas to configure independent prompt, reference, OpenPose, KSampler, and detailer nodes.
+                  </div>
+                )}
+              </div>
+            </div>
+          ) : null}
+
+          {results.length > 0 ? (
+            <div className="mt-5 space-y-4">
+              {results.map((result, shotIndex) => (
+                <section className="space-y-2" key={result.promptId}>
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <p className="text-xs font-bold text-slate-800">Shot {shotIndex + 1}</p>
+                      <p className="text-[11px] text-slate-500">seed {result.seed} - promptId {result.promptId}</p>
+                    </div>
+                    <span className="text-[11px] text-slate-500">
+                      {result.images.length}/{result.imageCount}
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
+                    {result.images.map((image, imageIndex) => {
+                      const imageKey = `${result.promptId}:${getGeneratedImageReferenceKey(image)}`;
+                      const saved = savedCurrentImageKeys.has(imageKey);
+
+                      return (
+                        <div className="overflow-hidden rounded-md border border-slate-200 bg-white" key={imageKey}>
+                          <a href={image.url} rel="noreferrer" target="_blank">
+                            <img
+                              alt={`Shot ${shotIndex + 1} candidate ${imageIndex + 1}`}
+                              className="aspect-square w-full object-cover"
+                              src={image.url}
+                            />
+                          </a>
+                          <div className="flex items-center gap-1 border-t border-slate-200 px-1.5 py-1.5">
+                            <span className="min-w-0 flex-1 truncate text-[10px] text-slate-500">{image.filename}</span>
+                            <button
+                              aria-label="Save sequence image"
+                              className="grid size-7 place-items-center rounded-md text-slate-500 transition hover:bg-emerald-50 hover:text-emerald-700 disabled:opacity-50"
+                              disabled={saved || historySaveStatus === "saving"}
+                              onClick={() => void saveSequenceImage(result, image)}
+                              title={saved ? "Saved" : "Save"}
+                              type="button"
+                            >
+                              {saved ? <CheckCircle2 className="size-3.5" /> : <Save className="size-3.5" />}
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </section>
+              ))}
+            </div>
+          ) : null}
+        </div>
+
+        <div className="flex flex-col gap-3 border-t border-slate-100 bg-slate-50 p-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="text-xs text-slate-500">
+            {waitMessage ? (
+              <span>{submitStatus === "loading" ? <Loader2 className="mr-1.5 inline size-3.5 animate-spin" /> : null}{waitMessage}</span>
+            ) : historySaveMessage ? (
+              <span className={historySaveStatus === "error" ? "text-rose-700" : historySaveStatus === "success" ? "text-emerald-700" : "text-sky-700"}>
+                {historySaveMessage}
+              </span>
+            ) : submitStatus === "error" ? (
+              <span className="text-rose-700">{submitError}</span>
+            ) : (
+              <span>{sequence?.shots.length ?? 0} independent shots</span>
+            )}
+          </div>
+          <div className="flex shrink-0 gap-3">
+            <Button
+              className="h-10 rounded-md border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+              disabled={submitStatus === "loading" || historySaveStatus === "saving"}
+              onClick={onClose}
+              type="button"
+              variant="secondary"
+            >
+              Close
+            </Button>
+            <Button
+              className="h-10 rounded-md bg-sky-600 text-white hover:bg-sky-700"
+              disabled={submitStatus === "loading" || !sequence?.shots.length || !allResourceDownloadsReady}
+              onClick={() => void submitSequence()}
+              type="button"
+            >
+              {submitStatus === "loading" ? <Loader2 className="size-4 animate-spin" /> : <Play className="size-4" />}
+              Generate sequence
+            </Button>
+          </div>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
 export function ImageGenerationPanel() {
   const project = useEditorStore((state) => state.project);
   const aiGeneratedPrompt = useEditorStore((state) => state.aiGeneratedPrompt);
@@ -5967,6 +8247,7 @@ export function ImageGenerationPanel() {
   const savedParameters = project.settings.savedComfyUiGenerationParams ?? null;
   const hasCheckpoint = Boolean(selectedCheckpointId);
   const [open, setOpen] = useState(false);
+  const [sequenceOpen, setSequenceOpen] = useState(false);
 
   return (
     <section className="flex flex-col">
@@ -5980,17 +8261,31 @@ export function ImageGenerationPanel() {
             <p className="mt-0.5 truncate text-[11px] text-slate-500">ComfyUI text-to-image</p>
           </div>
         </div>
-        <Button
-          className="h-8 shrink-0 rounded-md bg-sky-600 px-3 text-xs text-white hover:bg-sky-700 disabled:opacity-60"
-          disabled={!hasCheckpoint || !activePrompt.trim()}
-          onClick={() => setOpen(true)}
-          size="sm"
-          title={!hasCheckpoint ? "请先在 Civitai 资源库中选择 checkpoint" : "打开 ComfyUI 生图参数"}
-          type="button"
-        >
-          <Play className="size-3.5" />
-          ComfyUI 生图
-        </Button>
+        <div className="flex shrink-0 gap-2">
+          <Button
+            className="h-8 rounded-md border-sky-200 bg-white px-3 text-xs text-sky-700 hover:bg-sky-50 disabled:opacity-60"
+            disabled={!hasCheckpoint}
+            onClick={() => setSequenceOpen(true)}
+            size="sm"
+            title={!hasCheckpoint ? "Select a checkpoint first" : "Comic Sequence"}
+            type="button"
+            variant="secondary"
+          >
+            <Sparkles className="size-3.5" />
+            Sequence
+          </Button>
+          <Button
+            className="h-8 rounded-md bg-sky-600 px-3 text-xs text-white hover:bg-sky-700 disabled:opacity-60"
+            disabled={!hasCheckpoint || !activePrompt.trim()}
+            onClick={() => setOpen(true)}
+            size="sm"
+            title={!hasCheckpoint ? "Select a checkpoint first" : "Open ComfyUI generation settings"}
+            type="button"
+          >
+            <Play className="size-3.5" />
+            ComfyUI
+          </Button>
+        </div>
       </div>
       <p className="text-xs leading-relaxed text-slate-500">
         {!hasCheckpoint
@@ -6007,6 +8302,16 @@ export function ImageGenerationPanel() {
         selectedCheckpointId={selectedCheckpointId}
         selectedLoraIds={selectedLoraIds}
         title="ComfyUI 生图"
+      />
+      <ComicSequenceWorkspaceDialog
+        activePrompt={activePrompt}
+        aiGeneratedPrompt={aiGeneratedPrompt}
+        baseNegativePrompt={generatedPrompt.negativePrompt}
+        onClose={() => setSequenceOpen(false)}
+        open={sequenceOpen}
+        savedParameters={savedParameters}
+        selectedCheckpointId={selectedCheckpointId}
+        selectedLoraIds={selectedLoraIds}
       />
     </section>
   );

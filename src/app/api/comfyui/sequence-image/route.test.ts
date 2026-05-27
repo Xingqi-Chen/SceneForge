@@ -1,0 +1,336 @@
+// @vitest-environment node
+
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { POST } from "./route";
+
+const objectInfo = {
+  CheckpointLoaderSimple: {
+    input: {
+      required: {
+        ckpt_name: [["model.safetensors"], {}],
+      },
+    },
+  },
+  LoraLoader: {
+    input: {
+      required: {
+        lora_name: [["style.safetensors"], {}],
+      },
+    },
+  },
+  KSampler: {
+    input: {
+      required: {
+        sampler_name: [["euler"], {}],
+        scheduler: [["normal"], {}],
+      },
+    },
+  },
+  EmptyLatentImage: {},
+  IPAdapterAdvanced: {},
+  IPAdapterUnifiedLoader: {},
+  LoadImage: {},
+  PreviewImage: {},
+};
+
+type PromptBody = {
+  client_id?: string;
+  prompt: Record<string, {
+    class_type: string;
+    inputs: Record<string, unknown>;
+  }>;
+};
+
+function findPromptNode(body: PromptBody, classType: string) {
+  return Object.values(body.prompt).find((node) => node.class_type === classType);
+}
+
+describe("ComfyUI sequence image route", () => {
+  const previousBaseUrl = process.env.COMFYUI_BASE_URL;
+  const previousSequenceReferenceDir = process.env.SCENEFORGE_SEQUENCE_REFERENCE_DIR;
+
+  afterEach(() => {
+    if (previousBaseUrl === undefined) {
+      delete process.env.COMFYUI_BASE_URL;
+    } else {
+      process.env.COMFYUI_BASE_URL = previousBaseUrl;
+    }
+    if (previousSequenceReferenceDir === undefined) {
+      delete process.env.SCENEFORGE_SEQUENCE_REFERENCE_DIR;
+    } else {
+      process.env.SCENEFORGE_SEQUENCE_REFERENCE_DIR = previousSequenceReferenceDir;
+    }
+
+    vi.restoreAllMocks();
+  });
+
+  it("uploads character references and queues one ComfyUI prompt per shot", async () => {
+    process.env.COMFYUI_BASE_URL = "http://comfyui.test";
+    const promptBodies: PromptBody[] = [];
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      if (input === "http://comfyui.test/object_info") {
+        return Response.json(objectInfo);
+      }
+
+      if (input === "http://comfyui.test/upload/image") {
+        expect(init?.method).toBe("POST");
+        expect(init?.body).toBeInstanceOf(FormData);
+        return Response.json({
+          name: "hero-reference.png",
+          type: "input",
+        });
+      }
+
+      expect(input).toBe("http://comfyui.test/prompt");
+      const body = JSON.parse(String(init?.body)) as PromptBody;
+      promptBodies.push(body);
+
+      return Response.json({
+        prompt_id: `prompt-${promptBodies.length}`,
+        number: promptBodies.length,
+        node_errors: {},
+      });
+    });
+
+    const response = await POST(
+      new Request("http://localhost/api/comfyui/sequence-image", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          baseRequest: {
+            checkpointName: "model.safetensors",
+            positivePrompt: "ink comic style",
+            negativePrompt: "blurry",
+            samplerName: "euler",
+            scheduler: "normal",
+            width: 1024,
+            height: 1024,
+          },
+          baseSeed: 100,
+          characters: [
+            {
+              id: "hero",
+              name: "Hero",
+              prompt: "red cape",
+              references: [
+                {
+                  id: "hero-ref",
+                  imageDataUrl: "data:image/png;base64,aGVsbG8=",
+                },
+              ],
+            },
+          ],
+          clientId: "client-seq",
+          imageCount: 2,
+          sequenceId: "seq-1",
+          shots: [
+            { id: "shot-1", prompt: "close-up looking left" },
+            { id: "shot-2", prompt: "wide alley confrontation" },
+          ],
+        }),
+      }),
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(fetchSpy).toHaveBeenCalledTimes(4);
+    expect(promptBodies).toHaveLength(2);
+    expect(promptBodies[0].client_id).toBe("client-seq:shot-1");
+    expect(promptBodies[1].client_id).toBe("client-seq:shot-2");
+    expect(promptBodies[0].prompt["2"].inputs.text).toBe("ink comic style, Hero: red cape, close-up looking left");
+    expect(promptBodies[1].prompt["2"].inputs.text).toBe("ink comic style, Hero: red cape, wide alley confrontation");
+    expect(promptBodies[0].prompt["4"]).toMatchObject({
+      class_type: "LoadImage",
+      inputs: { image: "hero-reference.png" },
+    });
+    expect(promptBodies[0].prompt["7"].inputs).toMatchObject({
+      batch_size: 2,
+    });
+    expect(promptBodies[0].prompt["8"].inputs).toMatchObject({
+      model: ["6", 0],
+      seed: 100,
+    });
+    expect(promptBodies[1].prompt["8"].inputs.seed).toBe(101);
+    expect(payload).toMatchObject({
+      sequenceId: "seq-1",
+      warnings: [],
+      shots: [
+        {
+          characterReferenceIds: ["hero-ref"],
+          imageCount: 2,
+          promptId: "prompt-1",
+          seed: 100,
+          shotId: "shot-1",
+        },
+        {
+          characterReferenceIds: ["hero-ref"],
+          imageCount: 2,
+          promptId: "prompt-2",
+          seed: 101,
+          shotId: "shot-2",
+        },
+      ],
+    });
+  });
+
+  it("uses explicit per-shot requests without leaking base generation settings", async () => {
+    process.env.COMFYUI_BASE_URL = "http://comfyui.test";
+    const promptBodies: PromptBody[] = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      if (input === "http://comfyui.test/object_info") {
+        return Response.json(objectInfo);
+      }
+
+      expect(input).toBe("http://comfyui.test/prompt");
+      const body = JSON.parse(String(init?.body)) as PromptBody;
+      promptBodies.push(body);
+
+      return Response.json({
+        prompt_id: `prompt-${promptBodies.length}`,
+        number: promptBodies.length,
+        node_errors: {},
+      });
+    });
+
+    const response = await POST(
+      new Request("http://localhost/api/comfyui/sequence-image", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          baseRequest: {
+            checkpointName: "model.safetensors",
+            positivePrompt: "base global",
+            negativePrompt: "base negative",
+            samplerName: "euler",
+            scheduler: "normal",
+            width: 1024,
+            height: 1024,
+            batchSize: 1,
+            seed: 11,
+          },
+          baseSeed: 900,
+          characters: [],
+          clientId: "client-seq",
+          imageCount: 1,
+          sequenceId: "seq-2",
+          shots: [
+            {
+              id: "shot-a",
+              prompt: "fallback should not replace explicit positive prompt",
+              request: {
+                checkpointName: "model.safetensors",
+                positivePrompt: "shot A explicit prompt",
+                negativePrompt: "shot A negative",
+                samplerName: "euler",
+                scheduler: "normal",
+                width: 768,
+                height: 512,
+                batchSize: 3,
+                seed: 777,
+                outputPrefix: "ShotA",
+              },
+            },
+            {
+              id: "shot-b",
+              prompt: "shot B fallback prompt",
+              request: {
+                checkpointName: "model.safetensors",
+                negativePrompt: "shot B negative",
+                samplerName: "euler",
+                scheduler: "normal",
+                width: 512,
+                height: 768,
+                outputPrefix: "ShotB",
+              },
+            },
+          ],
+        }),
+      }),
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(promptBodies).toHaveLength(2);
+    expect(promptBodies[0].prompt["2"].inputs.text).toBe("shot A explicit prompt");
+    expect(promptBodies[0].prompt["3"].inputs.text).toBe("shot A negative");
+    expect(findPromptNode(promptBodies[0], "EmptyLatentImage")?.inputs).toMatchObject({
+      batch_size: 3,
+      height: 512,
+      width: 768,
+    });
+    expect(findPromptNode(promptBodies[0], "KSampler")?.inputs).toMatchObject({
+      seed: 777,
+    });
+    expect(promptBodies[1].prompt["2"].inputs.text).toBe("base global, shot B fallback prompt");
+    expect(promptBodies[1].prompt["3"].inputs.text).toBe("shot B negative");
+    expect(findPromptNode(promptBodies[1], "EmptyLatentImage")?.inputs).toMatchObject({
+      batch_size: 1,
+      height: 768,
+      width: 512,
+    });
+    expect(findPromptNode(promptBodies[1], "KSampler")?.inputs).toMatchObject({
+      seed: 901,
+    });
+    expect(payload.shots).toMatchObject([
+      {
+        imageCount: 3,
+        positivePrompt: "shot A explicit prompt",
+        seed: 777,
+        shotId: "shot-a",
+      },
+      {
+        imageCount: 1,
+        positivePrompt: "base global, shot B fallback prompt",
+        seed: 901,
+        shotId: "shot-b",
+      },
+    ]);
+  });
+
+  it("returns a clear error when a stored sequence reference image is missing", async () => {
+    process.env.COMFYUI_BASE_URL = "http://comfyui.test";
+    process.env.SCENEFORGE_SEQUENCE_REFERENCE_DIR = "data/__missing_sequence_references_test__";
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      expect(input).toBe("http://comfyui.test/object_info");
+      return Response.json(objectInfo);
+    });
+
+    const response = await POST(
+      new Request("http://localhost/api/comfyui/sequence-image", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          baseRequest: {
+            checkpointName: "model.safetensors",
+            positivePrompt: "base prompt",
+          },
+          characters: [],
+          shots: [
+            {
+              id: "shot-missing-reference",
+              prompt: "missing reference",
+              characters: [
+                {
+                  id: "hero-face",
+                  mode: "face",
+                  name: "Hero face",
+                  references: [
+                    {
+                      id: "missing-ref",
+                      storedFilename: "0123456789abcdef0123456789abcdef.png",
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        }),
+      }),
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(404);
+    expect(payload.error.message).toBe("Sequence reference image not found.");
+  });
+});

@@ -75,6 +75,98 @@ describe("ComfyUI workflow builder", () => {
     });
   });
 
+  it("patches the model with IPAdapter character references before sampling", () => {
+    const result = buildBasicTextToImageWorkflow({
+      checkpointName: "dream.safetensors",
+      positivePrompt: "comic panel",
+      seed: 123,
+      characterReferences: [
+        {
+          id: "hero",
+          name: "Hero",
+          images: [
+            { id: "hero-front", imageName: "hero-front.png" },
+            { id: "hero-side", imageName: "hero-side.png" },
+          ],
+          maskImageName: "hero-mask.png",
+          weight: 0.8,
+        },
+      ],
+    });
+
+    expect(result.nodeIds.characterReferences).toEqual([
+      {
+        characterId: "hero",
+        imageLoaders: ["4", "5"],
+        imageBatchers: ["6"],
+        maskImage: "7",
+        loader: "8",
+        apply: "9",
+      },
+    ]);
+    expect(result.workflow["4"]).toMatchObject({
+      class_type: "LoadImage",
+      inputs: { image: "hero-front.png" },
+    });
+    expect(result.workflow["6"]).toMatchObject({
+      class_type: "ImageBatch",
+      inputs: {
+        image1: ["4", 0],
+        image2: ["5", 0],
+      },
+    });
+    expect(result.workflow["8"]).toMatchObject({
+      class_type: "IPAdapterUnifiedLoader",
+      inputs: {
+        model: ["1", 0],
+        preset: "PLUS (high strength)",
+      },
+    });
+    expect(result.workflow["9"]).toMatchObject({
+      class_type: "IPAdapterAdvanced",
+      inputs: {
+        model: ["8", 0],
+        ipadapter: ["8", 1],
+        image: ["6", 0],
+        attn_mask: ["7", 1],
+        weight: 0.8,
+      },
+    });
+    expect(result.workflow["11"].inputs.model).toEqual(["9", 0]);
+  });
+
+  it("uses the IPAdapter Plus Face preset for face reference mode", () => {
+    const result = buildBasicTextToImageWorkflow({
+      checkpointName: "dream.safetensors",
+      positivePrompt: "portrait",
+      seed: 123,
+      characterReferences: [
+        {
+          id: "hero-face",
+          mode: "face",
+          name: "Hero Face",
+          images: [{ imageName: "hero-face.png" }],
+        },
+      ],
+    });
+
+    expect(result.workflow["5"]).toMatchObject({
+      class_type: "IPAdapterUnifiedLoader",
+      inputs: {
+        model: ["1", 0],
+        preset: "PLUS FACE (portraits)",
+      },
+    });
+    expect(result.workflow["6"]).toMatchObject({
+      class_type: "IPAdapterAdvanced",
+      inputs: {
+        image: ["4", 0],
+        weight: 0.45,
+      },
+    });
+    expect(result.workflow["8"].inputs.model).toEqual(["6", 0]);
+  });
+
   it("adds FaceDetailer and UltralyticsDetectorProvider when enabled", () => {
     const result = buildBasicTextToImageWorkflow({
       checkpointName: "dream.safetensors",

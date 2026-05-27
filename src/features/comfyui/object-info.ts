@@ -286,6 +286,32 @@ function getRequestControlNetUnits(request: ComfyUiTextToImageRequest): ComfyUiC
   ];
 }
 
+function getMissingCharacterReferenceNodes(
+  reference: NonNullable<ComfyUiTextToImageRequest["characterReferences"]>[number],
+  objectInfo: unknown,
+) {
+  const missingNodes: string[] = [];
+
+  if (!hasNodeInfo(objectInfo, "LoadImage")) {
+    missingNodes.push("LoadImage");
+  }
+
+  if (reference.images.length > 1 && !hasNodeInfo(objectInfo, "ImageBatch")) {
+    missingNodes.push("ImageBatch");
+  }
+
+  if (!hasNodeInfo(objectInfo, "IPAdapterAdvanced")) {
+    missingNodes.push("IPAdapterAdvanced");
+  }
+
+  const loaderNode = reference.mode === "faceid" ? "IPAdapterUnifiedLoaderFaceID" : "IPAdapterUnifiedLoader";
+  if (!hasNodeInfo(objectInfo, loaderNode)) {
+    missingNodes.push(loaderNode);
+  }
+
+  return missingNodes;
+}
+
 function validateDimension(value: number | undefined, label: string, latentImageNode: string, errors: string[]) {
   if (value === undefined) {
     return;
@@ -461,6 +487,7 @@ export function validateComfyUiRequestAgainstObjectInfo(
   });
 
   let controlNets = getRequestControlNetUnits(request);
+  let characterReferences = request.characterReferences ?? [];
   if (controlNets.some((unit) => unit.enabled)) {
     if (!hasNodeInfo(objectInfo, "LoadImage")) {
       errors.push("LoadImage node is not available in ComfyUI. It is required for ControlNet images.");
@@ -499,6 +526,26 @@ export function validateComfyUiRequestAgainstObjectInfo(
     });
   }
 
+  characterReferences = characterReferences.map((reference) => {
+    if (reference.enabled === false) {
+      return reference;
+    }
+
+    const missingNodes = getMissingCharacterReferenceNodes(reference, objectInfo);
+    if (missingNodes.length === 0) {
+      return reference;
+    }
+
+    warnings.push(
+      `Character reference "${reference.name}" was disabled because ComfyUI is missing nodes: ${missingNodes.join(", ")}. Install ComfyUI_IPAdapter_plus to enable character consistency.`,
+    );
+
+    return {
+      ...reference,
+      enabled: false,
+    };
+  });
+
   validateDimension(request.width, "width", latentImageNode ?? "EmptyLatentImage", errors);
   validateDimension(request.height, "height", latentImageNode ?? "EmptyLatentImage", errors);
 
@@ -528,6 +575,7 @@ export function validateComfyUiRequestAgainstObjectInfo(
       faceDetailer,
       handDetailer,
       controlNets,
+      characterReferences,
       loras,
     },
   };

@@ -55,6 +55,8 @@ next-env.d.ts
 /data/sceneforge.sqlite
 /data/civitai-lora-library/
 /data/artist-string-library/
+/data/comfyui-generated-images/
+/data/comfyui-sequence-references/
 
 # Local LLM interaction logs
 /data/logs/*

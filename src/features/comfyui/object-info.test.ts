@@ -63,6 +63,15 @@ const objectInfoWithControlNet = {
   },
 };
 
+const objectInfoWithIpAdapter = {
+  ...objectInfo,
+  LoadImage: {},
+  ImageBatch: {},
+  IPAdapterAdvanced: {},
+  IPAdapterUnifiedLoader: {},
+  IPAdapterUnifiedLoaderFaceID: {},
+};
+
 const objectInfoWithInpaint = {
   ...objectInfo,
   LoadImage: {},
@@ -262,6 +271,56 @@ describe("ComfyUI object info helpers", () => {
       request: {
         samplerName: "dpmpp_2m_sde_gpu",
       },
+    });
+  });
+
+  it("keeps character references when IPAdapter nodes are available", () => {
+    const result = validateComfyUiRequestAgainstObjectInfo(
+      {
+        checkpointName: "model.safetensors",
+        positivePrompt: "scene",
+        characterReferences: [
+          {
+            id: "hero",
+            name: "Hero",
+            images: [
+              { imageName: "hero-front.png" },
+              { imageName: "hero-side.png" },
+            ],
+          },
+        ],
+      },
+      objectInfoWithIpAdapter,
+    );
+
+    expect(result.errors).toEqual([]);
+    expect(result.warnings).toEqual([]);
+    expect(result.request.characterReferences?.[0]).toMatchObject({
+      id: "hero",
+    });
+  });
+
+  it("disables character references instead of failing when IPAdapter nodes are missing", () => {
+    const result = validateComfyUiRequestAgainstObjectInfo(
+      {
+        checkpointName: "model.safetensors",
+        positivePrompt: "scene",
+        characterReferences: [
+          {
+            id: "hero",
+            name: "Hero",
+            images: [{ imageName: "hero-front.png" }],
+          },
+        ],
+      },
+      objectInfo,
+    );
+
+    expect(result.errors).toEqual([]);
+    expect(result.warnings[0]).toContain("Character reference");
+    expect(result.request.characterReferences?.[0]).toMatchObject({
+      enabled: false,
+      id: "hero",
     });
   });
 

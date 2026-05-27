@@ -49,6 +49,7 @@ export type ComfyUiTextToImageRequest = {
   handDetailer?: ComfyUiHandDetailerConfig;
   controlNet?: ComfyUiControlNetConfig;
   controlNets?: ComfyUiControlNetUnitConfig[];
+  characterReferences?: ComfyUiCharacterReferenceConfig[];
 };
 
 export type ComfyUiInpaintRequest = {
@@ -210,6 +211,35 @@ export type ComfyUiControlNetUnitConfig = {
   imageName?: string;
 };
 
+export type ComfyUiIpAdapterReferenceMode = "ipadapter" | "face" | "faceid";
+
+export type ComfyUiIpAdapterCombineEmbeds = "concat" | "add" | "subtract" | "average" | "norm average";
+
+export type ComfyUiCharacterReferenceImageConfig = {
+  id?: string;
+  imageName: string;
+  weight?: number;
+};
+
+export type ComfyUiCharacterReferenceConfig = {
+  id?: string;
+  name: string;
+  prompt?: string;
+  enabled?: boolean;
+  mode?: ComfyUiIpAdapterReferenceMode;
+  images: ComfyUiCharacterReferenceImageConfig[];
+  maskImageName?: string;
+  weight?: number;
+  weightType?: string;
+  combineEmbeds?: ComfyUiIpAdapterCombineEmbeds;
+  startPercent?: number;
+  endPercent?: number;
+  preset?: string;
+  loraStrength?: number;
+  provider?: string;
+  embedsScaling?: string;
+};
+
 export type ComfyUiLoraInput = {
   loraName: string;
   strengthModel: number;
@@ -242,6 +272,7 @@ export type ResolvedComfyUiTextToImageRequest = {
   faceDetailer: ResolvedComfyUiFaceDetailerConfig;
   handDetailer: ResolvedComfyUiHandDetailerConfig;
   controlNets: ResolvedComfyUiControlNetUnitConfig[];
+  characterReferences: ResolvedComfyUiCharacterReferenceConfig[];
 };
 
 export type ResolvedComfyUiInpaintRequest = {
@@ -353,9 +384,43 @@ export type ResolvedComfyUiControlNetUnitConfig = {
   imageName: string;
 };
 
+export type ResolvedComfyUiCharacterReferenceImageConfig = {
+  id: string;
+  imageName: string;
+  weight: number;
+};
+
+export type ResolvedComfyUiCharacterReferenceConfig = {
+  id: string;
+  name: string;
+  prompt: string;
+  enabled: boolean;
+  mode: ComfyUiIpAdapterReferenceMode;
+  images: ResolvedComfyUiCharacterReferenceImageConfig[];
+  maskImageName: string;
+  weight: number;
+  weightType: string;
+  combineEmbeds: ComfyUiIpAdapterCombineEmbeds;
+  startPercent: number;
+  endPercent: number;
+  preset: string;
+  loraStrength: number;
+  provider: string;
+  embedsScaling: string;
+};
+
 export type BasicTextToImageControlNetNodeIds = {
   type: ComfyUiControlNetType;
   image: string;
+  loader: string;
+  apply: string;
+};
+
+export type BasicTextToImageCharacterReferenceNodeIds = {
+  characterId: string;
+  imageLoaders: string[];
+  imageBatchers: string[];
+  maskImage?: string;
   loader: string;
   apply: string;
 };
@@ -369,6 +434,7 @@ export type BasicTextToImageNodeIds = {
   controlNetImage?: string;
   controlNetLoader?: string;
   controlNetApply?: string;
+  characterReferences?: BasicTextToImageCharacterReferenceNodeIds[];
   latentImage: string;
   sampler: string;
   vaeDecode: string;

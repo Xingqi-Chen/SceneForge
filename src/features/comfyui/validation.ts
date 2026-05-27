@@ -2,6 +2,9 @@ import type {
   ComfyUiControlNetConfig,
   ComfyUiControlNetType,
   ComfyUiControlNetUnitConfig,
+  ComfyUiCharacterReferenceConfig,
+  ComfyUiIpAdapterCombineEmbeds,
+  ComfyUiIpAdapterReferenceMode,
   ComfyUiFaceDetailerConfig,
   ComfyUiInpaintLocalRegionConfig,
   ComfyUiInpaintLocalRegionSource,
@@ -16,6 +19,7 @@ import type {
   ComfyUiSam2Point,
   ComfyUiSam2Precision,
   ComfyUiTextToImageRequest,
+  ResolvedComfyUiCharacterReferenceConfig,
   ResolvedComfyUiControlNetUnitConfig,
   ResolvedComfyUiFaceDetailerConfig,
   ResolvedComfyUiInpaintRequest,
@@ -106,6 +110,7 @@ const DEFAULT_TEXT_TO_IMAGE_REQUEST = {
     steps: 30,
   },
   controlNets: [],
+  characterReferences: [],
 } satisfies Omit<ResolvedComfyUiTextToImageRequest, "checkpointName" | "positivePrompt" | "seed">;
 const DEFAULT_CONTROLNET_UNIT = {
   enabled: false,
@@ -173,7 +178,11 @@ const RANDOM_SEED_RANGE = RANDOM_SEED_UPPER_BOUND + 1;
 const MAX_CONTROLNET_SVG_LENGTH = 2_000_000;
 const MAX_CONTROLNET_IMAGE_DATA_URL_LENGTH = 12_000_000;
 const MAX_INPAINT_MASK_DATA_URL_LENGTH = 24_000_000;
+const MAX_CHARACTER_REFERENCE_COUNT = 8;
+const MAX_CHARACTER_REFERENCE_IMAGE_COUNT = 4;
 const CONTROLNET_TYPES = ["openpose", "depth", "normal"] as const satisfies readonly ComfyUiControlNetType[];
+const IPADAPTER_REFERENCE_MODES = ["ipadapter", "face", "faceid"] as const satisfies readonly ComfyUiIpAdapterReferenceMode[];
+const IPADAPTER_COMBINE_EMBEDS = ["concat", "add", "subtract", "average", "norm average"] as const satisfies readonly ComfyUiIpAdapterCombineEmbeds[];
 const INPAINT_UPSCALE_MODES = ["lanczos", "real-esrgan-x2", "aniscale2-x2"] as const satisfies readonly ComfyUiInpaintUpscaleMode[];
 const INPAINT_UPSCALE_STRATEGIES = ["full-image", "local-region"] as const satisfies readonly ComfyUiInpaintUpscaleStrategy[];
 const INPAINT_LOCAL_REGION_SOURCES = ["mask-bounds", "box"] as const satisfies readonly ComfyUiInpaintLocalRegionSource[];
@@ -329,6 +338,14 @@ function isOptionalFaceDetailerOption<T extends string>(
 
 function isControlNetType(value: unknown): value is ComfyUiControlNetType {
   return typeof value === "string" && CONTROLNET_TYPES.some((type) => type === value);
+}
+
+function isIpAdapterReferenceMode(value: unknown): value is ComfyUiIpAdapterReferenceMode {
+  return typeof value === "string" && IPADAPTER_REFERENCE_MODES.some((mode) => mode === value);
+}
+
+function isIpAdapterCombineEmbeds(value: unknown): value is ComfyUiIpAdapterCombineEmbeds {
+  return typeof value === "string" && IPADAPTER_COMBINE_EMBEDS.some((mode) => mode === value);
 }
 
 function isInpaintUpscaleMode(value: unknown): value is ComfyUiInpaintUpscaleMode {
@@ -787,6 +804,98 @@ function normalizeControlNetUnits(value: unknown): ComfyUiControlNetUnitConfig[]
   return units as ComfyUiControlNetUnitConfig[];
 }
 
+function normalizeCharacterReferenceConfig(value: unknown): ComfyUiCharacterReferenceConfig | null {
+  if (!isRecord(value) || !hasNonEmptyString(value.name) || !Array.isArray(value.images)) {
+    return null;
+  }
+
+  if (value.images.length < 1 || value.images.length > MAX_CHARACTER_REFERENCE_IMAGE_COUNT) {
+    return null;
+  }
+
+  const images = value.images.map((image) => {
+    if (!isRecord(image) || !hasNonEmptyString(image.imageName)) {
+      return null;
+    }
+
+    if (!isOptionalFiniteNumber(image.weight)) {
+      return null;
+    }
+
+    return {
+      ...(hasNonEmptyString(image.id) ? { id: image.id.trim() } : {}),
+      imageName: image.imageName.trim(),
+      ...(typeof image.weight === "number" ? { weight: image.weight } : {}),
+    };
+  });
+
+  if (images.some((image) => image === null)) {
+    return null;
+  }
+
+  if (!isOptionalString(value.id) || !isOptionalStringValue(value.prompt) || !isOptionalBoolean(value.enabled)) {
+    return null;
+  }
+
+  if (value.mode !== undefined && !isIpAdapterReferenceMode(value.mode)) {
+    return null;
+  }
+
+  if (
+    !isOptionalString(value.maskImageName) ||
+    !isOptionalFiniteNumber(value.weight) ||
+    !isOptionalString(value.weightType) ||
+    !isOptionalFiniteNumber(value.startPercent) ||
+    !isOptionalFiniteNumber(value.endPercent) ||
+    !isOptionalString(value.preset) ||
+    !isOptionalFiniteNumber(value.loraStrength) ||
+    !isOptionalString(value.provider) ||
+    !isOptionalString(value.embedsScaling)
+  ) {
+    return null;
+  }
+
+  if (value.combineEmbeds !== undefined && !isIpAdapterCombineEmbeds(value.combineEmbeds)) {
+    return null;
+  }
+
+  return {
+    ...(hasNonEmptyString(value.id) ? { id: value.id.trim() } : {}),
+    name: value.name.trim(),
+    ...(typeof value.prompt === "string" ? { prompt: value.prompt.trim() } : {}),
+    ...(typeof value.enabled === "boolean" ? { enabled: value.enabled } : {}),
+    ...(value.mode ? { mode: value.mode } : {}),
+    images: images as NonNullable<ComfyUiCharacterReferenceConfig["images"]>,
+    ...(hasNonEmptyString(value.maskImageName) ? { maskImageName: value.maskImageName.trim() } : {}),
+    ...(typeof value.weight === "number" ? { weight: value.weight } : {}),
+    ...(hasNonEmptyString(value.weightType) ? { weightType: value.weightType.trim() } : {}),
+    ...(value.combineEmbeds ? { combineEmbeds: value.combineEmbeds } : {}),
+    ...(typeof value.startPercent === "number" ? { startPercent: value.startPercent } : {}),
+    ...(typeof value.endPercent === "number" ? { endPercent: value.endPercent } : {}),
+    ...(hasNonEmptyString(value.preset) ? { preset: value.preset.trim() } : {}),
+    ...(typeof value.loraStrength === "number" ? { loraStrength: value.loraStrength } : {}),
+    ...(hasNonEmptyString(value.provider) ? { provider: value.provider.trim() } : {}),
+    ...(hasNonEmptyString(value.embedsScaling) ? { embedsScaling: value.embedsScaling.trim() } : {}),
+  };
+}
+
+function normalizeCharacterReferences(value: unknown): ComfyUiCharacterReferenceConfig[] | null | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (!Array.isArray(value) || value.length > MAX_CHARACTER_REFERENCE_COUNT) {
+    return null;
+  }
+
+  const references = value.map(normalizeCharacterReferenceConfig);
+  if (references.some((reference) => reference === null)) {
+    return null;
+  }
+
+  return references as ComfyUiCharacterReferenceConfig[];
+}
+
 function getLegacyControlNetSvg(controlNet: ComfyUiControlNetConfig | undefined) {
   return controlNet?.svg ?? controlNet?.openPoseSvg;
 }
@@ -920,6 +1029,28 @@ export function validateComfyUiTextToImageRequest(value: unknown): ComfyUiTextTo
     };
   }
 
+  const characterReferences = normalizeCharacterReferences(value.characterReferences);
+  if (characterReferences === null) {
+    return {
+      ok: false,
+      message: "characterReferences must be an array of valid character reference values when provided.",
+    };
+  }
+
+  const invalidCharacterReferenceTiming = characterReferences?.find((reference) =>
+    reference.enabled !== false &&
+    typeof reference.startPercent === "number" &&
+    typeof reference.endPercent === "number" &&
+    reference.startPercent > reference.endPercent
+  );
+
+  if (invalidCharacterReferenceTiming) {
+    return {
+      ok: false,
+      message: `characterReferences.${invalidCharacterReferenceTiming.name}.startPercent must be less than or equal to endPercent.`,
+    };
+  }
+
   if (value.loras !== undefined) {
     if (!Array.isArray(value.loras)) {
       return {
@@ -1021,6 +1152,7 @@ export function validateComfyUiTextToImageRequest(value: unknown): ComfyUiTextTo
       handDetailer,
       controlNet,
       controlNets,
+      characterReferences,
     },
   };
 }
@@ -1422,6 +1554,43 @@ function resolveControlNetUnits(request: ComfyUiTextToImageRequest): ResolvedCom
     .map(toResolvedControlNetUnit);
 }
 
+function resolveCharacterReferences(request: ComfyUiTextToImageRequest): ResolvedComfyUiCharacterReferenceConfig[] {
+  return (request.characterReferences ?? []).map((reference, referenceIndex) => {
+    const id = getString(reference.id, `character-${referenceIndex + 1}`);
+    const mode = reference.mode ?? "ipadapter";
+
+    return {
+      id,
+      name: reference.name.trim(),
+      prompt: typeof reference.prompt === "string" ? reference.prompt.trim() : "",
+      enabled: reference.enabled ?? true,
+      mode,
+      images: reference.images.map((image, imageIndex) => ({
+        id: getString(image.id, `${id}-reference-${imageIndex + 1}`),
+        imageName: image.imageName.trim(),
+        weight: image.weight ?? 1,
+      })),
+      maskImageName: getString(reference.maskImageName, ""),
+      weight: reference.weight ?? 0.45,
+      weightType: getString(reference.weightType, "linear"),
+      combineEmbeds: reference.combineEmbeds ?? "concat",
+      startPercent: reference.startPercent ?? 0,
+      endPercent: reference.endPercent ?? 1,
+      preset: getString(
+        reference.preset,
+        mode === "faceid"
+          ? "FACEID PLUS V2"
+          : mode === "face"
+            ? "PLUS FACE (portraits)"
+            : "PLUS (high strength)",
+      ),
+      loraStrength: reference.loraStrength ?? 0.6,
+      provider: getString(reference.provider, "CPU"),
+      embedsScaling: getString(reference.embedsScaling, "V only"),
+    };
+  });
+}
+
 function resolveDetailerConfig(
   detailer: ComfyUiFaceDetailerConfig | undefined,
   request: Pick<ComfyUiTextToImageRequest | ComfyUiInpaintRequest, "cfg" | "samplerName" | "scheduler" | "steps">,
@@ -1519,6 +1688,7 @@ export function resolveComfyUiTextToImageRequest(
     faceDetailer: resolveDetailerConfig(request.faceDetailer, request, DEFAULT_TEXT_TO_IMAGE_REQUEST.faceDetailer),
     handDetailer: resolveDetailerConfig(request.handDetailer, request, DEFAULT_TEXT_TO_IMAGE_REQUEST.handDetailer),
     controlNets: resolveControlNetUnits(request),
+    characterReferences: resolveCharacterReferences(request),
   };
 }
 

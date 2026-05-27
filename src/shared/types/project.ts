@@ -73,8 +73,75 @@ export type SavedComfyUiGenerationParams = {
   savedAt: string;
 };
 
-export type SavedComfyUiGeneratedImageSource = "text-to-image" | "inpaint";
+export type SavedComfyUiGeneratedImageSource = "text-to-image" | "inpaint" | "sequence";
 export type SavedComfyUiGeneratedImageStorage = "sceneforge" | "comfyui";
+
+export type SavedComicSequenceControlNetType = "openpose" | "depth" | "normal";
+
+export type SavedComicSequenceControlNetParams = {
+  type: SavedComicSequenceControlNetType;
+  enabled: boolean;
+  modelName: string;
+  strength: number;
+  startPercent: number;
+  endPercent: number;
+};
+
+export type SavedComicSequenceReferenceImage =
+  | {
+      id: string;
+      source: "history";
+      imageId: string;
+    }
+  | {
+      id: string;
+      source: "upload";
+      filename: string;
+      name: string;
+      url: string;
+    };
+
+export type SavedComicSequenceReferenceChannelParams = {
+  enabled: boolean;
+  mode: "ipadapter" | "face" | "faceid";
+  weight: number;
+  startAt: number;
+  endAt: number;
+  images: SavedComicSequenceReferenceImage[];
+};
+
+export type SavedComicSequenceReferenceParams = {
+  characterName: string;
+  characterPrompt: string;
+  face: SavedComicSequenceReferenceChannelParams;
+  character: SavedComicSequenceReferenceChannelParams;
+  mode: "ipadapter" | "face" | "faceid";
+  weight: number;
+  startAt: number;
+  endAt: number;
+  images: SavedComicSequenceReferenceImage[];
+};
+
+export type SavedComicSequenceShot = {
+  id: string;
+  title: string;
+  scene: Scene;
+  positivePrompt: string;
+  negativePrompt: string;
+  shotPrompt: string;
+  parameters: SavedComfyUiGenerationParams;
+  controlNets: SavedComicSequenceControlNetParams[];
+  reference: SavedComicSequenceReferenceParams;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type SavedComicSequence = {
+  version: 1;
+  selectedShotId?: string;
+  defaults?: SavedComfyUiGenerationParams;
+  shots: SavedComicSequenceShot[];
+};
 
 export type SavedComfyUiImageReference = {
   filename: string;
@@ -99,6 +166,9 @@ export type SavedComfyUiGeneratedImage = {
   createdAt: string;
   favorited: boolean;
   parentImageId?: string;
+  sequenceId?: string;
+  shotId?: string;
+  characterReferenceIds?: string[];
   outputNodeId?: string;
   width: number;
   height: number;
@@ -120,6 +190,7 @@ export type ProjectSettings = {
   selectedArtistStringPrompts: string[];
   artistStringPromptRenderMode: ArtistStringPromptRenderMode;
   savedComfyUiGenerationParams?: SavedComfyUiGenerationParams | null;
+  savedComicSequence?: SavedComicSequence;
   comfyUiGeneratedImages: SavedComfyUiGeneratedImage[];
   /** User-imported prompt library entries, loaded from the shared prompt library file at runtime. */
   promptLibraryTags: PromptTag[];

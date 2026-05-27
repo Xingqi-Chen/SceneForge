@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { SavedComfyUiGeneratedImage } from "@/shared/types";
+import type { SavedComicSequence, SavedComfyUiGeneratedImage } from "@/shared/types";
 import { createDefaultProject, defaultCharacter, defaultCharacterMannequinJoints3D } from "@/features/editor/store/defaults";
 import { serializePromptExport } from "@/features/prompt-engine";
 import { isThreeDViewportPrimitive, sceneObjectsVisibleOn2DCanvas } from "@/features/editor/scene-viewport-objects";
@@ -233,6 +233,218 @@ describe("project serialization", () => {
     });
   });
 
+  it("round-trips saved Comic Sequence shots and per-shot node settings", () => {
+    const project = createDefaultProject();
+    const baseParameters = createSavedComfyUiImage().parameters;
+    const savedComicSequence: SavedComicSequence = {
+      version: 1,
+      defaults: {
+        ...baseParameters,
+        seed: 1000,
+        seedMode: "random",
+      },
+      selectedShotId: "shot-1",
+      shots: [
+        {
+          id: "shot-1",
+          title: "Opening panel",
+          scene: project.scene,
+          positivePrompt: "hero on rooftop",
+          negativePrompt: "low quality",
+          shotPrompt: "windy night, dutch angle",
+          parameters: {
+            ...baseParameters,
+            cfg: 6.5,
+            faceDetailer: {
+              bboxCropFactor: 2.4,
+              bboxDilation: 14,
+              bboxThreshold: 0.45,
+              cfg: 5.5,
+              cycle: 2,
+              denoise: 0.4,
+              enabled: true,
+              detectorModelName: "bbox/face_yolov8s.pt",
+              dropSize: 16,
+              feather: 8,
+              forceInpaint: false,
+              guideSize: 640,
+              guideSizeFor: false,
+              maxSize: 1280,
+              noiseMask: false,
+              samBBoxExpansion: 6,
+              samDetectionHint: "rect-4",
+              samDilation: 3,
+              samMaskHintThreshold: 0.62,
+              samMaskHintUseNegative: "Small",
+              samThreshold: 0.86,
+              samplerName: "dpmpp_2m",
+              scheduler: "karras",
+              steps: 18,
+              wildcard: "[SEQ] face",
+            },
+            handDetailer: {
+              bboxCropFactor: 2.8,
+              bboxDilation: 18,
+              bboxThreshold: 0.4,
+              cfg: 6,
+              cycle: 2,
+              denoise: 0.45,
+              enabled: false,
+              detectorModelName: "bbox/hand_yolov8s.pt",
+              dropSize: 20,
+              feather: 6,
+              forceInpaint: true,
+              guideSize: 576,
+              guideSizeFor: true,
+              maxSize: 1152,
+              noiseMask: true,
+              samBBoxExpansion: 8,
+              samDetectionHint: "center-1",
+              samDilation: 4,
+              samMaskHintThreshold: 0.64,
+              samMaskHintUseNegative: "False",
+              samThreshold: 0.9,
+              samplerName: "dpmpp_2m",
+              scheduler: "karras",
+              steps: 20,
+              wildcard: "[SEQ] hand",
+            },
+          },
+          controlNets: [
+            {
+              type: "openpose",
+              enabled: true,
+              modelName: "control_v11p_sd15_openpose_fp16.safetensors",
+              strength: 0.82,
+              startPercent: 0.1,
+              endPercent: 0.9,
+            },
+          ],
+          reference: {
+            characterName: "Hero",
+            characterPrompt: "same scar and cape",
+            face: {
+              enabled: true,
+              mode: "face",
+              weight: 0.72,
+              startAt: 0.2,
+              endAt: 0.85,
+              images: [
+                {
+                  id: "history-ref-1",
+                  source: "history",
+                  imageId: "image-1",
+                },
+              ],
+            },
+            character: {
+              enabled: true,
+              mode: "ipadapter",
+              weight: 0.6,
+              startAt: 0.1,
+              endAt: 0.95,
+              images: [
+                {
+                  id: "upload-ref-1",
+                  source: "upload",
+                  filename: "0123456789abcdef0123456789abcdef.png",
+                  name: "uploaded-reference.png",
+                  url: "/api/comfyui/sequence-references/0123456789abcdef0123456789abcdef.png",
+                },
+              ],
+            },
+            mode: "faceid",
+            weight: 0.72,
+            startAt: 0.2,
+            endAt: 0.85,
+            images: [
+              {
+                id: "history-ref-1",
+                source: "history",
+                imageId: "image-1",
+              },
+              {
+                id: "upload-ref-1",
+                source: "upload",
+                filename: "0123456789abcdef0123456789abcdef.png",
+                name: "uploaded-reference.png",
+                url: "/api/comfyui/sequence-references/0123456789abcdef0123456789abcdef.png",
+              },
+            ],
+          },
+          createdAt: "2026-05-27T12:00:00.000Z",
+          updatedAt: "2026-05-27T12:30:00.000Z",
+        },
+      ],
+    };
+    project.settings.savedComicSequence = savedComicSequence;
+
+    const imported = importProjectFromJson(serializeProject(project));
+
+    expect(imported.settings.savedComicSequence).toEqual(savedComicSequence);
+  });
+
+  it("migrates legacy Comic Sequence reference mode into independent channels", () => {
+    const project = createDefaultProject();
+    const raw = JSON.parse(serializeProject(project));
+    raw.settings.savedComicSequence = {
+      version: 1,
+      selectedShotId: "shot-legacy",
+      shots: [
+        {
+          id: "shot-legacy",
+          title: "Legacy shot",
+          scene: project.scene,
+          positivePrompt: "legacy prompt",
+          negativePrompt: "",
+          shotPrompt: "",
+          parameters: createSavedComfyUiImage().parameters,
+          controlNets: [],
+          reference: {
+            characterName: "Hero",
+            characterPrompt: "scar",
+            mode: "ipadapter",
+            weight: 0.5,
+            startAt: 0.15,
+            endAt: 0.8,
+            images: [
+              {
+                id: "legacy-ref",
+                source: "history",
+                imageId: "image-1",
+              },
+            ],
+          },
+          createdAt: "2026-05-27T12:00:00.000Z",
+          updatedAt: "2026-05-27T12:00:00.000Z",
+        },
+      ],
+    };
+
+    const imported = importProjectFromJson(JSON.stringify(raw));
+    const reference = imported.settings.savedComicSequence?.shots[0]?.reference;
+
+    expect(reference?.character).toMatchObject({
+      enabled: true,
+      mode: "ipadapter",
+      weight: 0.5,
+      startAt: 0.15,
+      endAt: 0.8,
+      images: [
+        {
+          id: "legacy-ref",
+          source: "history",
+          imageId: "image-1",
+        },
+      ],
+    });
+    expect(reference?.face).toMatchObject({
+      enabled: false,
+      images: [],
+      mode: "face",
+    });
+  });
+
   it("defaults missing ComfyUI generated image history to an empty array", () => {
     const project = createDefaultProject();
     const raw = JSON.parse(serializeProject(project));
@@ -250,6 +462,21 @@ describe("project serialization", () => {
       source: "inpaint",
       parentImageId: "parent-image",
       favorited: true,
+    });
+    project.settings.comfyUiGeneratedImages = [historyImage];
+
+    const imported = importProjectFromJson(serializeProject(project));
+
+    expect(imported.settings.comfyUiGeneratedImages).toEqual([historyImage]);
+  });
+
+  it("round-trips ComfyUI sequence image metadata", () => {
+    const project = createDefaultProject();
+    const historyImage = createSavedComfyUiImage({
+      source: "sequence",
+      sequenceId: "seq-1",
+      shotId: "shot-2",
+      characterReferenceIds: ["hero-ref", "side-ref"],
     });
     project.settings.comfyUiGeneratedImages = [historyImage];
 
