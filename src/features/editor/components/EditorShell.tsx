@@ -29,6 +29,10 @@ import { useTabletEditorLayout } from "./useTabletEditorLayout";
 
 type TabletDrawer = "left" | "right";
 
+type EditorShellProps = {
+  showNsfwButton?: boolean;
+};
+
 function TabletEditorDrawer({
   children,
   onClose,
@@ -80,7 +84,7 @@ function TabletEditorDrawer({
   );
 }
 
-export function EditorShell() {
+export function EditorShell({ showNsfwButton = false }: EditorShellProps = {}) {
   const canvasCaptureRef = useRef<CanvasCapture | null>(null);
   const isTabletEditor = useTabletEditorLayout();
   const resetProject = useEditorStore((state) => state.resetProject);
@@ -209,26 +213,28 @@ export function EditorShell() {
             <span className="mr-1.5 inline-block h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
             {loadState === "loading" ? "加载中..." : "已就绪"}
           </span>
-          <Button
-            aria-pressed={supportsNsfw}
-            onClick={() => updateProjectSettings({ supportsNsfw: !supportsNsfw })}
-            type="button"
-            size="sm"
-            variant={supportsNsfw ? "primary" : "secondary"}
-            className={`${isTabletEditor ? "touch-target h-11" : "h-8"} shadow-none ${
-              supportsNsfw
-                ? "bg-rose-600 text-white hover:bg-rose-700 focus-visible:outline-rose-600"
-                : "border-rose-200 bg-white text-rose-600 hover:bg-rose-50 hover:text-rose-700"
-            }`}
-            title={
-              supportsNsfw
-                ? "NSFW support is enabled for supported AI operations"
-                : "Enable NSFW support for supported AI operations"
-            }
-          >
-            <ShieldAlert className="size-4" />
-            NSFW
-          </Button>
+          {showNsfwButton ? (
+            <Button
+              aria-pressed={supportsNsfw}
+              onClick={() => updateProjectSettings({ supportsNsfw: !supportsNsfw })}
+              type="button"
+              size="sm"
+              variant={supportsNsfw ? "primary" : "secondary"}
+              className={`${isTabletEditor ? "touch-target h-11" : "h-8"} shadow-none ${
+                supportsNsfw
+                  ? "bg-rose-600 text-white hover:bg-rose-700 focus-visible:outline-rose-600"
+                  : "border-rose-200 bg-white text-rose-600 hover:bg-rose-50 hover:text-rose-700"
+              }`}
+              title={
+                supportsNsfw
+                  ? "NSFW support is enabled for supported AI operations"
+                  : "Enable NSFW support for supported AI operations"
+              }
+            >
+              <ShieldAlert className="size-4" />
+              NSFW
+            </Button>
+          ) : null}
           <Button
             onClick={() => setClearCanvasConfirmOpen(true)}
             type="button"

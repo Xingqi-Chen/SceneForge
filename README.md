@@ -27,10 +27,13 @@ LITELLM_BASE_URL=http://localhost:4000
 LITELLM_API_KEY=your-litellm-proxy-key
 LITELLM_DEFAULT_MODEL=your-model-name
 LITELLM_NSFW_MODEL=optional-nsfw-model
+SCENEFORGE_SHOW_NSFW_BUTTON=false
 LITELLM_CIVITAI_RECOMMENDATION_MODEL=optional-civitai-recommendation-model
 ```
 
 The endpoint accepts `model`, `messages`, `temperature`, `maxTokens`, and optional `nsfw`. When a project has NSFW enabled, supported AI operations such as reverse prompt/pose and Comic Sequence storyboard generation use `LITELLM_NSFW_MODEL` by default if it is configured, then forward the request to LiteLLM's OpenAI-compatible `/v1/chat/completions` API.
+
+Set `SCENEFORGE_SHOW_NSFW_BUTTON=true` to display the main editor NSFW toggle. It defaults to hidden when unset.
 
 You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
 
