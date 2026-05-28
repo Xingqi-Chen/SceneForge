@@ -11,6 +11,7 @@ Use this file for reusable lessons that should shape future work. Do not add one
 - Require each agent handoff to state the scope source, files changed or reviewed, validation status, blockers, and next action.
 - Keep commit, push, and PR creation as Orchestrator closeout duties after `PASS` and `APPROVE`; sub-agents should not perform those git or GitHub actions themselves.
 - Keep PR merge manual, but make post-merge cleanup automatic: close remaining linked Issues, update the tracker, sync the base branch, and delete temporary local and remote branches.
+- Use `xhigh` deliberately for Orchestrator and reviewer by default, and for dev-agent whenever a task touches persistence, path safety, external integrations, editor state, 3D/IK, LLM routing, or multiple feature modules.
 
 ## Runtime Data Safety
 

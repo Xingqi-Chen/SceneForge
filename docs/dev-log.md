@@ -37,6 +37,7 @@ Follow-up:
 - Updated the closeout workflow so the Orchestrator automatically commits, pushes, and creates a PR after test and review gates pass. PR merge remains manual.
 - Added post-merge cleanup rules: after a user-approved PR merge, the Orchestrator closes linked Issues when needed and deletes merged temporary local/remote branches.
 - Removed the local issue-draft workflow so GitHub Issues are the only durable issue-detail records.
+- Added agent reasoning effort policy so the Orchestrator knows when to use `high` versus `xhigh` for each sub-agent.
 
 Validation:
 

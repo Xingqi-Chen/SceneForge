@@ -108,6 +108,43 @@ Every agent handoff should include:
 - validation run or validation still needed
 - blockers, risks, and next recommended action
 
+## Agent Reasoning Effort Policy
+
+The Orchestrator should choose agent reasoning effort based on risk, blast radius, and ambiguity. Prefer higher effort when an agent may affect source code, persistence, security, external integrations, or cross-module contracts.
+
+Recommended defaults:
+
+| Agent | Default effort | Escalate to `xhigh` when |
+| --- | --- | --- |
+| Orchestrator | `xhigh` | Always for multi-agent planning, Track-to-Issue mapping, branch/PR closeout, or conflict resolution. |
+| product-agent | `high` | Product direction is ambiguous, MVP boundaries are disputed, one Track may split into multiple Issues, or acceptance criteria affect data/security/integrations. |
+| dev-agent | `high` | The task touches project serialization, migrations, local file/path safety, ComfyUI workflows, Civitai downloads/cache, Zustand editor state, 2D/3D placement, stick-figure/IK logic, LLM routing, NSFW behavior, or multiple feature modules. |
+| tester-agent | `high` | Validation requires a regression matrix, path/security tests, integration mocks, browser/manual QA planning, or cross-module behavior. |
+| reviewer-agent | `xhigh` | Always for code-bearing changes before commit/PR, because review is the final quality gate before Orchestrator closeout. |
+
+Use `medium` only for narrow documentation-only work, simple status updates, or very small local edits where the scope is already explicit and there is no code/runtime risk.
+
+For common SceneForge work, apply these rules:
+
+- Documentation-only Track marked `N/A`: Orchestrator `xhigh`; product/dev/reviewer can use `high`; tester can be skipped or use `medium` if no validation evidence is needed.
+- Small UI or copy change: dev-agent `high`, tester-agent `high` if UI behavior changes, reviewer-agent `xhigh`.
+- Ordinary localized bug fix: dev-agent `high`, tester-agent `high`, reviewer-agent `xhigh`.
+- High-risk implementation: dev-agent `xhigh`, tester-agent `high` or `xhigh`, reviewer-agent `xhigh`.
+- Cross-module refactor: product-agent `high` or `xhigh` for scope, dev-agent `xhigh`, tester-agent `xhigh`, reviewer-agent `xhigh`.
+
+High-risk implementation includes:
+
+- project serialization or migration behavior
+- local disk writes, path validation, deletion, or generated asset storage
+- API routes that touch secrets, external services, or local files
+- ComfyUI workflow generation, inpainting, sequence images, history, or generated image storage
+- Civitai resource parsing, downloads, cache repair, and selected model state
+- Zustand editor store shape, undo behavior, project settings, or prompt bindings
+- 2D/3D coordinate conversion, object placement, pose solving, IK, or stick-figure state
+- LLM prompt routing, model selection, NSFW model behavior, or logging
+
+When uncertain, the Orchestrator should prefer `xhigh` for `dev-agent` and `reviewer-agent`, because implementation and review failures have the highest cost.
+
 ## Agent Responsibilities and Permissions
 
 This project uses four sub-agents.

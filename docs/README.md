@@ -11,6 +11,8 @@ This directory contains the working documents used by the Orchestrator and the f
 - `dev-log.md`: dated implementation notes, validation evidence, command changes, and documentation updates. Maintained by `dev-agent` and the Orchestrator.
 - `lessons-learned.md`: reusable engineering, testing, review, and workflow lessons. Updated only when a lesson should affect future work.
 
+Agent reasoning effort policy lives in `AGENTS.md`. The short version is: Orchestrator and reviewer default to `xhigh`; product, dev, and tester default to `high`; dev/test/product escalate to `xhigh` for high-risk, ambiguous, security-sensitive, persistence, integration, 3D, LLM, or cross-module work.
+
 ## Report Directories
 
 - `test-reports/`: validation reports and manual QA evidence from `tester-agent`.
