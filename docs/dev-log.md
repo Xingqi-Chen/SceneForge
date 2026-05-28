@@ -10,6 +10,7 @@ Summary:
 
 - Created GitHub Issue #4 for the standalone Agent draft workflow and marked T2 in progress.
 - Added `/agent` as an independent single-image draft page.
+- Aligned `/agent` styling with the main editor shell, panel layout, form controls, and light SceneForge UI palette.
 - Added `POST /api/agent/draft` plus Agent-specific request validation, LiteLLM draft generation, response normalization, and error taxonomy.
 - Kept T2 behind the confirmation gate: no ComfyUI calls, generated-image storage, editor project state, or editor store dependencies.
 
@@ -33,6 +34,7 @@ Validation:
 - `npm test` passed: 69 test files, 465 tests.
 - `npm run build` passed; Turbopack reported the existing ComfyUI sequence-reference NFT tracing warning.
 - `GET http://127.0.0.1:3000/agent` returned 200 and included the Agent page marker from the already-running dev server.
+- Chrome headless screenshot check confirmed `/agent` now renders with the light editor shell, white side panel, and slate/blue form styling.
 
 ### T1 Agent Backend Contract Audit
 

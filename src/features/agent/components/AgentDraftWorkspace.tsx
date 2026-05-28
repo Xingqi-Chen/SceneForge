@@ -3,6 +3,7 @@
 import { AlertTriangle, CheckCircle2, Loader2, Wand2 } from "lucide-react";
 import { useMemo, useState } from "react";
 
+import { Button } from "@/components/ui/button";
 import type {
   AgentErrorResponse,
   AgentGenerationDefaults,
@@ -41,6 +42,24 @@ const DEFAULT_FORM: DraftForm = {
   steps: "30",
   userRequest: "",
   width: "1024",
+};
+
+const FIELD_CLASS =
+  "mt-2 w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100";
+const TEXTAREA_CLASS =
+  "mt-2 w-full resize-y rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100";
+const MONO_TEXTAREA_CLASS =
+  "mt-2 min-h-72 w-full resize-y rounded-md border border-slate-200 bg-white px-3 py-2 font-mono text-sm text-slate-900 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100";
+const SECTION_LABEL_CLASS = "text-xs font-semibold uppercase tracking-wide text-slate-500";
+const FIELD_LABEL_CLASS = "text-sm font-medium text-slate-700";
+const GENERATION_NUMBER_FIELDS = ["width", "height", "steps", "cfg", "denoise", "batchSize"] as const;
+const GENERATION_NUMBER_FIELD_LABELS: Record<(typeof GENERATION_NUMBER_FIELDS)[number], string> = {
+  batchSize: "Batch size",
+  cfg: "CFG",
+  denoise: "Denoise",
+  height: "Height",
+  steps: "Steps",
+  width: "Width",
 };
 
 function parseOptionalNumber(value: string) {
@@ -163,194 +182,215 @@ export function AgentDraftWorkspace() {
   }
 
   return (
-    <main className="h-[100dvh] overflow-hidden bg-slate-950 text-slate-100">
-      <div className="grid h-full grid-cols-[minmax(360px,420px)_1fr] max-lg:grid-cols-1">
-        <section className="flex min-h-0 flex-col border-r border-slate-800 bg-slate-900/95 max-lg:border-b max-lg:border-r-0">
-          <header className="border-b border-slate-800 px-5 py-4">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <h1 className="text-xl font-semibold tracking-normal">Agent Draft</h1>
-                <p className="mt-1 text-sm text-slate-400">Single-image draft</p>
-              </div>
-              <span className="rounded bg-cyan-400 px-2 py-1 text-xs font-semibold text-slate-950">Draft</span>
-            </div>
-          </header>
-
-          <div className="custom-scrollbar min-h-0 flex-1 space-y-5 overflow-y-auto px-5 py-5">
-            <label className="block">
-              <span className="text-sm font-medium text-slate-200">Request</span>
-              <textarea
-                className="mt-2 min-h-44 w-full resize-y rounded border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none transition focus:border-cyan-400"
-                value={form.userRequest}
-                onChange={(event) => updateForm("userRequest", event.target.value)}
-                placeholder="cinematic rain alley with a lone traveler, neon reflections, dramatic rim light"
-              />
-            </label>
-
-            <div className="grid grid-cols-2 gap-3">
-              <label className="block">
-                <span className="text-sm font-medium text-slate-200">Model</span>
-                <input
-                  className="mt-2 w-full rounded border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none transition focus:border-cyan-400"
-                  value={form.model}
-                  onChange={(event) => updateForm("model", event.target.value)}
-                  placeholder="default"
-                />
-              </label>
-              <label className="flex items-end gap-2 rounded border border-slate-800 bg-slate-950 px-3 py-2">
-                <input
-                  type="checkbox"
-                  className="h-4 w-4 accent-cyan-400"
-                  checked={form.nsfw}
-                  onChange={(event) => updateForm("nsfw", event.target.checked)}
-                />
-                <span className="text-sm font-medium text-slate-200">NSFW model</span>
-              </label>
-            </div>
-
-            <div className="grid grid-cols-2 gap-3">
-              <label className="block">
-                <span className="text-sm font-medium text-slate-200">Checkpoint</span>
-                <input
-                  className="mt-2 w-full rounded border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none transition focus:border-cyan-400"
-                  value={form.checkpointName}
-                  onChange={(event) => updateForm("checkpointName", event.target.value)}
-                  placeholder="model.safetensors"
-                />
-              </label>
-              <label className="block">
-                <span className="text-sm font-medium text-slate-200">Output prefix</span>
-                <input
-                  className="mt-2 w-full rounded border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none transition focus:border-cyan-400"
-                  value={form.outputPrefix}
-                  onChange={(event) => updateForm("outputPrefix", event.target.value)}
-                />
-              </label>
-            </div>
-
-            <div className="grid grid-cols-2 gap-3">
-              {(["width", "height", "steps", "cfg", "denoise", "batchSize"] as const).map((field) => (
-                <label key={field} className="block">
-                  <span className="text-sm font-medium capitalize text-slate-200">{field}</span>
-                  <input
-                    className="mt-2 w-full rounded border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none transition focus:border-cyan-400"
-                    value={form[field]}
-                    onChange={(event) => updateForm(field, event.target.value)}
-                  />
-                </label>
-              ))}
-            </div>
-
-            <div className="grid grid-cols-2 gap-3">
-              <label className="block">
-                <span className="text-sm font-medium text-slate-200">Sampler</span>
-                <input
-                  className="mt-2 w-full rounded border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none transition focus:border-cyan-400"
-                  value={form.samplerName}
-                  onChange={(event) => updateForm("samplerName", event.target.value)}
-                />
-              </label>
-              <label className="block">
-                <span className="text-sm font-medium text-slate-200">Scheduler</span>
-                <input
-                  className="mt-2 w-full rounded border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none transition focus:border-cyan-400"
-                  value={form.scheduler}
-                  onChange={(event) => updateForm("scheduler", event.target.value)}
-                />
-              </label>
-            </div>
-
-            <label className="block">
-              <span className="text-sm font-medium text-slate-200">Negative prompt default</span>
-              <textarea
-                className="mt-2 min-h-24 w-full resize-y rounded border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none transition focus:border-cyan-400"
-                value={form.negativePrompt}
-                onChange={(event) => updateForm("negativePrompt", event.target.value)}
-              />
-            </label>
+    <main className="sf-app-shell flex overflow-hidden bg-slate-50 font-sans text-slate-950 selection:bg-blue-100 selection:text-blue-900">
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+        <header className="relative z-50 flex h-14 shrink-0 items-center justify-between border-b border-slate-200 bg-white px-3 sm:px-4">
+          <div className="flex min-w-0 items-center gap-3">
+            <h1 className="shrink-0 text-sm font-bold tracking-tight text-slate-900">SceneForge | Agent Draft</h1>
+            <span className="hidden rounded-md border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-600 sm:inline-flex">
+              Single-image draft
+            </span>
           </div>
+          <span className="inline-flex items-center gap-1.5 rounded-md border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700">
+            <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
+            Confirmation gate
+          </span>
+        </header>
 
-          <footer className="border-t border-slate-800 p-5">
-            <button
-              type="button"
-              className="flex h-11 w-full items-center justify-center gap-2 rounded bg-cyan-400 px-4 text-sm font-semibold text-slate-950 transition hover:bg-cyan-300 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400"
-              disabled={isLoading || !form.userRequest.trim()}
-              onClick={submitDraft}
-            >
-              {isLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}
-              Generate draft
-            </button>
-          </footer>
-        </section>
-
-        <section className="custom-scrollbar min-h-0 overflow-y-auto bg-slate-950 px-6 py-6">
-          {error ? (
-            <div className="mb-4 flex items-start gap-3 rounded border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-100">
-              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-              <span>{error}</span>
+        <div className="relative z-0 flex min-h-0 flex-1 overflow-hidden max-lg:flex-col">
+          <section className="touch-scroll-region custom-scrollbar flex w-[380px] shrink-0 flex-col overflow-y-auto border-r border-slate-200 bg-white p-4 max-lg:max-h-[50dvh] max-lg:w-full max-lg:border-b max-lg:border-r-0">
+            <div className="mb-4 flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <h2 className="text-sm font-semibold text-slate-900">Draft Input</h2>
+              </div>
+              <Wand2 className="size-4 shrink-0 text-slate-400" />
             </div>
-          ) : null}
 
-          {draft ? (
-            <div className="mx-auto max-w-5xl space-y-5">
-              <header className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 pb-4">
-                <div>
-                  <p className="text-sm text-slate-400">{draft.draftId}</p>
-                  <h2 className="mt-1 text-2xl font-semibold tracking-normal">{draft.title ?? "Untitled draft"}</h2>
-                </div>
-                <div className="flex items-center gap-2 rounded border border-emerald-400/30 bg-emerald-400/10 px-3 py-2 text-sm text-emerald-100">
-                  <CheckCircle2 className="h-4 w-4" />
-                  Confirmation required
-                </div>
-              </header>
+            <div className="space-y-5">
+              <label className="block">
+                <span className={SECTION_LABEL_CLASS}>Request</span>
+                <textarea
+                  className={`${TEXTAREA_CLASS} min-h-44`}
+                  onChange={(event) => updateForm("userRequest", event.target.value)}
+                  placeholder="cinematic rain alley with a lone traveler, neon reflections, dramatic rim light"
+                  value={form.userRequest}
+                />
+              </label>
 
-              <div className="grid grid-cols-2 gap-5 max-xl:grid-cols-1">
+              <div className="grid grid-cols-2 gap-3">
                 <label className="block">
-                  <span className="text-sm font-medium text-slate-200">Positive prompt</span>
-                  <textarea
-                    className="mt-2 min-h-72 w-full resize-y rounded border border-slate-700 bg-slate-900 px-3 py-2 font-mono text-sm text-slate-100 outline-none transition focus:border-cyan-400"
-                    value={draftPositivePrompt}
-                    onChange={(event) => setDraftPositivePrompt(event.target.value)}
+                  <span className={SECTION_LABEL_CLASS}>Model</span>
+                  <input
+                    className={FIELD_CLASS}
+                    onChange={(event) => updateForm("model", event.target.value)}
+                    placeholder="default"
+                    value={form.model}
                   />
                 </label>
-                <label className="block">
-                  <span className="text-sm font-medium text-slate-200">Negative prompt</span>
-                  <textarea
-                    className="mt-2 min-h-72 w-full resize-y rounded border border-slate-700 bg-slate-900 px-3 py-2 font-mono text-sm text-slate-100 outline-none transition focus:border-cyan-400"
-                    value={draftNegativePrompt}
-                    onChange={(event) => setDraftNegativePrompt(event.target.value)}
+                <label className="flex items-end gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
+                  <input
+                    checked={form.nsfw}
+                    className="h-4 w-4 accent-slate-950"
+                    onChange={(event) => updateForm("nsfw", event.target.checked)}
+                    type="checkbox"
                   />
+                  <span className={FIELD_LABEL_CLASS}>NSFW model</span>
                 </label>
               </div>
 
-              {draft.warnings.length > 0 ? (
-                <div className="rounded border border-amber-400/30 bg-amber-400/10 px-4 py-3">
-                  <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-amber-100">
-                    <AlertTriangle className="h-4 w-4" />
-                    Warnings
+              <div className="border-t border-slate-100 pt-5">
+                <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Generation Defaults
+                </h3>
+                <div className="grid grid-cols-2 gap-3">
+                  <label className="block">
+                    <span className={FIELD_LABEL_CLASS}>Checkpoint</span>
+                    <input
+                      className={FIELD_CLASS}
+                      onChange={(event) => updateForm("checkpointName", event.target.value)}
+                      placeholder="model.safetensors"
+                      value={form.checkpointName}
+                    />
+                  </label>
+                  <label className="block">
+                    <span className={FIELD_LABEL_CLASS}>Output prefix</span>
+                    <input
+                      className={FIELD_CLASS}
+                      onChange={(event) => updateForm("outputPrefix", event.target.value)}
+                      value={form.outputPrefix}
+                    />
+                  </label>
+                </div>
+
+                <div className="mt-3 grid grid-cols-2 gap-3">
+                  {GENERATION_NUMBER_FIELDS.map((field) => (
+                    <label className="block" key={field}>
+                      <span className={FIELD_LABEL_CLASS}>{GENERATION_NUMBER_FIELD_LABELS[field]}</span>
+                      <input
+                        className={FIELD_CLASS}
+                        onChange={(event) => updateForm(field, event.target.value)}
+                        value={form[field]}
+                      />
+                    </label>
+                  ))}
+                </div>
+
+                <div className="mt-3 grid grid-cols-2 gap-3">
+                  <label className="block">
+                    <span className={FIELD_LABEL_CLASS}>Sampler</span>
+                    <input
+                      className={FIELD_CLASS}
+                      onChange={(event) => updateForm("samplerName", event.target.value)}
+                      value={form.samplerName}
+                    />
+                  </label>
+                  <label className="block">
+                    <span className={FIELD_LABEL_CLASS}>Scheduler</span>
+                    <input
+                      className={FIELD_CLASS}
+                      onChange={(event) => updateForm("scheduler", event.target.value)}
+                      value={form.scheduler}
+                    />
+                  </label>
+                </div>
+
+                <label className="mt-3 block">
+                  <span className={FIELD_LABEL_CLASS}>Negative prompt default</span>
+                  <textarea
+                    className={`${TEXTAREA_CLASS} min-h-24`}
+                    onChange={(event) => updateForm("negativePrompt", event.target.value)}
+                    value={form.negativePrompt}
+                  />
+                </label>
+              </div>
+            </div>
+
+            <div className="mt-5 border-t border-slate-100 pt-4">
+              <Button
+                className="h-10 w-full shadow-none"
+                disabled={isLoading || !form.userRequest.trim()}
+                onClick={submitDraft}
+                type="button"
+              >
+                {isLoading ? <Loader2 className="size-4 animate-spin" /> : <Wand2 className="size-4" />}
+                Generate draft
+              </Button>
+            </div>
+          </section>
+
+          <section className="custom-scrollbar min-h-0 flex-1 overflow-y-auto bg-slate-50 px-4 py-4 sm:px-6 sm:py-6">
+            {error ? (
+              <div className="mb-4 flex items-start gap-3 rounded-md border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+                <AlertTriangle className="mt-0.5 size-4 shrink-0" />
+                <span>{error}</span>
+              </div>
+            ) : null}
+
+            {draft ? (
+              <div className="mx-auto max-w-5xl space-y-5">
+                <header className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-4">
+                  <div>
+                    <p className="text-xs font-medium text-slate-500">{draft.draftId}</p>
+                    <h2 className="mt-1 text-xl font-semibold tracking-tight text-slate-900">
+                      {draft.title ?? "Untitled draft"}
+                    </h2>
                   </div>
-                  <ul className="space-y-1 text-sm text-amber-50">
-                    {draft.warnings.map((warning) => (
-                      <li key={warning}>{warning}</li>
-                    ))}
-                  </ul>
-                </div>
-              ) : null}
+                  <div className="flex items-center gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-700">
+                    <CheckCircle2 className="size-4" />
+                    Confirmation required
+                  </div>
+                </header>
 
-              <pre className="max-h-96 overflow-auto rounded border border-slate-800 bg-slate-900 p-4 text-xs text-slate-300">
-                {JSON.stringify(editableComfyUiRequest, null, 2)}
-              </pre>
-            </div>
-          ) : (
-            <div className="grid h-full min-h-[420px] place-items-center">
-              <div className="max-w-md text-center">
-                <Wand2 className="mx-auto h-10 w-10 text-cyan-300" />
-                <h2 className="mt-4 text-2xl font-semibold tracking-normal">No draft yet</h2>
-                <p className="mt-2 text-sm text-slate-400">Waiting for draft input.</p>
+                <div className="grid grid-cols-2 gap-5 max-xl:grid-cols-1">
+                  <label className="block">
+                    <span className={FIELD_LABEL_CLASS}>Positive prompt</span>
+                    <textarea
+                      className={MONO_TEXTAREA_CLASS}
+                      onChange={(event) => setDraftPositivePrompt(event.target.value)}
+                      value={draftPositivePrompt}
+                    />
+                  </label>
+                  <label className="block">
+                    <span className={FIELD_LABEL_CLASS}>Negative prompt</span>
+                    <textarea
+                      className={MONO_TEXTAREA_CLASS}
+                      onChange={(event) => setDraftNegativePrompt(event.target.value)}
+                      value={draftNegativePrompt}
+                    />
+                  </label>
+                </div>
+
+                {draft.warnings.length > 0 ? (
+                  <div className="rounded-md border border-amber-200 bg-amber-50 px-4 py-3">
+                    <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-amber-800">
+                      <AlertTriangle className="size-4" />
+                      Warnings
+                    </div>
+                    <ul className="space-y-1 text-sm text-amber-700">
+                      {draft.warnings.map((warning) => (
+                        <li key={warning}>{warning}</li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+
+                <pre className="max-h-96 overflow-auto rounded-md border border-slate-200 bg-white p-4 font-mono text-xs text-slate-600">
+                  {JSON.stringify(editableComfyUiRequest, null, 2)}
+                </pre>
               </div>
-            </div>
-          )}
-        </section>
+            ) : (
+              <div className="grid h-full min-h-[420px] place-items-center">
+                <div className="max-w-md text-center">
+                  <div className="mx-auto flex size-12 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-400 shadow-sm">
+                    <Wand2 className="size-5" />
+                  </div>
+                  <h2 className="mt-4 text-lg font-semibold tracking-tight text-slate-900">No draft yet</h2>
+                  <p className="mt-2 text-sm text-slate-500">Waiting for draft input.</p>
+                </div>
+              </div>
+            )}
+          </section>
+        </div>
       </div>
     </main>
   );
