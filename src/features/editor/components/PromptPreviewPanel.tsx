@@ -30,7 +30,7 @@ type PromptPreviewPanelProps = {
   onCaptureCanvas?: () => string | null;
 };
 
-type AiGenerationConstraints = {
+export type AiGenerationConstraints = {
   layout: boolean;
   pose: boolean;
   visual: boolean;
@@ -426,7 +426,7 @@ function getConstraintButtonClass(enabled: boolean) {
   }`;
 }
 
-function buildAiSystemPrompt(
+export function buildAiSystemPrompt(
   constraints: AiGenerationConstraints,
 ) {
   const priority = [
@@ -443,19 +443,21 @@ function buildAiSystemPrompt(
       ? "Preserve object placement from the canvas: viewer-left/right, foreground/background, beside/near, behind/in front of, and visible-through-window relationships must remain in the final prompt."
       : "Spatial hints: use simple viewer-left/right, foreground/background, beside/near — not anatomical ruler language.",
     constraints.pose
-      ? "ACTION CONSTRAINT: strongly preserve the character pose from the screenshot. Describe limb direction, body lean, hand/foot placement, silhouette, and balance as naturally as possible so the generated image recreates the pose."
+      ? "ACTION CONSTRAINT: strongly preserve the character pose from the screenshot using Danbooru-style pose/action tags and short tag phrases, e.g. dynamic_pose, leaning, one_arm_raised, from_side."
       : null,
     constraints.visual
-      ? "VISUAL CONSTRAINT: strongly preserve the current camera view. Describe the shot angle, perspective, framing, distance, and lens feel in natural image-prompt language so the generated image recreates the screenshot viewpoint."
+      ? "VISUAL CONSTRAINT: strongly preserve the current camera view using Danbooru-style composition tags and short tag phrases, e.g. close-up, low_angle, from_above, dutch_angle, wide_shot."
       : null,
-    "Describe pose, expression, and props in natural, artistic language (e.g. leaning on a wall, dynamic stance, one arm raised). Never echo raw coordinates, pixel math, or awkward joint-vs-joint alignment phrases (e.g. do not write \"wrist level with neck\", \"ankle left of other ankle\", \"horizontally aligned with neck\").",
+    "Final output MUST be Danbooru/booru-style tags: comma-separated tokens and short tag phrases, not natural-language sentences.",
+    "Prefer canonical anime prompt vocabulary such as 1girl, solo, looking_at_viewer, long_hair, school_uniform, dynamic_pose, cowboy_shot, simple_background. Use underscores for multi-word Danbooru-like tags when appropriate.",
+    "Describe pose, expression, props, clothing, camera, and composition as tags or short tag phrases only. Never echo raw coordinates, pixel math, or awkward joint-vs-joint alignment phrases (e.g. do not write \"wrist level with neck\", \"ankle left of other ankle\", \"horizontally aligned with neck\").",
     "Skeleton notes in the summary are hints only; infer a plausible pose from the image, do not transcribe joint tuples.",
     "Merge duplicates; keep token economy; preserve style and subject tags from the preview when they matter.",
-    "Return only the final prompt text (no markdown, no labels like \"Prompt:\").",
+    "Return only the final comma-separated Danbooru-style positive prompt text (no markdown, no labels like \"Prompt:\", no prose explanation).",
   ].filter(Boolean);
 
   return [
-    "You are SceneForge's visual prompt assistant. Produce ONE concise image-generation prompt (Stable Diffusion-style: comma-separated tags and short phrases; anime-friendly).",
+    "You are SceneForge's visual prompt assistant. Produce ONE concise Danbooru/booru-style image-generation prompt (comma-separated anime tags and short tag phrases; not natural language).",
     "",
     `Prioritize ${priority}.`,
     constraints.layout
@@ -467,7 +469,7 @@ function buildAiSystemPrompt(
   ].join("\n");
 }
 
-function buildAiUserText({
+export function buildAiUserText({
   constraints,
   layoutConstraints,
   promptForAi,
@@ -481,18 +483,18 @@ function buildAiUserText({
   structuredSummary: string;
 }) {
   return [
-    "Generate a stronger positive prompt from the preview + screenshot below.",
+    "Generate a stronger Danbooru-style positive tag prompt from the preview + screenshot below.",
     constraints.layout || constraints.pose || constraints.visual
       ? `Order of trust: (1) enabled hard constraints and canvas image, (2) prompt preview, (3) character/object descriptions and prompt tags.`
       : "Order of trust: (1) canvas image and prompt preview, (2) character/object descriptions and prompt tags, (3) coarse layout hints in the structured summary.",
     constraints.layout
-      ? "Rewrite the layout constraints naturally, but keep every important placement relationship."
+      ? "Translate layout constraints into compact composition/location tags, while keeping every important placement relationship."
       : "Do not paste structured-summary wording verbatim if it reads like geometry homework.",
     constraints.pose
-      ? "Action constraint is enabled: the final prompt must strongly emphasize recreating the character's pose from the screenshot. Prefer natural pose words over coordinates."
+      ? "Action constraint is enabled: the final prompt must strongly emphasize recreating the character's pose from the screenshot using pose/action tags, not coordinate prose."
       : null,
     constraints.visual
-      ? "Visual constraint is enabled: the final prompt must strongly emphasize recreating the screenshot's camera angle, framing, and perspective."
+      ? "Visual constraint is enabled: the final prompt must strongly emphasize recreating the screenshot's camera angle, framing, and perspective using composition tags."
       : null,
     constraints.layout
       ? "Do not paste coordinate wording or structured-summary wording verbatim if it reads like geometry homework."

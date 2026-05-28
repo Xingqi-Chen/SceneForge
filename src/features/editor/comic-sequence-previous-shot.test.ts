@@ -99,6 +99,53 @@ describe("comic sequence previous-shot helpers", () => {
     expect(source?.previousShot.id).toBe("shot-1");
   });
 
+  it("treats bound project images as previous-shot sources before generated sequence images", () => {
+    const savedResults = createComicSequenceSavedPreviousShotResults(
+      [
+        savedSequenceImage({
+          id: "generated-shot-image",
+          filename: "generated.png",
+          sourceReference: {
+            filename: "generated-original.png",
+            type: "output",
+          },
+          url: "/api/comfyui/generated-images/generated.png",
+        }),
+        savedSequenceImage({
+          id: "bound-project-image",
+          filename: "bound-local.png",
+          source: "text-to-image",
+          shotId: undefined,
+          sourceReference: {
+            filename: "bound-original.png",
+            type: "output",
+          },
+          url: "/api/comfyui/generated-images/bound-local.png",
+        }),
+      ],
+      [
+        {
+          id: "shot-1",
+          boundImageIds: ["bound-project-image", "missing-image", "generated-shot-image"],
+        },
+      ],
+    );
+    const source = findComicSequencePreviousShotSource({
+      currentShotId: "shot-2",
+      shots: [shot("shot-1"), shot("shot-2")],
+      results: savedResults,
+    });
+
+    expect(savedResults).toHaveLength(2);
+    expect(source?.image).toEqual({
+      filename: "bound-original.png",
+      nodeId: "preview",
+      type: "output",
+      url: "/api/comfyui/generated-images/bound-local.png",
+    });
+    expect(source?.previousShot.id).toBe("shot-1");
+  });
+
   it("skips empty pending results before falling back to a later previous-shot source", () => {
     const fallback = image("saved-fallback.png");
     const source = findComicSequencePreviousShotSource({

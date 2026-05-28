@@ -17,6 +17,10 @@ describe("comic sequence storyboard AI helpers", () => {
 
     expect(messages[0].content).toContain("Return JSON only");
     expect(messages[0].content).toContain("upper limit of 20");
+    expect(messages[0].content).toContain("Danbooru/booru-style");
+    expect(messages[0].content).toContain("not natural-language sentences");
+    expect(messages[0].content).toContain("dynamic_pose");
+    expect(messages[0].content).toContain("title may be a short natural-language label");
     expect(messages[0].content).not.toContain("Create exactly");
     expect(messages[1].content).toContain("\"targetShotCount\": \"auto\"");
   });

@@ -148,6 +148,7 @@ const PROMPT_EXPORT_KIND = "sceneforge-prompt";
 const COMFYUI_GENERATED_IMAGE_HISTORY_LIMIT = 200;
 const COMFYUI_MANAGED_GENERATED_IMAGE_ROUTE_PREFIX = "/api/comfyui/generated-images/";
 const COMFYUI_MANAGED_GENERATED_IMAGE_FILENAME_PATTERN = /^[a-f0-9]{32}\.(?:gif|jpg|jpeg|png|webp)$/i;
+const COMIC_SEQUENCE_BOUND_IMAGE_LIMIT = 12;
 const COMIC_SEQUENCE_PREVIOUS_SHOT_MIN_DENOISE = 0.1;
 
 /** 画布（场景）专用 JSON 导出，`importCanvasBundleFromJson` 与之配对。 */
@@ -1130,6 +1131,7 @@ function sanitizeSavedComicSequence(raw: unknown): SceneForgeProject["settings"]
           return [];
         }
 
+        const boundImageIds = sanitizeStringIdList(shot.boundImageIds).slice(0, COMIC_SEQUENCE_BOUND_IMAGE_LIMIT);
         const previousShotReference = sanitizeSavedComicSequencePreviousShotReference(shot.previousShotReference);
 
         return [
@@ -1147,6 +1149,7 @@ function sanitizeSavedComicSequence(raw: unknown): SceneForgeProject["settings"]
                   .filter((controlNet): controlNet is NonNullable<ReturnType<typeof sanitizeSavedComicSequenceControlNet>> => controlNet !== null)
               : [],
             reference: sanitizeSavedComicSequenceReference(shot.reference),
+            ...(boundImageIds.length > 0 ? { boundImageIds } : {}),
             ...(previousShotReference ? { previousShotReference } : {}),
             createdAt: readTimestamp(shot.createdAt) ?? "1970-01-01T00:00:00.000Z",
             updatedAt: readTimestamp(shot.updatedAt) ?? "1970-01-01T00:00:00.000Z",

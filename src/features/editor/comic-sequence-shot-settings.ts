@@ -36,6 +36,9 @@ function cloneShotSettingsPatch(patch: ComicSequenceShotSettingsPatch): ComicSeq
   if (patch.reference) {
     next.reference = cloneSerializable(patch.reference);
   }
+  if (patch.boundImageIds) {
+    next.boundImageIds = [...patch.boundImageIds];
+  }
   if ("previousShotReference" in patch) {
     next.previousShotReference = patch.previousShotReference
       ? cloneSerializable(patch.previousShotReference)

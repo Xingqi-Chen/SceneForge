@@ -6570,6 +6570,7 @@ type SequencePreviousShotMaskRect = {
 };
 
 const DEFAULT_SEQUENCE_REFERENCE_STRENGTH = 0.45;
+const COMIC_SEQUENCE_BOUND_IMAGE_LIMIT = 12;
 const COMIC_SEQUENCE_PREVIOUS_SHOT_MIN_DENOISE = 0.1;
 const COMIC_SEQUENCE_PREVIOUS_REFERENCE_OPTIONS = [
   { label: "Off", value: "off" },
@@ -7554,9 +7555,13 @@ function ComicSequenceWorkspaceDialog({
   const [storyboardStatus, setStoryboardStatus] = useState<SubmitStatus>("idle");
   const [storyboardError, setStoryboardError] = useState("");
   const [storyboardMessage, setStoryboardMessage] = useState("");
-  const savedPreviousShotResults = useMemo(
-    () => createComicSequenceSavedPreviousShotResults(project.settings.comfyUiGeneratedImages ?? []),
+  const savedImageById = useMemo(
+    () => new Map((project.settings.comfyUiGeneratedImages ?? []).map((image) => [image.id, image])),
     [project.settings.comfyUiGeneratedImages],
+  );
+  const savedPreviousShotResults = useMemo(
+    () => createComicSequenceSavedPreviousShotResults(project.settings.comfyUiGeneratedImages ?? [], sequence?.shots ?? []),
+    [project.settings.comfyUiGeneratedImages, sequence?.shots],
   );
   const previousShotSourceResults = useMemo(
     () => [...results, ...savedPreviousShotResults],
@@ -7566,6 +7571,10 @@ function ComicSequenceWorkspaceDialog({
     downloadItems.length > 0 && downloadItems.every((item) => !item.error && isComfyUiGenerationResourceReady(item.status));
   const nsfwEnabled = project.settings.supportsNsfw === true;
   const selectedShot = findSavedComicSequenceShot(sequence, sequence?.selectedShotId);
+  const selectedBoundImageIds = new Set(
+    (selectedShot?.boundImageIds ?? []).filter((imageId) => savedImageById.has(imageId)),
+  );
+  const selectedBoundImageCount = selectedBoundImageIds.size;
   const selectedShotIndex = sequence && selectedShot
     ? sequence.shots.findIndex((shot) => shot.id === selectedShot.id)
     : -1;
@@ -7599,21 +7608,43 @@ function ComicSequenceWorkspaceDialog({
     );
   const trimmedAiPrompt = aiGeneratedPrompt.trim();
   const referenceCandidates = project.settings.comfyUiGeneratedImages.slice(0, 24);
+  const bindingCandidates = project.settings.comfyUiGeneratedImages;
   const savedImagesByShot = useMemo(() => {
     const byShot = new Map<string, SavedComfyUiGeneratedImage[]>();
+    const seenByShot = new Map<string, Set<string>>();
+
+    function append(shotId: string, image: SavedComfyUiGeneratedImage) {
+      const seen = seenByShot.get(shotId) ?? new Set<string>();
+      if (seen.has(image.id)) {
+        return;
+      }
+
+      seen.add(image.id);
+      seenByShot.set(shotId, seen);
+      const images = byShot.get(shotId) ?? [];
+      images.push(image);
+      byShot.set(shotId, images);
+    }
+
+    for (const shot of sequence?.shots ?? []) {
+      for (const imageId of shot.boundImageIds ?? []) {
+        const image = savedImageById.get(imageId);
+        if (image) {
+          append(shot.id, image);
+        }
+      }
+    }
 
     for (const image of project.settings.comfyUiGeneratedImages ?? []) {
       if (image.source !== "sequence" || !image.shotId) {
         continue;
       }
 
-      const images = byShot.get(image.shotId) ?? [];
-      images.push(image);
-      byShot.set(image.shotId, images);
+      append(image.shotId, image);
     }
 
     return byShot;
-  }, [project.settings.comfyUiGeneratedImages]);
+  }, [project.settings.comfyUiGeneratedImages, savedImageById, sequence?.shots]);
   const selectedShotFaceReference = selectedShot
     ? getComicSequenceReferenceChannel(selectedShot.reference, "face")
     : createComicSequenceReferenceChannel("face");
@@ -7812,16 +7843,41 @@ function ComicSequenceWorkspaceDialog({
   }
 
   function savePreviousShotMask(shotId: string, mask: SequencePreviousShotMaskSession) {
-    setPreviousShotMasks((current) => ({
-      ...current,
-      [shotId]: mask,
-    }));
+    const syncStartIndex = parameterSyncDownEnabled && sequence
+      ? sequence.shots.findIndex((shot) => shot.id === shotId)
+      : -1;
+    const syncedShotIds = syncStartIndex >= 0 && sequence
+      ? sequence.shots.slice(syncStartIndex).map((shot) => shot.id)
+      : [shotId];
+
+    setPreviousShotMasks((current) => {
+      const next = {
+        ...current,
+        [shotId]: mask,
+      };
+
+      for (const syncedShotId of syncedShotIds) {
+        if (syncedShotId === shotId) {
+          continue;
+        }
+
+        next[syncedShotId] = {
+          ...mask,
+          sourceImage: undefined,
+          sourceKey: PENDING_COMIC_SEQUENCE_PREVIOUS_SHOT_SOURCE_KEY,
+        };
+      }
+
+      return next;
+    });
     setMaskEditorTarget(null);
     setHistorySaveStatus("success");
     setHistorySaveMessage(
-      mask.sourceKey === PENDING_COMIC_SEQUENCE_PREVIOUS_SHOT_SOURCE_KEY
-        ? "Pending previous-shot inpaint mask is ready for this session."
-        : "Previous-shot inpaint mask is ready for this session.",
+      syncedShotIds.length > 1
+        ? `Previous-shot inpaint mask synced to ${syncedShotIds.length} shots for this session.`
+        : mask.sourceKey === PENDING_COMIC_SEQUENCE_PREVIOUS_SHOT_SOURCE_KEY
+          ? "Pending previous-shot inpaint mask is ready for this session."
+          : "Previous-shot inpaint mask is ready for this session.",
     );
   }
 
@@ -8198,6 +8254,7 @@ function ComicSequenceWorkspaceDialog({
       id: createLocalId("shot"),
       title: `${selectedShot.title} Copy`,
       scene: cloneSceneSnapshot(selectedShot.scene),
+      boundImageIds: selectedShot.boundImageIds ? [...selectedShot.boundImageIds] : undefined,
       reference: {
         ...selectedShot.reference,
         images: selectedShot.reference.images.map(cloneComicSequenceReferenceImage),
@@ -8278,6 +8335,45 @@ function ComicSequenceWorkspaceDialog({
       enabled: nextImages.length > 0 ? true : currentChannel.enabled,
       images: nextImages,
     });
+  }
+
+  function toggleShotBoundImage(shotId: string, image: SavedComfyUiGeneratedImage) {
+    const targetShot = sequence?.shots.find((shot) => shot.id === shotId);
+    if (!targetShot) {
+      return;
+    }
+
+    const availableImageIds = new Set(project.settings.comfyUiGeneratedImages.map((candidate) => candidate.id));
+    const currentIds = (targetShot.boundImageIds ?? []).filter((imageId) => availableImageIds.has(imageId));
+    const exists = currentIds.includes(image.id);
+    if (!exists && currentIds.length >= COMIC_SEQUENCE_BOUND_IMAGE_LIMIT) {
+      setHistorySaveStatus("error");
+      setHistorySaveMessage(`Each shot can bind up to ${COMIC_SEQUENCE_BOUND_IMAGE_LIMIT} project images.`);
+      return;
+    }
+
+    const nextIds = exists
+      ? currentIds.filter((imageId) => imageId !== image.id)
+      : [image.id, ...currentIds.filter((imageId) => imageId !== image.id)];
+
+    patchSequence((current) => ({
+      ...current,
+      shots: current.shots.map((shot) =>
+        shot.id === shotId
+          ? {
+              ...shot,
+              boundImageIds: nextIds.length > 0 ? nextIds : undefined,
+              updatedAt: new Date().toISOString(),
+            }
+          : shot,
+      ),
+    }));
+    setHistorySaveStatus("success");
+    setHistorySaveMessage(
+      exists
+        ? `Unbound ${image.filename} from ${targetShot.title}.`
+        : `Bound ${image.filename} to ${targetShot.title}.`,
+    );
   }
 
   async function handleUploadReferenceFiles(channelKey: ComicSequenceReferenceChannelKey, files: FileList | null) {
@@ -8851,7 +8947,7 @@ function ComicSequenceWorkspaceDialog({
                   <div className="flex items-center justify-between gap-3">
                     <div className="min-w-0">
                       <p className="text-xs font-bold text-slate-800">Saved shot images</p>
-                      <p className="mt-0.5 text-[11px] text-slate-500">Current saved sequence results by shot</p>
+                      <p className="mt-0.5 text-[11px] text-slate-500">Generated or bound project images by shot</p>
                     </div>
                     <span className="text-[11px] font-semibold text-slate-500">
                       {sequence.shots.reduce((count, shot) => count + (savedImagesByShot.get(shot.id)?.length ?? 0), 0)} saved
@@ -8861,6 +8957,7 @@ function ComicSequenceWorkspaceDialog({
                     {sequence.shots.map((shot, index) => {
                       const savedImages = savedImagesByShot.get(shot.id) ?? [];
                       const previewImages = savedImages.slice(0, 3);
+                      const boundCount = (shot.boundImageIds ?? []).filter((imageId) => savedImageById.has(imageId)).length;
                       const selected = selectedShot?.id === shot.id;
 
                       return (
@@ -8879,7 +8976,9 @@ function ComicSequenceWorkspaceDialog({
                             <span className="min-w-0 truncate text-[11px] font-bold text-slate-800">
                               {index + 1}. {shot.title}
                             </span>
-                            <span className="shrink-0 text-[10px] font-semibold text-slate-500">{savedImages.length}</span>
+                            <span className="shrink-0 text-[10px] font-semibold text-slate-500">
+                              {savedImages.length}{boundCount > 0 ? ` / ${boundCount} bound` : ""}
+                            </span>
                           </div>
                           {savedImages.length > 0 ? (
                             <div className="mt-2 grid grid-cols-3 gap-1">
@@ -8906,6 +9005,77 @@ function ComicSequenceWorkspaceDialog({
                       );
                     })}
                   </div>
+                  {selectedShot ? (
+                    <div className="mt-4 rounded-md border border-slate-200 bg-slate-50/70 p-3">
+                      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                        <div className="min-w-0">
+                          <p className="text-xs font-bold text-slate-800">Bind project images to {selectedShot.title}</p>
+                          <p className="mt-0.5 text-[11px] leading-relaxed text-slate-500">
+                            Bound images count as saved results for this shot, so the next shot can use them as previous-shot img2img or inpaint sources.
+                          </p>
+                        </div>
+                        <span className="shrink-0 text-[11px] font-semibold text-slate-500">
+                          {selectedBoundImageCount}/{COMIC_SEQUENCE_BOUND_IMAGE_LIMIT} bound
+                        </span>
+                      </div>
+                      {bindingCandidates.length > 0 ? (
+                        <div className="mt-3 grid grid-cols-4 gap-2 sm:grid-cols-6 lg:grid-cols-8 xl:grid-cols-10">
+                          {bindingCandidates.map((image) => {
+                            const bound = selectedBoundImageIds.has(image.id);
+                            const naturalShotImage = image.source === "sequence" && image.shotId === selectedShot.id;
+                            const limitReached = !bound && selectedBoundImageCount >= COMIC_SEQUENCE_BOUND_IMAGE_LIMIT;
+
+                            return (
+                              <button
+                                className={
+                                  "group relative overflow-hidden rounded-md border text-left transition disabled:cursor-not-allowed disabled:opacity-50 " +
+                                  (bound
+                                    ? "border-sky-400 ring-2 ring-sky-100"
+                                    : naturalShotImage
+                                      ? "border-emerald-200 hover:border-sky-300"
+                                      : "border-slate-200 hover:border-sky-300")
+                                }
+                                disabled={limitReached}
+                                key={image.id}
+                                onClick={() => toggleShotBoundImage(selectedShot.id, image)}
+                                title={
+                                  bound
+                                    ? `Unbind ${image.filename}`
+                                    : limitReached
+                                      ? "Binding limit reached"
+                                      : `Bind ${image.filename}`
+                                }
+                                type="button"
+                              >
+                                <img alt={image.filename} className="aspect-square w-full object-cover" src={image.url} />
+                                <span
+                                  className={
+                                    "absolute left-1 top-1 rounded px-1 text-[10px] font-semibold shadow-sm " +
+                                    (bound
+                                      ? "bg-sky-600 text-white"
+                                      : naturalShotImage
+                                        ? "bg-emerald-600 text-white"
+                                        : "bg-white/90 text-slate-600")
+                                  }
+                                >
+                                  {bound ? "bound" : naturalShotImage ? "saved" : "bind"}
+                                </span>
+                                {bound ? (
+                                  <span className="absolute bottom-1 right-1 grid size-5 place-items-center rounded-full bg-white/95 text-sky-600 shadow-sm">
+                                    <Link2 className="size-3" />
+                                  </span>
+                                ) : null}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        <div className="mt-3 rounded-md border border-dashed border-slate-200 bg-white p-3 text-[11px] leading-relaxed text-slate-500">
+                          No saved project images yet. Save a generated image first, then bind it here.
+                        </div>
+                      )}
+                    </div>
+                  ) : null}
                 </section>
               ) : null}
 

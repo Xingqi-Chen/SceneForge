@@ -139,6 +139,7 @@ export type SavedComicSequenceShot = {
   parameters: SavedComfyUiGenerationParams;
   controlNets: SavedComicSequenceControlNetParams[];
   reference: SavedComicSequenceReferenceParams;
+  boundImageIds?: string[];
   previousShotReference?: SavedComicSequencePreviousShotReference;
   createdAt: string;
   updatedAt: string;

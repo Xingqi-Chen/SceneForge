@@ -1080,12 +1080,40 @@ export const useEditorStore = create<EditorState>((set) => ({
           return state;
         }
 
+        const savedComicSequence = state.project.settings.savedComicSequence;
+        let nextSavedComicSequence = savedComicSequence;
+        if (savedComicSequence) {
+          const now = new Date().toISOString();
+          let sequenceChanged = false;
+          const nextShots = savedComicSequence.shots.map((shot) => {
+            const boundImageIds = shot.boundImageIds?.filter((imageId) => imageId !== id);
+            if ((boundImageIds?.length ?? 0) === (shot.boundImageIds?.length ?? 0)) {
+              return shot;
+            }
+
+            sequenceChanged = true;
+            return {
+              ...shot,
+              boundImageIds: boundImageIds && boundImageIds.length > 0 ? boundImageIds : undefined,
+              updatedAt: now,
+            };
+          });
+
+          if (sequenceChanged) {
+            nextSavedComicSequence = {
+              ...savedComicSequence,
+              shots: nextShots,
+            };
+          }
+        }
+
         return {
           project: touchProject({
             ...state.project,
             settings: {
               ...state.project.settings,
               comfyUiGeneratedImages: nextImages,
+              ...(nextSavedComicSequence !== savedComicSequence ? { savedComicSequence: nextSavedComicSequence } : {}),
             },
           }),
         };

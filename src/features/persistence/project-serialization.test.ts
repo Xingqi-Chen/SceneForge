@@ -372,6 +372,7 @@ describe("project serialization", () => {
               },
             ],
           },
+          boundImageIds: ["image-1", "image-2"],
           previousShotReference: {
             mode: "inpaint",
             denoise: 0.58,
@@ -407,6 +408,7 @@ describe("project serialization", () => {
           parameters: createSavedComfyUiImage().parameters,
           controlNets: [],
           reference: {},
+          boundImageIds: ["image-1", "", "image-1", 42],
           previousShotReference: {
             mode: "img2img",
             denoise: 0.02,
@@ -449,6 +451,7 @@ describe("project serialization", () => {
       inpaintMode: "vae-inpaint",
       growMaskBy: 0,
     });
+    expect(shots[0]?.boundImageIds).toEqual(["image-1"]);
     expect(shots[1]?.previousShotReference).toBeUndefined();
   });
 

@@ -72,30 +72,59 @@ export function findComicSequencePreviousShotSource({
   return null;
 }
 
+function createPreviousShotResultFromSavedImage(
+  record: SavedComfyUiGeneratedImage,
+  shotId: string,
+): ComicSequencePreviousShotResult {
+  const sourceReference = record.sourceReference ?? record;
+  const image: ComfyUiGeneratedImage = {
+    filename: sourceReference.filename,
+    nodeId: record.nodeId,
+    ...(sourceReference.subfolder !== undefined ? { subfolder: sourceReference.subfolder } : {}),
+    ...(sourceReference.type !== undefined ? { type: sourceReference.type } : {}),
+    url: record.url,
+  };
+
+  return {
+    images: [image],
+    shotId,
+  };
+}
+
 export function createComicSequenceSavedPreviousShotResults(
   savedImages: SavedComfyUiGeneratedImage[],
+  shots: Array<Pick<SavedComicSequenceShot, "boundImageIds" | "id">> = [],
 ): ComicSequencePreviousShotResult[] {
-  return savedImages.flatMap((record) => {
-    if (record.source !== "sequence" || !record.shotId) {
-      return [];
+  const savedImageById = new Map(savedImages.map((image) => [image.id, image]));
+  const seen = new Set<string>();
+  const results: ComicSequencePreviousShotResult[] = [];
+
+  function append(record: SavedComfyUiGeneratedImage, shotId: string) {
+    const key = `${shotId}\u0000${record.id}`;
+    if (seen.has(key)) {
+      return;
     }
 
-    const sourceReference = record.sourceReference ?? record;
-    const image: ComfyUiGeneratedImage = {
-      filename: sourceReference.filename,
-      nodeId: record.nodeId,
-      ...(sourceReference.subfolder !== undefined ? { subfolder: sourceReference.subfolder } : {}),
-      ...(sourceReference.type !== undefined ? { type: sourceReference.type } : {}),
-      url: record.url,
-    };
+    seen.add(key);
+    results.push(createPreviousShotResultFromSavedImage(record, shotId));
+  }
 
-    return [
-      {
-        images: [image],
-        shotId: record.shotId,
-      },
-    ];
-  });
+  for (const shot of shots) {
+    for (const imageId of shot.boundImageIds ?? []) {
+      const record = savedImageById.get(imageId);
+      if (record) {
+        append(record, shot.id);
+      }
+    }
+  }
+
+  for (const record of savedImages) {
+    if (record.source === "sequence" && record.shotId) {
+      append(record, record.shotId);
+    }
+  }
+
+  return results;
 }
 
 export function resolveComicSequencePreviousShotAction({

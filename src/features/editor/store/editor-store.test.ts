@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
-import type { CharacterSkeleton, PromptTag, SavedComfyUiGeneratedImage } from "@/shared/types";
+import type { CharacterSkeleton, PromptTag, SavedComicSequenceReferenceParams, SavedComfyUiGeneratedImage } from "@/shared/types";
 
 import { cloneStickFigurePose } from "@/features/editor/stick-figure-3d/stick-figure-pose-io";
 import { getCharacterStickFigurePose } from "@/features/editor/stick-figure-3d/get-character-stick-pose";
@@ -56,6 +56,34 @@ function createSavedComfyUiImage(
     selectedCheckpointId: "checkpoint-1",
     selectedLoraIds: ["lora-1"],
     ...patch,
+  };
+}
+
+function createTestComicSequenceReference(): SavedComicSequenceReferenceParams {
+  return {
+    characterName: "Character 1",
+    characterPrompt: "",
+    face: {
+      enabled: false,
+      mode: "face",
+      weight: 0.45,
+      startAt: 0,
+      endAt: 1,
+      images: [],
+    },
+    character: {
+      enabled: false,
+      mode: "ipadapter",
+      weight: 0.45,
+      startAt: 0,
+      endAt: 1,
+      images: [],
+    },
+    mode: "face",
+    weight: 0.45,
+    startAt: 0,
+    endAt: 1,
+    images: [],
   };
 }
 
@@ -322,6 +350,51 @@ describe("editor store", () => {
     useEditorStore.getState().deleteComfyUiGeneratedImage("history-1");
 
     expect(useEditorStore.getState().project.settings.comfyUiGeneratedImages).toEqual([secondImage]);
+  });
+
+  it("removes deleted ComfyUI generated images from Comic Sequence bindings", () => {
+    const project = createDefaultProject();
+    const firstImage = createSavedComfyUiImage({ id: "history-1" });
+    const secondImage = createSavedComfyUiImage({
+      id: "history-2",
+      filename: "SceneForge_00002_.png",
+      createdAt: "2026-05-26T12:00:00.000Z",
+    });
+
+    useEditorStore.getState().setProject({
+      ...project,
+      settings: {
+        ...project.settings,
+        comfyUiGeneratedImages: [firstImage, secondImage],
+        savedComicSequence: {
+          version: 1,
+          selectedShotId: "shot-1",
+          shots: [
+            {
+              id: "shot-1",
+              title: "Shot 1",
+              scene: project.scene,
+              positivePrompt: "panel",
+              negativePrompt: "",
+              shotPrompt: "",
+              parameters: firstImage.parameters,
+              controlNets: [],
+              reference: createTestComicSequenceReference(),
+              boundImageIds: ["history-1", "history-2"],
+              createdAt: "2026-05-26T10:00:00.000Z",
+              updatedAt: "2026-05-26T10:00:00.000Z",
+            },
+          ],
+        },
+      },
+    });
+
+    useEditorStore.getState().deleteComfyUiGeneratedImage("history-1");
+
+    expect(useEditorStore.getState().project.settings.comfyUiGeneratedImages).toEqual([secondImage]);
+    expect(useEditorStore.getState().project.settings.savedComicSequence?.shots[0]?.boundImageIds).toEqual([
+      "history-2",
+    ]);
   });
 
   it("does not add ComfyUI generated image history changes to the undo stack", () => {
