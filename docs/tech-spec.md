@@ -80,6 +80,130 @@ Route expectations:
 - Normalize external service errors into user-actionable responses.
 - Use configured storage roots and reject path traversal.
 
+## Agent Single-Image Backend Contract
+
+This contract covers T1 conclusions for the future standalone `/agent` single-image MVP. The Agent flow is independent from the editor workspace: it must not read the current canvas, project summary, editor store, generated-image history, or prompt panel state.
+
+### Reuse Assessment
+
+- LiteLLM can be reused through `src/features/llm` (`createLiteLlmClient`, `LlmChatRequest`, validation, and `LiteLlmError`). T2 should add an Agent-specific draft schema/parser around the chat response instead of weakening the generic chat contract.
+- ComfyUI single-image execution can reuse `src/features/comfyui` (`validateComfyUiTextToImageRequest`, `validateComfyUiRequestAgainstObjectInfo`, `buildBasicTextToImageWorkflow`, and `createComfyUiClient().generateImage`). T3 may add a thin Agent route/service wrapper, but should not build a new workflow selector.
+- Generated image file storage can reuse `src/features/comfyui/generated-image-storage` and `/api/comfyui/generated-images`. That storage is file-based and not project-bound by itself. Project history binding happens separately through editor store actions and must not be used by Agent MVP.
+- Existing API routes are useful compatibility references, but new server code should prefer shared feature modules over making server-to-server HTTP calls back into Next.js routes.
+
+### Draft Contract
+
+T2 draft generation should accept only standalone Agent input, for example:
+
+```ts
+type AgentSingleImageDraftRequest = {
+  userRequest: string;
+  model?: string;
+  nsfw?: boolean;
+  generationDefaults?: Partial<
+    Pick<
+      ComfyUiTextToImageRequest,
+      | "checkpointName"
+      | "negativePrompt"
+      | "loras"
+      | "width"
+      | "height"
+      | "steps"
+      | "cfg"
+      | "samplerName"
+      | "scheduler"
+      | "denoise"
+      | "batchSize"
+      | "latentImageNode"
+      | "promptWrapper"
+      | "outputPrefix"
+    >
+  >;
+};
+```
+
+The draft response should be structured JSON that can be edited before execution:
+
+```ts
+type AgentSingleImageDraftResponse = {
+  draftId: string;
+  status: "draft";
+  title?: string;
+  positivePrompt: string;
+  negativePrompt: string;
+  comfyUiRequest: Partial<ComfyUiTextToImageRequest> & {
+    positivePrompt: string;
+    negativePrompt?: string;
+  };
+  confirmationRequired: true;
+  warnings: string[];
+};
+```
+
+The LLM may draft prompt text and optional rationale, but backend code must validate and normalize the JSON. Fields that determine model availability or local files, especially `checkpointName` and `loras`, should come from explicit standalone Agent inputs or validated UI choices rather than untrusted LLM invention.
+
+### Confirmation Gate
+
+- Draft generation must never call ComfyUI, ComfyUI history/events, ComfyUI image view, generated image storage, or editor store actions.
+- ComfyUI execution requires an explicit confirmation request from the user after the draft is visible and editable.
+- The execution boundary should require a confirmed payload, such as `confirmed: true`, plus the final `ComfyUiTextToImageRequest` fields.
+- Missing confirmation is a backend validation failure and must stop before any ComfyUI client or storage code is constructed.
+
+### ComfyUI Execution Input and Output
+
+T3 execution should convert the confirmed draft into the existing `ComfyUiTextToImageRequest` contract:
+
+- Required: `checkpointName`, `positivePrompt`.
+- Optional: `negativePrompt`, `loras`, `width`, `height`, `seed`, `steps`, `cfg`, `samplerName`, `scheduler`, `denoise`, `batchSize`, `latentImageNode`, `promptWrapper`, `outputPrefix`.
+- Out of scope for Agent single-image MVP: inpainting, Sequence, ControlNet, character references, SAM masks, upscaling, and editor/project state mutation.
+
+Execution should reuse the current single-image path:
+
+1. Validate request shape with `validateComfyUiTextToImageRequest`.
+2. Read ComfyUI `object_info` and validate model/node compatibility with `validateComfyUiRequestAgainstObjectInfo`.
+3. Queue `buildBasicTextToImageWorkflow` through `createComfyUiClient().generateImage`.
+4. Return queue metadata compatible with existing ComfyUI responses: `clientId`, `promptId`, `number`, `nodeErrors`, `workflow`, `nodeIds`, `outputNodeId`, `warnings`, and sanitized resolved `request`.
+5. Read completion through existing history or event helpers when needed.
+
+### Default Workflow and Seed
+
+- Agent MVP uses the existing default single-image workflow from `buildBasicTextToImageWorkflow`.
+- The workflow uses `CheckpointLoaderSimple`, optional LoRA loaders, `CLIPTextEncode`, the default latent image node, `KSampler`, `VAEDecode`, and `PreviewImage`.
+- Existing defaults remain authoritative: `1024x1024`, `steps: 30`, `cfg: 7`, `samplerName: "euler"`, `scheduler: "normal"`, `denoise: 1`, `batchSize: 1`, `outputPrefix: "SceneForge"`, face/hand detailers disabled, no ControlNet units, and no character references unless a later scoped issue changes that.
+- Seed behavior must be inherited from `resolveComfyUiTextToImageRequest`: if `seed` is omitted, the runner creates a random safe integer in the existing range. Agent code must not introduce a second seed default or seed mode.
+
+### Image Storage Behavior
+
+- Agent-generated images may be saved with the existing generated image storage route/helper after ComfyUI returns an image reference.
+- `storeGeneratedImage` writes content-addressed image files under `SCENEFORGE_GENERATED_IMAGES_DIR` or `data/comfyui-generated-images/` and returns `{ byteLength, contentType, filename, url }`.
+- Saving an Agent image must not append `SavedComfyUiGeneratedImage` records to `project.settings.comfyUiGeneratedImages`, must not touch `useEditorStore`, and must not bind results to the current project.
+- If Agent later needs a gallery or durable draft history, that should be a separate non-editor storage contract.
+
+### Error Taxonomy
+
+Use stable categories in Agent route responses while preserving useful upstream details:
+
+- `agent_request_invalid`: malformed Agent draft or execution payload.
+- `agent_draft_invalid`: LiteLLM returned content that cannot be parsed into the draft schema.
+- `confirmation_required`: execution requested before explicit user confirmation; no ComfyUI or storage calls may have happened.
+- `llm_config`: missing LiteLLM base URL or model configuration.
+- `llm_upstream`: LiteLLM request failed with an upstream status or network/runtime error.
+- `llm_malformed_response`: LiteLLM completed but did not return usable chat content.
+- `comfyui_request_invalid`: confirmed payload does not satisfy `ComfyUiTextToImageRequest`.
+- `comfyui_object_info_mismatch`: selected checkpoint, sampler, scheduler, LoRA, or required node does not match current ComfyUI `object_info`.
+- `comfyui_workflow_build_failed`: the confirmed request passes initial validation but cannot be converted into the expected single-image workflow.
+- `comfyui_upstream`: ComfyUI queue/history/view request failed.
+- `comfyui_execution_failed`: queued workflow reported execution failure through history or events.
+- `image_storage_invalid`: generated image reference, content type, byte size, or filename is invalid.
+- `image_storage_failed`: local generated-image write/delete/read failed unexpectedly.
+- `agent_unexpected`: an unclassified Agent backend failure; responses should use a safe generic message while server logs preserve diagnostics.
+
+### T2/T3 Implementation Boundary
+
+- T2 owns the standalone `/agent` draft flow, Agent draft schema validation, prompt-to-draft LiteLLM call, and editable draft response. T2 must not call ComfyUI or generated image storage.
+- T3 owns the explicit confirmation execution path, thin ComfyUI wrapper, completion polling/events, and optional use of generated image storage. T3 must not add Sequence, inpainting, workflow selection, current-project binding, or editor-state mutation.
+- Both tracks should keep server modules isolated from client components and keep the editor store as a non-dependency of Agent backend code.
+
 ## Environment Variables
 
 Source of truth: `.env.example`.
