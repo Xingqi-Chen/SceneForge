@@ -5,6 +5,7 @@ This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-
 First, run the development server:
 
 ```bash
+npm install
 npm run dev
 # or
 yarn dev
@@ -15,6 +16,20 @@ bun dev
 ```
 
 Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+
+## Continuous Integration
+
+GitHub Actions runs the CI workflow on pull requests and pushes to `master`.
+It can also be run manually from the Actions tab.
+The workflow uses Node.js 22.x with the committed `package-lock.json`, then runs:
+
+```bash
+npm ci
+npm run lint
+npm run typecheck
+npm test
+npm run build
+```
 
 ## LLM API
 

@@ -8,7 +8,7 @@ Tracks are planning units. Implementation work must be split into issue-ready ta
 
 ## Immediate Next Step
 
-Prepare GitHub Issue content for `T2`. `T1` has confirmed the backend contracts that the Agent single-image workflow will use before `/agent` UI or ComfyUI execution work starts.
+Prepare GitHub Issue content for `T2`. `T-CI` added the temporary repository CI setup, and `T1` has confirmed the backend contracts that the Agent single-image workflow will use before `/agent` UI or ComfyUI execution work starts.
 
 ## Status Values
 
@@ -25,6 +25,7 @@ Prepare GitHub Issue content for `T2`. `T1` has confirmed the backend contracts 
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | T0 | N/A | Align Codex agent workflow and docs with SceneForge | Documentation | Done | PASS | Not requested | Covers AGENTS.md, `.codex/agents/`, and docs bootstrap. |
 | T1 | #1 | Audit Agent backend contracts for LangGraph single-image workflow | Agent MVP | Done | PASS | APPROVE | Confirmed LiteLLM draft, ComfyUI single-image runner, default workflow, seed behavior, image storage, and error contracts before implementation. Merged PR #2. |
+| T-CI | N/A | Configure GitHub Actions CI | Repository Infrastructure | Done | PASS | Self-reviewed | Temporary repository-bootstrap work requested directly; no GitHub Issue needed. Adds Node 22.x CI for install, lint, typecheck, test, and build. Full local CI validation passed after sandbox restrictions were lifted. Opened PR #3. |
 | T2 | TBD | Add standalone Agent draft workflow | Agent MVP | Ready | TBD | TBD | Depends on T1; `/agent` independent entry; LiteLLM creates editable single-image draft; user confirmation required before any ComfyUI call. |
 | T3 | TBD | Run confirmed Agent single-image drafts through ComfyUI | Agent MVP | Ready | TBD | TBD | Depends on T1 and T2; confirmed drafts call existing default single-image ComfyUI workflow directly; results may use existing image storage but must not bind to the current project. |
 
