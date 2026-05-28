@@ -69,6 +69,7 @@ Key route groups:
 - `/api/projects`: local project listing and save/load/delete operations.
 - `/api/prompt-library` and `/api/prompt-bindings`: shared prompt library and target binding state.
 - `/api/llm/chat`: LiteLLM-compatible chat endpoint.
+- `/api/agent/draft`: standalone Agent single-image draft endpoint backed by LiteLLM; it returns editable drafts and does not call ComfyUI.
 - `/api/comfyui/*`: workflow generation, queue/history/view helpers, image generation, inpainting, control models, upscale models, generated images, sequence references, events, and diagnosis.
 - `/api/civitai-lora-library/*`: resources, selected resources, settings, import image parsing, imported images, downloads, cache repair, and AI recommendation.
 - `/api/artist-string-library/*`: sync, selected resources, items, and images.

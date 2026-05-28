@@ -4,6 +4,36 @@ This log records dated implementation and documentation work. Keep entries conci
 
 ## 2026-05-28
 
+### T2 Standalone Agent Draft Workflow
+
+Summary:
+
+- Created GitHub Issue #4 for the standalone Agent draft workflow and marked T2 in progress.
+- Added `/agent` as an independent single-image draft page.
+- Added `POST /api/agent/draft` plus Agent-specific request validation, LiteLLM draft generation, response normalization, and error taxonomy.
+- Kept T2 behind the confirmation gate: no ComfyUI calls, generated-image storage, editor project state, or editor store dependencies.
+
+Files changed:
+
+- `src/features/agent/`
+- `src/app/agent/page.tsx`
+- `src/app/api/agent/draft/route.ts`
+- `src/app/api/agent/draft/route.test.ts`
+- `README.md`
+- `docs/product-spec.md`
+- `docs/tech-spec.md`
+- `docs/plan.md`
+- `docs/dev-log.md`
+
+Validation:
+
+- `npm test -- src/app/api/agent/draft/route.test.ts` passed.
+- `npm run typecheck` passed.
+- `npm run lint` passed with existing `<img>` warnings in editor components only.
+- `npm test` passed: 69 test files, 465 tests.
+- `npm run build` passed; Turbopack reported the existing ComfyUI sequence-reference NFT tracing warning.
+- `GET http://127.0.0.1:3000/agent` returned 200 and included the Agent page marker from the already-running dev server.
+
 ### T1 Agent Backend Contract Audit
 
 Summary:

@@ -32,6 +32,7 @@ SceneForge currently includes these major surfaces:
 - Prompt library and prompt binding workflows for scene, object, character, and body-part targets.
 - Local project save/load through Next.js API routes backed by local disk storage.
 - LiteLLM-compatible chat support for AI-assisted prompt and recommendation flows.
+- Standalone Agent draft page for editable single-image prompt drafts before any confirmed generation call.
 - ComfyUI workflow generation, generated image history, inpainting, sequence references, control image helpers, and diagnostic helpers.
 - Civitai resource discovery, selected checkpoints/LoRAs, import image parsing, download support, cache repair, and recommendation helpers.
 - Artist string library resources and selection.
