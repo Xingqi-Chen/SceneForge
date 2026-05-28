@@ -4,6 +4,25 @@ This log records dated implementation and documentation work. Keep entries conci
 
 ## 2026-05-28
 
+### T1 Agent Backend Contract Audit
+
+Summary:
+
+- Audited existing LiteLLM, ComfyUI text-to-image, ComfyUI history/events, and generated image storage backend contracts for GitHub Issue #1.
+- Documented the standalone Agent single-image draft contract, explicit confirmation gate, default ComfyUI workflow reuse, seed behavior, image storage behavior, and error taxonomy in `docs/tech-spec.md`.
+- Concluded that no production code is required for T1: T2 should add Agent-specific draft schema validation around the existing LiteLLM client, and T3 should thin-wrap existing ComfyUI feature modules for confirmed execution.
+
+Files changed:
+
+- `docs/tech-spec.md`
+- `docs/dev-log.md`
+
+Validation:
+
+- Automated tests were not run because this pass only updates technical documentation.
+- Inspected the scoped documentation diff.
+- `git diff --check` passed with line-ending warnings only.
+
 ### Documentation and Agent Workflow Bootstrap
 
 Summary:
