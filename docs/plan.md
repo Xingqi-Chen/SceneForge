@@ -24,7 +24,7 @@ Prepare GitHub Issue content for `T2`. `T1` has confirmed the backend contracts 
 | Track ID | GitHub Issue | Task | Phase | Status | Test | Review | Notes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | T0 | N/A | Align Codex agent workflow and docs with SceneForge | Documentation | Done | PASS | Not requested | Covers AGENTS.md, `.codex/agents/`, and docs bootstrap. |
-| T1 | #1 | Audit Agent backend contracts for LangGraph single-image workflow | Agent MVP | Done | PASS | APPROVE | Confirmed LiteLLM draft, ComfyUI single-image runner, default workflow, seed behavior, image storage, and error contracts before implementation. PR #2. |
+| T1 | #1 | Audit Agent backend contracts for LangGraph single-image workflow | Agent MVP | Done | PASS | APPROVE | Confirmed LiteLLM draft, ComfyUI single-image runner, default workflow, seed behavior, image storage, and error contracts before implementation. Merged PR #2. |
 | T2 | TBD | Add standalone Agent draft workflow | Agent MVP | Ready | TBD | TBD | Depends on T1; `/agent` independent entry; LiteLLM creates editable single-image draft; user confirmation required before any ComfyUI call. |
 | T3 | TBD | Run confirmed Agent single-image drafts through ComfyUI | Agent MVP | Ready | TBD | TBD | Depends on T1 and T2; confirmed drafts call existing default single-image ComfyUI workflow directly; results may use existing image storage but must not bind to the current project. |
 
