@@ -21,7 +21,7 @@ Open [http://localhost:3000](http://localhost:3000) with your browser to see the
 
 GitHub Actions runs the CI workflow on pull requests and pushes to `master`.
 It can also be run manually from the Actions tab.
-The workflow uses Node.js 20.x with the committed `package-lock.json`, then runs:
+The workflow uses Node.js 22.x with the committed `package-lock.json`, then runs:
 
 ```bash
 npm ci
