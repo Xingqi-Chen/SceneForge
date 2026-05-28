@@ -66,6 +66,7 @@ export type ComfyUiInpaintRequest = {
   promptWrapper?: ComfyUiPromptWrapper;
   outputPrefix?: string;
   sourceImage?: ComfyUiViewImageReference;
+  sourceImageDataUrl?: string;
   imageWidth?: number;
   imageHeight?: number;
   imageName?: string;
@@ -289,6 +290,7 @@ export type ResolvedComfyUiInpaintRequest = {
   promptWrapper: ResolvedComfyUiPromptWrapper;
   outputPrefix: string;
   sourceImage?: ComfyUiViewImageReference;
+  sourceImageDataUrl?: string;
   imageWidth?: number;
   imageHeight?: number;
   imageName: string;

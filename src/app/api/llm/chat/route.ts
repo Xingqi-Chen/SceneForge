@@ -30,10 +30,11 @@ function errorResponse(message: string, status: number, details?: unknown) {
   );
 }
 
-const NSFW_REVERSE_PURPOSES = new Set<LlmChatRequest["purpose"]>([
+const NSFW_MODEL_PURPOSES = new Set<LlmChatRequest["purpose"]>([
   "scene-prompt-reverse",
   "prompt-tag-reverse",
   "stick-figure-pose-generation",
+  "comic-sequence-storyboard",
 ]);
 
 function resolvePurposeDefaultModel(payload: LlmChatRequest) {
@@ -61,6 +62,10 @@ function resolvePurposeDefaultModel(payload: LlmChatRequest) {
     return process.env.LITELLM_DEFAULT_MODEL;
   }
 
+  if (payload.purpose === "comic-sequence-storyboard") {
+    return process.env.LITELLM_DEFAULT_MODEL;
+  }
+
   if (payload.purpose === "comfyui-generation-diagnosis") {
     return process.env.LITELLM_COMFYUI_DIAGNOSIS_MODEL || process.env.LITELLM_DEFAULT_MODEL;
   }
@@ -73,7 +78,7 @@ function resolvePurposeDefaultModel(payload: LlmChatRequest) {
 }
 
 export function resolveDefaultModel(payload: LlmChatRequest) {
-  if (payload.nsfw === true && NSFW_REVERSE_PURPOSES.has(payload.purpose)) {
+  if (payload.nsfw === true && NSFW_MODEL_PURPOSES.has(payload.purpose)) {
     return process.env.LITELLM_NSFW_MODEL || resolvePurposeDefaultModel(payload);
   }
 

@@ -372,6 +372,12 @@ describe("project serialization", () => {
               },
             ],
           },
+          previousShotReference: {
+            mode: "inpaint",
+            denoise: 0.58,
+            inpaintMode: "vae-inpaint",
+            growMaskBy: 12,
+          },
           createdAt: "2026-05-27T12:00:00.000Z",
           updatedAt: "2026-05-27T12:30:00.000Z",
         },
@@ -382,6 +388,68 @@ describe("project serialization", () => {
     const imported = importProjectFromJson(serializeProject(project));
 
     expect(imported.settings.savedComicSequence).toEqual(savedComicSequence);
+  });
+
+  it("sanitizes Comic Sequence previous-shot reference settings", () => {
+    const project = createDefaultProject();
+    const raw = JSON.parse(serializeProject(project));
+    raw.settings.savedComicSequence = {
+      version: 1,
+      selectedShotId: "shot-valid",
+      shots: [
+        {
+          id: "shot-valid",
+          title: "Valid previous reference",
+          scene: project.scene,
+          positivePrompt: "valid prompt",
+          negativePrompt: "",
+          shotPrompt: "",
+          parameters: createSavedComfyUiImage().parameters,
+          controlNets: [],
+          reference: {},
+          previousShotReference: {
+            mode: "img2img",
+            denoise: 0.02,
+            inpaintMode: "vae-inpaint",
+            growMaskBy: -20,
+            sourceImage: { filename: "must-not-persist.png" },
+            maskDataUrl: "data:image/png;base64,AAAA",
+          },
+          createdAt: "2026-05-27T12:00:00.000Z",
+          updatedAt: "2026-05-27T12:00:00.000Z",
+        },
+        {
+          id: "shot-invalid",
+          title: "Invalid previous reference",
+          scene: project.scene,
+          positivePrompt: "invalid prompt",
+          negativePrompt: "",
+          shotPrompt: "",
+          parameters: createSavedComfyUiImage().parameters,
+          controlNets: [],
+          reference: {},
+          previousShotReference: {
+            mode: "off",
+            denoise: 0.4,
+            inpaintMode: "vae-inpaint",
+            growMaskBy: 8,
+          },
+          createdAt: "2026-05-27T12:00:00.000Z",
+          updatedAt: "2026-05-27T12:00:00.000Z",
+        },
+      ],
+    };
+
+    const imported = importProjectFromJson(JSON.stringify(raw));
+    const shots = imported.settings.savedComicSequence?.shots ?? [];
+
+    expect(shots[0]?.previousShotReference).toEqual({
+      mode: "img2img",
+      denoise: 0.1,
+      inpaintMode: "vae-inpaint",
+      growMaskBy: 0,
+    });
+    expect(shots[1]?.previousShotReference).toBeUndefined();
   });
 
   it("migrates legacy Comic Sequence reference mode into independent channels", () => {

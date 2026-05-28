@@ -60,7 +60,18 @@ function sanitizeReturnedRequest(request: ComfyUiInpaintRequest) {
   return {
     ...request,
     maskDataUrl: "",
+    sourceImageDataUrl: "",
   };
+}
+
+function parseImageDataUrl(value: string) {
+  const match = /^data:image\/(?:png|jpe?g|webp);base64,([A-Za-z0-9+/=]+)$/.exec(value.trim());
+
+  if (!match) {
+    throw new InpaintInputError("sourceImageDataUrl must be a PNG, JPEG, or WEBP data URL.");
+  }
+
+  return Buffer.from(match[1], "base64");
 }
 
 function parsePngDataUrl(value: string) {
@@ -152,7 +163,7 @@ async function uploadInpaintImages(
   client: ReturnType<typeof createComfyUiClient>,
   request: ComfyUiInpaintRequest,
 ) {
-  if (!request.sourceImage) {
+  if (!request.sourceImage && !request.sourceImageDataUrl) {
     throw new InpaintInputError("sourceImage is required.");
   }
 
@@ -160,7 +171,9 @@ async function uploadInpaintImages(
     throw new InpaintInputError("maskDataUrl is required.");
   }
 
-  const sourceBytes = await readSourceImageBytes(client, request.sourceImage);
+  const sourceBytes = request.sourceImageDataUrl
+    ? parseImageDataUrl(request.sourceImageDataUrl)
+    : await readSourceImageBytes(client, request.sourceImage!);
   const maskBytes = parsePngDataUrl(request.maskDataUrl);
   const { imageHeight, imageWidth, maskPng, sourcePng } = await normalizeInpaintImages(sourceBytes, maskBytes);
   const suffix = `${Date.now()}-${Math.random().toString(16).slice(2)}`;

@@ -222,8 +222,8 @@ export function EditorShell() {
             }`}
             title={
               supportsNsfw
-                ? "NSFW support is enabled for reverse AI operations"
-                : "Enable NSFW support for reverse AI operations"
+                ? "NSFW support is enabled for supported AI operations"
+                : "Enable NSFW support for supported AI operations"
             }
           >
             <ShieldAlert className="size-4" />

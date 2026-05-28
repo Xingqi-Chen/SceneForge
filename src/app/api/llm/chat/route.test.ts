@@ -35,7 +35,7 @@ describe("LLM chat route model selection", () => {
     }
   });
 
-  it("uses the NSFW model for reverse AI requests when enabled", () => {
+  it("uses the NSFW model for reverse and storyboard AI requests when enabled", () => {
     expect(
       resolveDefaultModel({
         purpose: "scene-prompt-reverse",
@@ -59,6 +59,14 @@ describe("LLM chat route model selection", () => {
         messages: [{ role: "user", content: "Generate a pose" }],
       }),
     ).toBe("nsfw-model");
+
+    expect(
+      resolveDefaultModel({
+        purpose: "comic-sequence-storyboard",
+        nsfw: true,
+        messages: [{ role: "user", content: "Split this action paragraph into shots" }],
+      }),
+    ).toBe("nsfw-model");
   });
 
   it("falls back to the purpose-specific model when the NSFW model is not configured", () => {
@@ -71,6 +79,14 @@ describe("LLM chat route model selection", () => {
         messages: [{ role: "user", content: "Generate a pose" }],
       }),
     ).toBe("pose-model");
+
+    expect(
+      resolveDefaultModel({
+        purpose: "comic-sequence-storyboard",
+        nsfw: true,
+        messages: [{ role: "user", content: "Split this action paragraph into shots" }],
+      }),
+    ).toBe("default-model");
   });
 
   it("does not switch non-reverse AI requests to the NSFW model", () => {

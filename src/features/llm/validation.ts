@@ -71,6 +71,7 @@ function isOptionalPurpose(value: unknown): value is LlmChatRequest["purpose"] {
     value === "scene-prompt-reverse" ||
     value === "prompt-tag-reverse" ||
     value === "stick-figure-pose-generation" ||
+    value === "comic-sequence-storyboard" ||
     value === "civitai-resource-enrichment" ||
     value === "civitai-combination-recommendation" ||
     value === "stable-diffusion-prompt-generation" ||

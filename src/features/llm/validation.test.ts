@@ -12,6 +12,15 @@ describe("isLlmChatRequest", () => {
     ).toBe(true);
   });
 
+  it("accepts comic sequence storyboard purpose", () => {
+    expect(
+      isLlmChatRequest({
+        purpose: "comic-sequence-storyboard",
+        messages: [{ role: "user", content: "Split this action paragraph into shots" }],
+      }),
+    ).toBe(true);
+  });
+
   it("accepts reverse prompt purposes with nsfw flag", () => {
     expect(
       isLlmChatRequest({

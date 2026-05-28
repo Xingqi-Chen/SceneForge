@@ -31,6 +31,13 @@ import {
   defaultScene,
 } from "@/features/editor/store/defaults";
 import {
+  DEFAULT_COMFYUI_INPAINT_DENOISE,
+  DEFAULT_COMFYUI_INPAINT_GROW_MASK_BY,
+  DEFAULT_COMFYUI_INPAINT_MODE,
+  normalizeComfyUiInpaintMode,
+  type ComfyUiInpaintMode,
+} from "@/features/comfyui/inpaint";
+import {
   COMFYUI_FACE_DETAILER_DEFAULTS,
   COMFYUI_FACE_DETAILER_SAM_DETECTION_HINT_OPTIONS,
   COMFYUI_FACE_DETAILER_SAM_MASK_HINT_USE_NEGATIVE_OPTIONS,
@@ -141,6 +148,7 @@ const PROMPT_EXPORT_KIND = "sceneforge-prompt";
 const COMFYUI_GENERATED_IMAGE_HISTORY_LIMIT = 200;
 const COMFYUI_MANAGED_GENERATED_IMAGE_ROUTE_PREFIX = "/api/comfyui/generated-images/";
 const COMFYUI_MANAGED_GENERATED_IMAGE_FILENAME_PATTERN = /^[a-f0-9]{32}\.(?:gif|jpg|jpeg|png|webp)$/i;
+const COMIC_SEQUENCE_PREVIOUS_SHOT_MIN_DENOISE = 0.1;
 
 /** 画布（场景）专用 JSON 导出，`importCanvasBundleFromJson` 与之配对。 */
 export const SCENEFORGE_CANVAS_EXPORT_KIND = "sceneforge-canvas" as const;
@@ -1085,6 +1093,26 @@ function sanitizeSavedComicSequenceReference(raw: unknown): SavedComicSequenceRe
   };
 }
 
+function sanitizeSavedComicSequencePreviousShotReference(raw: unknown) {
+  if (!isRecord(raw) || (raw.mode !== "img2img" && raw.mode !== "inpaint")) {
+    return undefined;
+  }
+
+  const inpaintMode = normalizeComfyUiInpaintMode(raw.inpaintMode) ?? DEFAULT_COMFYUI_INPAINT_MODE;
+
+  return {
+    mode: raw.mode,
+    denoise: sanitizeNumberInRangeLoose(raw.denoise, DEFAULT_COMFYUI_INPAINT_DENOISE, COMIC_SEQUENCE_PREVIOUS_SHOT_MIN_DENOISE, 1),
+    inpaintMode,
+    growMaskBy: sanitizeIntegerInRangeLoose(raw.growMaskBy, DEFAULT_COMFYUI_INPAINT_GROW_MASK_BY, 0, 512),
+  } satisfies {
+    mode: "img2img" | "inpaint";
+    denoise: number;
+    inpaintMode: ComfyUiInpaintMode;
+    growMaskBy: number;
+  };
+}
+
 function sanitizeSavedComicSequence(raw: unknown): SceneForgeProject["settings"]["savedComicSequence"] | undefined {
   if (!isRecord(raw)) {
     return undefined;
@@ -1102,6 +1130,8 @@ function sanitizeSavedComicSequence(raw: unknown): SceneForgeProject["settings"]
           return [];
         }
 
+        const previousShotReference = sanitizeSavedComicSequencePreviousShotReference(shot.previousShotReference);
+
         return [
           {
             id: shot.id.trim(),
@@ -1117,6 +1147,7 @@ function sanitizeSavedComicSequence(raw: unknown): SceneForgeProject["settings"]
                   .filter((controlNet): controlNet is NonNullable<ReturnType<typeof sanitizeSavedComicSequenceControlNet>> => controlNet !== null)
               : [],
             reference: sanitizeSavedComicSequenceReference(shot.reference),
+            ...(previousShotReference ? { previousShotReference } : {}),
             createdAt: readTimestamp(shot.createdAt) ?? "1970-01-01T00:00:00.000Z",
             updatedAt: readTimestamp(shot.updatedAt) ?? "1970-01-01T00:00:00.000Z",
           },

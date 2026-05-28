@@ -122,6 +122,13 @@ export type SavedComicSequenceReferenceParams = {
   images: SavedComicSequenceReferenceImage[];
 };
 
+export type SavedComicSequencePreviousShotReference = {
+  mode: "img2img" | "inpaint";
+  denoise: number;
+  inpaintMode: "latent-noise-mask" | "vae-inpaint";
+  growMaskBy: number;
+};
+
 export type SavedComicSequenceShot = {
   id: string;
   title: string;
@@ -132,6 +139,7 @@ export type SavedComicSequenceShot = {
   parameters: SavedComfyUiGenerationParams;
   controlNets: SavedComicSequenceControlNetParams[];
   reference: SavedComicSequenceReferenceParams;
+  previousShotReference?: SavedComicSequencePreviousShotReference;
   createdAt: string;
   updatedAt: string;
 };

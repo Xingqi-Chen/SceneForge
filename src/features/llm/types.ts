@@ -28,6 +28,7 @@ export type LlmChatRequest = {
     | "scene-prompt-reverse"
     | "prompt-tag-reverse"
     | "stick-figure-pose-generation"
+    | "comic-sequence-storyboard"
     | "civitai-resource-enrichment"
     | "civitai-combination-recommendation"
     | "stable-diffusion-prompt-generation"

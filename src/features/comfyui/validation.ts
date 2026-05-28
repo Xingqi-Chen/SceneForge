@@ -178,6 +178,7 @@ const RANDOM_SEED_RANGE = RANDOM_SEED_UPPER_BOUND + 1;
 const MAX_CONTROLNET_SVG_LENGTH = 2_000_000;
 const MAX_CONTROLNET_IMAGE_DATA_URL_LENGTH = 12_000_000;
 const MAX_INPAINT_MASK_DATA_URL_LENGTH = 24_000_000;
+const MAX_INPAINT_SOURCE_IMAGE_DATA_URL_LENGTH = 32_000_000;
 const MAX_CHARACTER_REFERENCE_COUNT = 8;
 const MAX_CHARACTER_REFERENCE_IMAGE_COUNT = 4;
 const CONTROLNET_TYPES = ["openpose", "depth", "normal"] as const satisfies readonly ComfyUiControlNetType[];
@@ -362,6 +363,10 @@ function isInpaintLocalRegionSource(value: unknown): value is ComfyUiInpaintLoca
 
 function isPngDataUrl(value: string) {
   return /^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(value.trim());
+}
+
+function isImageDataUrl(value: string) {
+  return /^data:image\/(?:png|jpe?g|webp);base64,[A-Za-z0-9+/=]+$/.test(value.trim());
 }
 
 function normalizeImageReference(value: unknown) {
@@ -1194,7 +1199,23 @@ export function validateComfyUiInpaintRequest(value: unknown): ComfyUiInpaintVal
     };
   }
 
-  if (sourceImage === undefined && !hasNonEmptyString(value.imageName)) {
+  if (value.sourceImageDataUrl !== undefined) {
+    if (typeof value.sourceImageDataUrl !== "string" || value.sourceImageDataUrl.length > MAX_INPAINT_SOURCE_IMAGE_DATA_URL_LENGTH) {
+      return {
+        ok: false,
+        message: "sourceImageDataUrl must be an image data URL within the size limit.",
+      };
+    }
+
+    if (!isImageDataUrl(value.sourceImageDataUrl)) {
+      return {
+        ok: false,
+        message: "sourceImageDataUrl must be a PNG, JPEG, or WEBP data URL.",
+      };
+    }
+  }
+
+  if (sourceImage === undefined && !hasNonEmptyString(value.imageName) && value.sourceImageDataUrl === undefined) {
     return {
       ok: false,
       message: "sourceImage is required.",
@@ -1385,6 +1406,7 @@ export function validateComfyUiInpaintRequest(value: unknown): ComfyUiInpaintVal
       promptWrapper,
       outputPrefix: value.outputPrefix?.trim(),
       sourceImage,
+      sourceImageDataUrl: typeof value.sourceImageDataUrl === "string" ? value.sourceImageDataUrl.trim() : undefined,
       imageWidth: getOptionalNumber(value.imageWidth),
       imageHeight: getOptionalNumber(value.imageHeight),
       imageName: value.imageName?.trim(),
@@ -1716,6 +1738,7 @@ export function resolveComfyUiInpaintRequest(request: ComfyUiInpaintRequest): Re
     },
     outputPrefix: getString(request.outputPrefix, DEFAULT_INPAINT_REQUEST.outputPrefix),
     ...(request.sourceImage ? { sourceImage: request.sourceImage } : {}),
+    ...(request.sourceImageDataUrl ? { sourceImageDataUrl: request.sourceImageDataUrl } : {}),
     ...(request.imageWidth ? { imageWidth: request.imageWidth } : {}),
     ...(request.imageHeight ? { imageHeight: request.imageHeight } : {}),
     imageName: getString(request.imageName, DEFAULT_INPAINT_REQUEST.imageName),

@@ -9,6 +9,7 @@ import {
   Eraser,
   ExternalLink,
   Image as ImageIcon,
+  Link2,
   Loader2,
   Maximize2,
   Minus,
@@ -19,6 +20,7 @@ import {
   Settings,
   Sparkles,
   Square,
+  SquareDashedMousePointer,
   Star,
   Trash2,
   Undo2,
@@ -66,6 +68,13 @@ import {
   type ComfyUiTextToImageRequest,
 } from "@/features/comfyui";
 import {
+  buildComicSequenceStoryboardMessages,
+  COMIC_SEQUENCE_STORYBOARD_MAX_SHOTS,
+  COMIC_SEQUENCE_STORYBOARD_MIN_SHOTS,
+  normalizeComicSequenceStoryboardTargetCount,
+  parseComicSequenceStoryboardResponse,
+} from "@/features/editor/ai-prompt/comic-sequence-storyboard";
+import {
   applyComfyUiGenerationDiagnosisAdjustments,
   buildComfyUiGenerationAdjustmentMessages,
   buildComfyUiGenerationVisualDiagnosisMessages,
@@ -106,6 +115,19 @@ import {
   type InpaintLocalRegionRect,
 } from "@/features/editor/inpaint-local-region";
 import {
+  createComicSequenceSavedPreviousShotResults,
+  createFullImageMaskDataUrl,
+  findComicSequencePreviousShotSource,
+  getComfyUiGeneratedImageReferenceKey,
+  PENDING_COMIC_SEQUENCE_PREVIOUS_SHOT_SOURCE_KEY,
+  resolveComicSequencePreviousShotAction,
+  type ComicSequencePreviousShotSource,
+} from "@/features/editor/comic-sequence-previous-shot";
+import {
+  applyComicSequenceShotSettingsPatchToSequence,
+  type ComicSequenceShotSettingsPatch,
+} from "@/features/editor/comic-sequence-shot-settings";
+import {
   buildComfyUiControlNetOpenPosePreview,
   type ComfyUiControlNetOpenPosePreview,
 } from "@/features/editor/ai-prompt/comfyui-controlnet-preview";
@@ -133,6 +155,7 @@ import { getLlmProxyErrorMessage, isLlmChatResponse } from "@/features/llm";
 import { generatePrompt } from "@/features/prompt-engine";
 import type {
   SavedComicSequence,
+  SavedComicSequencePreviousShotReference,
   SavedComicSequenceReferenceChannelParams,
   SavedComicSequenceControlNetParams,
   SavedComicSequenceReferenceImage,
@@ -195,6 +218,8 @@ type GenerationResult = {
   sequenceId?: string;
   seed: number;
   shotId?: string;
+  shotNumber?: number;
+  shotTitle?: string;
   source: SavedComfyUiGeneratedImageSource;
 };
 
@@ -419,7 +444,7 @@ function getProgressPercent(progress: GenerationProgress | null) {
 }
 
 function getGeneratedImageReferenceKey(image: Pick<ComfyUiGeneratedImage, "filename" | "nodeId" | "subfolder" | "type">) {
-  return [image.nodeId, image.filename, image.subfolder ?? "", image.type ?? ""].join("\u0000");
+  return getComfyUiGeneratedImageReferenceKey(image);
 }
 
 function getGeneratedImageItemKey(item: GeneratedImageItem) {
@@ -1056,6 +1081,7 @@ type InpaintSubmitInput = {
   negativePrompt: string;
   positivePrompt: string;
   seed: number;
+  sourceImageDataUrl?: string;
   upscaleBeforeInpaint: {
     enabled: boolean;
     localRegion?: ComfyUiInpaintLocalRegionConfig;
@@ -1093,6 +1119,7 @@ function toInpaintRequestPayload(draft: GenerationDraft, input: InpaintSubmitInp
       ...(input.image.subfolder !== undefined ? { subfolder: input.image.subfolder } : {}),
       ...(input.image.type !== undefined ? { type: input.image.type } : {}),
     },
+    ...(input.sourceImageDataUrl ? { sourceImageDataUrl: input.sourceImageDataUrl } : {}),
     maskDataUrl: input.maskDataUrl,
     inpaintMode: input.mode,
     growMaskBy: input.growMaskBy,
@@ -2886,6 +2913,7 @@ function InpaintMaskDialog({
         negativePrompt,
         positivePrompt,
         seed,
+        sourceImageDataUrl: await loadOriginalImageUrlToDataUrl(imageItem.image.url),
         upscaleBeforeInpaint: {
           enabled: highResInpaintEnabled,
           ...(localRegion ? { localRegion } : {}),
@@ -3513,13 +3541,520 @@ function getControlNetOpenPoseUnavailableMessage(reason: ComfyUiControlNetOpenPo
   return "Add at least one visible 3D character skeleton to enable ControlNet previews.";
 }
 
+function SequencePreviousShotMaskDialog({
+  fallbackSize,
+  initialMaskDataUrl,
+  onClose,
+  onSave,
+  open,
+  source,
+}: {
+  fallbackSize: { height: number; width: number } | null;
+  initialMaskDataUrl?: string;
+  onClose: () => void;
+  onSave: (mask: SequencePreviousShotMaskSession) => void;
+  open: boolean;
+  source: ComicSequencePreviousShotSource | null;
+}) {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const drawingRef = useRef(false);
+  const lastPointRef = useRef<{ x: number; y: number } | null>(null);
+  const rectangleStartRef = useRef<{ x: number; y: number } | null>(null);
+  const rectangleCurrentRef = useRef<{ x: number; y: number } | null>(null);
+  const [brushSize, setBrushSize] = useState(48);
+  const [error, setError] = useState("");
+  const [maskReady, setMaskReady] = useState(false);
+  const [selectionRect, setSelectionRect] = useState<SequencePreviousShotMaskRect | null>(null);
+  const [sourceSize, setSourceSize] = useState<{ height: number; width: number } | null>(null);
+  const [tool, setTool] = useState<SequencePreviousShotMaskTool>("brush");
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+
+    if (!source) {
+      queueMicrotask(() => {
+        setError("");
+        setSelectionRect(null);
+        setSourceSize(fallbackSize);
+      });
+      return;
+    }
+
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (!cancelled) {
+        setError("");
+        setSelectionRect(null);
+      }
+    });
+
+    void loadImageSize(source.image.url)
+      .then((size) => {
+        if (!cancelled) {
+          setSourceSize(size);
+        }
+      })
+      .catch((loadError) => {
+        if (!cancelled) {
+          setError(loadError instanceof Error ? loadError.message : "Failed to load previous shot source.");
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [fallbackSize, open, source]);
+
+  useEffect(() => {
+    if (!open || !sourceSize) {
+      return;
+    }
+
+    let cancelled = false;
+    const canvas = canvasRef.current;
+    const context = canvas?.getContext("2d");
+    if (!canvas || !context) {
+      queueMicrotask(() => {
+        if (!cancelled) {
+          setError("Mask canvas is not available.");
+        }
+      });
+      return;
+    }
+
+    canvas.width = sourceSize.width;
+    canvas.height = sourceSize.height;
+    context.clearRect(0, 0, canvas.width, canvas.height);
+    queueMicrotask(() => {
+      if (!cancelled) {
+        setMaskReady(false);
+      }
+    });
+
+    if (!initialMaskDataUrl) {
+      return;
+    }
+
+    void loadImage(initialMaskDataUrl)
+      .then((maskImage) => {
+        if (cancelled) {
+          return;
+        }
+
+        const tempCanvas = document.createElement("canvas");
+        tempCanvas.width = canvas.width;
+        tempCanvas.height = canvas.height;
+        const tempContext = tempCanvas.getContext("2d");
+        if (!tempContext) {
+          throw new Error("Unable to restore saved mask.");
+        }
+
+        tempContext.drawImage(maskImage, 0, 0, tempCanvas.width, tempCanvas.height);
+        const imageData = tempContext.getImageData(0, 0, tempCanvas.width, tempCanvas.height);
+        let hasMask = false;
+        for (let index = 0; index < imageData.data.length; index += 4) {
+          const alpha = Math.max(imageData.data[index], imageData.data[index + 1], imageData.data[index + 2]);
+          imageData.data[index] = 255;
+          imageData.data[index + 1] = 255;
+          imageData.data[index + 2] = 255;
+          imageData.data[index + 3] = alpha;
+          hasMask = hasMask || alpha > 0;
+        }
+
+        context.putImageData(imageData, 0, 0);
+        setMaskReady(hasMask);
+      })
+      .catch((restoreError) => {
+        if (!cancelled) {
+          setError(restoreError instanceof Error ? restoreError.message : "Unable to restore saved mask.");
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [initialMaskDataUrl, open, sourceSize]);
+
+  if (!open || typeof document === "undefined") {
+    return null;
+  }
+
+  const sourceLabel = source
+    ? `${source.previousShot.title} - ${source.image.filename}`
+    : "Pending previous shot source";
+  const sourceHelp = source
+    ? "White mask areas will be regenerated from the selected previous-shot source."
+    : "Draw a pending mask before the previous shot exists. It will be resized and applied once generation reaches this shot.";
+
+  function getCanvasPoint(event: PointerEvent<HTMLCanvasElement>) {
+    const canvas = canvasRef.current;
+    if (!canvas) {
+      return null;
+    }
+
+    const rect = canvas.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) {
+      return null;
+    }
+
+    const x = ((event.clientX - rect.left) / rect.width) * canvas.width;
+    const y = ((event.clientY - rect.top) / rect.height) * canvas.height;
+
+    return {
+      x: Math.min(canvas.width, Math.max(0, x)),
+      y: Math.min(canvas.height, Math.max(0, y)),
+    };
+  }
+
+  function createSelectionRect(
+    start: { x: number; y: number },
+    end: { x: number; y: number },
+  ): SequencePreviousShotMaskRect {
+    const left = Math.min(start.x, end.x);
+    const top = Math.min(start.y, end.y);
+    return {
+      height: Math.abs(end.y - start.y),
+      left,
+      top,
+      width: Math.abs(end.x - start.x),
+    };
+  }
+
+  function getSelectionRectStyle(rect: SequencePreviousShotMaskRect) {
+    if (!sourceSize || sourceSize.width <= 0 || sourceSize.height <= 0) {
+      return undefined;
+    }
+
+    return {
+      height: `${(rect.height / sourceSize.height) * 100}%`,
+      left: `${(rect.left / sourceSize.width) * 100}%`,
+      top: `${(rect.top / sourceSize.height) * 100}%`,
+      width: `${(rect.width / sourceSize.width) * 100}%`,
+    };
+  }
+
+  function fillSelectionRect(rect: SequencePreviousShotMaskRect) {
+    const canvas = canvasRef.current;
+    const context = canvas?.getContext("2d");
+    if (!canvas || !context || rect.width < 1 || rect.height < 1) {
+      return;
+    }
+
+    context.save();
+    context.globalCompositeOperation = "source-over";
+    context.fillStyle = "#fff";
+    context.fillRect(rect.left, rect.top, rect.width, rect.height);
+    context.restore();
+    setMaskReady(true);
+  }
+
+  function drawTo(point: { x: number; y: number }) {
+    const canvas = canvasRef.current;
+    const context = canvas?.getContext("2d");
+    const lastPoint = lastPointRef.current ?? point;
+    if (!canvas || !context || tool === "rectangle") {
+      return;
+    }
+
+    context.save();
+    context.globalCompositeOperation = tool === "eraser" ? "destination-out" : "source-over";
+    context.strokeStyle = "#fff";
+    context.lineCap = "round";
+    context.lineJoin = "round";
+    context.lineWidth = brushSize;
+    context.beginPath();
+    context.moveTo(lastPoint.x, lastPoint.y);
+    context.lineTo(point.x, point.y);
+    context.stroke();
+    context.restore();
+    lastPointRef.current = point;
+    setMaskReady(true);
+  }
+
+  function beginStroke(event: PointerEvent<HTMLCanvasElement>) {
+    const point = getCanvasPoint(event);
+    if (!point) {
+      return;
+    }
+
+    event.currentTarget.setPointerCapture(event.pointerId);
+    drawingRef.current = true;
+
+    if (tool === "rectangle") {
+      rectangleStartRef.current = point;
+      rectangleCurrentRef.current = point;
+      setSelectionRect(createSelectionRect(point, point));
+      return;
+    }
+
+    lastPointRef.current = point;
+    drawTo(point);
+  }
+
+  function moveStroke(event: PointerEvent<HTMLCanvasElement>) {
+    if (!drawingRef.current) {
+      return;
+    }
+
+    const point = getCanvasPoint(event);
+    if (!point) {
+      return;
+    }
+
+    if (tool === "rectangle" && rectangleStartRef.current) {
+      rectangleCurrentRef.current = point;
+      setSelectionRect(createSelectionRect(rectangleStartRef.current, point));
+      return;
+    }
+
+    drawTo(point);
+  }
+
+  function endStroke(event?: PointerEvent<HTMLCanvasElement>) {
+    if (tool === "rectangle" && drawingRef.current && rectangleStartRef.current) {
+      const point = event ? getCanvasPoint(event) : rectangleCurrentRef.current;
+      if (point) {
+        fillSelectionRect(createSelectionRect(rectangleStartRef.current, point));
+      }
+    }
+
+    drawingRef.current = false;
+    lastPointRef.current = null;
+    rectangleStartRef.current = null;
+    rectangleCurrentRef.current = null;
+    setSelectionRect(null);
+  }
+
+  function clearMask() {
+    const canvas = canvasRef.current;
+    const context = canvas?.getContext("2d");
+    if (!canvas || !context) {
+      return;
+    }
+
+    context.clearRect(0, 0, canvas.width, canvas.height);
+    setMaskReady(false);
+    setSelectionRect(null);
+    setError("");
+  }
+
+  function exportMaskDataUrl() {
+    const sourceCanvas = canvasRef.current;
+    if (!sourceCanvas || !sourceSize) {
+      throw new Error("Mask canvas is not ready.");
+    }
+
+    const maskCanvas = document.createElement("canvas");
+    maskCanvas.width = sourceCanvas.width;
+    maskCanvas.height = sourceCanvas.height;
+    const context = maskCanvas.getContext("2d");
+    if (!context) {
+      throw new Error("Unable to export mask.");
+    }
+
+    context.fillStyle = "#000";
+    context.fillRect(0, 0, maskCanvas.width, maskCanvas.height);
+    context.drawImage(sourceCanvas, 0, 0);
+
+    return maskCanvas.toDataURL("image/png");
+  }
+
+  function saveMask() {
+    if (!sourceSize) {
+      setError("Previous shot source is not ready.");
+      return;
+    }
+
+    if (!maskReady) {
+      setError("Paint at least one mask area before saving.");
+      return;
+    }
+
+    try {
+      onSave({
+        maskDataUrl: exportMaskDataUrl(),
+        ...(source ? { sourceImage: source.image } : {}),
+        sourceKey: source?.sourceKey ?? PENDING_COMIC_SEQUENCE_PREVIOUS_SHOT_SOURCE_KEY,
+        sourceSize,
+      });
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "Unable to save mask.");
+    }
+  }
+
+  return createPortal(
+    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/60 p-4">
+      <div className="flex max-h-[92vh] w-full max-w-4xl flex-col overflow-hidden rounded-xl bg-white shadow-2xl">
+        <div className="flex items-center justify-between gap-3 border-b border-slate-100 px-4 py-3">
+          <div className="min-w-0">
+            <h3 className="text-sm font-bold text-slate-900">Configure previous-shot mask</h3>
+            <p className="mt-0.5 truncate text-[11px] text-slate-500">{sourceLabel}</p>
+          </div>
+          <button
+            aria-label="Close mask editor"
+            className="grid size-8 place-items-center rounded-md text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
+            onClick={onClose}
+            type="button"
+          >
+            <X className="size-4" />
+          </button>
+        </div>
+        <div className="min-h-0 flex-1 overflow-auto p-4">
+          <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_220px]">
+            <div className="overflow-hidden rounded-md border border-slate-200 bg-slate-950">
+              <div
+                className="relative"
+                style={sourceSize && !source ? { aspectRatio: `${sourceSize.width} / ${sourceSize.height}` } : undefined}
+              >
+                {source ? (
+                  <img alt="Previous shot source" className="block h-auto w-full select-none" draggable={false} src={source.image.url} />
+                ) : (
+                  <div className="grid h-full min-h-64 place-items-center bg-[linear-gradient(45deg,#0f172a_25%,transparent_25%),linear-gradient(-45deg,#0f172a_25%,transparent_25%),linear-gradient(45deg,transparent_75%,#0f172a_75%),linear-gradient(-45deg,transparent_75%,#0f172a_75%)] bg-[length:24px_24px] bg-[position:0_0,0_12px,12px_-12px,-12px_0] text-center text-xs text-slate-400">
+                    Pending previous shot image
+                  </div>
+                )}
+                {sourceSize ? (
+                  <>
+                    <canvas
+                      className="absolute inset-0 h-full w-full cursor-crosshair touch-none opacity-70"
+                      onPointerCancel={endStroke}
+                      onPointerDown={beginStroke}
+                      onPointerLeave={endStroke}
+                      onPointerMove={moveStroke}
+                      onPointerUp={endStroke}
+                      ref={canvasRef}
+                    />
+                    {selectionRect ? (
+                      <div
+                        className="pointer-events-none absolute border border-white bg-white/25 shadow-[0_0_0_1px_rgba(14,165,233,0.9)]"
+                        style={getSelectionRectStyle(selectionRect)}
+                      />
+                    ) : null}
+                  </>
+                ) : null}
+              </div>
+            </div>
+            <aside className="grid content-start gap-3">
+              <div className="grid grid-cols-3 gap-2">
+                {([
+                  { icon: Paintbrush, label: "Brush", value: "brush" },
+                  { icon: Eraser, label: "Erase", value: "eraser" },
+                  { icon: SquareDashedMousePointer, label: "Rect", value: "rectangle" },
+                ] as const).map((toolOption) => {
+                  const ToolIcon = toolOption.icon;
+                  return (
+                  <button
+                    aria-pressed={tool === toolOption.value}
+                    className={`h-9 rounded-md border px-2 text-xs font-semibold capitalize transition ${
+                      tool === toolOption.value
+                        ? "border-sky-300 bg-sky-50 text-sky-700"
+                        : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+                    }`}
+                    key={toolOption.value}
+                    onClick={() => setTool(toolOption.value)}
+                    title={toolOption.label}
+                    type="button"
+                  >
+                    <ToolIcon className="mx-auto size-3.5" />
+                  </button>
+                  );
+                })}
+              </div>
+              <NumberInput
+                label="brush"
+                max={256}
+                min={1}
+                onChange={(value) => setBrushSize(Math.max(1, Math.round(value)))}
+                value={brushSize}
+              />
+              <Button
+                className="h-9 rounded-md border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+                onClick={clearMask}
+                type="button"
+                variant="secondary"
+              >
+                <Eraser className="size-3.5" />
+                Clear
+              </Button>
+              {sourceSize ? (
+                <p className="text-[11px] leading-relaxed text-slate-500">
+                  {sourceHelp} Size: {sourceSize.width}x{sourceSize.height}.
+                </p>
+              ) : (
+                <p className="text-[11px] leading-relaxed text-amber-700">
+                  {source ? "Loading source image..." : "Previous shot size is not available."}
+                </p>
+              )}
+              {error ? (
+                <p className="rounded-md border border-rose-100 bg-rose-50 px-3 py-2 text-[11px] leading-relaxed text-rose-700">
+                  {error}
+                </p>
+              ) : null}
+            </aside>
+          </div>
+        </div>
+        <div className="flex items-center justify-end gap-3 border-t border-slate-100 bg-slate-50 px-4 py-3">
+          <Button
+            className="h-10 rounded-md border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+            onClick={onClose}
+            type="button"
+            variant="secondary"
+          >
+            Cancel
+          </Button>
+          <Button
+            className="h-10 rounded-md bg-sky-600 text-white hover:bg-sky-700 disabled:opacity-60"
+            disabled={!sourceSize}
+            onClick={saveMask}
+            type="button"
+          >
+            <Save className="size-4" />
+            Save mask
+          </Button>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
 function loadImage(src: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const image = new Image();
     image.onload = () => resolve(image);
-    image.onerror = () => reject(new Error("Failed to render ControlNet SVG."));
+    image.onerror = () => reject(new Error("Failed to load image."));
     image.src = src;
   });
+}
+
+async function loadImageSize(src: string) {
+  const image = await loadImage(src);
+  const width = image.naturalWidth || image.width;
+  const height = image.naturalHeight || image.height;
+  if (!width || !height) {
+    throw new Error("Unable to read image dimensions.");
+  }
+
+  return { height, width };
+}
+
+async function resizeMaskDataUrl(maskDataUrl: string, size: { height: number; width: number }) {
+  const maskImage = await loadImage(maskDataUrl);
+  const canvas = document.createElement("canvas");
+  canvas.width = size.width;
+  canvas.height = size.height;
+  const context = canvas.getContext("2d");
+  if (!context) {
+    throw new Error("Unable to resize previous-shot mask.");
+  }
+
+  context.fillStyle = "#000";
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  context.drawImage(maskImage, 0, 0, canvas.width, canvas.height);
+
+  return canvas.toDataURL("image/png");
 }
 
 function canvasToPngBlob(canvas: HTMLCanvasElement): Promise<Blob> {
@@ -6005,7 +6540,42 @@ type SequenceUploadedReference = {
   name: string;
 };
 
+type SequencePreviousShotReferenceMode = SavedComicSequencePreviousShotReference["mode"] | "off";
+
+type SequencePreviousShotMaskSession = {
+  maskDataUrl: string;
+  sourceImage?: ComfyUiGeneratedImage;
+  sourceKey: string;
+  sourceSize: {
+    height: number;
+    width: number;
+  };
+};
+
+type SequencePreviousShotMaskEditorTarget = {
+  fallbackSize: {
+    height: number;
+    width: number;
+  } | null;
+  shotId: string;
+  source: ComicSequencePreviousShotSource | null;
+};
+
+type SequencePreviousShotMaskTool = "brush" | "eraser" | "rectangle";
+type SequencePreviousShotMaskRect = {
+  height: number;
+  left: number;
+  top: number;
+  width: number;
+};
+
 const DEFAULT_SEQUENCE_REFERENCE_STRENGTH = 0.45;
+const COMIC_SEQUENCE_PREVIOUS_SHOT_MIN_DENOISE = 0.1;
+const COMIC_SEQUENCE_PREVIOUS_REFERENCE_OPTIONS = [
+  { label: "Off", value: "off" },
+  { label: "Img2Img", value: "img2img" },
+  { label: "Inpaint", value: "inpaint" },
+] as const;
 const SEQUENCE_REFERENCE_MODE_OPTIONS = [
   {
     description: "Best for portraits and close-ups. Requires ip-adapter-plus-face_sdxl_vit-h for Illustrious.",
@@ -6095,6 +6665,27 @@ function createComicSequenceReferenceChannel(
     startAt: 0,
     endAt: 1,
     images: [],
+  };
+}
+
+function createDefaultComicSequencePreviousShotReference(
+  mode: Exclude<SequencePreviousShotReferenceMode, "off">,
+): SavedComicSequencePreviousShotReference {
+  return {
+    mode,
+    denoise: DEFAULT_COMFYUI_INPAINT_DENOISE,
+    inpaintMode: DEFAULT_COMFYUI_INPAINT_MODE,
+    growMaskBy: DEFAULT_COMFYUI_INPAINT_GROW_MASK_BY,
+  };
+}
+
+function normalizeComicSequencePreviousShotReference(
+  reference: SavedComicSequencePreviousShotReference,
+): SavedComicSequencePreviousShotReference {
+  return {
+    ...reference,
+    denoise: Math.min(1, Math.max(COMIC_SEQUENCE_PREVIOUS_SHOT_MIN_DENOISE, reference.denoise)),
+    growMaskBy: Math.max(0, Math.min(512, Math.round(reference.growMaskBy))),
   };
 }
 
@@ -6946,6 +7537,7 @@ function ComicSequenceWorkspaceDialog({
   const [controlNetExpanded, setControlNetExpanded] = useState(false);
   const [controlNetNormalPreview, setControlNetNormalPreview] = useState<ComfyUiNormalControlImagePreview | null>(null);
   const [controlNetNormalPreviewLoading, setControlNetNormalPreviewLoading] = useState(false);
+  const [parameterSyncDownEnabled, setParameterSyncDownEnabled] = useState(false);
   const [submitStatus, setSubmitStatus] = useState<SubmitStatus>("idle");
   const [submitError, setSubmitError] = useState("");
   const [waitMessage, setWaitMessage] = useState("");
@@ -6955,11 +7547,73 @@ function ComicSequenceWorkspaceDialog({
   const [referenceUploadError, setReferenceUploadError] = useState("");
   const [results, setResults] = useState<GenerationResult[]>([]);
   const [savedCurrentImageKeys, setSavedCurrentImageKeys] = useState<Set<string>>(() => new Set());
+  const [previousShotMasks, setPreviousShotMasks] = useState<Record<string, SequencePreviousShotMaskSession>>({});
+  const [maskEditorTarget, setMaskEditorTarget] = useState<SequencePreviousShotMaskEditorTarget | null>(null);
+  const [storyboardInput, setStoryboardInput] = useState("");
+  const [storyboardTargetCount, setStoryboardTargetCount] = useState("");
+  const [storyboardStatus, setStoryboardStatus] = useState<SubmitStatus>("idle");
+  const [storyboardError, setStoryboardError] = useState("");
+  const [storyboardMessage, setStoryboardMessage] = useState("");
+  const savedPreviousShotResults = useMemo(
+    () => createComicSequenceSavedPreviousShotResults(project.settings.comfyUiGeneratedImages ?? []),
+    [project.settings.comfyUiGeneratedImages],
+  );
+  const previousShotSourceResults = useMemo(
+    () => [...results, ...savedPreviousShotResults],
+    [results, savedPreviousShotResults],
+  );
   const allResourceDownloadsReady =
     downloadItems.length > 0 && downloadItems.every((item) => !item.error && isComfyUiGenerationResourceReady(item.status));
+  const nsfwEnabled = project.settings.supportsNsfw === true;
   const selectedShot = findSavedComicSequenceShot(sequence, sequence?.selectedShotId);
+  const selectedShotIndex = sequence && selectedShot
+    ? sequence.shots.findIndex((shot) => shot.id === selectedShot.id)
+    : -1;
+  const selectedShotHasPreviousShot = selectedShotIndex > 0;
+  const selectedPreviousShotFallbackSize = sequence && selectedShotHasPreviousShot
+    ? (() => {
+        const previousShot = sequence.shots[selectedShotIndex - 1];
+        const previousDraft = previousShot ? createDraftFromShot(previousShot, selectedResources) : null;
+        return previousDraft
+          ? { height: previousDraft.height, width: previousDraft.width }
+          : null;
+      })()
+    : null;
+  const selectedPreviousShotSource = sequence && selectedShot
+    ? findComicSequencePreviousShotSource({
+        currentShotId: selectedShot.id,
+        results: previousShotSourceResults,
+        shots: sequence.shots,
+      })
+    : null;
+  const selectedPreviousShotMask = selectedShot
+    ? previousShotMasks[selectedShot.id]
+    : undefined;
+  const selectedPreviousShotMaskReady =
+    Boolean(
+      selectedPreviousShotMask?.maskDataUrl &&
+      (
+        selectedPreviousShotMask.sourceKey === PENDING_COMIC_SEQUENCE_PREVIOUS_SHOT_SOURCE_KEY ||
+        selectedPreviousShotMask.sourceKey === selectedPreviousShotSource?.sourceKey
+      ),
+    );
   const trimmedAiPrompt = aiGeneratedPrompt.trim();
   const referenceCandidates = project.settings.comfyUiGeneratedImages.slice(0, 24);
+  const savedImagesByShot = useMemo(() => {
+    const byShot = new Map<string, SavedComfyUiGeneratedImage[]>();
+
+    for (const image of project.settings.comfyUiGeneratedImages ?? []) {
+      if (image.source !== "sequence" || !image.shotId) {
+        continue;
+      }
+
+      const images = byShot.get(image.shotId) ?? [];
+      images.push(image);
+      byShot.set(image.shotId, images);
+    }
+
+    return byShot;
+  }, [project.settings.comfyUiGeneratedImages]);
   const selectedShotFaceReference = selectedShot
     ? getComicSequenceReferenceChannel(selectedShot.reference, "face")
     : createComicSequenceReferenceChannel("face");
@@ -6976,6 +7630,16 @@ function ComicSequenceWorkspaceDialog({
           height: draftHeight,
         })
       : null;
+  const maskEditorExistingMask = maskEditorTarget
+    ? previousShotMasks[maskEditorTarget.shotId]
+    : undefined;
+  const maskEditorInitialMaskDataUrl = maskEditorExistingMask &&
+    (
+      maskEditorExistingMask.sourceKey === PENDING_COMIC_SEQUENCE_PREVIOUS_SHOT_SOURCE_KEY ||
+      maskEditorExistingMask.sourceKey === maskEditorTarget?.source?.sourceKey
+    )
+    ? maskEditorExistingMask.maskDataUrl
+    : undefined;
 
   useEffect(() => {
     if (!open || !selectedShotScene || typeof draftWidth !== "number" || typeof draftHeight !== "number") {
@@ -7072,12 +7736,29 @@ function ComicSequenceWorkspaceDialog({
     }));
   }
 
+  function patchSelectedShotSettings(
+    patch: ComicSequenceShotSettingsPatch,
+    options: { defaults?: SavedComfyUiGenerationParams } = {},
+  ) {
+    if (!selectedShot) {
+      return;
+    }
+
+    patchSequence((currentSequence) =>
+      applyComicSequenceShotSettingsPatchToSequence(currentSequence, patch, {
+        defaults: options.defaults,
+        selectedShotId: selectedShot.id,
+        syncDown: parameterSyncDownEnabled,
+      }),
+    );
+  }
+
   function patchSelectedReference(patch: Partial<SavedComicSequenceShot["reference"]>) {
     if (!selectedShot) {
       return;
     }
 
-    patchSelectedShot({
+    patchSelectedShotSettings({
       reference: {
         ...selectedShot.reference,
         ...patch,
@@ -7102,6 +7783,48 @@ function ComicSequenceWorkspaceDialog({
     });
   }
 
+  function patchSelectedPreviousShotReference(
+    mode: SequencePreviousShotReferenceMode,
+    patch: Partial<Omit<SavedComicSequencePreviousShotReference, "mode">> = {},
+  ) {
+    if (!selectedShot) {
+      return;
+    }
+
+    if (mode === "off") {
+      patchSelectedShotSettings({ previousShotReference: undefined });
+      return;
+    }
+
+    const current =
+      selectedShot.previousShotReference?.mode === mode
+        ? selectedShot.previousShotReference
+        : createDefaultComicSequencePreviousShotReference(mode);
+    const inpaintMode = patch.inpaintMode ?? current.inpaintMode;
+    const next = normalizeComicSequencePreviousShotReference({
+      ...current,
+      ...patch,
+      inpaintMode,
+      mode,
+    });
+
+    patchSelectedShotSettings({ previousShotReference: next });
+  }
+
+  function savePreviousShotMask(shotId: string, mask: SequencePreviousShotMaskSession) {
+    setPreviousShotMasks((current) => ({
+      ...current,
+      [shotId]: mask,
+    }));
+    setMaskEditorTarget(null);
+    setHistorySaveStatus("success");
+    setHistorySaveMessage(
+      mask.sourceKey === PENDING_COMIC_SEQUENCE_PREVIOUS_SHOT_SOURCE_KEY
+        ? "Pending previous-shot inpaint mask is ready for this session."
+        : "Previous-shot inpaint mask is ready for this session.",
+    );
+  }
+
   function persistDraftForSelectedShot(nextDraft: GenerationDraft, options: { updateDefaults?: boolean } = {}) {
     if (!selectedShot) {
       return;
@@ -7109,28 +7832,14 @@ function ComicSequenceWorkspaceDialog({
 
     const nextParameters = toSavedParameters(nextDraft);
     const nextControlNets = getComicSequenceControlNetParams(nextDraft);
-    if (options.updateDefaults) {
-      patchSequence((currentSequence) => ({
-        ...currentSequence,
-        defaults: nextParameters,
-        shots: currentSequence.shots.map((shot) =>
-          shot.id === selectedShot.id
-            ? {
-                ...shot,
-                controlNets: nextControlNets,
-                parameters: nextParameters,
-                updatedAt: new Date().toISOString(),
-              }
-            : shot,
-        ),
-      }));
-      return;
-    }
 
-    patchSelectedShot({
-      controlNets: nextControlNets,
-      parameters: nextParameters,
-    });
+    patchSelectedShotSettings(
+      {
+        controlNets: nextControlNets,
+        parameters: nextParameters,
+      },
+      options.updateDefaults ? { defaults: nextParameters } : {},
+    );
   }
 
   function patchDraft(patch: Partial<GenerationDraft>) {
@@ -7213,6 +7922,14 @@ function ComicSequenceWorkspaceDialog({
       setHistorySaveMessage("");
       setResults([]);
       setSavedCurrentImageKeys(new Set());
+      setPreviousShotMasks({});
+      setMaskEditorTarget(null);
+      setParameterSyncDownEnabled(false);
+      setStoryboardInput("");
+      setStoryboardTargetCount("");
+      setStoryboardStatus("idle");
+      setStoryboardError("");
+      setStoryboardMessage("");
       setControlNetNormalPreview(null);
       setControlNetNormalPreviewLoading(false);
 
@@ -7277,9 +7994,14 @@ function ComicSequenceWorkspaceDialog({
     setControlNetExpanded(false);
     setControlNetNormalPreview(null);
     setControlNetNormalPreviewLoading(false);
+    setParameterSyncDownEnabled(false);
   }
 
-  function createShotFromScene(scene: Scene, sourceShot?: SavedComicSequenceShot | null): SavedComicSequenceShot | null {
+  function createShotFromScene(
+    scene: Scene,
+    sourceShot?: SavedComicSequenceShot | null,
+    options: { shotNumber?: number; shotPrompt?: string; title?: string } = {},
+  ): SavedComicSequenceShot | null {
     if (!sequence) {
       return null;
     }
@@ -7301,11 +8023,11 @@ function ComicSequenceWorkspaceDialog({
 
     return {
       id: createLocalId("shot"),
-      title: `Shot ${sequence.shots.length + 1}`,
+      title: options.title?.trim() || `Shot ${options.shotNumber ?? sequence.shots.length + 1}`,
       scene: cloneSceneSnapshot(scene),
       positivePrompt: resolveShotPositivePrompt(generated.prompt),
       negativePrompt: generated.negativePrompt || baseNegativePrompt,
-      shotPrompt: "",
+      shotPrompt: options.shotPrompt?.trim() ?? "",
       parameters: defaultParameters,
       controlNets: sourceDraft ? getComicSequenceControlNetParams(sourceDraft) : sourceShot?.controlNets ?? [],
       reference: {
@@ -7346,13 +8068,115 @@ function ComicSequenceWorkspaceDialog({
     setControlNetExpanded(false);
   }
 
+  async function generateAiStoryboardShots() {
+    if (!sequence) {
+      return;
+    }
+
+    const story = storyboardInput.trim();
+    if (!story) {
+      setStoryboardStatus("error");
+      setStoryboardError("Enter an action paragraph before generating storyboard shots.");
+      setStoryboardMessage("");
+      return;
+    }
+
+    const targetCountText = storyboardTargetCount.trim();
+    let targetShotCount: number | undefined;
+    if (targetCountText) {
+      const parsed = Number(targetCountText);
+      if (!Number.isFinite(parsed)) {
+        setStoryboardStatus("error");
+        setStoryboardError(`Target shots must be between ${COMIC_SEQUENCE_STORYBOARD_MIN_SHOTS} and ${COMIC_SEQUENCE_STORYBOARD_MAX_SHOTS}.`);
+        setStoryboardMessage("");
+        return;
+      }
+      targetShotCount = normalizeComicSequenceStoryboardTargetCount(parsed);
+    }
+
+    setStoryboardStatus("loading");
+    setStoryboardError("");
+    setStoryboardMessage("");
+
+    try {
+      const response = await fetch("/api/llm/chat", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          purpose: "comic-sequence-storyboard",
+          nsfw: nsfwEnabled,
+          messages: buildComicSequenceStoryboardMessages({
+            existingShotCount: sequence.shots.length,
+            globalPrompt: activePrompt,
+            negativePrompt: baseNegativePrompt,
+            story,
+            targetShotCount,
+          }),
+          temperature: 0.25,
+          maxTokens: 1800,
+        }),
+      });
+      const payload: unknown = await response.json().catch(() => null);
+
+      if (!response.ok) {
+        throw new Error(getLlmProxyErrorMessage(payload));
+      }
+
+      if (!isLlmChatResponse(payload)) {
+        throw new Error("AI storyboard returned an invalid response.");
+      }
+
+      const parsed = parseComicSequenceStoryboardResponse(payload.content, {
+        existingShotCount: sequence.shots.length,
+        maxShots: targetShotCount ?? COMIC_SEQUENCE_STORYBOARD_MAX_SHOTS,
+      });
+
+      if (parsed.shots.length === 0) {
+        throw new Error("AI storyboard did not return any usable shots.");
+      }
+
+      const firstShotNumber = sequence.shots.length + 1;
+      const newShots = parsed.shots
+        .map((shot, index) =>
+          createShotFromScene(project.scene, selectedShot, {
+            shotNumber: firstShotNumber + index,
+            shotPrompt: shot.prompt,
+            title: shot.title,
+          }),
+        )
+        .filter((shot): shot is SavedComicSequenceShot => shot !== null);
+
+      if (newShots.length === 0) {
+        throw new Error("Unable to create storyboard shots from the current sequence defaults.");
+      }
+
+      const nextSequence: SavedComicSequence = {
+        ...sequence,
+        selectedShotId: newShots[0].id,
+        shots: [...sequence.shots, ...newShots],
+      };
+      persistSequence(nextSequence);
+      setDraft(createDraftFromShot(newShots[0], selectedResources));
+      setControlNetExpanded(false);
+      setControlNetNormalPreview(null);
+      setControlNetNormalPreviewLoading(false);
+      setStoryboardStatus("success");
+      setStoryboardMessage(`Created ${newShots.length} storyboard shot${newShots.length === 1 ? "" : "s"}.`);
+    } catch (error) {
+      setStoryboardStatus("error");
+      setStoryboardError(error instanceof Error ? error.message : "AI storyboard failed. Check LiteLLM configuration and retry.");
+    }
+  }
+
   function updateSelectedShotFromCurrentCanvas() {
     if (!selectedShot) {
       return;
     }
 
     const generated = getComicSequenceShotPrompt(project, project.scene);
-    patchSelectedShot({
+    patchSelectedShotSettings({
       scene: cloneSceneSnapshot(project.scene),
       positivePrompt: resolveShotPositivePrompt(generated.prompt, selectedShot.positivePrompt),
       negativePrompt: generated.negativePrompt || selectedShot.negativePrompt,
@@ -7550,20 +8374,52 @@ function ComicSequenceWorkspaceDialog({
       return;
     }
 
+    const selectedShotIndex = sequence.selectedShotId
+      ? sequence.shots.findIndex((shot) => shot.id === sequence.selectedShotId)
+      : 0;
+    const sequenceStartIndex = selectedShotIndex >= 0 ? selectedShotIndex : 0;
+    const shotsToGenerate = sequence.shots.slice(sequenceStartIndex);
+
+    if (shotsToGenerate.length === 0) {
+      setSubmitStatus("error");
+      setSubmitError("Select a shot before generating.");
+      return;
+    }
+
     setSubmitStatus("loading");
     setSubmitError("");
-    setWaitMessage("Preparing independent shot requests...");
+    setWaitMessage(`Preparing shots ${sequenceStartIndex + 1}-${sequence.shots.length}...`);
     setHistorySaveStatus("idle");
     setHistorySaveMessage("");
-    setResults([]);
     setSavedCurrentImageKeys(new Set());
 
     try {
       const clientId = createComfyUiClientId();
-      const generationDrafts = new Map<string, GenerationDraft>();
-      const payloadShots = [];
+      const sequenceId = createLocalId("sequence");
+      const shotIndexById = new Map(sequence.shots.map((shot, index) => [shot.id, index]));
+      const retainedResults = results.filter((result) => {
+        const shotIndex = result.shotId ? shotIndexById.get(result.shotId) : undefined;
+        return shotIndex !== undefined && shotIndex < sequenceStartIndex;
+      });
+      const workingResults = [...retainedResults];
+      const allWarnings: string[] = [];
 
-      for (const [shotIndex, shot] of sequence.shots.entries()) {
+      setResults(workingResults);
+
+      const updateWorkingResult = (promptId: string, images: ComfyUiGeneratedImage[]) => {
+        const resultIndex = workingResults.findIndex((result) => result.promptId === promptId);
+        if (resultIndex < 0) {
+          return;
+        }
+
+        workingResults[resultIndex] = {
+          ...workingResults[resultIndex],
+          images,
+        };
+        setResults([...workingResults]);
+      };
+
+      const buildTextToImageShot = async (shot: SavedComicSequenceShot, shotNumber: number) => {
         const shotDraft = createDraftFromShot(shot, selectedResources);
         const imageCount = normalizeComfyUiGenerationImageCount(shotDraft.imageCount);
         const seed = resolveComfyUiGenerationSeed({
@@ -7601,119 +8457,306 @@ function ComicSequenceWorkspaceDialog({
           shotPreview,
           shotNormalPreview,
         );
-
-        generationDrafts.set(shot.id, { ...shotDraft, positivePrompt, negativePrompt: shot.negativePrompt, imageCount, seed });
-        payloadShots.push({
-          id: shot.id,
-          title: shot.title,
-          prompt: shot.shotPrompt || shot.title || `Shot ${shotIndex + 1}`,
-          request,
-          characters: [
-            ...(faceReferences.length > 0
-              ? [
-                  {
-                    id: `${shot.id}-face`,
-                    mode: faceReference.mode,
-                    name: `${shot.reference.characterName.trim() || "Character 1"} face`,
-                    prompt: shot.reference.characterPrompt,
-                    references: faceReferences,
-                    startPercent: Math.min(faceReference.startAt, faceReference.endAt),
-                    endPercent: Math.max(faceReference.startAt, faceReference.endAt),
-                    weight: faceReference.weight,
-                  },
-                ]
-              : []),
-            ...(characterReferences.length > 0
-              ? [
-                  {
-                    id: `${shot.id}-character`,
-                    mode: characterReference.mode,
-                    name: `${shot.reference.characterName.trim() || "Character 1"} character`,
-                    prompt: shot.reference.characterPrompt,
-                    references: characterReferences,
-                    startPercent: Math.min(characterReference.startAt, characterReference.endAt),
-                    endPercent: Math.max(characterReference.startAt, characterReference.endAt),
-                    weight: characterReference.weight,
-                  },
-                ]
-              : []),
-          ],
-        });
-      }
-
-      const firstDraft = generationDrafts.get(sequence.shots[0]?.id ?? "");
-      const baseRequest = firstDraft
-        ? toRequestPayload(firstDraft, firstDraft.seed, null, null)
-        : {
-            checkpointName: selectedResources.checkpoint?.modelFileName ?? "",
-            positivePrompt: activePrompt,
-          };
-      const payload = await fetchJson<SequenceImageRouteResponse>("/api/comfyui/sequence-image", {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-        },
-        body: JSON.stringify({
-          baseRequest,
-          characters: [],
-          clientId,
-          sequenceId: createLocalId("sequence"),
-          shots: payloadShots,
-        }),
-      });
-      const queuedResults: GenerationResult[] = payload.shots.map((shot) => {
-        const draftSnapshot = generationDrafts.get(shot.shotId) ?? firstDraft;
+        const draftSnapshot = { ...shotDraft, positivePrompt, negativePrompt: shot.negativePrompt, imageCount, seed };
 
         return {
-          characterReferenceIds: shot.characterReferenceIds,
+          baseRequest: toRequestPayload(draftSnapshot, seed, null, null),
+          draftSnapshot,
+          payloadShot: {
+            id: shot.id,
+            title: shot.title,
+            prompt: shot.shotPrompt || shot.title || `Shot ${shotNumber}`,
+            request,
+            characters: [
+              ...(faceReferences.length > 0
+                ? [
+                    {
+                      id: `${shot.id}-face`,
+                      mode: faceReference.mode,
+                      name: `${shot.reference.characterName.trim() || "Character 1"} face`,
+                      prompt: shot.reference.characterPrompt,
+                      references: faceReferences,
+                      startPercent: Math.min(faceReference.startAt, faceReference.endAt),
+                      endPercent: Math.max(faceReference.startAt, faceReference.endAt),
+                      weight: faceReference.weight,
+                    },
+                  ]
+                : []),
+              ...(characterReferences.length > 0
+                ? [
+                    {
+                      id: `${shot.id}-character`,
+                      mode: characterReference.mode,
+                      name: `${shot.reference.characterName.trim() || "Character 1"} character`,
+                      prompt: shot.reference.characterPrompt,
+                      references: characterReferences,
+                      startPercent: Math.min(characterReference.startAt, characterReference.endAt),
+                      endPercent: Math.max(characterReference.startAt, characterReference.endAt),
+                      weight: characterReference.weight,
+                    },
+                  ]
+                : []),
+            ],
+          },
+        };
+      };
+
+      const buildPreviousReferenceInpaintRequest = async ({
+        maskDataUrl,
+        reference,
+        shot,
+        sourceImage,
+      }: {
+        maskDataUrl: string;
+        reference: SavedComicSequencePreviousShotReference;
+        shot: SavedComicSequenceShot;
+        sourceImage: ComfyUiGeneratedImage;
+      }) => {
+        const shotDraft = createDraftFromShot(shot, selectedResources);
+        const seed = resolveComfyUiGenerationSeed({
+          currentSeed: shotDraft.seed,
+          mode: shotDraft.seedMode,
+        });
+        const faceReference = getComicSequenceReferenceChannel(shot.reference, "face");
+        const characterReference = getComicSequenceReferenceChannel(shot.reference, "character");
+        const hasReferenceImages =
+          (faceReference.enabled && faceReference.images.length > 0) ||
+          (characterReference.enabled && characterReference.images.length > 0);
+        const referencePrompt = hasReferenceImages
+          ? shot.reference.characterPrompt
+            ? `${shot.reference.characterName}: ${shot.reference.characterPrompt}`
+            : shot.reference.characterName
+          : undefined;
+        const positivePrompt = joinSequencePrompt([
+          shot.positivePrompt,
+          referencePrompt,
+          shot.shotPrompt,
+        ]);
+        const draftSnapshot: GenerationDraft = {
+          ...shotDraft,
+          imageCount: 1,
+          positivePrompt,
+          negativePrompt: shot.negativePrompt,
+          seed,
+          inpaint: {
+            ...shotDraft.inpaint,
+            denoise: reference.denoise,
+            growMaskBy: reference.growMaskBy,
+            mode: reference.inpaintMode,
+          },
+        };
+        const request = toInpaintRequestPayload(draftSnapshot, {
+          denoise: reference.denoise,
+          faceDetailer: shotDraft.faceDetailer,
+          growMaskBy: reference.growMaskBy,
+          handDetailer: shotDraft.handDetailer,
+          image: sourceImage,
+          maskDataUrl,
+          mode: reference.inpaintMode,
+          negativePrompt: shot.negativePrompt,
+          positivePrompt,
+          seed,
+          sourceImageDataUrl: await loadOriginalImageUrlToDataUrl(sourceImage.url),
+          upscaleBeforeInpaint: {
+            enabled: false,
+            mode: "lanczos",
+            scaleBy: 2,
+          },
+        });
+
+        return {
+          draftSnapshot,
+          request,
+          seed,
+        };
+      };
+
+      const preparePreviousShotMaskForSource = async (
+        mask: SequencePreviousShotMaskSession | undefined,
+        source: ComicSequencePreviousShotSource,
+      ) => {
+        if (!mask?.maskDataUrl) {
+          return null;
+        }
+
+        if (
+          mask.sourceKey !== source.sourceKey &&
+          mask.sourceKey !== PENDING_COMIC_SEQUENCE_PREVIOUS_SHOT_SOURCE_KEY
+        ) {
+          return null;
+        }
+
+        const sourceSize = await loadImageSize(source.image.url);
+        const maskDataUrl =
+          mask.sourceSize.width === sourceSize.width && mask.sourceSize.height === sourceSize.height
+            ? mask.maskDataUrl
+            : await resizeMaskDataUrl(mask.maskDataUrl, sourceSize);
+
+        return {
+          maskDataUrl,
+          sourceSize,
+        };
+      };
+
+      for (const [relativeShotIndex, shot] of shotsToGenerate.entries()) {
+        const shotNumber = sequenceStartIndex + relativeShotIndex + 1;
+        const source = findComicSequencePreviousShotSource({
+          currentShotId: shot.id,
+          results: [...workingResults, ...savedPreviousShotResults],
+          shots: sequence.shots,
+        });
+        const mask = previousShotMasks[shot.id];
+        const previousAction = resolveComicSequencePreviousShotAction({
+          mask,
+          reference: shot.previousShotReference,
+          source,
+        });
+
+        if (previousAction === "pause-for-mask" && source) {
+          selectShot(shot.id);
+          setWaitMessage("");
+          setSubmitStatus("error");
+          setSubmitError(`Configure an inpaint mask for Shot ${shotNumber} before continuing.`);
+          setHistorySaveStatus("idle");
+          setHistorySaveMessage("");
+          return;
+        }
+
+        if ((previousAction === "img2img" || previousAction === "inpaint") && shot.previousShotReference && source) {
+          const preparedMask = previousAction === "inpaint"
+            ? await preparePreviousShotMaskForSource(mask, source)
+            : null;
+          const maskDataUrl = previousAction === "img2img"
+            ? createFullImageMaskDataUrl(
+                ...(await loadImageSize(source.image.url).then((size) => [size.width, size.height] as const)),
+              )
+            : preparedMask?.maskDataUrl;
+          if (!maskDataUrl) {
+            throw new Error(`Shot ${shotNumber} is missing an inpaint mask.`);
+          }
+          if (previousAction === "inpaint" && preparedMask && mask?.sourceKey === PENDING_COMIC_SEQUENCE_PREVIOUS_SHOT_SOURCE_KEY) {
+            setPreviousShotMasks((current) => ({
+              ...current,
+              [shot.id]: {
+                ...mask,
+                maskDataUrl: preparedMask.maskDataUrl,
+                sourceImage: source.image,
+                sourceKey: source.sourceKey,
+                sourceSize: preparedMask.sourceSize,
+              },
+            }));
+          }
+
+          setWaitMessage(`Submitting ${previousAction} for Shot ${shotNumber}...`);
+          const { draftSnapshot, request, seed } = await buildPreviousReferenceInpaintRequest({
+            maskDataUrl,
+            reference: shot.previousShotReference,
+            shot,
+            sourceImage: source.image,
+          });
+          const shotClientId = `${clientId}:${shot.id}:previous`;
+          const payload = await fetchJson<Omit<GenerationResult, "historyContext" | "imageCount" | "images" | "seed" | "source">>("/api/comfyui/inpaint-image", {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+            },
+            body: JSON.stringify({ ...request, clientId: shotClientId }),
+          });
+          const queuedResult: GenerationResult = {
+            historyContext: {
+              draftSnapshot,
+              negativePrompt: request.negativePrompt ?? "",
+              positivePrompt: request.positivePrompt,
+              selectedCheckpointId,
+              selectedLoraIds: [...selectedLoraIds],
+            },
+            imageCount: 1,
+            images: [],
+            number: payload.number,
+            outputNodeId: payload.outputNodeId,
+            promptId: payload.promptId,
+            seed,
+            sequenceId,
+            shotId: shot.id,
+            shotNumber,
+            shotTitle: shot.title,
+            source: "sequence",
+          };
+
+          workingResults.push(queuedResult);
+          setResults([...workingResults]);
+          setWaitMessage(`Waiting for ${shot.title} (${previousAction})...`);
+          const history = await waitForComfyUiGeneratedImages(shotClientId, payload.promptId, 1, (historyUpdate) => {
+            if (historyUpdate.images.length > 0) {
+              updateWorkingResult(payload.promptId, historyUpdate.images);
+            }
+          });
+          updateWorkingResult(payload.promptId, history.images);
+          continue;
+        }
+
+        setWaitMessage(`Submitting Shot ${shotNumber} to ComfyUI...`);
+        const textShot = await buildTextToImageShot(shot, shotNumber);
+        const payload = await fetchJson<SequenceImageRouteResponse>("/api/comfyui/sequence-image", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({
+            baseRequest: textShot.baseRequest,
+            characters: [],
+            clientId,
+            sequenceId,
+            shots: [textShot.payloadShot],
+          }),
+        });
+        const queuedShot = payload.shots[0];
+        if (!queuedShot) {
+          throw new Error(`Shot ${shotNumber} was not queued.`);
+        }
+        allWarnings.push(...payload.warnings);
+        const queuedResult: GenerationResult = {
+          characterReferenceIds: queuedShot.characterReferenceIds,
           historyContext: {
-            draftSnapshot: draftSnapshot ?? (draft as GenerationDraft),
-            negativePrompt: shot.negativePrompt,
-            positivePrompt: shot.positivePrompt,
+            draftSnapshot: textShot.draftSnapshot,
+            negativePrompt: queuedShot.negativePrompt,
+            positivePrompt: queuedShot.positivePrompt,
             selectedCheckpointId,
             selectedLoraIds: [...selectedLoraIds],
           },
-          imageCount: shot.imageCount,
+          imageCount: queuedShot.imageCount,
           images: [],
-          number: shot.number,
-          outputNodeId: shot.outputNodeId,
-          promptId: shot.promptId,
+          number: queuedShot.number,
+          outputNodeId: queuedShot.outputNodeId,
+          promptId: queuedShot.promptId,
           sequenceId: payload.sequenceId,
-          seed: shot.seed,
-          shotId: shot.shotId,
+          seed: queuedShot.seed,
+          shotId: queuedShot.shotId,
+          shotNumber,
+          shotTitle: queuedShot.title,
           source: "sequence",
         };
-      });
 
-      setResults(queuedResults);
-
-      for (const shot of payload.shots) {
-        setWaitMessage(`Waiting for ${shot.title ?? shot.shotId} (${shot.imageCount} images)...`);
-        const history = await waitForComfyUiGeneratedImages(shot.clientId ?? "", shot.promptId, shot.imageCount, (historyUpdate) => {
+        workingResults.push(queuedResult);
+        setResults([...workingResults]);
+        setWaitMessage(`Waiting for ${queuedShot.title ?? queuedShot.shotId} (${queuedShot.imageCount} images)...`);
+        const history = await waitForComfyUiGeneratedImages(queuedShot.clientId ?? "", queuedShot.promptId, queuedShot.imageCount, (historyUpdate) => {
           if (historyUpdate.images.length > 0) {
-            setResults((current) =>
-              current.map((result) =>
-                result.promptId === shot.promptId ? { ...result, images: historyUpdate.images } : result,
-              ),
-            );
+            updateWorkingResult(queuedShot.promptId, historyUpdate.images);
           }
         });
-
-        setResults((current) =>
-          current.map((result) =>
-            result.promptId === shot.promptId ? { ...result, images: history.images } : result,
-          ),
-        );
+        updateWorkingResult(queuedShot.promptId, history.images);
       }
 
+      const warnings = Array.from(new Set(allWarnings));
       setWaitMessage("");
       setSubmitStatus("success");
       setHistorySaveMessage(
-        payload.warnings.length > 0
-          ? payload.warnings.join(" ")
+        warnings.length > 0
+          ? warnings.join(" ")
           : "Sequence images generated. Save the candidates you want to keep.",
       );
-      setHistorySaveStatus(payload.warnings.length > 0 ? "error" : "idle");
+      setHistorySaveStatus(warnings.length > 0 ? "error" : "idle");
     } catch (error) {
       setWaitMessage("");
       setSubmitStatus("error");
@@ -7802,7 +8845,71 @@ function ComicSequenceWorkspaceDialog({
             <div className="rounded-md border border-rose-100 bg-rose-50 p-3 text-sm text-rose-700">{loadError}</div>
           ) : null}
           {loadStatus === "success" ? (
-            <div className="grid gap-5 lg:grid-cols-[300px_minmax(0,1fr)]">
+            <div className="space-y-5">
+              {sequence?.shots.length ? (
+                <section className="rounded-md border border-slate-200 bg-white p-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-xs font-bold text-slate-800">Saved shot images</p>
+                      <p className="mt-0.5 text-[11px] text-slate-500">Current saved sequence results by shot</p>
+                    </div>
+                    <span className="text-[11px] font-semibold text-slate-500">
+                      {sequence.shots.reduce((count, shot) => count + (savedImagesByShot.get(shot.id)?.length ?? 0), 0)} saved
+                    </span>
+                  </div>
+                  <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                    {sequence.shots.map((shot, index) => {
+                      const savedImages = savedImagesByShot.get(shot.id) ?? [];
+                      const previewImages = savedImages.slice(0, 3);
+                      const selected = selectedShot?.id === shot.id;
+
+                      return (
+                        <button
+                          className={
+                            "min-w-0 rounded-md border p-2 text-left transition " +
+                            (selected
+                              ? "border-sky-300 bg-sky-50 ring-2 ring-sky-100"
+                              : "border-slate-200 bg-white hover:bg-slate-50")
+                          }
+                          key={shot.id}
+                          onClick={() => selectShot(shot.id)}
+                          type="button"
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="min-w-0 truncate text-[11px] font-bold text-slate-800">
+                              {index + 1}. {shot.title}
+                            </span>
+                            <span className="shrink-0 text-[10px] font-semibold text-slate-500">{savedImages.length}</span>
+                          </div>
+                          {savedImages.length > 0 ? (
+                            <div className="mt-2 grid grid-cols-3 gap-1">
+                              {previewImages.map((image) => (
+                                <img
+                                  alt={`${shot.title} saved result`}
+                                  className="aspect-square min-w-0 rounded border border-slate-100 object-cover"
+                                  key={image.id}
+                                  src={image.url}
+                                />
+                              ))}
+                              {savedImages.length > previewImages.length ? (
+                                <div className="grid aspect-square place-items-center rounded border border-slate-100 bg-slate-100 text-[10px] font-semibold text-slate-500">
+                                  +{savedImages.length - previewImages.length}
+                                </div>
+                              ) : null}
+                            </div>
+                          ) : (
+                            <div className="mt-2 grid h-14 place-items-center rounded-md border border-dashed border-slate-200 bg-slate-50 text-[10px] text-slate-400">
+                              No saved image
+                            </div>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </section>
+              ) : null}
+
+              <div className="grid gap-5 lg:grid-cols-[300px_minmax(0,1fr)]">
               <aside className="space-y-3">
                 <Button
                   className="h-10 w-full rounded-md bg-sky-600 text-white hover:bg-sky-700"
@@ -7813,6 +8920,68 @@ function ComicSequenceWorkspaceDialog({
                   <Plus className="size-4" />
                   Add shot from current canvas
                 </Button>
+                <div className="rounded-md border border-sky-100 bg-sky-50/70 p-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-xs font-bold text-slate-800">AI storyboard</p>
+                      <p className="mt-0.5 text-[11px] leading-relaxed text-slate-500">Split an action paragraph into manual shot prompts.</p>
+                    </div>
+                    {nsfwEnabled ? (
+                      <span className="shrink-0 rounded-full bg-rose-100 px-2 py-0.5 text-[10px] font-semibold text-rose-700">NSFW</span>
+                    ) : null}
+                  </div>
+                  <textarea
+                    className="mt-3 min-h-28 w-full rounded-md border border-sky-100 bg-white px-3 py-2 text-xs leading-relaxed text-slate-700 outline-none transition focus:border-sky-300 focus:ring-2 focus:ring-sky-100"
+                    disabled={storyboardStatus === "loading"}
+                    onChange={(event) => {
+                      setStoryboardInput(event.target.value);
+                      if (storyboardStatus !== "loading") {
+                        setStoryboardStatus("idle");
+                        setStoryboardError("");
+                        setStoryboardMessage("");
+                      }
+                    }}
+                    placeholder="The hero dodges left, slides under the attack, then counterattacks from a low angle..."
+                    value={storyboardInput}
+                  />
+                  <div className="mt-2 grid grid-cols-[minmax(0,1fr)_auto] gap-2">
+                    <label className="grid gap-1">
+                      <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">target shots</span>
+                      <input
+                        className="h-9 min-w-0 rounded-md border border-sky-100 bg-white px-2 text-sm text-slate-700 outline-none transition focus:border-sky-300 focus:ring-2 focus:ring-sky-100"
+                        disabled={storyboardStatus === "loading"}
+                        max={COMIC_SEQUENCE_STORYBOARD_MAX_SHOTS}
+                        min={COMIC_SEQUENCE_STORYBOARD_MIN_SHOTS}
+                        onChange={(event) => {
+                          setStoryboardTargetCount(event.target.value);
+                          if (storyboardStatus !== "loading") {
+                            setStoryboardStatus("idle");
+                            setStoryboardError("");
+                            setStoryboardMessage("");
+                          }
+                        }}
+                        placeholder="auto"
+                        type="number"
+                        value={storyboardTargetCount}
+                      />
+                    </label>
+                    <Button
+                      className="mt-5 h-9 rounded-md bg-sky-600 px-3 text-xs text-white hover:bg-sky-700"
+                      disabled={storyboardStatus === "loading" || loadStatus !== "success" || !sequence}
+                      onClick={() => void generateAiStoryboardShots()}
+                      type="button"
+                    >
+                      {storyboardStatus === "loading" ? <Loader2 className="size-3.5 animate-spin" /> : <Sparkles className="size-3.5" />}
+                      Generate
+                    </Button>
+                  </div>
+                  {storyboardStatus === "error" && storyboardError ? (
+                    <p className="mt-2 text-[11px] leading-relaxed text-rose-700">{storyboardError}</p>
+                  ) : null}
+                  {storyboardStatus === "success" && storyboardMessage ? (
+                    <p className="mt-2 text-[11px] leading-relaxed text-emerald-700">{storyboardMessage}</p>
+                  ) : null}
+                </div>
                 <div className="rounded-md border border-slate-200 bg-white p-2">
                   {sequence?.shots.length ? (
                     <div className="space-y-2">
@@ -7887,6 +9056,37 @@ function ComicSequenceWorkspaceDialog({
               <div className="min-w-0 space-y-4">
                 {selectedShot && draft ? (
                   <>
+                    <div
+                      className={`flex flex-col gap-3 rounded-md border p-3 sm:flex-row sm:items-center sm:justify-between ${
+                        parameterSyncDownEnabled
+                          ? "border-sky-200 bg-sky-50 text-sky-900"
+                          : "border-slate-200 bg-white text-slate-700"
+                      }`}
+                    >
+                      <div className="min-w-0">
+                        <p className="text-xs font-semibold">Shot setting chain</p>
+                        <p className={`mt-0.5 text-[11px] leading-relaxed ${parameterSyncDownEnabled ? "text-sky-700" : "text-slate-500"}`}>
+                          {parameterSyncDownEnabled
+                            ? "Setting edits sync to this shot and every shot below it, except title and manual shot prompt."
+                            : "Setting edits apply to the selected shot only."}
+                        </p>
+                      </div>
+                      <button
+                        aria-pressed={parameterSyncDownEnabled}
+                        className={`inline-flex h-9 shrink-0 items-center justify-center gap-2 rounded-md border px-3 text-xs font-medium transition ${
+                          parameterSyncDownEnabled
+                            ? "border-sky-300 bg-white text-sky-700 hover:bg-sky-100"
+                            : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+                        }`}
+                        onClick={() => setParameterSyncDownEnabled((value) => !value)}
+                        title="Sync shot setting edits to following shots"
+                        type="button"
+                      >
+                        <Link2 className="size-3.5" />
+                        {parameterSyncDownEnabled ? "Sync down on" : "Sync down"}
+                      </button>
+                    </div>
+
                     <div className="grid gap-3 rounded-md border border-slate-200 bg-white p-3 sm:grid-cols-2">
                       <label className="grid gap-1.5">
                         <span className="text-xs font-semibold text-slate-700">Shot title</span>
@@ -7909,7 +9109,7 @@ function ComicSequenceWorkspaceDialog({
                         <span className="text-xs font-semibold text-slate-700">Canvas prompt</span>
                         <textarea
                           className="min-h-24 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700 outline-none transition focus:border-sky-300 focus:ring-2 focus:ring-sky-100"
-                          onChange={(event) => patchSelectedShot({ positivePrompt: event.target.value })}
+                          onChange={(event) => patchSelectedShotSettings({ positivePrompt: event.target.value })}
                           value={selectedShot.positivePrompt}
                         />
                       </label>
@@ -7917,10 +9117,100 @@ function ComicSequenceWorkspaceDialog({
                         <span className="text-xs font-semibold text-slate-700">Negative prompt</span>
                         <textarea
                           className="min-h-20 rounded-md border border-rose-100 bg-rose-50 px-3 py-2 text-sm text-slate-700 outline-none transition focus:border-rose-300 focus:ring-2 focus:ring-rose-100"
-                          onChange={(event) => patchSelectedShot({ negativePrompt: event.target.value })}
+                          onChange={(event) => patchSelectedShotSettings({ negativePrompt: event.target.value })}
                           value={selectedShot.negativePrompt}
                         />
                       </label>
+                    </div>
+
+                    <div className="rounded-md border border-sky-100 bg-sky-50/60 p-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="text-xs font-semibold text-slate-700">Previous shot source</p>
+                          <p className="mt-0.5 text-[11px] leading-relaxed text-slate-500">
+                            Use the first candidate from the previous shot as an img2img or local inpaint source.
+                          </p>
+                        </div>
+                        {selectedPreviousShotSource ? (
+                          <img
+                            alt="Previous shot source"
+                            className="size-12 shrink-0 rounded-md border border-sky-100 object-cover"
+                            src={selectedPreviousShotSource.image.url}
+                          />
+                        ) : null}
+                      </div>
+                      <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                        <SelectInput
+                          label="mode"
+                          onChange={(value) => patchSelectedPreviousShotReference(value as SequencePreviousShotReferenceMode)}
+                          options={COMIC_SEQUENCE_PREVIOUS_REFERENCE_OPTIONS}
+                          value={selectedShot.previousShotReference?.mode ?? "off"}
+                        />
+                        {selectedShot.previousShotReference ? (
+                          <>
+                            <NumberInput
+                              label="denoise"
+                              max={1}
+                              min={COMIC_SEQUENCE_PREVIOUS_SHOT_MIN_DENOISE}
+                              onChange={(value) => patchSelectedPreviousShotReference(selectedShot.previousShotReference?.mode ?? "img2img", { denoise: value })}
+                              step={0.05}
+                              value={selectedShot.previousShotReference.denoise}
+                            />
+                            <SelectInput
+                              label="inpaint mode"
+                              onChange={(value) =>
+                                patchSelectedPreviousShotReference(selectedShot.previousShotReference?.mode ?? "img2img", {
+                                  inpaintMode: value as ComfyUiInpaintMode,
+                                })}
+                              options={COMFYUI_INPAINT_MODE_OPTIONS}
+                              value={selectedShot.previousShotReference.inpaintMode}
+                            />
+                            <NumberInput
+                              label="grow mask"
+                              max={512}
+                              min={0}
+                              onChange={(value) =>
+                                patchSelectedPreviousShotReference(selectedShot.previousShotReference?.mode ?? "img2img", {
+                                  growMaskBy: value,
+                                })}
+                              value={selectedShot.previousShotReference.growMaskBy}
+                            />
+                          </>
+                        ) : null}
+                      </div>
+                      {selectedShot.previousShotReference ? (
+                        <div className="mt-3 flex flex-col gap-2 rounded-md border border-sky-100 bg-white/70 p-2 sm:flex-row sm:items-center sm:justify-between">
+                          <p className="text-[11px] leading-relaxed text-sky-800">
+                            {selectedPreviousShotSource
+                              ? `Source: ${selectedPreviousShotSource.previousShot.title} / ${selectedPreviousShotSource.image.filename}`
+                              : selectedShotHasPreviousShot
+                                ? "No previous shot result yet. You can configure a pending mask before generating from an earlier shot."
+                                : "This is the first shot, so no previous-shot source can be used."}
+                            {selectedShot.previousShotReference.mode === "inpaint"
+                              ? selectedPreviousShotMaskReady
+                                ? " Mask ready."
+                                : selectedShotHasPreviousShot
+                                  ? " Mask required before local inpaint can run."
+                                  : ""
+                              : ""}
+                          </p>
+                          {selectedShot.previousShotReference.mode === "inpaint" && selectedShotHasPreviousShot ? (
+                            <Button
+                              className="h-8 shrink-0 rounded-md bg-sky-600 px-3 text-xs text-white hover:bg-sky-700"
+                              onClick={() =>
+                                setMaskEditorTarget({
+                                  fallbackSize: selectedPreviousShotFallbackSize,
+                                  shotId: selectedShot.id,
+                                  source: selectedPreviousShotSource,
+                                })}
+                              type="button"
+                            >
+                              <Paintbrush className="size-3.5" />
+                              Configure mask
+                            </Button>
+                          ) : null}
+                        </div>
+                      ) : null}
                     </div>
 
                     <div className="rounded-md border border-slate-200 bg-slate-50/60 p-3">
@@ -8059,59 +9349,62 @@ function ComicSequenceWorkspaceDialog({
                       </div>
                     </div>
 
-                    <div className="grid gap-3 rounded-md border border-slate-200 bg-white p-3 sm:grid-cols-2 lg:grid-cols-4">
-                      <NumberInput label="width" min={16} onChange={(value) => patchDraft({ width: Math.round(value / 8) * 8 })} step={8} value={draft.width} />
-                      <NumberInput label="height" min={16} onChange={(value) => patchDraft({ height: Math.round(value / 8) * 8 })} step={8} value={draft.height} />
-                      <NumberInput label="steps" min={1} onChange={(value) => patchDraft({ steps: Math.round(value) })} value={draft.steps} />
-                      <NumberInput label="cfg" min={0} onChange={(value) => patchDraft({ cfg: value })} step={0.5} value={draft.cfg} />
-                      <NumberInput label="denoise" max={1} min={0} onChange={(value) => patchDraft({ denoise: value })} step={0.05} value={draft.denoise} />
-                      <NumberInput
-                        label="images / shot"
-                        max={MAX_COMFYUI_GENERATION_IMAGE_COUNT}
-                        min={1}
-                        onChange={(value) => patchDraft({ imageCount: normalizeComfyUiGenerationImageCount(value) })}
-                        value={draft.imageCount}
-                      />
-                      <SelectInput label="sampler" onChange={(value) => patchDraft({ samplerName: value })} options={COMFYUI_SAMPLER_OPTIONS} value={draft.samplerName} />
-                      <SelectInput label="scheduler" onChange={(value) => patchDraft({ scheduler: value })} options={COMFYUI_SCHEDULER_OPTIONS} value={draft.scheduler} />
-                      <SelectInput
-                        label="latent"
-                        onChange={(value) => patchDraft({ latentImageNode: value as GenerationDraft["latentImageNode"] })}
-                        options={COMFYUI_LATENT_IMAGE_NODE_OPTIONS}
-                        value={draft.latentImageNode}
-                      />
-                      <TextInput label="output" onChange={(value) => patchDraft({ outputPrefix: value })} value={draft.outputPrefix} />
-                      <div className="grid gap-1 lg:col-span-2">
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">seed</span>
-                          <div className="inline-flex rounded-md border border-slate-200 bg-white p-0.5">
-                            {(["random", "fixed"] as const).map((mode) => (
-                              <button
-                                className={`rounded px-2 py-0.5 text-[10px] font-medium transition ${
-                                  draft.seedMode === mode ? "bg-sky-600 text-white" : "text-slate-500 hover:bg-slate-50"
-                                }`}
-                                key={mode}
-                                onClick={() => patchDraft({ seedMode: mode })}
-                                type="button"
-                              >
-                                {mode}
-                              </button>
-                            ))}
-                          </div>
-                        </div>
-                        <input
-                          className="h-9 min-w-0 rounded-md border border-slate-200 bg-white px-2 text-sm text-slate-700 outline-none transition focus:border-sky-300 focus:ring-2 focus:ring-sky-100"
-                          min={0}
-                          onChange={(event) => {
-                            const parsed = Number(event.target.value);
-                            if (Number.isFinite(parsed)) {
-                              patchDraft({ seed: Math.round(parsed), seedMode: "fixed" });
-                            }
-                          }}
-                          step={1}
-                          type="number"
-                          value={draft.seed}
+                    <div className="rounded-md border border-slate-200 bg-white p-3">
+                      <p className="mb-3 text-xs font-semibold text-slate-700">Generation parameters</p>
+                      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                        <NumberInput label="width" min={16} onChange={(value) => patchDraft({ width: Math.round(value / 8) * 8 })} step={8} value={draft.width} />
+                        <NumberInput label="height" min={16} onChange={(value) => patchDraft({ height: Math.round(value / 8) * 8 })} step={8} value={draft.height} />
+                        <NumberInput label="steps" min={1} onChange={(value) => patchDraft({ steps: Math.round(value) })} value={draft.steps} />
+                        <NumberInput label="cfg" min={0} onChange={(value) => patchDraft({ cfg: value })} step={0.5} value={draft.cfg} />
+                        <NumberInput label="denoise" max={1} min={0} onChange={(value) => patchDraft({ denoise: value })} step={0.05} value={draft.denoise} />
+                        <NumberInput
+                          label="images / shot"
+                          max={MAX_COMFYUI_GENERATION_IMAGE_COUNT}
+                          min={1}
+                          onChange={(value) => patchDraft({ imageCount: normalizeComfyUiGenerationImageCount(value) })}
+                          value={draft.imageCount}
                         />
+                        <SelectInput label="sampler" onChange={(value) => patchDraft({ samplerName: value })} options={COMFYUI_SAMPLER_OPTIONS} value={draft.samplerName} />
+                        <SelectInput label="scheduler" onChange={(value) => patchDraft({ scheduler: value })} options={COMFYUI_SCHEDULER_OPTIONS} value={draft.scheduler} />
+                        <SelectInput
+                          label="latent"
+                          onChange={(value) => patchDraft({ latentImageNode: value as GenerationDraft["latentImageNode"] })}
+                          options={COMFYUI_LATENT_IMAGE_NODE_OPTIONS}
+                          value={draft.latentImageNode}
+                        />
+                        <TextInput label="output" onChange={(value) => patchDraft({ outputPrefix: value })} value={draft.outputPrefix} />
+                        <div className="grid gap-1 lg:col-span-2">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">seed</span>
+                            <div className="inline-flex rounded-md border border-slate-200 bg-white p-0.5">
+                              {(["random", "fixed"] as const).map((mode) => (
+                                <button
+                                  className={`rounded px-2 py-0.5 text-[10px] font-medium transition ${
+                                    draft.seedMode === mode ? "bg-sky-600 text-white" : "text-slate-500 hover:bg-slate-50"
+                                  }`}
+                                  key={mode}
+                                  onClick={() => patchDraft({ seedMode: mode })}
+                                  type="button"
+                                >
+                                  {mode}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                          <input
+                            className="h-9 min-w-0 rounded-md border border-slate-200 bg-white px-2 text-sm text-slate-700 outline-none transition focus:border-sky-300 focus:ring-2 focus:ring-sky-100"
+                            min={0}
+                            onChange={(event) => {
+                              const parsed = Number(event.target.value);
+                              if (Number.isFinite(parsed)) {
+                                patchDraft({ seed: Math.round(parsed), seedMode: "fixed" });
+                              }
+                            }}
+                            step={1}
+                            type="number"
+                            value={draft.seed}
+                          />
+                        </div>
                       </div>
                     </div>
 
@@ -8143,55 +9436,61 @@ function ComicSequenceWorkspaceDialog({
                   </div>
                 )}
               </div>
+              </div>
             </div>
           ) : null}
 
           {results.length > 0 ? (
             <div className="mt-5 space-y-4">
-              {results.map((result, shotIndex) => (
-                <section className="space-y-2" key={result.promptId}>
-                  <div className="flex items-center justify-between gap-3">
-                    <div>
-                      <p className="text-xs font-bold text-slate-800">Shot {shotIndex + 1}</p>
-                      <p className="text-[11px] text-slate-500">seed {result.seed} - promptId {result.promptId}</p>
-                    </div>
-                    <span className="text-[11px] text-slate-500">
-                      {result.images.length}/{result.imageCount}
-                    </span>
-                  </div>
-                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
-                    {result.images.map((image, imageIndex) => {
-                      const imageKey = `${result.promptId}:${getGeneratedImageReferenceKey(image)}`;
-                      const saved = savedCurrentImageKeys.has(imageKey);
+              {results.map((result, shotIndex) => {
+                const shotLabel = result.shotNumber ? `Shot ${result.shotNumber}` : `Shot ${shotIndex + 1}`;
+                const shotTitle = result.shotTitle ? ` - ${result.shotTitle}` : "";
 
-                      return (
-                        <div className="overflow-hidden rounded-md border border-slate-200 bg-white" key={imageKey}>
-                          <a href={image.url} rel="noreferrer" target="_blank">
-                            <img
-                              alt={`Shot ${shotIndex + 1} candidate ${imageIndex + 1}`}
-                              className="aspect-square w-full object-cover"
-                              src={image.url}
-                            />
-                          </a>
-                          <div className="flex items-center gap-1 border-t border-slate-200 px-1.5 py-1.5">
-                            <span className="min-w-0 flex-1 truncate text-[10px] text-slate-500">{image.filename}</span>
-                            <button
-                              aria-label="Save sequence image"
-                              className="grid size-7 place-items-center rounded-md text-slate-500 transition hover:bg-emerald-50 hover:text-emerald-700 disabled:opacity-50"
-                              disabled={saved || historySaveStatus === "saving"}
-                              onClick={() => void saveSequenceImage(result, image)}
-                              title={saved ? "Saved" : "Save"}
-                              type="button"
-                            >
-                              {saved ? <CheckCircle2 className="size-3.5" /> : <Save className="size-3.5" />}
-                            </button>
+                return (
+                  <section className="space-y-2" key={result.promptId}>
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <p className="text-xs font-bold text-slate-800">{shotLabel}{shotTitle}</p>
+                        <p className="text-[11px] text-slate-500">seed {result.seed} - promptId {result.promptId}</p>
+                      </div>
+                      <span className="text-[11px] text-slate-500">
+                        {result.images.length}/{result.imageCount}
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
+                      {result.images.map((image, imageIndex) => {
+                        const imageKey = `${result.promptId}:${getGeneratedImageReferenceKey(image)}`;
+                        const saved = savedCurrentImageKeys.has(imageKey);
+
+                        return (
+                          <div className="overflow-hidden rounded-md border border-slate-200 bg-white" key={imageKey}>
+                            <a href={image.url} rel="noreferrer" target="_blank">
+                              <img
+                                alt={`${shotLabel} candidate ${imageIndex + 1}`}
+                                className="aspect-square w-full object-cover"
+                                src={image.url}
+                              />
+                            </a>
+                            <div className="flex items-center gap-1 border-t border-slate-200 px-1.5 py-1.5">
+                              <span className="min-w-0 flex-1 truncate text-[10px] text-slate-500">{image.filename}</span>
+                              <button
+                                aria-label="Save sequence image"
+                                className="grid size-7 place-items-center rounded-md text-slate-500 transition hover:bg-emerald-50 hover:text-emerald-700 disabled:opacity-50"
+                                disabled={saved || historySaveStatus === "saving"}
+                                onClick={() => void saveSequenceImage(result, image)}
+                                title={saved ? "Saved" : "Save"}
+                                type="button"
+                              >
+                                {saved ? <CheckCircle2 className="size-3.5" /> : <Save className="size-3.5" />}
+                              </button>
+                            </div>
                           </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </section>
-              ))}
+                        );
+                      })}
+                    </div>
+                  </section>
+                );
+              })}
             </div>
           ) : null}
         </div>
@@ -8231,6 +9530,19 @@ function ComicSequenceWorkspaceDialog({
             </Button>
           </div>
         </div>
+        <SequencePreviousShotMaskDialog
+          fallbackSize={maskEditorTarget?.fallbackSize ?? null}
+          initialMaskDataUrl={maskEditorInitialMaskDataUrl}
+          key={maskEditorTarget ? `${maskEditorTarget.shotId}:${maskEditorTarget.source?.sourceKey ?? "pending"}` : "closed"}
+          onClose={() => setMaskEditorTarget(null)}
+          onSave={(mask) => {
+            if (maskEditorTarget) {
+              savePreviousShotMask(maskEditorTarget.shotId, mask);
+            }
+          }}
+          open={Boolean(maskEditorTarget)}
+          source={maskEditorTarget?.source ?? null}
+        />
       </div>
     </div>,
     document.body,
