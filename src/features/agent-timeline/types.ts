@@ -1,3 +1,11 @@
+import type {
+  BodyPartId,
+  PromptTagCategory,
+  PromptTagSubcategory,
+  SceneObject3DTransform,
+} from "@/shared/types";
+import type { StickFigurePoseV1 } from "@/shared/types/stick-figure-pose";
+
 export const timelineNodeStatuses = [
   "blocked",
   "ready",
@@ -39,6 +47,8 @@ export const executableTimelineNodeIds = [
 export type TimelineExecutableNodeId = (typeof executableTimelineNodeIds)[number];
 
 export const reservedTimelineNodeIds = [
+  "resource-recommendation",
+  "parameter-recommendation",
   "comfyui-execution",
   "result-display",
 ] as const satisfies readonly TimelineNodeId[];
@@ -96,6 +106,55 @@ export type TimelineWorkflowState = {
 export type SceneInputTimelineResult = {
   rawIntent: string;
   settingsSnapshot?: unknown;
+};
+
+export type TimelinePromptFragment = {
+  label: string;
+  prompt: string;
+};
+
+export type ScenePromptTimelineResult = {
+  positivePrompt: string;
+  negativeSuggestions: string[];
+  style: TimelinePromptFragment[];
+  camera: TimelinePromptFragment[];
+  lighting: TimelinePromptFragment[];
+};
+
+export type CharacterPromptTag = {
+  label: string;
+  prompt: string;
+  category: PromptTagCategory;
+  subcategory?: PromptTagSubcategory;
+  bodyPartId?: BodyPartId;
+};
+
+export type CharacterTagsTimelineResult = {
+  primaryCharacter: {
+    name: string;
+    description: string;
+  };
+  tags: CharacterPromptTag[];
+  extraPeopleContext: string[];
+};
+
+export type CharacterActionTimelineResult = {
+  action: string;
+  pose: StickFigurePoseV1;
+  poseSummary: string;
+};
+
+export type CanvasBindingTimelineResult = {
+  primaryCharacter: {
+    id: string;
+    name: string;
+    description: string;
+  };
+  characterTags: CharacterPromptTag[];
+  action: string;
+  transform: SceneObject3DTransform;
+  pose: StickFigurePoseV1;
+  spatialSummary: string;
 };
 
 export type GenerationGateTimelineResult = {

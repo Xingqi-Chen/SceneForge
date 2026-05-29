@@ -1,6 +1,6 @@
 "use client";
 
-import { type FormEvent, useMemo, useState } from "react";
+import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import {
   ArrowRight,
@@ -26,14 +26,37 @@ import type { LucideIcon } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { getTimelineNodeDependencies } from "@/features/agent-timeline/dag";
-import { createTimelineWorkflowState, setTimelineNodeManualResult } from "@/features/agent-timeline/state";
+import { executeTimelineGraph } from "@/features/agent-timeline/graph";
+import {
+  createTimelineWorkflowState,
+  setTimelineNodeManualResult,
+} from "@/features/agent-timeline/state";
+import {
+  createTimelineT5NodeAdapters,
+  normalizeCharacterTagsTimelineResult,
+  normalizeScenePromptTimelineResult,
+} from "@/features/agent-timeline/t5-node-adapters";
 import {
   timelineNodeIds,
+  TimelineNodeExecutionError,
+  type CanvasBindingTimelineResult,
+  type CharacterActionTimelineResult,
   type SceneInputTimelineResult,
   type TimelineNodeId,
   type TimelineNodeStatus,
   type TimelineWorkflowState,
 } from "@/features/agent-timeline/types";
+import {
+  bindPrimaryTimelineCharacterToEditorStore,
+  getPrimaryTimelineCharacterPoseFromEditorStore,
+} from "@/features/agent-timeline/editor-canvas-binding";
+import {
+  getLlmProxyErrorMessage,
+  isLlmChatResponse,
+  LiteLlmError,
+  type LlmChatRequest,
+  type LlmChatResponse,
+} from "@/features/llm";
 import { cn } from "@/shared/utils/cn";
 
 import { TimelineNodeStatus as TimelineStatusChip } from "./TimelineNodeStatus";
@@ -115,11 +138,86 @@ const stepDisplay: Record<TimelineNodeId, StepDisplay> = {
 const settingsLinkClassName =
   "inline-flex h-9 items-center justify-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-xs font-medium text-slate-700 transition-colors hover:border-slate-300 hover:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-400";
 
+async function completeTimelineChatViaApi(request: LlmChatRequest): Promise<LlmChatResponse> {
+  const response = await fetch("/api/llm/chat", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+    },
+    body: JSON.stringify(request),
+  });
+  const payload: unknown = await response.json();
+
+  if (!response.ok) {
+    throw new LiteLlmError(getLlmProxyErrorMessage(payload), {
+      statusCode: response.status,
+      details: payload,
+    });
+  }
+
+  if (!isLlmChatResponse(payload)) {
+    throw new LiteLlmError("LLM response did not include usable chat content.", {
+      statusCode: 502,
+      details: payload,
+    });
+  }
+
+  return payload;
+}
+
+function parseManualJson(value: string) {
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    return null;
+  }
+}
+
 function createManualResult(nodeId: TimelineNodeId, value: string) {
   if (nodeId === "scene-input") {
     return {
       rawIntent: value,
     } satisfies SceneInputTimelineResult;
+  }
+
+  const parsed = parseManualJson(value);
+
+  if (parsed !== null) {
+    try {
+      if (nodeId === "scene-prompt") {
+        return normalizeScenePromptTimelineResult(parsed);
+      }
+
+      if (nodeId === "character-tags") {
+        return normalizeCharacterTagsTimelineResult(parsed);
+      }
+
+      if (
+        nodeId === "character-action" &&
+        typeof parsed === "object" &&
+        parsed !== null &&
+        "action" in parsed &&
+        "pose" in parsed &&
+        "poseSummary" in parsed
+      ) {
+        return parsed as CharacterActionTimelineResult;
+      }
+
+      if (
+        nodeId === "canvas-binding" &&
+        typeof parsed === "object" &&
+        parsed !== null &&
+        "primaryCharacter" in parsed &&
+        "pose" in parsed &&
+        "spatialSummary" in parsed
+      ) {
+        return parsed as CanvasBindingTimelineResult;
+      }
+    } catch (error) {
+      if (!(error instanceof TimelineNodeExecutionError)) {
+        throw error;
+      }
+    }
   }
 
   return {
@@ -192,6 +290,8 @@ export function TimelineShell() {
   const [editingNodeId, setEditingNodeId] = useState<TimelineNodeId | null>(null);
   const [drafts, setDrafts] = useState<DraftMap>({});
   const [notices, setNotices] = useState<NoticeMap>({});
+  const [isRunning, setIsRunning] = useState(false);
+  const activeRunIdRef = useRef(0);
 
   const previewWorkflow = useMemo(() => createTimelineWorkflowState({ workflowId: "draft-workflow" }), []);
   const activeWorkflow = workflow ?? previewWorkflow;
@@ -202,23 +302,100 @@ export function TimelineShell() {
   const selectedOutput = getTimelineNodeOutputText(selectedNode);
   const sceneRequestIsUsable = sceneRequest.trim().length > 0;
   const selectedNodeAiDisabled =
-    selectedContent.reserved || selectedNode.status === "blocked" || selectedNode.status === "running";
+    isRunning ||
+    selectedContent.reserved ||
+    selectedNode.status === "blocked" ||
+    selectedNode.status === "running";
   const workflowTitle = workflow ? sceneRequest : "Untitled workflow";
   const workflowMode = workflow ? "Run shell" : "Draft setup";
+
+  useEffect(() => {
+    return () => {
+      activeRunIdRef.current += 1;
+    };
+  }, []);
+
+  function isCurrentRun(runId: number) {
+    return activeRunIdRef.current === runId;
+  }
+
+  function invalidateTimelineRun() {
+    activeRunIdRef.current += 1;
+  }
+
+  async function runTimelineGraph(nextWorkflow: TimelineWorkflowState) {
+    const runId = activeRunIdRef.current + 1;
+    activeRunIdRef.current = runId;
+
+    setIsRunning(true);
+    setNotices({});
+
+    try {
+      const result = await executeTimelineGraph(
+        nextWorkflow,
+        createTimelineT5NodeAdapters({
+          completeChat: async (request) => {
+            if (!isCurrentRun(runId)) {
+              throw new Error("Timeline run was superseded.");
+            }
+
+            const response = await completeTimelineChatViaApi(request);
+
+            if (!isCurrentRun(runId)) {
+              throw new Error("Timeline run was superseded.");
+            }
+
+            return response;
+          },
+          bindCanvas: (input) => {
+            if (!isCurrentRun(runId)) {
+              throw new Error("Timeline run was superseded.");
+            }
+
+            return bindPrimaryTimelineCharacterToEditorStore(input);
+          },
+          getCurrentPose: getPrimaryTimelineCharacterPoseFromEditorStore,
+        }),
+      );
+
+      if (!isCurrentRun(runId)) {
+        return;
+      }
+
+      setWorkflow(result);
+    } catch (error) {
+      if (!isCurrentRun(runId)) {
+        return;
+      }
+
+      console.error("[SceneForge] [timeline] graph execution failed", { error });
+      setNotices((current) => ({
+        ...current,
+        [selectedNodeId]: error instanceof Error ? error.message : "Timeline graph execution failed.",
+      }));
+    } finally {
+      if (isCurrentRun(runId)) {
+        setIsRunning(false);
+      }
+    }
+  }
 
   function startWorkflow() {
     const trimmedSceneRequest = sceneRequest.trim();
 
-    if (!trimmedSceneRequest) {
+    if (!trimmedSceneRequest || isRunning) {
       return;
     }
 
-    setWorkflow(createTimelineWorkflowState({ sceneRequest: trimmedSceneRequest }));
+    const nextWorkflow = createTimelineWorkflowState({ sceneRequest: trimmedSceneRequest });
+
+    setWorkflow(nextWorkflow);
     setSceneRequest(trimmedSceneRequest);
     setSelectedNodeId("scene-input");
     setEditingNodeId(null);
     setDrafts({});
     setNotices({});
+    void runTimelineGraph(nextWorkflow);
   }
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -282,19 +459,32 @@ export function TimelineShell() {
 
   function handleRequestAi(nodeId: TimelineNodeId) {
     setSelectedNodeId(nodeId);
-    setNotices((current) => ({
-      ...current,
-      [nodeId]: "AI suggestion is reserved for a later timeline node.",
-    }));
+
+    if (!workflow) {
+      startWorkflow();
+      return;
+    }
+
+    if (timelineNodeContent[nodeId].reserved) {
+      setNotices((current) => ({
+        ...current,
+        [nodeId]: "This node is reserved for a later timeline slice.",
+      }));
+      return;
+    }
+
+    void runTimelineGraph(workflow);
   }
 
   function handleNewScene() {
+    invalidateTimelineRun();
     setWorkflow(null);
     setSceneRequest("");
     setSelectedNodeId("scene-input");
     setEditingNodeId(null);
     setDrafts({});
     setNotices({});
+    setIsRunning(false);
   }
 
   function selectNode(nodeId: TimelineNodeId) {
@@ -330,7 +520,7 @@ export function TimelineShell() {
           </Button>
           <Button
             className="h-9 px-3 text-xs shadow-none"
-            disabled={workflow ? selectedNodeAiDisabled : !sceneRequestIsUsable}
+            disabled={workflow ? selectedNodeAiDisabled : !sceneRequestIsUsable || isRunning}
             onClick={workflow ? () => handleRequestAi(selectedNodeId) : startWorkflow}
             type="button"
           >
@@ -344,8 +534,8 @@ export function TimelineShell() {
         </div>
       </header>
 
-      <div className="sf-agent-workbench">
-        <aside className="sf-agent-workbench__nav custom-scrollbar touch-scroll-region overflow-y-auto bg-white p-3">
+      <div className="sf-agent-workbench flex min-h-0 flex-1 flex-col overflow-hidden lg:flex-row">
+        <aside className="sf-agent-workbench__nav custom-scrollbar touch-scroll-region order-2 min-h-0 overflow-y-auto border-b border-slate-200 bg-white p-3 lg:order-1 lg:w-72 lg:flex-[0_0_18rem] lg:border-b-0 lg:border-r">
           <div className="mb-3 flex items-center justify-between px-1">
             <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Workflow</h2>
             <span className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] text-slate-500">
@@ -401,7 +591,7 @@ export function TimelineShell() {
           </div>
         </aside>
 
-        <section className="sf-agent-workbench__main custom-scrollbar touch-scroll-region overflow-y-auto bg-slate-100 p-4">
+        <section className="sf-agent-workbench__main custom-scrollbar touch-scroll-region order-1 min-h-0 flex-1 overflow-y-auto bg-slate-100 p-4 lg:order-2 lg:min-w-0">
           <div className="mx-auto flex w-full max-w-4xl flex-col gap-4">
             <article className="overflow-hidden rounded-md border border-slate-200 bg-white shadow-sm">
               <header className="flex flex-col gap-3 border-b border-slate-100 px-4 py-3 sm:flex-row sm:items-start sm:justify-between">
@@ -456,7 +646,7 @@ export function TimelineShell() {
                       <div className="flex flex-wrap items-center gap-1.5">
                         <Button
                           className="h-7 px-2 text-[11px] shadow-none"
-                          disabled={!workflow}
+                          disabled={!workflow || isRunning}
                           onClick={() => handleRequestAi("scene-input")}
                           type="button"
                           variant="secondary"
@@ -465,7 +655,7 @@ export function TimelineShell() {
                         </Button>
                         <Button
                           className="h-7 px-2 text-[11px] shadow-none"
-                          disabled={!workflow}
+                          disabled={!workflow || isRunning}
                           onClick={() => handleRequestAi("scene-input")}
                           type="button"
                           variant="secondary"
@@ -477,7 +667,7 @@ export function TimelineShell() {
                           Lock
                         </Button>
                       </div>
-                      <Button className="h-8 px-3 text-xs shadow-none" disabled={!sceneRequestIsUsable} type="submit">
+                      <Button className="h-8 px-3 text-xs shadow-none" disabled={!sceneRequestIsUsable || isRunning} type="submit">
                         <Play className="size-3.5" />
                         Start workflow
                       </Button>
@@ -587,7 +777,7 @@ export function TimelineShell() {
           </div>
         </section>
 
-        <aside className="sf-agent-workbench__inspector custom-scrollbar touch-scroll-region overflow-y-auto bg-white p-3">
+        <aside className="sf-agent-workbench__inspector custom-scrollbar touch-scroll-region order-3 min-h-0 overflow-y-auto border-t border-slate-200 bg-white p-3 lg:order-3 lg:w-80 lg:flex-[0_0_20rem] lg:border-l lg:border-t-0">
           <div className="flex flex-col gap-3">
             <section className="rounded-md border border-slate-200 bg-white">
               <header className="border-b border-slate-100 px-3 py-2">
@@ -617,14 +807,18 @@ export function TimelineShell() {
                   </p>
                 </div>
                 <div className="flex gap-2">
-                  <span className={cn("mt-1 size-2 shrink-0 rounded-full", selectedNode.status === "ready" ? "bg-blue-500" : "bg-slate-300")} />
+                  <span className={cn("mt-1 size-2 shrink-0 rounded-full", isRunning ? "bg-indigo-500" : selectedNode.status === "ready" ? "bg-blue-500" : "bg-slate-300")} />
                   <p className="leading-relaxed text-slate-600">
-                    {selectedContent.title} is {getCompactStatusLabel(selectedNode.status).toLowerCase()}.
+                    {isRunning
+                      ? "LangGraph is running T5 inference through the existing LLM chat boundary."
+                      : `${selectedContent.title} is ${getCompactStatusLabel(selectedNode.status).toLowerCase()}.`}
                   </p>
                 </div>
                 <div className="flex gap-2">
                   <span className="mt-1 size-2 shrink-0 rounded-full bg-slate-300" />
-                  <p className="leading-relaxed text-slate-600">Tool calls are reserved for later graph adapters.</p>
+                  <p className="leading-relaxed text-slate-600">
+                    Civitai, ComfyUI, image storage, and render execution remain blocked.
+                  </p>
                 </div>
               </div>
             </section>
@@ -634,7 +828,9 @@ export function TimelineShell() {
                 <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Tool calls</h2>
               </header>
               <div className="p-3 text-xs leading-relaxed text-slate-500">
-                No external tools have been called by this shell.
+                {workflow
+                  ? "T5 inference uses /api/llm/chat only. Resource and render services are not called."
+                  : "No external tools have been called by this shell."}
               </div>
             </section>
 

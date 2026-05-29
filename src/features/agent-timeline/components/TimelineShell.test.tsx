@@ -2,6 +2,9 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { createDefaultProject } from "@/features/editor/store/defaults";
+import { useEditorStore } from "@/features/editor/store/editor-store";
+
 import { TimelineShell } from "./TimelineShell";
 
 const nodeTitles = [
@@ -19,6 +22,124 @@ const nodeTitles = [
 
 let container: HTMLDivElement;
 let root: Root;
+
+function createJsonResponse(payload: unknown, status = 200) {
+  return new Response(JSON.stringify(payload), {
+    status,
+    headers: {
+      "content-type": "application/json",
+    },
+  });
+}
+
+function createPoseResponse() {
+  return JSON.stringify({
+    characterDescription: "courier leaping across wet pavement",
+    targets: {
+      pelvis: { x: 0, y: 1.05, z: 0 },
+      chest: { x: 0, y: 1.45, z: 0.08 },
+      head: { x: 0, y: 1.72, z: 0.1 },
+      leftHand: { x: -0.5, y: 1.25, z: 0.2 },
+      rightHand: { x: 0.45, y: 1.36, z: -0.1 },
+      leftFoot: { x: -0.2, y: 0.35, z: 0.22 },
+      rightFoot: { x: 0.25, y: 0.04, z: -0.08 },
+    },
+    poles: {
+      leftElbowPole: { x: -0.65, y: 1.2, z: 0.25 },
+      rightElbowPole: { x: 0.65, y: 1.2, z: 0.15 },
+      leftKneePole: { x: -0.28, y: 0.58, z: 0.8 },
+      rightKneePole: { x: 0.28, y: 0.52, z: 0.2 },
+    },
+  });
+}
+
+function getFetchPurpose(init: RequestInit | undefined) {
+  return typeof init?.body === "string" ? (JSON.parse(init.body) as { purpose?: string }).purpose : undefined;
+}
+
+function createT5ResponseForPurpose(purpose: string | undefined) {
+  if (purpose === "stable-diffusion-prompt-generation") {
+    return createJsonResponse({
+      role: "assistant",
+      content: JSON.stringify({
+        positivePrompt: "neon market alley, sunrise, courier sprinting",
+        negativeSuggestions: ["low detail"],
+        style: [{ label: "Cinematic", prompt: "cinematic realism" }],
+        camera: [{ label: "Wide", prompt: "wide angle tracking shot" }],
+        lighting: [{ label: "Rim", prompt: "warm sunrise rim light" }],
+      }),
+    });
+  }
+
+  if (purpose === "prompt-tag-reverse") {
+    return createJsonResponse({
+      role: "assistant",
+      content: JSON.stringify({
+        primaryCharacter: {
+          name: "Courier",
+          description: "A focused courier in a reflective jacket",
+        },
+        tags: [
+          {
+            label: "Courier",
+            prompt: "solo courier protagonist",
+            category: "character",
+            subcategory: "character-subject",
+          },
+          {
+            label: "Jacket",
+            prompt: "reflective yellow jacket",
+            category: "outfit",
+            subcategory: "outfit-upper",
+            bodyPartId: "torso",
+          },
+        ],
+        extraPeopleContext: ["distant shoppers are background context"],
+      }),
+    });
+  }
+
+  return createJsonResponse({
+    role: "assistant",
+    content: createPoseResponse(),
+  });
+}
+
+function mockT5Fetch() {
+  return vi.fn<typeof fetch>(async (_input, init) => createT5ResponseForPurpose(getFetchPurpose(init)));
+}
+
+function mockT5FetchWithDeferredPose() {
+  const poseRequests: Array<{
+    reject: (reason?: unknown) => void;
+    resolve: (response: Response) => void;
+  }> = [];
+
+  const fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
+    const purpose = getFetchPurpose(init);
+
+    if (purpose !== "stick-figure-pose-generation") {
+      return createT5ResponseForPurpose(purpose);
+    }
+
+    return new Promise<Response>((resolve, reject) => {
+      poseRequests.push({
+        reject,
+        resolve,
+      });
+    });
+  });
+
+  return { fetchMock, poseRequests };
+}
+
+async function flushAsyncWork(cycles = 6) {
+  for (let index = 0; index < cycles; index += 1) {
+    await act(async () => {
+      await Promise.resolve();
+    });
+  }
+}
 
 function getButtonByText(label: string) {
   const button = Array.from(container.querySelectorAll("button")).find(
@@ -63,7 +184,7 @@ function setNativeTextAreaValue(textarea: HTMLTextAreaElement, value: string) {
   textarea.dispatchEvent(new Event("input", { bubbles: true }));
 }
 
-function submitInitialScene(sceneRequest: string) {
+async function submitInitialScene(sceneRequest: string) {
   const textarea = container.querySelector("#scene-request") as HTMLTextAreaElement | null;
   const form = container.querySelector("form");
 
@@ -78,10 +199,13 @@ function submitInitialScene(sceneRequest: string) {
   act(() => {
     form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
   });
+
+  await flushAsyncWork();
 }
 
 beforeEach(() => {
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  useEditorStore.getState().setProject(createDefaultProject());
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -114,6 +238,18 @@ describe("TimelineShell", () => {
     expect(container.textContent).toContain("Tool calls");
     expect(container.textContent).toContain("Generated artifacts");
 
+    const workbench = container.querySelector(".sf-agent-workbench");
+    const nav = container.querySelector(".sf-agent-workbench__nav");
+    const main = container.querySelector(".sf-agent-workbench__main");
+    const inspector = container.querySelector(".sf-agent-workbench__inspector");
+
+    expect(workbench?.className).toContain("lg:flex-row");
+    expect(nav?.className).toContain("order-2");
+    expect(nav?.className).toContain("lg:order-1");
+    expect(main?.className).toContain("order-1");
+    expect(main?.className).toContain("lg:order-2");
+    expect(inspector?.className).toContain("order-3");
+
     const form = container.querySelector("form");
     expect(form).not.toBeNull();
 
@@ -130,10 +266,10 @@ describe("TimelineShell", () => {
     expect(getButtonByText("Start workflow").disabled).toBe(true);
   });
 
-  it("submits a usable scene request into the vertical MVP timeline shell without persistence or API calls", () => {
+  it("submits a usable scene request into the LangGraph T5 timeline without persistence or reserved service calls", async () => {
     const storageSpy = vi.spyOn(Storage.prototype, "setItem");
     const originalFetch = globalThis.fetch;
-    const fetchMock = vi.fn<typeof fetch>();
+    const fetchMock = mockT5Fetch();
     globalThis.fetch = fetchMock;
 
     try {
@@ -141,7 +277,7 @@ describe("TimelineShell", () => {
         root.render(<TimelineShell />);
       });
 
-      submitInitialScene("  A neon market alley with a courier at sunrise  ");
+      await submitInitialScene("  A neon market alley with a courier at sunrise  ");
 
       expect(getWorkflowStepTitles()).toEqual(nodeTitles);
       expect(container.textContent).toContain("A neon market alley with a courier at sunrise");
@@ -159,10 +295,25 @@ describe("TimelineShell", () => {
       });
 
       const scenePromptSection = getSectionByHeading("Prompt generation");
-      expect(scenePromptSection.textContent).toContain("Ready");
-      expect(scenePromptSection.textContent).toContain("Ready for scene prompt inference.");
+      expect(scenePromptSection.textContent).toContain("Done");
+      expect(scenePromptSection.textContent).toContain("neon market alley, sunrise, courier sprinting");
       expect(scenePromptSection.textContent).toContain("Edit");
       expect(scenePromptSection.textContent).toContain("Regenerate");
+
+      const characterTagsButton = container.querySelector('button[data-node-id="character-tags"]') as HTMLButtonElement | null;
+      act(() => {
+        characterTagsButton?.click();
+      });
+
+      expect(getSectionByHeading("Character tags").textContent).toContain("reflective yellow jacket");
+
+      const canvasButton = container.querySelector('button[data-node-id="canvas-binding"]') as HTMLButtonElement | null;
+      act(() => {
+        canvasButton?.click();
+      });
+
+      expect(getSectionByHeading("Layout planning").textContent).toContain("editable 3D character");
+      expect(getSectionByHeading("Layout planning").textContent).toContain("Courier");
 
       const generationGateButton = container.querySelector('button[data-node-id="generation-gate"]') as HTMLButtonElement | null;
       act(() => {
@@ -197,7 +348,10 @@ describe("TimelineShell", () => {
       );
 
       expect(storageSpy).not.toHaveBeenCalled();
-      expect(fetchMock).not.toHaveBeenCalled();
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+      expect(
+        fetchMock.mock.calls.map(([input]) => String(input)),
+      ).toEqual(["/api/llm/chat", "/api/llm/chat", "/api/llm/chat"]);
       expect(window.localStorage.length).toBe(0);
       expect(window.sessionStorage.length).toBe(0);
       expect(container.textContent).not.toMatch(/C:\\|SCENEFORGE_|API_KEY|generated-images|data\//);
@@ -206,75 +360,127 @@ describe("TimelineShell", () => {
     }
   });
 
-  it("surfaces downstream stale status after a manual scene prompt edit", () => {
-    act(() => {
-      root.render(<TimelineShell />);
-    });
+  it("ignores stale graph results and canvas binding after starting a new scene", async () => {
+    const originalFetch = globalThis.fetch;
+    const { fetchMock, poseRequests } = mockT5FetchWithDeferredPose();
+    globalThis.fetch = fetchMock;
 
-    submitInitialScene("A glass greenhouse control room");
+    try {
+      act(() => {
+        root.render(<TimelineShell />);
+      });
 
-    const promptStepButton = container.querySelector('button[data-node-id="scene-prompt"]') as HTMLButtonElement | null;
+      await submitInitialScene("A stale neon market courier scene");
 
-    act(() => {
-      promptStepButton?.click();
-    });
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+      expect(poseRequests).toHaveLength(1);
+      expect(container.textContent).toContain("A stale neon market courier scene");
 
-    const scenePromptSection = getSectionByHeading("Prompt generation");
-    const editButton = Array.from(scenePromptSection.querySelectorAll("button")).find(
-      (button) => button.textContent?.replace(/\s+/g, " ").trim() === "Edit",
-    ) as HTMLButtonElement | undefined;
+      act(() => {
+        getButtonByText("New scene").click();
+      });
 
-    expect(editButton).not.toBeUndefined();
+      expect((container.querySelector("#scene-request") as HTMLTextAreaElement | null)?.value).toBe("");
+      expect(container.textContent).toContain("Waiting for scene command.");
+      expect(container.textContent).not.toContain("A stale neon market courier scene");
 
-    act(() => {
-      editButton?.click();
-    });
+      await act(async () => {
+        poseRequests[0]?.resolve(createT5ResponseForPurpose("stick-figure-pose-generation"));
+        await Promise.resolve();
+      });
+      await flushAsyncWork();
 
-    let draft = scenePromptSection.querySelector("textarea") as HTMLTextAreaElement | null;
-    expect(draft).not.toBeNull();
+      const editorState = useEditorStore.getState();
 
-    act(() => {
-      setNativeTextAreaValue(draft as HTMLTextAreaElement, "discarded prompt draft");
-    });
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+      expect((container.querySelector("#scene-request") as HTMLTextAreaElement | null)?.value).toBe("");
+      expect(container.textContent).toContain("Waiting for scene command.");
+      expect(container.textContent).not.toContain("A stale neon market courier scene");
+      expect(container.textContent).not.toContain("neon market alley, sunrise, courier sprinting");
+      expect(container.textContent).not.toContain("Courier");
+      expect(editorState.project.scene.mode).toBe("2d");
+      expect(editorState.project.scene.characters).toHaveLength(0);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
 
-    const cancelButton = Array.from(scenePromptSection.querySelectorAll("button")).find((button) =>
-      button.textContent?.includes("Cancel"),
-    ) as HTMLButtonElement | undefined;
+  it("surfaces downstream stale status after a manual scene prompt edit", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mockT5Fetch();
 
-    act(() => {
-      cancelButton?.click();
-    });
+    try {
+      act(() => {
+        root.render(<TimelineShell />);
+      });
 
-    act(() => {
-      editButton?.click();
-    });
+      await submitInitialScene("A glass greenhouse control room");
 
-    draft = scenePromptSection.querySelector("textarea") as HTMLTextAreaElement | null;
-    expect(draft?.value).toBe("");
+      const promptStepButton = container.querySelector('button[data-node-id="scene-prompt"]') as HTMLButtonElement | null;
 
-    act(() => {
-      setNativeTextAreaValue(draft as HTMLTextAreaElement, "wide lens greenhouse command deck");
-    });
+      act(() => {
+        promptStepButton?.click();
+      });
 
-    const saveButton = Array.from(scenePromptSection.querySelectorAll("button")).find((button) =>
-      button.textContent?.includes("Save manual"),
-    ) as HTMLButtonElement | undefined;
+      const scenePromptSection = getSectionByHeading("Prompt generation");
+      const editButton = Array.from(scenePromptSection.querySelectorAll("button")).find(
+        (button) => button.textContent?.replace(/\s+/g, " ").trim() === "Edit",
+      ) as HTMLButtonElement | undefined;
 
-    expect(saveButton?.disabled).toBe(false);
+      expect(editButton).not.toBeUndefined();
 
-    act(() => {
-      saveButton?.click();
-    });
+      act(() => {
+        editButton?.click();
+      });
 
-    expect(getSectionByHeading("Prompt generation").textContent).toContain("Done");
-    expect(getSectionByHeading("Prompt generation").textContent).toContain("wide lens greenhouse command deck");
+      let draft = scenePromptSection.querySelector("textarea") as HTMLTextAreaElement | null;
+      expect(draft).not.toBeNull();
 
-    for (const title of nodeTitles.slice(2)) {
-      const stepButton = Array.from(container.querySelectorAll("button[data-node-id]")).find((button) =>
-        button.textContent?.includes(title),
-      );
+      act(() => {
+        setNativeTextAreaValue(draft as HTMLTextAreaElement, "discarded prompt draft");
+      });
 
-      expect(stepButton?.textContent).toContain("Pending");
+      const cancelButton = Array.from(scenePromptSection.querySelectorAll("button")).find((button) =>
+        button.textContent?.includes("Cancel"),
+      ) as HTMLButtonElement | undefined;
+
+      act(() => {
+        cancelButton?.click();
+      });
+
+      act(() => {
+        editButton?.click();
+      });
+
+      draft = scenePromptSection.querySelector("textarea") as HTMLTextAreaElement | null;
+      expect(draft?.value).toContain("neon market alley, sunrise, courier sprinting");
+
+      act(() => {
+        setNativeTextAreaValue(draft as HTMLTextAreaElement, "wide lens greenhouse command deck");
+      });
+
+      const saveButton = Array.from(scenePromptSection.querySelectorAll("button")).find((button) =>
+        button.textContent?.includes("Save manual"),
+      ) as HTMLButtonElement | undefined;
+
+      expect(saveButton?.disabled).toBe(false);
+
+      act(() => {
+        saveButton?.click();
+      });
+
+      expect(getSectionByHeading("Prompt generation").textContent).toContain("Done");
+      expect(getSectionByHeading("Prompt generation").textContent).toContain("wide lens greenhouse command deck");
+
+      for (const title of nodeTitles.slice(2)) {
+        const stepButton = Array.from(container.querySelectorAll("button[data-node-id]")).find((button) =>
+          button.textContent?.includes(title),
+        );
+
+        expect(stepButton?.textContent).toContain("Pending");
+      }
+    } finally {
+      globalThis.fetch = originalFetch;
     }
   });
 });

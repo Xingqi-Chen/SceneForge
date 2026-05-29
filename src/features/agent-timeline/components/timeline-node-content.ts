@@ -51,6 +51,7 @@ export const timelineNodeContent: Record<TimelineNodeId, TimelineNodeContent> = 
     emptyState: "Waiting for prompt, tags, action, and local resources.",
     editLabel: "Edit resources",
     aiLabel: "Suggest resources",
+    reserved: true,
   },
   "parameter-recommendation": {
     title: "Render prompt",
@@ -58,6 +59,7 @@ export const timelineNodeContent: Record<TimelineNodeId, TimelineNodeContent> = 
     emptyState: "Waiting for prompt, canvas, and resources.",
     editLabel: "Edit parameters",
     aiLabel: "Suggest parameters",
+    reserved: true,
   },
   "generation-gate": {
     title: "Review / export",

@@ -4,6 +4,33 @@ This log records dated implementation and documentation work. Keep entries conci
 
 ## 2026-05-29
 
+### T5 Timeline Inference and Canvas Binding
+
+Summary:
+
+- Restored the timeline workbench to a responsive three-column desktop layout and ordered the narrow layout so the selected node workspace and scene composer appear before the full workflow list.
+- Added T5 LangGraph adapters for scene prompt inference, primary character tag extraction, character action/pose inference, and canvas binding.
+- Reused `/api/llm/chat` from the client for all LLM calls and kept resource recommendation, parameter recommendation, ComfyUI execution, image storage, and result display blocked or reserved.
+- Added structured parsing and normalization for scene prompt fragments, primary character tags, extra people context, stick-figure pose output, and canvas binding results.
+- Bound the inferred primary character to the existing editor store as one editable 3D character/skeleton using existing editor store actions.
+- Added run invalidation so superseded or cleared timeline graph runs cannot restore stale workflow output or bind stale canvas/editor state.
+
+Files changed:
+
+- `src/features/agent-timeline/`
+- `docs/dev-log.md`
+
+Validation:
+
+- `npm test -- src/features/agent-timeline/components/TimelineShell.test.tsx` passed: 1 file, 4 tests.
+- `npm test -- src/features/agent-timeline` passed: 6 files, 23 tests.
+- `npm run typecheck` passed.
+- `npm run lint` passed with the existing 22 `<img>` warnings in editor UI components.
+- `npm test` passed: 74 files, 482 tests.
+- `npm run build` passed with the existing Turbopack NFT trace warning for `next.config.ts` through ComfyUI sequence reference storage.
+- `git diff --check` passed with line-ending warnings only.
+- Orchestrator evidence for the current pass also includes real Edge headless layout measurement passing on `http://localhost:3001`.
+
 ### T4 Initial Timeline Shell
 
 Summary:
