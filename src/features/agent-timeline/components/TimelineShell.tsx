@@ -205,14 +205,17 @@ export function TimelineShell() {
       </header>
 
       <div className="custom-scrollbar touch-scroll-region min-h-0 flex-1 overflow-y-auto px-4 py-6">
-        <div className="mx-auto flex w-full max-w-5xl flex-col gap-6">
-          <div className="flex flex-col gap-6">
+        <div className="mx-auto w-full max-w-5xl">
+          <div className="relative flex flex-col gap-5">
+            <span
+              aria-hidden="true"
+              className="absolute bottom-4 left-5 top-4 w-px bg-slate-300 shadow-[0_0_0_1px_rgba(255,255,255,0.8)] sm:left-6"
+            />
             {timelineNodes.map((node, index) => (
               <TimelineNodeCard
                 draft={drafts[node.nodeId] ?? ""}
                 index={index}
                 isEditing={editingNodeId === node.nodeId}
-                isLast={index === timelineNodes.length - 1}
                 key={node.nodeId}
                 node={node}
                 onCancelEdit={handleCancelEdit}

@@ -1,8 +1,12 @@
 "use client";
 
-import { LockKeyhole, Sparkles } from "lucide-react";
+import { Bot, LockKeyhole, Sparkles } from "lucide-react";
 
-import type { TimelineNodeId, TimelineNodeResult, TimelineNodeStatus as TimelineNodeStatusValue } from "@/features/agent-timeline";
+import type {
+  TimelineNodeId,
+  TimelineNodeResult,
+  TimelineNodeStatus as TimelineNodeStatusValue,
+} from "@/features/agent-timeline";
 import { cn } from "@/shared/utils/cn";
 
 import { TimelineAiRetry } from "./TimelineAiRetry";
@@ -14,7 +18,6 @@ type TimelineNodeCardProps = {
   draft: string;
   index: number;
   isEditing: boolean;
-  isLast: boolean;
   node: TimelineNodeResult;
   onCancelEdit: () => void;
   onDraftChange: (nodeId: TimelineNodeId, value: string) => void;
@@ -48,7 +51,6 @@ export function TimelineNodeCard({
   draft,
   index,
   isEditing,
-  isLast,
   node,
   onCancelEdit,
   onDraftChange,
@@ -62,14 +64,14 @@ export function TimelineNodeCard({
   const editable = !content.reserved && node.status !== "running";
   const aiDisabled = content.reserved || node.status === "blocked" || node.status === "running";
   const isGenerationGate = node.nodeId === "generation-gate";
+  const TitleIcon = content.reserved ? LockKeyhole : Bot;
 
   return (
-    <section className="relative flex flex-col gap-3 sm:flex-row">
-      <div className="relative hidden w-12 shrink-0 justify-center sm:flex">
-        {!isLast ? <span className="absolute top-10 bottom-[-1.5rem] w-px bg-slate-300" /> : null}
+    <section className="relative flex gap-3 sm:gap-4">
+      <div className="relative z-10 flex w-10 shrink-0 justify-center sm:w-12">
         <span
           className={cn(
-            "relative z-10 flex size-10 items-center justify-center rounded-md border text-xs font-bold shadow-sm",
+            "flex size-10 items-center justify-center rounded-md border text-xs font-bold shadow-sm ring-4 ring-slate-100",
             railClassName[node.status],
           )}
         >
@@ -79,21 +81,33 @@ export function TimelineNodeCard({
 
       <article
         className={cn(
-          "min-w-0 flex-1 overflow-hidden rounded-md border border-l-4 border-slate-200 bg-white shadow-sm shadow-slate-200/70",
+          "min-w-0 flex-1 overflow-hidden rounded-md border border-l-4 border-slate-200 bg-white shadow-md shadow-slate-200/70 ring-1 ring-slate-100",
           cardAccentClassName[node.status],
         )}
       >
-        <header className="flex flex-col gap-3 border-b border-slate-100 bg-slate-50/80 p-4 sm:flex-row sm:items-start sm:justify-between">
-          <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-2">
-              <h2 className="text-sm font-bold text-slate-900">{content.title}</h2>
-              {content.reserved ? (
-                <span className="inline-flex h-6 items-center gap-1 rounded-md border border-slate-200 bg-slate-50 px-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                  Reserved
-                </span>
-              ) : null}
+        <header className="flex flex-col gap-3 border-b border-slate-100 bg-white p-4 sm:flex-row sm:items-start sm:justify-between">
+          <div className="flex min-w-0 items-start gap-3">
+            <div
+              className={cn(
+                "flex size-8 shrink-0 items-center justify-center rounded-md border",
+                content.reserved
+                  ? "border-slate-200 bg-slate-50 text-slate-500"
+                  : "border-blue-100 bg-blue-50 text-blue-700",
+              )}
+            >
+              <TitleIcon className="size-4" />
             </div>
-            <p className="mt-1 text-xs leading-relaxed text-slate-500">{content.shellState}</p>
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2">
+                <h2 className="text-sm font-bold text-slate-900">{content.title}</h2>
+                {content.reserved ? (
+                  <span className="inline-flex h-6 items-center gap-1 rounded-md border border-slate-200 bg-slate-50 px-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                    Reserved
+                  </span>
+                ) : null}
+              </div>
+              <p className="mt-1 text-xs leading-relaxed text-slate-500">{content.shellState}</p>
+            </div>
           </div>
           <div className="flex shrink-0 flex-wrap items-center gap-2">
             <TimelineNodeStatus status={node.status} />
