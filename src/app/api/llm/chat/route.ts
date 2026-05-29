@@ -35,6 +35,7 @@ const NSFW_MODEL_PURPOSES = new Set<LlmChatRequest["purpose"]>([
   "prompt-tag-reverse",
   "stick-figure-pose-generation",
   "comic-sequence-storyboard",
+  "stable-diffusion-prompt-generation",
 ]);
 
 function resolvePurposeDefaultModel(payload: LlmChatRequest) {

@@ -591,6 +591,7 @@ async function completeRecommendationChat(chatRequest: LlmChatRequest): Promise<
     route: "civitai-lora-library/ai-recommendation",
     payload: {
       purpose: chatRequest.purpose,
+      nsfw: chatRequest.nsfw,
       model: chatRequest.model,
       temperature: chatRequest.temperature,
       maxTokens: chatRequest.maxTokens,
@@ -602,7 +603,7 @@ async function completeRecommendationChat(chatRequest: LlmChatRequest): Promise<
     const client = createLiteLlmClient({
       baseUrl: process.env.LITELLM_BASE_URL ?? "",
       apiKey: process.env.LITELLM_API_KEY,
-      defaultModel: process.env.LITELLM_CIVITAI_RECOMMENDATION_MODEL || process.env.LITELLM_DEFAULT_MODEL,
+      defaultModel: resolveCivitaiRecommendationModel(chatRequest.nsfw),
     });
     const completion = await client.completeChat(chatRequest);
 
@@ -638,16 +639,23 @@ function normalizeMaxLoras(value: number | undefined) {
   return Math.max(1, Math.min(CIVITAI_RECOMMENDATION_MAX_LORAS, Math.floor(value)));
 }
 
+function resolveCivitaiRecommendationModel(nsfw: boolean | undefined) {
+  const defaultModel = process.env.LITELLM_CIVITAI_RECOMMENDATION_MODEL || process.env.LITELLM_DEFAULT_MODEL;
+  return nsfw === true ? process.env.LITELLM_NSFW_MODEL || defaultModel : defaultModel;
+}
+
 export async function recommendCivitaiResourceCombination({
   completeChat = completeRecommendationChat,
   db,
   desiredEffect,
   maxLoras: rawMaxLoras,
+  nsfw,
 }: {
   completeChat?: (request: LlmChatRequest) => Promise<LlmChatResponse>;
   db: SceneForgeSqliteDatabase;
   desiredEffect: string;
   maxLoras?: number;
+  nsfw?: boolean;
 }): Promise<CivitaiAiRecommendationResponse> {
   const trimmedEffect = desiredEffect.trim();
   if (!trimmedEffect) {
@@ -668,7 +676,8 @@ export async function recommendCivitaiResourceCombination({
 
   const chatRequest: LlmChatRequest = {
     purpose: "civitai-combination-recommendation",
-    model: process.env.LITELLM_CIVITAI_RECOMMENDATION_MODEL || process.env.LITELLM_DEFAULT_MODEL,
+    model: resolveCivitaiRecommendationModel(nsfw),
+    nsfw,
     messages: buildCivitaiCombinationRecommendationMessages({
       checkpointCandidates: checkpoints,
       desiredEffect: trimmedEffect,

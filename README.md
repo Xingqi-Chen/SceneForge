@@ -35,7 +35,7 @@ npm run build
 
 SceneForge exposes a server-side LiteLLM chat endpoint at `POST /api/llm/chat`. The **Prompt 预览** panel can call this endpoint when you use the optional AI-assisted prompt action (optional `model` override per request). The rest of the editor works without any LLM configuration.
 
-The standalone Agent draft page is available at `/agent`. Its draft API lives at `POST /api/agent/draft`, uses the same LiteLLM environment variables, and returns an editable single-image draft without calling ComfyUI. Users submit only a request; NSFW is kept in page settings, and the LLM supplies editable prompt, checkpoint, LoRA, and generation default candidates.
+The standalone Agent draft page is available at `/agent`. Users submit only a request; NSFW is kept in page settings. The page reuses the existing frontend AI endpoints: `POST /api/llm/chat` creates positive prompt text, `POST /api/civitai-lora-library/ai-recommendation` selects a local checkpoint and LoRA subset, and `POST /api/agent/draft` composes an editable single-image draft without calling LiteLLM or ComfyUI directly.
 
 Configure the LiteLLM proxy with server-only environment variables:
 
@@ -48,7 +48,7 @@ SCENEFORGE_SHOW_NSFW_BUTTON=false
 LITELLM_CIVITAI_RECOMMENDATION_MODEL=optional-civitai-recommendation-model
 ```
 
-The endpoint accepts `model`, `messages`, `temperature`, `maxTokens`, and optional `nsfw`. When a project has NSFW enabled, supported AI operations such as reverse prompt/pose and Comic Sequence storyboard generation use `LITELLM_NSFW_MODEL` by default if it is configured, then forward the request to LiteLLM's OpenAI-compatible `/v1/chat/completions` API.
+The LLM chat endpoint accepts `model`, `messages`, `temperature`, `maxTokens`, and optional `nsfw`. When NSFW is enabled for supported AI operations, including the Agent prompt-generation step, SceneForge uses `LITELLM_NSFW_MODEL` by default if it is configured, then forwards the request to LiteLLM's OpenAI-compatible `/v1/chat/completions` API.
 
 Set `SCENEFORGE_SHOW_NSFW_BUTTON=true` to display the main editor NSFW toggle. It defaults to hidden when unset.
 

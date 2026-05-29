@@ -15,12 +15,14 @@ import type {
   AgentGenerationDefaults,
   AgentSingleImageDraftResponse,
 } from "@/features/agent";
+import type { CivitaiAiRecommendationResponse } from "@/features/civitai-lora-library/types";
 import { COMFYUI_LATENT_IMAGE_NODE_OPTIONS } from "@/features/comfyui/latent-image-node";
 import type { ComfyUiLoraInput } from "@/features/comfyui/types";
 import {
   COMFYUI_SAMPLER_OPTIONS,
   COMFYUI_SCHEDULER_OPTIONS,
 } from "@/features/editor/ai-prompt/comfyui-generation-options";
+import type { LlmChatResponse } from "@/features/llm";
 
 type AgentLatentImageNode = NonNullable<AgentGenerationDefaults["latentImageNode"]>;
 
@@ -63,6 +65,8 @@ const DEFAULT_DRAFT_CONFIG: DraftConfig = {
   steps: 30,
   width: 1024,
 };
+const DEFAULT_AGENT_NEGATIVE_PROMPT =
+  "lowres, blurry, bad anatomy, bad hands, extra fingers, missing fingers, malformed hands, text, watermark";
 
 const REQUEST_TEXTAREA_CLASS =
   "mt-2 min-h-52 w-full resize-y rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-sky-300 focus:ring-2 focus:ring-sky-100";
@@ -74,6 +78,41 @@ const FIELD_LABEL_CLASS = "text-sm font-medium text-slate-700";
 function errorMessageFromPayload(payload: unknown, fallback: string) {
   const response = payload as Partial<AgentErrorResponse>;
   return response.error?.message ?? fallback;
+}
+
+async function postJson<T>(url: string, body: unknown, fallbackError: string): Promise<T> {
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+  const payload = await response.json().catch(() => null);
+
+  if (!response.ok) {
+    throw new Error(errorMessageFromPayload(payload, fallbackError));
+  }
+
+  return payload as T;
+}
+
+function buildPromptMessages(userRequest: string) {
+  return [
+    {
+      role: "system" as const,
+      content: [
+        "You write Stable Diffusion positive prompts for SceneForge single-image drafts.",
+        "Return only the final positive prompt text.",
+        "Do not return JSON, Markdown, code fences, negative prompts, model names, LoRA names, width, height, sampler settings, or explanations.",
+        "Keep the result concrete, visual, and editable by a human before generation.",
+      ].join("\n"),
+    },
+    {
+      role: "user" as const,
+      content: userRequest.trim(),
+    },
+  ];
 }
 
 function roundToStep(value: number, step: number, min: number) {
@@ -196,23 +235,40 @@ export function AgentDraftWorkspace() {
     setError(null);
 
     try {
-      const response = await fetch("/api/agent/draft", {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-        },
-        body: JSON.stringify({
-          userRequest,
-          nsfw: settings.nsfw,
-        }),
-      });
-      const payload = await response.json();
+      const trimmedRequest = userRequest.trim();
+      const promptResponse = await postJson<LlmChatResponse>("/api/llm/chat", {
+        purpose: "stable-diffusion-prompt-generation",
+        nsfw: settings.nsfw,
+        messages: buildPromptMessages(trimmedRequest),
+        temperature: 0.2,
+        maxTokens: 700,
+      }, "Prompt generation request failed.");
+      const positivePrompt = promptResponse.content.trim();
 
-      if (!response.ok) {
-        throw new Error(errorMessageFromPayload(payload, "Agent draft request failed."));
+      if (!positivePrompt) {
+        throw new Error("Prompt generation returned an empty prompt.");
       }
 
-      const nextDraft = payload as AgentSingleImageDraftResponse;
+      const recommendation = await postJson<CivitaiAiRecommendationResponse>(
+        "/api/civitai-lora-library/ai-recommendation",
+        {
+          desiredEffect: `${trimmedRequest}\n\n${positivePrompt}`,
+          maxLoras: 3,
+          nsfw: settings.nsfw,
+        },
+        "Civitai resource recommendation failed.",
+      );
+      const nextDraft = await postJson<AgentSingleImageDraftResponse>("/api/agent/draft", {
+        userRequest: trimmedRequest,
+        nsfw: settings.nsfw,
+        prompt: {
+          title: trimmedRequest.slice(0, 80),
+          positivePrompt,
+          negativePrompt: DEFAULT_AGENT_NEGATIVE_PROMPT,
+        },
+        recommendation,
+      }, "Agent draft request failed.");
+
       setDraft(nextDraft);
       setDraftConfig(toDraftConfig(nextDraft));
       setDraftPositivePrompt(nextDraft.positivePrompt);

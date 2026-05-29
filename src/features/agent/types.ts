@@ -1,4 +1,5 @@
 import type { ComfyUiLoraInput, ComfyUiTextToImageRequest } from "@/features/comfyui/types";
+import type { CivitaiAiRecommendationResponse } from "@/features/civitai-lora-library/types";
 
 export type AgentDraftErrorCode =
   | "agent_request_invalid"
@@ -31,6 +32,18 @@ export type AgentGenerationDefaults = Partial<
 export type AgentSingleImageDraftRequest = {
   userRequest: string;
   nsfw?: boolean;
+};
+
+export type AgentPromptDraft = {
+  title?: string;
+  positivePrompt: string;
+  negativePrompt?: string;
+  warnings?: string[];
+};
+
+export type AgentSingleImageDraftComposeRequest = AgentSingleImageDraftRequest & {
+  prompt: AgentPromptDraft;
+  recommendation: CivitaiAiRecommendationResponse;
 };
 
 export type AgentSingleImageComfyUiDraftRequest = AgentGenerationDefaults & {

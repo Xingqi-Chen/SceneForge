@@ -1,21 +1,23 @@
-import {
-  createLiteLlmClient,
-  LiteLlmError,
-  type LlmChatMessage,
-  type LlmChatRequest,
-} from "@/features/llm";
+import type {
+  CivitaiAiRecommendationResponse,
+  SelectedCivitaiResourcePreview,
+  SelectedCivitaiResourcesPreview,
+} from "@/features/civitai-lora-library/types";
+import { resolveComfyUiGenerationSettings } from "@/features/editor/ai-prompt/comfyui-generation-params";
 
 import type {
   AgentDraftErrorCode,
   AgentGenerationDefaults,
   AgentSingleImageComfyUiDraftRequest,
-  AgentSingleImageDraftRequest,
+  AgentSingleImageDraftComposeRequest,
   AgentSingleImageDraftResponse,
 } from "./types";
 
 const MAX_USER_REQUEST_LENGTH = 8_000;
 const MAX_PROMPT_LENGTH = 12_000;
-const LATENT_IMAGE_NODES = new Set(["EmptyLatentImage", "EmptySD3LatentImage"]);
+const MAX_WARNING_LENGTH = 1_000;
+const DEFAULT_NEGATIVE_PROMPT =
+  "lowres, blurry, bad anatomy, bad hands, extra fingers, missing fingers, malformed hands, text, watermark";
 
 type AgentDraftErrorOptions = {
   code: AgentDraftErrorCode;
@@ -26,38 +28,13 @@ type AgentDraftErrorOptions = {
 type DraftValidationResult =
   | {
       ok: true;
-      request: AgentSingleImageDraftRequest;
+      request: AgentSingleImageDraftComposeRequest;
     }
   | {
       ok: false;
       message: string;
       details?: unknown;
     };
-
-type NormalizedDefaults = {
-  defaults: AgentGenerationDefaults;
-  warnings: string[];
-};
-
-type GenerateAgentSingleImageDraftOptions = {
-  baseUrl?: string;
-  apiKey?: string;
-  defaultModel?: string;
-  nsfwModel?: string;
-};
-
-type RequiredDraftDefaultKey =
-  | "checkpointName"
-  | "width"
-  | "height"
-  | "steps"
-  | "cfg"
-  | "samplerName"
-  | "scheduler"
-  | "denoise"
-  | "batchSize"
-  | "latentImageNode"
-  | "outputPrefix";
 
 export class AgentDraftError extends Error {
   readonly code: AgentDraftErrorCode;
@@ -85,18 +62,6 @@ function isOptionalBoolean(value: unknown): value is boolean | undefined {
   return value === undefined || typeof value === "boolean";
 }
 
-function isOptionalIntegerInRange(value: unknown, min: number, max: number): value is number | undefined {
-  return value === undefined || (typeof value === "number" && Number.isInteger(value) && value >= min && value <= max);
-}
-
-function isOptionalNumberInRange(value: unknown, min: number, max: number): value is number | undefined {
-  return value === undefined || (typeof value === "number" && Number.isFinite(value) && value >= min && value <= max);
-}
-
-function isOptionalLatentImageNode(value: unknown): value is AgentGenerationDefaults["latentImageNode"] {
-  return value === undefined || (typeof value === "string" && LATENT_IMAGE_NODES.has(value));
-}
-
 function createDraftId() {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
     return crypto.randomUUID();
@@ -108,16 +73,16 @@ function createDraftId() {
 function normalizePromptText(value: unknown, field: string): string {
   if (!hasNonEmptyString(value)) {
     throw new AgentDraftError(`${field} must be a non-empty string.`, {
-      code: "agent_draft_invalid",
-      statusCode: 502,
+      code: "agent_request_invalid",
+      statusCode: 400,
     });
   }
 
   const trimmed = value.trim();
   if (trimmed.length > MAX_PROMPT_LENGTH) {
     throw new AgentDraftError(`${field} is too long.`, {
-      code: "agent_draft_invalid",
-      statusCode: 502,
+      code: "agent_request_invalid",
+      statusCode: 400,
       details: { maxLength: MAX_PROMPT_LENGTH },
     });
   }
@@ -132,145 +97,124 @@ function normalizeOptionalPromptText(value: unknown): string | undefined {
 
   if (typeof value !== "string") {
     throw new AgentDraftError("negativePrompt must be a string when provided.", {
-      code: "agent_draft_invalid",
-      statusCode: 502,
+      code: "agent_request_invalid",
+      statusCode: 400,
     });
   }
 
-  return value.trim();
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
 }
 
-function normalizeLoraInput(value: unknown) {
-  if (!isRecord(value) || !hasNonEmptyString(value.loraName)) {
-    return null;
-  }
-
-  if (
-    !isOptionalNumberInRange(value.strengthModel, -10, 10) ||
-    !isOptionalNumberInRange(value.strengthClip, -10, 10)
-  ) {
-    return null;
-  }
-
-  return {
-    loraName: value.loraName.trim(),
-    strengthModel: value.strengthModel ?? 0.7,
-    strengthClip: value.strengthClip,
-  };
-}
-
-function normalizePromptWrapper(value: unknown) {
-  if (value === undefined) {
+function normalizeOptionalTitle(value: unknown): string | undefined {
+  if (typeof value !== "string") {
     return undefined;
   }
 
-  if (!isRecord(value)) {
-    return null;
-  }
-
-  if (value.positivePrefix !== undefined && typeof value.positivePrefix !== "string") {
-    return null;
-  }
-
-  if (value.negativePrefix !== undefined && typeof value.negativePrefix !== "string") {
-    return null;
-  }
-
-  return {
-    ...(typeof value.positivePrefix === "string" ? { positivePrefix: value.positivePrefix } : {}),
-    ...(typeof value.negativePrefix === "string" ? { negativePrefix: value.negativePrefix } : {}),
-  };
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed.slice(0, 120) : undefined;
 }
 
-function normalizeGenerationDefaults(value: unknown): NormalizedDefaults | null {
-  if (value === undefined) {
-    return null;
+function normalizeStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
   }
 
+  return value
+    .filter((entry): entry is string => typeof entry === "string")
+    .map((entry) => entry.trim().slice(0, MAX_WARNING_LENGTH))
+    .filter(Boolean);
+}
+
+function normalizeResource(value: unknown, field: string): SelectedCivitaiResourcePreview {
   if (!isRecord(value)) {
-    return null;
+    throw new AgentDraftError(`${field} must be a Civitai resource preview.`, {
+      code: "agent_request_invalid",
+      statusCode: 400,
+    });
   }
 
-  const warnings: string[] = [];
-  const defaults: AgentGenerationDefaults = {};
-
-  if (value.checkpointName !== undefined) {
-    if (!hasNonEmptyString(value.checkpointName)) {
-      return null;
-    } else {
-      defaults.checkpointName = value.checkpointName.trim();
-    }
+  if (!hasNonEmptyString(value.id) || !hasNonEmptyString(value.name) || !hasNonEmptyString(value.modelFileName)) {
+    throw new AgentDraftError(`${field} must include id, name, and modelFileName.`, {
+      code: "agent_request_invalid",
+      statusCode: 400,
+    });
   }
 
-  if (value.loras !== undefined) {
-    if (!Array.isArray(value.loras)) {
-      return null;
-    } else {
-      const loras = value.loras.map(normalizeLoraInput);
-      if (loras.some((lora) => lora === null)) {
-        return null;
-      }
-      defaults.loras = loras.filter((lora): lora is NonNullable<typeof lora> => lora !== null);
-    }
+  if (value.resourceType !== "lora" && value.resourceType !== "model") {
+    throw new AgentDraftError(`${field} must be a model or LoRA resource.`, {
+      code: "agent_request_invalid",
+      statusCode: 400,
+    });
   }
 
-  if (value.negativePrompt !== undefined) {
-    if (typeof value.negativePrompt !== "string") {
-      return null;
-    }
-    defaults.negativePrompt = value.negativePrompt.trim();
+  return value as SelectedCivitaiResourcePreview;
+}
+
+function normalizeRecommendation(value: unknown): CivitaiAiRecommendationResponse {
+  if (!isRecord(value)) {
+    throw new AgentDraftError("recommendation must be an object.", {
+      code: "agent_request_invalid",
+      statusCode: 400,
+    });
   }
 
-  if (!isOptionalIntegerInRange(value.width, 16, 16_384) || !isOptionalIntegerInRange(value.height, 16, 16_384)) {
-    return null;
+  if (!isRecord(value.checkpoint)) {
+    throw new AgentDraftError("recommendation.checkpoint is required.", {
+      code: "agent_request_invalid",
+      statusCode: 400,
+    });
   }
 
-  if (
-    (typeof value.width === "number" && value.width % 8 !== 0) ||
-    (typeof value.height === "number" && value.height % 8 !== 0)
-  ) {
-    return null;
+  const checkpoint = {
+    ...value.checkpoint,
+    resource: normalizeResource(value.checkpoint.resource, "recommendation.checkpoint.resource"),
+    reason: typeof value.checkpoint.reason === "string" ? value.checkpoint.reason : "",
+  };
+
+  if (checkpoint.resource.resourceType !== "model") {
+    throw new AgentDraftError("recommendation.checkpoint.resource must be a model.", {
+      code: "agent_request_invalid",
+      statusCode: 400,
+    });
   }
 
-  if (!isOptionalIntegerInRange(value.steps, 1, 200) || !isOptionalIntegerInRange(value.batchSize, 1, 16)) {
-    return null;
-  }
+  const loras = Array.isArray(value.loras)
+    ? value.loras.map((entry, index) => {
+        if (!isRecord(entry)) {
+          throw new AgentDraftError(`recommendation.loras[${index}] must be an object.`, {
+            code: "agent_request_invalid",
+            statusCode: 400,
+          });
+        }
 
-  if (
-    !isOptionalNumberInRange(value.cfg, 0, 50) ||
-    !isOptionalNumberInRange(value.denoise, 0, 1) ||
-    (value.samplerName !== undefined && typeof value.samplerName !== "string") ||
-    (value.scheduler !== undefined && typeof value.scheduler !== "string") ||
-    (value.outputPrefix !== undefined && typeof value.outputPrefix !== "string") ||
-    !isOptionalLatentImageNode(value.latentImageNode)
-  ) {
-    return null;
-  }
+        const resource = normalizeResource(entry.resource, `recommendation.loras[${index}].resource`);
+        if (resource.resourceType !== "lora") {
+          throw new AgentDraftError(`recommendation.loras[${index}].resource must be a LoRA.`, {
+            code: "agent_request_invalid",
+            statusCode: 400,
+          });
+        }
 
-  const promptWrapper = normalizePromptWrapper(value.promptWrapper);
-  if (promptWrapper === null) {
-    return null;
-  }
+        const suggestedWeight =
+          typeof entry.suggestedWeight === "number" && Number.isFinite(entry.suggestedWeight)
+            ? Math.min(2, Math.max(-2, Number(entry.suggestedWeight.toFixed(2))))
+            : null;
 
-  if (typeof value.width === "number") defaults.width = value.width;
-  if (typeof value.height === "number") defaults.height = value.height;
-  if (typeof value.steps === "number") defaults.steps = value.steps;
-  if (typeof value.cfg === "number") defaults.cfg = value.cfg;
-  if (typeof value.samplerName === "string") defaults.samplerName = value.samplerName.trim();
-  if (typeof value.scheduler === "string") defaults.scheduler = value.scheduler.trim();
-  if (typeof value.denoise === "number") defaults.denoise = value.denoise;
-  if (typeof value.batchSize === "number") defaults.batchSize = value.batchSize;
-  if (typeof value.latentImageNode === "string") defaults.latentImageNode = value.latentImageNode;
-  if (typeof value.outputPrefix === "string") defaults.outputPrefix = value.outputPrefix.trim();
-  if (promptWrapper) defaults.promptWrapper = promptWrapper;
-
-  if (Object.keys(value).some((key) => key === "seed")) {
-    warnings.push("Ignored LLM-suggested seed; seed selection belongs to the confirmed execution step.");
-  }
+        return {
+          resource,
+          suggestedWeight,
+          reason: typeof entry.reason === "string" ? entry.reason : "",
+        };
+      })
+    : [];
 
   return {
-    defaults,
-    warnings,
+    checkpoint,
+    loras,
+    recommendationReason: typeof value.recommendationReason === "string" ? value.recommendationReason : "",
+    overallEffect: typeof value.overallEffect === "string" ? value.overallEffect : "",
+    warnings: normalizeStringArray(value.warnings),
   };
 }
 
@@ -304,170 +248,107 @@ export function validateAgentSingleImageDraftRequest(value: unknown): DraftValid
     };
   }
 
+  if (!isRecord(value.prompt)) {
+    return {
+      ok: false,
+      message: "prompt must be an object.",
+    };
+  }
+
+  let positivePrompt: string;
+  let negativePrompt: string | undefined;
+  let recommendation: CivitaiAiRecommendationResponse;
+
+  try {
+    positivePrompt = normalizePromptText(value.prompt.positivePrompt, "positivePrompt");
+    negativePrompt = normalizeOptionalPromptText(value.prompt.negativePrompt);
+    recommendation = normalizeRecommendation(value.recommendation);
+  } catch (error) {
+    if (error instanceof AgentDraftError) {
+      return {
+        ok: false,
+        message: error.message,
+        details: error.details,
+      };
+    }
+
+    throw error;
+  }
+
   return {
     ok: true,
     request: {
       userRequest: value.userRequest.trim(),
       nsfw: value.nsfw,
+      prompt: {
+        title: normalizeOptionalTitle(value.prompt.title),
+        positivePrompt,
+        negativePrompt,
+        warnings: normalizeStringArray(value.prompt.warnings),
+      },
+      recommendation,
     },
   };
 }
 
-function stripJsonFence(content: string) {
-  const trimmed = content.trim();
-  const fenced = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
-  return fenced?.[1]?.trim() ?? trimmed;
-}
-
-function parseLlmDraftContent(content: string) {
-  try {
-    return JSON.parse(stripJsonFence(content)) as unknown;
-  } catch (error) {
-    throw new AgentDraftError("The LLM response was not valid Agent draft JSON.", {
-      code: "agent_draft_invalid",
-      statusCode: 502,
-      details: error instanceof Error ? error.message : String(error),
-    });
+function applySuggestedLoraWeights(
+  comfyUiRequest: AgentSingleImageComfyUiDraftRequest,
+  recommendation: CivitaiAiRecommendationResponse,
+): AgentSingleImageComfyUiDraftRequest {
+  if (!comfyUiRequest.loras?.length) {
+    return comfyUiRequest;
   }
-}
-
-function normalizeStringArray(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-
-  return value
-    .filter((entry): entry is string => typeof entry === "string")
-    .map((entry) => entry.trim())
-    .filter(Boolean);
-}
-
-function findMissingGenerationDefaultFields(defaults: AgentGenerationDefaults): RequiredDraftDefaultKey[] {
-  const missingFields: RequiredDraftDefaultKey[] = [];
-
-  if (!hasNonEmptyString(defaults.checkpointName)) missingFields.push("checkpointName");
-  if (typeof defaults.width !== "number") missingFields.push("width");
-  if (typeof defaults.height !== "number") missingFields.push("height");
-  if (typeof defaults.steps !== "number") missingFields.push("steps");
-  if (typeof defaults.cfg !== "number") missingFields.push("cfg");
-  if (!hasNonEmptyString(defaults.samplerName)) missingFields.push("samplerName");
-  if (!hasNonEmptyString(defaults.scheduler)) missingFields.push("scheduler");
-  if (typeof defaults.denoise !== "number") missingFields.push("denoise");
-  if (typeof defaults.batchSize !== "number") missingFields.push("batchSize");
-  if (defaults.latentImageNode === undefined) missingFields.push("latentImageNode");
-  if (!hasNonEmptyString(defaults.outputPrefix)) missingFields.push("outputPrefix");
-
-  return missingFields;
-}
-
-function normalizeParsedDraft(
-  payload: unknown,
-): Omit<AgentSingleImageDraftResponse, "draftId" | "status" | "confirmationRequired"> {
-  if (!isRecord(payload)) {
-    throw new AgentDraftError("The LLM response must be a JSON object.", {
-      code: "agent_draft_invalid",
-      statusCode: 502,
-    });
-  }
-
-  const llmDefaults = normalizeGenerationDefaults(payload.comfyUiRequest);
-  if (llmDefaults === null) {
-    throw new AgentDraftError("The LLM response included invalid generation defaults.", {
-      code: "agent_draft_invalid",
-      statusCode: 502,
-    });
-  }
-
-  const missingDefaultFields = findMissingGenerationDefaultFields(llmDefaults.defaults);
-  if (missingDefaultFields.length > 0) {
-    throw new AgentDraftError("The LLM response must include editable generation defaults.", {
-      code: "agent_draft_invalid",
-      statusCode: 502,
-      details: { missingFields: missingDefaultFields },
-    });
-  }
-
-  const positivePrompt = normalizePromptText(payload.positivePrompt, "positivePrompt");
-  const parsedNegativePrompt = normalizeOptionalPromptText(payload.negativePrompt);
-  const negativePrompt = parsedNegativePrompt ?? llmDefaults.defaults.negativePrompt ?? "";
-  const title = typeof payload.title === "string" && payload.title.trim() ? payload.title.trim() : undefined;
-  const warnings = [...normalizeStringArray(payload.warnings), ...llmDefaults.warnings];
-  const comfyUiRequest: AgentSingleImageComfyUiDraftRequest = {
-    ...llmDefaults.defaults,
-    positivePrompt,
-    negativePrompt,
-  };
 
   return {
-    title,
-    positivePrompt,
-    negativePrompt,
-    comfyUiRequest,
-    warnings: [...new Set(warnings)],
+    ...comfyUiRequest,
+    loras: comfyUiRequest.loras.map((lora, index) => {
+      const suggestedWeight = recommendation.loras[index]?.suggestedWeight;
+      return suggestedWeight === null || suggestedWeight === undefined
+        ? lora
+        : {
+            ...lora,
+            strengthModel: suggestedWeight,
+            strengthClip: suggestedWeight,
+          };
+    }),
   };
 }
 
-export function buildAgentDraftMessages(request: AgentSingleImageDraftRequest): LlmChatMessage[] {
-  return [
-    {
-      role: "system",
-      content: [
-        "You draft editable single-image prompts for SceneForge.",
-        "Return only strict JSON. Do not wrap it in prose.",
-        "Required JSON fields: positivePrompt, negativePrompt, comfyUiRequest.",
-        "Optional JSON fields: title, warnings.",
-        "comfyUiRequest must include checkpointName, width, height, steps, cfg, samplerName, scheduler, denoise, batchSize, latentImageNode, and outputPrefix.",
-        "comfyUiRequest may include loras as an array of { loraName, strengthModel, strengthClip } and promptWrapper.",
-        "Choose checkpointName and LoRAs as editable draft candidates based on the user's image goal.",
-        "Do not include local directory paths, generated image ids, ComfyUI node ids, or seeds.",
-        "If a checkpoint or LoRA choice is uncertain, still provide an editable candidate and add a warning to verify local availability.",
-      ].join("\n"),
-    },
-    {
-      role: "user",
-      content: JSON.stringify({
-        userRequest: request.userRequest,
-        nsfw: request.nsfw ?? false,
-      }),
-    },
-  ];
+function buildSelectedResources(recommendation: CivitaiAiRecommendationResponse): SelectedCivitaiResourcesPreview {
+  return {
+    checkpoint: recommendation.checkpoint.resource,
+    loras: recommendation.loras.map((lora) => lora.resource),
+  };
 }
 
-export function resolveAgentDraftModel(request: AgentSingleImageDraftRequest, options: GenerateAgentSingleImageDraftOptions) {
-  return request.nsfw === true ? options.nsfwModel || options.defaultModel : options.defaultModel;
+function buildWarnings(request: AgentSingleImageDraftComposeRequest) {
+  return Array.from(new Set([
+    ...(request.prompt.warnings ?? []),
+    ...request.recommendation.warnings,
+  ]));
 }
 
-function mapLiteLlmError(error: LiteLlmError): AgentDraftError {
-  const message = error.message;
-  if (
-    message.includes("LITELLM_BASE_URL") ||
-    message.includes("LLM model is required")
-  ) {
-    return new AgentDraftError(message, {
-      code: "llm_config",
-      statusCode: error.statusCode ?? 500,
-      details: error.details,
-    });
-  }
-
-  if (message.includes("did not include a chat message") || message.includes("invalid JSON chunk")) {
-    return new AgentDraftError(message, {
-      code: "llm_malformed_response",
-      statusCode: error.statusCode ?? 502,
-      details: error.details,
-    });
-  }
-
-  return new AgentDraftError("LiteLLM draft request failed.", {
-    code: "llm_upstream",
-    statusCode: error.statusCode ?? 502,
-    details: error.details,
-  });
+function toAgentGenerationDefaults(request: AgentSingleImageComfyUiDraftRequest): AgentGenerationDefaults {
+  return {
+    checkpointName: request.checkpointName,
+    negativePrompt: request.negativePrompt,
+    loras: request.loras,
+    width: request.width,
+    height: request.height,
+    steps: request.steps,
+    cfg: request.cfg,
+    samplerName: request.samplerName,
+    scheduler: request.scheduler,
+    denoise: request.denoise,
+    batchSize: request.batchSize,
+    latentImageNode: request.latentImageNode,
+    promptWrapper: request.promptWrapper,
+    outputPrefix: request.outputPrefix,
+  };
 }
 
 export async function generateAgentSingleImageDraft(
   rawRequest: unknown,
-  options: GenerateAgentSingleImageDraftOptions = {},
 ): Promise<AgentSingleImageDraftResponse> {
   const validation = validateAgentSingleImageDraftRequest(rawRequest);
   if (!validation.ok) {
@@ -479,46 +360,31 @@ export async function generateAgentSingleImageDraft(
   }
 
   const request = validation.request;
-  const model = resolveAgentDraftModel(request, {
-    defaultModel: options.defaultModel ?? process.env.LITELLM_DEFAULT_MODEL,
-    nsfwModel: options.nsfwModel ?? process.env.LITELLM_NSFW_MODEL,
+  const negativePrompt = request.prompt.negativePrompt ?? DEFAULT_NEGATIVE_PROMPT;
+  const settings = resolveComfyUiGenerationSettings({
+    activePrompt: request.prompt.positivePrompt,
+    baseNegativePrompt: negativePrompt,
+    selectedResources: buildSelectedResources(request.recommendation),
+    aiAdvice: null,
   });
-  const chatRequest: LlmChatRequest = {
-    model,
-    nsfw: request.nsfw,
-    messages: buildAgentDraftMessages(request),
-    temperature: 0.2,
-    maxTokens: 1200,
+  const resolvedNegativePrompt = settings.request.negativePrompt ?? negativePrompt;
+  const comfyUiRequest = applySuggestedLoraWeights(
+    {
+      ...toAgentGenerationDefaults(settings.request),
+      positivePrompt: request.prompt.positivePrompt,
+      negativePrompt: resolvedNegativePrompt,
+    },
+    request.recommendation,
+  );
+
+  return {
+    draftId: createDraftId(),
+    status: "draft",
+    title: request.prompt.title,
+    positivePrompt: request.prompt.positivePrompt,
+    negativePrompt: resolvedNegativePrompt,
+    comfyUiRequest,
+    confirmationRequired: true,
+    warnings: buildWarnings(request),
   };
-
-  try {
-    const client = createLiteLlmClient({
-      baseUrl: options.baseUrl ?? process.env.LITELLM_BASE_URL ?? "",
-      apiKey: options.apiKey ?? process.env.LITELLM_API_KEY,
-      defaultModel: model,
-    });
-    const completion = await client.completeChat(chatRequest);
-    const draft = normalizeParsedDraft(parseLlmDraftContent(completion.content));
-
-    return {
-      draftId: createDraftId(),
-      status: "draft",
-      ...draft,
-      confirmationRequired: true,
-    };
-  } catch (error) {
-    if (error instanceof AgentDraftError) {
-      throw error;
-    }
-
-    if (error instanceof LiteLlmError) {
-      throw mapLiteLlmError(error);
-    }
-
-    throw new AgentDraftError("Unexpected Agent draft failure.", {
-      code: "agent_unexpected",
-      statusCode: 500,
-      details: error instanceof Error ? error.message : String(error),
-    });
-  }
 }

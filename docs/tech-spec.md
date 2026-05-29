@@ -69,7 +69,7 @@ Key route groups:
 - `/api/projects`: local project listing and save/load/delete operations.
 - `/api/prompt-library` and `/api/prompt-bindings`: shared prompt library and target binding state.
 - `/api/llm/chat`: LiteLLM-compatible chat endpoint.
-- `/api/agent/draft`: standalone Agent single-image draft endpoint backed by LiteLLM; it returns editable drafts and does not call ComfyUI.
+- `/api/agent/draft`: standalone Agent single-image draft composer; it accepts prompt text and Civitai recommendations from existing frontend AI endpoints, returns editable drafts, and does not call LiteLLM or ComfyUI directly.
 - `/api/comfyui/*`: workflow generation, queue/history/view helpers, image generation, inpainting, control models, upscale models, generated images, sequence references, events, and diagnosis.
 - `/api/civitai-lora-library/*`: resources, selected resources, settings, import image parsing, imported images, downloads, cache repair, and AI recommendation.
 - `/api/artist-string-library/*`: sync, selected resources, items, and images.
@@ -87,7 +87,7 @@ This contract covers T1 conclusions for the future standalone `/agent` single-im
 
 ### Reuse Assessment
 
-- LiteLLM can be reused through `src/features/llm` (`createLiteLlmClient`, `LlmChatRequest`, validation, and `LiteLlmError`). T2 should add an Agent-specific draft schema/parser around the chat response instead of weakening the generic chat contract.
+- LiteLLM access should stay behind the existing frontend-facing AI interfaces. `/agent` uses `/api/llm/chat` for prompt text and `/api/civitai-lora-library/ai-recommendation` for checkpoint/LoRA selection instead of adding an Agent-specific direct LiteLLM route.
 - ComfyUI single-image execution can reuse `src/features/comfyui` (`validateComfyUiTextToImageRequest`, `validateComfyUiRequestAgainstObjectInfo`, `buildBasicTextToImageWorkflow`, and `createComfyUiClient().generateImage`). T3 may add a thin Agent route/service wrapper, but should not build a new workflow selector.
 - Generated image file storage can reuse `src/features/comfyui/generated-image-storage` and `/api/comfyui/generated-images`. That storage is file-based and not project-bound by itself. Project history binding happens separately through editor store actions and must not be used by Agent MVP.
 - Existing API routes are useful compatibility references, but new server code should prefer shared feature modules over making server-to-server HTTP calls back into Next.js routes.
@@ -103,7 +103,7 @@ type AgentSingleImageDraftRequest = {
 };
 ```
 
-The page should keep global options behind a settings control. The current setting is `nsfw`; when it is not enabled the draft route uses `LITELLM_DEFAULT_MODEL`, and when it is enabled the route uses `LITELLM_NSFW_MODEL` with `LITELLM_DEFAULT_MODEL` as fallback. The page must not expose a manual model override.
+The page should keep global options behind a settings control. The current setting is `nsfw`; when it is not enabled the prompt-generation LLM call uses `LITELLM_DEFAULT_MODEL`, and when it is enabled the Agent AI calls use `LITELLM_NSFW_MODEL` with their normal default model as fallback. The page must not expose a manual model override.
 
 The draft response should be structured JSON that can be edited before execution:
 
@@ -123,7 +123,7 @@ type AgentSingleImageDraftResponse = {
 };
 ```
 
-The LLM drafts prompt text, `checkpointName`, optional `loras`, and editable generation defaults such as `width`, `height`, `steps`, `cfg`, `samplerName`, `scheduler`, `denoise`, `batchSize`, `latentImageNode`, and `outputPrefix`. Backend code must validate and normalize the JSON and treat model selections as draft candidates only. Users can edit the right-side draft before any confirmed execution, and T3 remains responsible for validating selected checkpoint and LoRA availability against ComfyUI `object_info`.
+Draft generation is split into smaller existing interfaces: `/api/llm/chat` returns only positive prompt text, `/api/civitai-lora-library/ai-recommendation` selects a verified local checkpoint and LoRA subset, and `/api/agent/draft` deterministically composes editable generation defaults through the same ComfyUI parameter resolver used by the original image-generation panel. Users can edit the right-side draft before any confirmed execution, and T3 remains responsible for validating selected checkpoint and LoRA availability against ComfyUI `object_info`.
 
 ### Confirmation Gate
 
@@ -167,11 +167,11 @@ Execution should reuse the current single-image path:
 Use stable categories in Agent route responses while preserving useful upstream details:
 
 - `agent_request_invalid`: malformed Agent draft or execution payload.
-- `agent_draft_invalid`: LiteLLM returned content that cannot be parsed into the draft schema.
+- `agent_draft_invalid`: a composed Agent draft cannot be normalized into the editable draft schema.
 - `confirmation_required`: execution requested before explicit user confirmation; no ComfyUI or storage calls may have happened.
-- `llm_config`: missing LiteLLM base URL or model configuration.
-- `llm_upstream`: LiteLLM request failed with an upstream status or network/runtime error.
-- `llm_malformed_response`: LiteLLM completed but did not return usable chat content.
+- `llm_config`: missing LiteLLM base URL or model configuration surfaced by the existing AI endpoint used before draft composition.
+- `llm_upstream`: LiteLLM request failed with an upstream status or network/runtime error surfaced by the existing AI endpoint used before draft composition.
+- `llm_malformed_response`: LiteLLM completed but did not return usable chat content surfaced by the existing AI endpoint used before draft composition.
 - `comfyui_request_invalid`: confirmed payload does not satisfy `ComfyUiTextToImageRequest`.
 - `comfyui_object_info_mismatch`: selected checkpoint, sampler, scheduler, LoRA, or required node does not match current ComfyUI `object_info`.
 - `comfyui_workflow_build_failed`: the confirmed request passes initial validation but cannot be converted into the expected single-image workflow.
@@ -183,7 +183,7 @@ Use stable categories in Agent route responses while preserving useful upstream 
 
 ### T2/T3 Implementation Boundary
 
-- T2 owns the standalone `/agent` draft flow, global Agent settings control, request-only draft input, Agent draft schema validation, prompt-to-draft LiteLLM call, and editable draft response. T2 must not call ComfyUI or generated image storage.
+- T2 owns the standalone `/agent` draft flow, global Agent settings control, request-only draft input, reuse of existing AI endpoints, deterministic Agent draft composition, and editable draft response. T2 must not call ComfyUI or generated image storage.
 - T3 owns the explicit confirmation execution path, thin ComfyUI wrapper, completion polling/events, and optional use of generated image storage. T3 must not add Sequence, inpainting, workflow selection, current-project binding, or editor-state mutation.
 - Both tracks should keep server modules isolated from client components and keep the editor store as a non-dependency of Agent backend code.
 

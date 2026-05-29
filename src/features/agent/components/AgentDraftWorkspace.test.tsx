@@ -68,34 +68,102 @@ describe("AgentDraftWorkspace", () => {
     expect(checkbox?.checked).toBe(false);
   });
 
-  it("submits only the request and settings before rendering editable LLM-selected defaults", async () => {
-    const fetchMock = vi.fn(async () =>
-      Response.json({
-        draftId: "draft-test",
-        status: "draft",
-        title: "Rain Alley",
-        positivePrompt: "cinematic rain alley",
-        negativePrompt: "low quality",
-        comfyUiRequest: {
-          checkpointName: "llm-checkpoint.safetensors",
-          loras: [{ loraName: "rain-style.safetensors", strengthModel: 0.8, strengthClip: 0.75 }],
-          width: 768,
-          height: 1024,
-          steps: 28,
-          cfg: 6.5,
-          samplerName: "euler",
-          scheduler: "normal",
-          denoise: 1,
-          batchSize: 1,
-          latentImageNode: "EmptyLatentImage",
-          outputPrefix: "AgentDraft",
+  it("uses the existing LLM and Civitai endpoints before rendering editable selected defaults", async () => {
+    const recommendation = {
+      checkpoint: {
+        resource: {
+          id: "checkpoint-1",
+          resourceType: "model",
+          name: "Rain Checkpoint",
+          modelFileName: "llm-checkpoint.safetensors",
+        },
+        reason: "Best local checkpoint.",
+      },
+      loras: [
+        {
+          resource: {
+            id: "lora-1",
+            resourceType: "lora",
+            name: "Rain Style",
+            modelFileName: "rain-style.safetensors",
+          },
+          suggestedWeight: 0.8,
+          reason: "Adds rain styling.",
+        },
+      ],
+      recommendationReason: "Use local rain resources.",
+      overallEffect: "cinematic rain",
+      warnings: [],
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const body = JSON.parse(String(init?.body));
+
+      if (url === "/api/llm/chat") {
+        expect(body).toMatchObject({
+          purpose: "stable-diffusion-prompt-generation",
+          nsfw: false,
+          temperature: 0.2,
+          maxTokens: 700,
+        });
+        expect(body.messages[0].content).toContain("Return only the final positive prompt text.");
+        expect(body.messages[1].content).toBe("make a cinematic rain alley");
+
+        return Response.json({
+          content: "cinematic rain alley",
+          role: "assistant",
+        });
+      }
+
+      if (url === "/api/civitai-lora-library/ai-recommendation") {
+        expect(body).toEqual({
+          desiredEffect: "make a cinematic rain alley\n\ncinematic rain alley",
+          maxLoras: 3,
+          nsfw: false,
+        });
+
+        return Response.json(recommendation);
+      }
+
+      if (url === "/api/agent/draft") {
+        expect(body).toMatchObject({
+          userRequest: "make a cinematic rain alley",
+          nsfw: false,
+          prompt: {
+            positivePrompt: "cinematic rain alley",
+          },
+          recommendation,
+        });
+
+        return Response.json({
+          draftId: "draft-test",
+          status: "draft",
+          title: "Rain Alley",
           positivePrompt: "cinematic rain alley",
           negativePrompt: "low quality",
-        },
-        confirmationRequired: true,
-        warnings: [],
-      }),
-    );
+          comfyUiRequest: {
+            checkpointName: "llm-checkpoint.safetensors",
+            loras: [{ loraName: "rain-style.safetensors", strengthModel: 0.8, strengthClip: 0.75 }],
+            width: 768,
+            height: 1024,
+            steps: 28,
+            cfg: 6.5,
+            samplerName: "euler",
+            scheduler: "normal",
+            denoise: 1,
+            batchSize: 1,
+            latentImageNode: "EmptyLatentImage",
+            outputPrefix: "AgentDraft",
+            positivePrompt: "cinematic rain alley",
+            negativePrompt: "low quality",
+          },
+          confirmationRequired: true,
+          warnings: [],
+        });
+      }
+
+      throw new Error(`Unexpected request: ${url}`);
+    });
     vi.stubGlobal("fetch", fetchMock);
     renderWorkspace();
 
@@ -110,12 +178,12 @@ describe("AgentDraftWorkspace", () => {
       findButton("Generate draft").dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
 
-    expect(fetchMock).toHaveBeenCalledWith("/api/agent/draft", expect.objectContaining({
-      body: JSON.stringify({
-        userRequest: "make a cinematic rain alley",
-        nsfw: false,
-      }),
-    }));
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock.mock.calls.map((call) => call[0])).toEqual([
+      "/api/llm/chat",
+      "/api/civitai-lora-library/ai-recommendation",
+      "/api/agent/draft",
+    ]);
     expect(document.body.textContent).toContain("Generation Defaults");
     expect(document.body.textContent).toContain("LoRAs");
     expect(document.querySelector<HTMLInputElement>("input[value='llm-checkpoint.safetensors']")).not.toBeNull();
