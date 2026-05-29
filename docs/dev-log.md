@@ -32,6 +32,7 @@ Validation:
 - Existing dev server responded with HTTP 200 for `/`, `/editor`, and `/settings`.
 - `npm test` passed: 72 files, 476 tests.
 - Browser verification passed for `/`, `/editor`, and `/settings`; the root route submitted a scene request into the vertical timeline shell with no console errors.
+- PR #10 was merged to `master`; Issue #9 closed automatically via the PR closing reference.
 
 ### T3 LangGraph Workflow Foundation
 
