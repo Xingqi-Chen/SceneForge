@@ -2,6 +2,35 @@
 
 This log records dated implementation and documentation work. Keep entries concise and evidence-oriented.
 
+## 2026-05-29
+
+### Timeline MVP Requirements Reset
+
+Summary:
+
+- Product direction was reset from standalone Agent draft to a LangGraph-driven, single-image vertical timeline MVP.
+- Closed PR #5 and Issue #4 as superseded by the new timeline requirements.
+- Deleted the `issue-4-agent-draft-workflow` local and remote branch.
+- Replanned unfinished work into T3-T8: LangGraph orchestration, timeline UI shell, scene/person/action inference with 3D binding, settings page, resource/parameter recommendation, and confirmed ComfyUI execution.
+- Updated product, technical, planning, README, and agent guidance so future work uses LangGraph and existing LLM interfaces instead of a bespoke draft-only flow.
+
+Files changed:
+
+- `AGENTS.md`
+- `README.md`
+- `docs/product-vision.md`
+- `docs/product-spec.md`
+- `docs/tech-spec.md`
+- `docs/plan.md`
+- `docs/dev-log.md`
+
+Validation:
+
+- Documentation-only reset; application tests were not required.
+- PR #5 is closed.
+- Issue #4 is closed as not planned.
+- Local and remote `issue-4-agent-draft-workflow` branch references were removed.
+
 ## 2026-05-28
 
 ### T1 Agent Backend Contract Audit

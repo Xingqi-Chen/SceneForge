@@ -19,6 +19,7 @@ Keep the top-level repository clean:
 - `src/features/civitai-lora-library/`: Civitai model and LoRA discovery, parsing, downloads, cache management, recommendations, and settings.
 - `src/features/artist-string-library/`: artist string resources, adapters, local services, and image assets.
 - `src/features/llm/`: LiteLLM-compatible chat client, validation, chat response helpers, and local request logging.
+- `src/features/agent-timeline/`: future LangGraph timeline workflow state, node adapters, dependency rules, and single-image Agent MVP orchestration.
 - `src/features/tavily/`: Tavily web-context client code.
 - `src/shared/`: shared domain types and pure utility functions.
 - `public/`: static web assets.
@@ -140,6 +141,7 @@ High-risk implementation includes:
 - ComfyUI workflow generation, inpainting, sequence images, history, or generated image storage
 - Civitai resource parsing, downloads, cache repair, and selected model state
 - Zustand editor store shape, undo behavior, project settings, or prompt bindings
+- LangGraph timeline orchestration, node dependency state, stale downstream regeneration, or settings-page path updates
 - 2D/3D coordinate conversion, object placement, pose solving, IK, or stick-figure state
 - LLM prompt routing, model selection, NSFW model behavior, or logging
 
@@ -278,9 +280,11 @@ Never expose secrets in client components, tests, logs, docs, or committed files
 - Use TypeScript with strict typing. Avoid broad `any` unless a boundary truly requires it and the value is validated before use.
 - Follow existing Next.js App Router, React, Zustand, Konva, Three.js, and Vitest patterns already present in the repo.
 - Keep route handlers thin; push reusable behavior into feature modules.
+- Timeline workflow code must use LangGraph for node orchestration, dependency tracking, parallelism, stale downstream regeneration, and the start-generation gate. Do not hand-code a waterfall of timeline node calls in React components or API routes.
 - Keep prompt generation pure and deterministic where possible.
 - Keep persistence serialization explicit and backwards-compatible.
 - Keep ComfyUI, Civitai, Tavily, and LiteLLM adapters isolated from editor UI state.
+- Prefer wrapping or refactoring existing LLM interfaces into graph node adapters before adding new LLM endpoints.
 - Prefer structured parsing and validation over ad hoc string manipulation.
 - Keep UI text, layout, and interaction changes consistent with the existing editor shell and panels.
 - Use `@/` imports for source modules, matching `tsconfig.json`.
