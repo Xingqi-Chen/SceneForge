@@ -41,6 +41,115 @@ describe("parseCharacterImagePromptTagsContent", () => {
     });
   });
 
+  it("keeps the original items response shape with Simplified Chinese labels and English prompts", () => {
+    const result = parseCharacterImagePromptTagsContent(
+      JSON.stringify({
+        items: [
+          {
+            targetKind: "character",
+            label: "快递员",
+            prompt: "solo courier protagonist",
+            category: "character",
+            subcategory: "character-subject",
+          },
+          {
+            targetKind: "bodyPart",
+            bodyPartId: "torso",
+            label: "反光夹克",
+            prompt: "reflective yellow jacket",
+            category: "outfit",
+            subcategory: "outfit-upper",
+          },
+        ],
+      }),
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      items: [
+        {
+          target: { kind: "character" },
+          tag: {
+            label: "快递员",
+            prompt: "solo courier protagonist",
+            category: "character",
+            subcategory: "character-subject",
+            negative: false,
+            weight: { enabled: false, value: 1 },
+          },
+        },
+        {
+          target: { kind: "bodyPart", bodyPartId: "torso" },
+          bodyPartId: "torso",
+          tag: {
+            label: "反光夹克",
+            prompt: "reflective yellow jacket",
+            category: "outfit",
+            subcategory: "outfit-upper",
+            negative: false,
+            weight: { enabled: false, value: 1 },
+          },
+        },
+      ],
+    });
+  });
+
+  it("parses weighted prompt tokens and explicit negative metadata", () => {
+    const result = parseCharacterImagePromptTagsContent(
+      JSON.stringify({
+        items: [
+          {
+            targetKind: "bodyPart",
+            bodyPartId: "torso",
+            label: "Reflective jacket",
+            prompt: "reflective yellow jacket:1.25",
+            category: "outfit",
+            subcategory: "outfit-upper",
+          },
+          {
+            targetKind: "bodyPart",
+            bodyPartId: "torso",
+            label: "Muddy fabric",
+            prompt: "muddy fabric",
+            category: "outfit",
+            subcategory: "outfit-upper",
+            negative: true,
+          },
+        ],
+      }),
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      items: [
+        {
+          target: { kind: "bodyPart", bodyPartId: "torso" },
+          bodyPartId: "torso",
+          tag: {
+            label: "Reflective jacket",
+            prompt: "reflective yellow jacket",
+            category: "outfit",
+            subcategory: "outfit-upper",
+            negative: false,
+            weight: { enabled: true, value: 1.25 },
+          },
+        },
+        {
+          target: { kind: "bodyPart", bodyPartId: "torso" },
+          bodyPartId: "torso",
+          tag: {
+            label: "Muddy fabric",
+            prompt: "muddy fabric",
+            category: "outfit",
+            subcategory: "outfit-upper",
+            negative: true,
+            weight: { enabled: false, value: 1 },
+          },
+        },
+      ],
+    });
+  });
+
   it("accepts fenced JSON and skips invalid body parts or grouped prompts", () => {
     const result = parseCharacterImagePromptTagsContent(`\`\`\`json
 {"items":[
@@ -180,6 +289,8 @@ describe("parseCharacterImagePromptTagsContent", () => {
 
     expect(messages[0].content).toContain("freely expand");
     expect(messages[0].content).toContain("label MUST be a short Simplified Chinese");
+    expect(messages[0].content).toContain("prompt MUST stay in English");
+    expect(messages[0].content).toContain('Shape: {"items"');
     expect(messages[0].content).toContain('"label":"黑长发"');
     expect(messages[0].content).toContain("Never return style, lighting, quality, scene");
     expect(messages[0].content).toContain("Categories: character, body-part, outfit.");

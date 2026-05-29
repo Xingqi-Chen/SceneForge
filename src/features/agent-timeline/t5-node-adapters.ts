@@ -1,15 +1,16 @@
 import type { LlmChatRequest, LlmChatResponse } from "@/features/llm";
-import { createDefaultStickFigurePoseV1 } from "@/features/editor/store/defaults";
+import { createDefaultStickFigurePoseV1, defaultCharacter } from "@/features/editor/store/defaults";
 import {
   buildStickFigurePoseGenerationMessages,
   parseStickFigurePoseGenerationResponse,
 } from "@/features/editor/stick-figure-3d/llm-pose-generation";
 import {
-  isPromptTagCategory,
-  isPromptTagSubcategory,
-  PROMPT_TAG_SUBCATEGORY_OPTIONS,
-} from "@/features/prompt-engine/prompt-library/prompt-tag-taxonomy";
-import type { BodyPartId, PromptTagCategory, SceneObject3DTransform } from "@/shared/types";
+  buildCharacterTextPromptTagMessages,
+  isCharacterBodyPromptTagCategory,
+  parseCharacterImagePromptTagsContent,
+  type CharacterImagePromptTagItem,
+} from "@/features/prompt-engine/prompt-library/character-image-prompt-tags";
+import type { PromptTagCategory, SceneObject3DTransform } from "@/shared/types";
 import type { StickFigurePoseV1 } from "@/shared/types/stick-figure-pose";
 
 import { createLlmTimelineNodeAdapter, type TimelineCompleteChat } from "./llm-adapter";
@@ -27,26 +28,6 @@ import {
   type TimelinePromptFragment,
 } from "./types";
 
-const bodyPartIds = [
-  "head",
-  "torso",
-  "leftUpperArm",
-  "leftForearm",
-  "rightUpperArm",
-  "rightForearm",
-  "leftThigh",
-  "leftShin",
-  "rightThigh",
-  "rightShin",
-  "leftHand",
-  "rightHand",
-  "leftFoot",
-  "rightFoot",
-] as const satisfies readonly BodyPartId[];
-
-const bodyPartIdSet = new Set<BodyPartId>(bodyPartIds);
-const characterTagCategories = new Set<PromptTagCategory>(["character", "body-part", "outfit"]);
-
 const defaultCanvasTransform: SceneObject3DTransform = {
   position: { x: 0, y: 0, z: 0 },
   rotation: { x: 0, y: 0, z: 0 },
@@ -54,7 +35,10 @@ const defaultCanvasTransform: SceneObject3DTransform = {
 };
 
 export type TimelineCanvasBindingInput = {
-  primaryCharacter: CharacterTagsTimelineResult["primaryCharacter"];
+  primaryCharacter: {
+    name: string;
+    description: string;
+  };
   characterTags: CharacterPromptTag[];
   action: string;
   pose: StickFigurePoseV1;
@@ -221,88 +205,108 @@ export function normalizeScenePromptTimelineResult(raw: unknown): ScenePromptTim
   };
 }
 
-function categoryForSubcategory(value: unknown): PromptTagCategory | null {
-  if (!isPromptTagSubcategory(value)) {
+function toTimelineCharacterPromptTag(item: CharacterImagePromptTagItem): CharacterPromptTag | null {
+  const label = compactText(item.tag.label, 80) || compactText(item.tag.prompt, 48);
+  const prompt = compactText(item.tag.prompt, 500);
+
+  if (!label || !prompt || !isCharacterBodyPromptTagCategory(item.tag.category)) {
     return null;
   }
 
-  for (const [category, subcategories] of Object.entries(PROMPT_TAG_SUBCATEGORY_OPTIONS)) {
-    if (subcategories.includes(value)) {
-      return category as PromptTagCategory;
+  if (item.target.kind === "character") {
+    if (item.tag.category !== "character") {
+      return null;
     }
+
+    return {
+      ...item.tag,
+      targetKind: "character",
+      label,
+      prompt,
+      weight: { ...item.tag.weight },
+    };
+  }
+
+  if (item.target.kind === "bodyPart") {
+    return {
+      ...item.tag,
+      targetKind: "bodyPart",
+      bodyPartId: item.target.bodyPartId,
+      label,
+      prompt,
+      weight: { ...item.tag.weight },
+    };
   }
 
   return null;
 }
 
-function normalizeCharacterTag(value: unknown): CharacterPromptTag | null {
+function isPromptWeight(value: unknown): value is CharacterPromptTag["weight"] {
+  return (
+    isRecord(value) &&
+    typeof value.enabled === "boolean" &&
+    typeof value.value === "number" &&
+    Number.isFinite(value.value)
+  );
+}
+
+function isTimelineCharacterPromptTag(value: unknown): value is CharacterPromptTag {
   if (!isRecord(value)) {
-    return null;
+    return false;
   }
 
-  const prompt = compactText(value.prompt ?? value.text, 500);
-  if (!prompt) {
-    return null;
+  if (
+    typeof value.label !== "string" ||
+    typeof value.prompt !== "string" ||
+    typeof value.category !== "string" ||
+    !isCharacterBodyPromptTagCategory(value.category as PromptTagCategory) ||
+    !isPromptWeight(value.weight)
+  ) {
+    return false;
   }
 
-  const subcategory = isPromptTagSubcategory(value.subcategory) ? value.subcategory : undefined;
-  const inferredCategory = categoryForSubcategory(subcategory);
-  const rawCategory = isPromptTagCategory(value.category) ? value.category : inferredCategory;
-  const category = rawCategory && characterTagCategories.has(rawCategory) ? rawCategory : "character";
-  const bodyPartId = bodyPartIdSet.has(value.bodyPartId as BodyPartId)
-    ? (value.bodyPartId as BodyPartId)
-    : undefined;
-  const label = compactText(value.label, 80) || prompt.slice(0, 48);
+  if (value.negative !== undefined && typeof value.negative !== "boolean") {
+    return false;
+  }
 
-  return {
-    label,
-    prompt,
-    category,
-    ...(subcategory && PROMPT_TAG_SUBCATEGORY_OPTIONS[category].includes(subcategory)
-      ? { subcategory }
-      : {}),
-    ...(bodyPartId ? { bodyPartId } : {}),
-  };
+  if (value.targetKind === "character") {
+    return value.category === "character";
+  }
+
+  return value.targetKind === "bodyPart" && typeof value.bodyPartId === "string";
+}
+
+function isCharacterTagsTimelineResult(value: unknown): value is CharacterTagsTimelineResult {
+  return isRecord(value) && Array.isArray(value.items) && value.items.every(isTimelineCharacterPromptTag);
 }
 
 export function normalizeCharacterTagsTimelineResult(raw: unknown): CharacterTagsTimelineResult {
-  const parsed = typeof raw === "string" ? parseJsonObjectFromText(raw) : raw;
-
-  if (!isRecord(parsed)) {
-    malformedResponse("Character tags response must be a JSON object.", { raw });
+  const content = typeof raw === "string" ? raw : JSON.stringify(raw);
+  if (typeof content !== "string") {
+    malformedResponse("Character tags response must use the prompt-tag items shape.", { raw });
   }
 
-  const primaryRaw = isRecord(parsed.primaryCharacter)
-    ? parsed.primaryCharacter
-    : isRecord(parsed.primary_character)
-      ? parsed.primary_character
-      : {};
-  const name = compactText(primaryRaw.name, 80) || "Primary character";
-  const description =
-    compactText(primaryRaw.description ?? parsed.primaryCharacterDescription, 800) ||
-    "Derived from scene prompt context.";
+  const parsed = parseCharacterImagePromptTagsContent(content);
 
-  const tagsRaw = Array.isArray(parsed.tags) ? parsed.tags : [];
-  const tags = tagsRaw
-    .map(normalizeCharacterTag)
-    .filter((tag): tag is CharacterPromptTag => Boolean(tag))
+  if (!parsed.ok) {
+    malformedResponse("Character tags response must use the prompt-tag items shape.", {
+      error: parsed.error,
+      raw,
+    });
+  }
+
+  const items = parsed.items
+    .map(toTimelineCharacterPromptTag)
+    .filter((item): item is CharacterPromptTag => Boolean(item))
     .slice(0, 24);
 
-  if (tags.length === 0) {
-    malformedResponse("Character tags response must include at least one usable tag.", { raw });
+  if (items.length === 0) {
+    malformedResponse("Character tags response must include at least one character or body-part item.", {
+      raw,
+    });
   }
 
-  return {
-    primaryCharacter: {
-      name,
-      description,
-    },
-    tags,
-    extraPeopleContext: normalizeStringList(
-      parsed.extraPeopleContext ?? parsed.extra_people_context,
-      6,
-    ),
-  };
+  return { items };
 }
 
 function getSceneInput(workflow: TimelineNodeExecutionContext["workflow"]) {
@@ -369,20 +373,22 @@ function getCharacterTagsResult(workflow: TimelineNodeExecutionContext["workflow
 
   if (manualText) {
     return {
-      primaryCharacter: {
-        name: "Primary character",
-        description: manualText,
-      },
-      tags: [
+      items: [
         {
+          targetKind: "character",
           label: "Manual character note",
           prompt: manualText,
           category: "character",
           subcategory: "character-subject",
+          negative: false,
+          weight: { enabled: false, value: 1 },
         },
       ],
-      extraPeopleContext: [],
     };
+  }
+
+  if (isCharacterTagsTimelineResult(result)) {
+    return result;
   }
 
   try {
@@ -435,6 +441,7 @@ function buildScenePromptRequest(context: TimelineNodeExecutionContext): LlmChat
           "Return only valid JSON. No markdown, comments, or prose.",
           "Create the canonical shared scene context for later character tags, action planning, and layout planning.",
           "Include primary character identity, common/public character facts, global scene intent, style/tone, setting, and other shared facts.",
+          "All generated natural-language fields must be English, including positivePrompt, negativeSuggestions, labels, prompts, character identity, scene intent, style, camera, and lighting.",
           "Do not choose checkpoints, LoRAs, render parameters, file paths, or external resources.",
           'Required shape: {"primaryCharacter":{"name":"...","identity":"...","publicFacts":["..."]},"sceneIntent":"...","styleTone":"...","setting":"...","sharedFacts":["..."],"positivePrompt":"...","negativeSuggestions":["..."],"style":[{"label":"...","prompt":"..."}],"camera":[{"label":"...","prompt":"..."}],"lighting":[{"label":"...","prompt":"..."}]}',
         ].join("\n"),
@@ -459,37 +466,35 @@ function buildScenePromptRequest(context: TimelineNodeExecutionContext): LlmChat
   };
 }
 
+function buildCharacterTagSourceText(scenePrompt: ScenePromptTimelineResult) {
+  return [
+    `Already-selected primary character: ${scenePrompt.primaryCharacter.name}`,
+    `Primary character identity: ${scenePrompt.primaryCharacter.identity}`,
+    scenePrompt.primaryCharacter.publicFacts.length > 0
+      ? `Public character facts: ${scenePrompt.primaryCharacter.publicFacts.join(", ")}`
+      : "",
+    `Scene intent: ${scenePrompt.sceneIntent}`,
+    `Scene prompt: ${scenePrompt.positivePrompt}`,
+    scenePrompt.sharedFacts.length > 0 ? `Shared scene facts: ${scenePrompt.sharedFacts.join(", ")}` : "",
+    "Do not rename, reselect, or redefine the primary character. Return only prompt-tag items for this character and their visible body parts.",
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
 function buildCharacterTagsRequest(context: TimelineNodeExecutionContext): LlmChatRequest {
   const scenePrompt = getScenePromptResult(context.workflow);
 
   return {
     purpose: "prompt-tag-reverse",
-    messages: [
-      {
-        role: "system",
-        content: [
-          "You are SceneForge's primary character tag agent.",
-          "Return only valid JSON. No markdown, comments, or prose.",
-          "Use sceneContext.primaryCharacter as the already-selected primary character.",
-          "Do not rename, reselect, or redefine the primary character.",
-          "Create prompt tags for character identity, expression, body details, clothing, and relevant body parts.",
-          "If more people are present, keep them in extraPeopleContext instead of creating additional characters.",
-          "Allowed tag categories: character, body-part, outfit.",
-          `Allowed bodyPartId values: ${bodyPartIds.join(", ")}.`,
-          'Required shape: {"tags":[{"label":"...","prompt":"...","category":"character","subcategory":"character-subject","bodyPartId":"head"}],"extraPeopleContext":["..."]}',
-        ].join("\n"),
+    messages: buildCharacterTextPromptTagMessages({
+      bodyParts: defaultCharacter.bodyParts,
+      characterTarget: {
+        label: scenePrompt.primaryCharacter.name,
+        promptCategoryBindings: defaultCharacter.promptCategoryBindings,
       },
-      {
-        role: "user",
-        content: JSON.stringify(
-          {
-            sceneContext: scenePrompt,
-          },
-          null,
-          2,
-        ),
-      },
-    ],
+      userPrompt: buildCharacterTagSourceText(scenePrompt),
+    }),
     temperature: 0.25,
     maxTokens: 1000,
   };
@@ -507,6 +512,7 @@ function buildActionDescription(context: TimelineNodeExecutionContext) {
       : "",
     scenePrompt.sharedFacts.length > 0 ? `Shared scene facts: ${scenePrompt.sharedFacts.join(", ")}` : "",
     "Infer the primary character's physical action and a plausible editable 3D stick-figure pose.",
+    "Return the characterDescription/action summary in English.",
   ]
     .filter(Boolean)
     .join("\n");
@@ -551,8 +557,7 @@ function parseCharacterActionResponse(
 
 function buildSpatialSummary(
   scenePrompt: ScenePromptTimelineResult,
-  primaryCharacter: CharacterTagsTimelineResult["primaryCharacter"],
-  characterTags: CharacterTagsTimelineResult,
+  primaryCharacter: TimelineCanvasBindingInput["primaryCharacter"],
   action: CharacterActionTimelineResult,
 ) {
   return compactText(
@@ -572,11 +577,11 @@ function createCanvasBindingInput(context: TimelineNodeExecutionContext): Timeli
 
   return {
     primaryCharacter,
-    characterTags: characterTags.tags,
+    characterTags: characterTags.items,
     action: action.action,
     pose: action.pose,
     transform: defaultCanvasTransform,
-    spatialSummary: buildSpatialSummary(scenePrompt, primaryCharacter, characterTags, action),
+    spatialSummary: buildSpatialSummary(scenePrompt, primaryCharacter, action),
   };
 }
 

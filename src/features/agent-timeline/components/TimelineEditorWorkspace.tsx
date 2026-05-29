@@ -43,10 +43,7 @@ function isCanvasBindingResult(value: unknown): value is CanvasBindingTimelineRe
 function isCharacterTagsResult(value: unknown): value is CharacterTagsTimelineResult {
   return (
     isRecord(value) &&
-    isRecord(value.primaryCharacter) &&
-    typeof value.primaryCharacter.name === "string" &&
-    typeof value.primaryCharacter.description === "string" &&
-    Array.isArray(value.tags)
+    Array.isArray(value.items)
   );
 }
 
@@ -94,11 +91,10 @@ function getBindingSummary({
   const characterLabel =
     boundCharacter?.name ??
     binding?.primaryCharacter.name ??
-    characterTags?.primaryCharacter.name ??
     "Primary character";
   const pendingDetail =
     action && characterTags
-      ? `${characterLabel}: ${characterTags.tags.length} inferred tags and pose plan are ready for layout binding.`
+      ? `${characterLabel}: ${characterTags.items.length} inferred tags and pose plan are ready for layout binding.`
       : "Run layout planning to bind the primary character into the editor canvas.";
 
   return {

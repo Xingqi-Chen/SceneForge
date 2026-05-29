@@ -35,10 +35,8 @@ function toPromptTag(tag: CharacterPromptTag, index: number, target: string): Pr
     prompt: tag.prompt,
     category: tag.category,
     ...(tag.subcategory ? { subcategory: tag.subcategory } : {}),
-    weight: {
-      value: 1,
-      enabled: false,
-    },
+    ...(tag.negative === undefined ? {} : { negative: tag.negative }),
+    weight: { ...tag.weight },
   };
 }
 
@@ -47,13 +45,15 @@ function splitPromptTags(tags: CharacterPromptTag[]) {
   const bodyPartTags = new Map<BodyPartId, PromptTag[]>();
 
   tags.forEach((tag, index) => {
-    if (tag.bodyPartId) {
+    if (tag.targetKind === "bodyPart") {
       const nextTag = toPromptTag(tag, index, tag.bodyPartId);
       bodyPartTags.set(tag.bodyPartId, [...(bodyPartTags.get(tag.bodyPartId) ?? []), nextTag]);
       return;
     }
 
-    characterTags.push(toPromptTag(tag, index, "character"));
+    if (tag.targetKind === "character") {
+      characterTags.push(toPromptTag(tag, index, "character"));
+    }
   });
 
   return { bodyPartTags, characterTags };

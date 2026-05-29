@@ -1,7 +1,6 @@
 import type {
   BodyPartId,
-  PromptTagCategory,
-  PromptTagSubcategory,
+  PromptTag,
   SceneObject3DTransform,
 } from "@/shared/types";
 import type { StickFigurePoseV1 } from "@/shared/types/stick-figure-pose";
@@ -130,21 +129,20 @@ export type ScenePromptTimelineResult = {
   lighting: TimelinePromptFragment[];
 };
 
-export type CharacterPromptTag = {
-  label: string;
-  prompt: string;
-  category: PromptTagCategory;
-  subcategory?: PromptTagSubcategory;
-  bodyPartId?: BodyPartId;
-};
+type CharacterPromptTagBase = Omit<PromptTag, "id">;
+
+export type CharacterPromptTag =
+  | (CharacterPromptTagBase & {
+      targetKind: "character";
+      bodyPartId?: never;
+    })
+  | (CharacterPromptTagBase & {
+      targetKind: "bodyPart";
+      bodyPartId: BodyPartId;
+    });
 
 export type CharacterTagsTimelineResult = {
-  primaryCharacter: {
-    name: string;
-    description: string;
-  };
-  tags: CharacterPromptTag[];
-  extraPeopleContext: string[];
+  items: CharacterPromptTag[];
 };
 
 export type CharacterActionTimelineResult = {

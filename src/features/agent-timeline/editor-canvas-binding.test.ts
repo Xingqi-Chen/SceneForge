@@ -31,17 +31,23 @@ function createBindingInput(
     },
     characterTags: [
       {
+        targetKind: "character",
         label: "Courier",
         prompt: "solo courier protagonist",
         category: "character",
         subcategory: "character-subject",
+        negative: false,
+        weight: { enabled: false, value: 1 },
       },
       {
+        targetKind: "bodyPart",
         label: "Reflective jacket",
         prompt: "reflective yellow jacket",
         category: "outfit",
         subcategory: "outfit-upper",
         bodyPartId: "torso",
+        negative: false,
+        weight: { enabled: false, value: 1 },
       },
     ],
     action: "leaping across wet pavement",
@@ -151,17 +157,23 @@ describe("editor canvas binding", () => {
         },
         characterTags: [
           {
+            targetKind: "character",
             label: "Scout",
             prompt: "solo scout protagonist",
             category: "character",
             subcategory: "character-subject",
+            negative: false,
+            weight: { enabled: false, value: 1 },
           },
           {
+            targetKind: "bodyPart",
             label: "Signal coat",
             prompt: "rainproof signal coat",
             category: "outfit",
             subcategory: "outfit-upper",
             bodyPartId: "torso",
+            negative: false,
+            weight: { enabled: false, value: 1 },
           },
         ],
       }),
@@ -178,6 +190,39 @@ describe("editor canvas binding", () => {
     expect(torso?.promptTags.map((tag) => tag.prompt)).toEqual([
       "manual torso note",
       "rainproof signal coat",
+    ]);
+  });
+
+  it("preserves parsed prompt-tag metadata when binding timeline tags", () => {
+    bindPrimaryTimelineCharacterToEditorStore(
+      createBindingInput({
+        characterTags: [
+          {
+            targetKind: "bodyPart",
+            bodyPartId: "torso",
+            label: "Reflective jacket",
+            prompt: "reflective yellow jacket",
+            category: "outfit",
+            subcategory: "outfit-upper",
+            negative: true,
+            weight: { enabled: true, value: 1.25 },
+          },
+        ],
+      }),
+    );
+
+    const character = useEditorStore.getState().project.scene.characters[0];
+    const torso = character.bodyParts.find((bodyPart) => bodyPart.id === "torso");
+
+    expect(torso?.promptTags).toMatchObject([
+      {
+        label: "Reflective jacket",
+        prompt: "reflective yellow jacket",
+        category: "outfit",
+        subcategory: "outfit-upper",
+        negative: true,
+        weight: { enabled: true, value: 1.25 },
+      },
     ]);
   });
 });

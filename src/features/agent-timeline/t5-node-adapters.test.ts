@@ -1,7 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 
+import { createDefaultProject } from "@/features/editor/store/defaults";
+import { useEditorStore } from "@/features/editor/store/editor-store";
 import type { LlmChatRequest, LlmChatResponse } from "@/features/llm";
 
+import { bindPrimaryTimelineCharacterToEditorStore } from "./editor-canvas-binding";
 import { executeTimelineGraph } from "./graph";
 import { createTimelineWorkflowState } from "./state";
 import {
@@ -33,6 +36,10 @@ function createPoseResponse() {
 }
 
 describe("T5 timeline node adapters", () => {
+  beforeEach(() => {
+    useEditorStore.getState().setProject(createDefaultProject());
+  });
+
   it("parses and normalizes scene prompt and character tag JSON", () => {
     expect(
       normalizeScenePromptTimelineResult(`\`\`\`json
@@ -57,44 +64,42 @@ describe("T5 timeline node adapters", () => {
 
     expect(
       normalizeCharacterTagsTimelineResult({
-        primaryCharacter: {
-          name: "Courier",
-          description: "A focused courier in a reflective jacket",
-        },
-        tags: [
+        items: [
           {
-            label: "Reflective jacket",
+            targetKind: "bodyPart",
+            label: "反光夹克",
             prompt: "reflective yellow courier jacket",
             category: "outfit",
             subcategory: "outfit-upper",
             bodyPartId: "torso",
           },
           {
-            label: "Determined",
+            targetKind: "character",
+            label: "坚定表情",
             prompt: "determined expression",
             category: "character",
             subcategory: "character-expression",
           },
         ],
-        extraPeopleContext: ["market crowd stays background-only"],
       }),
     ).toMatchObject({
-      primaryCharacter: {
-        name: "Courier",
-        description: "A focused courier in a reflective jacket",
-      },
-      tags: [
+      items: [
         {
+          targetKind: "bodyPart",
           category: "outfit",
           bodyPartId: "torso",
           subcategory: "outfit-upper",
+          label: "反光夹克",
+          prompt: "reflective yellow courier jacket",
         },
         {
+          targetKind: "character",
           category: "character",
           subcategory: "character-expression",
+          label: "坚定表情",
+          prompt: "determined expression",
         },
       ],
-      extraPeopleContext: ["market crowd stays background-only"],
     });
   });
 
@@ -134,22 +139,23 @@ describe("T5 timeline node adapters", () => {
               name: "Conflicting scout",
               description: "A conflicting identity that must not drive layout binding",
             },
-            tags: [
+            items: [
               {
-                label: "Courier",
+                targetKind: "character",
+                label: "快递员",
                 prompt: "solo courier protagonist",
                 category: "character",
                 subcategory: "character-subject",
               },
               {
-                label: "Jacket",
+                targetKind: "bodyPart",
+                label: "反光夹克",
                 prompt: "reflective yellow jacket",
                 category: "outfit",
                 subcategory: "outfit-upper",
                 bodyPartId: "torso",
               },
             ],
-            extraPeopleContext: ["distant shoppers are background context"],
           }),
         };
       }
@@ -189,20 +195,55 @@ describe("T5 timeline node adapters", () => {
     );
 
     expect(requests[0]?.purpose).toBe("stable-diffusion-prompt-generation");
+    const scenePromptSystemText = String(requests[0]?.messages[0]?.content ?? "");
+    expect(scenePromptSystemText).toContain("All generated natural-language fields must be English");
+    expect(scenePromptSystemText).toContain("negativeSuggestions");
     expect(new Set(requests.slice(1).map((request) => request.purpose))).toEqual(
       new Set(["prompt-tag-reverse", "stick-figure-pose-generation"]),
     );
+    expect(requests).toHaveLength(3);
+    const characterTagRequest = requests.find((request) => request.purpose === "prompt-tag-reverse");
+    const characterTagSystemText = String(characterTagRequest?.messages[0]?.content ?? "");
+    const characterTagUserText = String(characterTagRequest?.messages[1]?.content ?? "");
+    expect(characterTagSystemText).toContain("label MUST be a short Simplified Chinese");
+    expect(characterTagSystemText).toContain("prompt MUST stay in English");
+    expect(characterTagSystemText).toContain('Shape: {"items"');
+    expect(characterTagUserText).toContain("Already-selected primary character: Courier");
+    expect(characterTagUserText).toContain("Do not rename, reselect, or redefine the primary character");
     const actionRequestText =
       JSON.stringify(
         requests.find((request) => request.purpose === "stick-figure-pose-generation")?.messages,
       ) ?? "";
+    expect(actionRequestText).toContain("Return the characterDescription/action summary in English.");
     expect(actionRequestText).toContain("A focused courier in a reflective jacket");
     expect(actionRequestText).not.toContain("reflective yellow jacket");
+    expect(actionRequestText).not.toContain("反光夹克");
     expect(bindings).toHaveLength(1);
     expect(bindings[0]?.primaryCharacter).toEqual({
       name: "Courier",
       description: "A focused courier in a reflective jacket",
     });
+    expect(bindings[0]?.characterTags).toEqual([
+      {
+        targetKind: "character",
+        label: "快递员",
+        prompt: "solo courier protagonist",
+        category: "character",
+        subcategory: "character-subject",
+        negative: false,
+        weight: { enabled: false, value: 1 },
+      },
+      {
+        targetKind: "bodyPart",
+        bodyPartId: "torso",
+        label: "反光夹克",
+        prompt: "reflective yellow jacket",
+        category: "outfit",
+        subcategory: "outfit-upper",
+        negative: false,
+        weight: { enabled: false, value: 1 },
+      },
+    ]);
     expect(result.nodes["scene-prompt"]).toMatchObject({
       status: "done",
       result: {
@@ -212,11 +253,22 @@ describe("T5 timeline node adapters", () => {
     expect(result.nodes["character-tags"]).toMatchObject({
       status: "done",
       result: {
-        primaryCharacter: {
-          name: "Conflicting scout",
-        },
+        items: [
+          {
+            targetKind: "character",
+            label: "快递员",
+            prompt: "solo courier protagonist",
+          },
+          {
+            targetKind: "bodyPart",
+            bodyPartId: "torso",
+            label: "反光夹克",
+            prompt: "reflective yellow jacket",
+          },
+        ],
       },
     });
+    expect(result.nodes["character-tags"].result).not.toHaveProperty("primaryCharacter");
     expect(result.nodes["character-action"]).toMatchObject({
       status: "done",
       result: {
@@ -237,6 +289,124 @@ describe("T5 timeline node adapters", () => {
     expect(result.nodes["resource-recommendation"].status).toBe("blocked");
     expect(result.nodes["parameter-recommendation"].status).toBe("blocked");
     expect(result.nodes["generation-gate"].status).toBe("blocked");
+  });
+
+  it("preserves parsed prompt tag metadata through Node 3 and editor binding", async () => {
+    const completeChat = async (request: LlmChatRequest): Promise<LlmChatResponse> => {
+      if (request.purpose === "stable-diffusion-prompt-generation") {
+        return {
+          role: "assistant",
+          content: JSON.stringify({
+            positivePrompt: "courier in a reflective yellow jacket",
+            primaryCharacter: {
+              name: "Courier",
+              identity: "A focused courier in a reflective jacket",
+              publicFacts: ["reflective jacket"],
+            },
+            sceneIntent: "Courier checks a rainy loading dock",
+            styleTone: "cinematic realism",
+            setting: "rainy loading dock",
+            sharedFacts: ["rain"],
+            negativeSuggestions: [],
+            style: [],
+            camera: [],
+            lighting: [],
+          }),
+        };
+      }
+
+      if (request.purpose === "prompt-tag-reverse") {
+        return {
+          role: "assistant",
+          content: JSON.stringify({
+            items: [
+              {
+                targetKind: "bodyPart",
+                bodyPartId: "torso",
+                label: "Reflective jacket",
+                prompt: "reflective yellow jacket:1.25",
+                category: "outfit",
+                subcategory: "outfit-upper",
+              },
+              {
+                targetKind: "bodyPart",
+                bodyPartId: "torso",
+                label: "Muddy fabric",
+                prompt: "muddy fabric",
+                category: "outfit",
+                subcategory: "outfit-upper",
+                negative: true,
+              },
+            ],
+          }),
+        };
+      }
+
+      return {
+        role: "assistant",
+        content: createPoseResponse(),
+      };
+    };
+    let boundTorsoTags: Array<{
+      id: string;
+      negative?: boolean;
+      prompt: string;
+      weight: { enabled: boolean; value: number };
+    }> = [];
+    const workflow = createTimelineWorkflowState({
+      workflowId: "t5-weighted-tags",
+      sceneRequest: "A courier in a reflective yellow jacket",
+      now: () => "2026-05-29T00:00:00.000Z",
+    });
+
+    const result = await executeTimelineGraph(
+      workflow,
+      createTimelineT5NodeAdapters({
+        completeChat,
+        bindCanvas: (input) => {
+          const binding = bindPrimaryTimelineCharacterToEditorStore(input);
+          const boundCharacter = useEditorStore
+            .getState()
+            .project.scene.characters.find((character) => character.id === binding.primaryCharacter.id);
+          boundTorsoTags =
+            boundCharacter?.bodyParts.find((bodyPart) => bodyPart.id === "torso")?.promptTags ?? [];
+
+          return binding;
+        },
+      }),
+      { now: () => "2026-05-29T00:00:01.000Z" },
+    );
+
+    const jacketTag = boundTorsoTags.find((tag) => tag.id.startsWith("timeline-t5-torso-0-"));
+    const negativeTag = boundTorsoTags.find((tag) => tag.id.startsWith("timeline-t5-torso-1-"));
+
+    expect(result.nodes["character-tags"].result).toMatchObject({
+      items: [
+        {
+          targetKind: "bodyPart",
+          bodyPartId: "torso",
+          label: "Reflective jacket",
+          prompt: "reflective yellow jacket",
+          category: "outfit",
+          subcategory: "outfit-upper",
+          negative: false,
+          weight: { enabled: true, value: 1.25 },
+        },
+        {
+          targetKind: "bodyPart",
+          bodyPartId: "torso",
+          label: "Muddy fabric",
+          prompt: "muddy fabric",
+          category: "outfit",
+          subcategory: "outfit-upper",
+          negative: true,
+          weight: { enabled: false, value: 1 },
+        },
+      ],
+    });
+    expect(jacketTag?.weight).toEqual({ enabled: true, value: 1.25 });
+    expect(jacketTag?.negative).toBe(false);
+    expect(negativeTag?.negative).toBe(true);
   });
 
   it("surfaces malformed LLM output as a node error without running downstream nodes", async () => {

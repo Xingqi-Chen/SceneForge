@@ -96,26 +96,23 @@ function createT5ResponseForPurpose(purpose: string | undefined) {
     return createJsonResponse({
       role: "assistant",
       content: JSON.stringify({
-        primaryCharacter: {
-          name: "Courier",
-          description: "A focused courier in a reflective jacket",
-        },
-        tags: [
+        items: [
           {
-            label: "Courier",
+            targetKind: "character",
+            label: "快递员",
             prompt: "solo courier protagonist",
             category: "character",
             subcategory: "character-subject",
           },
           {
-            label: "Jacket",
+            targetKind: "bodyPart",
+            label: "反光夹克",
             prompt: "reflective yellow jacket",
             category: "outfit",
             subcategory: "outfit-upper",
             bodyPartId: "torso",
           },
         ],
-        extraPeopleContext: ["distant shoppers are background context"],
       }),
     });
   }

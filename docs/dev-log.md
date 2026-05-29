@@ -4,6 +4,49 @@ This log records dated implementation and documentation work. Keep entries conci
 
 ## 2026-05-29
 
+### T5 Timeline Prompt Tag Metadata Fix
+
+Summary:
+
+- Preserved parsed prompt-tag metadata across Node 3 character tag output and Node 5 editor binding.
+- Kept weighted tokens such as `reflective yellow jacket:1.25` as enabled editor prompt-tag weights after binding.
+- Made explicit negative metadata preservation for allowed character/body-part tag categories.
+
+Files changed:
+
+- `src/features/agent-timeline/`
+- `src/features/prompt-engine/prompt-library/character-image-prompt-tags.test.ts`
+- `docs/dev-log.md`
+
+Validation:
+
+- `npm test -- src/features/agent-timeline` passed: 6 files, 27 tests.
+- `npm test -- src/features/prompt-engine/prompt-library/character-image-prompt-tags.test.ts` passed: 1 file, 9 tests.
+- `npm run typecheck` passed.
+
+### T5 Timeline Tag and Pose Reuse Follow-up
+
+Summary:
+
+- Changed Node 3 character tags to reuse the existing editor text reverse prompt-tag message builder and parser.
+- Restored the Node 3 raw result shape to `{ items: [...] }` with direct `targetKind` and optional `bodyPartId` fields.
+- Kept Node 4 pose planning on the existing stick-figure text generation helper and isolated its request text to Node 2 scene context.
+- Kept Node 5 deterministic and LLM-free while binding Node 3 character/body-part items plus the Node 4 pose to the 3D editor character.
+
+Files changed:
+
+- `src/features/agent-timeline/`
+- `src/features/prompt-engine/prompt-library/character-image-prompt-tags.ts`
+- `src/features/prompt-engine/prompt-library/character-image-prompt-tags.test.ts`
+- `docs/dev-log.md`
+
+Validation:
+
+- `npm test -- src/features/prompt-engine/prompt-library/character-image-prompt-tags.test.ts` passed: 1 file, 8 tests.
+- `npm test -- src/features/agent-timeline` passed: 6 files, 25 tests.
+- `npm run typecheck` passed.
+- `npm run lint` passed with the existing 22 `<img>` warnings in editor UI components.
+
 ### T5 Timeline Inference and Canvas Binding
 
 Summary:
