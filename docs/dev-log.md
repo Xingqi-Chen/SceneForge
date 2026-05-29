@@ -4,6 +4,31 @@ This log records dated implementation and documentation work. Keep entries conci
 
 ## 2026-05-29
 
+### T3 LangGraph Workflow Foundation
+
+Summary:
+
+- Added `@langchain/langgraph` as the timeline orchestration dependency.
+- Added the transient `src/features/agent-timeline/` feature boundary with exported node ids, statuses, result/error types, dependency DAG helpers, readiness checks, manual edit stale propagation, regeneration eligibility, and generation gate blocking.
+- Implemented a LangGraph-backed execution runner with injectable node adapters and branch-safe state merging for the canvas/resource recommendation split.
+- Added a graph-friendly LiteLLM adapter wrapper around existing LLM interfaces with mocked-response tests and normalized LLM error categories.
+- Kept ComfyUI execution and result display as reserved, non-executable downstream nodes for this issue.
+
+Files changed:
+
+- `package.json`
+- `package-lock.json`
+- `src/features/agent-timeline/`
+- `docs/dev-log.md`
+
+Validation:
+
+- `npm test -- src/features/agent-timeline` passed: 2 files, 13 tests.
+- `npm test` passed: 70 files, 472 tests.
+- `npm run typecheck` initially failed because stale generated `.next/types` referenced removed `src/app/agent/*` routes; after `npm run build` refreshed generated metadata, `npm run typecheck` passed.
+- `npm run lint` passed with 22 pre-existing `<img>` warnings in editor UI components.
+- `npm run build` passed. Turbopack reported an existing NFT trace warning involving `next.config.ts`, `src/features/comfyui/sequence-reference-storage.ts`, and the ComfyUI sequence references route.
+
 ### Timeline MVP Requirements Reset
 
 Summary:
