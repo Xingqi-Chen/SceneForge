@@ -14,6 +14,7 @@ Summary:
 - Added structured parsing and normalization for scene prompt fragments, primary character tags, extra people context, stick-figure pose output, and canvas binding results.
 - Bound the inferred primary character to the existing editor store as one editable 3D character/skeleton using existing editor store actions.
 - Added run invalidation so superseded or cleared timeline graph runs cannot restore stale workflow output or bind stale canvas/editor state.
+- Updated the selected-node workspace for character tags, action planning, and layout planning so the primary surface reuses the existing editor 3D canvas and prompt tag picker, with JSON kept as secondary diagnostics.
 
 Files changed:
 
@@ -30,6 +31,12 @@ Validation:
 - `npm run build` passed with the existing Turbopack NFT trace warning for `next.config.ts` through ComfyUI sequence reference storage.
 - `git diff --check` passed with line-ending warnings only.
 - Orchestrator evidence for the current pass also includes real Edge headless layout measurement passing on `http://localhost:3001`.
+- PR follow-up validation: `npm test -- src/features/agent-timeline/components/TimelineShell.test.tsx` passed: 1 file, 4 tests.
+- PR follow-up validation: `npm test -- src/features/agent-timeline` passed: 6 files, 23 tests.
+- PR follow-up validation: `npm run typecheck` passed.
+- PR follow-up validation: `npm run lint` passed with the existing 22 `<img>` warnings in editor UI components.
+- PR follow-up validation: `npm run build` passed with the existing Turbopack NFT trace warning.
+- PR follow-up browser fallback validation on `http://localhost:3000` confirmed the character tags, action planning, and layout planning nodes render the timeline editor workspace with the existing canvas mode controls and prompt tag picker surface while desktop remains a flex-row three-column layout.
 
 ### T4 Initial Timeline Shell
 

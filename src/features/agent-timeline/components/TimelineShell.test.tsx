@@ -5,6 +5,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDefaultProject } from "@/features/editor/store/defaults";
 import { useEditorStore } from "@/features/editor/store/editor-store";
 
+vi.mock("@/features/editor/components/CanvasViewport", () => ({
+  CanvasViewport: () => (
+    <div data-testid="existing-editor-canvas-viewport">Existing editor 3D canvas viewport</div>
+  ),
+}));
+
+vi.mock("@/features/editor/components/PromptTagPickerPanel", () => ({
+  PromptTagPickerPanel: () => (
+    <div data-testid="existing-prompt-tag-picker-panel">Existing prompt tag picker panel</div>
+  ),
+}));
+
 import { TimelineShell } from "./TimelineShell";
 
 const nodeTitles = [
@@ -305,15 +317,36 @@ describe("TimelineShell", () => {
         characterTagsButton?.click();
       });
 
-      expect(getSectionByHeading("Character tags").textContent).toContain("reflective yellow jacket");
+      const characterTagsSection = getSectionByHeading("Character tags");
+      expect(characterTagsSection.textContent).toContain("Existing editor 3D canvas viewport");
+      expect(characterTagsSection.textContent).toContain("Existing prompt tag picker panel");
+      expect(characterTagsSection.textContent).toContain("Prompt tags bound");
+      expect(characterTagsSection.textContent).toContain("JSON diagnostics");
+      expect(characterTagsSection.textContent).toContain("reflective yellow jacket");
+
+      const actionButton = container.querySelector('button[data-node-id="character-action"]') as HTMLButtonElement | null;
+      act(() => {
+        actionButton?.click();
+      });
+
+      const characterActionSection = getSectionByHeading("Action planning");
+      expect(characterActionSection.textContent).toContain("Existing editor 3D canvas viewport");
+      expect(characterActionSection.textContent).toContain("Existing prompt tag picker panel");
+      expect(characterActionSection.textContent).toContain("Pose bound to 3D character");
+      expect(characterActionSection.textContent).toContain("JSON diagnostics");
 
       const canvasButton = container.querySelector('button[data-node-id="canvas-binding"]') as HTMLButtonElement | null;
       act(() => {
         canvasButton?.click();
       });
 
-      expect(getSectionByHeading("Layout planning").textContent).toContain("editable 3D character");
-      expect(getSectionByHeading("Layout planning").textContent).toContain("Courier");
+      const canvasSection = getSectionByHeading("Layout planning");
+      expect(canvasSection.textContent).toContain("Existing editor 3D canvas viewport");
+      expect(canvasSection.textContent).toContain("Existing prompt tag picker panel");
+      expect(canvasSection.textContent).toContain("3D layout binding active");
+      expect(canvasSection.textContent).toContain("JSON diagnostics");
+      expect(canvasSection.textContent).toContain("editable 3D character");
+      expect(canvasSection.textContent).toContain("Courier");
 
       const generationGateButton = container.querySelector('button[data-node-id="generation-gate"]') as HTMLButtonElement | null;
       act(() => {

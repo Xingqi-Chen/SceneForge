@@ -60,6 +60,10 @@ import {
 import { cn } from "@/shared/utils/cn";
 
 import { TimelineNodeStatus as TimelineStatusChip } from "./TimelineNodeStatus";
+import {
+  isTimelineEditorWorkspaceNode,
+  TimelineEditorWorkspace,
+} from "./TimelineEditorWorkspace";
 import { getTimelineNodeOutputText, timelineNodeContent } from "./timeline-node-content";
 
 type DraftMap = Partial<Record<TimelineNodeId, string>>;
@@ -756,6 +760,13 @@ export function TimelineShell() {
                         </Button>
                       </div>
                     </div>
+                  ) : isTimelineEditorWorkspaceNode(selectedNodeId) ? (
+                    <TimelineEditorWorkspace
+                      diagnosticsText={selectedOutput}
+                      emptyDiagnostics={selectedContent.emptyState}
+                      nodeId={selectedNodeId}
+                      workflow={activeWorkflow}
+                    />
                   ) : selectedOutput ? (
                     <pre className="whitespace-pre-wrap rounded-md border border-slate-200 bg-slate-50 p-3 font-mono text-xs leading-relaxed text-slate-700">
                       {selectedOutput}
