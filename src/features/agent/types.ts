@@ -30,9 +30,7 @@ export type AgentGenerationDefaults = Partial<
 
 export type AgentSingleImageDraftRequest = {
   userRequest: string;
-  model?: string;
   nsfw?: boolean;
-  generationDefaults?: AgentGenerationDefaults;
 };
 
 export type AgentSingleImageComfyUiDraftRequest = AgentGenerationDefaults & {

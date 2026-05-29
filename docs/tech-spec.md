@@ -99,29 +99,11 @@ T2 draft generation should accept only standalone Agent input, for example:
 ```ts
 type AgentSingleImageDraftRequest = {
   userRequest: string;
-  model?: string;
   nsfw?: boolean;
-  generationDefaults?: Partial<
-    Pick<
-      ComfyUiTextToImageRequest,
-      | "checkpointName"
-      | "negativePrompt"
-      | "loras"
-      | "width"
-      | "height"
-      | "steps"
-      | "cfg"
-      | "samplerName"
-      | "scheduler"
-      | "denoise"
-      | "batchSize"
-      | "latentImageNode"
-      | "promptWrapper"
-      | "outputPrefix"
-    >
-  >;
 };
 ```
+
+The page should keep global options behind a settings control. The current setting is `nsfw`; when it is not enabled the draft route uses `LITELLM_DEFAULT_MODEL`, and when it is enabled the route uses `LITELLM_NSFW_MODEL` with `LITELLM_DEFAULT_MODEL` as fallback. The page must not expose a manual model override.
 
 The draft response should be structured JSON that can be edited before execution:
 
@@ -141,7 +123,7 @@ type AgentSingleImageDraftResponse = {
 };
 ```
 
-The LLM may draft prompt text and optional rationale, but backend code must validate and normalize the JSON. Fields that determine model availability or local files, especially `checkpointName` and `loras`, should come from explicit standalone Agent inputs or validated UI choices rather than untrusted LLM invention.
+The LLM drafts prompt text, `checkpointName`, optional `loras`, and editable generation defaults such as `width`, `height`, `steps`, `cfg`, `samplerName`, `scheduler`, `denoise`, `batchSize`, `latentImageNode`, and `outputPrefix`. Backend code must validate and normalize the JSON and treat model selections as draft candidates only. Users can edit the right-side draft before any confirmed execution, and T3 remains responsible for validating selected checkpoint and LoRA availability against ComfyUI `object_info`.
 
 ### Confirmation Gate
 
@@ -201,7 +183,7 @@ Use stable categories in Agent route responses while preserving useful upstream 
 
 ### T2/T3 Implementation Boundary
 
-- T2 owns the standalone `/agent` draft flow, Agent draft schema validation, prompt-to-draft LiteLLM call, and editable draft response. T2 must not call ComfyUI or generated image storage.
+- T2 owns the standalone `/agent` draft flow, global Agent settings control, request-only draft input, Agent draft schema validation, prompt-to-draft LiteLLM call, and editable draft response. T2 must not call ComfyUI or generated image storage.
 - T3 owns the explicit confirmation execution path, thin ComfyUI wrapper, completion polling/events, and optional use of generated image storage. T3 must not add Sequence, inpainting, workflow selection, current-project binding, or editor-state mutation.
 - Both tracks should keep server modules isolated from client components and keep the editor store as a non-dependency of Agent backend code.
 

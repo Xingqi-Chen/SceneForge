@@ -14,6 +14,31 @@ function makeRequest(body: unknown) {
   });
 }
 
+function draftContent(overrides: Record<string, unknown> = {}) {
+  return JSON.stringify({
+    title: "Rain Alley",
+    positivePrompt: "cinematic rain alley, neon reflections",
+    negativePrompt: "low quality",
+    comfyUiRequest: {
+      checkpointName: "llm-checkpoint.safetensors",
+      loras: [{ loraName: "rain-style.safetensors", strengthModel: 0.8, strengthClip: 0.75 }],
+      width: 768,
+      height: 1024,
+      steps: 28,
+      cfg: 6.5,
+      samplerName: "euler",
+      scheduler: "normal",
+      denoise: 1,
+      batchSize: 1,
+      latentImageNode: "EmptyLatentImage",
+      outputPrefix: "AgentDraft",
+      seed: 123,
+    },
+    warnings: ["Verify the checkpoint and LoRA exist locally before generation."],
+    ...overrides,
+  });
+}
+
 describe("Agent draft route", () => {
   let previousEnv: Partial<Record<(typeof ENV_KEYS)[number], string | undefined>>;
 
@@ -37,7 +62,7 @@ describe("Agent draft route", () => {
     }
   });
 
-  it("returns an editable draft and preserves explicit model defaults", async () => {
+  it("returns an editable draft with LLM-selected generation defaults", async () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
       expect(input).toBe("https://litellm.test/v1/chat/completions");
       expect(init?.method).toBe("POST");
@@ -53,13 +78,10 @@ describe("Agent draft route", () => {
       };
       expect(requestBody.model).toBe("agent-model");
       expect(requestBody.stream).toBe(true);
-      expect(requestBody.messages[0]?.content).toContain("Do not invent checkpointName");
-      expect(JSON.parse(requestBody.messages[1]?.content ?? "{}")).toMatchObject({
+      expect(requestBody.messages[0]?.content).toContain("Choose checkpointName and LoRAs");
+      expect(JSON.parse(requestBody.messages[1]?.content ?? "{}")).toEqual({
         userRequest: "make a cinematic rain alley",
-        generationDefaults: {
-          checkpointName: "approved.safetensors",
-          width: 512,
-        },
+        nsfw: false,
       });
 
       return Response.json({
@@ -67,19 +89,7 @@ describe("Agent draft route", () => {
           {
             message: {
               role: "assistant",
-              content: JSON.stringify({
-                title: "Rain Alley",
-                positivePrompt: "cinematic rain alley, neon reflections",
-                negativePrompt: "low quality",
-                comfyUiRequest: {
-                  checkpointName: "invented.safetensors",
-                  loras: [{ loraName: "invented.safetensors", strengthModel: 0.8 }],
-                  width: 768,
-                  height: 1024,
-                  seed: 123,
-                },
-                warnings: ["Select a local checkpoint before generation."],
-              }),
+              content: draftContent(),
             },
             finish_reason: "stop",
           },
@@ -87,16 +97,7 @@ describe("Agent draft route", () => {
       });
     });
 
-    const response = await POST(
-      makeRequest({
-        userRequest: "make a cinematic rain alley",
-        generationDefaults: {
-          checkpointName: "approved.safetensors",
-          width: 512,
-          loras: [{ loraName: "approved-lora.safetensors", strengthModel: 0.7 }],
-        },
-      }),
-    );
+    const response = await POST(makeRequest({ userRequest: "make a cinematic rain alley" }));
     const payload = await response.json();
 
     expect(response.status).toBe(200);
@@ -108,20 +109,26 @@ describe("Agent draft route", () => {
       negativePrompt: "low quality",
       confirmationRequired: true,
       comfyUiRequest: {
-        checkpointName: "approved.safetensors",
+        checkpointName: "llm-checkpoint.safetensors",
         positivePrompt: "cinematic rain alley, neon reflections",
         negativePrompt: "low quality",
-        width: 512,
+        width: 768,
         height: 1024,
-        loras: [{ loraName: "approved-lora.safetensors", strengthModel: 0.7 }],
+        steps: 28,
+        cfg: 6.5,
+        samplerName: "euler",
+        scheduler: "normal",
+        denoise: 1,
+        batchSize: 1,
+        latentImageNode: "EmptyLatentImage",
+        outputPrefix: "AgentDraft",
+        loras: [{ loraName: "rain-style.safetensors", strengthModel: 0.8, strengthClip: 0.75 }],
       },
     });
     expect(payload.draftId).toEqual(expect.any(String));
     expect(payload.warnings).toEqual(
       expect.arrayContaining([
-        "Select a local checkpoint before generation.",
-        "Ignored LLM-suggested checkpointName; choose a checkpoint explicitly before confirmation.",
-        "Ignored LLM-suggested LoRAs; choose LoRAs explicitly before confirmation.",
+        "Verify the checkpoint and LoRA exist locally before generation.",
         "Ignored LLM-suggested seed; seed selection belongs to the confirmed execution step.",
       ]),
     );
@@ -137,7 +144,7 @@ describe("Agent draft route", () => {
           {
             message: {
               role: "assistant",
-              content: JSON.stringify({
+              content: draftContent({
                 positivePrompt: "moody portrait lighting",
               }),
             },
@@ -147,6 +154,43 @@ describe("Agent draft route", () => {
     });
 
     const response = await POST(makeRequest({ userRequest: "draft a portrait", nsfw: true }));
+
+    expect(response.status).toBe(200);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores request model and default overrides and uses environment model selection", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (_input, init) => {
+      const requestBody = JSON.parse(String(init?.body)) as {
+        messages: Array<{ content: string }>;
+        model: string;
+      };
+      expect(requestBody.model).toBe("agent-model");
+      expect(JSON.parse(requestBody.messages[1]?.content ?? "{}")).toEqual({
+        userRequest: "draft a castle",
+        nsfw: false,
+      });
+
+      return Response.json({
+        choices: [
+          {
+            message: {
+              role: "assistant",
+              content: draftContent(),
+            },
+          },
+        ],
+      });
+    });
+
+    const response = await POST(makeRequest({
+      userRequest: "draft a castle",
+      model: "manual-model",
+      generationDefaults: {
+        checkpointName: "client-checkpoint.safetensors",
+        width: 512,
+      },
+    }));
 
     expect(response.status).toBe(200);
     expect(fetchSpy).toHaveBeenCalledTimes(1);
@@ -214,6 +258,61 @@ describe("Agent draft route", () => {
     expect(response.status).toBe(502);
     expect(payload.error).toMatchObject({
       code: "agent_draft_invalid",
+    });
+  });
+
+  it("rejects draft content without editable generation defaults", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+      Response.json({
+        choices: [
+          {
+            message: {
+              role: "assistant",
+              content: JSON.stringify({
+                positivePrompt: "forest shrine",
+              }),
+            },
+          },
+        ],
+      }),
+    );
+
+    const response = await POST(makeRequest({ userRequest: "draft a forest shrine" }));
+    const payload = await response.json();
+
+    expect(response.status).toBe(502);
+    expect(payload.error).toMatchObject({
+      code: "agent_draft_invalid",
+    });
+  });
+
+  it("rejects draft content with incomplete generation defaults", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+      Response.json({
+        choices: [
+          {
+            message: {
+              role: "assistant",
+              content: draftContent({
+                comfyUiRequest: {
+                  checkpointName: "llm-checkpoint.safetensors",
+                },
+              }),
+            },
+          },
+        ],
+      }),
+    );
+
+    const response = await POST(makeRequest({ userRequest: "draft a forest shrine" }));
+    const payload = await response.json();
+
+    expect(response.status).toBe(502);
+    expect(payload.error).toMatchObject({
+      code: "agent_draft_invalid",
+      details: {
+        missingFields: expect.arrayContaining(["width", "height", "steps", "cfg"]),
+      },
     });
   });
 });

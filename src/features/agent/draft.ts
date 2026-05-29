@@ -46,6 +46,19 @@ type GenerateAgentSingleImageDraftOptions = {
   nsfwModel?: string;
 };
 
+type RequiredDraftDefaultKey =
+  | "checkpointName"
+  | "width"
+  | "height"
+  | "steps"
+  | "cfg"
+  | "samplerName"
+  | "scheduler"
+  | "denoise"
+  | "batchSize"
+  | "latentImageNode"
+  | "outputPrefix";
+
 export class AgentDraftError extends Error {
   readonly code: AgentDraftErrorCode;
   readonly details?: unknown;
@@ -66,10 +79,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function hasNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
-}
-
-function isOptionalString(value: unknown): value is string | undefined {
-  return value === undefined || hasNonEmptyString(value);
 }
 
 function isOptionalBoolean(value: unknown): value is boolean | undefined {
@@ -173,18 +182,9 @@ function normalizePromptWrapper(value: unknown) {
   };
 }
 
-function normalizeGenerationDefaults(
-  value: unknown,
-  options: {
-    allowModelFields: boolean;
-    source: "request" | "llm";
-  },
-): NormalizedDefaults | null {
+function normalizeGenerationDefaults(value: unknown): NormalizedDefaults | null {
   if (value === undefined) {
-    return {
-      defaults: {},
-      warnings: [],
-    };
+    return null;
   }
 
   if (!isRecord(value)) {
@@ -195,9 +195,7 @@ function normalizeGenerationDefaults(
   const defaults: AgentGenerationDefaults = {};
 
   if (value.checkpointName !== undefined) {
-    if (!options.allowModelFields) {
-      warnings.push("Ignored LLM-suggested checkpointName; choose a checkpoint explicitly before confirmation.");
-    } else if (!hasNonEmptyString(value.checkpointName)) {
+    if (!hasNonEmptyString(value.checkpointName)) {
       return null;
     } else {
       defaults.checkpointName = value.checkpointName.trim();
@@ -205,9 +203,7 @@ function normalizeGenerationDefaults(
   }
 
   if (value.loras !== undefined) {
-    if (!options.allowModelFields) {
-      warnings.push("Ignored LLM-suggested LoRAs; choose LoRAs explicitly before confirmation.");
-    } else if (!Array.isArray(value.loras)) {
+    if (!Array.isArray(value.loras)) {
       return null;
     } else {
       const loras = value.loras.map(normalizeLoraInput);
@@ -243,9 +239,9 @@ function normalizeGenerationDefaults(
   if (
     !isOptionalNumberInRange(value.cfg, 0, 50) ||
     !isOptionalNumberInRange(value.denoise, 0, 1) ||
-    !isOptionalString(value.samplerName) ||
-    !isOptionalString(value.scheduler) ||
-    !isOptionalString(value.outputPrefix) ||
+    (value.samplerName !== undefined && typeof value.samplerName !== "string") ||
+    (value.scheduler !== undefined && typeof value.scheduler !== "string") ||
+    (value.outputPrefix !== undefined && typeof value.outputPrefix !== "string") ||
     !isOptionalLatentImageNode(value.latentImageNode)
   ) {
     return null;
@@ -268,7 +264,7 @@ function normalizeGenerationDefaults(
   if (typeof value.outputPrefix === "string") defaults.outputPrefix = value.outputPrefix.trim();
   if (promptWrapper) defaults.promptWrapper = promptWrapper;
 
-  if (options.source === "llm" && Object.keys(value).some((key) => key === "seed")) {
+  if (Object.keys(value).some((key) => key === "seed")) {
     warnings.push("Ignored LLM-suggested seed; seed selection belongs to the confirmed execution step.");
   }
 
@@ -301,21 +297,10 @@ export function validateAgentSingleImageDraftRequest(value: unknown): DraftValid
     };
   }
 
-  if (!isOptionalString(value.model) || !isOptionalBoolean(value.nsfw)) {
+  if (!isOptionalBoolean(value.nsfw)) {
     return {
       ok: false,
-      message: "model must be a non-empty string and nsfw must be a boolean when provided.",
-    };
-  }
-
-  const generationDefaults = normalizeGenerationDefaults(value.generationDefaults, {
-    allowModelFields: true,
-    source: "request",
-  });
-  if (generationDefaults === null) {
-    return {
-      ok: false,
-      message: "generationDefaults contains invalid single-image generation values.",
+      message: "nsfw must be a boolean when provided.",
     };
   }
 
@@ -323,9 +308,7 @@ export function validateAgentSingleImageDraftRequest(value: unknown): DraftValid
     ok: true,
     request: {
       userRequest: value.userRequest.trim(),
-      model: typeof value.model === "string" ? value.model.trim() : undefined,
       nsfw: value.nsfw,
-      generationDefaults: generationDefaults.defaults,
     },
   };
 }
@@ -359,9 +342,26 @@ function normalizeStringArray(value: unknown): string[] {
     .filter(Boolean);
 }
 
+function findMissingGenerationDefaultFields(defaults: AgentGenerationDefaults): RequiredDraftDefaultKey[] {
+  const missingFields: RequiredDraftDefaultKey[] = [];
+
+  if (!hasNonEmptyString(defaults.checkpointName)) missingFields.push("checkpointName");
+  if (typeof defaults.width !== "number") missingFields.push("width");
+  if (typeof defaults.height !== "number") missingFields.push("height");
+  if (typeof defaults.steps !== "number") missingFields.push("steps");
+  if (typeof defaults.cfg !== "number") missingFields.push("cfg");
+  if (!hasNonEmptyString(defaults.samplerName)) missingFields.push("samplerName");
+  if (!hasNonEmptyString(defaults.scheduler)) missingFields.push("scheduler");
+  if (typeof defaults.denoise !== "number") missingFields.push("denoise");
+  if (typeof defaults.batchSize !== "number") missingFields.push("batchSize");
+  if (defaults.latentImageNode === undefined) missingFields.push("latentImageNode");
+  if (!hasNonEmptyString(defaults.outputPrefix)) missingFields.push("outputPrefix");
+
+  return missingFields;
+}
+
 function normalizeParsedDraft(
   payload: unknown,
-  request: AgentSingleImageDraftRequest,
 ): Omit<AgentSingleImageDraftResponse, "draftId" | "status" | "confirmationRequired"> {
   if (!isRecord(payload)) {
     throw new AgentDraftError("The LLM response must be a JSON object.", {
@@ -370,10 +370,7 @@ function normalizeParsedDraft(
     });
   }
 
-  const llmDefaults = normalizeGenerationDefaults(payload.comfyUiRequest, {
-    allowModelFields: false,
-    source: "llm",
-  });
+  const llmDefaults = normalizeGenerationDefaults(payload.comfyUiRequest);
   if (llmDefaults === null) {
     throw new AgentDraftError("The LLM response included invalid generation defaults.", {
       code: "agent_draft_invalid",
@@ -381,15 +378,22 @@ function normalizeParsedDraft(
     });
   }
 
+  const missingDefaultFields = findMissingGenerationDefaultFields(llmDefaults.defaults);
+  if (missingDefaultFields.length > 0) {
+    throw new AgentDraftError("The LLM response must include editable generation defaults.", {
+      code: "agent_draft_invalid",
+      statusCode: 502,
+      details: { missingFields: missingDefaultFields },
+    });
+  }
+
   const positivePrompt = normalizePromptText(payload.positivePrompt, "positivePrompt");
   const parsedNegativePrompt = normalizeOptionalPromptText(payload.negativePrompt);
-  const requestDefaults = request.generationDefaults ?? {};
-  const negativePrompt = parsedNegativePrompt ?? requestDefaults.negativePrompt ?? "";
+  const negativePrompt = parsedNegativePrompt ?? llmDefaults.defaults.negativePrompt ?? "";
   const title = typeof payload.title === "string" && payload.title.trim() ? payload.title.trim() : undefined;
   const warnings = [...normalizeStringArray(payload.warnings), ...llmDefaults.warnings];
   const comfyUiRequest: AgentSingleImageComfyUiDraftRequest = {
     ...llmDefaults.defaults,
-    ...requestDefaults,
     positivePrompt,
     negativePrompt,
   };
@@ -410,11 +414,13 @@ export function buildAgentDraftMessages(request: AgentSingleImageDraftRequest): 
       content: [
         "You draft editable single-image prompts for SceneForge.",
         "Return only strict JSON. Do not wrap it in prose.",
-        "Required JSON fields: positivePrompt.",
-        "Optional JSON fields: title, negativePrompt, warnings, comfyUiRequest.",
-        "comfyUiRequest may include width, height, steps, cfg, samplerName, scheduler, denoise, batchSize, latentImageNode, promptWrapper, and outputPrefix.",
-        "Do not invent checkpointName, LoRAs, local filenames, file paths, generated image ids, ComfyUI node ids, or seeds.",
-        "If the user asks for model-specific resources, explain that selection in warnings instead of inventing local resources.",
+        "Required JSON fields: positivePrompt, negativePrompt, comfyUiRequest.",
+        "Optional JSON fields: title, warnings.",
+        "comfyUiRequest must include checkpointName, width, height, steps, cfg, samplerName, scheduler, denoise, batchSize, latentImageNode, and outputPrefix.",
+        "comfyUiRequest may include loras as an array of { loraName, strengthModel, strengthClip } and promptWrapper.",
+        "Choose checkpointName and LoRAs as editable draft candidates based on the user's image goal.",
+        "Do not include local directory paths, generated image ids, ComfyUI node ids, or seeds.",
+        "If a checkpoint or LoRA choice is uncertain, still provide an editable candidate and add a warning to verify local availability.",
       ].join("\n"),
     },
     {
@@ -422,17 +428,12 @@ export function buildAgentDraftMessages(request: AgentSingleImageDraftRequest): 
       content: JSON.stringify({
         userRequest: request.userRequest,
         nsfw: request.nsfw ?? false,
-        generationDefaults: request.generationDefaults ?? {},
       }),
     },
   ];
 }
 
 export function resolveAgentDraftModel(request: AgentSingleImageDraftRequest, options: GenerateAgentSingleImageDraftOptions) {
-  if (request.model) {
-    return request.model;
-  }
-
   return request.nsfw === true ? options.nsfwModel || options.defaultModel : options.defaultModel;
 }
 
@@ -497,7 +498,7 @@ export async function generateAgentSingleImageDraft(
       defaultModel: model,
     });
     const completion = await client.completeChat(chatRequest);
-    const draft = normalizeParsedDraft(parseLlmDraftContent(completion.content), request);
+    const draft = normalizeParsedDraft(parseLlmDraftContent(completion.content));
 
     return {
       draftId: createDraftId(),

@@ -12,6 +12,8 @@ Summary:
 - Added `/agent` as an independent single-image draft page.
 - Aligned `/agent` styling with the main editor shell, panel layout, form controls, and light SceneForge UI palette.
 - Removed the exposed LiteLLM model override from `/agent`; draft generation now relies on `LITELLM_DEFAULT_MODEL` or `LITELLM_NSFW_MODEL` based on the NSFW toggle.
+- Moved the NSFW toggle into a global Agent settings control so future Agent settings have one page-level entry point.
+- Reduced the left draft panel to request-only input; the LLM now supplies editable checkpoint, LoRA, prompt, and generation-default candidates in the right draft panel.
 - Extracted reusable ComfyUI parameter controls from `ImageGenerationPanel` and reused them in `/agent` so numeric, select, text, textarea, and boolean inputs match the original ComfyUI configuration UI.
 - Added `POST /api/agent/draft` plus Agent-specific request validation, LiteLLM draft generation, response normalization, and error taxonomy.
 - Kept T2 behind the confirmation gate: no ComfyUI calls, generated-image storage, editor project state, or editor store dependencies.
@@ -33,13 +35,14 @@ Files changed:
 Validation:
 
 - `npm test -- src/app/api/agent/draft/route.test.ts` passed.
+- `npm test -- src/features/agent/components/AgentDraftWorkspace.test.tsx src/app/api/agent/draft/route.test.ts` passed: 2 test files, 11 tests.
 - `npm run typecheck` passed.
 - `npm run lint` passed with existing `<img>` warnings in editor components only.
-- `npm test` passed: 69 test files, 465 tests.
+- `npm test` passed: 70 test files, 470 tests.
 - `npm run build` passed; Turbopack reported the existing ComfyUI sequence-reference NFT tracing warning.
 - `GET http://127.0.0.1:3000/agent` returned 200 and included the Agent page marker from the already-running dev server.
 - Chrome headless screenshot check confirmed `/agent` now renders with the light editor shell, white side panel, and slate/blue form styling.
-- Chrome headless screenshot check confirmed the LLM model override is no longer exposed and `/agent` uses the shared ComfyUI-style numeric and select controls.
+- Chrome headless screenshot check confirmed the global Settings button and request-only left panel are visible; the component test covers opening Settings, the default unchecked NSFW state, and rendering LLM-selected editable defaults.
 
 ### T1 Agent Backend Contract Audit
 

@@ -35,7 +35,7 @@ npm run build
 
 SceneForge exposes a server-side LiteLLM chat endpoint at `POST /api/llm/chat`. The **Prompt 预览** panel can call this endpoint when you use the optional AI-assisted prompt action (optional `model` override per request). The rest of the editor works without any LLM configuration.
 
-The standalone Agent draft page is available at `/agent`. Its draft API lives at `POST /api/agent/draft`, uses the same LiteLLM environment variables, and returns an editable single-image draft without calling ComfyUI.
+The standalone Agent draft page is available at `/agent`. Its draft API lives at `POST /api/agent/draft`, uses the same LiteLLM environment variables, and returns an editable single-image draft without calling ComfyUI. Users submit only a request; NSFW is kept in page settings, and the LLM supplies editable prompt, checkpoint, LoRA, and generation default candidates.
 
 Configure the LiteLLM proxy with server-only environment variables:
 
