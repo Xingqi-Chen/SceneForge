@@ -8,7 +8,9 @@ Tracks are planning units. Implementation work must be split into issue-ready ta
 
 ## Immediate Next Step
 
-Prepare GitHub Issue content for `T2`. `T-CI` added the temporary repository CI setup, and `T1` has confirmed the backend contracts that the Agent single-image workflow will use before `/agent` UI or ComfyUI execution work starts.
+Create the GitHub Issue for `T3`, the LangGraph workflow orchestration foundation. The previous standalone Agent draft scope was rejected: PR #5 was closed, Issue #4 was closed as not planned, and the `issue-4-agent-draft-workflow` local and remote branches were deleted.
+
+The new MVP is a single-image, top-to-bottom visual timeline. The first screen is only a user scene request input plus a settings entry point. LangGraph owns workflow orchestration, dependency tracking, stale downstream regeneration, and the stop-at-generation confirmation gate.
 
 ## Status Values
 
@@ -24,10 +26,40 @@ Prepare GitHub Issue content for `T2`. `T-CI` added the temporary repository CI 
 | Track ID | GitHub Issue | Task | Phase | Status | Test | Review | Notes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | T0 | N/A | Align Codex agent workflow and docs with SceneForge | Documentation | Done | PASS | Not requested | Covers AGENTS.md, `.codex/agents/`, and docs bootstrap. |
-| T1 | #1 | Audit Agent backend contracts for LangGraph single-image workflow | Agent MVP | Done | PASS | APPROVE | Confirmed LiteLLM draft, ComfyUI single-image runner, default workflow, seed behavior, image storage, and error contracts before implementation. Merged PR #2. |
+| T1 | #1 | Audit Agent backend contracts for single-image workflow reuse | Agent MVP | Done | PASS | APPROVE | Confirmed reusable LiteLLM, ComfyUI, image storage, and error contracts. The old standalone Agent draft direction is superseded, but the reuse audit remains useful. Merged PR #2. |
 | T-CI | N/A | Configure GitHub Actions CI | Repository Infrastructure | Done | PASS | Self-reviewed | Temporary repository-bootstrap work requested directly; no GitHub Issue needed. Adds Node 22.x CI for install, lint, typecheck, test, and build. Full local and GitHub Actions validation passed. Merged PR #3. |
-| T2 | TBD | Add standalone Agent draft workflow | Agent MVP | Ready | TBD | TBD | Depends on T1; `/agent` independent entry; LiteLLM creates editable single-image draft; user confirmation required before any ComfyUI call. |
-| T3 | TBD | Run confirmed Agent single-image drafts through ComfyUI | Agent MVP | Ready | TBD | TBD | Depends on T1 and T2; confirmed drafts call existing default single-image ComfyUI workflow directly; results may use existing image storage but must not bind to the current project. |
+| T2 | N/A | Reset MVP requirements to LangGraph timeline | Agent Timeline MVP | Done | Docs only | Self-reviewed | Product direction was reset. PR #5 and Issue #4 were closed as superseded by the top-to-bottom LangGraph timeline MVP. This track updates planning, product, technical, and README docs only. |
+| T3 | TBD | Add LangGraph workflow orchestration foundation | Agent Timeline MVP | Ready | TBD | TBD | Add LangGraph dependency; define workflow state, node result, dependency DAG, status transitions, stale downstream regeneration, and adapters around existing LLM interfaces. No timeline UI or ComfyUI execution yet. |
+| T4 | TBD | Build initial input and vertical timeline shell | Agent Timeline MVP | Todo | TBD | TBD | Depends on T3. Initial screen is only scene input, start button, and settings entry. After submit, show vertical node timeline with reusable NodeCard, NodeStatus, and NodeEditor components styled like the existing editor. |
+| T5 | TBD | Infer scene, character tags, action, and bind to 3D canvas | Agent Timeline MVP | Todo | TBD | TBD | Depends on T3 and T4. Reuse existing LLM interfaces and 3D/stick-figure modules to infer scene prompt, main-character tags, action pose, and bind results to the 3D canvas. MVP supports one primary character. |
+| T6 | TBD | Add centralized settings page | Agent Timeline MVP | Todo | TBD | TBD | Can proceed after T2 and in parallel with T4 where practical. Move path settings, NSFW, and integration status into a settings page. Keep secrets server-only unless a later scoped issue explicitly changes that. |
+| T7 | TBD | Add checkpoint, LoRA, and parameter recommendation nodes | Agent Timeline MVP | Todo | TBD | TBD | Depends on T5 and T6. Reuse Civitai recommendation, selected-resource UI, and ComfyUI parameter controls. LLM must choose from local candidates, not invent unavailable resource names. |
+| T8 | TBD | Add confirmed single-image ComfyUI execution timeline nodes | Agent Timeline MVP | Todo | TBD | TBD | Depends on T7. Timeline stops before generation. Only the user clicking start image generation can advance to ComfyUI execution and result display. MVP remains single-image only. |
+
+## MVP Timeline Nodes
+
+| Node | Inputs | Outputs | Dependencies | User Intervention | AI Re-entry |
+| --- | --- | --- | --- | --- | --- |
+| Scene input | Natural-language scene request | Workflow id, raw intent, settings snapshot | None | Edit input and restart workflow | Optional input rewrite, without mutating old downstream nodes |
+| Scene prompt | Raw intent, settings | Positive scene prompt, negative suggestions, style/camera/light fragments | Scene input | Edit prompt sections | Re-run scene prompt node with user guidance |
+| Character tags | Raw intent, scene prompt | Primary character description, body-part tags, clothing, expression | Scene prompt | Add, remove, or bind tags manually | Re-run character tag node with user guidance |
+| Character action | Character tags, raw intent, current pose | Action description and 3D pose targets | Character tags | Edit action text or choose pose preset | Re-run pose node with user guidance |
+| 3D canvas binding | Scene prompt, tags, pose | 3D scene entities, primary skeleton, spatial summary | Scene prompt, character tags, character action | Drag character, camera, and simple scene objects | Re-run pose or spatial suggestion against current canvas |
+| Checkpoint and LoRA | Prompt data, tags, action, NSFW, local Civitai candidates | Selected checkpoint, LoRAs, reasons, suggested weights | Scene prompt, character tags, character action, settings/resources | Re-select from local candidate UI | Re-run recommendation with style/model preference |
+| Generation parameters | Final prompt draft, selected resources, settings | Width, height, steps, cfg, sampler, scheduler, denoise, seed policy, negative additions | Checkpoint and LoRA, prompt data, canvas summary | Edit parameters with existing controls | Re-run parameter suggestion with quality/speed/aspect guidance |
+| Start image generation | Prompt, resources, parameters, canvas summary | Confirmed ComfyUI request preview | All previous nodes done or manual | Click start image generation | AI may explain risks or suggest final adjustments, but must not call ComfyUI |
+| ComfyUI execution | Confirmed request | Queue metadata, execution status | Start image generation confirmation | Retry/cancel where supported | Use existing diagnosis helpers on failure |
+| Result display | ComfyUI result | Single image, metadata, reusable prompt/parameters | ComfyUI execution | Save, copy, or return to upstream nodes | Use result feedback to re-enter upstream nodes |
+
+## Dependency and Regeneration Rules
+
+- LangGraph is the source of truth for node order, dependency edges, and execution state.
+- Nodes with no dependency relationship may run in parallel.
+- A node may run only when all required dependencies are `done` or `manual`.
+- User intervention marks the edited node as `manual`.
+- Every downstream node that depends on a manual edit must become `stale` and automatically regenerate when its dependencies are valid again.
+- Nodes outside the dependency closure of an edit must keep their existing result.
+- The UI must not implement an ad hoc waterfall of LLM calls. It renders graph state and invokes graph actions.
 
 ## Task Slicing Rules
 
@@ -35,7 +67,7 @@ Prepare GitHub Issue content for `T2`. `T-CI` added the temporary repository CI 
 - A Track with `GitHub Issue` set to `TBD`, blank, or missing is not ready for implementation.
 - A Track with `GitHub Issue` set to `N/A` is local-only work and must explain that decision in `Notes`.
 - A Track with a concrete issue number such as `#12` uses that GitHub Issue as the implementation scope source of truth.
-- Prefer one issue-ready task per behavior boundary: editor state, prompt engine, persistence, API route, integration adapter, or UI panel.
+- Prefer one issue-ready task per behavior boundary: LangGraph orchestration, timeline UI, LLM node adapters, editor/3D binding, settings, Civitai resources, ComfyUI execution, or persistence.
 - Do not mix unrelated production fixes with docs-only or test-only tasks.
 - If a task changes environment variables, update `.env.example`, `README.md`, `docs/tech-spec.md`, and `AGENTS.md` if workflow rules change.
 - If a task changes user-visible scope, update `docs/product-vision.md` and `docs/product-spec.md`.
@@ -60,6 +92,7 @@ Implementation gate:
 - Keep changes inside the assigned scope.
 - Update docs alongside command, environment, architecture, or workflow changes.
 - Use the narrowest useful tests first.
+- For timeline work, verify LangGraph owns orchestration and UI/API code is not manually chaining graph nodes.
 
 Test and review gate:
 
@@ -77,7 +110,9 @@ Closeout:
 
 ## Current Risks
 
+- LangGraph is not yet installed or integrated. T3 must add it before feature work starts.
+- Existing LLM interfaces were built around route or feature-specific calls. T3 must wrap them as graph node adapters before timeline UI work depends on them.
 - Some source comments or UI strings appear to contain mojibake. Treat encoding cleanup as a separate scoped task so product behavior is not mixed with text repair.
 - Local runtime data can grow quickly under `data/`; commits must be checked carefully.
 - ComfyUI, Civitai, Tavily, and LiteLLM behavior depends on local configuration and should not be assumed available in tests.
-- 2D and 3D editor state share project data but have different interaction expectations; regression tests should cover migration and mode switching.
+- 2D and 3D editor state share project data but have different interaction expectations; regression tests should cover migration, graph binding, and manual canvas edits.

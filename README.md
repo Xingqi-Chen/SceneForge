@@ -1,21 +1,19 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# SceneForge
+
+SceneForge is a local-first visual prompt workspace for AI image generation.
+
+The current MVP direction is a single-image, top-to-bottom timeline driven by LangGraph. Users enter one scene request, then review and edit scene prompt, character tags, 3D pose/canvas binding, checkpoint/LoRA selection, generation parameters, and the final ComfyUI generation gate.
 
 ## Getting Started
 
-First, run the development server:
+Install dependencies and start the development server:
 
 ```bash
 npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3000](http://localhost:3000) with your browser.
 
 ## Continuous Integration
 
@@ -31,9 +29,25 @@ npm test
 npm run build
 ```
 
+## MVP Workflow
+
+The MVP starts with only a scene input, a start button, and a settings entry point. After the user submits the scene request, SceneForge expands a vertical timeline:
+
+1. Scene prompt inference.
+2. Character tag inference.
+3. Character action and 3D pose inference.
+4. 3D canvas binding.
+5. Checkpoint and LoRA recommendation.
+6. Generation parameter recommendation.
+7. Start image generation gate.
+8. Confirmed single-image ComfyUI execution.
+9. Result display.
+
+Every node exposes manual controls and an AI retry/suggestion action. User edits mark dependent downstream nodes stale and LangGraph regenerates only those dependent nodes. The timeline must stop before ComfyUI execution until the user explicitly clicks start image generation.
+
 ## LLM API
 
-SceneForge exposes a server-side LiteLLM chat endpoint at `POST /api/llm/chat`. The **Prompt 预览** panel can call this endpoint when you use the optional AI-assisted prompt action (optional `model` override per request). The rest of the editor works without any LLM configuration.
+SceneForge exposes a server-side LiteLLM chat endpoint at `POST /api/llm/chat`. Existing AI features use this endpoint for prompt, tag, pose, diagnosis, enrichment, and recommendation flows. Timeline work should reuse these interfaces through graph-friendly adapters before adding any new LLM route.
 
 Configure the LiteLLM proxy with server-only environment variables:
 
@@ -46,25 +60,34 @@ SCENEFORGE_SHOW_NSFW_BUTTON=false
 LITELLM_CIVITAI_RECOMMENDATION_MODEL=optional-civitai-recommendation-model
 ```
 
-The endpoint accepts `model`, `messages`, `temperature`, `maxTokens`, and optional `nsfw`. When a project has NSFW enabled, supported AI operations such as reverse prompt/pose and Comic Sequence storyboard generation use `LITELLM_NSFW_MODEL` by default if it is configured, then forward the request to LiteLLM's OpenAI-compatible `/v1/chat/completions` API.
+The endpoint accepts `model`, `messages`, `temperature`, `maxTokens`, and optional `nsfw`. Supported AI operations use `LITELLM_NSFW_MODEL` by default when NSFW is enabled and that model is configured, then forward the request to LiteLLM's OpenAI-compatible `/v1/chat/completions` API.
 
-Set `SCENEFORGE_SHOW_NSFW_BUTTON=true` to display the main editor NSFW toggle. It defaults to hidden when unset.
+## Settings
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+The MVP settings page should centralize configuration outside the main timeline:
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+- NSFW mode.
+- Project storage path.
+- Prompt library path.
+- Generated image storage path.
+- ComfyUI temp directory path.
+- Civitai resource paths and status.
+- ComfyUI connection status.
+- LiteLLM configuration status.
 
-## Learn More
+Secrets should remain server-only in `.env.local` unless a later scoped issue adds secure runtime secret editing. The settings UI may display whether a secret is configured, but must not echo secret values.
 
-To learn more about Next.js, take a look at the following resources:
+## Local Data
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+Runtime data is stored under `data/` by default or in configured absolute paths. Do not commit generated projects, logs, caches, databases, downloaded assets, or generated images.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+Important environment variables are documented in `.env.example`.
 
-## Deploy on Vercel
+## Documentation
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+Product and technical planning lives in:
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- `docs/product-vision.md`
+- `docs/product-spec.md`
+- `docs/tech-spec.md`
+- `docs/plan.md`
