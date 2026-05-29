@@ -11,12 +11,16 @@ Summary:
 - Created GitHub Issue #4 for the standalone Agent draft workflow and marked T2 in progress.
 - Added `/agent` as an independent single-image draft page.
 - Aligned `/agent` styling with the main editor shell, panel layout, form controls, and light SceneForge UI palette.
+- Removed the exposed LiteLLM model override from `/agent`; draft generation now relies on `LITELLM_DEFAULT_MODEL` or `LITELLM_NSFW_MODEL` based on the NSFW toggle.
+- Extracted reusable ComfyUI parameter controls from `ImageGenerationPanel` and reused them in `/agent` so numeric, select, text, textarea, and boolean inputs match the original ComfyUI configuration UI.
 - Added `POST /api/agent/draft` plus Agent-specific request validation, LiteLLM draft generation, response normalization, and error taxonomy.
 - Kept T2 behind the confirmation gate: no ComfyUI calls, generated-image storage, editor project state, or editor store dependencies.
 
 Files changed:
 
 - `src/features/agent/`
+- `src/components/ui/comfyui-parameter-controls.tsx`
+- `src/features/editor/components/ImageGenerationPanel.tsx`
 - `src/app/agent/page.tsx`
 - `src/app/api/agent/draft/route.ts`
 - `src/app/api/agent/draft/route.test.ts`
@@ -35,6 +39,7 @@ Validation:
 - `npm run build` passed; Turbopack reported the existing ComfyUI sequence-reference NFT tracing warning.
 - `GET http://127.0.0.1:3000/agent` returned 200 and included the Agent page marker from the already-running dev server.
 - Chrome headless screenshot check confirmed `/agent` now renders with the light editor shell, white side panel, and slate/blue form styling.
+- Chrome headless screenshot check confirmed the LLM model override is no longer exposed and `/agent` uses the shared ComfyUI-style numeric and select controls.
 
 ### T1 Agent Backend Contract Audit
 

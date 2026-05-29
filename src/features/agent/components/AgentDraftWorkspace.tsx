@@ -4,97 +4,80 @@ import { AlertTriangle, CheckCircle2, Loader2, Wand2 } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import {
+  BooleanInput,
+  NumberInput,
+  SelectInput,
+  TextAreaInput,
+  TextInput,
+} from "@/components/ui/comfyui-parameter-controls";
 import type {
   AgentErrorResponse,
   AgentGenerationDefaults,
   AgentSingleImageDraftResponse,
 } from "@/features/agent";
+import { COMFYUI_LATENT_IMAGE_NODE_OPTIONS } from "@/features/comfyui";
+import {
+  COMFYUI_SAMPLER_OPTIONS,
+  COMFYUI_SCHEDULER_OPTIONS,
+} from "@/features/editor/ai-prompt/comfyui-generation-options";
+
+type AgentLatentImageNode = NonNullable<AgentGenerationDefaults["latentImageNode"]>;
 
 type DraftForm = {
-  batchSize: string;
-  cfg: string;
+  batchSize: number;
+  cfg: number;
   checkpointName: string;
-  denoise: string;
-  height: string;
-  model: string;
+  denoise: number;
+  height: number;
+  latentImageNode: AgentLatentImageNode;
   negativePrompt: string;
   nsfw: boolean;
   outputPrefix: string;
   samplerName: string;
   scheduler: string;
-  steps: string;
+  steps: number;
   userRequest: string;
-  width: string;
+  width: number;
 };
 
 const DEFAULT_FORM: DraftForm = {
-  batchSize: "1",
-  cfg: "7",
+  batchSize: 1,
+  cfg: 7,
   checkpointName: "",
-  denoise: "1",
-  height: "1024",
-  model: "",
+  denoise: 1,
+  height: 1024,
+  latentImageNode: "EmptyLatentImage",
   negativePrompt: "",
   nsfw: false,
   outputPrefix: "SceneForge",
   samplerName: "euler",
   scheduler: "normal",
-  steps: "30",
+  steps: 30,
   userRequest: "",
-  width: "1024",
+  width: 1024,
 };
 
-const FIELD_CLASS =
-  "mt-2 w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100";
-const TEXTAREA_CLASS =
-  "mt-2 w-full resize-y rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100";
+const REQUEST_TEXTAREA_CLASS =
+  "mt-2 min-h-44 w-full resize-y rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-sky-300 focus:ring-2 focus:ring-sky-100";
 const MONO_TEXTAREA_CLASS =
-  "mt-2 min-h-72 w-full resize-y rounded-md border border-slate-200 bg-white px-3 py-2 font-mono text-sm text-slate-900 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100";
-const SECTION_LABEL_CLASS = "text-xs font-semibold uppercase tracking-wide text-slate-500";
+  "mt-2 min-h-72 w-full resize-y rounded-md border border-slate-200 bg-white px-3 py-2 font-mono text-sm text-slate-900 outline-none transition focus:border-sky-300 focus:ring-2 focus:ring-sky-100";
+const SECTION_LABEL_CLASS = "text-[10px] font-semibold uppercase tracking-wider text-slate-500";
 const FIELD_LABEL_CLASS = "text-sm font-medium text-slate-700";
-const GENERATION_NUMBER_FIELDS = ["width", "height", "steps", "cfg", "denoise", "batchSize"] as const;
-const GENERATION_NUMBER_FIELD_LABELS: Record<(typeof GENERATION_NUMBER_FIELDS)[number], string> = {
-  batchSize: "Batch size",
-  cfg: "CFG",
-  denoise: "Denoise",
-  height: "Height",
-  steps: "Steps",
-  width: "Width",
-};
-
-function parseOptionalNumber(value: string) {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-
-  const parsed = Number(trimmed);
-  return Number.isFinite(parsed) ? parsed : undefined;
-}
-
-function formatOptionalNumber(value: number | undefined) {
-  return value === undefined ? undefined : String(value);
-}
 
 function buildGenerationDefaults(form: DraftForm): AgentGenerationDefaults {
-  const width = parseOptionalNumber(form.width);
-  const height = parseOptionalNumber(form.height);
-  const steps = parseOptionalNumber(form.steps);
-  const cfg = parseOptionalNumber(form.cfg);
-  const denoise = parseOptionalNumber(form.denoise);
-  const batchSize = parseOptionalNumber(form.batchSize);
-
   return {
     ...(form.checkpointName.trim() ? { checkpointName: form.checkpointName.trim() } : {}),
     ...(form.negativePrompt.trim() ? { negativePrompt: form.negativePrompt.trim() } : {}),
-    ...(width !== undefined ? { width } : {}),
-    ...(height !== undefined ? { height } : {}),
-    ...(steps !== undefined ? { steps } : {}),
-    ...(cfg !== undefined ? { cfg } : {}),
-    ...(form.samplerName.trim() ? { samplerName: form.samplerName.trim() } : {}),
-    ...(form.scheduler.trim() ? { scheduler: form.scheduler.trim() } : {}),
-    ...(denoise !== undefined ? { denoise } : {}),
-    ...(batchSize !== undefined ? { batchSize } : {}),
+    width: form.width,
+    height: form.height,
+    steps: form.steps,
+    cfg: form.cfg,
+    samplerName: form.samplerName,
+    scheduler: form.scheduler,
+    denoise: form.denoise,
+    batchSize: form.batchSize,
+    latentImageNode: form.latentImageNode,
     ...(form.outputPrefix.trim() ? { outputPrefix: form.outputPrefix.trim() } : {}),
   };
 }
@@ -102,6 +85,10 @@ function buildGenerationDefaults(form: DraftForm): AgentGenerationDefaults {
 function errorMessageFromPayload(payload: unknown, fallback: string) {
   const response = payload as Partial<AgentErrorResponse>;
   return response.error?.message ?? fallback;
+}
+
+function roundToStep(value: number, step: number, min: number) {
+  return Math.max(min, Math.round(value / step) * step);
 }
 
 export function AgentDraftWorkspace() {
@@ -145,7 +132,6 @@ export function AgentDraftWorkspace() {
         },
         body: JSON.stringify({
           userRequest: form.userRequest,
-          model: form.model.trim() || undefined,
           nsfw: form.nsfw,
           generationDefaults,
         }),
@@ -167,12 +153,13 @@ export function AgentDraftWorkspace() {
         outputPrefix: nextDraft.comfyUiRequest.outputPrefix ?? current.outputPrefix,
         samplerName: nextDraft.comfyUiRequest.samplerName ?? current.samplerName,
         scheduler: nextDraft.comfyUiRequest.scheduler ?? current.scheduler,
-        width: formatOptionalNumber(nextDraft.comfyUiRequest.width) ?? current.width,
-        height: formatOptionalNumber(nextDraft.comfyUiRequest.height) ?? current.height,
-        steps: formatOptionalNumber(nextDraft.comfyUiRequest.steps) ?? current.steps,
-        cfg: formatOptionalNumber(nextDraft.comfyUiRequest.cfg) ?? current.cfg,
-        denoise: formatOptionalNumber(nextDraft.comfyUiRequest.denoise) ?? current.denoise,
-        batchSize: formatOptionalNumber(nextDraft.comfyUiRequest.batchSize) ?? current.batchSize,
+        latentImageNode: nextDraft.comfyUiRequest.latentImageNode ?? current.latentImageNode,
+        width: nextDraft.comfyUiRequest.width ?? current.width,
+        height: nextDraft.comfyUiRequest.height ?? current.height,
+        steps: nextDraft.comfyUiRequest.steps ?? current.steps,
+        cfg: nextDraft.comfyUiRequest.cfg ?? current.cfg,
+        denoise: nextDraft.comfyUiRequest.denoise ?? current.denoise,
+        batchSize: nextDraft.comfyUiRequest.batchSize ?? current.batchSize,
       }));
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : "Agent draft request failed.");
@@ -200,9 +187,7 @@ export function AgentDraftWorkspace() {
         <div className="relative z-0 flex min-h-0 flex-1 overflow-hidden max-lg:flex-col">
           <section className="touch-scroll-region custom-scrollbar flex w-[380px] shrink-0 flex-col overflow-y-auto border-r border-slate-200 bg-white p-4 max-lg:max-h-[50dvh] max-lg:w-full max-lg:border-b max-lg:border-r-0">
             <div className="mb-4 flex items-center justify-between gap-3">
-              <div className="min-w-0">
-                <h2 className="text-sm font-semibold text-slate-900">Draft Input</h2>
-              </div>
+              <h2 className="text-sm font-semibold text-slate-900">Draft Input</h2>
               <Wand2 className="size-4 shrink-0 text-slate-400" />
             </div>
 
@@ -210,98 +195,108 @@ export function AgentDraftWorkspace() {
               <label className="block">
                 <span className={SECTION_LABEL_CLASS}>Request</span>
                 <textarea
-                  className={`${TEXTAREA_CLASS} min-h-44`}
+                  className={REQUEST_TEXTAREA_CLASS}
                   onChange={(event) => updateForm("userRequest", event.target.value)}
                   placeholder="cinematic rain alley with a lone traveler, neon reflections, dramatic rim light"
                   value={form.userRequest}
                 />
               </label>
 
-              <div className="grid grid-cols-2 gap-3">
-                <label className="block">
-                  <span className={SECTION_LABEL_CLASS}>Model</span>
-                  <input
-                    className={FIELD_CLASS}
-                    onChange={(event) => updateForm("model", event.target.value)}
-                    placeholder="default"
-                    value={form.model}
-                  />
-                </label>
-                <label className="flex items-end gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
-                  <input
-                    checked={form.nsfw}
-                    className="h-4 w-4 accent-slate-950"
-                    onChange={(event) => updateForm("nsfw", event.target.checked)}
-                    type="checkbox"
-                  />
-                  <span className={FIELD_LABEL_CLASS}>NSFW model</span>
-                </label>
-              </div>
+              <BooleanInput checked={form.nsfw} label="NSFW model" onChange={(value) => updateForm("nsfw", value)} />
 
               <div className="border-t border-slate-100 pt-5">
                 <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
                   Generation Defaults
                 </h3>
                 <div className="grid grid-cols-2 gap-3">
-                  <label className="block">
-                    <span className={FIELD_LABEL_CLASS}>Checkpoint</span>
-                    <input
-                      className={FIELD_CLASS}
-                      onChange={(event) => updateForm("checkpointName", event.target.value)}
-                      placeholder="model.safetensors"
-                      value={form.checkpointName}
-                    />
-                  </label>
-                  <label className="block">
-                    <span className={FIELD_LABEL_CLASS}>Output prefix</span>
-                    <input
-                      className={FIELD_CLASS}
-                      onChange={(event) => updateForm("outputPrefix", event.target.value)}
-                      value={form.outputPrefix}
-                    />
-                  </label>
+                  <TextInput
+                    label="checkpoint"
+                    onChange={(value) => updateForm("checkpointName", value)}
+                    placeholder="model.safetensors"
+                    value={form.checkpointName}
+                  />
+                  <TextInput
+                    label="output prefix"
+                    onChange={(value) => updateForm("outputPrefix", value)}
+                    value={form.outputPrefix}
+                  />
                 </div>
 
                 <div className="mt-3 grid grid-cols-2 gap-3">
-                  {GENERATION_NUMBER_FIELDS.map((field) => (
-                    <label className="block" key={field}>
-                      <span className={FIELD_LABEL_CLASS}>{GENERATION_NUMBER_FIELD_LABELS[field]}</span>
-                      <input
-                        className={FIELD_CLASS}
-                        onChange={(event) => updateForm(field, event.target.value)}
-                        value={form[field]}
-                      />
-                    </label>
-                  ))}
+                  <NumberInput
+                    label="width"
+                    min={16}
+                    onChange={(value) => updateForm("width", roundToStep(value, 8, 16))}
+                    step={8}
+                    value={form.width}
+                  />
+                  <NumberInput
+                    label="height"
+                    min={16}
+                    onChange={(value) => updateForm("height", roundToStep(value, 8, 16))}
+                    step={8}
+                    value={form.height}
+                  />
+                  <NumberInput
+                    label="steps"
+                    min={1}
+                    onChange={(value) => updateForm("steps", Math.max(1, Math.round(value)))}
+                    value={form.steps}
+                  />
+                  <NumberInput
+                    label="cfg"
+                    min={0}
+                    onChange={(value) => updateForm("cfg", value)}
+                    step={0.5}
+                    value={form.cfg}
+                  />
+                  <NumberInput
+                    label="denoise"
+                    max={1}
+                    min={0}
+                    onChange={(value) => updateForm("denoise", Math.min(1, Math.max(0, value)))}
+                    step={0.05}
+                    value={form.denoise}
+                  />
+                  <NumberInput
+                    label="images"
+                    max={16}
+                    min={1}
+                    onChange={(value) => updateForm("batchSize", Math.min(16, Math.max(1, Math.round(value))))}
+                    value={form.batchSize}
+                  />
                 </div>
 
                 <div className="mt-3 grid grid-cols-2 gap-3">
-                  <label className="block">
-                    <span className={FIELD_LABEL_CLASS}>Sampler</span>
-                    <input
-                      className={FIELD_CLASS}
-                      onChange={(event) => updateForm("samplerName", event.target.value)}
-                      value={form.samplerName}
+                  <SelectInput
+                    label="sampler"
+                    onChange={(value) => updateForm("samplerName", value)}
+                    options={COMFYUI_SAMPLER_OPTIONS}
+                    value={form.samplerName}
+                  />
+                  <SelectInput
+                    label="scheduler"
+                    onChange={(value) => updateForm("scheduler", value)}
+                    options={COMFYUI_SCHEDULER_OPTIONS}
+                    value={form.scheduler}
+                  />
+                  <div className="col-span-2">
+                    <SelectInput
+                      label="latent"
+                      onChange={(value) => updateForm("latentImageNode", value as AgentLatentImageNode)}
+                      options={COMFYUI_LATENT_IMAGE_NODE_OPTIONS}
+                      value={form.latentImageNode}
                     />
-                  </label>
-                  <label className="block">
-                    <span className={FIELD_LABEL_CLASS}>Scheduler</span>
-                    <input
-                      className={FIELD_CLASS}
-                      onChange={(event) => updateForm("scheduler", event.target.value)}
-                      value={form.scheduler}
-                    />
-                  </label>
+                  </div>
                 </div>
 
-                <label className="mt-3 block">
-                  <span className={FIELD_LABEL_CLASS}>Negative prompt default</span>
-                  <textarea
-                    className={`${TEXTAREA_CLASS} min-h-24`}
-                    onChange={(event) => updateForm("negativePrompt", event.target.value)}
+                <div className="mt-3">
+                  <TextAreaInput
+                    label="negative prompt default"
+                    onChange={(value) => updateForm("negativePrompt", value)}
                     value={form.negativePrompt}
                   />
-                </label>
+                </div>
               </div>
             </div>
 
