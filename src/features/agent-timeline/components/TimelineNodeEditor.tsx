@@ -38,7 +38,7 @@ export function TimelineNodeEditor({
     return (
       <div className="flex flex-col gap-3">
         <textarea
-          className="min-h-28 w-full resize-y rounded-md border border-slate-200 bg-white p-3 font-mono text-xs leading-relaxed text-slate-800 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+          className="min-h-28 w-full resize-y rounded-md border border-slate-200 bg-white p-3 font-mono text-xs leading-relaxed text-slate-800 shadow-inner shadow-slate-100 outline-none transition placeholder:text-slate-400 focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
           onChange={(event) => onDraftChange(event.target.value)}
           value={draft}
         />
@@ -60,12 +60,12 @@ export function TimelineNodeEditor({
     <div className="flex flex-col gap-3">
       <div
         className={cn(
-          "min-h-24 rounded-md border p-3 text-xs leading-relaxed",
+          "min-h-24 rounded-md border p-3 text-xs leading-relaxed shadow-inner",
           error
-            ? "border-rose-200 bg-rose-50 text-rose-700"
+            ? "border-rose-200 bg-rose-50 text-rose-700 shadow-rose-100/70"
             : output
-              ? "border-slate-200 bg-white text-slate-700"
-              : "border-dashed border-slate-200 bg-slate-50 text-slate-500",
+              ? "border-slate-200 bg-white text-slate-700 shadow-slate-100"
+              : "border-dashed border-slate-200 bg-slate-50 text-slate-500 shadow-slate-100",
         )}
       >
         {output ? <pre className="whitespace-pre-wrap font-mono">{output}</pre> : emptyState}

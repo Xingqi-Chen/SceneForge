@@ -193,8 +193,27 @@ describe("TimelineShell", () => {
       editButton?.click();
     });
 
-    const draft = scenePromptSection.querySelector("textarea") as HTMLTextAreaElement | null;
+    let draft = scenePromptSection.querySelector("textarea") as HTMLTextAreaElement | null;
     expect(draft).not.toBeNull();
+
+    act(() => {
+      setNativeTextAreaValue(draft as HTMLTextAreaElement, "discarded prompt draft");
+    });
+
+    const cancelButton = Array.from(scenePromptSection.querySelectorAll("button")).find((button) =>
+      button.textContent?.includes("Cancel"),
+    ) as HTMLButtonElement | undefined;
+
+    act(() => {
+      cancelButton?.click();
+    });
+
+    act(() => {
+      editButton?.click();
+    });
+
+    draft = scenePromptSection.querySelector("textarea") as HTMLTextAreaElement | null;
+    expect(draft?.value).toBe("");
 
     act(() => {
       setNativeTextAreaValue(draft as HTMLTextAreaElement, "wide lens greenhouse command deck");

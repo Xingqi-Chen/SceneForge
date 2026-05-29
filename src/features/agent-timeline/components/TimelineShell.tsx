@@ -2,7 +2,7 @@
 
 import { type FormEvent, useMemo, useState } from "react";
 import Link from "next/link";
-import { ArrowLeft, Play, Settings } from "lucide-react";
+import { ArrowLeft, Play, Settings, Workflow } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { createTimelineWorkflowState, setTimelineNodeManualResult } from "@/features/agent-timeline/state";
@@ -21,7 +21,7 @@ type DraftMap = Partial<Record<TimelineNodeId, string>>;
 type NoticeMap = Partial<Record<TimelineNodeId, string>>;
 
 const settingsLinkClassName =
-  "inline-flex h-10 items-center justify-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 shadow-sm transition-colors hover:bg-slate-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-400";
+  "inline-flex h-10 items-center justify-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 shadow-sm transition-colors hover:border-slate-300 hover:bg-slate-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-400";
 
 function createManualResult(nodeId: TimelineNodeId, value: string) {
   if (nodeId === "scene-input") {
@@ -76,6 +76,13 @@ export function TimelineShell() {
   }
 
   function handleCancelEdit() {
+    if (workflow && editingNodeId) {
+      setDrafts((current) => ({
+        ...current,
+        [editingNodeId]: getTimelineNodeOutputText(workflow.nodes[editingNodeId]),
+      }));
+    }
+
     setEditingNodeId(null);
   }
 
@@ -126,34 +133,47 @@ export function TimelineShell() {
 
   if (!workflow) {
     return (
-      <main className="sf-app-shell flex min-h-0 flex-col overflow-hidden bg-slate-50 p-4 font-sans text-slate-950 selection:bg-blue-100 selection:text-blue-900">
-        <div className="flex shrink-0 justify-end">
+      <main className="sf-app-shell flex min-h-0 flex-col overflow-hidden bg-slate-100 font-sans text-slate-950 selection:bg-blue-100 selection:text-blue-900">
+        <header className="flex shrink-0 items-center justify-between gap-3 border-b border-slate-200 bg-white/95 px-4 py-3 shadow-sm">
+          <div className="flex min-w-0 items-center gap-3">
+            <div className="flex size-9 shrink-0 items-center justify-center rounded-md border border-slate-200 bg-slate-50 text-slate-700">
+              <Workflow className="size-4" />
+            </div>
+            <h1 className="truncate text-sm font-bold text-slate-900">SceneForge timeline</h1>
+          </div>
           <Link aria-label="Open settings" className={settingsLinkClassName} href="/settings" title="Open settings">
             <Settings className="size-4" />
             Settings
           </Link>
-        </div>
+        </header>
 
-        <form className="flex min-h-0 flex-1 items-center justify-center" onSubmit={handleSubmit}>
-          <div className="grid w-full max-w-3xl gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
-            <label className="sr-only" htmlFor="scene-request">
-              Scene request
-            </label>
-            <textarea
-              className="min-h-32 w-full resize-y rounded-md border border-slate-200 bg-white p-4 text-sm leading-relaxed text-slate-900 shadow-sm outline-none transition placeholder:text-slate-400 focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
-              id="scene-request"
-              onChange={(event) => setSceneRequest(event.target.value)}
-              placeholder="Describe the scene request..."
-              value={sceneRequest}
-            />
-            <Button
-              className={cn("h-11 px-4 shadow-sm sm:h-12", !sceneRequestIsUsable && "bg-slate-400")}
-              disabled={!sceneRequestIsUsable}
-              type="submit"
-            >
-              <Play className="size-4" />
-              Start
-            </Button>
+        <form className="flex min-h-0 flex-1 items-center justify-center p-4 sm:p-6" onSubmit={handleSubmit}>
+          <div className="w-full max-w-4xl overflow-hidden rounded-md border border-slate-200 bg-white shadow-xl shadow-slate-200/70">
+            <div className="border-b border-slate-100 bg-slate-50 px-4 py-3 sm:px-5">
+              <label className="text-xs font-semibold uppercase tracking-wide text-slate-500" htmlFor="scene-request">
+                Scene request
+              </label>
+            </div>
+            <div className="flex flex-col gap-4 p-4 sm:flex-row sm:items-end sm:p-5">
+              <textarea
+                className="min-h-40 w-full resize-y rounded-md border border-slate-200 bg-white p-4 text-sm leading-relaxed text-slate-900 shadow-inner shadow-slate-100 outline-none transition placeholder:text-slate-400 focus:border-blue-400 focus:ring-2 focus:ring-blue-100 sm:flex-1"
+                id="scene-request"
+                onChange={(event) => setSceneRequest(event.target.value)}
+                placeholder="Describe the scene request..."
+                value={sceneRequest}
+              />
+              <Button
+                className={cn(
+                  "h-11 w-full px-4 shadow-sm sm:h-12 sm:w-auto sm:min-w-28",
+                  !sceneRequestIsUsable && "bg-slate-400",
+                )}
+                disabled={!sceneRequestIsUsable}
+                type="submit"
+              >
+                <Play className="size-4" />
+                Start
+              </Button>
+            </div>
           </div>
         </form>
       </main>
@@ -161,11 +181,16 @@ export function TimelineShell() {
   }
 
   return (
-    <main className="sf-app-shell flex min-h-0 flex-col overflow-hidden bg-slate-50 font-sans text-slate-950 selection:bg-blue-100 selection:text-blue-900">
-      <header className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-slate-200 bg-white px-4 py-3">
-        <div className="min-w-0">
-          <h1 className="truncate text-sm font-bold text-slate-900">SceneForge timeline</h1>
-          <p className="mt-0.5 truncate text-xs text-slate-500">{sceneRequest}</p>
+    <main className="sf-app-shell flex min-h-0 flex-col overflow-hidden bg-slate-100 font-sans text-slate-950 selection:bg-blue-100 selection:text-blue-900">
+      <header className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-slate-200 bg-white/95 px-4 py-3 shadow-sm">
+        <div className="flex min-w-0 items-center gap-3">
+          <div className="flex size-9 shrink-0 items-center justify-center rounded-md border border-slate-200 bg-slate-50 text-slate-700">
+            <Workflow className="size-4" />
+          </div>
+          <div className="min-w-0">
+            <h1 className="truncate text-sm font-bold text-slate-900">SceneForge timeline</h1>
+            <p className="mt-0.5 truncate text-xs text-slate-500">{sceneRequest}</p>
+          </div>
         </div>
         <div className="flex shrink-0 items-center gap-2">
           <Button className="h-9 px-3 text-xs shadow-none" onClick={handleNewScene} type="button" variant="secondary">
@@ -179,7 +204,7 @@ export function TimelineShell() {
         </div>
       </header>
 
-      <div className="custom-scrollbar touch-scroll-region min-h-0 flex-1 overflow-y-auto px-4 py-5">
+      <div className="custom-scrollbar touch-scroll-region min-h-0 flex-1 overflow-y-auto px-4 py-6">
         <div className="mx-auto flex w-full max-w-5xl flex-col gap-6">
           <div className="flex flex-col gap-6">
             {timelineNodes.map((node, index) => (

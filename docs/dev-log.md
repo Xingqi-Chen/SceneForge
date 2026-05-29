@@ -11,6 +11,7 @@ Summary:
 - Replaced the root route with an in-memory initial scene request screen and vertical timeline shell seeded from the T3 timeline state helpers.
 - Added reusable timeline UI primitives for node cards, status pills, manual editing, and AI retry/suggestion affordances.
 - Rendered all MVP timeline nodes in dependency order with shell output states, manual edit stale propagation, reserved future nodes, and an explicit ComfyUI confirmation gate notice.
+- Polished the timeline shell with a modern app header, centered input workspace, status-accented node cards, stable responsive flex layout, and cleaner edit surfaces.
 - Moved the legacy editor shell to `/editor` and added a minimal `/settings` entry target without exposing local paths or secrets.
 
 Files changed:
