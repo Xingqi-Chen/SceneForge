@@ -56,6 +56,13 @@ describe("agent timeline workflow foundation", () => {
   it("defines a valid MVP dependency DAG with reserved ComfyUI nodes downstream of the gate", () => {
     expect(validateTimelineDependencyDag()).toEqual([]);
     expect(getTimelineNodeDependencies("scene-input")).toEqual([]);
+    expect(getTimelineNodeDependencies("character-tags")).toEqual(["scene-prompt"]);
+    expect(getTimelineNodeDependencies("character-action")).toEqual(["scene-prompt"]);
+    expect(getTimelineNodeDependencies("canvas-binding")).toEqual([
+      "scene-prompt",
+      "character-tags",
+      "character-action",
+    ]);
     expect(getTimelineNodeDependencies("generation-gate")).toEqual([
       "scene-prompt",
       "character-tags",
@@ -116,15 +123,18 @@ describe("agent timeline workflow foundation", () => {
       now: clock,
     });
 
+    expect(getRunnableTimelineNodeIds(workflow)).toEqual(["character-tags", "character-action"]);
     expect(canRunTimelineNode(workflow, "character-tags")).toBe(true);
-    expect(canRunTimelineNode(workflow, "character-action")).toBe(false);
-
-    workflow = completeTimelineNode(workflow, "character-tags", { tags: ["robot"] }, "ai", { now: clock });
-
     expect(canRunTimelineNode(workflow, "character-action")).toBe(true);
     expect(canRunTimelineNode(workflow, "canvas-binding")).toBe(false);
 
     workflow = completeTimelineNode(workflow, "character-action", { action: "sketching" }, "ai", { now: clock });
+
+    expect(canRunTimelineNode(workflow, "character-action")).toBe(false);
+    expect(canRunTimelineNode(workflow, "character-tags")).toBe(true);
+    expect(canRunTimelineNode(workflow, "canvas-binding")).toBe(false);
+
+    workflow = completeTimelineNode(workflow, "character-tags", { tags: ["robot"] }, "ai", { now: clock });
 
     expect(getRunnableTimelineNodeIds(workflow)).toEqual(["canvas-binding"]);
     expect(isReservedTimelineNodeId("resource-recommendation")).toBe(true);
@@ -176,8 +186,10 @@ describe("agent timeline workflow foundation", () => {
 
     expect(edited.nodes["character-tags"].status).toBe("stale");
     expect(edited.nodes["character-action"].status).toBe("stale");
+    expect(edited.nodes["canvas-binding"].status).toBe("stale");
     expect(isTimelineNodeRegenerationEligible(edited, "character-tags")).toBe(true);
-    expect(isTimelineNodeRegenerationEligible(edited, "character-action")).toBe(false);
+    expect(isTimelineNodeRegenerationEligible(edited, "character-action")).toBe(true);
+    expect(isTimelineNodeRegenerationEligible(edited, "canvas-binding")).toBe(false);
 
     const regeneratedTags = setTimelineNodeManualResult(
       edited,
@@ -186,7 +198,50 @@ describe("agent timeline workflow foundation", () => {
       { now: clock },
     );
 
+    expect(regeneratedTags.nodes["character-action"].status).toBe("stale");
+    expect(regeneratedTags.nodes["canvas-binding"].status).toBe("stale");
     expect(isTimelineNodeRegenerationEligible(regeneratedTags, "character-action")).toBe(true);
+    expect(isTimelineNodeRegenerationEligible(regeneratedTags, "canvas-binding")).toBe(false);
+
+    const regeneratedAction = setTimelineNodeManualResult(
+      regeneratedTags,
+      "character-action",
+      { action: "checking controls" },
+      { now: clock },
+    );
+
+    expect(isTimelineNodeRegenerationEligible(regeneratedAction, "canvas-binding")).toBe(true);
+  });
+
+  it("marks only the T5 layout join stale after editing either parallel branch", () => {
+    const clock = createClock();
+    const workflow = createReadyForGateWorkflow(clock);
+
+    const editedTags = setTimelineNodeManualResult(
+      workflow,
+      "character-tags",
+      { tags: ["pilot", "raincoat"] },
+      { now: clock },
+    );
+
+    expect(editedTags.nodes["character-action"]).toMatchObject({
+      status: "manual",
+      result: { action: "checking controls" },
+    });
+    expect(editedTags.nodes["canvas-binding"].status).toBe("stale");
+
+    const editedAction = setTimelineNodeManualResult(
+      workflow,
+      "character-action",
+      { action: "checking an overhead switch" },
+      { now: clock },
+    );
+
+    expect(editedAction.nodes["character-tags"]).toMatchObject({
+      status: "manual",
+      result: { tags: ["pilot"] },
+    });
+    expect(editedAction.nodes["canvas-binding"].status).toBe("stale");
   });
 
   it("executes ready nodes with injected adapters and normalizes failed node errors", async () => {
@@ -200,6 +255,7 @@ describe("agent timeline workflow foundation", () => {
       "character-tags": () => {
         throw new Error("tag inference failed");
       },
+      "character-action": () => ({ value: { action: "walking under trees" }, source: "ai" }),
     };
     const workflow = createTimelineWorkflowState({
       workflowId: "adapter-failure",
@@ -220,7 +276,11 @@ describe("agent timeline workflow foundation", () => {
       code: "timeline_node_failed",
       message: "tag inference failed",
     });
-    expect(result.nodes["character-action"].status).toBe("blocked");
+    expect(result.nodes["character-action"]).toMatchObject({
+      status: "done",
+      result: { action: "walking under trees" },
+    });
+    expect(result.nodes["canvas-binding"].status).toBe("blocked");
   });
 
   it("runs canvas binding while keeping future resource and parameter nodes blocked", async () => {

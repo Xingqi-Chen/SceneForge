@@ -16,15 +16,12 @@ import type {
 import type { CharacterSkeleton } from "@/shared/types";
 
 const visualWorkspaceNodeIds = new Set<TimelineNodeId>([
-  "character-tags",
-  "character-action",
   "canvas-binding",
 ]);
 
 type TimelineEditorWorkspaceProps = {
   diagnosticsText: string;
   emptyDiagnostics: string;
-  nodeId: TimelineNodeId;
   workflow: TimelineWorkflowState;
 };
 
@@ -86,13 +83,11 @@ function getBindingSummary({
   boundCharacter,
   binding,
   characterTags,
-  nodeId,
 }: {
   action: CharacterActionTimelineResult | null;
   boundCharacter: CharacterSkeleton | undefined;
   binding: CanvasBindingTimelineResult | null;
   characterTags: CharacterTagsTimelineResult | null;
-  nodeId: TimelineNodeId;
 }) {
   const tagCount = getCharacterPromptTagCount(boundCharacter);
   const taggedBodyPartCount = getTaggedBodyPartCount(boundCharacter);
@@ -101,37 +96,17 @@ function getBindingSummary({
     binding?.primaryCharacter.name ??
     characterTags?.primaryCharacter.name ??
     "Primary character";
-
-  if (nodeId === "character-tags") {
-    return {
-      label: tagCount > 0 ? "Prompt tags bound" : "Tag inference pending binding",
-      detail:
-        tagCount > 0
-          ? `${characterLabel}: ${tagCount} prompt tags across ${taggedBodyPartCount} body-part targets.`
-          : characterTags
-            ? `${characterTags.tags.length} inferred tags are ready for layout binding.`
-            : "Run character tag inference to populate the editor prompt surface.",
-    };
-  }
-
-  if (nodeId === "character-action") {
-    return {
-      label: boundCharacter?.stickFigurePose3D ? "Pose bound to 3D character" : "Pose inference pending binding",
-      detail:
-        boundCharacter?.stickFigurePose3D
-          ? `${characterLabel}: action pose is visible in the editor 3D canvas.`
-          : action
-            ? action.poseSummary
-            : "Run action planning to populate the 3D pose surface.",
-    };
-  }
+  const pendingDetail =
+    action && characterTags
+      ? `${characterLabel}: ${characterTags.tags.length} inferred tags and pose plan are ready for layout binding.`
+      : "Run layout planning to bind the primary character into the editor canvas.";
 
   return {
     label: binding && boundCharacter ? "3D layout binding active" : "3D layout pending",
     detail:
       binding && boundCharacter
-        ? binding.spatialSummary
-        : "Run layout planning to bind the primary character into the editor canvas.",
+        ? `${binding.spatialSummary} ${tagCount} prompt tags across ${taggedBodyPartCount} body-part targets.`
+        : pendingDetail,
   };
 }
 
@@ -142,7 +117,6 @@ export function isTimelineEditorWorkspaceNode(nodeId: TimelineNodeId) {
 export function TimelineEditorWorkspace({
   diagnosticsText,
   emptyDiagnostics,
-  nodeId,
   workflow,
 }: TimelineEditorWorkspaceProps) {
   const project = useEditorStore((state) => state.project);
@@ -172,7 +146,6 @@ export function TimelineEditorWorkspace({
     boundCharacter,
     binding,
     characterTags,
-    nodeId,
   });
 
   useEffect(() => {

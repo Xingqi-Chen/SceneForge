@@ -183,7 +183,33 @@ export function normalizeScenePromptTimelineResult(raw: unknown): ScenePromptTim
     malformedResponse("Scene prompt response must include positivePrompt.", { raw });
   }
 
+  const primaryRaw = isRecord(parsed.primaryCharacter)
+    ? parsed.primaryCharacter
+    : isRecord(parsed.primary_character)
+      ? parsed.primary_character
+      : {};
+  const primaryName = compactText(primaryRaw.name, 80) || "Primary character";
+  const primaryIdentity = compactText(
+    primaryRaw.identity ?? primaryRaw.description ?? parsed.primaryCharacterDescription,
+    800,
+  );
+  const sceneIntent = compactText(parsed.sceneIntent ?? parsed.scene_intent ?? parsed.globalSceneIntent, 800);
+  const styleTone = compactText(parsed.styleTone ?? parsed.style_tone ?? parsed.tone, 400);
+  const setting = compactText(parsed.setting ?? parsed.location, 400);
+
   return {
+    primaryCharacter: {
+      name: primaryName,
+      identity: primaryIdentity || positivePrompt,
+      publicFacts: normalizeStringList(
+        primaryRaw.publicFacts ?? primaryRaw.public_facts ?? parsed.publicCharacterFacts,
+        8,
+      ),
+    },
+    sceneIntent: sceneIntent || positivePrompt,
+    styleTone: styleTone || normalizePromptFragments(parsed.style, 1)[0]?.prompt || "",
+    setting,
+    sharedFacts: normalizeStringList(parsed.sharedFacts ?? parsed.shared_facts ?? parsed.commonFacts, 10),
     positivePrompt,
     negativeSuggestions: normalizeStringList(
       parsed.negativeSuggestions ?? parsed.negative_suggestions ?? parsed.negativePrompt,
@@ -252,13 +278,9 @@ export function normalizeCharacterTagsTimelineResult(raw: unknown): CharacterTag
       ? parsed.primary_character
       : {};
   const name = compactText(primaryRaw.name, 80) || "Primary character";
-  const description = compactText(primaryRaw.description ?? parsed.primaryCharacterDescription, 800);
-
-  if (!description) {
-    malformedResponse("Character tags response must include primaryCharacter.description.", {
-      raw,
-    });
-  }
+  const description =
+    compactText(primaryRaw.description ?? parsed.primaryCharacterDescription, 800) ||
+    "Derived from scene prompt context.";
 
   const tagsRaw = Array.isArray(parsed.tags) ? parsed.tags : [];
   const tags = tagsRaw
@@ -311,6 +333,15 @@ function getScenePromptResult(workflow: TimelineNodeExecutionContext["workflow"]
 
   if (manualText) {
     return {
+      primaryCharacter: {
+        name: "Primary character",
+        identity: manualText,
+        publicFacts: [],
+      },
+      sceneIntent: manualText,
+      styleTone: "",
+      setting: "",
+      sharedFacts: [],
       positivePrompt: manualText,
       negativeSuggestions: [],
       style: [],
@@ -402,8 +433,10 @@ function buildScenePromptRequest(context: TimelineNodeExecutionContext): LlmChat
         content: [
           "You are SceneForge's scene prompt agent.",
           "Return only valid JSON. No markdown, comments, or prose.",
-          "Expand the user scene into image-generation language while preserving constraints.",
-          'Required shape: {"positivePrompt":"...","negativeSuggestions":["..."],"style":[{"label":"...","prompt":"..."}],"camera":[{"label":"...","prompt":"..."}],"lighting":[{"label":"...","prompt":"..."}]}',
+          "Create the canonical shared scene context for later character tags, action planning, and layout planning.",
+          "Include primary character identity, common/public character facts, global scene intent, style/tone, setting, and other shared facts.",
+          "Do not choose checkpoints, LoRAs, render parameters, file paths, or external resources.",
+          'Required shape: {"primaryCharacter":{"name":"...","identity":"...","publicFacts":["..."]},"sceneIntent":"...","styleTone":"...","setting":"...","sharedFacts":["..."],"positivePrompt":"...","negativeSuggestions":["..."],"style":[{"label":"...","prompt":"..."}],"camera":[{"label":"...","prompt":"..."}],"lighting":[{"label":"...","prompt":"..."}]}',
         ].join("\n"),
       },
       {
@@ -413,7 +446,7 @@ function buildScenePromptRequest(context: TimelineNodeExecutionContext): LlmChat
             sceneRequest: sceneInput.rawIntent,
             notes: [
               "Keep this single-image only.",
-              "Do not choose checkpoints, LoRAs, render parameters, file paths, or external resources.",
+              "Keep the schema narrow and suitable for a fixed editable table.",
             ],
           },
           null,
@@ -427,7 +460,6 @@ function buildScenePromptRequest(context: TimelineNodeExecutionContext): LlmChat
 }
 
 function buildCharacterTagsRequest(context: TimelineNodeExecutionContext): LlmChatRequest {
-  const sceneInput = getSceneInput(context.workflow);
   const scenePrompt = getScenePromptResult(context.workflow);
 
   return {
@@ -438,19 +470,20 @@ function buildCharacterTagsRequest(context: TimelineNodeExecutionContext): LlmCh
         content: [
           "You are SceneForge's primary character tag agent.",
           "Return only valid JSON. No markdown, comments, or prose.",
-          "Select exactly one primary character for the MVP. If more people are present, keep them in extraPeopleContext instead of creating additional characters.",
-          "Create editable prompt tags for character identity, expression, body details, clothing, and relevant body parts.",
+          "Use sceneContext.primaryCharacter as the already-selected primary character.",
+          "Do not rename, reselect, or redefine the primary character.",
+          "Create prompt tags for character identity, expression, body details, clothing, and relevant body parts.",
+          "If more people are present, keep them in extraPeopleContext instead of creating additional characters.",
           "Allowed tag categories: character, body-part, outfit.",
           `Allowed bodyPartId values: ${bodyPartIds.join(", ")}.`,
-          'Required shape: {"primaryCharacter":{"name":"...","description":"..."},"tags":[{"label":"...","prompt":"...","category":"character","subcategory":"character-subject","bodyPartId":"head"}],"extraPeopleContext":["..."]}',
+          'Required shape: {"tags":[{"label":"...","prompt":"...","category":"character","subcategory":"character-subject","bodyPartId":"head"}],"extraPeopleContext":["..."]}',
         ].join("\n"),
       },
       {
         role: "user",
         content: JSON.stringify(
           {
-            sceneRequest: sceneInput.rawIntent,
-            positivePrompt: scenePrompt.positivePrompt,
+            sceneContext: scenePrompt,
           },
           null,
           2,
@@ -463,16 +496,16 @@ function buildCharacterTagsRequest(context: TimelineNodeExecutionContext): LlmCh
 }
 
 function buildActionDescription(context: TimelineNodeExecutionContext) {
-  const sceneInput = getSceneInput(context.workflow);
   const scenePrompt = getScenePromptResult(context.workflow);
-  const characterTags = getCharacterTagsResult(context.workflow);
-  const tagPrompts = characterTags.tags.map((tag) => tag.prompt).join(", ");
 
   return [
-    `Scene request: ${sceneInput.rawIntent}`,
+    `Scene intent: ${scenePrompt.sceneIntent}`,
     `Scene prompt: ${scenePrompt.positivePrompt}`,
-    `Primary character: ${characterTags.primaryCharacter.name} - ${characterTags.primaryCharacter.description}`,
-    tagPrompts ? `Character tags: ${tagPrompts}` : "",
+    `Primary character: ${scenePrompt.primaryCharacter.name} - ${scenePrompt.primaryCharacter.identity}`,
+    scenePrompt.primaryCharacter.publicFacts.length > 0
+      ? `Public character facts: ${scenePrompt.primaryCharacter.publicFacts.join(", ")}`
+      : "",
+    scenePrompt.sharedFacts.length > 0 ? `Shared scene facts: ${scenePrompt.sharedFacts.join(", ")}` : "",
     "Infer the primary character's physical action and a plausible editable 3D stick-figure pose.",
   ]
     .filter(Boolean)
@@ -504,10 +537,10 @@ function parseCharacterActionResponse(
     });
   }
 
-  const characterTags = getCharacterTagsResult(context.workflow);
+  const scenePrompt = getScenePromptResult(context.workflow);
   const action = parsed.characterDescription
     ? compactText(parsed.characterDescription, 500)
-    : characterTags.primaryCharacter.description;
+    : `${scenePrompt.primaryCharacter.name}: ${scenePrompt.sceneIntent}`;
 
   return {
     action,
@@ -518,11 +551,12 @@ function parseCharacterActionResponse(
 
 function buildSpatialSummary(
   scenePrompt: ScenePromptTimelineResult,
+  primaryCharacter: CharacterTagsTimelineResult["primaryCharacter"],
   characterTags: CharacterTagsTimelineResult,
   action: CharacterActionTimelineResult,
 ) {
   return compactText(
-    `${characterTags.primaryCharacter.name} is bound as the primary editable 3D character at center stage, ${action.action}. Scene context: ${scenePrompt.positivePrompt}`,
+    `${primaryCharacter.name} is bound as the primary editable 3D character at center stage, ${action.action}. Scene context: ${scenePrompt.positivePrompt}`,
     600,
   );
 }
@@ -531,14 +565,18 @@ function createCanvasBindingInput(context: TimelineNodeExecutionContext): Timeli
   const scenePrompt = getScenePromptResult(context.workflow);
   const characterTags = getCharacterTagsResult(context.workflow);
   const action = getCharacterActionResult(context.workflow);
+  const primaryCharacter = {
+    name: scenePrompt.primaryCharacter.name,
+    description: scenePrompt.primaryCharacter.identity,
+  };
 
   return {
-    primaryCharacter: characterTags.primaryCharacter,
+    primaryCharacter,
     characterTags: characterTags.tags,
     action: action.action,
     pose: action.pose,
     transform: defaultCanvasTransform,
-    spatialSummary: buildSpatialSummary(scenePrompt, characterTags, action),
+    spatialSummary: buildSpatialSummary(scenePrompt, primaryCharacter, characterTags, action),
   };
 }
 

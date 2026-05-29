@@ -18,7 +18,7 @@ export const mvpTimelineDependencyDag = {
   "scene-input": [],
   "scene-prompt": ["scene-input"],
   "character-tags": ["scene-prompt"],
-  "character-action": ["character-tags"],
+  "character-action": ["scene-prompt"],
   "canvas-binding": ["scene-prompt", "character-tags", "character-action"],
   "resource-recommendation": ["scene-prompt", "character-tags", "character-action"],
   "parameter-recommendation": ["scene-prompt", "canvas-binding", "resource-recommendation"],

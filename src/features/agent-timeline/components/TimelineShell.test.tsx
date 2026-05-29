@@ -75,6 +75,15 @@ function createT5ResponseForPurpose(purpose: string | undefined) {
       role: "assistant",
       content: JSON.stringify({
         positivePrompt: "neon market alley, sunrise, courier sprinting",
+        primaryCharacter: {
+          name: "Courier",
+          identity: "A focused courier in a reflective jacket",
+          publicFacts: ["solo courier protagonist", "reflective jacket"],
+        },
+        sceneIntent: "Courier sprints through a neon market alley at sunrise",
+        styleTone: "cinematic realism",
+        setting: "neon market alley",
+        sharedFacts: ["sunrise", "wet pavement"],
         negativeSuggestions: ["low detail"],
         style: [{ label: "Cinematic", prompt: "cinematic realism" }],
         camera: [{ label: "Wide", prompt: "wide angle tracking shot" }],
@@ -143,6 +152,30 @@ function mockT5FetchWithDeferredPose() {
   });
 
   return { fetchMock, poseRequests };
+}
+
+function mockT5FetchWithDeferredPrompt() {
+  const promptRequests: Array<{
+    reject: (reason?: unknown) => void;
+    resolve: (response: Response) => void;
+  }> = [];
+
+  const fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
+    const purpose = getFetchPurpose(init);
+
+    if (purpose !== "stable-diffusion-prompt-generation") {
+      return createT5ResponseForPurpose(purpose);
+    }
+
+    return new Promise<Response>((resolve, reject) => {
+      promptRequests.push({
+        reject,
+        resolve,
+      });
+    });
+  });
+
+  return { fetchMock, promptRequests };
 }
 
 async function flushAsyncWork(cycles = 6) {
@@ -245,6 +278,7 @@ describe("TimelineShell", () => {
     expect(startButton.disabled).toBe(true);
     expect(settingsLink?.textContent).toContain("Settings");
     expect(getWorkflowStepTitles()).toEqual(nodeTitles);
+    expect(container.textContent?.match(/Parallel/g)?.length ?? 0).toBeGreaterThanOrEqual(2);
     expect(container.textContent).toContain("Inspector");
     expect(container.textContent).toContain("Agent activity");
     expect(container.textContent).toContain("Tool calls");
@@ -308,8 +342,12 @@ describe("TimelineShell", () => {
 
       const scenePromptSection = getSectionByHeading("Prompt generation");
       expect(scenePromptSection.textContent).toContain("Done");
-      expect(scenePromptSection.textContent).toContain("neon market alley, sunrise, courier sprinting");
-      expect(scenePromptSection.textContent).toContain("Edit");
+      expect(scenePromptSection.textContent).toContain("Scene context table");
+      expect(scenePromptSection.textContent).toContain("Save context");
+      expect(
+        (scenePromptSection.querySelector('textarea[aria-label="Positive prompt"]') as HTMLTextAreaElement | null)
+          ?.value,
+      ).toContain("neon market alley, sunrise, courier sprinting");
       expect(scenePromptSection.textContent).toContain("Regenerate");
 
       const characterTagsButton = container.querySelector('button[data-node-id="character-tags"]') as HTMLButtonElement | null;
@@ -318,11 +356,13 @@ describe("TimelineShell", () => {
       });
 
       const characterTagsSection = getSectionByHeading("Character tags");
-      expect(characterTagsSection.textContent).toContain("Existing editor 3D canvas viewport");
-      expect(characterTagsSection.textContent).toContain("Existing prompt tag picker panel");
-      expect(characterTagsSection.textContent).toContain("Prompt tags bound");
-      expect(characterTagsSection.textContent).toContain("JSON diagnostics");
+      expect(characterTagsSection.textContent).toContain("Non-editable");
+      expect(characterTagsSection.textContent).toContain("Raw JSON only");
+      expect(characterTagsSection.textContent).toContain("Inspect only");
       expect(characterTagsSection.textContent).toContain("reflective yellow jacket");
+      expect(characterTagsSection.textContent).not.toContain("Existing editor 3D canvas viewport");
+      expect(characterTagsSection.textContent).not.toContain("Existing prompt tag picker panel");
+      expect(characterTagsSection.textContent).not.toContain("Edit");
 
       const actionButton = container.querySelector('button[data-node-id="character-action"]') as HTMLButtonElement | null;
       act(() => {
@@ -330,10 +370,13 @@ describe("TimelineShell", () => {
       });
 
       const characterActionSection = getSectionByHeading("Action planning");
-      expect(characterActionSection.textContent).toContain("Existing editor 3D canvas viewport");
-      expect(characterActionSection.textContent).toContain("Existing prompt tag picker panel");
-      expect(characterActionSection.textContent).toContain("Pose bound to 3D character");
-      expect(characterActionSection.textContent).toContain("JSON diagnostics");
+      expect(characterActionSection.textContent).toContain("Non-editable");
+      expect(characterActionSection.textContent).toContain("Raw JSON only");
+      expect(characterActionSection.textContent).toContain("Inspect only");
+      expect(characterActionSection.textContent).toContain("courier leaping across wet pavement");
+      expect(characterActionSection.textContent).not.toContain("Existing editor 3D canvas viewport");
+      expect(characterActionSection.textContent).not.toContain("Existing prompt tag picker panel");
+      expect(characterActionSection.textContent).not.toContain("Edit");
 
       const canvasButton = container.querySelector('button[data-node-id="canvas-binding"]') as HTMLButtonElement | null;
       act(() => {
@@ -438,6 +481,73 @@ describe("TimelineShell", () => {
     }
   });
 
+  it("keeps a visual scene prompt save when an in-flight graph result resolves later", async () => {
+    const originalFetch = globalThis.fetch;
+    const { fetchMock, promptRequests } = mockT5FetchWithDeferredPrompt();
+    globalThis.fetch = fetchMock;
+
+    try {
+      act(() => {
+        root.render(<TimelineShell />);
+      });
+
+      await submitInitialScene("A pending greenhouse scene");
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(promptRequests).toHaveLength(1);
+
+      const promptStepButton = container.querySelector('button[data-node-id="scene-prompt"]') as HTMLButtonElement | null;
+
+      act(() => {
+        promptStepButton?.click();
+      });
+
+      let scenePromptSection = getSectionByHeading("Prompt generation");
+      let positivePrompt = scenePromptSection.querySelector(
+        'textarea[aria-label="Positive prompt"]',
+      ) as HTMLTextAreaElement | null;
+
+      expect(positivePrompt).not.toBeNull();
+
+      act(() => {
+        setNativeTextAreaValue(positivePrompt as HTMLTextAreaElement, "manual visual scene context");
+      });
+
+      const saveContextButton = Array.from(scenePromptSection.querySelectorAll("button")).find(
+        (button) => button.textContent?.replace(/\s+/g, " ").trim() === "Save context",
+      ) as HTMLButtonElement | undefined;
+
+      expect(saveContextButton?.disabled).toBe(false);
+
+      act(() => {
+        saveContextButton?.click();
+      });
+
+      scenePromptSection = getSectionByHeading("Prompt generation");
+      positivePrompt = scenePromptSection.querySelector(
+        'textarea[aria-label="Positive prompt"]',
+      ) as HTMLTextAreaElement | null;
+      expect(positivePrompt?.value).toBe("manual visual scene context");
+
+      await act(async () => {
+        promptRequests[0]?.resolve(createT5ResponseForPurpose("stable-diffusion-prompt-generation"));
+        await Promise.resolve();
+      });
+      await flushAsyncWork();
+
+      scenePromptSection = getSectionByHeading("Prompt generation");
+      positivePrompt = scenePromptSection.querySelector(
+        'textarea[aria-label="Positive prompt"]',
+      ) as HTMLTextAreaElement | null;
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(positivePrompt?.value).toBe("manual visual scene context");
+      expect(positivePrompt?.value).not.toContain("neon market alley, sunrise, courier sprinting");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("surfaces downstream stale status after a manual scene prompt edit", async () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = mockT5Fetch();
@@ -456,6 +566,16 @@ describe("TimelineShell", () => {
       });
 
       const scenePromptSection = getSectionByHeading("Prompt generation");
+      const rawJsonButton = Array.from(scenePromptSection.querySelectorAll("button")).find(
+        (button) => button.textContent?.replace(/\s+/g, " ").trim() === "Raw JSON",
+      ) as HTMLButtonElement | undefined;
+
+      expect(rawJsonButton).not.toBeUndefined();
+
+      act(() => {
+        rawJsonButton?.click();
+      });
+
       const editButton = Array.from(scenePromptSection.querySelectorAll("button")).find(
         (button) => button.textContent?.replace(/\s+/g, " ").trim() === "Edit",
       ) as HTMLButtonElement | undefined;

@@ -14,7 +14,9 @@ Summary:
 - Added structured parsing and normalization for scene prompt fragments, primary character tags, extra people context, stick-figure pose output, and canvas binding results.
 - Bound the inferred primary character to the existing editor store as one editable 3D character/skeleton using existing editor store actions.
 - Added run invalidation so superseded or cleared timeline graph runs cannot restore stale workflow output or bind stale canvas/editor state.
-- Updated the selected-node workspace for character tags, action planning, and layout planning so the primary surface reuses the existing editor 3D canvas and prompt tag picker, with JSON kept as secondary diagnostics.
+- Updated the T5 DAG so prompt generation feeds character tags and action planning as parallel sibling nodes, then layout planning joins prompt, tags, and action.
+- Expanded prompt generation into the canonical shared scene context producer with a narrow editable visual table and raw JSON inspection/editing fallback.
+- Restricted character tags and action planning to non-editable raw JSON inspection, and kept the existing editor 3D canvas plus prompt tag picker visual workspace on layout planning only.
 
 Files changed:
 
@@ -36,7 +38,13 @@ Validation:
 - PR follow-up validation: `npm run typecheck` passed.
 - PR follow-up validation: `npm run lint` passed with the existing 22 `<img>` warnings in editor UI components.
 - PR follow-up validation: `npm run build` passed with the existing Turbopack NFT trace warning.
-- PR follow-up browser fallback validation on `http://localhost:3000` confirmed the character tags, action planning, and layout planning nodes render the timeline editor workspace with the existing canvas mode controls and prompt tag picker surface while desktop remains a flex-row three-column layout.
+- Earlier PR follow-up browser fallback validation on `http://localhost:3000` confirmed the desktop workbench layout; the product clarification pass below was validated with focused automated timeline coverage.
+- Product clarification implementation validation: `npm test -- src/features/agent-timeline` passed: 6 files, 25 tests.
+- Product clarification implementation validation: `npm run typecheck` passed.
+- Product clarification implementation validation: `npm run lint` passed with the existing 22 `<img>` warnings in editor UI components.
+- Product clarification implementation validation: `npm test` passed: 74 files, 484 tests.
+- Product clarification implementation validation: `npm run build` passed with the existing Turbopack NFT trace warning.
+- Product clarification browser validation on `http://localhost:3000` passed in headless Edge: desktop workbench measured as three columns, node 2 rendered the visual scene-context table, nodes 3 and 4 rendered non-editable raw JSON only, node 5 rendered the reused editor canvas and prompt tag binding workspace, node 5 preserved node 2's primary character identity despite conflicting node 3 output, and node 4's LLM request did not include node 3 tag-only output.
 
 ### T4 Initial Timeline Shell
 

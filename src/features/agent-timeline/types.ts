@@ -114,6 +114,15 @@ export type TimelinePromptFragment = {
 };
 
 export type ScenePromptTimelineResult = {
+  primaryCharacter: {
+    name: string;
+    identity: string;
+    publicFacts: string[];
+  };
+  sceneIntent: string;
+  styleTone: string;
+  setting: string;
+  sharedFacts: string[];
   positivePrompt: string;
   negativeSuggestions: string[];
   style: TimelinePromptFragment[];

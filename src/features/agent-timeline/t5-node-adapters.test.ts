@@ -39,6 +39,15 @@ describe("T5 timeline node adapters", () => {
 {"positivePrompt":" neon alley courier ","negativeSuggestions":[" blur "],"style":["cinematic"],"camera":[{"label":"Lens","prompt":"wide lens"}],"lighting":["sunrise rim light"]}
 \`\`\``),
     ).toEqual({
+      primaryCharacter: {
+        name: "Primary character",
+        identity: "neon alley courier",
+        publicFacts: [],
+      },
+      sceneIntent: "neon alley courier",
+      styleTone: "cinematic",
+      setting: "",
+      sharedFacts: [],
       positivePrompt: "neon alley courier",
       negativeSuggestions: ["blur"],
       style: [{ label: "cinematic", prompt: "cinematic" }],
@@ -89,7 +98,7 @@ describe("T5 timeline node adapters", () => {
     });
   });
 
-  it("runs scene prompt, tags, action, and canvas binding through LangGraph adapters only", async () => {
+  it("preserves node 2 primary identity when node 3 returns conflicting character identity", async () => {
     const requests: LlmChatRequest[] = [];
     const bindings: TimelineCanvasBindingInput[] = [];
     const completeChat = async (request: LlmChatRequest): Promise<LlmChatResponse> => {
@@ -100,6 +109,15 @@ describe("T5 timeline node adapters", () => {
           role: "assistant",
           content: JSON.stringify({
             positivePrompt: "neon market alley, sunrise, courier sprinting",
+            primaryCharacter: {
+              name: "Courier",
+              identity: "A focused courier in a reflective jacket",
+              publicFacts: ["reflective jacket", "solo protagonist"],
+            },
+            sceneIntent: "Courier sprints through a market alley at sunrise",
+            styleTone: "cinematic realism",
+            setting: "neon market alley",
+            sharedFacts: ["sunrise", "wet pavement"],
             negativeSuggestions: ["low detail"],
             style: [{ label: "Cinematic", prompt: "cinematic realism" }],
             camera: [{ label: "Wide", prompt: "wide angle tracking shot" }],
@@ -113,8 +131,8 @@ describe("T5 timeline node adapters", () => {
           role: "assistant",
           content: JSON.stringify({
             primaryCharacter: {
-              name: "Courier",
-              description: "A focused courier in a reflective jacket",
+              name: "Conflicting scout",
+              description: "A conflicting identity that must not drive layout binding",
             },
             tags: [
               {
@@ -170,12 +188,21 @@ describe("T5 timeline node adapters", () => {
       { now: () => "2026-05-29T00:00:01.000Z" },
     );
 
-    expect(requests.map((request) => request.purpose)).toEqual([
-      "stable-diffusion-prompt-generation",
-      "prompt-tag-reverse",
-      "stick-figure-pose-generation",
-    ]);
+    expect(requests[0]?.purpose).toBe("stable-diffusion-prompt-generation");
+    expect(new Set(requests.slice(1).map((request) => request.purpose))).toEqual(
+      new Set(["prompt-tag-reverse", "stick-figure-pose-generation"]),
+    );
+    const actionRequestText =
+      JSON.stringify(
+        requests.find((request) => request.purpose === "stick-figure-pose-generation")?.messages,
+      ) ?? "";
+    expect(actionRequestText).toContain("A focused courier in a reflective jacket");
+    expect(actionRequestText).not.toContain("reflective yellow jacket");
     expect(bindings).toHaveLength(1);
+    expect(bindings[0]?.primaryCharacter).toEqual({
+      name: "Courier",
+      description: "A focused courier in a reflective jacket",
+    });
     expect(result.nodes["scene-prompt"]).toMatchObject({
       status: "done",
       result: {
@@ -186,7 +213,7 @@ describe("T5 timeline node adapters", () => {
       status: "done",
       result: {
         primaryCharacter: {
-          name: "Courier",
+          name: "Conflicting scout",
         },
       },
     });
@@ -203,6 +230,7 @@ describe("T5 timeline node adapters", () => {
         primaryCharacter: {
           id: "editor-character-1",
           name: "Courier",
+          description: "A focused courier in a reflective jacket",
         },
       },
     });
