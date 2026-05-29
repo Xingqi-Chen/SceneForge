@@ -1,9 +1,5 @@
-import { EditorShell } from "@/features/editor/components/EditorShell";
-
-function readBooleanEnvFlag(value: string | undefined) {
-  return value?.trim().toLowerCase() === "true";
-}
+import { TimelineShell } from "@/features/agent-timeline/components/TimelineShell";
 
 export default function Home() {
-  return <EditorShell showNsfwButton={readBooleanEnvFlag(process.env.SCENEFORGE_SHOW_NSFW_BUTTON)} />;
+  return <TimelineShell />;
 }

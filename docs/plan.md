@@ -8,7 +8,7 @@ Tracks are planning units. Implementation work must be split into issue-ready ta
 
 ## Immediate Next Step
 
-Create the GitHub Issue for `T4`, the initial input and vertical timeline shell. The LangGraph workflow orchestration foundation is complete and merged in PR #8.
+Review PR #10 for `T4` / Issue #9, the initial input and vertical timeline shell. The LangGraph workflow orchestration foundation is complete and merged in PR #8.
 
 The new MVP is a single-image, top-to-bottom visual timeline. The first screen is only a user scene request input plus a settings entry point. LangGraph owns workflow orchestration, dependency tracking, stale downstream regeneration, and the stop-at-generation confirmation gate.
 
@@ -30,7 +30,7 @@ The new MVP is a single-image, top-to-bottom visual timeline. The first screen i
 | T-CI | N/A | Configure GitHub Actions CI | Repository Infrastructure | Done | PASS | Self-reviewed | Temporary repository-bootstrap work requested directly; no GitHub Issue needed. Adds Node 22.x CI for install, lint, typecheck, test, and build. Full local and GitHub Actions validation passed. Merged PR #3. |
 | T2 | N/A | Reset MVP requirements to LangGraph timeline | Agent Timeline MVP | Done | Docs only | Self-reviewed | Product direction was reset. PR #5 and Issue #4 were closed as superseded by the top-to-bottom LangGraph timeline MVP. This track updates planning, product, technical, and README docs only. |
 | T3 | #7 | Add LangGraph workflow orchestration foundation | Agent Timeline MVP | Done | PASS | APPROVE | Add LangGraph dependency; define workflow state, node result, dependency DAG, status transitions, stale downstream regeneration, and adapters around existing LLM interfaces. No timeline UI or ComfyUI execution yet. Merged PR #8. |
-| T4 | TBD | Build initial input and vertical timeline shell | Agent Timeline MVP | Todo | TBD | TBD | Depends on T3. Initial screen is only scene input, start button, and settings entry. After submit, show vertical node timeline with reusable NodeCard, NodeStatus, and NodeEditor components styled like the existing editor. |
+| T4 | #9 | Build initial input and vertical timeline shell | Agent Timeline MVP | In Progress | PASS | APPROVE | Depends on T3. Initial screen is only scene input, start button, and settings entry. After submit, show vertical node timeline with reusable NodeCard, NodeStatus, and NodeEditor components styled like the existing editor. PR #10 opened. |
 | T5 | TBD | Infer scene, character tags, action, and bind to 3D canvas | Agent Timeline MVP | Todo | TBD | TBD | Depends on T3 and T4. Reuse existing LLM interfaces and 3D/stick-figure modules to infer scene prompt, main-character tags, action pose, and bind results to the 3D canvas. MVP supports one primary character. |
 | T6 | TBD | Add centralized settings page | Agent Timeline MVP | Todo | TBD | TBD | Can proceed after T2 and in parallel with T4 where practical. Move path settings, NSFW, and integration status into a settings page. Keep secrets server-only unless a later scoped issue explicitly changes that. |
 | T7 | TBD | Add checkpoint, LoRA, and parameter recommendation nodes | Agent Timeline MVP | Todo | TBD | TBD | Depends on T5 and T6. Reuse Civitai recommendation, selected-resource UI, and ComfyUI parameter controls. LLM must choose from local candidates, not invent unavailable resource names. |

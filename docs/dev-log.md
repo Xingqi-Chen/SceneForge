@@ -4,6 +4,35 @@ This log records dated implementation and documentation work. Keep entries conci
 
 ## 2026-05-29
 
+### T4 Initial Timeline Shell
+
+Summary:
+
+- Replaced the root route with an in-memory initial scene request screen and vertical timeline shell seeded from the T3 timeline state helpers.
+- Added reusable timeline UI primitives for node cards, status pills, manual editing, and AI retry/suggestion affordances.
+- Rendered all MVP timeline nodes in dependency order with shell output states, manual edit stale propagation, reserved future nodes, and an explicit ComfyUI confirmation gate notice.
+- Redesigned the timeline shell as a modern AI agent workflow workbench with left step navigation, a central selected-step workspace, right-side inspector/activity panels, command-style scene composer, input-transform-output panels, and stable responsive layout CSS.
+- Moved the legacy editor shell to `/editor` and added a minimal `/settings` entry target without exposing local paths or secrets.
+
+Files changed:
+
+- `src/app/page.tsx`
+- `src/app/editor/page.tsx`
+- `src/app/settings/page.tsx`
+- `src/features/agent-timeline/components/`
+- `README.md`
+- `docs/dev-log.md`
+
+Validation:
+
+- `npm run typecheck` passed.
+- `npm run lint` passed with 22 pre-existing `<img>` warnings in editor UI components.
+- `npm run build` passed with the existing Turbopack NFT trace warning for ComfyUI sequence references.
+- `git diff --check` passed with line-ending warnings only.
+- Existing dev server responded with HTTP 200 for `/`, `/editor`, and `/settings`.
+- `npm test` passed: 72 files, 476 tests.
+- Browser verification passed for `/`, `/editor`, and `/settings`; the root route submitted a scene request into the vertical timeline shell with no console errors.
+
 ### T3 LangGraph Workflow Foundation
 
 Summary:

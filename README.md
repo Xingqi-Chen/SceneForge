@@ -13,7 +13,8 @@ npm install
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser.
+Open [http://localhost:3000](http://localhost:3000) with your browser. The timeline MVP is the root route.
+The legacy visual editor remains available at [http://localhost:3000/editor](http://localhost:3000/editor).
 
 ## Continuous Integration
 
