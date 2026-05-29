@@ -11,9 +11,9 @@ const expectedLabels: Record<TimelineNodeStatusValue, string> = {
   ready: "Ready",
   running: "Running",
   done: "Done",
-  stale: "Stale",
-  error: "Error",
-  manual: "Manual",
+  stale: "Pending",
+  error: "Blocked",
+  manual: "Done",
 };
 
 let container: HTMLDivElement;

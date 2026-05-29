@@ -62,6 +62,57 @@ button {
   min-width: 44px;
 }
 
+.sf-agent-workbench {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.sf-agent-workbench__nav,
+.sf-agent-workbench__main,
+.sf-agent-workbench__inspector {
+  min-height: 0;
+}
+
+.sf-agent-workbench__nav {
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.sf-agent-workbench__main {
+  flex: 1 1 auto;
+}
+
+.sf-agent-workbench__inspector {
+  border-top: 1px solid #e2e8f0;
+}
+
+@media (min-width: 1024px) {
+  .sf-agent-workbench {
+    flex-direction: row;
+  }
+
+  .sf-agent-workbench__nav {
+    border-bottom: 0;
+    border-right: 1px solid #e2e8f0;
+    flex: 0 0 18rem;
+    width: 18rem;
+  }
+
+  .sf-agent-workbench__main {
+    flex: 1 1 0;
+    min-width: 0;
+  }
+
+  .sf-agent-workbench__inspector {
+    border-left: 1px solid #e2e8f0;
+    border-top: 0;
+    flex: 0 0 20rem;
+    width: 20rem;
+  }
+}
+
 @media (pointer: coarse), (hover: none) {
   input:not([type="checkbox"]):not([type="radio"]):not([type="color"]):not([type="file"]),
   textarea,

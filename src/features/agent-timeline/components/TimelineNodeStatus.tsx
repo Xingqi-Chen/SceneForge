@@ -42,17 +42,17 @@ const statusConfig: Record<TimelineNodeStatusValue, StatusConfig> = {
     className: "border-emerald-200 bg-emerald-50 text-emerald-700",
   },
   stale: {
-    label: "Stale",
+    label: "Pending",
     icon: RefreshCcw,
     className: "border-amber-200 bg-amber-50 text-amber-700",
   },
   error: {
-    label: "Error",
+    label: "Blocked",
     icon: AlertTriangle,
     className: "border-rose-200 bg-rose-50 text-rose-700",
   },
   manual: {
-    label: "Manual",
+    label: "Done",
     icon: PencilLine,
     className: "border-violet-200 bg-violet-50 text-violet-700",
   },

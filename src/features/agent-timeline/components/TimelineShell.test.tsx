@@ -6,15 +6,15 @@ import { TimelineShell } from "./TimelineShell";
 
 const nodeTitles = [
   "Scene input",
-  "Scene prompt",
+  "Prompt generation",
   "Character tags",
-  "Character action",
-  "3D canvas binding",
-  "Checkpoint and LoRA",
-  "Generation parameters",
-  "Start image generation",
-  "ComfyUI execution",
-  "Result display",
+  "Action planning",
+  "Layout planning",
+  "Model resources",
+  "Render prompt",
+  "Review / export",
+  "Render execution",
+  "Artifact result",
 ];
 
 let container: HTMLDivElement;
@@ -43,6 +43,13 @@ function getSectionByHeading(headingText: string) {
   }
 
   return section as HTMLElement;
+}
+
+function getWorkflowStepTitles() {
+  return Array.from(container.querySelectorAll("button[data-node-id]"))
+    .map((button) => button.textContent?.replace(/\s+/g, " ").trim() ?? "")
+    .map((text) => nodeTitles.find((title) => text.includes(title)))
+    .filter((title): title is string => Boolean(title));
 }
 
 function setNativeTextAreaValue(textarea: HTMLTextAreaElement, value: string) {
@@ -89,19 +96,23 @@ afterEach(() => {
 });
 
 describe("TimelineShell", () => {
-  it("starts with only the scene input, start button, and settings entry point and guards blank submits", () => {
+  it("starts with the workbench, workflow steps, scene composer, and disabled run actions for blank input", () => {
     act(() => {
       root.render(<TimelineShell />);
     });
 
     const sceneInput = container.querySelector("#scene-request") as HTMLTextAreaElement | null;
-    const startButton = getButtonByText("Start");
+    const startButton = getButtonByText("Start workflow");
     const settingsLink = container.querySelector('a[href="/settings"]');
 
     expect(sceneInput).not.toBeNull();
     expect(startButton.disabled).toBe(true);
     expect(settingsLink?.textContent).toContain("Settings");
-    expect(Array.from(container.querySelectorAll("h2")).map((heading) => heading.textContent)).toEqual([]);
+    expect(getWorkflowStepTitles()).toEqual(nodeTitles);
+    expect(container.textContent).toContain("Inspector");
+    expect(container.textContent).toContain("Agent activity");
+    expect(container.textContent).toContain("Tool calls");
+    expect(container.textContent).toContain("Generated artifacts");
 
     const form = container.querySelector("form");
     expect(form).not.toBeNull();
@@ -110,13 +121,13 @@ describe("TimelineShell", () => {
       form?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
     });
 
-    expect(Array.from(container.querySelectorAll("h2")).map((heading) => heading.textContent)).toEqual([]);
+    expect(container.textContent).toContain("Waiting for scene command.");
 
     act(() => {
       setNativeTextAreaValue(sceneInput as HTMLTextAreaElement, "   ");
     });
 
-    expect(getButtonByText("Start").disabled).toBe(true);
+    expect(getButtonByText("Start workflow").disabled).toBe(true);
   });
 
   it("submits a usable scene request into the vertical MVP timeline shell without persistence or API calls", () => {
@@ -132,34 +143,54 @@ describe("TimelineShell", () => {
 
       submitInitialScene("  A neon market alley with a courier at sunrise  ");
 
-      expect(Array.from(container.querySelectorAll("h2")).map((heading) => heading.textContent)).toEqual(nodeTitles);
+      expect(getWorkflowStepTitles()).toEqual(nodeTitles);
       expect(container.textContent).toContain("A neon market alley with a courier at sunrise");
 
       const sceneInputSection = getSectionByHeading("Scene input");
-      expect(sceneInputSection.textContent).toContain("Manual");
+      expect(sceneInputSection.textContent).toContain("Done");
       expect(sceneInputSection.textContent).toContain("A neon market alley with a courier at sunrise");
-      expect(sceneInputSection.textContent).toContain("Edit request");
       expect(sceneInputSection.textContent).toContain("Rewrite");
 
-      const scenePromptSection = getSectionByHeading("Scene prompt");
+      const promptStepButton = container.querySelector('button[data-node-id="scene-prompt"]') as HTMLButtonElement | null;
+      expect(promptStepButton).not.toBeNull();
+
+      act(() => {
+        promptStepButton?.click();
+      });
+
+      const scenePromptSection = getSectionByHeading("Prompt generation");
       expect(scenePromptSection.textContent).toContain("Ready");
       expect(scenePromptSection.textContent).toContain("Ready for scene prompt inference.");
-      expect(scenePromptSection.textContent).toContain("Edit prompt");
-      expect(scenePromptSection.textContent).toContain("Suggest prompt");
+      expect(scenePromptSection.textContent).toContain("Edit");
+      expect(scenePromptSection.textContent).toContain("Regenerate");
 
-      const generationGateSection = getSectionByHeading("Start image generation");
+      const generationGateButton = container.querySelector('button[data-node-id="generation-gate"]') as HTMLButtonElement | null;
+      act(() => {
+        generationGateButton?.click();
+      });
+
+      const generationGateSection = getSectionByHeading("Review / export");
       expect(generationGateSection.textContent).toContain(
         "ComfyUI execution requires explicit future confirmation. This shell stops at the gate and never starts generation.",
       );
 
-      const comfyExecutionSection = getSectionByHeading("ComfyUI execution");
+      const comfyButton = container.querySelector('button[data-node-id="comfyui-execution"]') as HTMLButtonElement | null;
+      act(() => {
+        comfyButton?.click();
+      });
+
+      const comfyExecutionSection = getSectionByHeading("Render execution");
       expect(comfyExecutionSection.textContent).toContain("Reserved");
       expect(comfyExecutionSection.textContent).toContain(
         "ComfyUI remains blocked until a future explicit confirmation flow starts generation.",
       );
-      expect((comfyExecutionSection.querySelector("button") as HTMLButtonElement | null)?.disabled).toBe(true);
 
-      const resultSection = getSectionByHeading("Result display");
+      const resultButton = container.querySelector('button[data-node-id="result-display"]') as HTMLButtonElement | null;
+      act(() => {
+        resultButton?.click();
+      });
+
+      const resultSection = getSectionByHeading("Artifact result");
       expect(resultSection.textContent).toContain("Reserved");
       expect(resultSection.textContent).toContain(
         "Result display remains empty until confirmed ComfyUI execution returns an image.",
@@ -182,9 +213,15 @@ describe("TimelineShell", () => {
 
     submitInitialScene("A glass greenhouse control room");
 
-    const scenePromptSection = getSectionByHeading("Scene prompt");
-    const editButton = Array.from(scenePromptSection.querySelectorAll("button")).find((button) =>
-      button.textContent?.includes("Edit prompt"),
+    const promptStepButton = container.querySelector('button[data-node-id="scene-prompt"]') as HTMLButtonElement | null;
+
+    act(() => {
+      promptStepButton?.click();
+    });
+
+    const scenePromptSection = getSectionByHeading("Prompt generation");
+    const editButton = Array.from(scenePromptSection.querySelectorAll("button")).find(
+      (button) => button.textContent?.replace(/\s+/g, " ").trim() === "Edit",
     ) as HTMLButtonElement | undefined;
 
     expect(editButton).not.toBeUndefined();
@@ -229,11 +266,15 @@ describe("TimelineShell", () => {
       saveButton?.click();
     });
 
-    expect(getSectionByHeading("Scene prompt").textContent).toContain("Manual");
-    expect(getSectionByHeading("Scene prompt").textContent).toContain("wide lens greenhouse command deck");
+    expect(getSectionByHeading("Prompt generation").textContent).toContain("Done");
+    expect(getSectionByHeading("Prompt generation").textContent).toContain("wide lens greenhouse command deck");
 
     for (const title of nodeTitles.slice(2)) {
-      expect(getSectionByHeading(title).textContent).toContain("Stale");
+      const stepButton = Array.from(container.querySelectorAll("button[data-node-id]")).find((button) =>
+        button.textContent?.includes(title),
+      );
+
+      expect(stepButton?.textContent).toContain("Pending");
     }
   });
 });
