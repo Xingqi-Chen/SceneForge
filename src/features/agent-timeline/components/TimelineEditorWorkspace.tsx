@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useMemo } from "react";
-import { Box, CheckCircle2, CircleDashed } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { Box, CheckCircle2, CircleDashed, Tags } from "lucide-react";
 
+import { Button } from "@/components/ui/button";
 import { CanvasViewport } from "@/features/editor/components/CanvasViewport";
 import { useEditorStore } from "@/features/editor/store/editor-store";
 import type {
@@ -13,14 +14,13 @@ import type {
   TimelineWorkflowState,
 } from "@/features/agent-timeline";
 import type { CharacterSkeleton } from "@/shared/types";
+import { TimelinePromptLibraryDrawer } from "./TimelinePromptLibraryDrawer";
 
 const visualWorkspaceNodeIds = new Set<TimelineNodeId>([
   "canvas-binding",
 ]);
 
 type TimelineEditorWorkspaceProps = {
-  diagnosticsText: string;
-  emptyDiagnostics: string;
   workflow: TimelineWorkflowState;
 };
 
@@ -110,13 +110,12 @@ export function isTimelineEditorWorkspaceNode(nodeId: TimelineNodeId) {
 }
 
 export function TimelineEditorWorkspace({
-  diagnosticsText,
-  emptyDiagnostics,
   workflow,
 }: TimelineEditorWorkspaceProps) {
   const project = useEditorStore((state) => state.project);
   const selectCharacter = useEditorStore((state) => state.selectCharacter);
   const setSceneMode = useEditorStore((state) => state.setSceneMode);
+  const [promptLibraryOpen, setPromptLibraryOpen] = useState(true);
   const binding = useMemo(() => {
     const result = workflow.nodes["canvas-binding"].result;
     return isCanvasBindingResult(result) ? result : null;
@@ -165,7 +164,7 @@ export function TimelineEditorWorkspace({
   }, [boundCharacter, selectCharacter, setSceneMode]);
 
   return (
-    <div className="flex flex-col gap-3" data-testid="timeline-editor-workspace">
+    <div className="flex min-h-0 flex-col" data-testid="timeline-editor-workspace">
       <section className="min-h-[34rem] overflow-hidden rounded-md border border-slate-200 bg-slate-50">
         <div className="flex items-center justify-between gap-3 border-b border-slate-200 bg-white px-3 py-2">
           <div className="flex min-w-0 items-center gap-2">
@@ -175,36 +174,44 @@ export function TimelineEditorWorkspace({
                 3D editor canvas
               </h3>
               <p className="truncate text-[11px] text-slate-500">{summary.label}</p>
+              <p className="truncate text-[11px] text-slate-400">{summary.detail}</p>
             </div>
           </div>
-          <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] font-medium text-slate-600">
-            {binding && boundCharacter ? (
-              <CheckCircle2 className="size-3 text-emerald-600" />
-            ) : (
-              <CircleDashed className="size-3 text-amber-600" />
-            )}
-            {project.scene.mode.toUpperCase()}
-          </span>
+          <div className="flex shrink-0 items-center gap-2">
+            <Button
+              aria-pressed={promptLibraryOpen}
+              className="h-8 gap-1.5 rounded-md border-slate-200 bg-white px-2.5 text-xs text-slate-700 shadow-none hover:bg-slate-50"
+              data-testid="timeline-prompt-library-toggle"
+              onClick={() => setPromptLibraryOpen((open) => !open)}
+              size="sm"
+              type="button"
+              variant="secondary"
+            >
+              <Tags className="size-3.5" />
+              Prompt library
+            </Button>
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] font-medium text-slate-600">
+              {binding && boundCharacter ? (
+                <CheckCircle2 className="size-3 text-emerald-600" />
+              ) : (
+                <CircleDashed className="size-3 text-amber-600" />
+              )}
+              {project.scene.mode.toUpperCase()}
+            </span>
+          </div>
         </div>
-        <div className="h-[34rem] min-h-[34rem] lg:h-[44rem]">
-          <CanvasViewport />
+        <div className="relative h-[34rem] min-h-[34rem] overflow-hidden lg:h-[44rem]">
+          <CanvasViewport lockedSceneMode="3d" showSceneModeSwitcher={false} />
+
+          {promptLibraryOpen ? (
+            <aside
+              className="absolute inset-x-3 bottom-3 z-30 flex max-h-[20rem] flex-col overflow-hidden rounded-md border border-slate-200 bg-white shadow-xl md:inset-x-auto md:bottom-3 md:right-3 md:top-[5.5rem] md:max-h-none md:w-[22rem]"
+            >
+              <TimelinePromptLibraryDrawer />
+            </aside>
+          ) : null}
         </div>
       </section>
-
-      <details className="rounded-md border border-slate-200 bg-slate-50">
-        <summary className="cursor-pointer px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-          JSON diagnostics
-        </summary>
-        {diagnosticsText ? (
-          <pre className="whitespace-pre-wrap border-t border-slate-200 bg-white p-3 font-mono text-xs leading-relaxed text-slate-700">
-            {diagnosticsText}
-          </pre>
-        ) : (
-          <div className="border-t border-slate-200 bg-white p-3 text-xs leading-relaxed text-slate-500">
-            {emptyDiagnostics}
-          </div>
-        )}
-      </details>
     </div>
   );
 }

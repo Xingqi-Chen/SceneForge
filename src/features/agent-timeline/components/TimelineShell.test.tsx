@@ -14,8 +14,20 @@ const savePromptLibraryMock = vi.hoisted(() =>
 );
 
 vi.mock("@/features/editor/components/CanvasViewport", () => ({
-  CanvasViewport: () => (
-    <div data-testid="existing-editor-canvas-viewport">Existing editor 3D canvas viewport</div>
+  CanvasViewport: ({
+    lockedSceneMode,
+    showSceneModeSwitcher,
+  }: {
+    lockedSceneMode?: "2d" | "3d";
+    showSceneModeSwitcher?: boolean;
+  }) => (
+    <div
+      data-locked-scene-mode={lockedSceneMode ?? ""}
+      data-show-scene-mode-switcher={String(showSceneModeSwitcher ?? true)}
+      data-testid="existing-editor-canvas-viewport"
+    >
+      Existing editor 3D canvas viewport
+    </div>
   ),
 }));
 
@@ -336,12 +348,16 @@ describe("TimelineShell", () => {
     const nav = container.querySelector(".sf-agent-workbench__nav");
     const main = container.querySelector(".sf-agent-workbench__main");
     const inspector = container.querySelector(".sf-agent-workbench__inspector");
+    const middleWorkspace = main?.querySelector(".mx-auto");
+    const selectedStepCard = main?.querySelector("article");
 
     expect(workbench?.className).toContain("lg:flex-row");
     expect(nav?.className).toContain("order-2");
     expect(nav?.className).toContain("lg:order-1");
     expect(main?.className).toContain("order-1");
     expect(main?.className).toContain("lg:order-2");
+    expect(middleWorkspace?.className).toContain("max-w-7xl");
+    expect(selectedStepCard?.className).toContain("min-h-[50rem]");
     expect(inspector?.className).toContain("order-3");
 
     const form = container.querySelector("form");
@@ -443,12 +459,35 @@ describe("TimelineShell", () => {
       });
 
       const canvasSection = getSectionByHeading("Layout planning");
+      const canvasViewport = canvasSection.querySelector(
+        '[data-testid="existing-editor-canvas-viewport"]',
+      ) as HTMLElement | null;
       expect(canvasSection.textContent).toContain("Existing editor 3D canvas viewport");
+      expect(canvasViewport?.dataset.lockedSceneMode).toBe("3d");
+      expect(canvasViewport?.dataset.showSceneModeSwitcher).toBe("false");
+      expect(canvasSection.textContent).toContain("Prompt library");
+      expect(canvasSection.querySelector('[data-testid="timeline-prompt-library-drawer"]')).not.toBeNull();
+      expect(canvasSection.querySelector('[data-testid="timeline-prompt-library-tag"]')).not.toBeNull();
       expect(canvasSection.textContent).not.toContain("Existing prompt tag picker panel");
+      expect(canvasSection.textContent).toContain("Visual only");
+      expect(canvasSection.textContent).not.toContain("Raw JSON");
       expect(canvasSection.textContent).toContain("3D layout binding active");
-      expect(canvasSection.textContent).toContain("JSON diagnostics");
+      expect(canvasSection.textContent).not.toContain("JSON diagnostics");
       expect(canvasSection.textContent).toContain("editable 3D character");
       expect(canvasSection.textContent).toContain("Courier");
+
+      const promptLibraryToggle = canvasSection.querySelector(
+        '[data-testid="timeline-prompt-library-toggle"]',
+      ) as HTMLButtonElement | null;
+      act(() => {
+        promptLibraryToggle?.click();
+      });
+      expect(canvasSection.querySelector('[data-testid="timeline-prompt-library-drawer"]')).toBeNull();
+
+      act(() => {
+        promptLibraryToggle?.click();
+      });
+      expect(canvasSection.querySelector('[data-testid="timeline-prompt-library-drawer"]')).not.toBeNull();
 
       const generationGateButton = container.querySelector('button[data-node-id="generation-gate"]') as HTMLButtonElement | null;
       act(() => {

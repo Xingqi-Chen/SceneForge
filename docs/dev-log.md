@@ -4,6 +4,33 @@ This log records dated implementation and documentation work. Keep entries conci
 
 ## 2026-05-29
 
+### Issue #11 Node 5 Layout Planning UI Follow-up
+
+Summary:
+
+- Locked the Node 5 layout-planning workspace to the 3D editor canvas and hid the embedded 2D/3D canvas mode switch there.
+- Restored prompt-library tag selection in Node 5 as a compact right-side/bottom overlay drawer using the existing prompt-library data and editor store binding flow.
+- Made the selected-step workspace width and Step output minimum height stable across timeline nodes.
+- Kept Node 5 visual-only in the selected workspace while leaving the normal editor canvas mode switch enabled by default.
+
+Files changed:
+
+- `src/features/editor/components/CanvasViewport.tsx`
+- `src/features/editor/components/CanvasViewport.test.tsx`
+- `src/features/agent-timeline/components/TimelineEditorWorkspace.tsx`
+- `src/features/agent-timeline/components/TimelinePromptLibraryDrawer.tsx`
+- `src/features/agent-timeline/components/TimelinePromptLibraryDrawer.test.tsx`
+- `src/features/agent-timeline/components/TimelineShell.tsx`
+- `src/features/agent-timeline/components/TimelineShell.test.tsx`
+- `docs/dev-log.md`
+
+Validation:
+
+- `npm test -- src/features/editor/components/CanvasViewport.test.tsx src/features/agent-timeline/components/TimelineShell.test.tsx src/features/agent-timeline/components/TimelinePromptLibraryDrawer.test.tsx` passed: 3 files, 13 tests.
+- `npm run typecheck` passed.
+- `npm test` passed: 76 files, 498 tests.
+- `npm run lint` passed with the existing 22 `<img>` warnings in editor image-heavy panels.
+
 ### Issue #11 Node 5 Canvas Binding Review
 
 Summary:
