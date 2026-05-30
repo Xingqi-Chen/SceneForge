@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, Eye, EyeOff, Loader2, Palette, Plus, Search, Sparkles } from "lucide-react";
+import { Check, Eye, EyeOff, Loader2, Palette, Plus, Search, Sparkles, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -300,13 +300,19 @@ function CivitaiPickerResourceCard({
   );
 }
 
-function ResourceCard({ resource }: { resource: SelectedCivitaiResourcePreview }) {
+function ResourceCard({
+  onRemove,
+  resource,
+}: {
+  onRemove: () => void;
+  resource: SelectedCivitaiResourcePreview;
+}) {
   const previewImage = resource.previewImage
     ? (getCivitaiImageVariantUrl(resource.previewImage, 256) ?? resource.previewImage)
     : null;
 
   return (
-    <div className="grid gap-3 rounded-md border border-slate-200 bg-white p-3 sm:grid-cols-[64px_1fr]">
+    <div className="grid gap-3 rounded-md border border-slate-200 bg-white p-3 sm:grid-cols-[64px_minmax(0,1fr)_auto]">
       <div className="flex h-16 w-16 overflow-hidden rounded-md bg-slate-100">
         {previewImage ? (
           // eslint-disable-next-line @next/next/no-img-element
@@ -342,21 +348,35 @@ function ResourceCard({ resource }: { resource: SelectedCivitaiResourcePreview }
           </div>
         ) : null}
       </div>
+      <Button
+        aria-label={`Remove ${resource.resourceType === "model" ? "checkpoint" : "LoRA"} ${resource.name}`}
+        className="h-8 justify-self-end rounded-md border border-rose-100 bg-white px-2 text-[11px] text-rose-700 hover:bg-rose-50"
+        onClick={onRemove}
+        size="sm"
+        title="Remove selected resource"
+        type="button"
+        variant="secondary"
+      >
+        <X className="size-3.5" />
+        Remove
+      </Button>
     </div>
   );
 }
 
 function ArtistStringCard({
   item,
+  onRemove,
   prompt,
 }: {
   item: ArtistStringItemRecord;
+  onRemove: () => void;
   prompt: string;
 }) {
   const previewImage = item.referenceImages.find((image) => image.localUrl)?.localUrl ?? null;
 
   return (
-    <div className="grid gap-3 rounded-md border border-fuchsia-100 bg-white p-3 sm:grid-cols-[64px_1fr]">
+    <div className="grid gap-3 rounded-md border border-fuchsia-100 bg-white p-3 sm:grid-cols-[64px_minmax(0,1fr)_auto]">
       <div className="flex h-16 w-16 overflow-hidden rounded-md bg-slate-100">
         {previewImage ? (
           // eslint-disable-next-line @next/next/no-img-element
@@ -373,6 +393,18 @@ function ArtistStringCard({
           {compact(prompt, 150)}
         </p>
       </div>
+      <Button
+        aria-label={`Remove artist string NAI ${formatSequence(item.sourceSequence)}`}
+        className="h-8 justify-self-end rounded-md border border-rose-100 bg-white px-2 text-[11px] text-rose-700 hover:bg-rose-50"
+        onClick={onRemove}
+        size="sm"
+        title="Remove selected artist string"
+        type="button"
+        variant="secondary"
+      >
+        <X className="size-3.5" />
+        Remove
+      </Button>
     </div>
   );
 }
@@ -496,34 +528,42 @@ export function StylePalettePanel() {
     setAdvice({ error: "", result: null, status: "idle" });
   }
 
-  function handleToggleArtistStringSelection(item: ArtistStringItemRecord) {
-    const formattedPrompt = formatArtistPrompt(item, artistRenderMode);
-    if (!formattedPrompt.trim()) {
+  function removeArtistStringSelection(item: ArtistStringItemRecord) {
+    const selectedIds = project.settings.selectedArtistStringIds ?? [];
+    const selectedPrompts = project.settings.selectedArtistStringPrompts ?? [];
+    const removedIndex = selectedIds.indexOf(item.id);
+
+    if (removedIndex === -1) {
       return;
     }
 
+    const existingPrompt = selectedPrompts[removedIndex] ?? formatArtistPrompt(item, artistRenderMode);
+    const nextIds = selectedIds.filter((id) => id !== item.id);
+    const nextPrompts = selectedPrompts.filter((_, index) => index !== removedIndex);
+
+    if (!nextPrompts.some((prompt) => prompt.trim() === existingPrompt.trim())) {
+      removeSceneArtistPrompt(existingPrompt);
+    }
+
+    updateProjectSettings({
+      selectedArtistStringIds: nextIds,
+      selectedArtistStringPrompts: nextPrompts,
+    });
+    setSelectedArtistStrings((current) => current.filter((entry) => entry.id !== item.id));
+    setAdvice({ error: "", result: null, status: "idle" });
+  }
+
+  function handleToggleArtistStringSelection(item: ArtistStringItemRecord) {
     const selectedIds = project.settings.selectedArtistStringIds ?? [];
     const selectedPrompts = project.settings.selectedArtistStringPrompts ?? [];
 
     if (selectedIds.includes(item.id)) {
-      const removedIndex = selectedIds.indexOf(item.id);
-      const existingPrompt = selectedPrompts[removedIndex] ?? formattedPrompt;
-      const nextIds = selectedIds.filter((id) => id !== item.id);
-      const nextPrompts =
-        removedIndex >= 0
-          ? selectedPrompts.filter((_, index) => index !== removedIndex)
-          : selectedPrompts.filter((prompt) => prompt.trim() !== existingPrompt.trim());
+      removeArtistStringSelection(item);
+      return;
+    }
 
-      if (!nextPrompts.some((prompt) => prompt.trim() === existingPrompt.trim())) {
-        removeSceneArtistPrompt(existingPrompt);
-      }
-
-      updateProjectSettings({
-        selectedArtistStringIds: nextIds,
-        selectedArtistStringPrompts: nextPrompts,
-      });
-      setSelectedArtistStrings((current) => current.filter((entry) => entry.id !== item.id));
-      setAdvice({ error: "", result: null, status: "idle" });
+    const formattedPrompt = formatArtistPrompt(item, artistRenderMode);
+    if (!formattedPrompt.trim()) {
       return;
     }
 
@@ -578,6 +618,23 @@ export function StylePalettePanel() {
     setCivitaiPickerKind("lora");
     setCivitaiPickerOpen(true);
     setCivitaiPickerQuery("");
+    setAdvice({ error: "", result: null, status: "idle" });
+  }
+
+  function removeSelectedCivitaiResource(resource: SelectedCivitaiResourcePreview) {
+    if (resource.resourceType === "model") {
+      updateProjectSettings({
+        selectedCivitaiCheckpointId: null,
+        selectedCivitaiLoraIds: [],
+      });
+      setCivitaiPickerKind("checkpoint");
+      setAdvice({ error: "", result: null, status: "idle" });
+      return;
+    }
+
+    updateProjectSettings({
+      selectedCivitaiLoraIds: selectedLoraIds.filter((id) => id !== resource.id),
+    });
     setAdvice({ error: "", result: null, status: "idle" });
   }
 
@@ -969,19 +1026,9 @@ export function StylePalettePanel() {
               Artist Strings 已临时屏蔽：锁定 positive、AI 建议和 ComfyUI 生图暂时不会使用画师串。
             </p>
           ) : null}
-          <div className={`space-y-2 rounded-md border border-fuchsia-100 bg-fuchsia-50/50 p-3 ${artistStringsMasked ? "opacity-60" : ""}`}>
-            {selectedArtistStrings.length > 0 ? (
-              selectedArtistStrings.map((item) => {
-                const index = selectedArtistStringIds.indexOf(item.id);
-                const prompt = storedArtistPrompts[index] ?? formatArtistPrompt(item, artistRenderMode);
-                return <ArtistStringCard item={item} key={item.id} prompt={prompt} />;
-              })
-            ) : (
-              <p className="text-xs leading-relaxed text-slate-500">No artist strings selected.</p>
-            )}
-          </div>
+          <div className="flex flex-col gap-3">
           {artistPickerOpen ? (
-            <div className="mt-3 rounded-md border border-fuchsia-100 bg-white p-3">
+            <div className="rounded-md border border-fuchsia-100 bg-white p-3">
               <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_150px]">
                 <div className="relative min-w-0">
                   <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-slate-400" />
@@ -1085,6 +1132,25 @@ export function StylePalettePanel() {
               </div>
             </div>
           ) : null}
+          <div className={`space-y-2 rounded-md border border-fuchsia-100 bg-fuchsia-50/50 p-3 ${artistStringsMasked ? "opacity-60" : ""}`}>
+            {selectedArtistStrings.length > 0 ? (
+              selectedArtistStrings.map((item) => {
+                const index = selectedArtistStringIds.indexOf(item.id);
+                const prompt = storedArtistPrompts[index] ?? formatArtistPrompt(item, artistRenderMode);
+                return (
+                  <ArtistStringCard
+                    item={item}
+                    key={item.id}
+                    onRemove={() => removeArtistStringSelection(item)}
+                    prompt={prompt}
+                  />
+                );
+              })
+            ) : (
+              <p className="text-xs leading-relaxed text-slate-500">No artist strings selected.</p>
+            )}
+          </div>
+          </div>
         </div>
         <div>
           <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
@@ -1133,28 +1199,9 @@ export function StylePalettePanel() {
               LoRA 已临时屏蔽：锁定 positive、AI 建议和 ComfyUI 生图暂时不会使用任何 LoRA 或触发词。
             </p>
           ) : null}
-          <div className="space-y-2 rounded-md border border-indigo-100 bg-indigo-50/50 p-3">
-            {loadStatus === "loading" ? (
-              <p className="text-xs leading-relaxed text-indigo-700">
-                <Loader2 className="mr-1.5 inline size-3.5 animate-spin" />
-                Loading selected resources...
-              </p>
-            ) : null}
-            {loadStatus === "error" && loadError ? (
-              <p className="text-xs leading-relaxed text-rose-700">{loadError}</p>
-            ) : null}
-            {selectedResourceCards.length > 0 ? (
-              selectedResourceCards.map((resource) => (
-                <div className={lorasMasked && resource.resourceType === "lora" ? "opacity-50" : ""} key={resource.id}>
-                  <ResourceCard resource={resource} />
-                </div>
-              ))
-            ) : loadStatus !== "loading" ? (
-              <p className="text-xs leading-relaxed text-slate-500">No Civitai resources selected.</p>
-            ) : null}
-          </div>
+          <div className="flex flex-col gap-3">
           {civitaiPickerOpen ? (
-            <div className="mt-3 rounded-md border border-indigo-100 bg-white p-3">
+            <div className="rounded-md border border-indigo-100 bg-white p-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div>
                   <p className="text-[11px] font-bold uppercase tracking-wider text-indigo-700">
@@ -1256,6 +1303,30 @@ export function StylePalettePanel() {
               </div>
             </div>
           ) : null}
+          <div className="space-y-2 rounded-md border border-indigo-100 bg-indigo-50/50 p-3">
+            {loadStatus === "loading" ? (
+              <p className="text-xs leading-relaxed text-indigo-700">
+                <Loader2 className="mr-1.5 inline size-3.5 animate-spin" />
+                Loading selected resources...
+              </p>
+            ) : null}
+            {loadStatus === "error" && loadError ? (
+              <p className="text-xs leading-relaxed text-rose-700">{loadError}</p>
+            ) : null}
+            {selectedResourceCards.length > 0 ? (
+              selectedResourceCards.map((resource) => (
+                <div className={lorasMasked && resource.resourceType === "lora" ? "opacity-50" : ""} key={resource.id}>
+                  <ResourceCard
+                    onRemove={() => removeSelectedCivitaiResource(resource)}
+                    resource={resource}
+                  />
+                </div>
+              ))
+            ) : loadStatus !== "loading" ? (
+              <p className="text-xs leading-relaxed text-slate-500">No Civitai resources selected.</p>
+            ) : null}
+          </div>
+          </div>
         </div>
       </div>
     </div>
@@ -1293,10 +1364,10 @@ export function StylePalettePanel() {
         diagnosisScopes={{ parameters: true, prompt: false }}
         description="使用固定预设 prompt 初始化风格测试；Active Prompt 可临时编辑，Locked Positive 不会被改写。"
         introContent={introContent}
-        negativePromptLocked
         onSaveParameters={(parameters) => updateProjectSettings({ savedComfyUiGenerationParams: parameters })}
         onClose={() => setOpen(false)}
         open={open}
+        promptRefreshKey={preset.id}
         savedParameters={savedParameters}
         selectedCheckpointId={selectedCheckpointId}
         selectedLoraIds={effectiveSelectedLoraIds}

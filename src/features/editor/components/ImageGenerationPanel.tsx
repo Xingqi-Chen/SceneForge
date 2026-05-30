@@ -102,6 +102,7 @@ import {
   type ComfyUiGenerationLoraSetting,
   type ComfyUiGenerationParameterSource,
 } from "@/features/editor/ai-prompt/comfyui-generation-params";
+import { mergeDraftWithPromptRefresh } from "@/features/editor/ai-prompt/comfyui-generation-draft";
 import {
   COMFYUI_SAMPLER_OPTIONS,
   COMFYUI_SCHEDULER_OPTIONS,
@@ -4651,6 +4652,8 @@ export type ComfyUiGenerationDialogProps = {
   onClose: () => void;
   open: boolean;
   positivePromptLocked?: boolean;
+  /** Prompt fields are reset from active/base prompts only when this key changes. */
+  promptRefreshKey?: string;
   savedParameters?: SavedComfyUiGenerationParams | null;
   selectedCheckpointId: string | null;
   selectedLoraIds: string[];
@@ -4672,6 +4675,7 @@ export function ComfyUiGenerationDialog({
   onClose,
   open,
   positivePromptLocked = false,
+  promptRefreshKey,
   savedParameters = null,
   selectedCheckpointId,
   selectedLoraIds,
@@ -4688,6 +4692,8 @@ export function ComfyUiGenerationDialog({
   const deleteComfyUiGeneratedImage = useEditorStore((state) => state.deleteComfyUiGeneratedImage);
   const diagnosisPromptAllowed = diagnosisScopes?.prompt ?? true;
   const diagnosisParameterAllowed = diagnosisScopes?.parameters ?? true;
+  const resolvedPromptRefreshKey = promptRefreshKey ?? `${activePrompt}\u0000${baseNegativePrompt}`;
+  const previousPromptRefreshKeyRef = useRef<string | null>(null);
   const selectedLoraIdsKey = selectedLoraIds.join(",");
   const [selectedResources, setSelectedResources] = useState<SelectedCivitaiResourcesPreview>(EMPTY_SELECTED_RESOURCES);
   const [loadStatus, setLoadStatus] = useState<LoadStatus>("idle");
@@ -4755,6 +4761,12 @@ export function ComfyUiGenerationDialog({
         : null,
     [allowControlNet, draft, scene],
   );
+
+  useEffect(() => {
+    if (!open) {
+      previousPromptRefreshKeyRef.current = null;
+    }
+  }, [open]);
 
   useEffect(() => {
     if (!allowControlNet || !draft || !open) {
@@ -4844,7 +4856,17 @@ export function ComfyUiGenerationDialog({
       });
 
       setSelectedResources(resources);
-      setDraft(toDraft(settings.request, settings.loras, savedParameters?.seedMode, savedParameters));
+      const nextDraft = toDraft(settings.request, settings.loras, savedParameters?.seedMode, savedParameters);
+      const previousPromptRefreshKey = previousPromptRefreshKeyRef.current;
+      setDraft((currentDraft) =>
+        mergeDraftWithPromptRefresh({
+          currentDraft,
+          nextDraft,
+          nextPromptRefreshKey: resolvedPromptRefreshKey,
+          previousPromptRefreshKey,
+        }),
+      );
+      previousPromptRefreshKeyRef.current = resolvedPromptRefreshKey;
       setLoraSettings(settings.loras);
       setParameterSource(settings.parameterSource);
       setDownloadItems(await loadResourceDownloadItems(resources));
@@ -4869,9 +4891,9 @@ export function ComfyUiGenerationDialog({
     }, 0);
 
     return () => window.clearTimeout(timeout);
-    // Reload the draft whenever the caller changes the selected resources or locked prompts.
+    // Reload resource context whenever selections change; prompt fields refresh only when the key changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, selectedCheckpointId, selectedLoraIdsKey, activePrompt, baseNegativePrompt, advice]);
+  }, [open, selectedCheckpointId, selectedLoraIdsKey, resolvedPromptRefreshKey, advice]);
 
   function closeModal() {
     if (submitStatus === "loading" || downloadActionStatus === "loading") {

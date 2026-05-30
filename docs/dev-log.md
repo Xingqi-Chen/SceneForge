@@ -4,6 +4,29 @@ This log records dated implementation and documentation work. Keep entries conci
 
 ## 2026-05-30
 
+### Local `/editor` Style Palette UX Fix
+
+Summary:
+
+- Added right-side remove buttons for selected artist strings and selected Civitai resources in the style palette.
+- Reversed the visible order of quick-pick suggestions and selected content so quick selections appear above the selected lists when open.
+- Added a prompt refresh key for the ComfyUI generation dialog so style palette active/negative prompt drafts refresh on preset changes, while resource selection changes preserve manual prompt edits.
+
+Files changed:
+
+- `src/features/editor/components/StylePalettePanel.tsx`
+- `src/features/editor/components/ImageGenerationPanel.tsx`
+- `src/features/editor/ai-prompt/comfyui-generation-draft.ts`
+- `src/features/editor/ai-prompt/comfyui-generation-draft.test.ts`
+- `src/features/editor/components/StylePalettePanel.test.tsx`
+- `docs/dev-log.md`
+
+Validation:
+
+- `npm test -- src/features/editor/ai-prompt/comfyui-generation-draft.test.ts src/features/editor/components/StylePalettePanel.test.tsx` passed.
+- `npm run typecheck` passed.
+- `npm run lint -- src/features/editor/components/StylePalettePanel.tsx src/features/editor/components/ImageGenerationPanel.tsx src/features/editor/ai-prompt/comfyui-generation-draft.ts src/features/editor/ai-prompt/comfyui-generation-draft.test.ts src/features/editor/components/StylePalettePanel.test.tsx` passed with existing `@next/next/no-img-element` warnings in `ImageGenerationPanel.tsx`.
+
 ### Comic Sequence Single-Shot Generation Button
 
 Summary:
