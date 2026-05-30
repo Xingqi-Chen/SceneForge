@@ -3,7 +3,11 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ArtistStringItemRecord } from "@/features/artist-string-library";
-import type { SelectedCivitaiResourcePreview, SelectedCivitaiResourcesPreview } from "@/features/civitai-lora-library";
+import type {
+  CivitaiResourceListItem,
+  SelectedCivitaiResourcePreview,
+  SelectedCivitaiResourcesPreview,
+} from "@/features/civitai-lora-library";
 import { STYLE_PALETTE_PROMPT_PRESETS } from "@/features/editor/ai-prompt/style-palette-prompts";
 import { createDefaultProject } from "@/features/editor/store/defaults";
 import { useEditorStore } from "@/features/editor/store/editor-store";
@@ -60,6 +64,14 @@ const checkpointResource = createSelectedResource({
 const alternateCheckpointResource = createSelectedResource({
   id: "checkpoint-2",
   name: "Ink Checkpoint",
+  baseModel: "Pony",
+  resourceType: "model",
+});
+
+const noBaseCheckpointResource = createSelectedResource({
+  id: "checkpoint-no-base",
+  name: "Metadata Light Checkpoint",
+  baseModel: null,
   resourceType: "model",
 });
 
@@ -69,6 +81,10 @@ const loraResource = createSelectedResource({
   resourceType: "lora",
   trainedWords: ["neon_detail"],
 });
+
+const checkpointListItem = createResourceListItem(checkpointResource);
+const alternateCheckpointListItem = createResourceListItem(alternateCheckpointResource);
+const loraListItem = createResourceListItem(loraResource);
 
 function createSelectedResource(
   overrides: Partial<SelectedCivitaiResourcePreview>,
@@ -95,6 +111,44 @@ function createSelectedResource(
   };
 }
 
+function createResourceListItem(resource: SelectedCivitaiResourcePreview): CivitaiResourceListItem {
+  return {
+    id: resource.id,
+    resourceType: resource.resourceType,
+    civitaiModelId: null,
+    civitaiModelVersionId: null,
+    name: resource.name,
+    versionName: resource.versionName,
+    hash: null,
+    baseModel: resource.baseModel,
+    trainedWords: resource.trainedWords,
+    tags: resource.tags,
+    description: resource.descriptionSnippet,
+    creator: resource.creator,
+    downloadUrl: null,
+    filesJson: null,
+    officialImagesJson: null,
+    category: null,
+    categories: resource.categories,
+    usageGuide: resource.usageGuide,
+    recommendations: resource.recommendations,
+    enrichmentStatus: "fallback",
+    enrichmentError: null,
+    nsfw: null,
+    aiNsfwLevel: "unknown",
+    aiNsfwConfidence: null,
+    aiNsfwReason: null,
+    rawVersionJson: null,
+    createdAt: "2026-05-30T00:00:00.000Z",
+    updatedAt: "2026-05-30T00:00:00.000Z",
+    importedImageCount: 1,
+    averageWeight: resource.averageWeight,
+    minWeight: resource.minWeight,
+    maxWeight: resource.maxWeight,
+    previewImage: resource.previewImage,
+  };
+}
+
 function selectedResourcesForUrl(url: string): SelectedCivitaiResourcesPreview {
   const paramsText = url.split("?")[1] ?? "";
   const params = new URLSearchParams(paramsText);
@@ -107,7 +161,9 @@ function selectedResourcesForUrl(url: string): SelectedCivitaiResourcesPreview {
         ? checkpointResource
         : checkpointId === alternateCheckpointResource.id
           ? alternateCheckpointResource
-          : null,
+          : checkpointId === noBaseCheckpointResource.id
+            ? noBaseCheckpointResource
+            : null,
     loras: loraIds.includes(loraResource.id) ? [loraResource] : [],
   };
 }
@@ -130,13 +186,23 @@ function defaultLlmChatResponse(init?: RequestInit) {
   });
 }
 
-function mockFetch(options: { llmChatResponse?: (init?: RequestInit) => Promise<Response> | Response } = {}) {
+function mockFetch(
+  options: {
+    llmChatResponse?: (init?: RequestInit) => Promise<Response> | Response;
+    resourcesResponse?: (url: string, init?: RequestInit) => Promise<Response> | Response;
+    selectedResourcesResponse?: (url: string, init?: RequestInit) => Promise<Response> | Response;
+  } = {},
+) {
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
 
       if (url.startsWith("/api/civitai-lora-library/selected-resources")) {
+        if (options.selectedResourcesResponse) {
+          return options.selectedResourcesResponse(url, init);
+        }
+
         return jsonResponse(selectedResourcesForUrl(url));
       }
 
@@ -149,6 +215,24 @@ function mockFetch(options: { llmChatResponse?: (init?: RequestInit) => Promise<
       }
 
       if (url.startsWith("/api/civitai-lora-library/resources")) {
+        if (options.resourcesResponse) {
+          return options.resourcesResponse(url, init);
+        }
+
+        const params = new URLSearchParams(url.split("?")[1] ?? "");
+        const resourceType = params.get("resourceType");
+        const baseModel = params.get("baseModel");
+
+        if (resourceType === "model") {
+          return jsonResponse({ items: [checkpointListItem, alternateCheckpointListItem] });
+        }
+
+        if (resourceType === "lora") {
+          return jsonResponse({
+            items: !baseModel || baseModel === loraListItem.baseModel ? [loraListItem] : [],
+          });
+        }
+
         return jsonResponse({ items: [] });
       }
 
@@ -244,6 +328,40 @@ function getButtonByText(text: string): HTMLButtonElement {
   );
   expect(button).toBeInstanceOf(HTMLButtonElement);
   return button as HTMLButtonElement;
+}
+
+function getLastButtonWithin(rootElement: HTMLElement): HTMLButtonElement {
+  const button = Array.from(rootElement.querySelectorAll("button")).at(-1);
+  expect(button).toBeInstanceOf(HTMLButtonElement);
+  return button as HTMLButtonElement;
+}
+
+function countFetchCallsStartingWith(prefix: string) {
+  return vi.mocked(fetch).mock.calls.filter(([input]) => String(input).startsWith(prefix)).length;
+}
+
+function hasCivitaiResourceFetch(params: Record<string, string>) {
+  return vi.mocked(fetch).mock.calls.some(([input]) => {
+    const url = String(input);
+    if (!url.startsWith("/api/civitai-lora-library/resources")) {
+      return false;
+    }
+
+    const searchParams = new URLSearchParams(url.split("?")[1] ?? "");
+    return Object.entries(params).every(([key, value]) => searchParams.get(key) === value);
+  });
+}
+
+function countCivitaiResourceFetches(params: Record<string, string>) {
+  return vi.mocked(fetch).mock.calls.filter(([input]) => {
+    const url = String(input);
+    if (!url.startsWith("/api/civitai-lora-library/resources")) {
+      return false;
+    }
+
+    const searchParams = new URLSearchParams(url.split("?")[1] ?? "");
+    return Object.entries(params).every(([key, value]) => searchParams.get(key) === value);
+  }).length;
 }
 
 function getTextElement(text: string): HTMLElement {
@@ -365,6 +483,44 @@ describe("StylePalettePanel", () => {
     expect(useEditorStore.getState().project.settings.selectedCivitaiLoraIds).toEqual([]);
   });
 
+  it("keeps selected Civitai cards mounted while selected resources refresh", async () => {
+    await openPaletteAndWaitForContext();
+
+    const deferred = createDeferredResponse();
+    let pendingSelectedRefresh = false;
+    mockFetch({
+      selectedResourcesResponse: () => {
+        pendingSelectedRefresh = true;
+        return deferred.promise;
+      },
+    });
+
+    const loraRemoveButton = getButtonByAriaLabel("Remove LoRA Neon Detail LoRA");
+
+    act(() => {
+      loraRemoveButton?.click();
+    });
+
+    await waitFor(() => {
+      expect(pendingSelectedRefresh).toBe(true);
+      expect(useEditorStore.getState().project.settings.selectedCivitaiLoraIds).toEqual([]);
+    });
+
+    expect(getButtonByAriaLabel("Remove LoRA Neon Detail LoRA")).toBeNull();
+    expect(getButtonByAriaLabel("Remove checkpoint Dream Checkpoint")).not.toBeNull();
+    expect(container.textContent).toContain("Dream Checkpoint");
+    expect(container.textContent).not.toContain("Loading selected resources...");
+
+    await act(async () => {
+      deferred.resolve(
+        jsonResponse(selectedResourcesForUrl("/api/civitai-lora-library/selected-resources?checkpointId=checkpoint-1")),
+      );
+      await new Promise((resolve) => window.setTimeout(resolve, 0));
+    });
+
+    expect(getButtonByAriaLabel("Remove checkpoint Dream Checkpoint")).not.toBeNull();
+  });
+
   it("keeps quick-pick panels above selected content in visual and keyboard order", async () => {
     await openPaletteAndWaitForContext();
 
@@ -378,6 +534,242 @@ describe("StylePalettePanel", () => {
     expect(artistWrapper.children[1]?.textContent).toContain("NAI 007");
     expect(civitaiWrapper.children[0]?.textContent).toContain("Checkpoint Quick Select");
     expect(civitaiWrapper.children[1]?.textContent).toContain("Dream Checkpoint");
+  });
+
+  it("does not refresh selected Civitai resources when artist string selection changes", async () => {
+    await openPaletteAndWaitForContext();
+
+    clickFirstHeaderButton("Selected Artist Strings");
+    const artistWrapper = getStackColumnWrapper("Selected Artist Strings");
+
+    await waitFor(() => {
+      expect(artistWrapper.children[0]?.querySelector("input")).not.toBeNull();
+      expect((artistWrapper.children[0] as HTMLElement).querySelector("button")).not.toBeNull();
+    });
+
+    const selectedResourceFetches = countFetchCallsStartingWith("/api/civitai-lora-library/selected-resources");
+    const artistToggleButton = getLastButtonWithin(artistWrapper.children[0] as HTMLElement);
+
+    act(() => {
+      artistToggleButton.click();
+    });
+
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 30));
+    });
+
+    expect(countFetchCallsStartingWith("/api/civitai-lora-library/selected-resources")).toBe(selectedResourceFetches);
+    expect(container.textContent).not.toContain("Loading selected resources...");
+  });
+
+  it("keeps the Civitai picker list mounted when toggling a selected LoRA", async () => {
+    await openPaletteAndWaitForContext();
+
+    const civitaiColumn = getSectionColumn("Selected Civitai Resources");
+    const headerButtons = civitaiColumn.children[0]?.querySelectorAll("button");
+    expect(headerButtons?.[1]).toBeInstanceOf(HTMLButtonElement);
+
+    act(() => {
+      (headerButtons?.[1] as HTMLButtonElement).click();
+    });
+
+    const civitaiWrapper = getStackColumnWrapper("Selected Civitai Resources");
+
+    await waitFor(() => {
+      expect(civitaiWrapper.children[0]?.textContent).toContain("LoRA Quick Select");
+      expect(civitaiWrapper.children[0]?.textContent).toContain("Neon Detail LoRA");
+    });
+
+    const resourceFetches = countFetchCallsStartingWith("/api/civitai-lora-library/resources");
+    const loraToggleButton = getLastButtonWithin(civitaiWrapper.children[0] as HTMLElement);
+
+    act(() => {
+      loraToggleButton.click();
+    });
+
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 30));
+    });
+
+    expect(useEditorStore.getState().project.settings.selectedCivitaiLoraIds).toEqual([]);
+    expect(countFetchCallsStartingWith("/api/civitai-lora-library/resources")).toBe(resourceFetches);
+    expect(civitaiWrapper.children[0]?.textContent).toContain("Neon Detail LoRA");
+    expect(civitaiWrapper.children[0]?.textContent).not.toContain("正在读取 Civitai 资源...");
+  });
+
+  it("uses the clicked checkpoint base model when switching directly into the LoRA picker", async () => {
+    await openPaletteAndWaitForContext();
+
+    clickFirstHeaderButton("Selected Civitai Resources");
+    const civitaiWrapper = getStackColumnWrapper("Selected Civitai Resources");
+
+    await waitFor(() => {
+      expect(civitaiWrapper.children[0]?.textContent).toContain("Checkpoint Quick Select");
+      expect(civitaiWrapper.children[0]?.textContent).toContain("Ink Checkpoint");
+    });
+
+    const checkpointPicker = civitaiWrapper.children[0] as HTMLElement;
+    const alternateCheckpointButton = Array.from(checkpointPicker.querySelectorAll("button")).find((button) =>
+      button.parentElement?.textContent?.includes("Ink Checkpoint"),
+    );
+    expect(alternateCheckpointButton).toBeInstanceOf(HTMLButtonElement);
+
+    act(() => {
+      (alternateCheckpointButton as HTMLButtonElement).click();
+    });
+
+    expect(useEditorStore.getState().project.settings.selectedCivitaiCheckpointId).toBe(alternateCheckpointResource.id);
+    expect(useEditorStore.getState().project.settings.selectedCivitaiLoraIds).toEqual([]);
+
+    await waitFor(() => {
+      expect(civitaiWrapper.children[0]?.textContent).toContain("LoRA Quick Select");
+      expect(hasCivitaiResourceFetch({ resourceType: "lora", baseModel: "Pony" })).toBe(true);
+    });
+  });
+
+  it("hides stale checkpoint rows while checkpoint-to-LoRA resource loading is pending", async () => {
+    await openPaletteAndWaitForContext();
+
+    clickFirstHeaderButton("Selected Civitai Resources");
+    const civitaiWrapper = getStackColumnWrapper("Selected Civitai Resources");
+
+    await waitFor(() => {
+      expect(civitaiWrapper.children[0]?.textContent).toContain("Checkpoint Quick Select");
+      expect(civitaiWrapper.children[0]?.textContent).toContain("Dream Checkpoint");
+      expect(civitaiWrapper.children[0]?.textContent).toContain("Ink Checkpoint");
+    });
+
+    const deferred = createDeferredResponse();
+    let pendingLoraFetch = false;
+    mockFetch({
+      resourcesResponse: (url) => {
+        const params = new URLSearchParams(url.split("?")[1] ?? "");
+        if (params.get("resourceType") === "lora") {
+          pendingLoraFetch = true;
+          return deferred.promise;
+        }
+
+        return jsonResponse({ items: [checkpointListItem, alternateCheckpointListItem] });
+      },
+    });
+
+    const checkpointPicker = civitaiWrapper.children[0] as HTMLElement;
+    const alternateCheckpointButton = Array.from(checkpointPicker.querySelectorAll("button")).find((button) =>
+      button.parentElement?.textContent?.includes("Ink Checkpoint"),
+    );
+    expect(alternateCheckpointButton).toBeInstanceOf(HTMLButtonElement);
+
+    act(() => {
+      (alternateCheckpointButton as HTMLButtonElement).click();
+    });
+
+    await waitFor(() => {
+      expect(civitaiWrapper.children[0]?.textContent).toContain("LoRA Quick Select");
+    });
+
+    expect(civitaiWrapper.children[0]?.textContent).not.toContain("Dream Checkpoint");
+    expect(civitaiWrapper.children[0]?.textContent).not.toContain("Ink Checkpoint");
+
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 180));
+    });
+
+    expect(pendingLoraFetch).toBe(true);
+    expect(civitaiWrapper.children[0]?.textContent).not.toContain("Dream Checkpoint");
+    expect(civitaiWrapper.children[0]?.textContent).not.toContain("Ink Checkpoint");
+
+    await act(async () => {
+      deferred.resolve(jsonResponse({ items: [] }));
+      await deferred.promise;
+    });
+  });
+
+  it("clears stale picker items when the selected checkpoint has no base model for LoRA filtering", async () => {
+    await openPaletteAndWaitForContext();
+
+    clickFirstHeaderButton("Selected Civitai Resources");
+    const civitaiWrapper = getStackColumnWrapper("Selected Civitai Resources");
+
+    await waitFor(() => {
+      expect(civitaiWrapper.children[0]?.textContent).toContain("Checkpoint Quick Select");
+      expect(civitaiWrapper.children[0]?.textContent).toContain("Dream Checkpoint");
+      expect(civitaiWrapper.children[0]?.textContent).toContain("Ink Checkpoint");
+    });
+
+    act(() => {
+      useEditorStore.getState().updateProjectSettings({
+        selectedCivitaiCheckpointId: noBaseCheckpointResource.id,
+        selectedCivitaiLoraIds: [],
+      });
+    });
+
+    await waitFor(() => {
+      expect(container.textContent).toContain("Metadata Light Checkpoint");
+    });
+
+    const loraFetchesBefore = countCivitaiResourceFetches({ resourceType: "lora" });
+    const segmentedButtons = (civitaiWrapper.children[0] as HTMLElement).querySelectorAll("button");
+    const loraTabButton = Array.from(segmentedButtons).find((button) => button.textContent?.includes("LoRA"));
+    expect(loraTabButton).toBeInstanceOf(HTMLButtonElement);
+
+    act(() => {
+      (loraTabButton as HTMLButtonElement).click();
+    });
+
+    await waitFor(() => {
+      expect(civitaiWrapper.children[0]?.textContent).toContain("LoRA Quick Select");
+      expect(civitaiWrapper.children[0]?.textContent).toContain("Selected checkpoint has no base model metadata.");
+    });
+
+    expect(civitaiWrapper.children[0]?.textContent).not.toContain("Dream Checkpoint");
+    expect(civitaiWrapper.children[0]?.textContent).not.toContain("Ink Checkpoint");
+    expect(civitaiWrapper.children[0]?.textContent).not.toContain("Neon Detail LoRA");
+    expect(civitaiWrapper.children[0]?.textContent).not.toContain("正在读取 Civitai 资源...");
+    expect(countCivitaiResourceFetches({ resourceType: "lora" })).toBe(loraFetchesBefore);
+  });
+
+  it("does not use stale checkpoint metadata when selected-resource refresh fails", async () => {
+    await openPaletteAndWaitForContext();
+
+    clickFirstHeaderButton("Selected Civitai Resources");
+    const civitaiWrapper = getStackColumnWrapper("Selected Civitai Resources");
+
+    await waitFor(() => {
+      expect(civitaiWrapper.children[0]?.textContent).toContain("Checkpoint Quick Select");
+      expect(civitaiWrapper.children[0]?.textContent).toContain("Dream Checkpoint");
+      expect(civitaiWrapper.children[0]?.textContent).toContain("Ink Checkpoint");
+    });
+
+    mockFetch({
+      selectedResourcesResponse: () =>
+        jsonResponse({ error: { message: "Selected resource refresh failed" } }, false),
+    });
+
+    act(() => {
+      useEditorStore.getState().updateProjectSettings({
+        selectedCivitaiCheckpointId: noBaseCheckpointResource.id,
+        selectedCivitaiLoraIds: [],
+      });
+    });
+
+    const segmentedButtons = (civitaiWrapper.children[0] as HTMLElement).querySelectorAll("button");
+    const loraTabButton = Array.from(segmentedButtons).find((button) => button.textContent?.includes("LoRA"));
+    expect(loraTabButton).toBeInstanceOf(HTMLButtonElement);
+
+    act(() => {
+      (loraTabButton as HTMLButtonElement).click();
+    });
+
+    await waitFor(() => {
+      expect(civitaiWrapper.children[0]?.textContent).toContain("LoRA Quick Select");
+      expect(civitaiWrapper.children[0]?.textContent).toContain("Selected checkpoint has no base model metadata.");
+      expect(container.textContent).toContain("Selected resource refresh failed");
+    });
+
+    expect(civitaiWrapper.children[0]?.textContent).not.toContain("Dream Checkpoint");
+    expect(civitaiWrapper.children[0]?.textContent).not.toContain("Ink Checkpoint");
+    expect(civitaiWrapper.children[0]?.textContent).not.toContain("Neon Detail LoRA");
+    expect(countCivitaiResourceFetches({ resourceType: "lora" })).toBe(0);
   });
 
   it("keeps Subject Input outside resource refreshes while refreshing the ComfyUI prompt key", async () => {

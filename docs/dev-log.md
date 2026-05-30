@@ -4,6 +4,30 @@ This log records dated implementation and documentation work. Keep entries conci
 
 ## 2026-05-30
 
+### Style Palette Resource Selection Stability
+
+Summary:
+
+- Split style palette selected Civitai resource loading from selected artist string loading so artist string changes no longer flip the Civitai selected-resource panel into loading.
+- Kept existing selected Civitai cards and quick-picker list data mounted while refreshes are in flight.
+- Removed the LoRA picker dependency on selected-resource loading state so checkpoint/LoRA selection and right-side removal do not clear the bottom resource list.
+- Optimistically applied clicked checkpoint/LoRA list items to selected-resource preview state so checkpoint-to-LoRA switching can use the clicked checkpoint base model immediately.
+- Made missing checkpoint base model metadata a stable empty LoRA picker state, with stale picker rows hidden synchronously and aborted picker fetches guarded from late writes.
+- Added regression coverage for artist selection not refetching Civitai selected resources, LoRA toggles not refetching/clearing the picker list, checkpoint-to-LoRA switching using the clicked base model without showing stale checkpoint rows, and missing checkpoint base model metadata not showing stale rows or fetching LoRAs.
+
+Files changed:
+
+- `src/features/editor/components/StylePalettePanel.tsx`
+- `src/features/editor/components/StylePalettePanel.test.tsx`
+- `docs/dev-log.md`
+
+Validation:
+
+- `npm test -- --run src/features/editor/components/StylePalettePanel.test.tsx` passed.
+- `npm test` passed.
+- `npm run typecheck` passed.
+- `npm run lint` passed with existing `@next/next/no-img-element` warnings.
+
 ### Local `/editor` Style Palette UX Fix
 
 Summary:
