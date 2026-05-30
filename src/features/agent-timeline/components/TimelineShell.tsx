@@ -1,6 +1,6 @@
 "use client";
 
-import { type FormEvent, useMemo, useState } from "react";
+import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import {
   ArrowRight,
@@ -9,6 +9,7 @@ import {
   CheckCircle2,
   CircleDot,
   Database,
+  GitBranch,
   ImageIcon,
   LayoutDashboard,
   LockKeyhole,
@@ -26,21 +27,72 @@ import type { LucideIcon } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { getTimelineNodeDependencies } from "@/features/agent-timeline/dag";
-import { createTimelineWorkflowState, setTimelineNodeManualResult } from "@/features/agent-timeline/state";
+import { executeTimelineGraph } from "@/features/agent-timeline/graph";
+import {
+  createTimelineWorkflowState,
+  setTimelineNodeManualResult,
+} from "@/features/agent-timeline/state";
+import {
+  createTimelineT5NodeAdapters,
+  normalizeCharacterTagsTimelineResult,
+  normalizeScenePromptTimelineResult,
+  type TimelineCanvasBindingInput,
+} from "@/features/agent-timeline/t5-node-adapters";
 import {
   timelineNodeIds,
+  TimelineNodeExecutionError,
+  type CanvasBindingTimelineResult,
+  type CharacterActionTimelineResult,
+  type ScenePromptTimelineResult,
   type SceneInputTimelineResult,
   type TimelineNodeId,
   type TimelineNodeStatus,
   type TimelineWorkflowState,
 } from "@/features/agent-timeline/types";
+import {
+  bindPrimaryTimelineCharacterToEditorStore,
+  createTimelinePromptTagSuggestions,
+  getTimelineCharacterTagsToBind,
+  getPrimaryTimelineCharacterPoseFromEditorStore,
+} from "@/features/agent-timeline/editor-canvas-binding";
+import {
+  getAvailablePromptLibraryTags,
+  PromptTagImportReviewDialog,
+  splitPromptTagSuggestionsByLibrary,
+  type NewPromptTagApplyMode,
+  type PendingPromptTagImportReview,
+} from "@/features/editor/components/PromptTagImportReviewDialog";
+import { useEditorStore } from "@/features/editor/store/editor-store";
+import {
+  getLlmProxyErrorMessage,
+  isLlmChatResponse,
+  LiteLlmError,
+  type LlmChatRequest,
+  type LlmChatResponse,
+} from "@/features/llm";
+import { savePromptLibrary } from "@/features/persistence";
+import type { CharacterPromptTagTarget } from "@/features/prompt-engine/prompt-library/character-image-prompt-tags";
 import { cn } from "@/shared/utils/cn";
 
 import { TimelineNodeStatus as TimelineStatusChip } from "./TimelineNodeStatus";
+import {
+  isTimelineEditorWorkspaceNode,
+  TimelineEditorWorkspace,
+} from "./TimelineEditorWorkspace";
+import { TimelineScenePromptWorkspace } from "./TimelineScenePromptWorkspace";
 import { getTimelineNodeOutputText, timelineNodeContent } from "./timeline-node-content";
 
 type DraftMap = Partial<Record<TimelineNodeId, string>>;
 type NoticeMap = Partial<Record<TimelineNodeId, string>>;
+type OutputDisplayMode = "json" | "visual";
+type OutputDisplayModeMap = Partial<Record<TimelineNodeId, OutputDisplayMode>>;
+
+type PendingTimelinePromptTagReview = {
+  input: TimelineCanvasBindingInput;
+  reject: (error: Error) => void;
+  resolve: (mode: NewPromptTagApplyMode) => void;
+  review: PendingPromptTagImportReview;
+};
 
 type StepDisplay = {
   agent: string;
@@ -58,21 +110,21 @@ const stepDisplay: Record<TimelineNodeId, StepDisplay> = {
   },
   "scene-prompt": {
     agent: "Prompt agent",
-    artifact: "Positive / negative prompt draft",
+    artifact: "Shared scene context table",
     icon: Bot,
-    transform: "Expand scene intent into generation language",
+    transform: "Expand scene intent into canonical shared context",
   },
   "character-tags": {
     agent: "Tag agent",
     artifact: "Character and body-part tags",
     icon: Tags,
-    transform: "Extract entities, clothing, expression, and body details",
+    transform: "Extract entities, clothing, expression, and body details from prompt context",
   },
   "character-action": {
     agent: "Pose agent",
     artifact: "Action and pose plan",
     icon: Zap,
-    transform: "Infer action, motion, and pose targets",
+    transform: "Infer action, motion, and pose targets from prompt context",
   },
   "canvas-binding": {
     agent: "Layout agent",
@@ -114,12 +166,91 @@ const stepDisplay: Record<TimelineNodeId, StepDisplay> = {
 
 const settingsLinkClassName =
   "inline-flex h-9 items-center justify-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-xs font-medium text-slate-700 transition-colors hover:border-slate-300 hover:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-400";
+const rawEditableNodeIds = new Set<TimelineNodeId>(["scene-input", "scene-prompt"]);
+const visualOutputNodeIds = new Set<TimelineNodeId>(["scene-prompt", "canvas-binding"]);
+const nonEditableAiNodeIds = new Set<TimelineNodeId>(["character-tags", "character-action"]);
+const parallelNodeIds = new Set<TimelineNodeId>(["character-tags", "character-action"]);
+
+async function completeTimelineChatViaApi(request: LlmChatRequest): Promise<LlmChatResponse> {
+  const response = await fetch("/api/llm/chat", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+    },
+    body: JSON.stringify(request),
+  });
+  const payload: unknown = await response.json();
+
+  if (!response.ok) {
+    throw new LiteLlmError(getLlmProxyErrorMessage(payload), {
+      statusCode: response.status,
+      details: payload,
+    });
+  }
+
+  if (!isLlmChatResponse(payload)) {
+    throw new LiteLlmError("LLM response did not include usable chat content.", {
+      statusCode: 502,
+      details: payload,
+    });
+  }
+
+  return payload;
+}
+
+function parseManualJson(value: string) {
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    return null;
+  }
+}
 
 function createManualResult(nodeId: TimelineNodeId, value: string) {
   if (nodeId === "scene-input") {
     return {
       rawIntent: value,
     } satisfies SceneInputTimelineResult;
+  }
+
+  const parsed = parseManualJson(value);
+
+  if (parsed !== null) {
+    try {
+      if (nodeId === "scene-prompt") {
+        return normalizeScenePromptTimelineResult(parsed);
+      }
+
+      if (nodeId === "character-tags") {
+        return normalizeCharacterTagsTimelineResult(parsed);
+      }
+
+      if (
+        nodeId === "character-action" &&
+        typeof parsed === "object" &&
+        parsed !== null &&
+        "action" in parsed &&
+        "pose" in parsed &&
+        "poseSummary" in parsed
+      ) {
+        return parsed as CharacterActionTimelineResult;
+      }
+
+      if (
+        nodeId === "canvas-binding" &&
+        typeof parsed === "object" &&
+        parsed !== null &&
+        "primaryCharacter" in parsed &&
+        "pose" in parsed &&
+        "spatialSummary" in parsed
+      ) {
+        return parsed as CanvasBindingTimelineResult;
+      }
+    } catch (error) {
+      if (!(error instanceof TimelineNodeExecutionError)) {
+        throw error;
+      }
+    }
   }
 
   return {
@@ -185,13 +316,28 @@ function buildDependencyText(nodeId: TimelineNodeId) {
   return dependencies.map((dependencyId) => timelineNodeContent[dependencyId].title).join(", ");
 }
 
+function hasVisualOutputMode(nodeId: TimelineNodeId) {
+  return visualOutputNodeIds.has(nodeId);
+}
+
+function canRawEditNode(nodeId: TimelineNodeId, workflow: TimelineWorkflowState | null) {
+  return Boolean(workflow) && rawEditableNodeIds.has(nodeId);
+}
+
 export function TimelineShell() {
   const [sceneRequest, setSceneRequest] = useState("");
   const [workflow, setWorkflow] = useState<TimelineWorkflowState | null>(null);
   const [selectedNodeId, setSelectedNodeId] = useState<TimelineNodeId>("scene-input");
   const [editingNodeId, setEditingNodeId] = useState<TimelineNodeId | null>(null);
   const [drafts, setDrafts] = useState<DraftMap>({});
+  const [outputDisplayModes, setOutputDisplayModes] = useState<OutputDisplayModeMap>({});
   const [notices, setNotices] = useState<NoticeMap>({});
+  const [isRunning, setIsRunning] = useState(false);
+  const activeRunIdRef = useRef(0);
+  const [pendingPromptTagReview, setPendingPromptTagReview] =
+    useState<PendingTimelinePromptTagReview | null>(null);
+  const [isSavingPromptTagReview, setIsSavingPromptTagReview] = useState(false);
+  const pendingPromptTagReviewRef = useRef<PendingTimelinePromptTagReview | null>(null);
 
   const previewWorkflow = useMemo(() => createTimelineWorkflowState({ workflowId: "draft-workflow" }), []);
   const activeWorkflow = workflow ?? previewWorkflow;
@@ -200,25 +346,273 @@ export function TimelineShell() {
   const selectedDisplay = stepDisplay[selectedNodeId];
   const SelectedIcon = selectedDisplay.icon;
   const selectedOutput = getTimelineNodeOutputText(selectedNode);
+  const selectedHasVisualOutput = hasVisualOutputMode(selectedNodeId);
+  const selectedIsVisualOnlyEditable = selectedNodeId === "canvas-binding";
+  const selectedOutputDisplayMode: OutputDisplayMode = selectedHasVisualOutput
+    ? selectedIsVisualOnlyEditable
+      ? "visual"
+      : outputDisplayModes[selectedNodeId] ?? "visual"
+    : "json";
+  const selectedRawEditable = canRawEditNode(selectedNodeId, workflow);
+  const selectedIsNonEditableAiNode = nonEditableAiNodeIds.has(selectedNodeId);
   const sceneRequestIsUsable = sceneRequest.trim().length > 0;
   const selectedNodeAiDisabled =
-    selectedContent.reserved || selectedNode.status === "blocked" || selectedNode.status === "running";
+    isRunning ||
+    selectedContent.reserved ||
+    selectedNode.status === "blocked" ||
+    selectedNode.status === "running";
   const workflowTitle = workflow ? sceneRequest : "Untitled workflow";
   const workflowMode = workflow ? "Run shell" : "Draft setup";
+
+  function clearPendingPromptTagReview() {
+    pendingPromptTagReviewRef.current = null;
+    setPendingPromptTagReview(null);
+    setIsSavingPromptTagReview(false);
+  }
+
+  function cancelPendingPromptTagReview(message: string) {
+    const pending = pendingPromptTagReviewRef.current;
+    if (!pending) {
+      return;
+    }
+
+    pending.reject(new Error(message));
+    clearPendingPromptTagReview();
+  }
+
+  useEffect(() => {
+    return () => {
+      activeRunIdRef.current += 1;
+      const pending = pendingPromptTagReviewRef.current;
+      if (pending) {
+        pending.reject(new Error("Timeline run was superseded."));
+        pendingPromptTagReviewRef.current = null;
+      }
+    };
+  }, []);
+
+  function isCurrentRun(runId: number) {
+    return activeRunIdRef.current === runId;
+  }
+
+  function invalidateTimelineRun() {
+    activeRunIdRef.current += 1;
+    cancelPendingPromptTagReview("Timeline run was superseded.");
+  }
+
+  function getCurrentPromptLibraryTags() {
+    return getAvailablePromptLibraryTags(useEditorStore.getState().project.settings);
+  }
+
+  function requestTimelinePromptTagReview(
+    input: TimelineCanvasBindingInput,
+    review: PendingPromptTagImportReview,
+  ) {
+    const existingPending = pendingPromptTagReviewRef.current;
+    if (existingPending) {
+      existingPending.reject(new Error("Timeline prompt tag review was superseded."));
+    }
+
+    return new Promise<NewPromptTagApplyMode>((resolve, reject) => {
+      const pending = {
+        input,
+        reject,
+        resolve,
+        review,
+      };
+
+      pendingPromptTagReviewRef.current = pending;
+      setPendingPromptTagReview(pending);
+      setIsSavingPromptTagReview(false);
+      setSelectedNodeId("canvas-binding");
+      setOutputDisplayModes((current) => ({
+        ...current,
+        "canvas-binding": "visual",
+      }));
+      setNotices((current) => ({
+        ...current,
+        "canvas-binding": `Review ${review.newSuggestions.length} new prompt tags before applying layout planning.`,
+      }));
+    });
+  }
+
+  async function bindCanvasWithPromptLibraryReview(
+    input: TimelineCanvasBindingInput,
+    runId: number,
+  ) {
+    const suggestions = createTimelinePromptTagSuggestions(input.characterTags);
+    const review = splitPromptTagSuggestionsByLibrary(suggestions, getCurrentPromptLibraryTags());
+
+    if (review.newSuggestions.length === 0) {
+      return bindPrimaryTimelineCharacterToEditorStore(input, {
+        characterTags: getTimelineCharacterTagsToBind(review, "skip"),
+      });
+    }
+
+    try {
+      const newTagMode = await requestTimelinePromptTagReview(input, review);
+
+      if (!isCurrentRun(runId)) {
+        throw new Error("Timeline run was superseded.");
+      }
+
+      if (newTagMode === "import") {
+        useEditorStore
+          .getState()
+          .importPromptLibraryTags(review.newSuggestions.map((suggestion) => suggestion.tag));
+        const nextProject = useEditorStore.getState().project;
+        await savePromptLibrary({
+          promptLibraryTags: nextProject.settings.promptLibraryTags ?? [],
+          deletedBuiltInPromptLibraryTagIds:
+            nextProject.settings.deletedBuiltInPromptLibraryTagIds ?? [],
+        });
+
+        const importedReview = splitPromptTagSuggestionsByLibrary(
+          suggestions,
+          getCurrentPromptLibraryTags(),
+        );
+
+        return bindPrimaryTimelineCharacterToEditorStore(input, {
+          characterTags: getTimelineCharacterTagsToBind(importedReview, "temporary"),
+        });
+      }
+
+      return bindPrimaryTimelineCharacterToEditorStore(input, {
+        characterTags: getTimelineCharacterTagsToBind(review, newTagMode),
+      });
+    } finally {
+      clearPendingPromptTagReview();
+    }
+  }
+
+  function handleApplyPromptTagReview(mode: NewPromptTagApplyMode) {
+    const pending = pendingPromptTagReviewRef.current;
+    if (!pending) {
+      return;
+    }
+
+    setIsSavingPromptTagReview(true);
+    pending.resolve(mode);
+  }
+
+  function handleCancelPromptTagReview() {
+    const message =
+      "Layout planning prompt tag review was canceled. Rerun layout planning to try again.";
+
+    setNotices((current) => ({
+      ...current,
+      "canvas-binding": message,
+    }));
+    cancelPendingPromptTagReview(message);
+  }
+
+  function getTimelinePromptTagTargetLabel(target: CharacterPromptTagTarget) {
+    if (target.kind === "character") {
+      return pendingPromptTagReview?.input.primaryCharacter.name ?? "人物";
+    }
+
+    if (target.kind === "bodyPart") {
+      return target.bodyPartId;
+    }
+
+    return "场景";
+  }
+
+  async function runTimelineGraph(nextWorkflow: TimelineWorkflowState) {
+    const runId = activeRunIdRef.current + 1;
+    activeRunIdRef.current = runId;
+
+    setIsRunning(true);
+    setNotices({});
+
+    try {
+      const result = await executeTimelineGraph(
+        nextWorkflow,
+        createTimelineT5NodeAdapters({
+          completeChat: async (request) => {
+            if (!isCurrentRun(runId)) {
+              throw new Error("Timeline run was superseded.");
+            }
+
+            const response = await completeTimelineChatViaApi(request);
+
+            if (!isCurrentRun(runId)) {
+              throw new Error("Timeline run was superseded.");
+            }
+
+            return response;
+          },
+          bindCanvas: async (input) => {
+            if (!isCurrentRun(runId)) {
+              throw new Error("Timeline run was superseded.");
+            }
+
+            return bindCanvasWithPromptLibraryReview(input, runId);
+          },
+          getCurrentPose: getPrimaryTimelineCharacterPoseFromEditorStore,
+        }),
+      );
+
+      if (!isCurrentRun(runId)) {
+        return;
+      }
+
+      const canvasBindingError = result.nodes["canvas-binding"].error;
+      if (canvasBindingError) {
+        setNotices((current) => ({
+          ...current,
+          "canvas-binding": canvasBindingError.message,
+        }));
+        if (canvasBindingError.message.includes("prompt tag review")) {
+          setSelectedNodeId("canvas-binding");
+        }
+      } else {
+        setNotices((current) => {
+          if (!current["canvas-binding"]) {
+            return current;
+          }
+
+          const next = { ...current };
+          delete next["canvas-binding"];
+          return next;
+        });
+      }
+
+      setWorkflow(result);
+    } catch (error) {
+      if (!isCurrentRun(runId)) {
+        return;
+      }
+
+      console.error("[SceneForge] [timeline] graph execution failed", { error });
+      setNotices((current) => ({
+        ...current,
+        [selectedNodeId]: error instanceof Error ? error.message : "Timeline graph execution failed.",
+      }));
+    } finally {
+      if (isCurrentRun(runId)) {
+        setIsRunning(false);
+      }
+    }
+  }
 
   function startWorkflow() {
     const trimmedSceneRequest = sceneRequest.trim();
 
-    if (!trimmedSceneRequest) {
+    if (!trimmedSceneRequest || isRunning) {
       return;
     }
 
-    setWorkflow(createTimelineWorkflowState({ sceneRequest: trimmedSceneRequest }));
+    const nextWorkflow = createTimelineWorkflowState({ sceneRequest: trimmedSceneRequest });
+
+    setWorkflow(nextWorkflow);
     setSceneRequest(trimmedSceneRequest);
     setSelectedNodeId("scene-input");
     setEditingNodeId(null);
     setDrafts({});
+    setOutputDisplayModes({});
     setNotices({});
+    void runTimelineGraph(nextWorkflow);
   }
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -227,11 +621,15 @@ export function TimelineShell() {
   }
 
   function handleStartEdit(nodeId: TimelineNodeId) {
-    if (!workflow) {
+    if (!workflow || !canRawEditNode(nodeId, workflow)) {
       return;
     }
 
     setSelectedNodeId(nodeId);
+    setOutputDisplayModes((current) => ({
+      ...current,
+      [nodeId]: "json",
+    }));
     setEditingNodeId(nodeId);
     setDrafts((current) => ({
       ...current,
@@ -258,7 +656,7 @@ export function TimelineShell() {
   }
 
   function handleSaveEdit(nodeId: TimelineNodeId) {
-    if (!workflow) {
+    if (!workflow || !canRawEditNode(nodeId, workflow)) {
       return;
     }
 
@@ -268,6 +666,8 @@ export function TimelineShell() {
       return;
     }
 
+    invalidateTimelineRun();
+    setIsRunning(false);
     setWorkflow(setTimelineNodeManualResult(workflow, nodeId, createManualResult(nodeId, draft)));
     setEditingNodeId(null);
     setDrafts((current) => ({
@@ -280,21 +680,57 @@ export function TimelineShell() {
     }
   }
 
+  function handleSaveScenePromptVisual(result: ScenePromptTimelineResult) {
+    if (!workflow) {
+      return;
+    }
+
+    invalidateTimelineRun();
+    setIsRunning(false);
+    const nextWorkflow = setTimelineNodeManualResult(workflow, "scene-prompt", result);
+    const nextDraft = JSON.stringify(result, null, 2);
+
+    setWorkflow(nextWorkflow);
+    setDrafts((current) => ({
+      ...current,
+      "scene-prompt": nextDraft,
+    }));
+    setOutputDisplayModes((current) => ({
+      ...current,
+      "scene-prompt": "visual",
+    }));
+    setEditingNodeId(null);
+  }
+
   function handleRequestAi(nodeId: TimelineNodeId) {
     setSelectedNodeId(nodeId);
-    setNotices((current) => ({
-      ...current,
-      [nodeId]: "AI suggestion is reserved for a later timeline node.",
-    }));
+
+    if (!workflow) {
+      startWorkflow();
+      return;
+    }
+
+    if (timelineNodeContent[nodeId].reserved) {
+      setNotices((current) => ({
+        ...current,
+        [nodeId]: "This node is reserved for a later timeline slice.",
+      }));
+      return;
+    }
+
+    void runTimelineGraph(workflow);
   }
 
   function handleNewScene() {
+    invalidateTimelineRun();
     setWorkflow(null);
     setSceneRequest("");
     setSelectedNodeId("scene-input");
     setEditingNodeId(null);
     setDrafts({});
+    setOutputDisplayModes({});
     setNotices({});
+    setIsRunning(false);
   }
 
   function selectNode(nodeId: TimelineNodeId) {
@@ -330,7 +766,7 @@ export function TimelineShell() {
           </Button>
           <Button
             className="h-9 px-3 text-xs shadow-none"
-            disabled={workflow ? selectedNodeAiDisabled : !sceneRequestIsUsable}
+            disabled={workflow ? selectedNodeAiDisabled : !sceneRequestIsUsable || isRunning}
             onClick={workflow ? () => handleRequestAi(selectedNodeId) : startWorkflow}
             type="button"
           >
@@ -344,8 +780,8 @@ export function TimelineShell() {
         </div>
       </header>
 
-      <div className="sf-agent-workbench">
-        <aside className="sf-agent-workbench__nav custom-scrollbar touch-scroll-region overflow-y-auto bg-white p-3">
+      <div className="sf-agent-workbench flex min-h-0 flex-1 flex-col overflow-hidden lg:flex-row">
+        <aside className="sf-agent-workbench__nav custom-scrollbar touch-scroll-region order-2 min-h-0 overflow-y-auto border-b border-slate-200 bg-white p-3 lg:order-1 lg:w-72 lg:flex-[0_0_18rem] lg:border-b-0 lg:border-r">
           <div className="mb-3 flex items-center justify-between px-1">
             <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Workflow</h2>
             <span className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] text-slate-500">
@@ -361,6 +797,7 @@ export function TimelineShell() {
               const display = stepDisplay[nodeId];
               const StepIcon = display.icon;
               const selected = selectedNodeId === nodeId;
+              const isParallelNode = parallelNodeIds.has(nodeId);
 
               return (
                 <button
@@ -394,6 +831,12 @@ export function TimelineShell() {
                         {getCompactStatusLabel(node.status)}
                       </span>
                     </span>
+                    {isParallelNode ? (
+                      <span className="mt-1 inline-flex items-center gap-1 rounded-full border border-blue-100 bg-blue-50 px-1.5 py-0.5 text-[10px] font-medium uppercase text-blue-700">
+                        <GitBranch className="size-3" />
+                        Parallel
+                      </span>
+                    ) : null}
                   </span>
                 </button>
               );
@@ -401,9 +844,9 @@ export function TimelineShell() {
           </div>
         </aside>
 
-        <section className="sf-agent-workbench__main custom-scrollbar touch-scroll-region overflow-y-auto bg-slate-100 p-4">
-          <div className="mx-auto flex w-full max-w-4xl flex-col gap-4">
-            <article className="overflow-hidden rounded-md border border-slate-200 bg-white shadow-sm">
+        <section className="sf-agent-workbench__main custom-scrollbar touch-scroll-region order-1 min-h-0 flex-1 overflow-y-auto bg-slate-100 p-4 lg:order-2 lg:min-w-0">
+          <div className="mx-auto flex w-full max-w-7xl flex-col gap-4">
+            <article className="flex min-h-[50rem] flex-col overflow-hidden rounded-md border border-slate-200 bg-white shadow-sm">
               <header className="flex flex-col gap-3 border-b border-slate-100 px-4 py-3 sm:flex-row sm:items-start sm:justify-between">
                 <div className="flex min-w-0 items-start gap-3">
                   <div className="flex size-9 shrink-0 items-center justify-center rounded-md border border-blue-100 bg-blue-50 text-blue-700">
@@ -415,6 +858,16 @@ export function TimelineShell() {
                       {selectedContent.reserved ? (
                         <span className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] font-semibold uppercase text-slate-500">
                           Reserved
+                        </span>
+                      ) : null}
+                      {selectedIsNonEditableAiNode ? (
+                        <span className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] font-semibold uppercase text-slate-500">
+                          Non-editable
+                        </span>
+                      ) : null}
+                      {selectedIsVisualOnlyEditable ? (
+                        <span className="rounded-md border border-indigo-100 bg-indigo-50 px-2 py-1 text-[11px] font-semibold uppercase text-indigo-700">
+                          Visual edits only
                         </span>
                       ) : null}
                     </div>
@@ -437,7 +890,7 @@ export function TimelineShell() {
                 </div>
               </header>
 
-              <div className="flex flex-col gap-4 p-4">
+              <div className="flex min-h-0 flex-1 flex-col gap-4 p-4">
                 {selectedNodeId === "scene-input" ? (
                   <form className="rounded-md border border-slate-200 bg-slate-50" id="scene-composer-form" onSubmit={handleSubmit}>
                     <div className="border-b border-slate-200 px-3 py-2">
@@ -456,7 +909,7 @@ export function TimelineShell() {
                       <div className="flex flex-wrap items-center gap-1.5">
                         <Button
                           className="h-7 px-2 text-[11px] shadow-none"
-                          disabled={!workflow}
+                          disabled={!workflow || isRunning}
                           onClick={() => handleRequestAi("scene-input")}
                           type="button"
                           variant="secondary"
@@ -465,7 +918,7 @@ export function TimelineShell() {
                         </Button>
                         <Button
                           className="h-7 px-2 text-[11px] shadow-none"
-                          disabled={!workflow}
+                          disabled={!workflow || isRunning}
                           onClick={() => handleRequestAi("scene-input")}
                           type="button"
                           variant="secondary"
@@ -477,7 +930,7 @@ export function TimelineShell() {
                           Lock
                         </Button>
                       </div>
-                      <Button className="h-8 px-3 text-xs shadow-none" disabled={!sceneRequestIsUsable} type="submit">
+                      <Button className="h-8 px-3 text-xs shadow-none" disabled={!sceneRequestIsUsable || isRunning} type="submit">
                         <Play className="size-3.5" />
                         Start workflow
                       </Button>
@@ -523,23 +976,73 @@ export function TimelineShell() {
                   </div>
                 ) : null}
 
-                <div className="rounded-md border border-slate-200 bg-white p-3">
+                <div className="flex min-h-[36rem] flex-1 flex-col rounded-md border border-slate-200 bg-white p-3">
                   <div className="mb-2 flex items-center justify-between gap-3">
                     <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Step output</p>
-                    <div className="flex items-center gap-1.5">
-                      <Button
-                        className="h-7 px-2 text-[11px] shadow-none"
-                        disabled={!workflow || selectedContent.reserved}
-                        onClick={() => handleStartEdit(selectedNodeId)}
-                        type="button"
-                        variant="secondary"
-                      >
-                        <PencilLine className="size-3" />
-                        Edit
-                      </Button>
+                    <div className="flex flex-wrap items-center justify-end gap-1.5">
+                      {selectedHasVisualOutput && !selectedIsVisualOnlyEditable ? (
+                        <div className="inline-flex overflow-hidden rounded-md border border-slate-200 bg-slate-50">
+                          <button
+                            className={cn(
+                              "h-7 px-2 text-[11px] font-medium transition-colors",
+                              selectedOutputDisplayMode === "visual"
+                                ? "bg-white text-slate-900 shadow-sm"
+                                : "text-slate-500 hover:bg-white",
+                            )}
+                            onClick={() =>
+                              setOutputDisplayModes((current) => ({
+                                ...current,
+                                [selectedNodeId]: "visual",
+                              }))
+                            }
+                            type="button"
+                          >
+                            Visual
+                          </button>
+                          <button
+                            className={cn(
+                              "h-7 border-l border-slate-200 px-2 text-[11px] font-medium transition-colors",
+                              selectedOutputDisplayMode === "json"
+                                ? "bg-white text-slate-900 shadow-sm"
+                                : "text-slate-500 hover:bg-white",
+                            )}
+                            onClick={() =>
+                              setOutputDisplayModes((current) => ({
+                                ...current,
+                                [selectedNodeId]: "json",
+                              }))
+                            }
+                            type="button"
+                          >
+                            Raw JSON
+                          </button>
+                        </div>
+                      ) : (
+                        <span className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] font-medium uppercase text-slate-500">
+                          {selectedIsVisualOnlyEditable ? "Visual only" : "Raw JSON only"}
+                        </span>
+                      )}
+                      {selectedOutputDisplayMode === "json" && selectedRawEditable ? (
+                        <Button
+                          className="h-7 px-2 text-[11px] shadow-none"
+                          disabled={!selectedRawEditable}
+                          onClick={() => handleStartEdit(selectedNodeId)}
+                          type="button"
+                          variant="secondary"
+                        >
+                          <PencilLine className="size-3" />
+                          Edit
+                        </Button>
+                      ) : null}
+                      {selectedIsNonEditableAiNode ? (
+                        <span className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] font-medium uppercase text-slate-500">
+                          Inspect only
+                        </span>
+                      ) : null}
                     </div>
                   </div>
 
+                  <div className="min-h-0 flex-1">
                   {editingNodeId === selectedNodeId ? (
                     <div className="flex flex-col gap-2">
                       <textarea
@@ -566,6 +1069,18 @@ export function TimelineShell() {
                         </Button>
                       </div>
                     </div>
+                  ) : selectedOutputDisplayMode === "visual" && selectedNodeId === "scene-prompt" ? (
+                    <TimelineScenePromptWorkspace
+                      editable={Boolean(workflow)}
+                      emptyState={selectedContent.emptyState}
+                      key={selectedNode.updatedAt}
+                      node={selectedNode}
+                      onSave={handleSaveScenePromptVisual}
+                    />
+                  ) : selectedOutputDisplayMode === "visual" && isTimelineEditorWorkspaceNode(selectedNodeId) ? (
+                    <TimelineEditorWorkspace
+                      workflow={activeWorkflow}
+                    />
                   ) : selectedOutput ? (
                     <pre className="whitespace-pre-wrap rounded-md border border-slate-200 bg-slate-50 p-3 font-mono text-xs leading-relaxed text-slate-700">
                       {selectedOutput}
@@ -575,6 +1090,7 @@ export function TimelineShell() {
                       {selectedContent.emptyState}
                     </div>
                   )}
+                  </div>
                 </div>
               </div>
 
@@ -587,7 +1103,7 @@ export function TimelineShell() {
           </div>
         </section>
 
-        <aside className="sf-agent-workbench__inspector custom-scrollbar touch-scroll-region overflow-y-auto bg-white p-3">
+        <aside className="sf-agent-workbench__inspector custom-scrollbar touch-scroll-region order-3 min-h-0 overflow-y-auto border-t border-slate-200 bg-white p-3 lg:order-3 lg:w-80 lg:flex-[0_0_20rem] lg:border-l lg:border-t-0">
           <div className="flex flex-col gap-3">
             <section className="rounded-md border border-slate-200 bg-white">
               <header className="border-b border-slate-100 px-3 py-2">
@@ -617,14 +1133,18 @@ export function TimelineShell() {
                   </p>
                 </div>
                 <div className="flex gap-2">
-                  <span className={cn("mt-1 size-2 shrink-0 rounded-full", selectedNode.status === "ready" ? "bg-blue-500" : "bg-slate-300")} />
+                  <span className={cn("mt-1 size-2 shrink-0 rounded-full", isRunning ? "bg-indigo-500" : selectedNode.status === "ready" ? "bg-blue-500" : "bg-slate-300")} />
                   <p className="leading-relaxed text-slate-600">
-                    {selectedContent.title} is {getCompactStatusLabel(selectedNode.status).toLowerCase()}.
+                    {isRunning
+                      ? "LangGraph is running T5 inference through the existing LLM chat boundary."
+                      : `${selectedContent.title} is ${getCompactStatusLabel(selectedNode.status).toLowerCase()}.`}
                   </p>
                 </div>
                 <div className="flex gap-2">
                   <span className="mt-1 size-2 shrink-0 rounded-full bg-slate-300" />
-                  <p className="leading-relaxed text-slate-600">Tool calls are reserved for later graph adapters.</p>
+                  <p className="leading-relaxed text-slate-600">
+                    Civitai, ComfyUI, image storage, and render execution remain blocked.
+                  </p>
                 </div>
               </div>
             </section>
@@ -634,7 +1154,9 @@ export function TimelineShell() {
                 <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Tool calls</h2>
               </header>
               <div className="p-3 text-xs leading-relaxed text-slate-500">
-                No external tools have been called by this shell.
+                {workflow
+                  ? "T5 inference uses /api/llm/chat only. Resource and render services are not called."
+                  : "No external tools have been called by this shell."}
               </div>
             </section>
 
@@ -651,6 +1173,17 @@ export function TimelineShell() {
           </div>
         </aside>
       </div>
+
+      {pendingPromptTagReview ? (
+        <PromptTagImportReviewDialog
+          getSuggestionTargetLabel={getTimelinePromptTagTargetLabel}
+          isSaving={isSavingPromptTagReview}
+          onApply={handleApplyPromptTagReview}
+          onCancel={handleCancelPromptTagReview}
+          review={pendingPromptTagReview.review}
+          title="导入新的部位提示词"
+        />
+      ) : null}
     </main>
   );
 }

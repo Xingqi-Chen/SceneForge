@@ -1,3 +1,10 @@
+import type {
+  BodyPartId,
+  PromptTag,
+  SceneObject3DTransform,
+} from "@/shared/types";
+import type { StickFigurePoseV1 } from "@/shared/types/stick-figure-pose";
+
 export const timelineNodeStatuses = [
   "blocked",
   "ready",
@@ -39,6 +46,8 @@ export const executableTimelineNodeIds = [
 export type TimelineExecutableNodeId = (typeof executableTimelineNodeIds)[number];
 
 export const reservedTimelineNodeIds = [
+  "resource-recommendation",
+  "parameter-recommendation",
   "comfyui-execution",
   "result-display",
 ] as const satisfies readonly TimelineNodeId[];
@@ -96,6 +105,63 @@ export type TimelineWorkflowState = {
 export type SceneInputTimelineResult = {
   rawIntent: string;
   settingsSnapshot?: unknown;
+};
+
+export type TimelinePromptFragment = {
+  label: string;
+  prompt: string;
+};
+
+export type ScenePromptTimelineResult = {
+  primaryCharacter: {
+    name: string;
+    identity: string;
+    publicFacts: string[];
+  };
+  sceneIntent: string;
+  styleTone: string;
+  setting: string;
+  sharedFacts: string[];
+  positivePrompt: string;
+  negativeSuggestions: string[];
+  style: TimelinePromptFragment[];
+  camera: TimelinePromptFragment[];
+  lighting: TimelinePromptFragment[];
+};
+
+type CharacterPromptTagBase = Omit<PromptTag, "id">;
+
+export type CharacterPromptTag =
+  | (CharacterPromptTagBase & {
+      targetKind: "character";
+      bodyPartId?: never;
+    })
+  | (CharacterPromptTagBase & {
+      targetKind: "bodyPart";
+      bodyPartId: BodyPartId;
+    });
+
+export type CharacterTagsTimelineResult = {
+  items: CharacterPromptTag[];
+};
+
+export type CharacterActionTimelineResult = {
+  action: string;
+  pose: StickFigurePoseV1;
+  poseSummary: string;
+};
+
+export type CanvasBindingTimelineResult = {
+  primaryCharacter: {
+    id: string;
+    name: string;
+    description: string;
+  };
+  characterTags: CharacterPromptTag[];
+  action: string;
+  transform: SceneObject3DTransform;
+  pose: StickFigurePoseV1;
+  spatialSummary: string;
 };
 
 export type GenerationGateTimelineResult = {

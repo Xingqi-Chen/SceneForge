@@ -4,6 +4,144 @@ This log records dated implementation and documentation work. Keep entries conci
 
 ## 2026-05-29
 
+### Issue #11 Node 5 Layout Planning UI Follow-up
+
+Summary:
+
+- Locked the Node 5 layout-planning workspace to the 3D editor canvas and hid the embedded 2D/3D canvas mode switch there.
+- Restored prompt-library tag selection in Node 5 as a compact right-side/bottom overlay drawer using the existing prompt-library data and editor store binding flow.
+- Made the selected-step workspace width and Step output minimum height stable across timeline nodes.
+- Kept Node 5 visual-only in the selected workspace while leaving the normal editor canvas mode switch enabled by default.
+
+Files changed:
+
+- `src/features/editor/components/CanvasViewport.tsx`
+- `src/features/editor/components/CanvasViewport.test.tsx`
+- `src/features/agent-timeline/components/TimelineEditorWorkspace.tsx`
+- `src/features/agent-timeline/components/TimelinePromptLibraryDrawer.tsx`
+- `src/features/agent-timeline/components/TimelinePromptLibraryDrawer.test.tsx`
+- `src/features/agent-timeline/components/TimelineShell.tsx`
+- `src/features/agent-timeline/components/TimelineShell.test.tsx`
+- `docs/dev-log.md`
+
+Validation:
+
+- `npm test -- src/features/editor/components/CanvasViewport.test.tsx src/features/agent-timeline/components/TimelineShell.test.tsx src/features/agent-timeline/components/TimelinePromptLibraryDrawer.test.tsx` passed: 3 files, 13 tests.
+- `npm run typecheck` passed.
+- `npm test` passed: 76 files, 498 tests.
+- `npm run lint` passed with the existing 22 `<img>` warnings in editor image-heavy panels.
+
+### Issue #11 Node 5 Canvas Binding Review
+
+Summary:
+
+- Removed the prompt tag picker from the Node 5 visual output so layout planning shows the existing 3D canvas only.
+- Expanded the Node 5 visual workspace width and canvas height while keeping the three-column workbench shell intact.
+- Extracted the reverse prompt-tag missing-library review dialog and semantic matching helpers for reuse by the original character image prompt-tag panel and timeline Node 5.
+- Added Node 5 prompt-library review handling for skip, transient bind, and import-and-bind choices before committing timeline prompt tags to the editor store.
+
+Files changed:
+
+- `src/features/editor/components/PromptTagImportReviewDialog.tsx`
+- `src/features/editor/components/CharacterImagePromptTagPanel.tsx`
+- `src/features/agent-timeline/components/TimelineEditorWorkspace.tsx`
+- `src/features/agent-timeline/components/TimelineShell.tsx`
+- `src/features/agent-timeline/components/TimelineShell.test.tsx`
+- `src/features/agent-timeline/editor-canvas-binding.ts`
+- `src/features/agent-timeline/editor-canvas-binding.test.ts`
+- `docs/dev-log.md`
+
+Validation:
+
+- `npm test -- src/features/agent-timeline` passed.
+- `npm run typecheck` passed.
+- `npm run lint` passed with pre-existing `no-img-element` warnings in editor image-heavy panels.
+
+### T5 Timeline Prompt Tag Metadata Fix
+
+Summary:
+
+- Preserved parsed prompt-tag metadata across Node 3 character tag output and Node 5 editor binding.
+- Kept weighted tokens such as `reflective yellow jacket:1.25` as enabled editor prompt-tag weights after binding.
+- Made explicit negative metadata preservation for allowed character/body-part tag categories.
+
+Files changed:
+
+- `src/features/agent-timeline/`
+- `src/features/prompt-engine/prompt-library/character-image-prompt-tags.test.ts`
+- `docs/dev-log.md`
+
+Validation:
+
+- `npm test -- src/features/agent-timeline` passed: 6 files, 27 tests.
+- `npm test -- src/features/prompt-engine/prompt-library/character-image-prompt-tags.test.ts` passed: 1 file, 9 tests.
+- `npm run typecheck` passed.
+
+### T5 Timeline Tag and Pose Reuse Follow-up
+
+Summary:
+
+- Changed Node 3 character tags to reuse the existing editor text reverse prompt-tag message builder and parser.
+- Restored the Node 3 raw result shape to `{ items: [...] }` with direct `targetKind` and optional `bodyPartId` fields.
+- Kept Node 4 pose planning on the existing stick-figure text generation helper and isolated its request text to Node 2 scene context.
+- Kept Node 5 deterministic and LLM-free while binding Node 3 character/body-part items plus the Node 4 pose to the 3D editor character.
+
+Files changed:
+
+- `src/features/agent-timeline/`
+- `src/features/prompt-engine/prompt-library/character-image-prompt-tags.ts`
+- `src/features/prompt-engine/prompt-library/character-image-prompt-tags.test.ts`
+- `docs/dev-log.md`
+
+Validation:
+
+- `npm test -- src/features/prompt-engine/prompt-library/character-image-prompt-tags.test.ts` passed: 1 file, 8 tests.
+- `npm test -- src/features/agent-timeline` passed: 6 files, 25 tests.
+- `npm run typecheck` passed.
+- `npm run lint` passed with the existing 22 `<img>` warnings in editor UI components.
+
+### T5 Timeline Inference and Canvas Binding
+
+Summary:
+
+- Restored the timeline workbench to a responsive three-column desktop layout and ordered the narrow layout so the selected node workspace and scene composer appear before the full workflow list.
+- Added T5 LangGraph adapters for scene prompt inference, primary character tag extraction, character action/pose inference, and canvas binding.
+- Reused `/api/llm/chat` from the client for all LLM calls and kept resource recommendation, parameter recommendation, ComfyUI execution, image storage, and result display blocked or reserved.
+- Added structured parsing and normalization for scene prompt fragments, primary character tags, extra people context, stick-figure pose output, and canvas binding results.
+- Bound the inferred primary character to the existing editor store as one editable 3D character/skeleton using existing editor store actions.
+- Added run invalidation so superseded or cleared timeline graph runs cannot restore stale workflow output or bind stale canvas/editor state.
+- Updated the T5 DAG so prompt generation feeds character tags and action planning as parallel sibling nodes, then layout planning joins prompt, tags, and action.
+- Expanded prompt generation into the canonical shared scene context producer with a narrow editable visual table and raw JSON inspection/editing fallback.
+- Restricted character tags and action planning to non-editable raw JSON inspection, and kept the existing editor 3D canvas plus prompt tag picker visual workspace on layout planning only.
+
+Files changed:
+
+- `src/features/agent-timeline/`
+- `docs/dev-log.md`
+
+Validation:
+
+- `npm test -- src/features/agent-timeline/components/TimelineShell.test.tsx` passed: 1 file, 4 tests.
+- `npm test -- src/features/agent-timeline` passed: 6 files, 23 tests.
+- `npm run typecheck` passed.
+- `npm run lint` passed with the existing 22 `<img>` warnings in editor UI components.
+- `npm test` passed: 74 files, 482 tests.
+- `npm run build` passed with the existing Turbopack NFT trace warning for `next.config.ts` through ComfyUI sequence reference storage.
+- `git diff --check` passed with line-ending warnings only.
+- Orchestrator evidence for the current pass also includes real Edge headless layout measurement passing on `http://localhost:3001`.
+- PR follow-up validation: `npm test -- src/features/agent-timeline/components/TimelineShell.test.tsx` passed: 1 file, 4 tests.
+- PR follow-up validation: `npm test -- src/features/agent-timeline` passed: 6 files, 23 tests.
+- PR follow-up validation: `npm run typecheck` passed.
+- PR follow-up validation: `npm run lint` passed with the existing 22 `<img>` warnings in editor UI components.
+- PR follow-up validation: `npm run build` passed with the existing Turbopack NFT trace warning.
+- Earlier PR follow-up browser fallback validation on `http://localhost:3000` confirmed the desktop workbench layout; the product clarification pass below was validated with focused automated timeline coverage.
+- Product clarification implementation validation: `npm test -- src/features/agent-timeline` passed: 6 files, 25 tests.
+- Product clarification implementation validation: `npm run typecheck` passed.
+- Product clarification implementation validation: `npm run lint` passed with the existing 22 `<img>` warnings in editor UI components.
+- Product clarification implementation validation: `npm test` passed: 74 files, 484 tests.
+- Product clarification implementation validation: `npm run build` passed with the existing Turbopack NFT trace warning.
+- Product clarification browser validation on `http://localhost:3000` passed in headless Edge: desktop workbench measured as three columns, node 2 rendered the visual scene-context table, nodes 3 and 4 rendered non-editable raw JSON only, node 5 rendered the reused editor canvas and prompt tag binding workspace, node 5 preserved node 2's primary character identity despite conflicting node 3 output, and node 4's LLM request did not include node 3 tag-only output.
+
 ### T4 Initial Timeline Shell
 
 Summary:

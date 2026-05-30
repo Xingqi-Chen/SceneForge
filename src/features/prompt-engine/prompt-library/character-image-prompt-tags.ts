@@ -13,7 +13,7 @@ export type CharacterPromptTagTarget =
   | { kind: "character" }
   | { kind: "bodyPart"; bodyPartId: BodyPartId };
 
-type CharacterImagePromptTagItem = {
+export type CharacterImagePromptTagItem = {
   target: CharacterPromptTagTarget;
   bodyPartId?: BodyPartId;
   tag: Omit<PromptTag, "id">;

@@ -72,10 +72,16 @@ function shortcutKey(event: KeyboardEvent<HTMLElement>) {
 }
 
 type CanvasViewportProps = {
+  lockedSceneMode?: "2d" | "3d";
   onCanvasCaptureReady?: (capture: CanvasCapture | null) => void;
+  showSceneModeSwitcher?: boolean;
 };
 
-export function CanvasViewport({ onCanvasCaptureReady }: CanvasViewportProps) {
+export function CanvasViewport({
+  lockedSceneMode,
+  onCanvasCaptureReady,
+  showSceneModeSwitcher = true,
+}: CanvasViewportProps) {
   const viewportRef = useRef<HTMLElement>(null);
   const copiedSelectionRef = useRef<EditorSelection | null>(null);
   const isTabletEditor = useTabletEditorLayout();
@@ -98,8 +104,15 @@ export function CanvasViewport({ onCanvasCaptureReady }: CanvasViewportProps) {
   const [spacePressed, setSpacePressed] = useState(false);
   const [multiSelectMode, setMultiSelectMode] = useState(false);
   const canDuplicateOrDelete = isCopyableSelection(selection);
-  const is3DMode = project.scene.mode === "3d";
+  const activeSceneMode = lockedSceneMode ?? project.scene.mode;
+  const is3DMode = activeSceneMode === "3d";
   const canAdjustLayer = selection.kind === "object" && !is3DMode;
+
+  useEffect(() => {
+    if (lockedSceneMode && project.scene.mode !== lockedSceneMode) {
+      setSceneMode(lockedSceneMode);
+    }
+  }, [lockedSceneMode, project.scene.mode, setSceneMode]);
 
   /* eslint-disable react-hooks/set-state-in-effect -- leaving 2D clears tablet-only multi-select mode */
   useEffect(() => {
@@ -155,11 +168,11 @@ export function CanvasViewport({ onCanvasCaptureReady }: CanvasViewportProps) {
       event.preventDefault();
       const { scene } = project;
       const objectIds =
-        scene.mode === "2d"
+        activeSceneMode === "2d"
           ? sceneObjectsVisibleOn2DCanvas(scene.objects).map((object) => object.id)
           : scene.objects.filter(isThreeDViewportPrimitive).map((object) => object.id);
       const characterIds =
-        scene.mode === "2d"
+        activeSceneMode === "2d"
           ? scene.characters.filter(characterAppearsOn2dCanvas).map((c) => c.id)
           : scene.characters.filter(characterAppearsInThreeViewport).map((c) => c.id);
       selectMultiple(objectIds, characterIds);
@@ -288,26 +301,28 @@ export function CanvasViewport({ onCanvasCaptureReady }: CanvasViewportProps) {
           </div>
         </div>
         <div className={`flex min-w-0 items-center gap-2 ${isTabletEditor ? "flex-1 justify-end overflow-x-auto" : "gap-3"}`}>
-          <div className={`${isTabletEditor ? "h-11" : ""} flex items-center rounded-lg border border-slate-200 bg-white p-0.5 shadow-sm`}>
-            <button
-              onClick={() => {
-                setSpacePressed(false);
-                setSceneMode("2d");
-              }}
-              className={`flex ${isTabletEditor ? "h-11 px-4 text-sm" : "h-7 px-3 text-xs"} items-center justify-center rounded-md font-medium transition-colors ${!is3DMode ? "bg-slate-900 text-white shadow-sm" : "text-slate-600 hover:text-slate-900 hover:bg-slate-100"}`}
-            >
-              2D
-            </button>
-            <button
-              onClick={() => {
-                setSpacePressed(false);
-                setSceneMode("3d");
-              }}
-              className={`flex ${isTabletEditor ? "h-11 px-4 text-sm" : "h-7 px-3 text-xs"} items-center justify-center rounded-md font-medium transition-colors ${is3DMode ? "bg-slate-900 text-white shadow-sm" : "text-slate-600 hover:text-slate-900 hover:bg-slate-100"}`}
-            >
-              3D
-            </button>
-          </div>
+          {showSceneModeSwitcher && !lockedSceneMode ? (
+            <div className={`${isTabletEditor ? "h-11" : ""} flex items-center rounded-lg border border-slate-200 bg-white p-0.5 shadow-sm`}>
+              <button
+                onClick={() => {
+                  setSpacePressed(false);
+                  setSceneMode("2d");
+                }}
+                className={`flex ${isTabletEditor ? "h-11 px-4 text-sm" : "h-7 px-3 text-xs"} items-center justify-center rounded-md font-medium transition-colors ${!is3DMode ? "bg-slate-900 text-white shadow-sm" : "text-slate-600 hover:text-slate-900 hover:bg-slate-100"}`}
+              >
+                2D
+              </button>
+              <button
+                onClick={() => {
+                  setSpacePressed(false);
+                  setSceneMode("3d");
+                }}
+                className={`flex ${isTabletEditor ? "h-11 px-4 text-sm" : "h-7 px-3 text-xs"} items-center justify-center rounded-md font-medium transition-colors ${is3DMode ? "bg-slate-900 text-white shadow-sm" : "text-slate-600 hover:text-slate-900 hover:bg-slate-100"}`}
+              >
+                3D
+              </button>
+            </div>
+          ) : null}
           <div className={`${isTabletEditor ? "h-11" : "h-8"} flex shrink-0 items-center gap-3 rounded-md border border-slate-200 bg-white px-3 text-xs font-medium shadow-sm`}>
             <div className="flex shrink-0 items-center gap-1.5 text-slate-600">
               <span className="inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-slate-400" />
