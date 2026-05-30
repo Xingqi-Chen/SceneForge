@@ -1,7 +1,7 @@
 "use client";
 
-import { Check, Eye, EyeOff, Loader2, Palette, Plus, Search, Sparkles } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { Check, Eye, EyeOff, Loader2, Palette, Plus, Search, Sparkles, X } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import type {
@@ -24,8 +24,11 @@ import {
 import {
   STYLE_PALETTE_PROMPT_PRESETS,
   buildStylePaletteAdviceMessages,
+  buildStylePaletteActivePrompt,
   buildStylePalettePositivePrompt,
+  buildStylePaletteSubjectDanbooruMessages,
   getStylePalettePromptPreset,
+  normalizeStylePaletteSubjectPrompt,
 } from "@/features/editor/ai-prompt/style-palette-prompts";
 import { useEditorStore } from "@/features/editor/store/editor-store";
 import { getLlmProxyErrorMessage, isLlmChatResponse } from "@/features/llm";
@@ -300,13 +303,19 @@ function CivitaiPickerResourceCard({
   );
 }
 
-function ResourceCard({ resource }: { resource: SelectedCivitaiResourcePreview }) {
+function ResourceCard({
+  onRemove,
+  resource,
+}: {
+  onRemove: () => void;
+  resource: SelectedCivitaiResourcePreview;
+}) {
   const previewImage = resource.previewImage
     ? (getCivitaiImageVariantUrl(resource.previewImage, 256) ?? resource.previewImage)
     : null;
 
   return (
-    <div className="grid gap-3 rounded-md border border-slate-200 bg-white p-3 sm:grid-cols-[64px_1fr]">
+    <div className="grid gap-3 rounded-md border border-slate-200 bg-white p-3 sm:grid-cols-[64px_minmax(0,1fr)_auto]">
       <div className="flex h-16 w-16 overflow-hidden rounded-md bg-slate-100">
         {previewImage ? (
           // eslint-disable-next-line @next/next/no-img-element
@@ -342,21 +351,35 @@ function ResourceCard({ resource }: { resource: SelectedCivitaiResourcePreview }
           </div>
         ) : null}
       </div>
+      <Button
+        aria-label={`Remove ${resource.resourceType === "model" ? "checkpoint" : "LoRA"} ${resource.name}`}
+        className="h-8 justify-self-end rounded-md border border-rose-100 bg-white px-2 text-[11px] text-rose-700 hover:bg-rose-50"
+        onClick={onRemove}
+        size="sm"
+        title="Remove selected resource"
+        type="button"
+        variant="secondary"
+      >
+        <X className="size-3.5" />
+        Remove
+      </Button>
     </div>
   );
 }
 
 function ArtistStringCard({
   item,
+  onRemove,
   prompt,
 }: {
   item: ArtistStringItemRecord;
+  onRemove: () => void;
   prompt: string;
 }) {
   const previewImage = item.referenceImages.find((image) => image.localUrl)?.localUrl ?? null;
 
   return (
-    <div className="grid gap-3 rounded-md border border-fuchsia-100 bg-white p-3 sm:grid-cols-[64px_1fr]">
+    <div className="grid gap-3 rounded-md border border-fuchsia-100 bg-white p-3 sm:grid-cols-[64px_minmax(0,1fr)_auto]">
       <div className="flex h-16 w-16 overflow-hidden rounded-md bg-slate-100">
         {previewImage ? (
           // eslint-disable-next-line @next/next/no-img-element
@@ -373,6 +396,18 @@ function ArtistStringCard({
           {compact(prompt, 150)}
         </p>
       </div>
+      <Button
+        aria-label={`Remove artist string NAI ${formatSequence(item.sourceSequence)}`}
+        className="h-8 justify-self-end rounded-md border border-rose-100 bg-white px-2 text-[11px] text-rose-700 hover:bg-rose-50"
+        onClick={onRemove}
+        size="sm"
+        title="Remove selected artist string"
+        type="button"
+        variant="secondary"
+      >
+        <X className="size-3.5" />
+        Remove
+      </Button>
     </div>
   );
 }
@@ -408,6 +443,11 @@ export function StylePalettePanel() {
   const [civitaiPickerError, setCivitaiPickerError] = useState("");
   const [artistStringsMasked, setArtistStringsMasked] = useState(false);
   const [lorasMasked, setLorasMasked] = useState(false);
+  const [subjectInput, setSubjectInput] = useState("");
+  const [subjectConversionStatus, setSubjectConversionStatus] = useState<LoadStatus>("idle");
+  const [subjectConversionError, setSubjectConversionError] = useState("");
+  const subjectConversionRequestIdRef = useRef(0);
+  const subjectInputRef = useRef("");
   const selectedCheckpointId = project.settings.selectedCivitaiCheckpointId;
   const selectedLoraIds = useMemo(
     () => project.settings.selectedCivitaiLoraIds ?? [],
@@ -445,6 +485,21 @@ export function StylePalettePanel() {
     preset,
     resources: effectiveSelectedResources,
   });
+  const stylePaletteActivePrompt = buildStylePaletteActivePrompt({
+    stylePrompt: positivePrompt,
+    subjectPrompt: subjectInput,
+  });
+  const stylePalettePromptRefreshKey = [
+    preset.id,
+    preset.negative,
+    stylePaletteActivePrompt,
+    selectedCheckpointId ?? "",
+    selectedLoraIdsKey,
+    selectedArtistStringIdsKey,
+    artistStringsMasked ? "artist-strings-masked" : "artist-strings-visible",
+    lorasMasked ? "loras-masked" : "loras-visible",
+    advice.result ? JSON.stringify(advice.result) : "",
+  ].join("\u0000");
 
   function removeSceneArtistPrompt(prompt: string | null) {
     if (!prompt) {
@@ -496,34 +551,42 @@ export function StylePalettePanel() {
     setAdvice({ error: "", result: null, status: "idle" });
   }
 
-  function handleToggleArtistStringSelection(item: ArtistStringItemRecord) {
-    const formattedPrompt = formatArtistPrompt(item, artistRenderMode);
-    if (!formattedPrompt.trim()) {
+  function removeArtistStringSelection(item: ArtistStringItemRecord) {
+    const selectedIds = project.settings.selectedArtistStringIds ?? [];
+    const selectedPrompts = project.settings.selectedArtistStringPrompts ?? [];
+    const removedIndex = selectedIds.indexOf(item.id);
+
+    if (removedIndex === -1) {
       return;
     }
 
+    const existingPrompt = selectedPrompts[removedIndex] ?? formatArtistPrompt(item, artistRenderMode);
+    const nextIds = selectedIds.filter((id) => id !== item.id);
+    const nextPrompts = selectedPrompts.filter((_, index) => index !== removedIndex);
+
+    if (!nextPrompts.some((prompt) => prompt.trim() === existingPrompt.trim())) {
+      removeSceneArtistPrompt(existingPrompt);
+    }
+
+    updateProjectSettings({
+      selectedArtistStringIds: nextIds,
+      selectedArtistStringPrompts: nextPrompts,
+    });
+    setSelectedArtistStrings((current) => current.filter((entry) => entry.id !== item.id));
+    setAdvice({ error: "", result: null, status: "idle" });
+  }
+
+  function handleToggleArtistStringSelection(item: ArtistStringItemRecord) {
     const selectedIds = project.settings.selectedArtistStringIds ?? [];
     const selectedPrompts = project.settings.selectedArtistStringPrompts ?? [];
 
     if (selectedIds.includes(item.id)) {
-      const removedIndex = selectedIds.indexOf(item.id);
-      const existingPrompt = selectedPrompts[removedIndex] ?? formattedPrompt;
-      const nextIds = selectedIds.filter((id) => id !== item.id);
-      const nextPrompts =
-        removedIndex >= 0
-          ? selectedPrompts.filter((_, index) => index !== removedIndex)
-          : selectedPrompts.filter((prompt) => prompt.trim() !== existingPrompt.trim());
+      removeArtistStringSelection(item);
+      return;
+    }
 
-      if (!nextPrompts.some((prompt) => prompt.trim() === existingPrompt.trim())) {
-        removeSceneArtistPrompt(existingPrompt);
-      }
-
-      updateProjectSettings({
-        selectedArtistStringIds: nextIds,
-        selectedArtistStringPrompts: nextPrompts,
-      });
-      setSelectedArtistStrings((current) => current.filter((entry) => entry.id !== item.id));
-      setAdvice({ error: "", result: null, status: "idle" });
+    const formattedPrompt = formatArtistPrompt(item, artistRenderMode);
+    if (!formattedPrompt.trim()) {
       return;
     }
 
@@ -578,6 +641,23 @@ export function StylePalettePanel() {
     setCivitaiPickerKind("lora");
     setCivitaiPickerOpen(true);
     setCivitaiPickerQuery("");
+    setAdvice({ error: "", result: null, status: "idle" });
+  }
+
+  function removeSelectedCivitaiResource(resource: SelectedCivitaiResourcePreview) {
+    if (resource.resourceType === "model") {
+      updateProjectSettings({
+        selectedCivitaiCheckpointId: null,
+        selectedCivitaiLoraIds: [],
+      });
+      setCivitaiPickerKind("checkpoint");
+      setAdvice({ error: "", result: null, status: "idle" });
+      return;
+    }
+
+    updateProjectSettings({
+      selectedCivitaiLoraIds: selectedLoraIds.filter((id) => id !== resource.id),
+    });
     setAdvice({ error: "", result: null, status: "idle" });
   }
 
@@ -830,6 +910,71 @@ export function StylePalettePanel() {
     }
   }
 
+  function handleSubjectInputChange(value: string) {
+    subjectInputRef.current = value;
+    setSubjectInput(value);
+    setSubjectConversionError("");
+    if (subjectConversionStatus !== "loading") {
+      setSubjectConversionStatus("idle");
+    }
+  }
+
+  async function convertSubjectToDanbooru() {
+    const subject = subjectInput.trim();
+    if (!subject || subjectConversionStatus === "loading") {
+      return;
+    }
+
+    setSubjectConversionStatus("loading");
+    setSubjectConversionError("");
+    const requestId = subjectConversionRequestIdRef.current + 1;
+    subjectConversionRequestIdRef.current = requestId;
+
+    try {
+      const response = await fetch("/api/llm/chat", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          purpose: "stable-diffusion-prompt-generation",
+          messages: buildStylePaletteSubjectDanbooruMessages({ subject }),
+          temperature: 0.1,
+          maxTokens: 120,
+        }),
+      });
+      const payload: unknown = await response.json().catch(() => null);
+
+      if (!response.ok) {
+        throw new Error(getLlmProxyErrorMessage(payload));
+      }
+
+      if (!isLlmChatResponse(payload)) {
+        throw new Error("AI subject conversion returned an invalid response.");
+      }
+
+      const convertedSubject = normalizeStylePaletteSubjectPrompt(payload.content);
+      if (!convertedSubject) {
+        throw new Error("AI subject conversion did not return usable Danbooru tags.");
+      }
+
+      if (subjectConversionRequestIdRef.current !== requestId || subjectInputRef.current.trim() !== subject) {
+        setSubjectConversionStatus("idle");
+        return;
+      }
+
+      subjectInputRef.current = convertedSubject;
+      setSubjectInput(convertedSubject);
+      setSubjectConversionStatus("success");
+    } catch (error) {
+      if (subjectConversionRequestIdRef.current !== requestId || subjectInputRef.current.trim() !== subject) {
+        setSubjectConversionStatus("idle");
+        return;
+      }
+
+      setSubjectConversionStatus("error");
+      setSubjectConversionError(error instanceof Error ? error.message : "AI subject conversion failed.");
+    }
+  }
+
   const introContent = (
     <div className="space-y-5">
       <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
@@ -917,6 +1062,48 @@ export function StylePalettePanel() {
           )}
         </div>
       </div>
+      <div className="rounded-md border border-sky-100 bg-sky-50/70 p-3">
+        <div className="mb-2 flex flex-wrap items-start justify-between gap-2">
+          <div>
+            <p className="text-[11px] font-bold uppercase tracking-wider text-sky-700">Subject Input</p>
+            <p className="mt-1 text-xs leading-relaxed text-slate-500">
+              Object or subject slot prepended to the generated style palette prompt.
+            </p>
+          </div>
+        </div>
+        <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
+          <input
+            aria-label="Subject Input"
+            className="h-9 w-full rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-sky-300 focus:ring-2 focus:ring-sky-100"
+            onChange={(event) => handleSubjectInputChange(event.target.value)}
+            placeholder="e.g. hatsune_miku, mechanical_dragon, ornate_sword"
+            value={subjectInput}
+          />
+          <Button
+            aria-label="Convert subject to Danbooru tags"
+            className="h-9 rounded-md bg-sky-600 px-3 text-xs text-white hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-60"
+            disabled={!subjectInput.trim() || subjectConversionStatus === "loading"}
+            onClick={() => void convertSubjectToDanbooru()}
+            size="sm"
+            type="button"
+          >
+            {subjectConversionStatus === "loading" ? (
+              <Loader2 className="size-3.5 animate-spin" />
+            ) : (
+              <Sparkles className="size-3.5" />
+            )}
+            Danbooru
+          </Button>
+        </div>
+        {subjectConversionStatus === "error" && subjectConversionError ? (
+          <p className="mt-2 rounded-md border border-rose-100 bg-white px-3 py-2 text-xs leading-relaxed text-rose-700">
+            {subjectConversionError}
+          </p>
+        ) : null}
+        {subjectConversionStatus === "success" ? (
+          <p className="mt-2 text-xs leading-relaxed text-sky-700">Subject tags updated.</p>
+        ) : null}
+      </div>
       <div className="grid gap-4 lg:grid-cols-2">
         <div>
           <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
@@ -969,19 +1156,9 @@ export function StylePalettePanel() {
               Artist Strings 已临时屏蔽：锁定 positive、AI 建议和 ComfyUI 生图暂时不会使用画师串。
             </p>
           ) : null}
-          <div className={`space-y-2 rounded-md border border-fuchsia-100 bg-fuchsia-50/50 p-3 ${artistStringsMasked ? "opacity-60" : ""}`}>
-            {selectedArtistStrings.length > 0 ? (
-              selectedArtistStrings.map((item) => {
-                const index = selectedArtistStringIds.indexOf(item.id);
-                const prompt = storedArtistPrompts[index] ?? formatArtistPrompt(item, artistRenderMode);
-                return <ArtistStringCard item={item} key={item.id} prompt={prompt} />;
-              })
-            ) : (
-              <p className="text-xs leading-relaxed text-slate-500">No artist strings selected.</p>
-            )}
-          </div>
+          <div className="flex flex-col gap-3">
           {artistPickerOpen ? (
-            <div className="mt-3 rounded-md border border-fuchsia-100 bg-white p-3">
+            <div className="rounded-md border border-fuchsia-100 bg-white p-3">
               <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_150px]">
                 <div className="relative min-w-0">
                   <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-slate-400" />
@@ -1085,6 +1262,25 @@ export function StylePalettePanel() {
               </div>
             </div>
           ) : null}
+          <div className={`space-y-2 rounded-md border border-fuchsia-100 bg-fuchsia-50/50 p-3 ${artistStringsMasked ? "opacity-60" : ""}`}>
+            {selectedArtistStrings.length > 0 ? (
+              selectedArtistStrings.map((item) => {
+                const index = selectedArtistStringIds.indexOf(item.id);
+                const prompt = storedArtistPrompts[index] ?? formatArtistPrompt(item, artistRenderMode);
+                return (
+                  <ArtistStringCard
+                    item={item}
+                    key={item.id}
+                    onRemove={() => removeArtistStringSelection(item)}
+                    prompt={prompt}
+                  />
+                );
+              })
+            ) : (
+              <p className="text-xs leading-relaxed text-slate-500">No artist strings selected.</p>
+            )}
+          </div>
+          </div>
         </div>
         <div>
           <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
@@ -1133,28 +1329,9 @@ export function StylePalettePanel() {
               LoRA 已临时屏蔽：锁定 positive、AI 建议和 ComfyUI 生图暂时不会使用任何 LoRA 或触发词。
             </p>
           ) : null}
-          <div className="space-y-2 rounded-md border border-indigo-100 bg-indigo-50/50 p-3">
-            {loadStatus === "loading" ? (
-              <p className="text-xs leading-relaxed text-indigo-700">
-                <Loader2 className="mr-1.5 inline size-3.5 animate-spin" />
-                Loading selected resources...
-              </p>
-            ) : null}
-            {loadStatus === "error" && loadError ? (
-              <p className="text-xs leading-relaxed text-rose-700">{loadError}</p>
-            ) : null}
-            {selectedResourceCards.length > 0 ? (
-              selectedResourceCards.map((resource) => (
-                <div className={lorasMasked && resource.resourceType === "lora" ? "opacity-50" : ""} key={resource.id}>
-                  <ResourceCard resource={resource} />
-                </div>
-              ))
-            ) : loadStatus !== "loading" ? (
-              <p className="text-xs leading-relaxed text-slate-500">No Civitai resources selected.</p>
-            ) : null}
-          </div>
+          <div className="flex flex-col gap-3">
           {civitaiPickerOpen ? (
-            <div className="mt-3 rounded-md border border-indigo-100 bg-white p-3">
+            <div className="rounded-md border border-indigo-100 bg-white p-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div>
                   <p className="text-[11px] font-bold uppercase tracking-wider text-indigo-700">
@@ -1256,6 +1433,30 @@ export function StylePalettePanel() {
               </div>
             </div>
           ) : null}
+          <div className="space-y-2 rounded-md border border-indigo-100 bg-indigo-50/50 p-3">
+            {loadStatus === "loading" ? (
+              <p className="text-xs leading-relaxed text-indigo-700">
+                <Loader2 className="mr-1.5 inline size-3.5 animate-spin" />
+                Loading selected resources...
+              </p>
+            ) : null}
+            {loadStatus === "error" && loadError ? (
+              <p className="text-xs leading-relaxed text-rose-700">{loadError}</p>
+            ) : null}
+            {selectedResourceCards.length > 0 ? (
+              selectedResourceCards.map((resource) => (
+                <div className={lorasMasked && resource.resourceType === "lora" ? "opacity-50" : ""} key={resource.id}>
+                  <ResourceCard
+                    onRemove={() => removeSelectedCivitaiResource(resource)}
+                    resource={resource}
+                  />
+                </div>
+              ))
+            ) : loadStatus !== "loading" ? (
+              <p className="text-xs leading-relaxed text-slate-500">No Civitai resources selected.</p>
+            ) : null}
+          </div>
+          </div>
         </div>
       </div>
     </div>
@@ -1284,7 +1485,7 @@ export function StylePalettePanel() {
         打开风格调色板
       </Button>
       <ComfyUiGenerationDialog
-        activePrompt={positivePrompt}
+        activePrompt={stylePaletteActivePrompt}
         advice={advice.result}
         allowDiagnosis
         allowControlNet={false}
@@ -1293,10 +1494,10 @@ export function StylePalettePanel() {
         diagnosisScopes={{ parameters: true, prompt: false }}
         description="使用固定预设 prompt 初始化风格测试；Active Prompt 可临时编辑，Locked Positive 不会被改写。"
         introContent={introContent}
-        negativePromptLocked
         onSaveParameters={(parameters) => updateProjectSettings({ savedComfyUiGenerationParams: parameters })}
         onClose={() => setOpen(false)}
         open={open}
+        promptRefreshKey={stylePalettePromptRefreshKey}
         savedParameters={savedParameters}
         selectedCheckpointId={selectedCheckpointId}
         selectedLoraIds={effectiveSelectedLoraIds}

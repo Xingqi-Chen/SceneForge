@@ -149,6 +149,48 @@ export function buildStylePalettePositivePrompt(input: {
   return dedupePromptParts(parts).join(", ");
 }
 
+export function buildStylePaletteActivePrompt(input: {
+  stylePrompt: string;
+  subjectPrompt: string;
+}) {
+  return dedupePromptParts([
+    ...splitPromptParts(input.subjectPrompt),
+    ...splitPromptParts(input.stylePrompt),
+  ]).join(", ");
+}
+
+export function normalizeStylePaletteSubjectPrompt(value: string) {
+  const withoutFence = value
+    .trim()
+    .replace(/^```[a-zA-Z0-9_-]*\s*/, "")
+    .replace(/\s*```$/, "")
+    .trim();
+  const withoutLabel = withoutFence.replace(
+    /^(?:danbooru\s+tags|danbooru\s+prompt|subject\s+tags|tags|prompt|subject)\s*:\s*/i,
+    "",
+  );
+
+  return dedupePromptParts(splitPromptParts(withoutLabel)).join(", ");
+}
+
+export function buildStylePaletteSubjectDanbooruMessages(input: { subject: string }): LlmChatMessage[] {
+  return [
+    {
+      role: "system",
+      content: [
+        "You are SceneForge's Danbooru tag normalizer for Stable Diffusion prompts.",
+        "Convert one character, object, or subject name into concise Danbooru/booru-style positive prompt tags.",
+        "Return only comma-separated tags. Do not include markdown, labels, explanations, style tags, quality tags, lighting, composition, or negative prompt terms.",
+        "Use underscores for multi-word Danbooru-like tags and keep canonical character or object names when they are likely known.",
+      ].join("\n"),
+    },
+    {
+      role: "user",
+      content: `Subject name:\n${input.subject.trim()}`,
+    },
+  ];
+}
+
 export function buildStylePaletteAdviceMessages(input: {
   artistPrompts: string[];
   preset: StylePalettePromptPreset;
