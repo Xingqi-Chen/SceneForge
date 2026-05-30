@@ -181,7 +181,7 @@ export function buildStylePaletteSubjectDanbooruMessages(input: { subject: strin
         "You are SceneForge's Danbooru tag normalizer for Stable Diffusion prompts.",
         "Convert one character, object, or subject name into concise Danbooru/booru-style positive prompt tags.",
         "Return only comma-separated tags. Do not include markdown, labels, explanations, style tags, quality tags, lighting, composition, or negative prompt terms.",
-        "Use underscores for multi-word Danbooru-like tags and keep canonical character or object names when they are likely known.",
+        "Do not connect separate words with underscores; preserve underscores only when they are part of a known canonical tag, character name, object name, or exact source token.",
       ].join("\n"),
     },
     {

@@ -92,6 +92,7 @@ describe("style palette prompts", () => {
 
     expect(messages[0].content).toContain("Danbooru tag normalizer");
     expect(messages[0].content).toContain("Return only comma-separated tags");
+    expect(messages[0].content).toContain("Do not connect separate words with underscores");
     expect(messages[1].content).toContain("Hatsune Miku");
     expect(normalizeStylePaletteSubjectPrompt("Tags: hatsune_miku, 1girl, hatsune_miku")).toBe(
       "hatsune_miku, 1girl",

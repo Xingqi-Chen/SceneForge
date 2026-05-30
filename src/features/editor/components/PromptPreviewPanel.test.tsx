@@ -17,8 +17,9 @@ describe("PromptPreviewPanel AI prompt messages", () => {
     expect(systemPrompt).toContain("not natural language");
     expect(systemPrompt).toContain("comma-separated tokens and short tag phrases");
     expect(systemPrompt).toContain("no prose explanation");
-    expect(systemPrompt).toContain("dynamic_pose");
-    expect(systemPrompt).toContain("low_angle");
+    expect(systemPrompt).toContain("dynamic pose");
+    expect(systemPrompt).toContain("low angle");
+    expect(systemPrompt).toContain("Do not connect separate words with underscores");
     expect(systemPrompt).not.toContain("natural image-prompt language");
     expect(systemPrompt).not.toContain("natural, artistic language");
   });
