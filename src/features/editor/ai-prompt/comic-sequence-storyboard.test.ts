@@ -17,10 +17,23 @@ describe("comic sequence storyboard AI helpers", () => {
 
     expect(messages[0].content).toContain("Return JSON only");
     expect(messages[0].content).toContain("upper limit of 20");
-    expect(messages[0].content).toContain("Danbooru/booru-style");
+    expect(messages[0].content).toContain("English booru-style local shot prompt");
     expect(messages[0].content).toContain("not natural-language sentences");
-    expect(messages[0].content).toContain("dynamic_pose");
-    expect(messages[0].content).toContain("title may be a short natural-language label");
+    expect(messages[0].content).toContain("dynamic pose");
+    expect(messages[0].content).toContain("Do not connect separate words with underscores");
+    expect(messages[0].content).toContain("preserve underscores only when they are part of a known canonical tag or exact source token");
+    expect(messages[0].content).toContain("Include a short natural-language title for each shot when possible");
+    expect(messages[0].content).toContain("The title is only for the UI");
+    expect(messages[0].content).toContain("For shots with two or more active visible characters");
+    expect(messages[0].content).toContain("Use character A and character B when two distinct people need disambiguation");
+    expect(messages[0].content).toContain("Keep character labels consistent across shots");
+    expect(messages[0].content).toContain("Clearly describe relative placement");
+    expect(messages[0].content).toContain("Clearly describe interaction direction");
+    expect(messages[0].content).toContain("Include the contact point or shared object");
+    expect(messages[0].content).toContain("Include gaze relationship when relevant");
+    expect(messages[0].content).toContain("Use many people or crowd for crowd shots instead of inventing an exact count");
+    expect(messages[0].content).toContain("Do not invent character identities, extra characters, model resources, or off-screen events");
+    expect(messages[0].content).not.toContain("Use underscores for multi-word");
     expect(messages[0].content).not.toContain("Create exactly");
     expect(messages[1].content).toContain("\"targetShotCount\": \"auto\"");
   });
@@ -32,6 +45,7 @@ describe("comic sequence storyboard AI helpers", () => {
     });
 
     expect(messages[0].content).toContain("Create exactly 4 shots.");
+    expect(messages[0].content).not.toContain("Choose the natural number of shots");
     expect(messages[1].content).toContain("\"targetShotCount\": 4");
   });
 

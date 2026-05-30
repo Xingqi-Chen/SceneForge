@@ -443,13 +443,13 @@ export function buildAiSystemPrompt(
       ? "Preserve object placement from the canvas: viewer-left/right, foreground/background, beside/near, behind/in front of, and visible-through-window relationships must remain in the final prompt."
       : "Spatial hints: use simple viewer-left/right, foreground/background, beside/near — not anatomical ruler language.",
     constraints.pose
-      ? "ACTION CONSTRAINT: strongly preserve the character pose from the screenshot using Danbooru-style pose/action tags and short tag phrases, e.g. dynamic_pose, leaning, one_arm_raised, from_side."
+      ? "ACTION CONSTRAINT: strongly preserve the character pose from the screenshot using Danbooru-style pose/action tags and short tag phrases, e.g. dynamic pose, leaning, one arm raised, from side."
       : null,
     constraints.visual
-      ? "VISUAL CONSTRAINT: strongly preserve the current camera view using Danbooru-style composition tags and short tag phrases, e.g. close-up, low_angle, from_above, dutch_angle, wide_shot."
+      ? "VISUAL CONSTRAINT: strongly preserve the current camera view using Danbooru-style composition tags and short tag phrases, e.g. close-up, low angle, from above, dutch angle, wide shot."
       : null,
     "Final output MUST be Danbooru/booru-style tags: comma-separated tokens and short tag phrases, not natural-language sentences.",
-    "Prefer canonical anime prompt vocabulary such as 1girl, solo, looking_at_viewer, long_hair, school_uniform, dynamic_pose, cowboy_shot, simple_background. Use underscores for multi-word Danbooru-like tags when appropriate.",
+    "Prefer canonical anime prompt vocabulary such as 1girl, solo, looking at viewer, long hair, school uniform, dynamic pose, cowboy shot, simple background. Do not connect separate words with underscores; preserve underscores only when they are part of a known canonical tag or exact source token.",
     "Describe pose, expression, props, clothing, camera, and composition as tags or short tag phrases only. Never echo raw coordinates, pixel math, or awkward joint-vs-joint alignment phrases (e.g. do not write \"wrist level with neck\", \"ankle left of other ankle\", \"horizontally aligned with neck\").",
     "Skeleton notes in the summary are hints only; infer a plausible pose from the image, do not transcribe joint tuples.",
     "Merge duplicates; keep token economy; preserve style and subject tags from the preview when they matter.",
