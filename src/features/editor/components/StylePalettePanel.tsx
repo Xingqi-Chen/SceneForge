@@ -1,7 +1,7 @@
 "use client";
 
 import { Check, Eye, EyeOff, Loader2, Palette, Plus, Search, Sparkles, X } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import type {
@@ -24,8 +24,11 @@ import {
 import {
   STYLE_PALETTE_PROMPT_PRESETS,
   buildStylePaletteAdviceMessages,
+  buildStylePaletteActivePrompt,
   buildStylePalettePositivePrompt,
+  buildStylePaletteSubjectDanbooruMessages,
   getStylePalettePromptPreset,
+  normalizeStylePaletteSubjectPrompt,
 } from "@/features/editor/ai-prompt/style-palette-prompts";
 import { useEditorStore } from "@/features/editor/store/editor-store";
 import { getLlmProxyErrorMessage, isLlmChatResponse } from "@/features/llm";
@@ -440,6 +443,11 @@ export function StylePalettePanel() {
   const [civitaiPickerError, setCivitaiPickerError] = useState("");
   const [artistStringsMasked, setArtistStringsMasked] = useState(false);
   const [lorasMasked, setLorasMasked] = useState(false);
+  const [subjectInput, setSubjectInput] = useState("");
+  const [subjectConversionStatus, setSubjectConversionStatus] = useState<LoadStatus>("idle");
+  const [subjectConversionError, setSubjectConversionError] = useState("");
+  const subjectConversionRequestIdRef = useRef(0);
+  const subjectInputRef = useRef("");
   const selectedCheckpointId = project.settings.selectedCivitaiCheckpointId;
   const selectedLoraIds = useMemo(
     () => project.settings.selectedCivitaiLoraIds ?? [],
@@ -477,6 +485,21 @@ export function StylePalettePanel() {
     preset,
     resources: effectiveSelectedResources,
   });
+  const stylePaletteActivePrompt = buildStylePaletteActivePrompt({
+    stylePrompt: positivePrompt,
+    subjectPrompt: subjectInput,
+  });
+  const stylePalettePromptRefreshKey = [
+    preset.id,
+    preset.negative,
+    stylePaletteActivePrompt,
+    selectedCheckpointId ?? "",
+    selectedLoraIdsKey,
+    selectedArtistStringIdsKey,
+    artistStringsMasked ? "artist-strings-masked" : "artist-strings-visible",
+    lorasMasked ? "loras-masked" : "loras-visible",
+    advice.result ? JSON.stringify(advice.result) : "",
+  ].join("\u0000");
 
   function removeSceneArtistPrompt(prompt: string | null) {
     if (!prompt) {
@@ -887,6 +910,71 @@ export function StylePalettePanel() {
     }
   }
 
+  function handleSubjectInputChange(value: string) {
+    subjectInputRef.current = value;
+    setSubjectInput(value);
+    setSubjectConversionError("");
+    if (subjectConversionStatus !== "loading") {
+      setSubjectConversionStatus("idle");
+    }
+  }
+
+  async function convertSubjectToDanbooru() {
+    const subject = subjectInput.trim();
+    if (!subject || subjectConversionStatus === "loading") {
+      return;
+    }
+
+    setSubjectConversionStatus("loading");
+    setSubjectConversionError("");
+    const requestId = subjectConversionRequestIdRef.current + 1;
+    subjectConversionRequestIdRef.current = requestId;
+
+    try {
+      const response = await fetch("/api/llm/chat", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          purpose: "stable-diffusion-prompt-generation",
+          messages: buildStylePaletteSubjectDanbooruMessages({ subject }),
+          temperature: 0.1,
+          maxTokens: 120,
+        }),
+      });
+      const payload: unknown = await response.json().catch(() => null);
+
+      if (!response.ok) {
+        throw new Error(getLlmProxyErrorMessage(payload));
+      }
+
+      if (!isLlmChatResponse(payload)) {
+        throw new Error("AI subject conversion returned an invalid response.");
+      }
+
+      const convertedSubject = normalizeStylePaletteSubjectPrompt(payload.content);
+      if (!convertedSubject) {
+        throw new Error("AI subject conversion did not return usable Danbooru tags.");
+      }
+
+      if (subjectConversionRequestIdRef.current !== requestId || subjectInputRef.current.trim() !== subject) {
+        setSubjectConversionStatus("idle");
+        return;
+      }
+
+      subjectInputRef.current = convertedSubject;
+      setSubjectInput(convertedSubject);
+      setSubjectConversionStatus("success");
+    } catch (error) {
+      if (subjectConversionRequestIdRef.current !== requestId || subjectInputRef.current.trim() !== subject) {
+        setSubjectConversionStatus("idle");
+        return;
+      }
+
+      setSubjectConversionStatus("error");
+      setSubjectConversionError(error instanceof Error ? error.message : "AI subject conversion failed.");
+    }
+  }
+
   const introContent = (
     <div className="space-y-5">
       <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
@@ -973,6 +1061,48 @@ export function StylePalettePanel() {
             </p>
           )}
         </div>
+      </div>
+      <div className="rounded-md border border-sky-100 bg-sky-50/70 p-3">
+        <div className="mb-2 flex flex-wrap items-start justify-between gap-2">
+          <div>
+            <p className="text-[11px] font-bold uppercase tracking-wider text-sky-700">Subject Input</p>
+            <p className="mt-1 text-xs leading-relaxed text-slate-500">
+              Object or subject slot prepended to the generated style palette prompt.
+            </p>
+          </div>
+        </div>
+        <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
+          <input
+            aria-label="Subject Input"
+            className="h-9 w-full rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-sky-300 focus:ring-2 focus:ring-sky-100"
+            onChange={(event) => handleSubjectInputChange(event.target.value)}
+            placeholder="e.g. hatsune_miku, mechanical_dragon, ornate_sword"
+            value={subjectInput}
+          />
+          <Button
+            aria-label="Convert subject to Danbooru tags"
+            className="h-9 rounded-md bg-sky-600 px-3 text-xs text-white hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-60"
+            disabled={!subjectInput.trim() || subjectConversionStatus === "loading"}
+            onClick={() => void convertSubjectToDanbooru()}
+            size="sm"
+            type="button"
+          >
+            {subjectConversionStatus === "loading" ? (
+              <Loader2 className="size-3.5 animate-spin" />
+            ) : (
+              <Sparkles className="size-3.5" />
+            )}
+            Danbooru
+          </Button>
+        </div>
+        {subjectConversionStatus === "error" && subjectConversionError ? (
+          <p className="mt-2 rounded-md border border-rose-100 bg-white px-3 py-2 text-xs leading-relaxed text-rose-700">
+            {subjectConversionError}
+          </p>
+        ) : null}
+        {subjectConversionStatus === "success" ? (
+          <p className="mt-2 text-xs leading-relaxed text-sky-700">Subject tags updated.</p>
+        ) : null}
       </div>
       <div className="grid gap-4 lg:grid-cols-2">
         <div>
@@ -1355,7 +1485,7 @@ export function StylePalettePanel() {
         打开风格调色板
       </Button>
       <ComfyUiGenerationDialog
-        activePrompt={positivePrompt}
+        activePrompt={stylePaletteActivePrompt}
         advice={advice.result}
         allowDiagnosis
         allowControlNet={false}
@@ -1367,7 +1497,7 @@ export function StylePalettePanel() {
         onSaveParameters={(parameters) => updateProjectSettings({ savedComfyUiGenerationParams: parameters })}
         onClose={() => setOpen(false)}
         open={open}
-        promptRefreshKey={preset.id}
+        promptRefreshKey={stylePalettePromptRefreshKey}
         savedParameters={savedParameters}
         selectedCheckpointId={selectedCheckpointId}
         selectedLoraIds={effectiveSelectedLoraIds}

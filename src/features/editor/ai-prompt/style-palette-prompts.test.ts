@@ -5,7 +5,10 @@ import type { SelectedCivitaiResourcePreview, SelectedCivitaiResourcesPreview } 
 import {
   STYLE_PALETTE_PROMPT_PRESETS,
   buildStylePaletteAdviceMessages,
+  buildStylePaletteActivePrompt,
   buildStylePalettePositivePrompt,
+  buildStylePaletteSubjectDanbooruMessages,
+  normalizeStylePaletteSubjectPrompt,
 } from "./style-palette-prompts";
 
 function makeResource(
@@ -73,6 +76,26 @@ describe("style palette prompts", () => {
     expect(prompt).toContain("by beta");
     expect(prompt.match(/Painter trigger/g)).toHaveLength(1);
     expect(prompt).toContain("detail trigger");
+  });
+
+  it("prepends subject input to the active style palette prompt while deduping tags", () => {
+    const prompt = buildStylePaletteActivePrompt({
+      subjectPrompt: "hatsune_miku, 1girl",
+      stylePrompt: "1girl, solo, simple background",
+    });
+
+    expect(prompt).toBe("hatsune_miku, 1girl, solo, simple background");
+  });
+
+  it("builds and normalizes Danbooru subject conversion prompts", () => {
+    const messages = buildStylePaletteSubjectDanbooruMessages({ subject: "Hatsune Miku" });
+
+    expect(messages[0].content).toContain("Danbooru tag normalizer");
+    expect(messages[0].content).toContain("Return only comma-separated tags");
+    expect(messages[1].content).toContain("Hatsune Miku");
+    expect(normalizeStylePaletteSubjectPrompt("Tags: hatsune_miku, 1girl, hatsune_miku")).toBe(
+      "hatsune_miku, 1girl",
+    );
   });
 
   it("builds JSON-only style advice messages without scene rewrite instructions", () => {

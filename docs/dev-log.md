@@ -10,12 +10,15 @@ Summary:
 
 - Added right-side remove buttons for selected artist strings and selected Civitai resources in the style palette.
 - Reversed the visible order of quick-pick suggestions and selected content so quick selections appear above the selected lists when open.
-- Added a prompt refresh key for the ComfyUI generation dialog so style palette active/negative prompt drafts refresh on preset changes, while resource selection changes preserve manual prompt edits.
+- Revised the style palette prompt refresh key so active/negative prompt drafts refresh on preset, checkpoint, LoRA, selected resource, and AI advice changes.
+- Added a Subject Input slot above the style palette ComfyUI prompt flow; it persists across palette/resource changes, prepends into the active prompt, and can call the existing LiteLLM chat endpoint to convert a subject name into Danbooru-style tags with loading/error states.
 
 Files changed:
 
 - `src/features/editor/components/StylePalettePanel.tsx`
 - `src/features/editor/components/ImageGenerationPanel.tsx`
+- `src/features/editor/ai-prompt/style-palette-prompts.ts`
+- `src/features/editor/ai-prompt/style-palette-prompts.test.ts`
 - `src/features/editor/ai-prompt/comfyui-generation-draft.ts`
 - `src/features/editor/ai-prompt/comfyui-generation-draft.test.ts`
 - `src/features/editor/components/StylePalettePanel.test.tsx`
@@ -23,9 +26,13 @@ Files changed:
 
 Validation:
 
-- `npm test -- src/features/editor/ai-prompt/comfyui-generation-draft.test.ts src/features/editor/components/StylePalettePanel.test.tsx` passed.
+- `npm test -- src/features/editor/ai-prompt/comfyui-generation-draft.test.ts src/features/editor/ai-prompt/style-palette-prompts.test.ts src/features/editor/components/StylePalettePanel.test.tsx` passed.
+- `npm test` passed.
 - `npm run typecheck` passed.
-- `npm run lint -- src/features/editor/components/StylePalettePanel.tsx src/features/editor/components/ImageGenerationPanel.tsx src/features/editor/ai-prompt/comfyui-generation-draft.ts src/features/editor/ai-prompt/comfyui-generation-draft.test.ts src/features/editor/components/StylePalettePanel.test.tsx` passed with existing `@next/next/no-img-element` warnings in `ImageGenerationPanel.tsx`.
+- `npm run lint -- src/features/editor/components/StylePalettePanel.tsx src/features/editor/components/StylePalettePanel.test.tsx src/features/editor/ai-prompt/style-palette-prompts.ts src/features/editor/ai-prompt/style-palette-prompts.test.ts` passed.
+- `npm run lint` passed with existing `@next/next/no-img-element` warnings.
+- `npm run build` passed with the existing Turbopack NFT warning for `sequence-reference-storage.ts`.
+- Browser QA opened `/editor`, opened the style palette, confirmed the Subject Input and quick-pick/selected-content ordering, confirmed right-side remove buttons are visible, and confirmed a subject input is prepended into the Active Prompt draft.
 
 ### Comic Sequence Single-Shot Generation Button
 
