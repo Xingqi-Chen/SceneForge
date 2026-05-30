@@ -3,6 +3,11 @@
 import { getCharacterStickFigurePose } from "@/features/editor/stick-figure-3d/get-character-stick-pose";
 import { createDefaultStickFigurePoseV1 } from "@/features/editor/store/defaults";
 import { useEditorStore } from "@/features/editor/store/editor-store";
+import type {
+  BoundPromptTagSuggestion,
+  NewPromptTagApplyMode,
+  PendingPromptTagImportReview,
+} from "@/features/editor/components/PromptTagImportReviewDialog";
 import type { BodyPartId, PromptTag } from "@/shared/types";
 import type { StickFigurePoseV1 } from "@/shared/types/stick-figure-pose";
 
@@ -13,6 +18,10 @@ import type {
 } from "@/features/agent-timeline";
 
 const timelineTagIdPrefix = "timeline-t5";
+
+type TimelineCanvasBindingOptions = {
+  characterTags?: CharacterPromptTag[];
+};
 
 function slug(value: string) {
   const normalized = value
@@ -59,6 +68,76 @@ function splitPromptTags(tags: CharacterPromptTag[]) {
   return { bodyPartTags, characterTags };
 }
 
+function getPromptTagPayload(tag: Omit<PromptTag, "id"> | PromptTag): Omit<PromptTag, "id"> {
+  return {
+    label: tag.label,
+    prompt: tag.prompt,
+    category: tag.category,
+    ...(tag.subcategory ? { subcategory: tag.subcategory } : {}),
+    ...(tag.negative === undefined ? {} : { negative: tag.negative }),
+    weight: { ...tag.weight },
+  };
+}
+
+function toTimelineCharacterPromptTag(
+  suggestion: BoundPromptTagSuggestion,
+  tagToBind: Omit<PromptTag, "id"> | PromptTag,
+): CharacterPromptTag | null {
+  const payload = getPromptTagPayload(tagToBind);
+
+  if (suggestion.target.kind === "character") {
+    return {
+      ...payload,
+      targetKind: "character",
+    };
+  }
+
+  if (suggestion.target.kind === "bodyPart") {
+    return {
+      ...payload,
+      targetKind: "bodyPart",
+      bodyPartId: suggestion.target.bodyPartId,
+    };
+  }
+
+  return null;
+}
+
+export function createTimelinePromptTagSuggestions(
+  tags: CharacterPromptTag[],
+): BoundPromptTagSuggestion[] {
+  return tags.map((tag) => ({
+    target:
+      tag.targetKind === "character"
+        ? { kind: "character" }
+        : { kind: "bodyPart", bodyPartId: tag.bodyPartId },
+    tag: getPromptTagPayload(tag),
+  }));
+}
+
+export function getTimelineCharacterTagsToBind(
+  review: PendingPromptTagImportReview,
+  newTagMode: NewPromptTagApplyMode,
+): CharacterPromptTag[] {
+  const applyNewTags = newTagMode !== "skip";
+  const tagsToBind = [
+    ...review.existingSuggestions.map((suggestion) => ({
+      suggestion,
+      tagToBind: suggestion.libraryTag,
+    })),
+    ...(applyNewTags
+      ? review.newSuggestions.map((suggestion) => ({
+          suggestion,
+          tagToBind: suggestion.tag,
+        }))
+      : []),
+  ];
+
+  return tagsToBind
+    .map(({ suggestion, tagToBind }) => toTimelineCharacterPromptTag(suggestion, tagToBind))
+    .filter((tag): tag is CharacterPromptTag => Boolean(tag));
+}
+
 function getOrCreatePrimaryCharacterId() {
   let state = useEditorStore.getState();
 
@@ -103,6 +182,7 @@ export function getPrimaryTimelineCharacterPoseFromEditorStore(): StickFigurePos
 
 export function bindPrimaryTimelineCharacterToEditorStore(
   input: TimelineCanvasBindingInput,
+  options: TimelineCanvasBindingOptions = {},
 ): CanvasBindingTimelineResult {
   const characterId = getOrCreatePrimaryCharacterId();
   let state = useEditorStore.getState();
@@ -112,7 +192,8 @@ export function bindPrimaryTimelineCharacterToEditorStore(
     throw new Error("Primary character was not found after timeline binding setup.");
   }
 
-  const { bodyPartTags, characterTags } = splitPromptTags(input.characterTags);
+  const characterTagsToBind = options.characterTags ?? input.characterTags;
+  const { bodyPartTags, characterTags } = splitPromptTags(characterTagsToBind);
 
   state.updateCharacter(characterId, {
     name: input.primaryCharacter.name,
@@ -145,7 +226,7 @@ export function bindPrimaryTimelineCharacterToEditorStore(
       name: boundCharacter.name,
       description: boundCharacter.description,
     },
-    characterTags: input.characterTags,
+    characterTags: characterTagsToBind,
     action: input.action,
     transform: boundCharacter.transform3D ?? input.transform,
     pose: getCharacterStickFigurePose(boundCharacter),

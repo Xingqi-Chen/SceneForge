@@ -4,6 +4,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createDefaultProject } from "@/features/editor/store/defaults";
 import { useEditorStore } from "@/features/editor/store/editor-store";
+import type { PromptTag } from "@/shared/types";
+
+const savePromptLibraryMock = vi.hoisted(() =>
+  vi.fn((state: unknown) => {
+    void state;
+    return Promise.resolve();
+  }),
+);
 
 vi.mock("@/features/editor/components/CanvasViewport", () => ({
   CanvasViewport: () => (
@@ -16,6 +24,17 @@ vi.mock("@/features/editor/components/PromptTagPickerPanel", () => ({
     <div data-testid="existing-prompt-tag-picker-panel">Existing prompt tag picker panel</div>
   ),
 }));
+
+vi.mock("@/features/persistence", async () => {
+  const actual = await vi.importActual<typeof import("@/features/persistence")>(
+    "@/features/persistence",
+  );
+
+  return {
+    ...actual,
+    savePromptLibrary: savePromptLibraryMock,
+  };
+});
 
 import { TimelineShell } from "./TimelineShell";
 
@@ -184,7 +203,7 @@ async function flushAsyncWork(cycles = 6) {
 }
 
 function getButtonByText(label: string) {
-  const button = Array.from(container.querySelectorAll("button")).find(
+  const button = Array.from(document.body.querySelectorAll("button")).find(
     (candidate) => candidate.textContent?.replace(/\s+/g, " ").trim() === label,
   );
 
@@ -245,8 +264,40 @@ async function submitInitialScene(sceneRequest: string) {
   await flushAsyncWork();
 }
 
+function createPromptLibraryTag(patch: Partial<PromptTag> = {}): PromptTag {
+  return {
+    id: patch.id ?? "library-courier",
+    label: patch.label ?? "Library courier",
+    prompt: patch.prompt ?? "solo courier protagonist",
+    category: patch.category ?? "character",
+    subcategory: patch.subcategory ?? "character-subject",
+    negative: patch.negative ?? false,
+    weight: patch.weight ?? { enabled: true, value: 1.35 },
+  };
+}
+
+function setPromptLibraryTags(promptLibraryTags: PromptTag[]) {
+  const project = createDefaultProject();
+  project.settings.promptLibraryTags = promptLibraryTags;
+  useEditorStore.getState().setProject(project);
+}
+
+async function choosePromptTagReviewOption(label: string) {
+  act(() => {
+    getButtonByText(label).click();
+  });
+
+  await flushAsyncWork();
+}
+
+async function submitSceneAndChoosePromptTagReview(sceneRequest: string, label: string) {
+  await submitInitialScene(sceneRequest);
+  await choosePromptTagReviewOption(label);
+}
+
 beforeEach(() => {
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  savePromptLibraryMock.mockClear();
   useEditorStore.getState().setProject(createDefaultProject());
   container = document.createElement("div");
   document.body.append(container);
@@ -321,9 +372,20 @@ describe("TimelineShell", () => {
       });
 
       await submitInitialScene("  A neon market alley with a courier at sunrise  ");
+      expect(document.body.textContent).toContain("导入新的部位提示词");
+      expect(document.body.textContent).toContain("仅选中已有词条");
+      expect(document.body.textContent).toContain("本次保留，不入词库");
+      expect(document.body.textContent).toContain("导入并选中");
+
+      await choosePromptTagReviewOption("本次保留，不入词库");
 
       expect(getWorkflowStepTitles()).toEqual(nodeTitles);
       expect(container.textContent).toContain("A neon market alley with a courier at sunrise");
+
+      const sceneInputButton = container.querySelector('button[data-node-id="scene-input"]') as HTMLButtonElement | null;
+      act(() => {
+        sceneInputButton?.click();
+      });
 
       const sceneInputSection = getSectionByHeading("Scene input");
       expect(sceneInputSection.textContent).toContain("Done");
@@ -382,7 +444,7 @@ describe("TimelineShell", () => {
 
       const canvasSection = getSectionByHeading("Layout planning");
       expect(canvasSection.textContent).toContain("Existing editor 3D canvas viewport");
-      expect(canvasSection.textContent).toContain("Existing prompt tag picker panel");
+      expect(canvasSection.textContent).not.toContain("Existing prompt tag picker panel");
       expect(canvasSection.textContent).toContain("3D layout binding active");
       expect(canvasSection.textContent).toContain("JSON diagnostics");
       expect(canvasSection.textContent).toContain("editable 3D character");
@@ -421,6 +483,7 @@ describe("TimelineShell", () => {
       );
 
       expect(storageSpy).not.toHaveBeenCalled();
+      expect(savePromptLibraryMock).not.toHaveBeenCalled();
       expect(fetchMock).toHaveBeenCalledTimes(3);
       expect(
         fetchMock.mock.calls.map(([input]) => String(input)),
@@ -428,6 +491,146 @@ describe("TimelineShell", () => {
       expect(window.localStorage.length).toBe(0);
       expect(window.sessionStorage.length).toBe(0);
       expect(container.textContent).not.toMatch(/C:\\|SCENEFORGE_|API_KEY|generated-images|data\//);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("binds only existing library tags when skipping new Node 5 prompt tags", async () => {
+    const originalFetch = globalThis.fetch;
+    const existingTag = createPromptLibraryTag({
+      id: "library-existing-courier",
+      label: "Existing courier",
+      prompt: "  SOLO COURIER PROTAGONIST  ",
+      weight: { enabled: true, value: 1.4 },
+    });
+    setPromptLibraryTags([existingTag]);
+    globalThis.fetch = mockT5Fetch();
+
+    try {
+      act(() => {
+        root.render(<TimelineShell />);
+      });
+
+      await submitInitialScene("A neon market alley with a courier at sunrise");
+
+      expect(document.body.textContent).toContain("导入新的部位提示词");
+      expect(document.body.textContent).toContain("仅选中已有词条");
+      expect(document.body.textContent).toContain("本次保留，不入词库");
+      expect(document.body.textContent).toContain("导入并选中");
+
+      await choosePromptTagReviewOption("仅选中已有词条");
+
+      const character = useEditorStore.getState().project.scene.characters[0];
+      const torso = character.bodyParts.find((bodyPart) => bodyPart.id === "torso");
+
+      expect(character.promptTags).toHaveLength(1);
+      expect(character.promptTags[0]).toMatchObject({
+        label: "Existing courier",
+        prompt: "  SOLO COURIER PROTAGONIST  ",
+        weight: { enabled: true, value: 1.4 },
+      });
+      expect(character.promptTags[0]?.id).toMatch(/^timeline-t5-/);
+      expect(torso?.promptTags).toEqual([]);
+      expect(useEditorStore.getState().project.settings.promptLibraryTags).toHaveLength(1);
+      expect(savePromptLibraryMock).not.toHaveBeenCalled();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("binds new Node 5 prompt tags transiently without growing the prompt library", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mockT5Fetch();
+
+    try {
+      act(() => {
+        root.render(<TimelineShell />);
+      });
+
+      await submitSceneAndChoosePromptTagReview(
+        "A neon market alley with a courier at sunrise",
+        "本次保留，不入词库",
+      );
+
+      const state = useEditorStore.getState();
+      const character = state.project.scene.characters[0];
+      const torso = character.bodyParts.find((bodyPart) => bodyPart.id === "torso");
+
+      expect(character.promptTags.map((tag) => tag.prompt)).toEqual(["solo courier protagonist"]);
+      expect(torso?.promptTags.map((tag) => tag.prompt)).toEqual(["reflective yellow jacket"]);
+      expect(character.promptTags[0]?.id).toMatch(/^timeline-t5-/);
+      expect(torso?.promptTags[0]?.id).toMatch(/^timeline-t5-/);
+      expect(state.project.settings.promptLibraryTags).toEqual([]);
+      expect(savePromptLibraryMock).not.toHaveBeenCalled();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("imports and binds new Node 5 prompt tags when the review chooses import", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mockT5Fetch();
+
+    try {
+      act(() => {
+        root.render(<TimelineShell />);
+      });
+
+      await submitSceneAndChoosePromptTagReview(
+        "A neon market alley with a courier at sunrise",
+        "导入并选中",
+      );
+
+      const state = useEditorStore.getState();
+      const character = state.project.scene.characters[0];
+      const torso = character.bodyParts.find((bodyPart) => bodyPart.id === "torso");
+
+      expect(state.project.settings.promptLibraryTags.map((tag) => tag.prompt)).toEqual([
+        "solo courier protagonist",
+        "reflective yellow jacket",
+      ]);
+      expect(character.promptTags.map((tag) => tag.prompt)).toEqual(["solo courier protagonist"]);
+      expect(torso?.promptTags.map((tag) => tag.prompt)).toEqual(["reflective yellow jacket"]);
+      expect(character.promptTags[0]?.id).toMatch(/^timeline-t5-/);
+      expect(torso?.promptTags[0]?.id).toMatch(/^timeline-t5-/);
+      expect(savePromptLibraryMock).toHaveBeenCalledTimes(1);
+      const savedLibrary = savePromptLibraryMock.mock.calls[0]?.[0] as
+        | { promptLibraryTags: PromptTag[] }
+        | undefined;
+      expect(savedLibrary?.promptLibraryTags).toHaveLength(2);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("does not apply Node 5 binding when the missing-tag review is canceled", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mockT5Fetch();
+
+    try {
+      act(() => {
+        root.render(<TimelineShell />);
+      });
+
+      await submitInitialScene("A neon market alley with a courier at sunrise");
+
+      const closeButton = document.body.querySelector(
+        'button[aria-label="关闭新增提示词确认"]',
+      ) as HTMLButtonElement | null;
+
+      expect(closeButton).not.toBeNull();
+
+      act(() => {
+        closeButton?.click();
+      });
+      await flushAsyncWork();
+
+      expect(useEditorStore.getState().project.scene.characters).toHaveLength(0);
+      expect(container.textContent).toContain(
+        "Layout planning prompt tag review was canceled. Rerun layout planning to try again.",
+      );
+      expect(getSectionByHeading("Layout planning").textContent).toContain("Blocked");
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -554,7 +757,10 @@ describe("TimelineShell", () => {
         root.render(<TimelineShell />);
       });
 
-      await submitInitialScene("A glass greenhouse control room");
+      await submitSceneAndChoosePromptTagReview(
+        "A glass greenhouse control room",
+        "本次保留，不入词库",
+      );
 
       const promptStepButton = container.querySelector('button[data-node-id="scene-prompt"]') as HTMLButtonElement | null;
 

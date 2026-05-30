@@ -1,10 +1,18 @@
 "use client";
 
-import { ImagePlus, Loader2, Sparkles, TextCursorInput, Upload, X } from "lucide-react";
+import { ImagePlus, Loader2, TextCursorInput, Upload } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
-import { createPortal } from "react-dom";
 
 import { Button } from "@/components/ui/button";
+import {
+  getAvailablePromptLibraryTags,
+  makeTransientPromptTag,
+  PromptTagImportReviewDialog,
+  splitPromptTagSuggestionsByLibrary,
+  type BoundPromptTagSuggestion,
+  type NewPromptTagApplyMode,
+  type PendingPromptTagImportReview,
+} from "@/features/editor/components/PromptTagImportReviewDialog";
 import { getCharacterStickFigurePose } from "@/features/editor/stick-figure-3d/get-character-stick-pose";
 import {
   buildStickFigurePoseGenerationMessages,
@@ -12,7 +20,6 @@ import {
   parseStickFigurePoseGenerationResponse,
 } from "@/features/editor/stick-figure-3d/llm-pose-generation";
 import { useEditorStore } from "@/features/editor/store/editor-store";
-import { BUILT_IN_PROMPT_LIBRARY_TAGS } from "@/features/prompt-engine/prompt-library/built-in-prompt-tags";
 import {
   buildCharacterImagePromptTagMessages,
   buildCharacterTextPromptTagMessages,
@@ -24,10 +31,6 @@ import {
   SCENE_PROMPT_TAG_CATEGORIES,
   type CharacterPromptTagTarget,
 } from "@/features/prompt-engine/prompt-library/character-image-prompt-tags";
-import {
-  PROMPT_TAG_CATEGORY_LABELS,
-  PROMPT_TAG_SUBCATEGORY_LABELS,
-} from "@/features/prompt-engine/prompt-library/prompt-tag-taxonomy";
 import { getLlmProxyErrorMessage, isLlmChatResponse, type LlmChatMessage } from "@/features/llm";
 import { saveProject, savePromptLibrary } from "@/features/persistence";
 import { characterAppearsInThreeViewport } from "@/shared/utils/character-space";
@@ -35,66 +38,12 @@ import type { PromptTag, PromptTagCategory } from "@/shared/types";
 
 type AnalyzeStatus = "idle" | "loading" | "success" | "error";
 
-type BoundPromptTagSuggestion = {
-  target: CharacterPromptTagTarget;
-  tag: Omit<PromptTag, "id">;
-};
-
-type PendingImportReview = {
-  suggestions: BoundPromptTagSuggestion[];
-  existingSuggestions: Array<BoundPromptTagSuggestion & { libraryTag: PromptTag }>;
-  newSuggestions: BoundPromptTagSuggestion[];
-};
-
-type NewPromptTagApplyMode = "skip" | "temporary" | "import";
-
 const SCENE_REVERSE_PROMPT_CATEGORY_SET = new Set<PromptTagCategory>(
   SCENE_PROMPT_TAG_CATEGORIES,
 );
 const MAX_IMAGE_EDGE = 768;
 const MAX_POSE_IMAGE_EDGE = 512;
 const JPEG_QUALITY = 0.72;
-
-function getSemanticTagKey(tag: Pick<PromptTag, "prompt" | "category" | "negative">) {
-  return [
-    tag.prompt.trim().toLocaleLowerCase(),
-    tag.category,
-    Boolean(tag.negative) ? "negative" : "positive",
-  ].join("|");
-}
-
-function makeTransientPromptTag(tag: Omit<PromptTag, "id">): PromptTag {
-  return {
-    ...tag,
-    id:
-      typeof crypto !== "undefined" && "randomUUID" in crypto
-        ? `analysis-${crypto.randomUUID()}`
-        : `analysis-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-    weight: { ...tag.weight },
-  };
-}
-
-function uniqueSuggestions(suggestions: BoundPromptTagSuggestion[]) {
-  const seen = new Set<string>();
-
-  return suggestions.filter((suggestion) => {
-    const key = `${getSuggestionTargetKey(suggestion.target)}:${getSemanticTagKey(suggestion.tag)}`;
-    if (seen.has(key)) {
-      return false;
-    }
-
-    seen.add(key);
-    return true;
-  });
-}
-
-function getSuggestionTargetKey(target: CharacterPromptTagTarget) {
-  if (target.kind === "scene") {
-    return "scene";
-  }
-
-  return target.kind === "character" ? "character" : `bodyPart:${target.bodyPartId}`;
-}
 
 function getAllowedCategories(categories: PromptTagCategory[] | undefined) {
   return new Set((categories ?? []).filter(isCharacterBodyPromptTagCategory));
@@ -187,7 +136,7 @@ export function CharacterImagePromptTagPanel() {
   const [inferPoseFromImage, setInferPoseFromImage] = useState(false);
   const [poseStatus, setPoseStatus] = useState<"idle" | "loading" | "success" | "error">("idle");
   const [poseError, setPoseError] = useState("");
-  const [pendingReview, setPendingReview] = useState<PendingImportReview | null>(null);
+  const [pendingReview, setPendingReview] = useState<PendingPromptTagImportReview | null>(null);
   const [savingReview, setSavingReview] = useState(false);
   const [textPrompt, setTextPrompt] = useState("");
 
@@ -205,45 +154,29 @@ export function CharacterImagePromptTagPanel() {
   const shouldInferPose = !isSceneTarget && inferPoseFromImage;
   const nsfwEnabled = project.settings.supportsNsfw === true;
   const targetTagLabel = isSceneTarget ? "场景标签" : "部位标签";
+  const { deletedBuiltInPromptLibraryTagIds, promptLibraryTags } = project.settings;
 
-  const allLibraryTags = useMemo(() => {
-    const custom = project.settings.promptLibraryTags ?? [];
-    const deletedBuiltIns = new Set(project.settings.deletedBuiltInPromptLibraryTagIds ?? []);
-    const builtIns = BUILT_IN_PROMPT_LIBRARY_TAGS.filter((tag) => !deletedBuiltIns.has(tag.id));
-
-    return [...builtIns, ...custom];
-  }, [project.settings.deletedBuiltInPromptLibraryTagIds, project.settings.promptLibraryTags]);
-
-  const libraryTagBySemanticKey = useMemo(
-    () => new Map(allLibraryTags.map((tag) => [getSemanticTagKey(tag), tag])),
-    [allLibraryTags],
+  const allLibraryTags = useMemo(
+    () =>
+      getAvailablePromptLibraryTags({
+        deletedBuiltInPromptLibraryTagIds,
+        promptLibraryTags,
+      }),
+    [deletedBuiltInPromptLibraryTagIds, promptLibraryTags],
   );
 
   if (!visibleForSelection) {
     return null;
   }
 
-  function splitByLibrary(suggestions: BoundPromptTagSuggestion[]): PendingImportReview {
-    const existingSuggestions: Array<BoundPromptTagSuggestion & { libraryTag: PromptTag }> = [];
-    const newSuggestions: BoundPromptTagSuggestion[] = [];
-
-    for (const suggestion of uniqueSuggestions(suggestions)) {
-      const libraryTag = libraryTagBySemanticKey.get(getSemanticTagKey(suggestion.tag));
-      if (libraryTag) {
-        existingSuggestions.push({ ...suggestion, libraryTag });
-      } else {
-        newSuggestions.push(suggestion);
-      }
-    }
-
-    return {
-      suggestions,
-      existingSuggestions,
-      newSuggestions,
-    };
+  function splitByLibrary(suggestions: BoundPromptTagSuggestion[]): PendingPromptTagImportReview {
+    return splitPromptTagSuggestionsByLibrary(suggestions, allLibraryTags);
   }
 
-  async function applySuggestions(review: PendingImportReview, newTagMode: NewPromptTagApplyMode) {
+  async function applySuggestions(
+    review: PendingPromptTagImportReview,
+    newTagMode: NewPromptTagApplyMode,
+  ) {
     const character = selectedCharacter;
     if (!isSceneTarget && !character) {
       return;
@@ -825,103 +758,16 @@ export function CharacterImagePromptTagPanel() {
         <p className="text-xs leading-relaxed text-rose-600">{poseError}</p>
       ) : null}
 
-      {pendingReview && typeof document !== "undefined"
-        ? createPortal(
-            <div
-              aria-modal="true"
-              className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4 backdrop-blur-sm"
-              role="dialog"
-            >
-              <div className="flex max-h-[88vh] w-full max-w-xl flex-col overflow-hidden rounded-md border border-slate-200 bg-white shadow-2xl">
-                <div className="flex items-start gap-3 border-b border-slate-100 bg-pink-50 p-5">
-                  <div className="rounded-md bg-white p-2 text-pink-600">
-                    <Sparkles className="size-5" />
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <h3 className="text-base font-bold text-slate-900">
-                      {isSceneTarget ? "导入新的场景提示词" : "导入新的部位提示词"}
-                    </h3>
-                    <p className="mt-1 text-xs leading-relaxed text-slate-500">
-                      AI 识别到 {pendingReview.newSuggestions.length} 个词库中不存在的词条。可导入词库，也可仅本次保留并应用到当前目标。
-                    </p>
-                  </div>
-                  <button
-                    aria-label="关闭新增提示词确认"
-                    className="rounded-full bg-white/80 p-1.5 text-slate-400 shadow-sm transition-all hover:bg-white hover:text-slate-700 disabled:opacity-50"
-                    disabled={savingReview}
-                    onClick={() => setPendingReview(null)}
-                    type="button"
-                  >
-                    <X className="size-4" />
-                  </button>
-                </div>
-
-                <div className="min-h-0 flex-1 overflow-y-auto p-5 custom-scrollbar">
-                  <ul className="space-y-2">
-                    {pendingReview.newSuggestions.map((suggestion) => {
-                      const targetLabel = getSuggestionTargetLabel(suggestion.target);
-                      const subcategory = suggestion.tag.subcategory
-                        ? PROMPT_TAG_SUBCATEGORY_LABELS[suggestion.tag.subcategory]
-                        : "未分类";
-
-                      return (
-                        <li
-                          className="rounded-md border border-slate-200 bg-slate-50 p-3 text-xs"
-                          key={`${getSuggestionTargetKey(suggestion.target)}:${getSemanticTagKey(suggestion.tag)}`}
-                        >
-                          <div className="flex items-start justify-between gap-3">
-                            <div className="min-w-0">
-                              <p className="font-semibold text-slate-900">
-                                {targetLabel} / {suggestion.tag.label}
-                              </p>
-                              <p className="mt-1 break-words leading-relaxed text-slate-600">
-                                {suggestion.tag.prompt}
-                              </p>
-                            </div>
-                            <span className="shrink-0 rounded-full bg-white px-2 py-0.5 text-[10px] font-medium text-slate-500">
-                              {PROMPT_TAG_CATEGORY_LABELS[suggestion.tag.category]} / {subcategory}
-                            </span>
-                          </div>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                </div>
-
-                <div className="flex flex-col gap-2 border-t border-slate-100 bg-slate-50 p-4 sm:flex-row sm:flex-wrap sm:items-center sm:justify-end sm:gap-3">
-                  <Button
-                    className="h-10 w-full whitespace-nowrap rounded-md border-slate-200 bg-white px-5 text-slate-700 hover:bg-slate-50 sm:w-auto sm:min-w-[148px]"
-                    disabled={savingReview}
-                    onClick={() => void applySuggestions(pendingReview, "skip")}
-                    type="button"
-                    variant="secondary"
-                  >
-                    仅选中已有词条
-                  </Button>
-                  <Button
-                    className="h-10 w-full whitespace-nowrap rounded-md border-pink-200 bg-white px-5 text-pink-700 hover:bg-pink-50 disabled:opacity-60 sm:w-auto sm:min-w-[190px]"
-                    disabled={savingReview}
-                    onClick={() => void applySuggestions(pendingReview, "temporary")}
-                    type="button"
-                    variant="secondary"
-                  >
-                    本次保留，不入词库
-                  </Button>
-                  <Button
-                    className="h-10 w-full whitespace-nowrap rounded-md bg-pink-600 px-5 text-white hover:bg-pink-700 disabled:opacity-60 sm:w-auto sm:min-w-[148px]"
-                    disabled={savingReview}
-                    onClick={() => void applySuggestions(pendingReview, "import")}
-                    type="button"
-                  >
-                    {savingReview ? <Loader2 className="size-4 animate-spin" /> : null}
-                    导入并选中
-                  </Button>
-                </div>
-              </div>
-            </div>,
-            document.body,
-          )
-        : null}
+      {pendingReview ? (
+        <PromptTagImportReviewDialog
+          getSuggestionTargetLabel={getSuggestionTargetLabel}
+          isSaving={savingReview}
+          onApply={(mode) => void applySuggestions(pendingReview, mode)}
+          onCancel={() => setPendingReview(null)}
+          review={pendingReview}
+          title={isSceneTarget ? "导入新的场景提示词" : "导入新的部位提示词"}
+        />
+      ) : null}
     </section>
   );
 }

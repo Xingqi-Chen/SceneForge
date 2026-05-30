@@ -3,10 +3,16 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { getCharacterStickFigurePose } from "@/features/editor/stick-figure-3d/get-character-stick-pose";
 import { createDefaultProject, createDefaultStickFigurePoseV1 } from "@/features/editor/store/defaults";
 import { useEditorStore } from "@/features/editor/store/editor-store";
+import {
+  getAvailablePromptLibraryTags,
+  splitPromptTagSuggestionsByLibrary,
+} from "@/features/editor/components/PromptTagImportReviewDialog";
 import type { PromptTag } from "@/shared/types";
 
 import {
   bindPrimaryTimelineCharacterToEditorStore,
+  createTimelinePromptTagSuggestions,
+  getTimelineCharacterTagsToBind,
   getPrimaryTimelineCharacterPoseFromEditorStore,
 } from "./editor-canvas-binding";
 import type { TimelineCanvasBindingInput } from "./t5-node-adapters";
@@ -191,6 +197,167 @@ describe("editor canvas binding", () => {
       "manual torso note",
       "rainproof signal coat",
     ]);
+  });
+
+  it("inherits existing library tag payloads while keeping timeline IDs and replacement semantics", () => {
+    const input = createBindingInput();
+    const suggestions = createTimelinePromptTagSuggestions(input.characterTags);
+    const resolvedTags = getTimelineCharacterTagsToBind(
+      {
+        suggestions,
+        existingSuggestions: [
+          {
+            ...suggestions[0]!,
+            libraryTag: {
+              id: "library-curated-courier",
+              label: "Curated courier",
+              prompt: "SOLO COURIER PROTAGONIST",
+              category: "character",
+              subcategory: "character-subject",
+              negative: false,
+              weight: { enabled: true, value: 1.35 },
+            },
+          },
+          {
+            ...suggestions[1]!,
+            libraryTag: {
+              id: "library-curated-jacket",
+              label: "Curated jacket",
+              prompt: "REFLECTIVE YELLOW JACKET",
+              category: "outfit",
+              subcategory: "outfit-upper",
+              negative: false,
+              weight: { enabled: true, value: 1.2 },
+            },
+          },
+        ],
+        newSuggestions: [],
+      },
+      "skip",
+    );
+
+    const firstResult = bindPrimaryTimelineCharacterToEditorStore(input, {
+      characterTags: resolvedTags,
+    });
+    let character = useEditorStore.getState().project.scene.characters[0];
+    let torso = character.bodyParts.find((bodyPart) => bodyPart.id === "torso");
+
+    expect(character.promptTags[0]).toMatchObject({
+      id: expect.stringMatching(/^timeline-t5-/),
+      label: "Curated courier",
+      prompt: "SOLO COURIER PROTAGONIST",
+      weight: { enabled: true, value: 1.35 },
+    });
+    expect(character.promptTags[0]?.id).not.toBe("library-curated-courier");
+    expect(torso?.promptTags[0]).toMatchObject({
+      id: expect.stringMatching(/^timeline-t5-/),
+      label: "Curated jacket",
+      prompt: "REFLECTIVE YELLOW JACKET",
+      weight: { enabled: true, value: 1.2 },
+    });
+    expect(torso?.promptTags[0]?.id).not.toBe("library-curated-jacket");
+
+    useEditorStore.getState().updateCharacter(firstResult.primaryCharacter.id, {
+      promptTags: [...character.promptTags, manualCharacterTag],
+    });
+
+    const secondInput = createBindingInput({
+      characterTags: [
+        {
+          targetKind: "character",
+          label: "Scout",
+          prompt: "solo scout protagonist",
+          category: "character",
+          subcategory: "character-subject",
+          negative: false,
+          weight: { enabled: false, value: 1 },
+        },
+      ],
+    });
+    const secondSuggestions = createTimelinePromptTagSuggestions(secondInput.characterTags);
+    const secondResolvedTags = getTimelineCharacterTagsToBind(
+      {
+        suggestions: secondSuggestions,
+        existingSuggestions: [
+          {
+            ...secondSuggestions[0]!,
+            libraryTag: {
+              id: "library-scout",
+              label: "Library scout",
+              prompt: "solo scout protagonist",
+              category: "character",
+              subcategory: "character-subject",
+              weight: { enabled: false, value: 1 },
+            },
+          },
+        ],
+        newSuggestions: [],
+      },
+      "skip",
+    );
+
+    bindPrimaryTimelineCharacterToEditorStore(secondInput, {
+      characterTags: secondResolvedTags,
+    });
+    character = useEditorStore.getState().project.scene.characters[0];
+    torso = character.bodyParts.find((bodyPart) => bodyPart.id === "torso");
+
+    expect(character.promptTags.map((tag) => tag.prompt)).toEqual([
+      "manual character note",
+      "solo scout protagonist",
+    ]);
+    expect(character.promptTags[1]?.id).toMatch(/^timeline-t5-/);
+    expect(torso?.promptTags.map((tag) => tag.prompt)).toEqual([]);
+  });
+
+  it("matches built-in prompt library tags before binding timeline tags", () => {
+    const input = createBindingInput({
+      characterTags: [
+        {
+          targetKind: "character",
+          label: "Generated low quality",
+          prompt: "  LOW QUALITY  ",
+          category: "negative",
+          subcategory: "negative-quality",
+          negative: true,
+          weight: { enabled: true, value: 1.8 },
+        },
+      ],
+    });
+    const review = splitPromptTagSuggestionsByLibrary(
+      createTimelinePromptTagSuggestions(input.characterTags),
+      getAvailablePromptLibraryTags(createDefaultProject().settings),
+    );
+
+    expect(review.existingSuggestions).toHaveLength(1);
+    expect(review.newSuggestions).toHaveLength(0);
+    expect(review.existingSuggestions[0]?.libraryTag).toMatchObject({
+      id: "library-negative-low-quality",
+      label: "低质量",
+      prompt: "low quality",
+      category: "negative",
+      subcategory: "negative-quality",
+      negative: true,
+      weight: { enabled: false, value: 1 },
+    });
+
+    bindPrimaryTimelineCharacterToEditorStore(input, {
+      characterTags: getTimelineCharacterTagsToBind(review, "skip"),
+    });
+
+    const character = useEditorStore.getState().project.scene.characters[0];
+
+    expect(character.promptTags).toHaveLength(1);
+    expect(character.promptTags[0]).toMatchObject({
+      id: expect.stringMatching(/^timeline-t5-/),
+      label: "低质量",
+      prompt: "low quality",
+      category: "negative",
+      subcategory: "negative-quality",
+      negative: true,
+      weight: { enabled: false, value: 1 },
+    });
+    expect(character.promptTags[0]?.id).not.toBe("library-negative-low-quality");
   });
 
   it("preserves parsed prompt-tag metadata when binding timeline tags", () => {

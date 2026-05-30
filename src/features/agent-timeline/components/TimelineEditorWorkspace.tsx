@@ -1,10 +1,9 @@
 "use client";
 
 import { useEffect, useMemo } from "react";
-import { Box, CheckCircle2, CircleDashed, Tags } from "lucide-react";
+import { Box, CheckCircle2, CircleDashed } from "lucide-react";
 
 import { CanvasViewport } from "@/features/editor/components/CanvasViewport";
-import { PromptTagPickerPanel } from "@/features/editor/components/PromptTagPickerPanel";
 import { useEditorStore } from "@/features/editor/store/editor-store";
 import type {
   CanvasBindingTimelineResult,
@@ -136,7 +135,6 @@ export function TimelineEditorWorkspace({
       : undefined) ??
     project.scene.characters.find((character) => character.characterSpace === "3d") ??
     project.scene.characters[0];
-  const tagCount = getCharacterPromptTagCount(boundCharacter);
   const summary = getBindingSummary({
     action,
     boundCharacter,
@@ -168,52 +166,30 @@ export function TimelineEditorWorkspace({
 
   return (
     <div className="flex flex-col gap-3" data-testid="timeline-editor-workspace">
-      <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(18rem,24rem)]">
-        <section className="min-h-[28rem] overflow-hidden rounded-md border border-slate-200 bg-slate-50">
-          <div className="flex items-center justify-between gap-3 border-b border-slate-200 bg-white px-3 py-2">
-            <div className="flex min-w-0 items-center gap-2">
-              <Box className="size-4 shrink-0 text-indigo-600" />
-              <div className="min-w-0">
-                <h3 className="truncate text-xs font-semibold uppercase tracking-wide text-slate-500">
-                  3D editor canvas
-                </h3>
-                <p className="truncate text-[11px] text-slate-500">{summary.label}</p>
-              </div>
+      <section className="min-h-[34rem] overflow-hidden rounded-md border border-slate-200 bg-slate-50">
+        <div className="flex items-center justify-between gap-3 border-b border-slate-200 bg-white px-3 py-2">
+          <div className="flex min-w-0 items-center gap-2">
+            <Box className="size-4 shrink-0 text-indigo-600" />
+            <div className="min-w-0">
+              <h3 className="truncate text-xs font-semibold uppercase tracking-wide text-slate-500">
+                3D editor canvas
+              </h3>
+              <p className="truncate text-[11px] text-slate-500">{summary.label}</p>
             </div>
-            <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] font-medium text-slate-600">
-              {binding && boundCharacter ? (
-                <CheckCircle2 className="size-3 text-emerald-600" />
-              ) : (
-                <CircleDashed className="size-3 text-amber-600" />
-              )}
-              {project.scene.mode.toUpperCase()}
-            </span>
           </div>
-          <div className="h-[25rem]">
-            <CanvasViewport />
-          </div>
-        </section>
-
-        <section className="min-h-[28rem] overflow-hidden rounded-md border border-slate-200 bg-white">
-          <div className="flex items-center justify-between gap-3 border-b border-slate-200 bg-white px-3 py-2">
-            <div className="flex min-w-0 items-center gap-2">
-              <Tags className="size-4 shrink-0 text-pink-600" />
-              <div className="min-w-0">
-                <h3 className="truncate text-xs font-semibold uppercase tracking-wide text-slate-500">
-                  Prompt tag binding
-                </h3>
-                <p className="truncate text-[11px] text-slate-500">{summary.detail}</p>
-              </div>
-            </div>
-            <span className="shrink-0 rounded-full border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] font-medium text-slate-600">
-              {tagCount} tags
-            </span>
-          </div>
-          <div className="custom-scrollbar max-h-[25rem] overflow-y-auto p-3">
-            <PromptTagPickerPanel />
-          </div>
-        </section>
-      </div>
+          <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] font-medium text-slate-600">
+            {binding && boundCharacter ? (
+              <CheckCircle2 className="size-3 text-emerald-600" />
+            ) : (
+              <CircleDashed className="size-3 text-amber-600" />
+            )}
+            {project.scene.mode.toUpperCase()}
+          </span>
+        </div>
+        <div className="h-[34rem] min-h-[34rem] lg:h-[44rem]">
+          <CanvasViewport />
+        </div>
+      </section>
 
       <details className="rounded-md border border-slate-200 bg-slate-50">
         <summary className="cursor-pointer px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">

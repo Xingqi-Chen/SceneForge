@@ -36,6 +36,7 @@ import {
   createTimelineT5NodeAdapters,
   normalizeCharacterTagsTimelineResult,
   normalizeScenePromptTimelineResult,
+  type TimelineCanvasBindingInput,
 } from "@/features/agent-timeline/t5-node-adapters";
 import {
   timelineNodeIds,
@@ -50,8 +51,18 @@ import {
 } from "@/features/agent-timeline/types";
 import {
   bindPrimaryTimelineCharacterToEditorStore,
+  createTimelinePromptTagSuggestions,
+  getTimelineCharacterTagsToBind,
   getPrimaryTimelineCharacterPoseFromEditorStore,
 } from "@/features/agent-timeline/editor-canvas-binding";
+import {
+  getAvailablePromptLibraryTags,
+  PromptTagImportReviewDialog,
+  splitPromptTagSuggestionsByLibrary,
+  type NewPromptTagApplyMode,
+  type PendingPromptTagImportReview,
+} from "@/features/editor/components/PromptTagImportReviewDialog";
+import { useEditorStore } from "@/features/editor/store/editor-store";
 import {
   getLlmProxyErrorMessage,
   isLlmChatResponse,
@@ -59,6 +70,8 @@ import {
   type LlmChatRequest,
   type LlmChatResponse,
 } from "@/features/llm";
+import { savePromptLibrary } from "@/features/persistence";
+import type { CharacterPromptTagTarget } from "@/features/prompt-engine/prompt-library/character-image-prompt-tags";
 import { cn } from "@/shared/utils/cn";
 
 import { TimelineNodeStatus as TimelineStatusChip } from "./TimelineNodeStatus";
@@ -73,6 +86,13 @@ type DraftMap = Partial<Record<TimelineNodeId, string>>;
 type NoticeMap = Partial<Record<TimelineNodeId, string>>;
 type OutputDisplayMode = "json" | "visual";
 type OutputDisplayModeMap = Partial<Record<TimelineNodeId, OutputDisplayMode>>;
+
+type PendingTimelinePromptTagReview = {
+  input: TimelineCanvasBindingInput;
+  reject: (error: Error) => void;
+  resolve: (mode: NewPromptTagApplyMode) => void;
+  review: PendingPromptTagImportReview;
+};
 
 type StepDisplay = {
   agent: string;
@@ -314,6 +334,10 @@ export function TimelineShell() {
   const [notices, setNotices] = useState<NoticeMap>({});
   const [isRunning, setIsRunning] = useState(false);
   const activeRunIdRef = useRef(0);
+  const [pendingPromptTagReview, setPendingPromptTagReview] =
+    useState<PendingTimelinePromptTagReview | null>(null);
+  const [isSavingPromptTagReview, setIsSavingPromptTagReview] = useState(false);
+  const pendingPromptTagReviewRef = useRef<PendingTimelinePromptTagReview | null>(null);
 
   const previewWorkflow = useMemo(() => createTimelineWorkflowState({ workflowId: "draft-workflow" }), []);
   const activeWorkflow = workflow ?? previewWorkflow;
@@ -326,6 +350,8 @@ export function TimelineShell() {
   const selectedOutputDisplayMode: OutputDisplayMode = selectedHasVisualOutput
     ? outputDisplayModes[selectedNodeId] ?? "visual"
     : "json";
+  const selectedUsesWideCanvasOutput =
+    selectedNodeId === "canvas-binding" && selectedOutputDisplayMode === "visual";
   const selectedRawEditable = canRawEditNode(selectedNodeId, workflow);
   const selectedIsNonEditableAiNode = nonEditableAiNodeIds.has(selectedNodeId);
   const selectedIsVisualOnlyEditable = selectedNodeId === "canvas-binding";
@@ -338,9 +364,30 @@ export function TimelineShell() {
   const workflowTitle = workflow ? sceneRequest : "Untitled workflow";
   const workflowMode = workflow ? "Run shell" : "Draft setup";
 
+  function clearPendingPromptTagReview() {
+    pendingPromptTagReviewRef.current = null;
+    setPendingPromptTagReview(null);
+    setIsSavingPromptTagReview(false);
+  }
+
+  function cancelPendingPromptTagReview(message: string) {
+    const pending = pendingPromptTagReviewRef.current;
+    if (!pending) {
+      return;
+    }
+
+    pending.reject(new Error(message));
+    clearPendingPromptTagReview();
+  }
+
   useEffect(() => {
     return () => {
       activeRunIdRef.current += 1;
+      const pending = pendingPromptTagReviewRef.current;
+      if (pending) {
+        pending.reject(new Error("Timeline run was superseded."));
+        pendingPromptTagReviewRef.current = null;
+      }
     };
   }, []);
 
@@ -350,6 +397,125 @@ export function TimelineShell() {
 
   function invalidateTimelineRun() {
     activeRunIdRef.current += 1;
+    cancelPendingPromptTagReview("Timeline run was superseded.");
+  }
+
+  function getCurrentPromptLibraryTags() {
+    return getAvailablePromptLibraryTags(useEditorStore.getState().project.settings);
+  }
+
+  function requestTimelinePromptTagReview(
+    input: TimelineCanvasBindingInput,
+    review: PendingPromptTagImportReview,
+  ) {
+    const existingPending = pendingPromptTagReviewRef.current;
+    if (existingPending) {
+      existingPending.reject(new Error("Timeline prompt tag review was superseded."));
+    }
+
+    return new Promise<NewPromptTagApplyMode>((resolve, reject) => {
+      const pending = {
+        input,
+        reject,
+        resolve,
+        review,
+      };
+
+      pendingPromptTagReviewRef.current = pending;
+      setPendingPromptTagReview(pending);
+      setIsSavingPromptTagReview(false);
+      setSelectedNodeId("canvas-binding");
+      setOutputDisplayModes((current) => ({
+        ...current,
+        "canvas-binding": "visual",
+      }));
+      setNotices((current) => ({
+        ...current,
+        "canvas-binding": `Review ${review.newSuggestions.length} new prompt tags before applying layout planning.`,
+      }));
+    });
+  }
+
+  async function bindCanvasWithPromptLibraryReview(
+    input: TimelineCanvasBindingInput,
+    runId: number,
+  ) {
+    const suggestions = createTimelinePromptTagSuggestions(input.characterTags);
+    const review = splitPromptTagSuggestionsByLibrary(suggestions, getCurrentPromptLibraryTags());
+
+    if (review.newSuggestions.length === 0) {
+      return bindPrimaryTimelineCharacterToEditorStore(input, {
+        characterTags: getTimelineCharacterTagsToBind(review, "skip"),
+      });
+    }
+
+    try {
+      const newTagMode = await requestTimelinePromptTagReview(input, review);
+
+      if (!isCurrentRun(runId)) {
+        throw new Error("Timeline run was superseded.");
+      }
+
+      if (newTagMode === "import") {
+        useEditorStore
+          .getState()
+          .importPromptLibraryTags(review.newSuggestions.map((suggestion) => suggestion.tag));
+        const nextProject = useEditorStore.getState().project;
+        await savePromptLibrary({
+          promptLibraryTags: nextProject.settings.promptLibraryTags ?? [],
+          deletedBuiltInPromptLibraryTagIds:
+            nextProject.settings.deletedBuiltInPromptLibraryTagIds ?? [],
+        });
+
+        const importedReview = splitPromptTagSuggestionsByLibrary(
+          suggestions,
+          getCurrentPromptLibraryTags(),
+        );
+
+        return bindPrimaryTimelineCharacterToEditorStore(input, {
+          characterTags: getTimelineCharacterTagsToBind(importedReview, "temporary"),
+        });
+      }
+
+      return bindPrimaryTimelineCharacterToEditorStore(input, {
+        characterTags: getTimelineCharacterTagsToBind(review, newTagMode),
+      });
+    } finally {
+      clearPendingPromptTagReview();
+    }
+  }
+
+  function handleApplyPromptTagReview(mode: NewPromptTagApplyMode) {
+    const pending = pendingPromptTagReviewRef.current;
+    if (!pending) {
+      return;
+    }
+
+    setIsSavingPromptTagReview(true);
+    pending.resolve(mode);
+  }
+
+  function handleCancelPromptTagReview() {
+    const message =
+      "Layout planning prompt tag review was canceled. Rerun layout planning to try again.";
+
+    setNotices((current) => ({
+      ...current,
+      "canvas-binding": message,
+    }));
+    cancelPendingPromptTagReview(message);
+  }
+
+  function getTimelinePromptTagTargetLabel(target: CharacterPromptTagTarget) {
+    if (target.kind === "character") {
+      return pendingPromptTagReview?.input.primaryCharacter.name ?? "人物";
+    }
+
+    if (target.kind === "bodyPart") {
+      return target.bodyPartId;
+    }
+
+    return "场景";
   }
 
   async function runTimelineGraph(nextWorkflow: TimelineWorkflowState) {
@@ -376,12 +542,12 @@ export function TimelineShell() {
 
             return response;
           },
-          bindCanvas: (input) => {
+          bindCanvas: async (input) => {
             if (!isCurrentRun(runId)) {
               throw new Error("Timeline run was superseded.");
             }
 
-            return bindPrimaryTimelineCharacterToEditorStore(input);
+            return bindCanvasWithPromptLibraryReview(input, runId);
           },
           getCurrentPose: getPrimaryTimelineCharacterPoseFromEditorStore,
         }),
@@ -389,6 +555,27 @@ export function TimelineShell() {
 
       if (!isCurrentRun(runId)) {
         return;
+      }
+
+      const canvasBindingError = result.nodes["canvas-binding"].error;
+      if (canvasBindingError) {
+        setNotices((current) => ({
+          ...current,
+          "canvas-binding": canvasBindingError.message,
+        }));
+        if (canvasBindingError.message.includes("prompt tag review")) {
+          setSelectedNodeId("canvas-binding");
+        }
+      } else {
+        setNotices((current) => {
+          if (!current["canvas-binding"]) {
+            return current;
+          }
+
+          const next = { ...current };
+          delete next["canvas-binding"];
+          return next;
+        });
       }
 
       setWorkflow(result);
@@ -658,7 +845,12 @@ export function TimelineShell() {
         </aside>
 
         <section className="sf-agent-workbench__main custom-scrollbar touch-scroll-region order-1 min-h-0 flex-1 overflow-y-auto bg-slate-100 p-4 lg:order-2 lg:min-w-0">
-          <div className="mx-auto flex w-full max-w-4xl flex-col gap-4">
+          <div
+            className={cn(
+              "mx-auto flex w-full flex-col gap-4",
+              selectedUsesWideCanvasOutput ? "max-w-7xl" : "max-w-4xl",
+            )}
+          >
             <article className="overflow-hidden rounded-md border border-slate-200 bg-white shadow-sm">
               <header className="flex flex-col gap-3 border-b border-slate-100 px-4 py-3 sm:flex-row sm:items-start sm:justify-between">
                 <div className="flex min-w-0 items-start gap-3">
@@ -986,6 +1178,17 @@ export function TimelineShell() {
           </div>
         </aside>
       </div>
+
+      {pendingPromptTagReview ? (
+        <PromptTagImportReviewDialog
+          getSuggestionTargetLabel={getTimelinePromptTagTargetLabel}
+          isSaving={isSavingPromptTagReview}
+          onApply={handleApplyPromptTagReview}
+          onCancel={handleCancelPromptTagReview}
+          review={pendingPromptTagReview.review}
+          title="导入新的部位提示词"
+        />
+      ) : null}
     </main>
   );
 }

@@ -4,6 +4,32 @@ This log records dated implementation and documentation work. Keep entries conci
 
 ## 2026-05-29
 
+### Issue #11 Node 5 Canvas Binding Review
+
+Summary:
+
+- Removed the prompt tag picker from the Node 5 visual output so layout planning shows the existing 3D canvas only.
+- Expanded the Node 5 visual workspace width and canvas height while keeping the three-column workbench shell intact.
+- Extracted the reverse prompt-tag missing-library review dialog and semantic matching helpers for reuse by the original character image prompt-tag panel and timeline Node 5.
+- Added Node 5 prompt-library review handling for skip, transient bind, and import-and-bind choices before committing timeline prompt tags to the editor store.
+
+Files changed:
+
+- `src/features/editor/components/PromptTagImportReviewDialog.tsx`
+- `src/features/editor/components/CharacterImagePromptTagPanel.tsx`
+- `src/features/agent-timeline/components/TimelineEditorWorkspace.tsx`
+- `src/features/agent-timeline/components/TimelineShell.tsx`
+- `src/features/agent-timeline/components/TimelineShell.test.tsx`
+- `src/features/agent-timeline/editor-canvas-binding.ts`
+- `src/features/agent-timeline/editor-canvas-binding.test.ts`
+- `docs/dev-log.md`
+
+Validation:
+
+- `npm test -- src/features/agent-timeline` passed.
+- `npm run typecheck` passed.
+- `npm run lint` passed with pre-existing `no-img-element` warnings in editor image-heavy panels.
+
 ### T5 Timeline Prompt Tag Metadata Fix
 
 Summary:
