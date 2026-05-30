@@ -124,6 +124,10 @@ import {
   type ComicSequencePreviousShotSource,
 } from "@/features/editor/comic-sequence-previous-shot";
 import {
+  planComicSequenceGeneration,
+  type ComicSequenceSubmitMode,
+} from "@/features/editor/comic-sequence-generation";
+import {
   applyComicSequenceShotSettingsPatchToSequence,
   type ComicSequenceShotSettingsPatch,
 } from "@/features/editor/comic-sequence-shot-settings";
@@ -7540,6 +7544,7 @@ function ComicSequenceWorkspaceDialog({
   const [controlNetNormalPreviewLoading, setControlNetNormalPreviewLoading] = useState(false);
   const [parameterSyncDownEnabled, setParameterSyncDownEnabled] = useState(false);
   const [submitStatus, setSubmitStatus] = useState<SubmitStatus>("idle");
+  const [activeSubmitMode, setActiveSubmitMode] = useState<ComicSequenceSubmitMode | null>(null);
   const [submitError, setSubmitError] = useState("");
   const [waitMessage, setWaitMessage] = useState("");
   const [historySaveStatus, setHistorySaveStatus] = useState<"idle" | "saving" | "success" | "error">("idle");
@@ -7972,6 +7977,7 @@ function ComicSequenceWorkspaceDialog({
       setLoadError("");
       setDownloadItems([]);
       setSubmitStatus("idle");
+      setActiveSubmitMode(null);
       setSubmitError("");
       setWaitMessage("");
       setHistorySaveStatus("idle");
@@ -8457,7 +8463,7 @@ function ComicSequenceWorkspaceDialog({
     return references.filter((reference): reference is NonNullable<(typeof references)[number]> => reference !== null);
   }
 
-  async function submitSequence() {
+  async function submitSequence(mode: ComicSequenceSubmitMode = "sequence") {
     if (!sequence || sequence.shots.length === 0) {
       setSubmitStatus("error");
       setSubmitError("Add at least one shot from the current canvas.");
@@ -8470,11 +8476,15 @@ function ComicSequenceWorkspaceDialog({
       return;
     }
 
-    const selectedShotIndex = sequence.selectedShotId
-      ? sequence.shots.findIndex((shot) => shot.id === sequence.selectedShotId)
-      : 0;
-    const sequenceStartIndex = selectedShotIndex >= 0 ? selectedShotIndex : 0;
-    const shotsToGenerate = sequence.shots.slice(sequenceStartIndex);
+    const generationPlan = planComicSequenceGeneration({
+      mode,
+      results,
+      selectedShotId: sequence.selectedShotId,
+      shots: sequence.shots,
+    });
+    const sequenceStartIndex = generationPlan.selectedShotIndex;
+    const shotsToGenerate = generationPlan.shotsToGenerate;
+    const generateSingleShot = mode === "shot";
 
     if (shotsToGenerate.length === 0) {
       setSubmitStatus("error");
@@ -8483,24 +8493,38 @@ function ComicSequenceWorkspaceDialog({
     }
 
     setSubmitStatus("loading");
+    setActiveSubmitMode(mode);
     setSubmitError("");
-    setWaitMessage(`Preparing shots ${sequenceStartIndex + 1}-${sequence.shots.length}...`);
+    setWaitMessage(
+      generateSingleShot
+        ? `Preparing Shot ${sequenceStartIndex + 1}...`
+        : `Preparing shots ${sequenceStartIndex + 1}-${sequence.shots.length}...`,
+    );
     setHistorySaveStatus("idle");
     setHistorySaveMessage("");
-    setSavedCurrentImageKeys(new Set());
+    if (!generateSingleShot) {
+      setSavedCurrentImageKeys(new Set());
+    }
 
     try {
       const clientId = createComfyUiClientId();
       const sequenceId = createLocalId("sequence");
       const shotIndexById = new Map(sequence.shots.map((shot, index) => [shot.id, index]));
-      const retainedResults = results.filter((result) => {
-        const shotIndex = result.shotId ? shotIndexById.get(result.shotId) : undefined;
-        return shotIndex !== undefined && shotIndex < sequenceStartIndex;
-      });
+      const retainedResults = generationPlan.retainedResults;
       const workingResults = [...retainedResults];
       const allWarnings: string[] = [];
+      const setOrderedWorkingResults = () => {
+        setResults(
+          [...workingResults].sort((left, right) => {
+            const leftIndex = left.shotId ? shotIndexById.get(left.shotId) : undefined;
+            const rightIndex = right.shotId ? shotIndexById.get(right.shotId) : undefined;
 
-      setResults(workingResults);
+            return (leftIndex ?? Number.MAX_SAFE_INTEGER) - (rightIndex ?? Number.MAX_SAFE_INTEGER);
+          }),
+        );
+      };
+
+      setOrderedWorkingResults();
 
       const updateWorkingResult = (promptId: string, images: ComfyUiGeneratedImage[]) => {
         const resultIndex = workingResults.findIndex((result) => result.promptId === promptId);
@@ -8512,7 +8536,7 @@ function ComicSequenceWorkspaceDialog({
           ...workingResults[resultIndex],
           images,
         };
-        setResults([...workingResults]);
+        setOrderedWorkingResults();
       };
 
       const buildTextToImageShot = async (shot: SavedComicSequenceShot, shotNumber: number) => {
@@ -8780,7 +8804,7 @@ function ComicSequenceWorkspaceDialog({
           };
 
           workingResults.push(queuedResult);
-          setResults([...workingResults]);
+          setOrderedWorkingResults();
           setWaitMessage(`Waiting for ${shot.title} (${previousAction})...`);
           const history = await waitForComfyUiGeneratedImages(shotClientId, payload.promptId, 1, (historyUpdate) => {
             if (historyUpdate.images.length > 0) {
@@ -8834,7 +8858,7 @@ function ComicSequenceWorkspaceDialog({
         };
 
         workingResults.push(queuedResult);
-        setResults([...workingResults]);
+        setOrderedWorkingResults();
         setWaitMessage(`Waiting for ${queuedShot.title ?? queuedShot.shotId} (${queuedShot.imageCount} images)...`);
         const history = await waitForComfyUiGeneratedImages(queuedShot.clientId ?? "", queuedShot.promptId, queuedShot.imageCount, (historyUpdate) => {
           if (historyUpdate.images.length > 0) {
@@ -8850,13 +8874,17 @@ function ComicSequenceWorkspaceDialog({
       setHistorySaveMessage(
         warnings.length > 0
           ? warnings.join(" ")
-          : "Sequence images generated. Save the candidates you want to keep.",
+          : generateSingleShot
+            ? "Shot images generated. Save the candidates you want to keep."
+            : "Sequence images generated. Save the candidates you want to keep.",
       );
       setHistorySaveStatus(warnings.length > 0 ? "error" : "idle");
     } catch (error) {
       setWaitMessage("");
       setSubmitStatus("error");
       setSubmitError(error instanceof Error ? error.message : "ComfyUI sequence request failed.");
+    } finally {
+      setActiveSubmitMode(null);
     }
   }
 
@@ -9690,12 +9718,30 @@ function ComicSequenceWorkspaceDialog({
               Close
             </Button>
             <Button
+              className="h-10 rounded-md border-sky-200 bg-white text-sky-700 hover:bg-sky-50"
+              disabled={submitStatus === "loading" || !selectedShot || !allResourceDownloadsReady}
+              onClick={() => void submitSequence("shot")}
+              type="button"
+              variant="secondary"
+            >
+              {submitStatus === "loading" && activeSubmitMode === "shot" ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <Play className="size-4" />
+              )}
+              Generate shot
+            </Button>
+            <Button
               className="h-10 rounded-md bg-sky-600 text-white hover:bg-sky-700"
               disabled={submitStatus === "loading" || !sequence?.shots.length || !allResourceDownloadsReady}
-              onClick={() => void submitSequence()}
+              onClick={() => void submitSequence("sequence")}
               type="button"
             >
-              {submitStatus === "loading" ? <Loader2 className="size-4 animate-spin" /> : <Play className="size-4" />}
+              {submitStatus === "loading" && activeSubmitMode === "sequence" ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <Play className="size-4" />
+              )}
               Generate sequence
             </Button>
           </div>

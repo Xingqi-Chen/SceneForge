@@ -2,6 +2,29 @@
 
 This log records dated implementation and documentation work. Keep entries concise and evidence-oriented.
 
+## 2026-05-30
+
+### Comic Sequence Single-Shot Generation Button
+
+Summary:
+
+- Added a `Generate shot` action to the Comic Sequence workspace footer before `Generate sequence`.
+- Reused the existing ComfyUI shot submission path while limiting the new action to the currently selected shot.
+- Kept the existing sequence action generating from the selected shot onward.
+
+Files changed:
+
+- `src/features/editor/components/ImageGenerationPanel.tsx`
+- `src/features/editor/comic-sequence-generation.ts`
+- `src/features/editor/comic-sequence-generation.test.ts`
+- `docs/dev-log.md`
+
+Validation:
+
+- `npm test -- src/features/editor/comic-sequence-generation.test.ts` passed.
+- `npm run typecheck` passed.
+- `npm run lint -- src/features/editor/comic-sequence-generation.ts src/features/editor/comic-sequence-generation.test.ts src/features/editor/components/ImageGenerationPanel.tsx` passed with existing `@next/next/no-img-element` warnings in `ImageGenerationPanel.tsx`.
+
 ## 2026-05-29
 
 ### Issue #11 Node 5 Layout Planning UI Follow-up
