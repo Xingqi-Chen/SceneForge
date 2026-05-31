@@ -353,6 +353,7 @@ describe("ComfyUI sequence image route", () => {
             scheduler: "normal",
             width: 1024,
             height: 768,
+            steps: 30,
             batchSize: 4,
             faceDetailer: {
               enabled: true,
@@ -377,9 +378,12 @@ describe("ComfyUI sequence image route", () => {
     expect(fetchSpy).toHaveBeenCalledTimes(2);
     expect(promptBodies).toHaveLength(1);
     expect(findPromptNode(promptBodies[0], "EmptyLatentImage")?.inputs).toMatchObject({
-      width: 512,
-      height: 384,
+      width: 1024,
+      height: 768,
       batch_size: 1,
+    });
+    expect(findPromptNode(promptBodies[0], "KSampler")?.inputs).toMatchObject({
+      steps: 10,
     });
     expect(findPromptNode(promptBodies[0], "FaceDetailer")).toBeUndefined();
     expect(payload).toMatchObject({
@@ -389,8 +393,9 @@ describe("ComfyUI sequence image route", () => {
           imageCount: 1,
           promptId: "prompt-preview-shot",
           request: {
-            width: 512,
-            height: 384,
+            width: 1024,
+            height: 768,
+            steps: 10,
             batchSize: 1,
             faceDetailer: {
               enabled: false,
@@ -444,6 +449,7 @@ describe("ComfyUI sequence image route", () => {
             scheduler: "normal",
             width: 1024,
             height: 768,
+            steps: 30,
             batchSize: 4,
             controlNets: [
               {
@@ -481,9 +487,12 @@ describe("ComfyUI sequence image route", () => {
     expect(promptBodies[0].prompt["4"].inputs.image).toBe("SceneForge/uploaded-openpose.png");
     expect(promptBodies[0].prompt["7"].inputs.image).toBe("SceneForge/uploaded-normal.png");
     expect(findPromptNode(promptBodies[0], "EmptyLatentImage")?.inputs).toMatchObject({
-      width: 512,
-      height: 384,
+      width: 1024,
+      height: 768,
       batch_size: 1,
+    });
+    expect(findPromptNode(promptBodies[0], "KSampler")?.inputs).toMatchObject({
+      steps: 10,
     });
     expect(payload).toMatchObject({
       sequenceId: "seq-preview-controlnet",
@@ -493,8 +502,9 @@ describe("ComfyUI sequence image route", () => {
           outputNodeId: "13",
           promptId: "prompt-preview-controlnet-shot",
           request: {
-            width: 512,
-            height: 384,
+            width: 1024,
+            height: 768,
+            steps: 10,
             batchSize: 1,
             controlNets: [
               {

@@ -52,7 +52,6 @@ import {
   DEFAULT_COMFYUI_INPAINT_MODE,
   MIN_COMFYUI_VAE_INPAINT_DENOISE,
   COMFYUI_LATENT_IMAGE_NODE_OPTIONS,
-  getComfyUiPreviewDimensions,
   normalizeComfyUiInpaintDenoiseForMode,
   type ComfyUiGeneratedImage,
   type ComfyUiGenerateSam2MaskResponse,
@@ -5364,30 +5363,12 @@ export function ComfyUiGenerationDialog({
       }
       setWaitMessage(`已准备生成 ${imageCount} 张图片，正在提交到 ComfyUI...`);
 
-      const requestDraft = previewMode
-        ? {
-            ...draft,
-            ...getComfyUiPreviewDimensions({
-              height: draft.height,
-              width: draft.width,
-            }),
-          }
-        : draft;
+      const requestDraft = draft;
       const requestControlNetOpenPosePreview = allowControlNet
-        ? previewMode
-          ? buildComfyUiControlNetOpenPosePreview(scene, {
-              width: requestDraft.width,
-              height: requestDraft.height,
-            })
-          : controlNetOpenPosePreview
+        ? controlNetOpenPosePreview
         : null;
       const requestControlNetNormalPreview = allowControlNet
-        ? previewMode && requestDraft.controlNets.normal.enabled
-          ? await renderComfyUiNormalControlImage(scene, {
-              width: requestDraft.width,
-              height: requestDraft.height,
-            })
-          : controlNetNormalPreview
+        ? controlNetNormalPreview
         : null;
 
       const baseRequestPayload = toRequestPayload(
@@ -8751,15 +8732,7 @@ function ComicSequenceWorkspaceDialog({
           shotPrompt: shot.shotPrompt,
         });
         const negativePrompt = mergeNegativePrompts([baseNegativePrompt, shot.negativePrompt]);
-        const requestShotDraft = previewMode
-          ? {
-              ...shotDraft,
-              ...getComfyUiPreviewDimensions({
-                height: shotDraft.height,
-                width: shotDraft.width,
-              }),
-            }
-          : shotDraft;
+        const requestShotDraft = shotDraft;
         const shotPreview = buildComfyUiControlNetOpenPosePreview(shot.scene, {
           width: requestShotDraft.width,
           height: requestShotDraft.height,

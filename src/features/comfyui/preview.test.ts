@@ -1,50 +1,18 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  COMFYUI_PREVIEW_MAX_SIDE,
+  COMFYUI_PREVIEW_STEPS,
   createComfyUiTextToImagePreviewRequest,
-  getComfyUiPreviewDimensions,
 } from "./preview";
 
 describe("ComfyUI preview request transform", () => {
-  it("reduces dimensions while preserving the original aspect ratio", () => {
-    const dimensions = getComfyUiPreviewDimensions({ width: 2048, height: 1024 });
-
-    expect(dimensions).toEqual({ width: 512, height: 256 });
-    expect(dimensions.width / dimensions.height).toBeCloseTo(2, 5);
-  });
-
-  it("keeps preview dimensions compatible with ComfyUI latent constraints", () => {
-    const dimensions = getComfyUiPreviewDimensions({ width: 1000, height: 600 });
-
-    expect(Math.max(dimensions.width, dimensions.height)).toBeLessThanOrEqual(COMFYUI_PREVIEW_MAX_SIDE);
-    expect(dimensions.width).toBeGreaterThanOrEqual(16);
-    expect(dimensions.height).toBeGreaterThanOrEqual(16);
-    expect(dimensions.width % 8).toBe(0);
-    expect(dimensions.height % 8).toBe(0);
-    expect(dimensions.width / dimensions.height).toBeCloseTo(1000 / 600, 1);
-  });
-
-  it("does not upscale requests that are already at preview size", () => {
-    expect(getComfyUiPreviewDimensions({ width: 320, height: 256 })).toEqual({
-      width: 320,
-      height: 256,
-    });
-  });
-
-  it("uses safe default source dimensions when width or height are omitted", () => {
-    expect(getComfyUiPreviewDimensions({})).toEqual({
-      width: 512,
-      height: 512,
-    });
-  });
-
-  it("disables detailers and limits the batch to one image", () => {
+  it("keeps dimensions, disables detailers, limits batch size, and uses preview steps", () => {
     const request = createComfyUiTextToImagePreviewRequest({
       checkpointName: "model.safetensors",
       positivePrompt: "a scene",
       width: 1024,
       height: 768,
+      steps: 30,
       batchSize: 4,
       faceDetailer: {
         enabled: true,
@@ -56,8 +24,9 @@ describe("ComfyUI preview request transform", () => {
     });
 
     expect(request).toMatchObject({
-      width: 512,
-      height: 384,
+      width: 1024,
+      height: 768,
+      steps: COMFYUI_PREVIEW_STEPS,
       batchSize: 1,
       preview: true,
       faceDetailer: {
@@ -68,5 +37,14 @@ describe("ComfyUI preview request transform", () => {
         enabled: false,
       },
     });
+  });
+
+  it("sets preview steps even when the original request does not include steps", () => {
+    const request = createComfyUiTextToImagePreviewRequest({
+      checkpointName: "model.safetensors",
+      positivePrompt: "a scene",
+    });
+
+    expect(request.steps).toBe(COMFYUI_PREVIEW_STEPS);
   });
 });

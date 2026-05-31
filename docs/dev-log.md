@@ -11,6 +11,7 @@ Summary:
 - Added a shared ComfyUI text-to-image preview request transform that reduces target dimensions to a max 512px side with 8px alignment, limits previews to one image, and disables face/hand detailers.
 - Added `preview` flow-through for ordinary `/api/comfyui/generate-image` and `/api/comfyui/sequence-image` requests.
 - Added preview generation entries to the legacy `/editor` ComfyUI dialog, Style Palette reuse path, and Comic Sequence shot/sequence controls.
+- Follow-up: changed preview acceleration from resolution downscaling to fixed 10-step sampling while preserving the requested width and height; preview still limits output to one image and disables face/hand detailers.
 
 Files changed:
 

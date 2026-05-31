@@ -315,7 +315,7 @@ describe("ComfyUI generate image route", () => {
     });
   });
 
-  it("queues preview requests at reduced dimensions with detailers disabled", async () => {
+  it("queues preview requests at original dimensions with ten steps and detailers disabled", async () => {
     process.env.COMFYUI_BASE_URL = "http://comfyui.test";
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
       if (input === "http://comfyui.test/object_info") {
@@ -327,11 +327,15 @@ describe("ComfyUI generate image route", () => {
       expect(body.prompt["4"]).toMatchObject({
         class_type: "EmptyLatentImage",
         inputs: {
-          width: 512,
-          height: 384,
+          width: 1024,
+          height: 768,
           batch_size: 1,
         },
       });
+      const samplerNode = Object.values(body.prompt).find(
+        (node) => (node as { class_type?: string }).class_type === "KSampler",
+      ) as { inputs?: { steps?: number } } | undefined;
+      expect(samplerNode?.inputs?.steps).toBe(10);
       expect(Object.values(body.prompt).some((node) => (node as { class_type?: string }).class_type === "FaceDetailer")).toBe(false);
       expect(body.prompt["7"].class_type).toBe("PreviewImage");
 
@@ -352,6 +356,7 @@ describe("ComfyUI generate image route", () => {
           seed: 123,
           width: 1024,
           height: 768,
+          steps: 30,
           batchSize: 4,
           preview: true,
           faceDetailer: {
@@ -371,8 +376,9 @@ describe("ComfyUI generate image route", () => {
       promptId: "prompt-preview",
       outputNodeId: "7",
       request: {
-        width: 512,
-        height: 384,
+        width: 1024,
+        height: 768,
+        steps: 10,
         batchSize: 1,
         faceDetailer: {
           enabled: false,
@@ -384,7 +390,7 @@ describe("ComfyUI generate image route", () => {
     });
   });
 
-  it("queues preview ControlNet requests with reduced latent dimensions", async () => {
+  it("queues preview ControlNet requests at original latent dimensions", async () => {
     process.env.COMFYUI_BASE_URL = "http://comfyui.test";
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
       if (input === "http://comfyui.test/object_info") {
@@ -410,8 +416,8 @@ describe("ComfyUI generate image route", () => {
       expect(body.prompt["10"]).toMatchObject({
         class_type: "EmptyLatentImage",
         inputs: {
-          width: 512,
-          height: 384,
+          width: 1024,
+          height: 768,
           batch_size: 1,
         },
       });
@@ -432,6 +438,7 @@ describe("ComfyUI generate image route", () => {
           positivePrompt: "a scene",
           width: 1024,
           height: 768,
+          steps: 30,
           batchSize: 4,
           preview: true,
           controlNets: [
@@ -459,8 +466,9 @@ describe("ComfyUI generate image route", () => {
       promptId: "prompt-preview-controlnet",
       outputNodeId: "13",
       request: {
-        width: 512,
-        height: 384,
+        width: 1024,
+        height: 768,
+        steps: 10,
         batchSize: 1,
         controlNets: [
           {
