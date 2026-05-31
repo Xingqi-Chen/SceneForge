@@ -9523,12 +9523,12 @@ function ComicSequenceWorkspaceDialog({
                           value={selectedShot.title}
                         />
                       </label>
-                      <label className="grid gap-1.5">
+                      <label className="grid gap-1.5 sm:col-span-2">
                         <span className="text-xs font-semibold text-slate-700">Manual shot prompt</span>
-                        <input
-                          className={COMFYUI_TEXT_FIELD_CLASS}
+                        <textarea
+                          className="min-h-28 resize-y rounded-md border border-slate-200 bg-white px-3 py-2 text-sm leading-relaxed text-slate-700 outline-none transition focus:border-sky-300 focus:ring-2 focus:ring-sky-100"
                           onChange={(event) => patchSelectedShot({ shotPrompt: event.target.value })}
-                          placeholder="camera move, emotion, local action"
+                          placeholder={"camera move, emotion, local action\nclose-up, worried expression, hand reaching for the door"}
                           value={selectedShot.shotPrompt}
                         />
                       </label>

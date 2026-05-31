@@ -42,6 +42,10 @@ function formatCanvasForPrompt(canvas: CanvasConfig): string {
   return `${canvas.aspectRatio} aspect ratio, ${canvas.width}x${canvas.height} pixels`;
 }
 
+function shouldIncludeCanvasForPrompt(format: PromptModelFormat) {
+  return format !== "stable-diffusion";
+}
+
 function uniquePrompts(prompts: string[]) {
   return Array.from(new Set(prompts.filter(Boolean)));
 }
@@ -126,7 +130,9 @@ export function generatePrompt(project: SceneForgeProject, options: GenerateProm
   parts.push(...collectTags(scene.promptTags, settings.modelFormat));
   negativeParts.push(...collectTags(scene.promptTags, settings.modelFormat, true));
 
-  parts.push(formatCanvasForPrompt(scene.canvas));
+  if (shouldIncludeCanvasForPrompt(settings.modelFormat)) {
+    parts.push(formatCanvasForPrompt(scene.canvas));
+  }
 
   if (usesGlobalLayoutConstraints) {
     const layoutConstraints = inferSceneLayoutConstraints(scene);
