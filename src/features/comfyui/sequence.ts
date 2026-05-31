@@ -54,6 +54,7 @@ export type ComfyUiSequenceImageRequest = {
   baseSeed?: number;
   imageCount?: number;
   clientId?: string;
+  preview?: boolean;
   baseRequest: ComfyUiTextToImageRequest;
   characters: ComfyUiSequenceCharacter[];
   shots: ComfyUiSequenceShot[];
@@ -296,11 +297,12 @@ export function validateComfyUiSequenceImageRequest(value: unknown): ComfyUiSequ
     !isOptionalStringValue(value.negativePrompt) ||
     !isOptionalSafeSeed(value.baseSeed) ||
     !isOptionalPositiveInteger(value.imageCount) ||
-    !isOptionalString(value.clientId)
+    !isOptionalString(value.clientId) ||
+    !isOptionalBoolean(value.preview)
   ) {
     return {
       ok: false,
-      message: "sequenceId, prompts, seed, imageCount, and clientId must use valid values when provided.",
+      message: "sequenceId, prompts, seed, imageCount, clientId, and preview must use valid values when provided.",
     };
   }
 
@@ -336,6 +338,7 @@ export function validateComfyUiSequenceImageRequest(value: unknown): ComfyUiSequ
       baseSeed: typeof value.baseSeed === "number" ? value.baseSeed : undefined,
       imageCount: typeof value.imageCount === "number" ? value.imageCount : undefined,
       clientId: hasNonEmptyString(value.clientId) ? value.clientId.trim() : undefined,
+      preview: typeof value.preview === "boolean" ? value.preview : undefined,
       baseRequest: value.baseRequest as ComfyUiTextToImageRequest,
       characters: characters as ComfyUiSequenceCharacter[],
       shots: shots as ComfyUiSequenceShot[],

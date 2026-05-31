@@ -7,6 +7,7 @@ import {
   buildComfyUiSequenceCharacterReference,
   ComfyUiApiError,
   createComfyUiClient,
+  createComfyUiTextToImagePreviewRequest,
   summarizeComfyUiErrorDetails,
   validateComfyUiRequestAgainstObjectInfo,
   validateComfyUiSequenceImageRequest,
@@ -390,7 +391,10 @@ export async function POST(request: Request) {
         shotIndex,
         characters: shotCharacters,
       });
-      const validation = validateComfyUiTextToImageRequest(shotRequest.request);
+      const generationRequest = sequence.preview
+        ? createComfyUiTextToImagePreviewRequest(shotRequest.request)
+        : shotRequest.request;
+      const validation = validateComfyUiTextToImageRequest(generationRequest);
       if (!validation.ok) {
         return errorResponse(`Shot "${shot.id}" is invalid: ${validation.message}`, 400, validation.details);
       }

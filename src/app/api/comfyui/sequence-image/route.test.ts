@@ -34,6 +34,27 @@ const objectInfo = {
   PreviewImage: {},
 };
 
+const objectInfoWithControlNet = {
+  ...objectInfo,
+  ControlNetApplyAdvanced: {},
+  ControlNetLoader: {
+    input: {
+      required: {
+        control_net_name: [
+          [
+            "control_v11p_sd15_openpose.pth",
+            "control_v11p_sd15_normalbae.pth",
+          ],
+          {},
+        ],
+      },
+    },
+  },
+};
+
+const openPoseSvg = '<svg xmlns="http://www.w3.org/2000/svg" width="512" height="384"><rect width="512" height="384" fill="#000" /></svg>';
+const normalPngDataUrl = "data:image/png;base64,aGVsbG8=";
+
 type PromptBody = {
   client_id?: string;
   prompt: Record<string, {
@@ -44,6 +65,19 @@ type PromptBody = {
 
 function findPromptNode(body: PromptBody, classType: string) {
   return Object.values(body.prompt).find((node) => node.class_type === classType);
+}
+
+function readUploadedControlNetType(body: BodyInit | null | undefined) {
+  if (!(body instanceof FormData)) {
+    return "openpose";
+  }
+
+  const image = body.get("image");
+  const filename = image && typeof image === "object" && "name" in image && typeof image.name === "string"
+    ? image.name
+    : "";
+
+  return filename.includes("normal") ? "normal" : "openpose";
 }
 
 describe("ComfyUI sequence image route", () => {
@@ -286,6 +320,200 @@ describe("ComfyUI sequence image route", () => {
         shotId: "shot-b",
       },
     ]);
+  });
+
+  it("applies preview mode to sequence shot requests", async () => {
+    process.env.COMFYUI_BASE_URL = "http://comfyui.test";
+    const promptBodies: PromptBody[] = [];
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      if (input === "http://comfyui.test/object_info") {
+        return Response.json(objectInfo);
+      }
+
+      expect(input).toBe("http://comfyui.test/prompt");
+      const body = JSON.parse(String(init?.body)) as PromptBody;
+      promptBodies.push(body);
+
+      return Response.json({
+        prompt_id: "prompt-preview-shot",
+        number: 1,
+        node_errors: {},
+      });
+    });
+
+    const response = await POST(
+      new Request("http://localhost/api/comfyui/sequence-image", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          baseRequest: {
+            checkpointName: "model.safetensors",
+            positivePrompt: "base prompt",
+            samplerName: "euler",
+            scheduler: "normal",
+            width: 1024,
+            height: 768,
+            batchSize: 4,
+            faceDetailer: {
+              enabled: true,
+            },
+          },
+          characters: [],
+          imageCount: 4,
+          preview: true,
+          sequenceId: "seq-preview",
+          shots: [
+            {
+              id: "shot-preview",
+              prompt: "preview this shot",
+            },
+          ],
+        }),
+      }),
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(promptBodies).toHaveLength(1);
+    expect(findPromptNode(promptBodies[0], "EmptyLatentImage")?.inputs).toMatchObject({
+      width: 512,
+      height: 384,
+      batch_size: 1,
+    });
+    expect(findPromptNode(promptBodies[0], "FaceDetailer")).toBeUndefined();
+    expect(payload).toMatchObject({
+      sequenceId: "seq-preview",
+      shots: [
+        {
+          imageCount: 1,
+          promptId: "prompt-preview-shot",
+          request: {
+            width: 512,
+            height: 384,
+            batchSize: 1,
+            faceDetailer: {
+              enabled: false,
+            },
+          },
+        },
+      ],
+    });
+  });
+
+  it("applies preview mode to sequence ControlNet shot requests", async () => {
+    process.env.COMFYUI_BASE_URL = "http://comfyui.test";
+    const promptBodies: PromptBody[] = [];
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      if (input === "http://comfyui.test/object_info") {
+        return Response.json(objectInfoWithControlNet);
+      }
+
+      if (input === "http://comfyui.test/upload/image") {
+        expect(init?.method).toBe("POST");
+        expect(init?.body).toBeInstanceOf(FormData);
+        const type = readUploadedControlNetType(init?.body);
+
+        return Response.json({
+          name: type === "normal" ? "uploaded-normal.png" : "uploaded-openpose.png",
+          subfolder: "SceneForge",
+          type: "input",
+        });
+      }
+
+      expect(input).toBe("http://comfyui.test/prompt");
+      const body = JSON.parse(String(init?.body)) as PromptBody;
+      promptBodies.push(body);
+
+      return Response.json({
+        prompt_id: "prompt-preview-controlnet-shot",
+        number: 1,
+        node_errors: {},
+      });
+    });
+
+    const response = await POST(
+      new Request("http://localhost/api/comfyui/sequence-image", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          baseRequest: {
+            checkpointName: "model.safetensors",
+            positivePrompt: "base prompt",
+            samplerName: "euler",
+            scheduler: "normal",
+            width: 1024,
+            height: 768,
+            batchSize: 4,
+            controlNets: [
+              {
+                type: "openpose",
+                enabled: true,
+                strength: 0.8,
+                svg: openPoseSvg,
+              },
+              {
+                type: "normal",
+                enabled: true,
+                strength: 0.7,
+                imageDataUrl: normalPngDataUrl,
+              },
+            ],
+          },
+          characters: [],
+          imageCount: 4,
+          preview: true,
+          sequenceId: "seq-preview-controlnet",
+          shots: [
+            {
+              id: "shot-preview-controlnet",
+              prompt: "preview controlnet shot",
+            },
+          ],
+        }),
+      }),
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(fetchSpy).toHaveBeenCalledTimes(4);
+    expect(promptBodies).toHaveLength(1);
+    expect(promptBodies[0].prompt["4"].inputs.image).toBe("SceneForge/uploaded-openpose.png");
+    expect(promptBodies[0].prompt["7"].inputs.image).toBe("SceneForge/uploaded-normal.png");
+    expect(findPromptNode(promptBodies[0], "EmptyLatentImage")?.inputs).toMatchObject({
+      width: 512,
+      height: 384,
+      batch_size: 1,
+    });
+    expect(payload).toMatchObject({
+      sequenceId: "seq-preview-controlnet",
+      shots: [
+        {
+          imageCount: 1,
+          outputNodeId: "13",
+          promptId: "prompt-preview-controlnet-shot",
+          request: {
+            width: 512,
+            height: 384,
+            batchSize: 1,
+            controlNets: [
+              {
+                type: "openpose",
+                imageName: "SceneForge/uploaded-openpose.png",
+                svg: "",
+                imageDataUrl: "",
+              },
+              {
+                type: "normal",
+                imageName: "SceneForge/uploaded-normal.png",
+                svg: "",
+                imageDataUrl: "",
+              },
+            ],
+          },
+        },
+      ],
+    });
   });
 
   it("returns a clear error when a stored sequence reference image is missing", async () => {

@@ -2,6 +2,37 @@
 
 This log records dated implementation and documentation work. Keep entries concise and evidence-oriented.
 
+## 2026-05-31
+
+### Legacy Editor ComfyUI Preview Generation
+
+Summary:
+
+- Added a shared ComfyUI text-to-image preview request transform that reduces target dimensions to a max 512px side with 8px alignment, limits previews to one image, and disables face/hand detailers.
+- Added `preview` flow-through for ordinary `/api/comfyui/generate-image` and `/api/comfyui/sequence-image` requests.
+- Added preview generation entries to the legacy `/editor` ComfyUI dialog, Style Palette reuse path, and Comic Sequence shot/sequence controls.
+
+Files changed:
+
+- `src/features/comfyui/preview.ts`
+- `src/features/comfyui/preview.test.ts`
+- `src/features/comfyui/types.ts`
+- `src/features/comfyui/validation.ts`
+- `src/features/comfyui/sequence.ts`
+- `src/features/comfyui/index.ts`
+- `src/app/api/comfyui/generate-image/route.ts`
+- `src/app/api/comfyui/generate-image/route.test.ts`
+- `src/app/api/comfyui/sequence-image/route.ts`
+- `src/app/api/comfyui/sequence-image/route.test.ts`
+- `src/features/editor/components/ImageGenerationPanel.tsx`
+- `docs/dev-log.md`
+
+Validation:
+
+- `npm test -- src/features/comfyui/preview.test.ts src/app/api/comfyui/generate-image/route.test.ts src/app/api/comfyui/sequence-image/route.test.ts` passed.
+- `npm run typecheck` passed.
+- `npm run lint` passed with existing `@next/next/no-img-element` warnings in editor image-heavy panels.
+
 ## 2026-05-30
 
 ### Illustrious Prompt Ordering Refactor

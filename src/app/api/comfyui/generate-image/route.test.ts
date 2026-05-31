@@ -315,6 +315,171 @@ describe("ComfyUI generate image route", () => {
     });
   });
 
+  it("queues preview requests at reduced dimensions with detailers disabled", async () => {
+    process.env.COMFYUI_BASE_URL = "http://comfyui.test";
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      if (input === "http://comfyui.test/object_info") {
+        return Response.json(objectInfo);
+      }
+
+      expect(input).toBe("http://comfyui.test/prompt");
+      const body = JSON.parse(String(init?.body));
+      expect(body.prompt["4"]).toMatchObject({
+        class_type: "EmptyLatentImage",
+        inputs: {
+          width: 512,
+          height: 384,
+          batch_size: 1,
+        },
+      });
+      expect(Object.values(body.prompt).some((node) => (node as { class_type?: string }).class_type === "FaceDetailer")).toBe(false);
+      expect(body.prompt["7"].class_type).toBe("PreviewImage");
+
+      return Response.json({
+        prompt_id: "prompt-preview",
+        number: 12,
+        node_errors: {},
+      });
+    });
+
+    const response = await POST(
+      new Request("http://localhost/api/comfyui/generate-image", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          checkpointName: "model.safetensors",
+          positivePrompt: "a scene",
+          seed: 123,
+          width: 1024,
+          height: 768,
+          batchSize: 4,
+          preview: true,
+          faceDetailer: {
+            enabled: true,
+          },
+          handDetailer: {
+            enabled: true,
+          },
+        }),
+      }),
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(payload).toMatchObject({
+      promptId: "prompt-preview",
+      outputNodeId: "7",
+      request: {
+        width: 512,
+        height: 384,
+        batchSize: 1,
+        faceDetailer: {
+          enabled: false,
+        },
+        handDetailer: {
+          enabled: false,
+        },
+      },
+    });
+  });
+
+  it("queues preview ControlNet requests with reduced latent dimensions", async () => {
+    process.env.COMFYUI_BASE_URL = "http://comfyui.test";
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      if (input === "http://comfyui.test/object_info") {
+        return Response.json(objectInfoWithControlNet);
+      }
+
+      if (input === "http://comfyui.test/upload/image") {
+        expect(init?.method).toBe("POST");
+        expect(init?.body).toBeInstanceOf(FormData);
+        const type = readUploadedControlNetType(init?.body);
+
+        return Response.json({
+          name: type === "normal" ? "uploaded-normal.png" : "uploaded-openpose.png",
+          subfolder: "SceneForge",
+          type: "input",
+        });
+      }
+
+      expect(input).toBe("http://comfyui.test/prompt");
+      const body = JSON.parse(String(init?.body));
+      expect(body.prompt["4"].inputs.image).toBe("SceneForge/uploaded-openpose.png");
+      expect(body.prompt["7"].inputs.image).toBe("SceneForge/uploaded-normal.png");
+      expect(body.prompt["10"]).toMatchObject({
+        class_type: "EmptyLatentImage",
+        inputs: {
+          width: 512,
+          height: 384,
+          batch_size: 1,
+        },
+      });
+
+      return Response.json({
+        prompt_id: "prompt-preview-controlnet",
+        number: 14,
+        node_errors: {},
+      });
+    });
+
+    const response = await POST(
+      new Request("http://localhost/api/comfyui/generate-image", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          checkpointName: "model.safetensors",
+          positivePrompt: "a scene",
+          width: 1024,
+          height: 768,
+          batchSize: 4,
+          preview: true,
+          controlNets: [
+            {
+              type: "openpose",
+              enabled: true,
+              strength: 0.8,
+              svg: openPoseSvg,
+            },
+            {
+              type: "normal",
+              enabled: true,
+              strength: 0.7,
+              imageDataUrl: normalPngDataUrl,
+            },
+          ],
+        }),
+      }),
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(fetchSpy).toHaveBeenCalledTimes(4);
+    expect(payload).toMatchObject({
+      promptId: "prompt-preview-controlnet",
+      outputNodeId: "13",
+      request: {
+        width: 512,
+        height: 384,
+        batchSize: 1,
+        controlNets: [
+          {
+            type: "openpose",
+            imageName: "SceneForge/uploaded-openpose.png",
+            svg: "",
+            imageDataUrl: "",
+          },
+          {
+            type: "normal",
+            imageName: "SceneForge/uploaded-normal.png",
+            svg: "",
+            imageDataUrl: "",
+          },
+        ],
+      },
+    });
+  });
+
   it("uploads an OpenPose image and queues a ControlNet workflow when enabled", async () => {
     process.env.COMFYUI_BASE_URL = "http://comfyui.test";
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {

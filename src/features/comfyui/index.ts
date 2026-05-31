@@ -5,6 +5,7 @@ export * from "./inpaint";
 export * from "./latent-image-node";
 export * from "./object-info";
 export * from "./openpose-skeleton";
+export * from "./preview";
 export * from "./sequence";
 export type * from "./types";
 export * from "./validation";

@@ -1102,6 +1102,13 @@ export function validateComfyUiTextToImageRequest(value: unknown): ComfyUiTextTo
     };
   }
 
+  if (!isOptionalBoolean(value.preview)) {
+    return {
+      ok: false,
+      message: "preview must be a boolean when provided.",
+    };
+  }
+
   for (const field of ["width", "height", "batchSize", "steps"] as const) {
     if (!isOptionalPositiveInteger(value[field])) {
       return {
@@ -1158,6 +1165,7 @@ export function validateComfyUiTextToImageRequest(value: unknown): ComfyUiTextTo
       controlNet,
       controlNets,
       characterReferences,
+      preview: typeof value.preview === "boolean" ? value.preview : undefined,
     },
   };
 }

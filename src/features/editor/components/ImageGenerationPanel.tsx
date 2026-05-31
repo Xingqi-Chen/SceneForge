@@ -44,6 +44,7 @@ import {
   COMFYUI_FACE_DETAILER_SAM_MASK_HINT_USE_NEGATIVE_OPTIONS,
   COMFYUI_INPAINT_UPSCALE_MODEL_PRESETS,
   COMFYUI_INPAINT_MODE_OPTIONS,
+  createComfyUiTextToImagePreviewRequest,
   DEFAULT_COMFYUI_FACE_DETAILER_DETECTOR_MODEL,
   DEFAULT_COMFYUI_HAND_DETAILER_DETECTOR_MODEL,
   DEFAULT_COMFYUI_INPAINT_DENOISE,
@@ -51,6 +52,7 @@ import {
   DEFAULT_COMFYUI_INPAINT_MODE,
   MIN_COMFYUI_VAE_INPAINT_DENOISE,
   COMFYUI_LATENT_IMAGE_NODE_OPTIONS,
+  getComfyUiPreviewDimensions,
   normalizeComfyUiInpaintDenoiseForMode,
   type ComfyUiGeneratedImage,
   type ComfyUiGenerateSam2MaskResponse,
@@ -185,6 +187,7 @@ import type {
 
 type LoadStatus = "idle" | "loading" | "success" | "error";
 type SubmitStatus = "idle" | "loading" | "success" | "error";
+type GenerationSubmitMode = "full" | "preview";
 type DownloadActionStatus = "idle" | "loading" | "success" | "error";
 type DiagnosisStatus = "idle" | "analyzing" | "searching" | "suggesting" | "success" | "error";
 type InpaintMaskTool = "brush" | "eraser" | "sam-positive" | "sam-negative" | "sam-box";
@@ -303,7 +306,7 @@ type GenerationDraftInpaint = {
   mode: ComfyUiInpaintMode;
 };
 
-type GenerationDraft = Required<Omit<ComfyUiTextToImageRequest, "loras" | "promptWrapper" | "faceDetailer" | "handDetailer" | "controlNet" | "controlNets" | "characterReferences">> & {
+type GenerationDraft = Required<Omit<ComfyUiTextToImageRequest, "loras" | "promptWrapper" | "faceDetailer" | "handDetailer" | "controlNet" | "controlNets" | "characterReferences" | "preview">> & {
   loras: GenerationDraftLora[];
   imageCount: number;
   promptWrapper: Required<NonNullable<ComfyUiTextToImageRequest["promptWrapper"]>>;
@@ -4744,6 +4747,7 @@ export function ComfyUiGenerationDialog({
   const [downloadActionMessage, setDownloadActionMessage] = useState("");
   const [downloadActionError, setDownloadActionError] = useState("");
   const [submitStatus, setSubmitStatus] = useState<SubmitStatus>("idle");
+  const [activeGenerationSubmitMode, setActiveGenerationSubmitMode] = useState<GenerationSubmitMode | null>(null);
   const [submitError, setSubmitError] = useState("");
   const [saveMessage, setSaveMessage] = useState("");
   const [waitMessage, setWaitMessage] = useState("");
@@ -4858,6 +4862,7 @@ export function ComfyUiGenerationDialog({
     setDownloadActionMessage("");
     setDownloadActionError("");
     setSubmitStatus("idle");
+    setActiveGenerationSubmitMode(null);
     setSubmitError("");
     setSaveMessage("");
     setWaitMessage("");
@@ -5047,6 +5052,7 @@ export function ComfyUiGenerationDialog({
     setDownloadActionMessage("");
     setDownloadActionError("");
     setSubmitStatus("idle");
+    setActiveGenerationSubmitMode(null);
     setSubmitError("");
     setWaitMessage("");
     setGenerationProgress(null);
@@ -5321,11 +5327,12 @@ export function ComfyUiGenerationDialog({
     }
   }
 
-  async function submitGeneration() {
+  async function submitGeneration(mode: GenerationSubmitMode = "full") {
     if (!draft) {
       return;
     }
 
+    const previewMode = mode === "preview";
     if (!allResourceDownloadsReady) {
       setWaitMessage("");
       setGenerationProgress(null);
@@ -5335,6 +5342,7 @@ export function ComfyUiGenerationDialog({
     }
 
     setSubmitStatus("loading");
+    setActiveGenerationSubmitMode(mode);
     setSubmitError("");
     setWaitMessage("");
     setGenerationProgress(null);
@@ -5351,15 +5359,65 @@ export function ComfyUiGenerationDialog({
       });
       const clientId = createComfyUiClientId();
 
-      setDraft((current) => (current ? { ...current, imageCount, seed } : current));
+      if (!previewMode) {
+        setDraft((current) => (current ? { ...current, imageCount, seed } : current));
+      }
       setWaitMessage(`已准备生成 ${imageCount} 张图片，正在提交到 ComfyUI...`);
 
-      const requestPayload = toRequestPayload(
-        { ...draft, imageCount },
+      const requestDraft = previewMode
+        ? {
+            ...draft,
+            ...getComfyUiPreviewDimensions({
+              height: draft.height,
+              width: draft.width,
+            }),
+          }
+        : draft;
+      const requestControlNetOpenPosePreview = allowControlNet
+        ? previewMode
+          ? buildComfyUiControlNetOpenPosePreview(scene, {
+              width: requestDraft.width,
+              height: requestDraft.height,
+            })
+          : controlNetOpenPosePreview
+        : null;
+      const requestControlNetNormalPreview = allowControlNet
+        ? previewMode && requestDraft.controlNets.normal.enabled
+          ? await renderComfyUiNormalControlImage(scene, {
+              width: requestDraft.width,
+              height: requestDraft.height,
+            })
+          : controlNetNormalPreview
+        : null;
+
+      const baseRequestPayload = toRequestPayload(
+        { ...requestDraft, imageCount },
         seed,
-        allowControlNet ? controlNetOpenPosePreview : null,
-        allowControlNet ? controlNetNormalPreview : null,
+        requestControlNetOpenPosePreview,
+        requestControlNetNormalPreview,
       );
+      const requestPayload = previewMode
+        ? createComfyUiTextToImagePreviewRequest(baseRequestPayload)
+        : baseRequestPayload;
+      const submittedImageCount = normalizeComfyUiGenerationImageCount(requestPayload.batchSize ?? imageCount);
+      const submittedDraftSnapshot: GenerationDraft = {
+        ...draft,
+        faceDetailer: {
+          ...draft.faceDetailer,
+          enabled: requestPayload.faceDetailer?.enabled ?? draft.faceDetailer.enabled,
+        },
+        handDetailer: {
+          ...draft.handDetailer,
+          enabled: requestPayload.handDetailer?.enabled ?? draft.handDetailer.enabled,
+        },
+        height: requestPayload.height ?? draft.height,
+        imageCount: submittedImageCount,
+        seed,
+        width: requestPayload.width ?? draft.width,
+      };
+      if (previewMode) {
+        setWaitMessage(`Submitting ${submittedDraftSnapshot.width}x${submittedDraftSnapshot.height} preview to ComfyUI...`);
+      }
       const payload = await fetchJson<Omit<GenerationResult, "historyContext" | "imageCount" | "images" | "seed" | "source">>("/api/comfyui/generate-image", {
         method: "POST",
         headers: {
@@ -5370,13 +5428,13 @@ export function ComfyUiGenerationDialog({
 
       const queuedResult: GenerationResult = {
         historyContext: {
-          draftSnapshot: { ...draft, imageCount, seed },
-          negativePrompt: draft.negativePrompt,
-          positivePrompt: draft.positivePrompt,
+          draftSnapshot: submittedDraftSnapshot,
+          negativePrompt: requestPayload.negativePrompt ?? draft.negativePrompt,
+          positivePrompt: requestPayload.positivePrompt,
           selectedCheckpointId,
           selectedLoraIds: [...selectedLoraIds],
         },
-        imageCount,
+        imageCount: submittedImageCount,
         images: [],
         promptId: payload.promptId,
         number: payload.number,
@@ -5388,7 +5446,11 @@ export function ComfyUiGenerationDialog({
       setResults([queuedResult]);
       setWaitMessage(`已提交 batch_size ${imageCount} 到 ComfyUI，seed ${seed}。`);
 
-      const history = await waitForComfyUiGeneratedImages(clientId, payload.promptId, imageCount, (historyUpdate) => {
+      if (previewMode) {
+        setWaitMessage(`Preview submitted to ComfyUI, seed ${seed}.`);
+      }
+
+      const history = await waitForComfyUiGeneratedImages(clientId, payload.promptId, submittedImageCount, (historyUpdate) => {
         const progress = readComfyUiProgress(historyUpdate.raw);
         if (progress) {
           setGenerationProgress(progress);
@@ -5397,6 +5459,10 @@ export function ComfyUiGenerationDialog({
 
         if (historyUpdate.images.length > 0) {
           setResults([{ ...queuedResult, images: historyUpdate.images }]);
+          if (previewMode) {
+            setWaitMessage(`Received ${historyUpdate.images.length}/${submittedImageCount} preview image, seed ${seed}.`);
+            return;
+          }
           setWaitMessage(`已获取 ${historyUpdate.images.length}/${imageCount} 张图片，seed ${seed}。`);
         }
       });
@@ -5408,11 +5474,16 @@ export function ComfyUiGenerationDialog({
       setSubmitStatus("success");
       setHistorySaveStatus("idle");
       setHistorySaveMessage("图片已生成，默认不保存到项目历史；需要保留时请点击图片下方的保存按钮。");
+      if (previewMode) {
+        setHistorySaveMessage("Preview image generated. Save the candidate if you want to keep it.");
+      }
     } catch (error) {
       setWaitMessage("");
       setGenerationProgress(null);
       setSubmitStatus("error");
       setSubmitError(error instanceof Error ? error.message : "ComfyUI 生图请求失败。");
+    } finally {
+      setActiveGenerationSubmitMode(null);
     }
   }
 
@@ -6518,7 +6589,7 @@ export function ComfyUiGenerationDialog({
                     {saveMessage ? <p className="text-emerald-700">{saveMessage}</p> : null}
                     {submitStatus === "error" ? <p className="text-rose-600">{submitError}</p> : null}
                   </div>
-                  <div className="flex shrink-0 gap-3">
+                  <div className="flex shrink-0 flex-wrap justify-end gap-3">
                     {onSaveParameters ? (
                       <Button
                         className="h-10 rounded-md border-teal-200 bg-white text-teal-700 hover:bg-teal-50"
@@ -6540,12 +6611,30 @@ export function ComfyUiGenerationDialog({
                       关闭
                     </Button>
                     <Button
+                      className="h-10 rounded-md border-sky-200 bg-white text-sky-700 hover:bg-sky-50"
+                      disabled={!canSubmitGeneration}
+                      onClick={() => void submitGeneration("preview")}
+                      type="button"
+                      variant="secondary"
+                    >
+                      {submitStatus === "loading" && activeGenerationSubmitMode === "preview" ? (
+                        <Loader2 className="size-4 animate-spin" />
+                      ) : (
+                        <Play className="size-4" />
+                      )}
+                      Preview
+                    </Button>
+                    <Button
                       className="h-10 rounded-md bg-sky-600 text-white hover:bg-sky-700"
                       disabled={!canSubmitGeneration}
-                      onClick={() => void submitGeneration()}
+                      onClick={() => void submitGeneration("full")}
                       type="button"
                     >
-                      {submitStatus === "loading" ? <Loader2 className="size-4 animate-spin" /> : <Play className="size-4" />}
+                      {submitStatus === "loading" && activeGenerationSubmitMode === "full" ? (
+                        <Loader2 className="size-4 animate-spin" />
+                      ) : (
+                        <Play className="size-4" />
+                      )}
                       开始生图
                     </Button>
                   </div>
@@ -7640,6 +7729,7 @@ function ComicSequenceWorkspaceDialog({
   const [parameterSyncDownEnabled, setParameterSyncDownEnabled] = useState(false);
   const [submitStatus, setSubmitStatus] = useState<SubmitStatus>("idle");
   const [activeSubmitMode, setActiveSubmitMode] = useState<ComicSequenceSubmitMode | null>(null);
+  const [activeSubmitGenerationMode, setActiveSubmitGenerationMode] = useState<GenerationSubmitMode | null>(null);
   const [submitError, setSubmitError] = useState("");
   const [waitMessage, setWaitMessage] = useState("");
   const [historySaveStatus, setHistorySaveStatus] = useState<"idle" | "saving" | "success" | "error">("idle");
@@ -8073,6 +8163,7 @@ function ComicSequenceWorkspaceDialog({
       setDownloadItems([]);
       setSubmitStatus("idle");
       setActiveSubmitMode(null);
+      setActiveSubmitGenerationMode(null);
       setSubmitError("");
       setWaitMessage("");
       setHistorySaveStatus("idle");
@@ -8558,13 +8649,17 @@ function ComicSequenceWorkspaceDialog({
     return references.filter((reference): reference is NonNullable<(typeof references)[number]> => reference !== null);
   }
 
-  async function submitSequence(mode: ComicSequenceSubmitMode = "sequence") {
+  async function submitSequence(
+    mode: ComicSequenceSubmitMode = "sequence",
+    generationMode: GenerationSubmitMode = "full",
+  ) {
     if (!sequence || sequence.shots.length === 0) {
       setSubmitStatus("error");
       setSubmitError("Add at least one shot from the current canvas.");
       return;
     }
 
+    const previewMode = generationMode === "preview";
     if (!allResourceDownloadsReady) {
       setSubmitStatus("error");
       setSubmitError("Download the selected checkpoint / LoRA files before generating.");
@@ -8589,11 +8684,12 @@ function ComicSequenceWorkspaceDialog({
 
     setSubmitStatus("loading");
     setActiveSubmitMode(mode);
+    setActiveSubmitGenerationMode(generationMode);
     setSubmitError("");
     setWaitMessage(
       generateSingleShot
-        ? `Preparing Shot ${sequenceStartIndex + 1}...`
-        : `Preparing shots ${sequenceStartIndex + 1}-${sequence.shots.length}...`,
+        ? `Preparing ${previewMode ? "preview for " : ""}Shot ${sequenceStartIndex + 1}...`
+        : `Preparing ${previewMode ? "previews for " : ""}shots ${sequenceStartIndex + 1}-${sequence.shots.length}...`,
     );
     setHistorySaveStatus("idle");
     setHistorySaveMessage("");
@@ -8655,23 +8751,52 @@ function ComicSequenceWorkspaceDialog({
           shotPrompt: shot.shotPrompt,
         });
         const negativePrompt = mergeNegativePrompts([baseNegativePrompt, shot.negativePrompt]);
+        const requestShotDraft = previewMode
+          ? {
+              ...shotDraft,
+              ...getComfyUiPreviewDimensions({
+                height: shotDraft.height,
+                width: shotDraft.width,
+              }),
+            }
+          : shotDraft;
         const shotPreview = buildComfyUiControlNetOpenPosePreview(shot.scene, {
-          width: shotDraft.width,
-          height: shotDraft.height,
+          width: requestShotDraft.width,
+          height: requestShotDraft.height,
         });
-        const shotNormalPreview = shotDraft.controlNets.normal.enabled
+        const shotNormalPreview = requestShotDraft.controlNets.normal.enabled
           ? await renderComfyUiNormalControlImage(shot.scene, {
-              width: shotDraft.width,
-              height: shotDraft.height,
+              width: requestShotDraft.width,
+              height: requestShotDraft.height,
             })
           : null;
-        const request = toRequestPayload(
-          { ...shotDraft, positivePrompt, negativePrompt, imageCount },
+        const fullRequest = toRequestPayload(
+          { ...requestShotDraft, positivePrompt, negativePrompt, imageCount },
           seed,
           shotPreview,
           shotNormalPreview,
         );
-        const draftSnapshot = { ...shotDraft, positivePrompt, negativePrompt, imageCount, seed };
+        const request = previewMode
+          ? createComfyUiTextToImagePreviewRequest(fullRequest)
+          : fullRequest;
+        const submittedImageCount = normalizeComfyUiGenerationImageCount(request.batchSize ?? imageCount);
+        const draftSnapshot = {
+          ...requestShotDraft,
+          faceDetailer: {
+            ...requestShotDraft.faceDetailer,
+            enabled: request.faceDetailer?.enabled ?? requestShotDraft.faceDetailer.enabled,
+          },
+          handDetailer: {
+            ...requestShotDraft.handDetailer,
+            enabled: request.handDetailer?.enabled ?? requestShotDraft.handDetailer.enabled,
+          },
+          height: request.height ?? requestShotDraft.height,
+          imageCount: submittedImageCount,
+          negativePrompt,
+          positivePrompt,
+          seed,
+          width: request.width ?? requestShotDraft.width,
+        };
 
         return {
           baseRequest: toRequestPayload(draftSnapshot, seed, null, null),
@@ -8745,8 +8870,16 @@ function ComicSequenceWorkspaceDialog({
           shotPrompt: shot.shotPrompt,
         });
         const negativePrompt = mergeNegativePrompts([baseNegativePrompt, shot.negativePrompt]);
+        const faceDetailer = previewMode
+          ? { ...shotDraft.faceDetailer, enabled: false }
+          : shotDraft.faceDetailer;
+        const handDetailer = previewMode
+          ? { ...shotDraft.handDetailer, enabled: false }
+          : shotDraft.handDetailer;
         const draftSnapshot: GenerationDraft = {
           ...shotDraft,
+          faceDetailer,
+          handDetailer,
           imageCount: 1,
           positivePrompt,
           negativePrompt,
@@ -8760,9 +8893,9 @@ function ComicSequenceWorkspaceDialog({
         };
         const request = toInpaintRequestPayload(draftSnapshot, {
           denoise: reference.denoise,
-          faceDetailer: shotDraft.faceDetailer,
+          faceDetailer,
           growMaskBy: reference.growMaskBy,
-          handDetailer: shotDraft.handDetailer,
+          handDetailer,
           image: sourceImage,
           maskDataUrl,
           mode: reference.inpaintMode,
@@ -8919,6 +9052,7 @@ function ComicSequenceWorkspaceDialog({
             baseRequest: textShot.baseRequest,
             characters: [],
             clientId,
+            preview: previewMode || undefined,
             sequenceId,
             shots: [textShot.payloadShot],
           }),
@@ -8978,6 +9112,7 @@ function ComicSequenceWorkspaceDialog({
       setSubmitError(error instanceof Error ? error.message : "ComfyUI sequence request failed.");
     } finally {
       setActiveSubmitMode(null);
+      setActiveSubmitGenerationMode(null);
     }
   }
 
@@ -9826,7 +9961,7 @@ function ComicSequenceWorkspaceDialog({
               <span>{sequence?.shots.length ?? 0} independent shots</span>
             )}
           </div>
-          <div className="flex shrink-0 gap-3">
+          <div className="flex shrink-0 flex-wrap justify-end gap-3">
             <Button
               className="h-10 rounded-md border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
               disabled={submitStatus === "loading" || historySaveStatus === "saving"}
@@ -9839,11 +9974,39 @@ function ComicSequenceWorkspaceDialog({
             <Button
               className="h-10 rounded-md border-sky-200 bg-white text-sky-700 hover:bg-sky-50"
               disabled={submitStatus === "loading" || !selectedShot || !allResourceDownloadsReady}
-              onClick={() => void submitSequence("shot")}
+              onClick={() => void submitSequence("shot", "preview")}
               type="button"
               variant="secondary"
             >
-              {submitStatus === "loading" && activeSubmitMode === "shot" ? (
+              {submitStatus === "loading" && activeSubmitMode === "shot" && activeSubmitGenerationMode === "preview" ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <Play className="size-4" />
+              )}
+              Preview shot
+            </Button>
+            <Button
+              className="h-10 rounded-md border-sky-200 bg-white text-sky-700 hover:bg-sky-50"
+              disabled={submitStatus === "loading" || !sequence?.shots.length || !allResourceDownloadsReady}
+              onClick={() => void submitSequence("sequence", "preview")}
+              type="button"
+              variant="secondary"
+            >
+              {submitStatus === "loading" && activeSubmitMode === "sequence" && activeSubmitGenerationMode === "preview" ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <Play className="size-4" />
+              )}
+              Preview sequence
+            </Button>
+            <Button
+              className="h-10 rounded-md border-sky-200 bg-white text-sky-700 hover:bg-sky-50"
+              disabled={submitStatus === "loading" || !selectedShot || !allResourceDownloadsReady}
+              onClick={() => void submitSequence("shot", "full")}
+              type="button"
+              variant="secondary"
+            >
+              {submitStatus === "loading" && activeSubmitMode === "shot" && activeSubmitGenerationMode === "full" ? (
                 <Loader2 className="size-4 animate-spin" />
               ) : (
                 <Play className="size-4" />
@@ -9853,10 +10016,10 @@ function ComicSequenceWorkspaceDialog({
             <Button
               className="h-10 rounded-md bg-sky-600 text-white hover:bg-sky-700"
               disabled={submitStatus === "loading" || !sequence?.shots.length || !allResourceDownloadsReady}
-              onClick={() => void submitSequence("sequence")}
+              onClick={() => void submitSequence("sequence", "full")}
               type="button"
             >
-              {submitStatus === "loading" && activeSubmitMode === "sequence" ? (
+              {submitStatus === "loading" && activeSubmitMode === "sequence" && activeSubmitGenerationMode === "full" ? (
                 <Loader2 className="size-4 animate-spin" />
               ) : (
                 <Play className="size-4" />

@@ -50,6 +50,7 @@ export type ComfyUiTextToImageRequest = {
   controlNet?: ComfyUiControlNetConfig;
   controlNets?: ComfyUiControlNetUnitConfig[];
   characterReferences?: ComfyUiCharacterReferenceConfig[];
+  preview?: boolean;
 };
 
 export type ComfyUiInpaintRequest = {
