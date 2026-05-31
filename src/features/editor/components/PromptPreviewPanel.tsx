@@ -12,19 +12,26 @@ import type {
 } from "@/features/civitai-lora-library";
 import { getCivitaiImageVariantUrl } from "@/features/civitai-lora-library/image-url";
 import { dispatchOpenCivitaiLibraryResourceDetail } from "@/features/civitai-lora-library/ui-events";
-import { selectedCivitaiResourceCards } from "@/features/editor/ai-prompt/civitai-ai-context";
+import {
+  formatSelectedCivitaiResourcesForAi,
+  selectedCivitaiResourceCards,
+} from "@/features/editor/ai-prompt/civitai-ai-context";
+import {
+  buildIllustriousAiResponseInstructions,
+  renderIllustriousPromptFromAiResponse,
+} from "@/features/editor/ai-prompt/illustrious-prompt";
 import { useEditorStore } from "@/features/editor/store/editor-store";
 import { generatePrompt } from "@/features/prompt-engine";
 import { inferSceneLayoutConstraints } from "@/features/prompt-engine/spatial-relations";
 import { getLlmProxyErrorMessage, isLlmChatResponse } from "@/features/llm";
-import type { ArtistStringPromptRenderMode, SceneForgeProject } from "@/shared/types";
+import type { ArtistStringPromptRenderMode, PromptModelFormat, SceneForgeProject } from "@/shared/types";
 import { characterAppearsInThreeViewport } from "@/shared/utils/character-space";
 
 import { getCharacterStickFigurePose } from "@/features/editor/stick-figure-3d/get-character-stick-pose";
 import { stickFigurePoseToPromptSnippet } from "@/features/editor/stick-figure-3d/PromptExporter";
 
 type AiGenerationStatus = "idle" | "loading" | "success" | "error";
-type SelectedResourceStatus = "idle" | "loading" | "success" | "error";
+export type SelectedResourceStatus = "idle" | "loading" | "success" | "error";
 
 type PromptPreviewPanelProps = {
   onCaptureCanvas?: () => string | null;
@@ -83,6 +90,34 @@ function buildSelectedCivitaiResourcesQuery(checkpointId: string | null, loraIds
   }
 
   return params.toString();
+}
+
+export async function resolveSelectedCivitaiResourcesForAi({
+  fetchSelectedResources,
+  modelFormat,
+  selectedResources,
+  selectedResourcesQuery,
+  selectedResourcesResultQuery,
+  selectedResourceStatus,
+  shouldLoadSelectedResources,
+}: {
+  fetchSelectedResources: (query: string) => Promise<SelectedCivitaiResourcesPreview>;
+  modelFormat: PromptModelFormat;
+  selectedResources: SelectedCivitaiResourcesPreview;
+  selectedResourcesQuery: string;
+  selectedResourcesResultQuery: string;
+  selectedResourceStatus: SelectedResourceStatus;
+  shouldLoadSelectedResources: boolean;
+}) {
+  if (modelFormat !== "stable-diffusion" || !shouldLoadSelectedResources || !selectedResourcesQuery) {
+    return EMPTY_SELECTED_CIVITAI_RESOURCES;
+  }
+
+  if (selectedResourcesResultQuery === selectedResourcesQuery && selectedResourceStatus === "success") {
+    return selectedResources;
+  }
+
+  return fetchSelectedResources(selectedResourcesQuery);
 }
 
 function selectedResourceVersionLabel(resource: SelectedCivitaiResourcePreview) {
@@ -428,7 +463,9 @@ function getConstraintButtonClass(enabled: boolean) {
 
 export function buildAiSystemPrompt(
   constraints: AiGenerationConstraints,
+  options: { modelFormat?: PromptModelFormat } = {},
 ) {
+  const stableDiffusion = options.modelFormat === "stable-diffusion";
   const priority = [
     constraints.layout ? "hard layout constraints" : null,
     constraints.pose ? "the character pose in the screenshot" : null,
@@ -448,16 +485,22 @@ export function buildAiSystemPrompt(
     constraints.visual
       ? "VISUAL CONSTRAINT: strongly preserve the current camera view using Danbooru-style composition tags and short tag phrases, e.g. close-up, low angle, from above, dutch angle, wide shot."
       : null,
-    "Final output MUST be Danbooru/booru-style tags: comma-separated tokens and short tag phrases, not natural-language sentences.",
+    stableDiffusion
+      ? "Section values MUST be Danbooru/booru-style tags: comma-separated tokens and short tag phrases, not natural-language sentences."
+      : "Final output MUST be Danbooru/booru-style tags: comma-separated tokens and short tag phrases, not natural-language sentences.",
     "Prefer canonical anime prompt vocabulary such as 1girl, solo, looking at viewer, long hair, school uniform, dynamic pose, cowboy shot, simple background. Do not connect separate words with underscores; preserve underscores only when they are part of a known canonical tag or exact source token.",
     "Describe pose, expression, props, clothing, camera, and composition as tags or short tag phrases only. Never echo raw coordinates, pixel math, or awkward joint-vs-joint alignment phrases (e.g. do not write \"wrist level with neck\", \"ankle left of other ankle\", \"horizontally aligned with neck\").",
     "Skeleton notes in the summary are hints only; infer a plausible pose from the image, do not transcribe joint tuples.",
     "Merge duplicates; keep token economy; preserve style and subject tags from the preview when they matter.",
-    "Return only the final comma-separated Danbooru-style positive prompt text (no markdown, no labels like \"Prompt:\", no prose explanation).",
+    stableDiffusion
+      ? "Return only the structured JSON response described below (no markdown, no labels, no prose explanation)."
+      : "Return only the final comma-separated Danbooru-style positive prompt text (no markdown, no labels like \"Prompt:\", no prose explanation).",
   ].filter(Boolean);
 
-  return [
-    "You are SceneForge's visual prompt assistant. Produce ONE concise Danbooru/booru-style image-generation prompt (comma-separated anime tags and short tag phrases; not natural language).",
+  const prompt = [
+    stableDiffusion
+      ? "You are SceneForge's visual prompt assistant. Produce structured Illustrious-compatible Stable Diffusion prompt sections using concise Danbooru/booru-style anime tags and short tag phrases; not natural language."
+      : "You are SceneForge's visual prompt assistant. Produce ONE concise Danbooru/booru-style image-generation prompt (comma-separated anime tags and short tag phrases; not natural language).",
     "",
     `Prioritize ${priority}.`,
     constraints.layout
@@ -467,23 +510,39 @@ export function buildAiSystemPrompt(
     "Rules:",
     ...rules.map((rule) => `- ${rule}`),
   ].join("\n");
+
+  if (!stableDiffusion) {
+    return prompt;
+  }
+
+  return [prompt, "", buildIllustriousAiResponseInstructions()].join("\n");
 }
 
 export function buildAiUserText({
   constraints,
   layoutConstraints,
+  modelFormat = "generic",
   promptForAi,
   project,
+  selectedResources = EMPTY_SELECTED_CIVITAI_RESOURCES,
   structuredSummary,
 }: {
   constraints: AiGenerationConstraints;
   layoutConstraints: string | null;
+  modelFormat?: PromptModelFormat;
   promptForAi: ReturnType<typeof generatePrompt>;
   project: SceneForgeProject;
+  selectedResources?: SelectedCivitaiResourcesPreview;
   structuredSummary: string;
 }) {
+  const civitaiContext = modelFormat === "stable-diffusion"
+    ? formatSelectedCivitaiResourcesForAi(selectedResources) ?? "none"
+    : null;
+
   return [
-    "Generate a stronger Danbooru-style positive tag prompt from the preview + screenshot below.",
+    modelFormat === "stable-diffusion"
+      ? "Generate stronger Illustrious ordered positive prompt sections from the preview + screenshot below."
+      : "Generate a stronger Danbooru-style positive tag prompt from the preview + screenshot below.",
     constraints.layout || constraints.pose || constraints.visual
       ? `Order of trust: (1) enabled hard constraints and canvas image, (2) prompt preview, (3) character/object descriptions and prompt tags.`
       : "Order of trust: (1) canvas image and prompt preview, (2) character/object descriptions and prompt tags, (3) coarse layout hints in the structured summary.",
@@ -501,13 +560,18 @@ export function buildAiUserText({
       : null,
     "",
     `Prompt preview: ${promptForAi.prompt || "(empty)"}`,
-    `Negative prompt (from scene tags and legacy settings; reference only; your reply must be the positive prompt text only): ${promptForAi.negativePrompt || "(none)"}`,
+    modelFormat === "stable-diffusion"
+      ? `Negative prompt (from scene tags and legacy settings; reference only; your reply must be Illustrious JSON sections): ${promptForAi.negativePrompt || "(none)"}`
+      : `Negative prompt (from scene tags and legacy settings; reference only; your reply must be the positive prompt text only): ${promptForAi.negativePrompt || "(none)"}`,
     constraints.layout ? "" : null,
     constraints.layout ? "Hard layout constraints (must be preserved in the final prompt):" : null,
     constraints.layout ? layoutConstraints || "(none)" : null,
     constraints.visual ? "" : null,
     constraints.visual ? "Current camera / screenshot view (must be preserved in the final prompt):" : null,
     constraints.visual ? summarizeCameraForAi(project) : null,
+    civitaiContext ? "" : null,
+    civitaiContext ? "Selected Civitai resources for exact trainedWords context (never invent trigger words):" : null,
+    civitaiContext,
     "",
     "Structured scene summary (reference only):",
     structuredSummary,
@@ -736,12 +800,44 @@ export function PromptPreviewPanel({ onCaptureCanvas }: PromptPreviewPanelProps)
       const layoutConstraints = useLayoutConstraints && project.settings.includeSpatialHints
         ? inferSceneLayoutConstraints(project.scene)
         : null;
-      const systemPrompt = buildAiSystemPrompt(constraints);
+      const selectedResourcesForAi = await resolveSelectedCivitaiResourcesForAi({
+        fetchSelectedResources: async (query) => {
+          try {
+            const payload = await fetchJson<SelectedCivitaiResourcesPreview>(
+              `/api/civitai-lora-library/selected-resources?${query}`,
+            );
+            setSelectedResources(payload);
+            setSelectedResourceStatus("success");
+            setSelectedResourceError("");
+            setSelectedResourcesResultQuery(query);
+
+            return payload;
+          } catch (error) {
+            const message = error instanceof Error ? error.message : "Unable to read selected Civitai resources.";
+            setSelectedResources(EMPTY_SELECTED_CIVITAI_RESOURCES);
+            setSelectedResourceStatus("error");
+            setSelectedResourceError(message);
+            setSelectedResourcesResultQuery(query);
+            throw error instanceof Error ? error : new Error(message);
+          }
+        },
+        modelFormat: project.settings.modelFormat,
+        selectedResources,
+        selectedResourcesQuery,
+        selectedResourcesResultQuery,
+        selectedResourceStatus,
+        shouldLoadSelectedResources,
+      });
+      const systemPrompt = buildAiSystemPrompt(constraints, {
+        modelFormat: project.settings.modelFormat,
+      });
       const userText = buildAiUserText({
         constraints,
         layoutConstraints,
+        modelFormat: project.settings.modelFormat,
         promptForAi,
         project,
+        selectedResources: selectedResourcesForAi,
         structuredSummary,
       });
       const requestBody = {
@@ -817,7 +913,13 @@ export function PromptPreviewPanel({ onCaptureCanvas }: PromptPreviewPanelProps)
         usage: payload.usage,
       });
 
-      setAiGeneratedPrompt(payload.content.trim());
+      const nextAiPrompt = project.settings.modelFormat === "stable-diffusion"
+        ? renderIllustriousPromptFromAiResponse({
+            rawContent: payload.content,
+            resources: selectedResourcesForAi,
+          })
+        : payload.content.trim();
+      setAiGeneratedPrompt(nextAiPrompt);
       setAiStatus("success");
     } catch (error) {
       console.error("[SceneForge] [llm] failed to generate AI prompt", { error });

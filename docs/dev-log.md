@@ -4,6 +4,34 @@ This log records dated implementation and documentation work. Keep entries conci
 
 ## 2026-05-30
 
+### Illustrious Prompt Ordering Refactor
+
+Summary:
+
+- Added a shared pure Illustrious prompt renderer for Stable Diffusion prompt sections, default quality/aesthetic tags, Civitai checkpoint trigger words, and LoRA trigger placement by category/tag.
+- Updated `/editor` AI prompt generation to request Illustrious JSON sections with selected Civitai trainedWords context and locally render the final stored prompt, with flat-prompt classification fallback.
+- Follow-up: Stable Diffusion AI generation now resolves the current selected Civitai resource previews before building the LLM request so checkpoint/LoRA trainedWords are not omitted while the panel preview fetch is still loading.
+- Updated Comic Sequence text-to-image and previous-shot inpaint prompt construction to use the shared Illustrious merge path for Stable Diffusion while preserving generic positive prompt joins.
+- Deduped Comic Sequence negative prompts across the base negative prompt and per-shot negative prompt.
+
+Files changed:
+
+- `src/features/editor/ai-prompt/illustrious-prompt.ts`
+- `src/features/editor/ai-prompt/illustrious-prompt.test.ts`
+- `src/features/editor/components/PromptPreviewPanel.tsx`
+- `src/features/editor/components/PromptPreviewPanel.test.tsx`
+- `src/features/editor/components/ImageGenerationPanel.tsx`
+- `docs/dev-log.md`
+
+Validation:
+
+- `npm test -- src/features/editor/ai-prompt/illustrious-prompt.test.ts src/features/editor/components/PromptPreviewPanel.test.tsx` passed.
+- Follow-up validation: `npm test -- src/features/editor/components/PromptPreviewPanel.test.tsx` passed.
+- `npm run typecheck` passed.
+- `npm run lint` passed with existing `@next/next/no-img-element` warnings in editor image-heavy panels.
+- `npm test` passed: 80 files, 534 tests.
+- `npm run build` passed with the existing Turbopack NFT trace warning for `sequence-reference-storage.ts`.
+
 ### Comic Sequence Direct Shot Previous Source Fix
 
 Summary:
