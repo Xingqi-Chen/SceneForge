@@ -48,6 +48,12 @@ const objectInfoWithInpaint = {
   },
 };
 
+const objectInfoWithInpaintWithoutDetailers = Object.fromEntries(
+  Object.entries(objectInfoWithInpaint).filter(
+    ([nodeName]) => nodeName !== "FaceDetailer" && nodeName !== "UltralyticsDetectorProvider",
+  ),
+);
+
 const objectInfoWithHighResInpaint = {
   ...objectInfoWithInpaint,
   ImageScaleBy: {
@@ -240,6 +246,137 @@ describe("ComfyUI inpaint image route", () => {
         imageName: "SceneForge/uploaded-source.png",
         maskDataUrl: "",
         maskName: "SceneForge/uploaded-mask.png",
+      },
+    });
+  });
+
+  it("queues preview inpaint at capped steps with detailers disabled", async () => {
+    process.env.COMFYUI_BASE_URL = "http://comfyui.test";
+    const sourceImageDataUrl = await createPngDataUrl(8, 8, "#336699");
+    const maskDataUrl = await createPngDataUrl();
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      if (input === "http://comfyui.test/object_info") {
+        return Response.json(objectInfoWithInpaintWithoutDetailers);
+      }
+
+      if (input === "http://comfyui.test/upload/image") {
+        const kind = readUploadedKind(init?.body);
+
+        return Response.json({
+          name: kind === "mask" ? "uploaded-mask.png" : "uploaded-source.png",
+          subfolder: "SceneForge",
+          type: "input",
+        });
+      }
+
+      expect(input).toBe("http://comfyui.test/prompt");
+      const body = JSON.parse(String(init?.body));
+      const samplerNode = Object.values(body.prompt).find(
+        (node) => (node as { class_type?: string }).class_type === "KSampler",
+      ) as { inputs?: { steps?: number } } | undefined;
+      expect(samplerNode?.inputs?.steps).toBe(10);
+      expect(Object.values(body.prompt).some((node) => (node as { class_type?: string }).class_type === "FaceDetailer")).toBe(false);
+
+      return Response.json({
+        prompt_id: "prompt-inpaint-preview",
+        number: 15,
+        node_errors: {},
+      });
+    });
+
+    const response = await POST(
+      new Request("http://localhost/api/comfyui/inpaint-image", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          checkpointName: "model.safetensors",
+          positivePrompt: "replace the window",
+          sourceImageDataUrl,
+          maskDataUrl,
+          seed: 123,
+          steps: 30,
+          preview: true,
+          faceDetailer: {
+            enabled: true,
+          },
+          handDetailer: {
+            enabled: true,
+          },
+        }),
+      }),
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(fetchSpy).toHaveBeenCalledTimes(4);
+    expect(payload).toMatchObject({
+      promptId: "prompt-inpaint-preview",
+      request: {
+        steps: 10,
+        faceDetailer: {
+          enabled: false,
+        },
+        handDetailer: {
+          enabled: false,
+        },
+      },
+    });
+  });
+
+  it("does not increase low-step preview inpaint requests", async () => {
+    process.env.COMFYUI_BASE_URL = "http://comfyui.test";
+    const sourceImageDataUrl = await createPngDataUrl(8, 8, "#336699");
+    const maskDataUrl = await createPngDataUrl();
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      if (input === "http://comfyui.test/object_info") {
+        return Response.json(objectInfoWithInpaint);
+      }
+
+      if (input === "http://comfyui.test/upload/image") {
+        const kind = readUploadedKind(init?.body);
+
+        return Response.json({
+          name: kind === "mask" ? "uploaded-mask.png" : "uploaded-source.png",
+          subfolder: "SceneForge",
+          type: "input",
+        });
+      }
+
+      expect(input).toBe("http://comfyui.test/prompt");
+      const body = JSON.parse(String(init?.body));
+      const samplerNode = Object.values(body.prompt).find(
+        (node) => (node as { class_type?: string }).class_type === "KSampler",
+      ) as { inputs?: { steps?: number } } | undefined;
+      expect(samplerNode?.inputs?.steps).toBe(6);
+
+      return Response.json({
+        prompt_id: "prompt-inpaint-preview-low-steps",
+        number: 16,
+        node_errors: {},
+      });
+    });
+
+    const response = await POST(
+      new Request("http://localhost/api/comfyui/inpaint-image", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          checkpointName: "model.safetensors",
+          positivePrompt: "replace the window",
+          sourceImageDataUrl,
+          maskDataUrl,
+          steps: 6,
+          preview: true,
+        }),
+      }),
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(payload).toMatchObject({
+      promptId: "prompt-inpaint-preview-low-steps",
+      request: {
+        steps: 6,
       },
     });
   });

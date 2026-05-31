@@ -1102,6 +1102,13 @@ export function validateComfyUiTextToImageRequest(value: unknown): ComfyUiTextTo
     };
   }
 
+  if (!isOptionalBoolean(value.preview)) {
+    return {
+      ok: false,
+      message: "preview must be a boolean when provided.",
+    };
+  }
+
   for (const field of ["width", "height", "batchSize", "steps"] as const) {
     if (!isOptionalPositiveInteger(value[field])) {
       return {
@@ -1158,6 +1165,7 @@ export function validateComfyUiTextToImageRequest(value: unknown): ComfyUiTextTo
       controlNet,
       controlNets,
       characterReferences,
+      preview: typeof value.preview === "boolean" ? value.preview : undefined,
     },
   };
 }
@@ -1358,6 +1366,13 @@ export function validateComfyUiInpaintRequest(value: unknown): ComfyUiInpaintVal
     };
   }
 
+  if (!isOptionalBoolean(value.preview)) {
+    return {
+      ok: false,
+      message: "preview must be a boolean when provided.",
+    };
+  }
+
   for (const field of ["steps"] as const) {
     if (!isOptionalPositiveInteger(value[field])) {
       return {
@@ -1417,6 +1432,7 @@ export function validateComfyUiInpaintRequest(value: unknown): ComfyUiInpaintVal
       faceDetailer,
       handDetailer,
       upscaleBeforeInpaint,
+      preview: typeof value.preview === "boolean" ? value.preview : undefined,
     },
   };
 }

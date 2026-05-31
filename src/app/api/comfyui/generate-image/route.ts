@@ -4,6 +4,7 @@ import sharp from "sharp";
 import {
   ComfyUiApiError,
   createComfyUiClient,
+  createComfyUiTextToImagePreviewRequest,
   summarizeComfyUiErrorDetails,
   validateComfyUiTextToImageRequest,
   validateComfyUiRequestAgainstObjectInfo,
@@ -137,7 +138,10 @@ export async function POST(request: Request) {
       apiKey: process.env.COMFYUI_API_KEY || undefined,
     });
     const objectInfo = await client.getObjectInfo();
-    const objectValidation = validateComfyUiRequestAgainstObjectInfo(validation.request, objectInfo);
+    const generationRequest = validation.request.preview
+      ? createComfyUiTextToImagePreviewRequest(validation.request)
+      : validation.request;
+    const objectValidation = validateComfyUiRequestAgainstObjectInfo(generationRequest, objectInfo);
 
     if (objectValidation.errors.length > 0) {
       return errorResponse("ComfyUI request does not match the current ComfyUI model/node options.", 400, {

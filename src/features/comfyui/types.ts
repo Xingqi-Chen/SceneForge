@@ -50,6 +50,7 @@ export type ComfyUiTextToImageRequest = {
   controlNet?: ComfyUiControlNetConfig;
   controlNets?: ComfyUiControlNetUnitConfig[];
   characterReferences?: ComfyUiCharacterReferenceConfig[];
+  preview?: boolean;
 };
 
 export type ComfyUiInpaintRequest = {
@@ -77,6 +78,7 @@ export type ComfyUiInpaintRequest = {
   faceDetailer?: ComfyUiFaceDetailerConfig;
   handDetailer?: ComfyUiHandDetailerConfig;
   upscaleBeforeInpaint?: ComfyUiInpaintUpscaleConfig;
+  preview?: boolean;
 };
 
 export type ComfyUiInpaintUpscaleMode = "lanczos" | "real-esrgan-x2" | "aniscale2-x2";
