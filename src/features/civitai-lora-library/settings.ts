@@ -3,6 +3,7 @@ import type { CivitaiLibrarySettings } from "./types";
 export const DEFAULT_CIVITAI_LIBRARY_SETTINGS: CivitaiLibrarySettings = {
   loraDownloadPath: "",
   checkpointDownloadPath: "",
+  diffusionModelPath: "",
   controlNetModelPath: "",
 };
 
@@ -19,6 +20,7 @@ export function sanitizeCivitaiLibrarySettingsPayload(payload: unknown): Civitai
   return {
     loraDownloadPath: readTrimmedString(record.loraDownloadPath),
     checkpointDownloadPath: readTrimmedString(record.checkpointDownloadPath),
+    diffusionModelPath: readTrimmedString(record.diffusionModelPath),
     controlNetModelPath: readTrimmedString(record.controlNetModelPath),
   };
 }

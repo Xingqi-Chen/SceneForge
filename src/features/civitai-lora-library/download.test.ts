@@ -7,6 +7,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { CivitaiResourceRecord } from "./types";
 import {
+  getCivitaiModelStorageKind,
+  getCivitaiResourceConfiguredDownloadPath,
   getCivitaiResourceDownloadStatus,
   getCivitaiResourceFileMetadata,
   makeCivitaiResourceTargetFileName,
@@ -106,6 +108,44 @@ describe("Civitai LoRA download helpers", () => {
     expect(makeCivitaiResourceTargetFileName(resource)).toBe(
       `Hero Style LoRA__v1 Final__mv456__${sha256("expected").slice(0, 12)}.safetensors`,
     );
+  });
+
+  it("classifies diffusion models and routes configured download paths", () => {
+    const settings = {
+      loraDownloadPath: "D:/models/loras",
+      checkpointDownloadPath: "D:/models/checkpoints",
+      diffusionModelPath: "D:/ComfyUI/models/diffusion_models",
+      controlNetModelPath: "D:/ComfyUI/models/controlnet",
+    };
+    const lora = makeResource();
+    const checkpoint = makeResource({
+      resourceType: "model",
+      name: "DreamShaper XL",
+      category: null,
+      categories: [],
+    });
+    const anima = makeResource({
+      resourceType: "model",
+      name: "Anima Pencil XL",
+      versionName: "v1",
+      category: null,
+      categories: [],
+    });
+    const flux = makeResource({
+      resourceType: "model",
+      name: "Scene base",
+      versionName: "dev",
+      baseModel: "Flux.1 D",
+      category: null,
+      categories: [],
+    });
+
+    expect(getCivitaiModelStorageKind(checkpoint)).toBe("checkpoint");
+    expect(getCivitaiModelStorageKind(anima)).toBe("diffusion");
+    expect(getCivitaiModelStorageKind(flux)).toBe("diffusion");
+    expect(getCivitaiResourceConfiguredDownloadPath(lora, settings)).toBe(settings.loraDownloadPath);
+    expect(getCivitaiResourceConfiguredDownloadPath(checkpoint, settings)).toBe(settings.checkpointDownloadPath);
+    expect(getCivitaiResourceConfiguredDownloadPath(anima, settings)).toBe(settings.diffusionModelPath);
   });
 
   it("checks missing paths, matching checksums, mismatches, and unverified files", async () => {

@@ -194,7 +194,7 @@ Required setting areas:
 - Prompt library path.
 - Generated image storage path.
 - ComfyUI temp directory path.
-- Civitai model/LoRA download paths and resource status where applicable.
+- Civitai LoRA, checkpoint, diffusion model, and ControlNet resource paths and status where applicable.
 - ComfyUI connection status.
 - LiteLLM configuration status.
 

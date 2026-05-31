@@ -72,7 +72,7 @@ The MVP settings page should centralize configuration outside the main timeline:
 - Prompt library path.
 - Generated image storage path.
 - ComfyUI temp directory path.
-- Civitai resource paths and status.
+- Civitai LoRA, checkpoint, diffusion model, and ControlNet resource paths and status.
 - ComfyUI connection status.
 - LiteLLM configuration status.
 
