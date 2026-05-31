@@ -9,15 +9,27 @@ import {
 describe("comic sequence storyboard AI helpers", () => {
   it("builds auto-count JSON-only storyboard instructions", () => {
     const messages = buildComicSequenceStoryboardMessages({
+      characters: [
+        {
+          id: "hero",
+          name: "Hero",
+          prompt: "red cape, facial scar",
+        },
+      ],
+      environmentPrompt: "rainy alley",
       existingShotCount: 2,
       globalPrompt: "anime action scene",
       negativePrompt: "low quality",
+      stylePrompt: "inked comic style",
       story: "The hero draws a sword, leaps forward, and blocks a strike.",
     });
 
     expect(messages[0].content).toContain("Return JSON only");
     expect(messages[0].content).toContain("upper limit of 20");
     expect(messages[0].content).toContain("English booru-style local shot prompt");
+    expect(messages[0].content).toContain("\"castCharacterIds\": string[]");
+    expect(messages[0].content).toContain("Use only character ids from the supplied characters list");
+    expect(messages[0].content).toContain("Do not write full fixed character appearances into shotPrompt");
     expect(messages[0].content).toContain("not natural-language sentences");
     expect(messages[0].content).toContain("dynamic pose");
     expect(messages[0].content).toContain("Do not connect separate words with underscores");
@@ -36,6 +48,9 @@ describe("comic sequence storyboard AI helpers", () => {
     expect(messages[0].content).not.toContain("Use underscores for multi-word");
     expect(messages[0].content).not.toContain("Create exactly");
     expect(messages[1].content).toContain("\"targetShotCount\": \"auto\"");
+    expect(messages[1].content).toContain("\"id\": \"hero\"");
+    expect(messages[1].content).toContain("\"stylePrompt\": \"inked comic style\"");
+    expect(messages[1].content).toContain("\"environmentPrompt\": \"rainy alley\"");
   });
 
   it("builds target-count instructions when requested", () => {
@@ -53,27 +68,27 @@ describe("comic sequence storyboard AI helpers", () => {
     const parsed = parseComicSequenceStoryboardResponse(
       JSON.stringify({
         shots: [
-          { title: "Opening", prompt: "wide shot, hero entering the alley" },
-          { prompt: "close-up, hand gripping the sword" },
+          { title: "Opening", castCharacterIds: ["hero"], shotPrompt: "wide shot, hero entering the alley" },
+          { castCharacterIds: ["hero", "missing"], shotPrompt: "close-up, hand gripping the sword" },
         ],
       }),
-      { existingShotCount: 3 },
+      { existingShotCount: 3, validCharacterIds: ["hero"] },
     );
 
     expect(parsed.shots).toEqual([
-      { title: "Opening", prompt: "wide shot, hero entering the alley" },
-      { title: "Shot 5", prompt: "close-up, hand gripping the sword" },
+      { title: "Opening", castCharacterIds: ["hero"], shotPrompt: "wide shot, hero entering the alley" },
+      { title: "Shot 5", castCharacterIds: ["hero"], shotPrompt: "close-up, hand gripping the sword" },
     ]);
   });
 
-  it("parses fenced JSON and drops empty prompts", () => {
+  it("parses fenced JSON and drops empty shot prompts", () => {
     const parsed = parseComicSequenceStoryboardResponse(
       [
         "```json",
         JSON.stringify({
           shots: [
-            { title: "Empty", prompt: "  " },
-            { prompt: "low angle, impact pose, debris flying" },
+            { title: "Empty", shotPrompt: "  " },
+            { shotPrompt: "low angle, impact pose, debris flying" },
           ],
         }),
         "```",
@@ -82,7 +97,7 @@ describe("comic sequence storyboard AI helpers", () => {
     );
 
     expect(parsed.shots).toEqual([
-      { title: "Shot 3", prompt: "low angle, impact pose, debris flying" },
+      { title: "Shot 3", castCharacterIds: [], shotPrompt: "low angle, impact pose, debris flying" },
     ]);
   });
 
@@ -90,11 +105,24 @@ describe("comic sequence storyboard AI helpers", () => {
     const parsed = parseComicSequenceStoryboardResponse(
       JSON.stringify({
         shots: Array.from({ length: COMIC_SEQUENCE_STORYBOARD_MAX_SHOTS + 5 }, (_, index) => ({
-          prompt: `shot prompt ${index + 1}`,
+          shotPrompt: `shot prompt ${index + 1}`,
         })),
       }),
     );
 
     expect(parsed.shots).toHaveLength(COMIC_SEQUENCE_STORYBOARD_MAX_SHOTS);
+  });
+
+  it("keeps legacy prompt responses as a parser fallback", () => {
+    const parsed = parseComicSequenceStoryboardResponse(
+      JSON.stringify({
+        shots: [{ castCharacterIds: ["hero"], prompt: "legacy local action prompt" }],
+      }),
+      { validCharacterIds: ["hero"] },
+    );
+
+    expect(parsed.shots).toEqual([
+      { title: "Shot 1", castCharacterIds: ["hero"], shotPrompt: "legacy local action prompt" },
+    ]);
   });
 });

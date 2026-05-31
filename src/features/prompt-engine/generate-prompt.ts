@@ -126,7 +126,9 @@ export function generatePrompt(project: SceneForgeProject, options: GenerateProm
   parts.push(...collectTags(scene.promptTags, settings.modelFormat));
   negativeParts.push(...collectTags(scene.promptTags, settings.modelFormat, true));
 
-  parts.push(formatCanvasForPrompt(scene.canvas));
+  if (settings.modelFormat !== "stable-diffusion") {
+    parts.push(formatCanvasForPrompt(scene.canvas));
+  }
 
   if (usesGlobalLayoutConstraints) {
     const layoutConstraints = inferSceneLayoutConstraints(scene);

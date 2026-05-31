@@ -198,6 +198,30 @@ describe("Illustrious prompt renderer", () => {
     expect(prompt).not.toContain("Mira:");
   });
 
+  it("builds layered Comic Sequence prompts with only current cast character prompts", () => {
+    const prompt = buildIllustriousComicSequencePrompt({
+      basePrompt: "ink comic style",
+      canvasPrompt: "wide shot, bridge in foreground",
+      characterPrompts: ["Mira: red dress, long hair"],
+      environmentPrompt: "rainy city district",
+      resources: {
+        checkpoint: makeResource("model", "Checkpoint", {
+          trainedWords: ["checkpoint token"],
+        }),
+        loras: [],
+      },
+      shotPrompt: "solo, looking back, worried expression",
+    });
+
+    expect(prompt).toContain("ink comic style, checkpoint token");
+    expect(prompt).toContain("Mira, solo, long hair, red dress");
+    expect(prompt).toContain("looking back, worried expression");
+    expect(prompt).toContain("rainy city district");
+    expect(prompt).toContain("bridge in foreground");
+    expect(prompt).not.toContain("Rival");
+    expect(prompt).not.toContain("<lora:");
+  });
+
   it("dedupes merged negative prompts", () => {
     expect(mergeNegativePrompts(["low quality, blurry", "blurry, bad hands"])).toBe(
       "low quality, blurry, bad hands",

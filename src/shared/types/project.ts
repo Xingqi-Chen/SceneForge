@@ -122,6 +122,13 @@ export type SavedComicSequenceReferenceParams = {
   images: SavedComicSequenceReferenceImage[];
 };
 
+export type SavedComicSequenceCharacter = {
+  id: string;
+  name: string;
+  prompt: string;
+  references: SavedComicSequenceReferenceParams;
+};
+
 export type SavedComicSequencePreviousShotReference = {
   mode: "img2img" | "inpaint";
   denoise: number;
@@ -136,6 +143,9 @@ export type SavedComicSequenceShot = {
   positivePrompt: string;
   negativePrompt: string;
   shotPrompt: string;
+  castCharacterIds: string[];
+  shotCanvasPrompt: string;
+  manualShotPrompt: string;
   parameters: SavedComfyUiGenerationParams;
   controlNets: SavedComicSequenceControlNetParams[];
   reference: SavedComicSequenceReferenceParams;
@@ -148,6 +158,9 @@ export type SavedComicSequenceShot = {
 export type SavedComicSequence = {
   version: 1;
   selectedShotId?: string;
+  stylePrompt: string;
+  environmentPrompt: string;
+  characters: SavedComicSequenceCharacter[];
   defaults?: SavedComfyUiGenerationParams;
   shots: SavedComicSequenceShot[];
 };

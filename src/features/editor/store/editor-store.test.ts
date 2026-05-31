@@ -369,6 +369,9 @@ describe("editor store", () => {
         savedComicSequence: {
           version: 1,
           selectedShotId: "shot-1",
+          stylePrompt: "",
+          environmentPrompt: "",
+          characters: [],
           shots: [
             {
               id: "shot-1",
@@ -377,6 +380,9 @@ describe("editor store", () => {
               positivePrompt: "panel",
               negativePrompt: "",
               shotPrompt: "",
+              castCharacterIds: [],
+              shotCanvasPrompt: "panel",
+              manualShotPrompt: "",
               parameters: firstImage.parameters,
               controlNets: [],
               reference: createTestComicSequenceReference(),

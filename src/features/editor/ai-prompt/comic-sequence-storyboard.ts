@@ -1,11 +1,13 @@
 import type { LlmChatMessage } from "@/features/llm";
+import type { SavedComicSequenceCharacter } from "@/shared/types";
 
 export const COMIC_SEQUENCE_STORYBOARD_MIN_SHOTS = 1;
 export const COMIC_SEQUENCE_STORYBOARD_MAX_SHOTS = 20;
 
 export type ComicSequenceStoryboardShot = {
+  castCharacterIds: string[];
+  shotPrompt: string;
   title: string;
-  prompt: string;
 };
 
 export type ComicSequenceStoryboardResult = {
@@ -13,9 +15,12 @@ export type ComicSequenceStoryboardResult = {
 };
 
 export type BuildComicSequenceStoryboardMessagesInput = {
+  characters?: Pick<SavedComicSequenceCharacter, "id" | "name" | "prompt">[];
+  environmentPrompt?: string;
   existingShotCount?: number;
   globalPrompt?: string;
   negativePrompt?: string;
+  stylePrompt?: string;
   story: string;
   targetShotCount?: number;
 };
@@ -59,9 +64,12 @@ function readOptionalText(value: unknown) {
 }
 
 export function buildComicSequenceStoryboardMessages({
+  characters = [],
+  environmentPrompt,
   existingShotCount,
   globalPrompt,
   negativePrompt,
+  stylePrompt,
   story,
   targetShotCount,
 }: BuildComicSequenceStoryboardMessagesInput): LlmChatMessage[] {
@@ -80,11 +88,13 @@ export function buildComicSequenceStoryboardMessages({
         shotCountInstruction,
         "",
         "Return JSON only. Do not wrap it in markdown.",
-        "Schema: { \"shots\": [{ \"title\"?: string, \"prompt\": string }] }.",
+        "Schema: { \"shots\": [{ \"title\"?: string, \"castCharacterIds\": string[], \"shotPrompt\": string }] }.",
         "",
         "Include a short natural-language title for each shot when possible. The title is only for the UI.",
+        "Use only character ids from the supplied characters list in castCharacterIds. Use an empty array for environment-only shots.",
+        "Do not invent new character ids. Do not write full fixed character appearances into shotPrompt; those belong to the Character Reference Prompt.",
         "",
-        "Each prompt must be an English booru-style local shot prompt:",
+        "Each shotPrompt must be an English booru-style local shot prompt:",
         "comma-separated tags and short tag phrases, not natural-language sentences.",
         "",
         "Use anime prompt vocabulary such as:",
@@ -106,7 +116,7 @@ export function buildComicSequenceStoryboardMessages({
         "",
         "Do not connect separate words with underscores; preserve underscores only when they are part of a known canonical tag or exact source token.",
         "",
-        "Focus each prompt on local action, camera framing, pose, expression, gesture, motion, character placement, interaction, and immediate setting as tags.",
+        "Focus each shotPrompt on local action, camera framing, pose, expression, gesture, motion, character placement, interaction, and immediate setting as tags.",
         "",
         "Do not repeat broad global art style, quality boilerplate, LoRA syntax, model names, or negative prompt terms.",
         "",
@@ -118,7 +128,7 @@ export function buildComicSequenceStoryboardMessages({
         "Rewrite them as tags like:",
         "2 people, character A in foreground, character B in background, dynamic pose, jumping, blocking attack, sword clash, impact lines, determined expression.",
         "",
-        "Keep each prompt concise but specific enough to paste into a Manual shot prompt field.",
+        "Keep each shotPrompt concise but specific enough to paste into a Manual shot prompt field.",
       ].join("\n"),
     },
     {
@@ -126,7 +136,16 @@ export function buildComicSequenceStoryboardMessages({
       content: JSON.stringify(
         {
           existingShotCount: existingShotCount ?? 0,
+          characters: characters
+            .map((character) => ({
+              id: character.id,
+              name: character.name,
+              referencePrompt: character.prompt || undefined,
+            }))
+            .filter((character) => character.id),
           globalPrompt: globalPrompt?.trim() || undefined,
+          stylePrompt: stylePrompt?.trim() || undefined,
+          environmentPrompt: environmentPrompt?.trim() || undefined,
           negativePrompt: negativePrompt?.trim() || undefined,
           story: story.trim(),
           targetShotCount: normalizedTarget ?? "auto",
@@ -140,7 +159,7 @@ export function buildComicSequenceStoryboardMessages({
 
 export function parseComicSequenceStoryboardResponse(
   rawContent: string,
-  options: { existingShotCount?: number; maxShots?: number } = {},
+  options: { existingShotCount?: number; maxShots?: number; validCharacterIds?: string[] } = {},
 ): ComicSequenceStoryboardResult {
   const parsed = parseJsonCandidate(rawContent);
   const parsedMaxShots =
@@ -149,6 +168,7 @@ export function parseComicSequenceStoryboardResponse(
       : COMIC_SEQUENCE_STORYBOARD_MAX_SHOTS;
   const maxShots = Math.min(COMIC_SEQUENCE_STORYBOARD_MAX_SHOTS, Math.max(COMIC_SEQUENCE_STORYBOARD_MIN_SHOTS, parsedMaxShots));
   const existingShotCount = Math.max(0, Math.round(options.existingShotCount ?? 0));
+  const validCharacterIds = options.validCharacterIds ? new Set(options.validCharacterIds) : null;
 
   if (!isRecord(parsed) || !Array.isArray(parsed.shots)) {
     return { shots: [] };
@@ -160,14 +180,20 @@ export function parseComicSequenceStoryboardResponse(
       continue;
     }
 
-    const prompt = readOptionalText(value.prompt);
-    if (!prompt) {
+    const shotPrompt = readOptionalText(value.shotPrompt) || readOptionalText(value.prompt);
+    if (!shotPrompt) {
       continue;
     }
+    const rawCastCharacterIds = Array.isArray(value.castCharacterIds) ? value.castCharacterIds : [];
+    const castCharacterIds = rawCastCharacterIds
+      .map((id) => readOptionalText(id))
+      .filter((id, index, ids) => id && ids.indexOf(id) === index)
+      .filter((id) => !validCharacterIds || validCharacterIds.has(id));
 
     shots.push({
+      castCharacterIds,
+      shotPrompt,
       title: readOptionalText(value.title) || `Shot ${existingShotCount + shots.length + 1}`,
-      prompt,
     });
   }
 

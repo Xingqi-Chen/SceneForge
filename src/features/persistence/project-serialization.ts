@@ -9,6 +9,7 @@ import type {
   PromptTag,
   PromptTagCategory,
   PromptTagSubcategory,
+  SavedComicSequenceCharacter,
   SavedComicSequenceReferenceChannelParams,
   SavedComicSequenceControlNetParams,
   SavedComicSequenceReferenceImage,
@@ -1094,6 +1095,19 @@ function sanitizeSavedComicSequenceReference(raw: unknown): SavedComicSequenceRe
   };
 }
 
+function sanitizeSavedComicSequenceCharacter(raw: unknown): SavedComicSequenceCharacter | null {
+  if (!isRecord(raw) || typeof raw.id !== "string" || !raw.id.trim()) {
+    return null;
+  }
+
+  return {
+    id: raw.id.trim(),
+    name: typeof raw.name === "string" && raw.name.trim() ? raw.name.trim() : "Character",
+    prompt: typeof raw.prompt === "string" ? raw.prompt : "",
+    references: sanitizeSavedComicSequenceReference(raw.references),
+  };
+}
+
 function sanitizeSavedComicSequencePreviousShotReference(raw: unknown) {
   if (!isRecord(raw) || (raw.mode !== "img2img" && raw.mode !== "inpaint")) {
     return undefined;
@@ -1120,6 +1134,14 @@ function sanitizeSavedComicSequence(raw: unknown): SceneForgeProject["settings"]
   }
 
   const defaults = sanitizeSavedComfyUiGenerationParams(raw.defaults);
+  const characters = Array.isArray(raw.characters)
+    ? dedupeById(
+        raw.characters
+          .map(sanitizeSavedComicSequenceCharacter)
+          .filter((character): character is NonNullable<ReturnType<typeof sanitizeSavedComicSequenceCharacter>> => character !== null),
+      )
+    : [];
+  const characterIds = new Set(characters.map((character) => character.id));
   const shots = Array.isArray(raw.shots)
     ? raw.shots.flatMap((shot) => {
         if (!isRecord(shot) || typeof shot.id !== "string" || !shot.id.trim()) {
@@ -1133,6 +1155,7 @@ function sanitizeSavedComicSequence(raw: unknown): SceneForgeProject["settings"]
 
         const boundImageIds = sanitizeStringIdList(shot.boundImageIds).slice(0, COMIC_SEQUENCE_BOUND_IMAGE_LIMIT);
         const previousShotReference = sanitizeSavedComicSequencePreviousShotReference(shot.previousShotReference);
+        const castCharacterIds = sanitizeStringIdList(shot.castCharacterIds).filter((id) => characterIds.has(id));
 
         return [
           {
@@ -1142,6 +1165,9 @@ function sanitizeSavedComicSequence(raw: unknown): SceneForgeProject["settings"]
             positivePrompt: typeof shot.positivePrompt === "string" ? shot.positivePrompt : "",
             negativePrompt: typeof shot.negativePrompt === "string" ? shot.negativePrompt : "",
             shotPrompt: typeof shot.shotPrompt === "string" ? shot.shotPrompt : "",
+            castCharacterIds,
+            shotCanvasPrompt: typeof shot.shotCanvasPrompt === "string" ? shot.shotCanvasPrompt : "",
+            manualShotPrompt: typeof shot.manualShotPrompt === "string" ? shot.manualShotPrompt : "",
             parameters,
             controlNets: Array.isArray(shot.controlNets)
               ? shot.controlNets
@@ -1164,6 +1190,9 @@ function sanitizeSavedComicSequence(raw: unknown): SceneForgeProject["settings"]
   return {
     version: 1,
     ...(selectedShotId ? { selectedShotId } : {}),
+    stylePrompt: typeof raw.stylePrompt === "string" ? raw.stylePrompt : "",
+    environmentPrompt: typeof raw.environmentPrompt === "string" ? raw.environmentPrompt : "",
+    characters,
     ...(defaults && defaults !== null ? { defaults } : {}),
     shots,
   };

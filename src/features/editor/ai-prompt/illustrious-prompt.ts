@@ -504,11 +504,17 @@ export function renderIllustriousPromptFromAiResponse({
 
 export function buildIllustriousComicSequencePrompt({
   basePrompt,
+  canvasPrompt,
+  characterPrompts = [],
+  environmentPrompt,
   reference,
   resources = { checkpoint: null, loras: [] },
   shotPrompt,
 }: {
   basePrompt: string;
+  canvasPrompt?: string;
+  characterPrompts?: string[];
+  environmentPrompt?: string;
   reference?: {
     characterName: string;
     characterPrompt: string;
@@ -522,11 +528,31 @@ export function buildIllustriousComicSequencePrompt({
     appendSection(sections, key as IllustriousPromptSectionKey, sectionValueToParts(value));
   }
 
+  for (const characterPrompt of characterPrompts) {
+    const labeledCharacter = /^([^:]+):\s*(.+)$/.exec(characterPrompt.trim());
+    if (labeledCharacter) {
+      appendSection(sections, "subjectIdentity", splitPromptParts(labeledCharacter[1] ?? ""));
+    }
+
+    const promptToClassify = labeledCharacter?.[2] ?? characterPrompt;
+    for (const [key, value] of Object.entries(classifyFlatPromptToIllustriousSections(promptToClassify))) {
+      appendSection(sections, key as IllustriousPromptSectionKey, sectionValueToParts(value));
+    }
+  }
+
   if (reference) {
     appendSection(sections, "subjectIdentity", splitPromptParts(reference.characterName));
     for (const [key, value] of Object.entries(classifyFlatPromptToIllustriousSections(reference.characterPrompt))) {
       appendSection(sections, key as IllustriousPromptSectionKey, sectionValueToParts(value));
     }
+  }
+
+  for (const [key, value] of Object.entries(classifyFlatPromptToIllustriousSections(environmentPrompt ?? ""))) {
+    appendSection(sections, key as IllustriousPromptSectionKey, sectionValueToParts(value));
+  }
+
+  for (const [key, value] of Object.entries(classifyFlatPromptToIllustriousSections(canvasPrompt ?? ""))) {
+    appendSection(sections, key as IllustriousPromptSectionKey, sectionValueToParts(value));
   }
 
   for (const [key, value] of Object.entries(classifyFlatPromptToIllustriousSections(shotPrompt))) {

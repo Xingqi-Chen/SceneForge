@@ -68,6 +68,7 @@ import {
   type ComfyUiPromptHistoryResponse,
   type ComfyUiSam2Bbox,
   type ComfyUiSam2Point,
+  type ComfyUiSequenceCharacter,
   type ComfyUiTextToImageRequest,
 } from "@/features/comfyui";
 import {
@@ -170,6 +171,7 @@ import { getLlmProxyErrorMessage, isLlmChatResponse } from "@/features/llm";
 import { generatePrompt } from "@/features/prompt-engine";
 import type {
   SavedComicSequence,
+  SavedComicSequenceCharacter,
   SavedComicSequencePreviousShotReference,
   SavedComicSequenceReferenceChannelParams,
   SavedComicSequenceReferenceParams,
@@ -6775,8 +6777,15 @@ function joinSequencePrompt(parts: Array<string | undefined>) {
   return parts.map((part) => part?.trim()).filter(Boolean).join(", ");
 }
 
+function formatComicSequenceCharacterPrompt(character: Pick<SavedComicSequenceCharacter, "name" | "prompt">) {
+  return character.prompt.trim() ? `${character.name.trim()}: ${character.prompt.trim()}` : character.name.trim();
+}
+
 function buildComicSequencePositivePrompt({
   basePrompt,
+  canvasPrompt,
+  characterPrompts = [],
+  environmentPrompt,
   hasReferenceImages,
   modelFormat,
   reference,
@@ -6784,6 +6793,9 @@ function buildComicSequencePositivePrompt({
   shotPrompt,
 }: {
   basePrompt: string;
+  canvasPrompt?: string;
+  characterPrompts?: string[];
+  environmentPrompt?: string;
   hasReferenceImages: boolean;
   modelFormat: PromptModelFormat;
   reference: SavedComicSequenceReferenceParams;
@@ -6797,11 +6809,21 @@ function buildComicSequencePositivePrompt({
         : reference.characterName
       : undefined;
 
-    return joinSequencePrompt([basePrompt, referencePrompt, shotPrompt]);
+    return joinSequencePrompt([
+      basePrompt,
+      characterPrompts.length > 0 ? characterPrompts.join(", ") : undefined,
+      referencePrompt,
+      environmentPrompt,
+      canvasPrompt,
+      shotPrompt,
+    ]);
   }
 
   return buildIllustriousComicSequencePrompt({
     basePrompt,
+    canvasPrompt,
+    characterPrompts,
+    environmentPrompt,
     reference: hasReferenceImages
       ? {
           characterName: reference.characterName,
@@ -6830,6 +6852,23 @@ function createComicSequenceReferenceChannel(
     startAt: 0,
     endAt: 1,
     images: [],
+  };
+}
+
+function createDefaultComicSequenceReference(): SavedComicSequenceReferenceParams {
+  const face = createComicSequenceReferenceChannel("face");
+  const character = createComicSequenceReferenceChannel("ipadapter");
+
+  return {
+    characterName: "Character",
+    characterPrompt: "",
+    mode: "face",
+    weight: DEFAULT_SEQUENCE_REFERENCE_STRENGTH,
+    startAt: 0,
+    endAt: 1,
+    images: [],
+    face,
+    character,
   };
 }
 
@@ -7915,6 +7954,75 @@ function ComicSequenceWorkspaceDialog({
     persistSequence(updater(sequence));
   }
 
+  function patchSequenceFields(patch: Partial<Pick<SavedComicSequence, "environmentPrompt" | "stylePrompt">>) {
+    patchSequence((current) => ({
+      ...current,
+      ...patch,
+    }));
+  }
+
+  function addComicSequenceCharacter() {
+    const reference = createDefaultComicSequenceReference();
+    const characterNumber = (sequence?.characters.length ?? 0) + 1;
+    const character: SavedComicSequenceCharacter = {
+      id: createLocalId("character"),
+      name: `Character ${characterNumber}`,
+      prompt: "",
+      references: {
+        ...reference,
+        characterName: `Character ${characterNumber}`,
+      },
+    };
+
+    patchSequence((current) => ({
+      ...current,
+      characters: [...current.characters, character],
+    }));
+  }
+
+  function patchComicSequenceCharacter(characterId: string, patch: Partial<Pick<SavedComicSequenceCharacter, "name" | "prompt">>) {
+    patchSequence((current) => ({
+      ...current,
+      characters: current.characters.map((character) =>
+        character.id === characterId
+          ? {
+              ...character,
+              ...patch,
+              references: {
+                ...character.references,
+                ...(patch.name !== undefined ? { characterName: patch.name } : {}),
+                ...(patch.prompt !== undefined ? { characterPrompt: patch.prompt } : {}),
+              },
+            }
+          : character,
+      ),
+    }));
+  }
+
+  function deleteComicSequenceCharacter(characterId: string) {
+    patchSequence((current) => ({
+      ...current,
+      characters: current.characters.filter((character) => character.id !== characterId),
+      shots: current.shots.map((shot) => ({
+        ...shot,
+        castCharacterIds: shot.castCharacterIds.filter((id) => id !== characterId),
+      })),
+    }));
+  }
+
+  function toggleSelectedShotCastCharacter(characterId: string) {
+    if (!selectedShot) {
+      return;
+    }
+
+    const currentIds = selectedShot.castCharacterIds ?? [];
+    const nextIds = currentIds.includes(characterId)
+      ? currentIds.filter((id) => id !== characterId)
+      : [...currentIds, characterId];
+
+    patchSelectedShot({ castCharacterIds: nextIds });
+  }
+
   function patchSelectedShot(patch: Partial<SavedComicSequenceShot>) {
     if (!selectedShot) {
       return;
@@ -8173,11 +8281,17 @@ function ComicSequenceWorkspaceDialog({
           const nextSequence: SavedComicSequence = existing
             ? {
                 ...existing,
+                stylePrompt: existing.stylePrompt ?? activePrompt,
+                environmentPrompt: existing.environmentPrompt ?? "",
+                characters: existing.characters ?? [],
                 defaults: existing.defaults ?? parameters,
                 selectedShotId: existing.selectedShotId ?? existing.shots[0]?.id,
               }
             : {
                 version: 1,
+                stylePrompt: activePrompt,
+                environmentPrompt: "",
+                characters: [],
                 defaults: parameters,
                 shots: [],
               };
@@ -8225,7 +8339,7 @@ function ComicSequenceWorkspaceDialog({
   function createShotFromScene(
     scene: Scene,
     sourceShot?: SavedComicSequenceShot | null,
-    options: { shotNumber?: number; shotPrompt?: string; title?: string } = {},
+    options: { castCharacterIds?: string[]; shotNumber?: number; shotPrompt?: string; title?: string } = {},
   ): SavedComicSequenceShot | null {
     if (!sequence) {
       return null;
@@ -8245,14 +8359,19 @@ function ComicSequenceWorkspaceDialog({
       ? getComicSequenceReferenceChannel(sourceReference, "character")
       : createComicSequenceReferenceChannel("ipadapter");
     const sourceDraft = draft ?? (sourceShot ? createDraftFromShot(sourceShot, selectedResources) : null);
+    const shotCanvasPrompt = resolveShotPositivePrompt(generated.prompt);
+    const manualShotPrompt = options.shotPrompt?.trim() ?? "";
 
     return {
       id: createLocalId("shot"),
       title: options.title?.trim() || `Shot ${options.shotNumber ?? sequence.shots.length + 1}`,
       scene: cloneSceneSnapshot(scene),
-      positivePrompt: resolveShotPositivePrompt(generated.prompt),
+      positivePrompt: shotCanvasPrompt,
       negativePrompt: generated.negativePrompt || baseNegativePrompt,
-      shotPrompt: options.shotPrompt?.trim() ?? "",
+      shotPrompt: manualShotPrompt,
+      castCharacterIds: options.castCharacterIds ?? [],
+      shotCanvasPrompt,
+      manualShotPrompt,
       parameters: defaultParameters,
       controlNets: sourceDraft ? getComicSequenceControlNetParams(sourceDraft) : sourceShot?.controlNets ?? [],
       reference: {
@@ -8333,9 +8452,12 @@ function ComicSequenceWorkspaceDialog({
           purpose: "comic-sequence-storyboard",
           nsfw: nsfwEnabled,
           messages: buildComicSequenceStoryboardMessages({
+            characters: sequence.characters,
+            environmentPrompt: sequence.environmentPrompt,
             existingShotCount: sequence.shots.length,
             globalPrompt: activePrompt,
             negativePrompt: baseNegativePrompt,
+            stylePrompt: sequence.stylePrompt,
             story,
             targetShotCount,
           }),
@@ -8356,6 +8478,7 @@ function ComicSequenceWorkspaceDialog({
       const parsed = parseComicSequenceStoryboardResponse(payload.content, {
         existingShotCount: sequence.shots.length,
         maxShots: targetShotCount ?? COMIC_SEQUENCE_STORYBOARD_MAX_SHOTS,
+        validCharacterIds: sequence.characters.map((character) => character.id),
       });
 
       if (parsed.shots.length === 0) {
@@ -8367,7 +8490,8 @@ function ComicSequenceWorkspaceDialog({
         .map((shot, index) =>
           createShotFromScene(project.scene, selectedShot, {
             shotNumber: firstShotNumber + index,
-            shotPrompt: shot.prompt,
+            castCharacterIds: shot.castCharacterIds,
+            shotPrompt: shot.shotPrompt,
             title: shot.title,
           }),
         )
@@ -8401,9 +8525,10 @@ function ComicSequenceWorkspaceDialog({
     }
 
     const generated = getComicSequenceShotPrompt(project, project.scene);
-    patchSelectedShotSettings({
+    patchSelectedShot({
       scene: cloneSceneSnapshot(project.scene),
       positivePrompt: resolveShotPositivePrompt(generated.prompt, selectedShot.positivePrompt),
+      shotCanvasPrompt: resolveShotPositivePrompt(generated.prompt, selectedShot.shotCanvasPrompt),
       negativePrompt: generated.negativePrompt || selectedShot.negativePrompt,
     });
     setControlNetNormalPreview(null);
@@ -8626,6 +8751,45 @@ function ComicSequenceWorkspaceDialog({
     return references.filter((reference): reference is NonNullable<(typeof references)[number]> => reference !== null);
   }
 
+  async function buildCastCharacterPayloads(castCharacters: SavedComicSequenceCharacter[]) {
+    const payloads: ComfyUiSequenceCharacter[] = [];
+
+    for (const character of castCharacters) {
+      const faceReference = getComicSequenceReferenceChannel(character.references, "face");
+      const characterReference = getComicSequenceReferenceChannel(character.references, "character");
+      const faceReferences = faceReference.enabled ? await buildShotReferenceImages(faceReference.images) : [];
+      const characterReferences = characterReference.enabled ? await buildShotReferenceImages(characterReference.images) : [];
+
+      if (faceReferences.length > 0) {
+        payloads.push({
+          id: `${character.id}-face`,
+          mode: faceReference.mode,
+          name: `${character.name.trim() || "Character"} face`,
+          prompt: character.prompt,
+          references: faceReferences,
+          startPercent: Math.min(faceReference.startAt, faceReference.endAt),
+          endPercent: Math.max(faceReference.startAt, faceReference.endAt),
+          weight: faceReference.weight,
+        });
+      }
+
+      if (characterReferences.length > 0) {
+        payloads.push({
+          id: `${character.id}-character`,
+          mode: characterReference.mode,
+          name: `${character.name.trim() || "Character"} character`,
+          prompt: character.prompt,
+          references: characterReferences,
+          startPercent: Math.min(characterReference.startAt, characterReference.endAt),
+          endPercent: Math.max(characterReference.startAt, characterReference.endAt),
+          weight: characterReference.weight,
+        });
+      }
+    }
+
+    return payloads;
+  }
+
   async function submitSequence(
     mode: ComicSequenceSubmitMode = "sequence",
     generationMode: GenerationSubmitMode = "full",
@@ -8709,6 +8873,9 @@ function ComicSequenceWorkspaceDialog({
 
       const buildTextToImageShot = async (shot: SavedComicSequenceShot, shotNumber: number) => {
         const shotDraft = createDraftFromShot(shot, selectedResources);
+        const castIds = new Set(shot.castCharacterIds ?? []);
+        const castCharacters = sequence.characters.filter((character) => castIds.has(character.id));
+        const castCharacterPrompts = castCharacters.map(formatComicSequenceCharacterPrompt);
         const imageCount = normalizeComfyUiGenerationImageCount(shotDraft.imageCount);
         const seed = resolveComfyUiGenerationSeed({
           currentSeed: shotDraft.seed,
@@ -8720,12 +8887,15 @@ function ComicSequenceWorkspaceDialog({
         const characterReferences = characterReference.enabled ? await buildShotReferenceImages(characterReference.images) : [];
         const hasReferenceImages = faceReferences.length > 0 || characterReferences.length > 0;
         const positivePrompt = buildComicSequencePositivePrompt({
-          basePrompt: shot.positivePrompt,
+          basePrompt: sequence.stylePrompt || activePrompt,
+          canvasPrompt: shot.shotCanvasPrompt || shot.positivePrompt,
+          characterPrompts: castCharacterPrompts,
+          environmentPrompt: sequence.environmentPrompt,
           hasReferenceImages,
           modelFormat: project.settings.modelFormat,
           reference: shot.reference,
           resources: selectedResources,
-          shotPrompt: shot.shotPrompt,
+          shotPrompt: shot.manualShotPrompt || shot.shotPrompt,
         });
         const negativePrompt = mergeNegativePrompts([baseNegativePrompt, shot.negativePrompt]);
         const requestShotDraft = shotDraft;
@@ -8748,6 +8918,7 @@ function ComicSequenceWorkspaceDialog({
         const request = previewMode
           ? createComfyUiTextToImagePreviewRequest(fullRequest)
           : fullRequest;
+        const castCharacterPayloads = await buildCastCharacterPayloads(castCharacters);
         const submittedImageCount = normalizeComfyUiGenerationImageCount(request.batchSize ?? imageCount);
         const draftSnapshot = {
           ...requestShotDraft,
@@ -8774,9 +8945,10 @@ function ComicSequenceWorkspaceDialog({
           payloadShot: {
             id: shot.id,
             title: shot.title,
-            prompt: shot.shotPrompt || shot.title || `Shot ${shotNumber}`,
+            prompt: shot.manualShotPrompt || shot.shotPrompt || shot.title || `Shot ${shotNumber}`,
             request,
             characters: [
+              ...castCharacterPayloads,
               ...(faceReferences.length > 0
                 ? [
                     {
@@ -8822,6 +8994,9 @@ function ComicSequenceWorkspaceDialog({
         sourceImage: ComfyUiGeneratedImage;
       }) => {
         const shotDraft = createDraftFromShot(shot, selectedResources);
+        const castIds = new Set(shot.castCharacterIds ?? []);
+        const castCharacters = sequence.characters.filter((character) => castIds.has(character.id));
+        const castCharacterPrompts = castCharacters.map(formatComicSequenceCharacterPrompt);
         const seed = resolveComfyUiGenerationSeed({
           currentSeed: shotDraft.seed,
           mode: shotDraft.seedMode,
@@ -8832,12 +9007,15 @@ function ComicSequenceWorkspaceDialog({
           (faceReference.enabled && faceReference.images.length > 0) ||
           (characterReference.enabled && characterReference.images.length > 0);
         const positivePrompt = buildComicSequencePositivePrompt({
-          basePrompt: shot.positivePrompt,
+          basePrompt: sequence.stylePrompt || activePrompt,
+          canvasPrompt: shot.shotCanvasPrompt || shot.positivePrompt,
+          characterPrompts: castCharacterPrompts,
+          environmentPrompt: sequence.environmentPrompt,
           hasReferenceImages,
           modelFormat: project.settings.modelFormat,
           reference: shot.reference,
           resources: selectedResources,
-          shotPrompt: shot.shotPrompt,
+          shotPrompt: shot.manualShotPrompt || shot.shotPrompt,
         });
         const negativePrompt = mergeNegativePrompts([baseNegativePrompt, shot.negativePrompt]);
         const faceDetailer = previewMode
@@ -9336,6 +9514,83 @@ function ComicSequenceWorkspaceDialog({
                 </section>
               ) : null}
 
+              {sequence ? (
+                <section className="rounded-md border border-slate-200 bg-white p-3">
+                  <div className="grid gap-3 lg:grid-cols-2">
+                    <label className="grid gap-1.5">
+                      <span className="text-xs font-semibold text-slate-700">Sequence Style</span>
+                      <textarea
+                        className="min-h-24 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm leading-relaxed text-slate-700 outline-none transition focus:border-sky-300 focus:ring-2 focus:ring-sky-100"
+                        onChange={(event) => patchSequenceFields({ stylePrompt: event.target.value })}
+                        placeholder="series art style, medium, rendering language, aesthetic tags"
+                        value={sequence.stylePrompt}
+                      />
+                    </label>
+                    <label className="grid gap-1.5">
+                      <span className="text-xs font-semibold text-slate-700">Sequence Environment</span>
+                      <textarea
+                        className="min-h-24 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm leading-relaxed text-slate-700 outline-none transition focus:border-sky-300 focus:ring-2 focus:ring-sky-100"
+                        onChange={(event) => patchSequenceFields({ environmentPrompt: event.target.value })}
+                        placeholder="stable location, era, weather, world context, recurring background"
+                        value={sequence.environmentPrompt}
+                      />
+                    </label>
+                  </div>
+                  <div className="mt-4 flex items-center justify-between gap-3">
+                    <div>
+                      <p className="text-xs font-semibold text-slate-700">Characters</p>
+                      <p className="mt-0.5 text-[11px] leading-relaxed text-slate-500">
+                        Character Reference Prompt is the source for fixed identity and appearance. Shot prompts should only describe local action, camera, expression, and placement.
+                      </p>
+                    </div>
+                    <Button className="h-8 rounded-md bg-white px-3 text-xs text-slate-700" onClick={addComicSequenceCharacter} type="button" variant="secondary">
+                      <Plus className="size-3.5" />
+                      Add character
+                    </Button>
+                  </div>
+                  {sequence.characters.length > 0 ? (
+                    <div className="mt-3 grid gap-3 md:grid-cols-2">
+                      {sequence.characters.map((character) => (
+                        <div className="rounded-md border border-slate-200 bg-slate-50/60 p-3" key={character.id}>
+                          <div className="flex items-start gap-2">
+                            <label className="grid min-w-0 flex-1 gap-1.5">
+                              <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">name</span>
+                              <input
+                                className={COMFYUI_TEXT_FIELD_CLASS}
+                                onChange={(event) => patchComicSequenceCharacter(character.id, { name: event.target.value })}
+                                value={character.name}
+                              />
+                            </label>
+                            <Button
+                              className="mt-5 h-9 shrink-0 rounded-md border-rose-200 bg-white px-2 text-rose-700 hover:bg-rose-50"
+                              onClick={() => deleteComicSequenceCharacter(character.id)}
+                              title="Delete character and remove it from shot casts"
+                              type="button"
+                              variant="secondary"
+                            >
+                              <Trash2 className="size-3.5" />
+                            </Button>
+                          </div>
+                          <label className="mt-2 grid gap-1.5">
+                            <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">character reference prompt</span>
+                            <textarea
+                              className="min-h-20 rounded-md border border-slate-200 bg-white px-3 py-2 text-xs leading-relaxed text-slate-700 outline-none transition focus:border-sky-300 focus:ring-2 focus:ring-sky-100"
+                              onChange={(event) => patchComicSequenceCharacter(character.id, { prompt: event.target.value })}
+                              placeholder="fixed identity, outfit baseline, stable visual anchors"
+                              value={character.prompt}
+                            />
+                          </label>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="mt-3 rounded-md border border-dashed border-slate-200 bg-slate-50 p-3 text-xs leading-relaxed text-slate-500">
+                      No sequence characters yet. Add characters before using cast-aware storyboard or shot generation.
+                    </div>
+                  )}
+                </section>
+              ) : null}
+
               <div className="grid gap-5 lg:grid-cols-[300px_minmax(0,1fr)]">
               <aside className="space-y-3">
                 <Button
@@ -9428,10 +9683,10 @@ function ComicSequenceWorkspaceDialog({
                             {index + 1}. {shot.title}
                           </span>
                           <span className="mt-1 line-clamp-2 block text-[11px] leading-relaxed text-slate-500">
-                            {shot.shotPrompt || shot.positivePrompt || "No prompt"}
+                            {shot.manualShotPrompt || shot.shotPrompt || shot.shotCanvasPrompt || shot.positivePrompt || "No prompt"}
                           </span>
                           <span className="mt-2 block text-[10px] text-slate-400">
-                            {getComicSequenceReferenceCount(shot.reference)} refs · {shot.controlNets.filter((unit) => unit.enabled).length} control
+                            {(shot.castCharacterIds ?? []).length} cast / {getComicSequenceReferenceCount(shot.reference)} refs / {shot.controlNets.filter((unit) => unit.enabled).length} control
                           </span>
                         </button>
                       ))}
@@ -9494,7 +9749,7 @@ function ComicSequenceWorkspaceDialog({
                         <p className="text-xs font-semibold">Shot setting chain</p>
                         <p className={`mt-0.5 text-[11px] leading-relaxed ${parameterSyncDownEnabled ? "text-sky-700" : "text-slate-500"}`}>
                           {parameterSyncDownEnabled
-                            ? "Setting edits sync to this shot and every shot below it, except title and manual shot prompt."
+                            ? "Setting edits sync to this shot and every shot below it, except title, cast, and manual shot prompt."
                             : "Setting edits apply to the selected shot only."}
                         </p>
                       </div>
@@ -9523,21 +9778,69 @@ function ComicSequenceWorkspaceDialog({
                           value={selectedShot.title}
                         />
                       </label>
-                      <label className="grid gap-1.5">
+                      <div className="grid gap-1.5 sm:col-span-2">
+                        <span className="text-xs font-semibold text-slate-700">Shot Cast</span>
+                        {(sequence?.characters.length ?? 0) > 0 ? (
+                          <div className="flex flex-wrap gap-2">
+                            {(sequence?.characters ?? []).map((character) => {
+                              const checked = selectedShot.castCharacterIds.includes(character.id);
+
+                              return (
+                                <label
+                                  className={
+                                    "inline-flex h-8 items-center gap-2 rounded-md border px-2 text-xs transition " +
+                                    (checked
+                                      ? "border-sky-300 bg-sky-50 text-sky-800"
+                                      : "border-slate-200 bg-white text-slate-600")
+                                  }
+                                  key={character.id}
+                                >
+                                  <input
+                                    checked={checked}
+                                    className="size-3.5 rounded border-slate-300 text-sky-600"
+                                    onChange={() => toggleSelectedShotCastCharacter(character.id)}
+                                    type="checkbox"
+                                  />
+                                  {character.name || character.id}
+                                </label>
+                              );
+                            })}
+                          </div>
+                        ) : (
+                          <p className="rounded-md border border-dashed border-slate-200 bg-slate-50 p-2 text-[11px] leading-relaxed text-slate-500">
+                            Add sequence characters above to choose who appears in this shot.
+                          </p>
+                        )}
+                        <p className="text-[11px] leading-relaxed text-slate-500">
+                          Only selected cast character prompts are merged for generation. Sync-down does not copy cast.
+                        </p>
+                      </div>
+                      <label className="grid gap-1.5 sm:col-span-2">
                         <span className="text-xs font-semibold text-slate-700">Manual shot prompt</span>
-                        <input
-                          className={COMFYUI_TEXT_FIELD_CLASS}
-                          onChange={(event) => patchSelectedShot({ shotPrompt: event.target.value })}
+                        <textarea
+                          className="min-h-24 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm leading-relaxed text-slate-700 outline-none transition focus:border-sky-300 focus:ring-2 focus:ring-sky-100"
+                          onChange={(event) =>
+                            patchSelectedShot({
+                              manualShotPrompt: event.target.value,
+                              shotPrompt: event.target.value,
+                            })
+                          }
                           placeholder="camera move, emotion, local action"
-                          value={selectedShot.shotPrompt}
+                          rows={4}
+                          value={selectedShot.manualShotPrompt || selectedShot.shotPrompt}
                         />
                       </label>
                       <label className="grid gap-1.5 sm:col-span-2">
                         <span className="text-xs font-semibold text-slate-700">Canvas prompt</span>
                         <textarea
                           className="min-h-24 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700 outline-none transition focus:border-sky-300 focus:ring-2 focus:ring-sky-100"
-                          onChange={(event) => patchSelectedShotSettings({ positivePrompt: event.target.value })}
-                          value={selectedShot.positivePrompt}
+                          onChange={(event) =>
+                            patchSelectedShotSettings({
+                              positivePrompt: event.target.value,
+                              shotCanvasPrompt: event.target.value,
+                            })
+                          }
+                          value={selectedShot.shotCanvasPrompt || selectedShot.positivePrompt}
                         />
                       </label>
                       <label className="grid gap-1.5 sm:col-span-2">

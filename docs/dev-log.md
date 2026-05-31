@@ -4,6 +4,60 @@ This log records dated implementation and documentation work. Keep entries conci
 
 ## 2026-05-31
 
+### Comic Sequence Layered Prompt MVP
+
+Summary:
+
+- Added Comic Sequence UI controls for sequence style, sequence environment, sequence characters, per-shot cast, shot canvas prompt, and manual shot prompt.
+- Added minimal character library editing for name and Character Reference Prompt, with delete cleanup for existing shot casts.
+- Updated storyboard AI schema to `{ title, castCharacterIds, shotPrompt }`, includes sequence character context in the LLM request, filters invalid cast ids, and writes storyboard output to `manualShotPrompt` plus `castCharacterIds`.
+- Updated Comic Sequence positive prompt construction to merge sequence style, current shot cast character prompts, sequence environment, shot canvas prompt, and manual shot prompt while preserving Illustrious ordering and Civitai checkpoint/LoRA trigger handling.
+- Current shot generation now sends only current cast character reference payloads when cast character references exist; shot-local legacy references remain supported.
+- Refreshing a selected shot from the current canvas now updates only shot-local scene/canvas prompt/negative mirror fields and preserves sequence style, environment, characters, manual prompt, and cast.
+
+Files changed:
+
+- `src/features/editor/components/ImageGenerationPanel.tsx`
+- `src/features/editor/ai-prompt/comic-sequence-storyboard.ts`
+- `src/features/editor/ai-prompt/comic-sequence-storyboard.test.ts`
+- `src/features/editor/ai-prompt/illustrious-prompt.ts`
+- `src/features/editor/ai-prompt/illustrious-prompt.test.ts`
+- `docs/dev-log.md`
+
+Validation:
+
+- `npm test -- src/features/editor/ai-prompt/comic-sequence-storyboard.test.ts src/features/editor/ai-prompt/illustrious-prompt.test.ts src/features/persistence/project-serialization.test.ts src/features/editor/comic-sequence-shot-settings.test.ts src/features/editor/comic-sequence-previous-shot.test.ts src/features/editor/store/editor-store.test.ts src/features/prompt-engine/generate-prompt.test.ts` passed.
+- `npm run typecheck` passed.
+- `npm run lint` passed with existing `@next/next/no-img-element` warnings in editor image-heavy panels.
+
+### Comic Sequence Layered Prompt Data Model
+
+Summary:
+
+- Added sequence-level `stylePrompt`, `environmentPrompt`, and `characters` fields to the saved Comic Sequence model.
+- Added character-level `id`, `name`, `prompt`, and aligned reference settings for future cast-aware generation.
+- Added shot-level `castCharacterIds`, `shotCanvasPrompt`, and `manualShotPrompt` while preserving existing `positivePrompt`, `shotPrompt`, parameters, ControlNet, reference, and scene snapshot fields.
+- New Comic Sequence and shot creation now writes the layered prompt fields; existing generation continues to use current prompts with `manualShotPrompt` as the new manual prompt source.
+- Serialization sanitizes and round-trips the new fields, defaulting missing layered fields to empty strings or arrays without attempting old data migration.
+
+Files changed:
+
+- `src/shared/types/project.ts`
+- `src/features/persistence/project-serialization.ts`
+- `src/features/persistence/project-serialization.test.ts`
+- `src/features/editor/components/ImageGenerationPanel.tsx`
+- `src/features/editor/comic-sequence-shot-settings.ts`
+- `src/features/editor/comic-sequence-shot-settings.test.ts`
+- `src/features/editor/comic-sequence-previous-shot.test.ts`
+- `src/features/editor/store/editor-store.test.ts`
+- `docs/dev-log.md`
+
+Validation:
+
+- `npm test -- src/features/persistence/project-serialization.test.ts src/features/editor/comic-sequence-shot-settings.test.ts src/features/editor/comic-sequence-previous-shot.test.ts src/features/editor/store/editor-store.test.ts` passed.
+- `npm run typecheck` passed.
+- `npm run lint` passed with existing `@next/next/no-img-element` warnings in editor image-heavy panels.
+
 ### Legacy Editor ComfyUI Preview Generation
 
 Summary:

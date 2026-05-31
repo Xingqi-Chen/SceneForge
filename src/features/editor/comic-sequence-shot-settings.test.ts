@@ -16,6 +16,9 @@ function createShot(id: string, title: string, shotPrompt: string): SavedComicSe
     positivePrompt: `${id} positive`,
     negativePrompt: `${id} negative`,
     shotPrompt,
+    castCharacterIds: [],
+    shotCanvasPrompt: `${id} positive`,
+    manualShotPrompt: shotPrompt,
     parameters: {
       cfg: 7,
       denoise: 0.7,
@@ -67,6 +70,9 @@ function createSequence(): SavedComicSequence {
   return {
     version: 1,
     selectedShotId: "shot-2",
+    stylePrompt: "",
+    environmentPrompt: "",
+    characters: [],
     shots: [
       createShot("shot-1", "Shot 1", "manual 1"),
       createShot("shot-2", "Shot 2", "manual 2"),
@@ -76,10 +82,21 @@ function createSequence(): SavedComicSequence {
 }
 
 describe("comic sequence shot settings sync", () => {
-  it("syncs settings from the selected shot down without replacing titles or manual prompts", () => {
+  it("syncs settings from the selected shot down without replacing titles, casts, or manual prompts", () => {
+    const sequence = createSequence();
+    sequence.shots[1] = {
+      ...sequence.shots[1]!,
+      castCharacterIds: ["character-b"],
+    };
+    sequence.shots[2] = {
+      ...sequence.shots[2]!,
+      castCharacterIds: ["character-c"],
+    };
+
     const next = applyComicSequenceShotSettingsPatchToSequence(
-      createSequence(),
+      sequence,
       {
+        castCharacterIds: ["character-shared"],
         negativePrompt: "shared negative",
         positivePrompt: "shared positive",
         previousShotReference: {
@@ -113,7 +130,7 @@ describe("comic sequence shot settings sync", () => {
           endAt: 0.9,
           images: [],
         },
-      },
+      } as Parameters<typeof applyComicSequenceShotSettingsPatchToSequence>[1],
       {
         selectedShotId: "shot-2",
         syncDown: true,
@@ -125,7 +142,9 @@ describe("comic sequence shot settings sync", () => {
     expect(next.shots[1]?.positivePrompt).toBe("shared positive");
     expect(next.shots[2]?.positivePrompt).toBe("shared positive");
     expect(next.shots.map((shot) => shot.title)).toEqual(["Shot 1", "Shot 2", "Shot 3"]);
+    expect(next.shots.map((shot) => shot.castCharacterIds)).toEqual([[], ["character-b"], ["character-c"]]);
     expect(next.shots.map((shot) => shot.shotPrompt)).toEqual(["manual 1", "manual 2", "manual 3"]);
+    expect(next.shots.map((shot) => shot.manualShotPrompt)).toEqual(["manual 1", "manual 2", "manual 3"]);
     expect(next.shots[2]?.previousShotReference?.mode).toBe("inpaint");
     expect(next.shots[1]?.reference).not.toBe(next.shots[2]?.reference);
   });

@@ -208,6 +208,123 @@ describe("ComfyUI sequence image route", () => {
     });
   });
 
+  it("uses shot-scoped character references without leaking unselected cast prompts", async () => {
+    process.env.COMFYUI_BASE_URL = "http://comfyui.test";
+    const promptBodies: PromptBody[] = [];
+    const uploadNames = ["hero-reference.png", "rival-reference.png"];
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      if (input === "http://comfyui.test/object_info") {
+        return Response.json(objectInfo);
+      }
+
+      if (input === "http://comfyui.test/upload/image") {
+        expect(init?.method).toBe("POST");
+        expect(init?.body).toBeInstanceOf(FormData);
+        return Response.json({
+          name: uploadNames.shift() ?? "unexpected-reference.png",
+          type: "input",
+        });
+      }
+
+      expect(input).toBe("http://comfyui.test/prompt");
+      const body = JSON.parse(String(init?.body)) as PromptBody;
+      promptBodies.push(body);
+
+      return Response.json({
+        prompt_id: `prompt-${promptBodies.length}`,
+        number: promptBodies.length,
+        node_errors: {},
+      });
+    });
+
+    const response = await POST(
+      new Request("http://localhost/api/comfyui/sequence-image", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          baseRequest: {
+            checkpointName: "model.safetensors",
+            positivePrompt: "ink comic style",
+            samplerName: "euler",
+            scheduler: "normal",
+            width: 1024,
+            height: 1024,
+          },
+          characters: [],
+          clientId: "client-seq",
+          sequenceId: "seq-cast",
+          shots: [
+            {
+              id: "shot-hero",
+              prompt: "wide rooftop entrance",
+              characters: [
+                {
+                  id: "hero-face",
+                  mode: "face",
+                  name: "Hero face",
+                  prompt: "red cape, facial scar",
+                  references: [
+                    {
+                      id: "hero-ref",
+                      imageDataUrl: "data:image/png;base64,aGVsbG8=",
+                    },
+                  ],
+                },
+              ],
+            },
+            {
+              id: "shot-rival",
+              prompt: "low angle alley reveal",
+              characters: [
+                {
+                  id: "rival-character",
+                  mode: "ipadapter",
+                  name: "Rival character",
+                  prompt: "black coat, silver hair",
+                  references: [
+                    {
+                      id: "rival-ref",
+                      imageDataUrl: "data:image/png;base64,aGVsbG8=",
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        }),
+      }),
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(fetchSpy).toHaveBeenCalledTimes(5);
+    expect(promptBodies).toHaveLength(2);
+    expect(promptBodies[0].prompt["2"].inputs.text).toBe("ink comic style, Hero face: red cape, facial scar, wide rooftop entrance");
+    expect(promptBodies[1].prompt["2"].inputs.text).toBe("ink comic style, Rival character: black coat, silver hair, low angle alley reveal");
+    expect(promptBodies[0].prompt["2"].inputs.text).not.toContain("Rival");
+    expect(promptBodies[1].prompt["2"].inputs.text).not.toContain("Hero");
+    expect(promptBodies[0].prompt["4"]).toMatchObject({
+      class_type: "LoadImage",
+      inputs: { image: "hero-reference.png" },
+    });
+    expect(promptBodies[1].prompt["4"]).toMatchObject({
+      class_type: "LoadImage",
+      inputs: { image: "rival-reference.png" },
+    });
+    expect(payload.shots).toMatchObject([
+      {
+        characterReferenceIds: ["hero-ref"],
+        promptId: "prompt-1",
+        shotId: "shot-hero",
+      },
+      {
+        characterReferenceIds: ["rival-ref"],
+        promptId: "prompt-2",
+        shotId: "shot-rival",
+      },
+    ]);
+  });
+
   it("uses explicit per-shot requests without leaking base generation settings", async () => {
     process.env.COMFYUI_BASE_URL = "http://comfyui.test";
     const promptBodies: PromptBody[] = [];

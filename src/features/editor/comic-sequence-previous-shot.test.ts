@@ -155,6 +155,9 @@ describe("comic sequence previous-shot helpers", () => {
       {
         version: 1,
         selectedShotId: "shot-1",
+        stylePrompt: "",
+        environmentPrompt: "",
+        characters: [],
         shots,
       },
       "shot-1",

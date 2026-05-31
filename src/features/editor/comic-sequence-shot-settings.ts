@@ -1,7 +1,7 @@
 import type { SavedComicSequence, SavedComicSequenceShot, SavedComfyUiGenerationParams } from "@/shared/types";
 
 export type ComicSequenceShotSettingsPatch = Partial<
-  Omit<SavedComicSequenceShot, "createdAt" | "id" | "shotPrompt" | "title" | "updatedAt">
+  Omit<SavedComicSequenceShot, "castCharacterIds" | "createdAt" | "id" | "manualShotPrompt" | "shotPrompt" | "title" | "updatedAt">
 >;
 
 type ApplyComicSequenceShotSettingsOptions = {
@@ -56,8 +56,10 @@ export function applyComicSequenceShotSettingsPatch(
   return {
     ...shot,
     ...cloneShotSettingsPatch(patch),
+    castCharacterIds: shot.castCharacterIds,
     title: shot.title,
     shotPrompt: shot.shotPrompt,
+    manualShotPrompt: shot.manualShotPrompt,
     updatedAt,
   };
 }

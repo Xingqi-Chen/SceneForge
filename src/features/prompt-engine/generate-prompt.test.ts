@@ -71,6 +71,17 @@ describe("generatePrompt", () => {
     expect(result.prompt).toMatch(/1280x720 pixels/);
   });
 
+  it("omits canvas aspect ratio and pixel dimensions for Stable Diffusion prompts", () => {
+    const project = createDefaultProject();
+    project.settings.modelFormat = "stable-diffusion";
+
+    const result = generatePrompt(project);
+
+    expect(result.parts).not.toContain("16:9 aspect ratio, 1280x720 pixels");
+    expect(result.prompt).not.toMatch(/aspect ratio/);
+    expect(result.prompt).not.toMatch(/pixels/);
+  });
+
   it("builds a stable diffusion prompt from semantic scene data", () => {
     const project = createDefaultProject();
     project.settings.modelFormat = "stable-diffusion";

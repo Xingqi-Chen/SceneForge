@@ -20,6 +20,34 @@ import {
   stripSharedPromptStateFromProject,
 } from "./project-serialization";
 
+function createSavedComicSequenceReference() {
+  return {
+    characterName: "Character 1",
+    characterPrompt: "",
+    face: {
+      enabled: false,
+      mode: "face" as const,
+      weight: 0.45,
+      startAt: 0,
+      endAt: 1,
+      images: [],
+    },
+    character: {
+      enabled: false,
+      mode: "ipadapter" as const,
+      weight: 0.45,
+      startAt: 0,
+      endAt: 1,
+      images: [],
+    },
+    mode: "face" as const,
+    weight: 0.45,
+    startAt: 0,
+    endAt: 1,
+    images: [],
+  };
+}
+
 function createSavedComfyUiImage(
   patch: Partial<SavedComfyUiGeneratedImage> = {},
 ): SavedComfyUiGeneratedImage {
@@ -238,6 +266,16 @@ describe("project serialization", () => {
     const baseParameters = createSavedComfyUiImage().parameters;
     const savedComicSequence: SavedComicSequence = {
       version: 1,
+      stylePrompt: "inked comic style",
+      environmentPrompt: "rainy rooftop district",
+      characters: [
+        {
+          id: "character-hero",
+          name: "Hero",
+          prompt: "same scar and cape",
+          references: createSavedComicSequenceReference(),
+        },
+      ],
       defaults: {
         ...baseParameters,
         seed: 1000,
@@ -252,6 +290,9 @@ describe("project serialization", () => {
           positivePrompt: "hero on rooftop",
           negativePrompt: "low quality",
           shotPrompt: "windy night, dutch angle",
+          castCharacterIds: ["character-hero"],
+          shotCanvasPrompt: "hero on rooftop",
+          manualShotPrompt: "windy night, dutch angle",
           parameters: {
             ...baseParameters,
             cfg: 6.5,
@@ -391,12 +432,111 @@ describe("project serialization", () => {
     expect(imported.settings.savedComicSequence).toEqual(savedComicSequence);
   });
 
+  it("round-trips empty layered Comic Sequence prompt defaults", () => {
+    const project = createDefaultProject();
+    project.settings.savedComicSequence = {
+      version: 1,
+      selectedShotId: "shot-1",
+      stylePrompt: "",
+      environmentPrompt: "",
+      characters: [],
+      shots: [
+        {
+          id: "shot-1",
+          title: "Opening panel",
+          scene: project.scene,
+          positivePrompt: "canvas prompt",
+          negativePrompt: "",
+          shotPrompt: "",
+          castCharacterIds: [],
+          shotCanvasPrompt: "",
+          manualShotPrompt: "",
+          parameters: createSavedComfyUiImage().parameters,
+          controlNets: [],
+          reference: createSavedComicSequenceReference(),
+          createdAt: "2026-05-27T12:00:00.000Z",
+          updatedAt: "2026-05-27T12:00:00.000Z",
+        },
+      ],
+    };
+
+    const imported = importProjectFromJson(serializeProject(project));
+    const sequence = imported.settings.savedComicSequence;
+    const shot = sequence?.shots[0];
+
+    expect(sequence?.stylePrompt).toBe("");
+    expect(sequence?.environmentPrompt).toBe("");
+    expect(sequence?.characters).toEqual([]);
+    expect(shot?.castCharacterIds).toEqual([]);
+    expect(shot?.shotCanvasPrompt).toBe("");
+    expect(shot?.manualShotPrompt).toBe("");
+  });
+
+  it("dedupes Comic Sequence characters and filters shot casts to known character ids", () => {
+    const project = createDefaultProject();
+    const raw = JSON.parse(serializeProject(project));
+    raw.settings.savedComicSequence = {
+      version: 1,
+      selectedShotId: "shot-1",
+      stylePrompt: "inked panels",
+      environmentPrompt: "city rooftop",
+      characters: [
+        {
+          id: " character-a ",
+          name: "Hero",
+          prompt: "red cape",
+          references: createSavedComicSequenceReference(),
+        },
+        {
+          id: "character-a",
+          name: "Duplicate Hero",
+          prompt: "duplicate should be dropped",
+          references: createSavedComicSequenceReference(),
+        },
+        {
+          id: "character-b",
+          name: "Rival",
+          prompt: "black coat",
+          references: createSavedComicSequenceReference(),
+        },
+      ],
+      shots: [
+        {
+          id: "shot-1",
+          title: "Opening panel",
+          scene: project.scene,
+          positivePrompt: "canvas prompt",
+          negativePrompt: "",
+          shotPrompt: "manual prompt",
+          castCharacterIds: ["character-a", "missing-character", "character-b", "character-a"],
+          shotCanvasPrompt: "canvas prompt",
+          manualShotPrompt: "manual prompt",
+          parameters: createSavedComfyUiImage().parameters,
+          controlNets: [],
+          reference: createSavedComicSequenceReference(),
+          createdAt: "2026-05-27T12:00:00.000Z",
+          updatedAt: "2026-05-27T12:00:00.000Z",
+        },
+      ],
+    };
+
+    const imported = importProjectFromJson(JSON.stringify(raw));
+    const sequence = imported.settings.savedComicSequence;
+
+    expect(sequence?.characters.map((character) => character.id)).toEqual(["character-a", "character-b"]);
+    expect(sequence?.characters[0]?.prompt).toBe("red cape");
+    expect(sequence?.shots[0]?.castCharacterIds).toEqual(["character-a", "character-b"]);
+  });
+
   it("sanitizes Comic Sequence previous-shot reference settings", () => {
     const project = createDefaultProject();
     const raw = JSON.parse(serializeProject(project));
     raw.settings.savedComicSequence = {
       version: 1,
       selectedShotId: "shot-valid",
+      stylePrompt: "",
+      environmentPrompt: "",
+      characters: [],
       shots: [
         {
           id: "shot-valid",
@@ -405,6 +545,9 @@ describe("project serialization", () => {
           positivePrompt: "valid prompt",
           negativePrompt: "",
           shotPrompt: "",
+          castCharacterIds: [],
+          shotCanvasPrompt: "valid prompt",
+          manualShotPrompt: "",
           parameters: createSavedComfyUiImage().parameters,
           controlNets: [],
           reference: {},
@@ -427,6 +570,9 @@ describe("project serialization", () => {
           positivePrompt: "invalid prompt",
           negativePrompt: "",
           shotPrompt: "",
+          castCharacterIds: [],
+          shotCanvasPrompt: "invalid prompt",
+          manualShotPrompt: "",
           parameters: createSavedComfyUiImage().parameters,
           controlNets: [],
           reference: {},
@@ -461,6 +607,9 @@ describe("project serialization", () => {
     raw.settings.savedComicSequence = {
       version: 1,
       selectedShotId: "shot-legacy",
+      stylePrompt: "",
+      environmentPrompt: "",
+      characters: [],
       shots: [
         {
           id: "shot-legacy",
@@ -469,6 +618,9 @@ describe("project serialization", () => {
           positivePrompt: "legacy prompt",
           negativePrompt: "",
           shotPrompt: "",
+          castCharacterIds: [],
+          shotCanvasPrompt: "legacy prompt",
+          manualShotPrompt: "",
           parameters: createSavedComfyUiImage().parameters,
           controlNets: [],
           reference: {
