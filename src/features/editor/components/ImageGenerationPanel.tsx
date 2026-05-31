@@ -110,6 +110,10 @@ import {
 } from "@/features/editor/ai-prompt/comfyui-generation-options";
 import type { CivitaiAiPromptResult } from "@/features/editor/ai-prompt/civitai-ai-context";
 import {
+  buildIllustriousComicSequencePrompt,
+  mergeNegativePrompts,
+} from "@/features/editor/ai-prompt/illustrious-prompt";
+import {
   findMaskAlphaBounds,
   padAndAlignLocalRegion,
   resolveInpaintLocalRegion,
@@ -165,6 +169,7 @@ import type {
   SavedComicSequence,
   SavedComicSequencePreviousShotReference,
   SavedComicSequenceReferenceChannelParams,
+  SavedComicSequenceReferenceParams,
   SavedComicSequenceControlNetParams,
   SavedComicSequenceReferenceImage,
   SavedComicSequenceShot,
@@ -173,6 +178,7 @@ import type {
   SavedComfyUiGeneratedImageStorage,
   SavedComfyUiImageReference,
   SavedComfyUiGenerationParams,
+  PromptModelFormat,
   Scene,
   SceneForgeProject,
 } from "@/shared/types";
@@ -6704,6 +6710,44 @@ function joinSequencePrompt(parts: Array<string | undefined>) {
   return parts.map((part) => part?.trim()).filter(Boolean).join(", ");
 }
 
+function buildComicSequencePositivePrompt({
+  basePrompt,
+  hasReferenceImages,
+  modelFormat,
+  reference,
+  resources,
+  shotPrompt,
+}: {
+  basePrompt: string;
+  hasReferenceImages: boolean;
+  modelFormat: PromptModelFormat;
+  reference: SavedComicSequenceReferenceParams;
+  resources: SelectedCivitaiResourcesPreview;
+  shotPrompt: string;
+}) {
+  if (modelFormat !== "stable-diffusion") {
+    const referencePrompt = hasReferenceImages
+      ? reference.characterPrompt
+        ? `${reference.characterName}: ${reference.characterPrompt}`
+        : reference.characterName
+      : undefined;
+
+    return joinSequencePrompt([basePrompt, referencePrompt, shotPrompt]);
+  }
+
+  return buildIllustriousComicSequencePrompt({
+    basePrompt,
+    reference: hasReferenceImages
+      ? {
+          characterName: reference.characterName,
+          characterPrompt: reference.characterPrompt,
+        }
+      : undefined,
+    resources,
+    shotPrompt,
+  });
+}
+
 function getComicSequenceShotPrompt(project: SceneForgeProject, scene: Scene) {
   return generatePrompt({
     ...project,
@@ -8602,16 +8646,15 @@ function ComicSequenceWorkspaceDialog({
         const faceReferences = faceReference.enabled ? await buildShotReferenceImages(faceReference.images) : [];
         const characterReferences = characterReference.enabled ? await buildShotReferenceImages(characterReference.images) : [];
         const hasReferenceImages = faceReferences.length > 0 || characterReferences.length > 0;
-        const referencePrompt = hasReferenceImages
-          ? shot.reference.characterPrompt
-            ? `${shot.reference.characterName}: ${shot.reference.characterPrompt}`
-            : shot.reference.characterName
-          : undefined;
-        const positivePrompt = joinSequencePrompt([
-          shot.positivePrompt,
-          referencePrompt,
-          shot.shotPrompt,
-        ]);
+        const positivePrompt = buildComicSequencePositivePrompt({
+          basePrompt: shot.positivePrompt,
+          hasReferenceImages,
+          modelFormat: project.settings.modelFormat,
+          reference: shot.reference,
+          resources: selectedResources,
+          shotPrompt: shot.shotPrompt,
+        });
+        const negativePrompt = mergeNegativePrompts([baseNegativePrompt, shot.negativePrompt]);
         const shotPreview = buildComfyUiControlNetOpenPosePreview(shot.scene, {
           width: shotDraft.width,
           height: shotDraft.height,
@@ -8623,12 +8666,12 @@ function ComicSequenceWorkspaceDialog({
             })
           : null;
         const request = toRequestPayload(
-          { ...shotDraft, positivePrompt, negativePrompt: shot.negativePrompt, imageCount },
+          { ...shotDraft, positivePrompt, negativePrompt, imageCount },
           seed,
           shotPreview,
           shotNormalPreview,
         );
-        const draftSnapshot = { ...shotDraft, positivePrompt, negativePrompt: shot.negativePrompt, imageCount, seed };
+        const draftSnapshot = { ...shotDraft, positivePrompt, negativePrompt, imageCount, seed };
 
         return {
           baseRequest: toRequestPayload(draftSnapshot, seed, null, null),
@@ -8693,21 +8736,20 @@ function ComicSequenceWorkspaceDialog({
         const hasReferenceImages =
           (faceReference.enabled && faceReference.images.length > 0) ||
           (characterReference.enabled && characterReference.images.length > 0);
-        const referencePrompt = hasReferenceImages
-          ? shot.reference.characterPrompt
-            ? `${shot.reference.characterName}: ${shot.reference.characterPrompt}`
-            : shot.reference.characterName
-          : undefined;
-        const positivePrompt = joinSequencePrompt([
-          shot.positivePrompt,
-          referencePrompt,
-          shot.shotPrompt,
-        ]);
+        const positivePrompt = buildComicSequencePositivePrompt({
+          basePrompt: shot.positivePrompt,
+          hasReferenceImages,
+          modelFormat: project.settings.modelFormat,
+          reference: shot.reference,
+          resources: selectedResources,
+          shotPrompt: shot.shotPrompt,
+        });
+        const negativePrompt = mergeNegativePrompts([baseNegativePrompt, shot.negativePrompt]);
         const draftSnapshot: GenerationDraft = {
           ...shotDraft,
           imageCount: 1,
           positivePrompt,
-          negativePrompt: shot.negativePrompt,
+          negativePrompt,
           seed,
           inpaint: {
             ...shotDraft.inpaint,
@@ -8724,7 +8766,7 @@ function ComicSequenceWorkspaceDialog({
           image: sourceImage,
           maskDataUrl,
           mode: reference.inpaintMode,
-          negativePrompt: shot.negativePrompt,
+          negativePrompt,
           positivePrompt,
           seed,
           sourceImageDataUrl: await loadOriginalImageUrlToDataUrl(sourceImage.url),
