@@ -3,7 +3,10 @@ import { describe, expect, it } from "vitest";
 import { createDefaultProject } from "@/features/editor/store/defaults";
 import type { SavedComicSequence, SavedComicSequenceShot } from "@/shared/types";
 
-import { applyComicSequenceShotSettingsPatchToSequence } from "./comic-sequence-shot-settings";
+import {
+  applyComicSequenceShotSettingsPatchToSequence,
+  bindComicSequenceShotImageIds,
+} from "./comic-sequence-shot-settings";
 
 function createShot(id: string, title: string, shotPrompt: string): SavedComicSequenceShot {
   return {
@@ -170,5 +173,27 @@ describe("comic sequence shot settings sync", () => {
     expect(next.shots[0]?.previousShotReference?.mode).toBe("img2img");
     expect(next.shots[1]?.previousShotReference).toBeUndefined();
     expect(next.shots[2]?.previousShotReference).toBeUndefined();
+  });
+
+  it("binds saved direct-shot images to the generated shot for previous-shot reuse", () => {
+    const sequence = createSequence();
+    sequence.shots[0] = {
+      ...sequence.shots[0]!,
+      boundImageIds: ["manual-image", "older-image"],
+    };
+
+    const next = bindComicSequenceShotImageIds(
+      sequence,
+      "shot-1",
+      ["saved-shot-image", "manual-image", "saved-shot-image"],
+      {
+        limit: 3,
+        updatedAt: "2026-05-27T13:00:00.000Z",
+      },
+    );
+
+    expect(next.shots[0]?.boundImageIds).toEqual(["saved-shot-image", "manual-image", "older-image"]);
+    expect(next.shots[0]?.updatedAt).toBe("2026-05-27T13:00:00.000Z");
+    expect(next.shots[1]?.boundImageIds).toBeUndefined();
   });
 });

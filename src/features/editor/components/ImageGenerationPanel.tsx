@@ -117,10 +117,12 @@ import {
 } from "@/features/editor/inpaint-local-region";
 import {
   createComicSequenceSavedPreviousShotResults,
+  createComicSequenceImageFromSavedImage,
   createFullImageMaskDataUrl,
   findComicSequencePreviousShotSource,
   getComfyUiGeneratedImageReferenceKey,
   PENDING_COMIC_SEQUENCE_PREVIOUS_SHOT_SOURCE_KEY,
+  promoteComicSequenceResultImage,
   resolveComicSequencePreviousShotAction,
   type ComicSequencePreviousShotSource,
 } from "@/features/editor/comic-sequence-previous-shot";
@@ -130,6 +132,7 @@ import {
 } from "@/features/editor/comic-sequence-generation";
 import {
   applyComicSequenceShotSettingsPatchToSequence,
+  bindComicSequenceShotImageIds,
   type ComicSequenceShotSettingsPatch,
 } from "@/features/editor/comic-sequence-shot-settings";
 import {
@@ -462,6 +465,32 @@ function getGeneratedImageItemReferenceKey(item: GeneratedImageItem) {
 
 function getGeneratedImageSessionKey(promptId: string, image: Pick<ComfyUiGeneratedImage, "filename" | "nodeId" | "subfolder" | "type">) {
   return [promptId, getGeneratedImageReferenceKey(image)].join("\u0000");
+}
+
+function getSavedGeneratedImageSessionKey(record: SavedComfyUiGeneratedImage) {
+  const sourceReference = record.sourceReference ?? record;
+
+  return [
+    record.promptId,
+    getGeneratedImageReferenceKey({
+      filename: sourceReference.filename,
+      nodeId: record.nodeId,
+      ...(sourceReference.subfolder !== undefined ? { subfolder: sourceReference.subfolder } : {}),
+      ...(sourceReference.type !== undefined ? { type: sourceReference.type } : {}),
+    }),
+  ].join("\u0000");
+}
+
+function findSavedGeneratedImageIdsForImages(
+  savedImages: SavedComfyUiGeneratedImage[],
+  promptId: string,
+  images: ComfyUiGeneratedImage[],
+) {
+  const imageKeys = new Set(images.map((image) => getGeneratedImageSessionKey(promptId, image)));
+
+  return savedImages
+    .filter((record) => imageKeys.has(getSavedGeneratedImageSessionKey(record)))
+    .map((record) => record.id);
 }
 
 function createGeneratedImageHistoryId() {
@@ -8939,6 +8968,32 @@ function ComicSequenceWorkspaceDialog({
       });
 
       appendComfyUiGeneratedImages(records);
+      const savedResultImage = records[0]
+        ? createComicSequenceImageFromSavedImage(records[0])
+        : null;
+      if (savedResultImage) {
+        setResults((current) => promoteComicSequenceResultImage(current, result.promptId, savedResultImage));
+      }
+      if (result.shotId && sequence) {
+        const currentProject = useEditorStore.getState().project;
+        const savedImageIds = findSavedGeneratedImageIdsForImages(
+          currentProject.settings.comfyUiGeneratedImages ?? [],
+          result.promptId,
+          [image],
+        );
+        const currentSequence = currentProject.settings.savedComicSequence ?? sequence;
+        const nextSequence = bindComicSequenceShotImageIds(
+          currentSequence,
+          result.shotId,
+          savedImageIds,
+          { limit: COMIC_SEQUENCE_BOUND_IMAGE_LIMIT },
+        );
+
+        if (nextSequence !== currentSequence) {
+          setSequence(nextSequence);
+          updateProjectSettings({ savedComicSequence: nextSequence });
+        }
+      }
       await saveProject(useEditorStore.getState().project);
       setSavedCurrentImageKeys((current) => new Set(current).add(imageKey));
       setHistorySaveStatus("success");

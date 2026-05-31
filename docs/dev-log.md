@@ -4,6 +4,33 @@ This log records dated implementation and documentation work. Keep entries conci
 
 ## 2026-05-30
 
+### Comic Sequence Direct Shot Previous Source Fix
+
+Summary:
+
+- Fixed the legacy `/editor` Comic Sequence shot workspace so saving an image from direct `Generate shot` also binds the saved history record back to that shot.
+- Promoted the saved local image URL over the stale ComfyUI temp `/api/comfyui/view` URL in the current session results after saving, preventing previous-shot generation from reusing a deleted temp file.
+- Reused the existing bound-image previous-shot source path, preserving imported references, manual previous-source settings, sequence reference uploads, and ComfyUI generated image history.
+- Added focused regression coverage for binding saved direct-shot image IDs without duplicating existing shot bindings.
+
+Files changed:
+
+- `src/features/editor/components/ImageGenerationPanel.tsx`
+- `src/features/editor/comic-sequence-previous-shot.ts`
+- `src/features/editor/comic-sequence-previous-shot.test.ts`
+- `src/features/editor/comic-sequence-shot-settings.ts`
+- `src/features/editor/comic-sequence-shot-settings.test.ts`
+- `docs/dev-log.md`
+
+Validation:
+
+- `npm test -- src/features/editor/comic-sequence-shot-settings.test.ts src/features/editor/comic-sequence-previous-shot.test.ts` passed.
+- `npm run typecheck` passed.
+
+PR:
+
+- #17
+
 ### Style Palette Resource Selection Stability
 
 Summary:

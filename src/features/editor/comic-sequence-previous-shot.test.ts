@@ -2,11 +2,14 @@ import { describe, expect, it } from "vitest";
 
 import type { ComfyUiGeneratedImage } from "@/features/comfyui";
 import type { SavedComicSequenceShot, SavedComfyUiGeneratedImage } from "@/shared/types";
+import { bindComicSequenceShotImageIds } from "./comic-sequence-shot-settings";
 import {
+  createComicSequenceImageFromSavedImage,
   createComicSequenceSavedPreviousShotResults,
   createFullImageMaskDataUrl,
   findComicSequencePreviousShotSource,
   PENDING_COMIC_SEQUENCE_PREVIOUS_SHOT_SOURCE_KEY,
+  promoteComicSequenceResultImage,
   resolveComicSequencePreviousShotAction,
 } from "./comic-sequence-previous-shot";
 
@@ -144,6 +147,117 @@ describe("comic sequence previous-shot helpers", () => {
       url: "/api/comfyui/generated-images/bound-local.png",
     });
     expect(source?.previousShot.id).toBe("shot-1");
+  });
+
+  it("finds a saved direct-shot image after its saved record id is bound back to the shot", () => {
+    const shots = [shot("shot-1"), shot("shot-2")];
+    const sequence = bindComicSequenceShotImageIds(
+      {
+        version: 1,
+        selectedShotId: "shot-1",
+        shots,
+      },
+      "shot-1",
+      ["saved-direct-shot-image"],
+      { updatedAt: "2026-05-27T13:00:00.000Z" },
+    );
+    const savedResults = createComicSequenceSavedPreviousShotResults(
+      [
+        savedSequenceImage({
+          id: "saved-direct-shot-image",
+          filename: "local-direct-shot.png",
+          source: "text-to-image",
+          shotId: undefined,
+          sourceReference: {
+            filename: "direct-shot-output.png",
+            type: "output",
+          },
+          url: "/api/comfyui/generated-images/local-direct-shot.png",
+        }),
+      ],
+      sequence.shots,
+    );
+
+    const source = findComicSequencePreviousShotSource({
+      currentShotId: "shot-2",
+      shots: sequence.shots,
+      results: savedResults,
+    });
+
+    expect(sequence.shots[0]?.boundImageIds).toEqual(["saved-direct-shot-image"]);
+    expect(source?.image).toEqual({
+      filename: "direct-shot-output.png",
+      nodeId: "preview",
+      type: "output",
+      url: "/api/comfyui/generated-images/local-direct-shot.png",
+    });
+    expect(source?.previousShot.id).toBe("shot-1");
+  });
+
+  it("promotes saved direct-shot results over stale ComfyUI temp URLs", () => {
+    const tempImage: ComfyUiGeneratedImage = {
+      filename: "ComfyUI_temp_ofnve_00002_.png",
+      nodeId: "preview",
+      type: "temp",
+      url: "/api/comfyui/view?filename=ComfyUI_temp_ofnve_00002_.png&type=temp",
+    };
+    const savedImage = createComicSequenceImageFromSavedImage(
+      savedSequenceImage({
+        id: "saved-direct-shot-image",
+        filename: "local-direct-shot.png",
+        source: "text-to-image",
+        shotId: undefined,
+        sourceReference: {
+          filename: "ComfyUI_temp_ofnve_00002_.png",
+          type: "temp",
+        },
+        url: "/api/comfyui/generated-images/local-direct-shot.png",
+      }),
+    );
+    const promotedResults = promoteComicSequenceResultImage(
+      [
+        {
+          images: [tempImage, image("alternate.png")],
+          promptId: "prompt-1",
+          shotId: "shot-1",
+        },
+      ],
+      "prompt-1",
+      savedImage,
+    );
+    const source = findComicSequencePreviousShotSource({
+      currentShotId: "shot-2",
+      shots: [shot("shot-1"), shot("shot-2")],
+      results: promotedResults,
+    });
+
+    expect(promotedResults[0]?.images).toHaveLength(2);
+    expect(source?.image).toEqual({
+      filename: "ComfyUI_temp_ofnve_00002_.png",
+      nodeId: "preview",
+      type: "temp",
+      url: "/api/comfyui/generated-images/local-direct-shot.png",
+    });
+  });
+
+  it("does not insert a saved image into unrelated prompt results", () => {
+    const existingResult = {
+      images: [image("other.png")],
+      promptId: "prompt-1",
+      shotId: "shot-1",
+    };
+    const promotedResults = promoteComicSequenceResultImage(
+      [existingResult],
+      "prompt-1",
+      {
+        filename: "missing.png",
+        nodeId: "preview",
+        type: "output",
+        url: "/api/comfyui/generated-images/missing.png",
+      },
+    );
+
+    expect(promotedResults[0]).toBe(existingResult);
   });
 
   it("skips empty pending results before falling back to a later previous-shot source", () => {
