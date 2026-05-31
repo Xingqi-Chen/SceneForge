@@ -73,6 +73,7 @@ describe("Civitai LoRA download route", () => {
   let tempDir: string;
   let loraDir: string;
   let checkpointDir: string;
+  let diffusionDir: string;
   let db: SceneForgeSqliteDatabase;
   let resourceId: string;
   let previousSqliteFile: string | undefined;
@@ -81,14 +82,17 @@ describe("Civitai LoRA download route", () => {
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "sceneforge-lora-route-"));
     loraDir = path.join(tempDir, "loras");
     checkpointDir = path.join(tempDir, "checkpoints");
+    diffusionDir = path.join(tempDir, "diffusion_models");
     await fs.mkdir(loraDir, { recursive: true });
     await fs.mkdir(checkpointDir, { recursive: true });
+    await fs.mkdir(diffusionDir, { recursive: true });
     previousSqliteFile = process.env.SCENEFORGE_SQLITE_FILE;
     process.env.SCENEFORGE_SQLITE_FILE = path.join(tempDir, "sceneforge.sqlite");
     db = await openSceneForgeSqliteDatabase();
     saveCivitaiLibrarySettingsToSqlite(db, {
       loraDownloadPath: loraDir,
       checkpointDownloadPath: checkpointDir,
+      diffusionModelPath: diffusionDir,
     });
     resourceId = upsertCivitaiResourceToSqlite(db, makeResourceInput()).resource.id;
   });
@@ -238,5 +242,79 @@ describe("Civitai LoRA download route", () => {
       bytesWritten: 0,
     });
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("uses the diffusion model download path for Anima model resources", async () => {
+    const diffusionResource = upsertCivitaiResourceToSqlite(
+      db,
+      makeResourceInput("expected", {
+        resourceType: "model",
+        name: "Anima Pencil XL",
+        versionName: "Diffusion model",
+        category: null,
+        categories: [],
+      }),
+    ).resource;
+    resourceId = diffusionResource.id;
+    const targetPath = path.join(diffusionDir, makeCivitaiResourceTargetFileName(diffusionResource));
+    await fs.writeFile(targetPath, "expected");
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const statusResponse = await GET(new Request("http://localhost/api"), context());
+    await expect(statusResponse.json()).resolves.toMatchObject({
+      status: "unverified",
+      checksumMatches: null,
+      actualSha256: null,
+      targetPath,
+    });
+
+    const verifyResponse = await GET(new Request("http://localhost/api?verify=true"), context());
+    await expect(verifyResponse.json()).resolves.toMatchObject({
+      status: "verified",
+      checksumMatches: true,
+      targetPath,
+    });
+
+    const downloadResponse = await POST(
+      new Request("http://localhost/api", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "download" }),
+      }),
+      context(),
+    );
+    await expect(downloadResponse.json()).resolves.toMatchObject({
+      status: "verified",
+      action: "download",
+      skipped: true,
+      bytesWritten: 0,
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("reports a missing path when a diffusion model path is not configured", async () => {
+    saveCivitaiLibrarySettingsToSqlite(db, {
+      loraDownloadPath: loraDir,
+      checkpointDownloadPath: checkpointDir,
+      diffusionModelPath: "",
+    });
+    const diffusionResource = upsertCivitaiResourceToSqlite(
+      db,
+      makeResourceInput("expected", {
+        resourceType: "model",
+        name: "Anima Pencil XL",
+        category: null,
+        categories: [],
+      }),
+    ).resource;
+    resourceId = diffusionResource.id;
+
+    const statusResponse = await GET(new Request("http://localhost/api"), context());
+    await expect(statusResponse.json()).resolves.toMatchObject({
+      status: "path_missing",
+      pathConfigured: false,
+      targetPath: null,
+    });
   });
 });

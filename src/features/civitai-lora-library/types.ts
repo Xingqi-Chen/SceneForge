@@ -1,4 +1,5 @@
 export type CivitaiResourceType = "lora" | "model" | "embedding" | "vae" | "other";
+export type CivitaiModelStorageKind = "checkpoint" | "diffusion";
 
 export type CivitaiLoraCategory =
   | "character"
@@ -26,6 +27,7 @@ export type CivitaiAiNsfwLevel = "sfw" | "suggestive" | "mature" | "explicit" | 
 export type CivitaiLibrarySettings = {
   loraDownloadPath: string;
   checkpointDownloadPath: string;
+  diffusionModelPath: string;
   controlNetModelPath: string;
 };
 
@@ -304,6 +306,7 @@ export type SelectedCivitaiResourcePreview = {
   recommendations: CivitaiResourceRecommendation[];
   previewImage: string | null;
   modelFileName: string;
+  modelStorageKind?: CivitaiModelStorageKind;
   promptReferences?: CivitaiPromptReference[];
 };
 

@@ -6,11 +6,12 @@ import { NextResponse } from "next/server";
 
 import {
   getCivitaiResourceDownloadStatus,
+  getCivitaiResourceConfiguredDownloadPath,
+  getCivitaiResourceDownloadLabel,
   getCivitaiResourceFileMetadata,
   writeReadableStreamToFile,
   type CivitaiResourceDetail,
   type CivitaiResourceDownloadResult,
-  type CivitaiLibrarySettings,
 } from "@/features/civitai-lora-library";
 import {
   getCivitaiResourceDetailFromSqlite,
@@ -44,18 +45,10 @@ function errorResponse(message: string, status: number, details?: unknown) {
   );
 }
 
-function getResourceDownloadLabel(detail: CivitaiResourceDetail) {
-  return detail.resourceType === "model" ? "Checkpoint" : "LoRA";
-}
-
 function assertDownloadableResource(detail: CivitaiResourceDetail) {
   if (detail.resourceType !== "lora" && detail.resourceType !== "model") {
     throw new DownloadRouteError("当前只支持下载 LoRA 与 Checkpoint 资源。", 400);
   }
-}
-
-function getConfiguredDownloadPath(detail: CivitaiResourceDetail, settings: CivitaiLibrarySettings) {
-  return detail.resourceType === "model" ? settings.checkpointDownloadPath : settings.loraDownloadPath;
 }
 
 async function loadDownloadContext(resourceId: string) {
@@ -118,7 +111,7 @@ async function cleanupTempFile(tempPath: string) {
 
 async function downloadCivitaiFile(detail: CivitaiResourceDetail, targetPath: string) {
   const metadata = getCivitaiResourceFileMetadata(detail);
-  const label = getResourceDownloadLabel(detail);
+  const label = getCivitaiResourceDownloadLabel(detail);
   if (!metadata.downloadUrl) {
     throw new DownloadRouteError(`该 ${label} 没有可用的 Civitai 下载链接。`, 400);
   }
@@ -180,7 +173,7 @@ function makeResult(
 }
 
 async function handleDownload(detail: CivitaiResourceDetail, downloadPath: string) {
-  const label = getResourceDownloadLabel(detail);
+  const label = getCivitaiResourceDownloadLabel(detail);
   const currentStatus = await getCivitaiResourceDownloadStatus(detail, downloadPath, { verifyChecksum: true });
   assertReadyForWrite(currentStatus, label);
 
@@ -209,7 +202,7 @@ async function handleDownload(detail: CivitaiResourceDetail, downloadPath: strin
 }
 
 async function handleUpload(detail: CivitaiResourceDetail, downloadPath: string, stream: ReadableStream<Uint8Array>) {
-  const label = getResourceDownloadLabel(detail);
+  const label = getCivitaiResourceDownloadLabel(detail);
   const currentStatus = await getCivitaiResourceDownloadStatus(detail, downloadPath, { verifyChecksum: true });
   assertReadyForWrite(currentStatus, label);
 
@@ -236,7 +229,11 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
     const url = new URL(request.url);
     const verifyChecksum = url.searchParams.get("verify") === "1" || url.searchParams.get("verify") === "true";
     return NextResponse.json(
-      await getCivitaiResourceDownloadStatus(detail, getConfiguredDownloadPath(detail, settings), { verifyChecksum }),
+      await getCivitaiResourceDownloadStatus(
+        detail,
+        getCivitaiResourceConfiguredDownloadPath(detail, settings),
+        { verifyChecksum },
+      ),
     );
   } catch (error) {
     if (error instanceof DownloadRouteError) {
@@ -254,8 +251,8 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
   try {
     const { detail, settings } = await loadDownloadContext(id);
     assertDownloadableResource(detail);
-    const downloadPath = getConfiguredDownloadPath(detail, settings);
-    const label = getResourceDownloadLabel(detail);
+    const downloadPath = getCivitaiResourceConfiguredDownloadPath(detail, settings);
+    const label = getCivitaiResourceDownloadLabel(detail);
 
     const contentType = request.headers.get("content-type") ?? "";
     if (contentType.includes("application/octet-stream")) {

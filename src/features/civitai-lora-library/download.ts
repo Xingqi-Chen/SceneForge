@@ -4,13 +4,15 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 
 import type {
+  CivitaiLibrarySettings,
+  CivitaiModelStorageKind,
   CivitaiResourceDownloadStatus,
   CivitaiResourceRecord,
 } from "./types";
 
 type DownloadableCivitaiResource = Pick<
   CivitaiResourceRecord,
-  "id" | "resourceType" | "name" | "versionName" | "civitaiModelVersionId" | "downloadUrl" | "filesJson"
+  "id" | "resourceType" | "name" | "versionName" | "baseModel" | "civitaiModelVersionId" | "downloadUrl" | "filesJson"
 >;
 
 type CivitaiFileMetadata = {
@@ -33,6 +35,8 @@ type CivitaiResourceDownloadStatusOptions = {
 const DEFAULT_MODEL_EXTENSION = ".safetensors";
 const KNOWN_MODEL_EXTENSIONS = new Set([".safetensors", ".ckpt", ".pt", ".bin"]);
 const WINDOWS_RESERVED_FILE_CHARS = /[<>:"/\\|?*\x00-\x1F]/g;
+const DIFFUSION_MODEL_PATTERN =
+  /\b(?:anima|flux(?:\s*1)?|sd\s*3(?:\.\d+)?|stable\s+diffusion\s+3(?:\.\d+)?|qwen(?:\s+image)?|z\s+image|lumina)\b/i;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -146,8 +150,51 @@ function makeDisplayHash(resource: DownloadableCivitaiResource, file: Record<str
   );
 }
 
-function getResourceDownloadLabel(resource: DownloadableCivitaiResource) {
-  return resource.resourceType === "model" ? "Checkpoint" : "LoRA";
+function getDiffusionModelFamilyText(resource: DownloadableCivitaiResource) {
+  const metadata = getCivitaiResourceFileMetadata(resource);
+  return [
+    resource.name,
+    resource.versionName,
+    resource.baseModel,
+    metadata.name,
+    metadata.downloadUrl,
+  ]
+    .filter((value): value is string => Boolean(value))
+    .join(" ")
+    .replace(/[_-]+/g, " ");
+}
+
+export function getCivitaiModelStorageKind(resource: DownloadableCivitaiResource): CivitaiModelStorageKind {
+  if (resource.resourceType !== "model") {
+    return "checkpoint";
+  }
+
+  return DIFFUSION_MODEL_PATTERN.test(getDiffusionModelFamilyText(resource))
+    ? "diffusion"
+    : "checkpoint";
+}
+
+export function getCivitaiResourceDownloadLabel(resource: DownloadableCivitaiResource) {
+  if (resource.resourceType === "lora") {
+    return "LoRA";
+  }
+
+  return getCivitaiModelStorageKind(resource) === "diffusion" ? "Diffusion model" : "Checkpoint";
+}
+
+export function getCivitaiResourceConfiguredDownloadPath(
+  resource: DownloadableCivitaiResource,
+  settings: CivitaiLibrarySettings,
+) {
+  if (resource.resourceType === "lora") {
+    return settings.loraDownloadPath;
+  }
+
+  if (resource.resourceType === "model" && getCivitaiModelStorageKind(resource) === "diffusion") {
+    return settings.diffusionModelPath;
+  }
+
+  return resource.resourceType === "model" ? settings.checkpointDownloadPath : "";
 }
 
 export function getCivitaiResourceFileMetadata(resource: DownloadableCivitaiResource): CivitaiFileMetadata {
@@ -220,7 +267,7 @@ export async function getCivitaiResourceDownloadStatus(
   const configuredPath = downloadPath.trim();
   const metadata = getCivitaiResourceFileMetadata(resource);
   const targetFileName = makeCivitaiResourceTargetFileName(resource);
-  const label = getResourceDownloadLabel(resource);
+  const label = getCivitaiResourceDownloadLabel(resource);
   const verifyChecksum = options.verifyChecksum === true;
 
   if (!configuredPath) {

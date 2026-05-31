@@ -6,7 +6,10 @@ import type {
   SelectedCivitaiResourcePreview,
   SelectedCivitaiResourcesPreview,
 } from "@/features/civitai-lora-library";
-import { makeCivitaiResourceTargetFileName } from "@/features/civitai-lora-library";
+import {
+  getCivitaiModelStorageKind,
+  makeCivitaiResourceTargetFileName,
+} from "@/features/civitai-lora-library";
 import {
   getCivitaiResourceDetailFromSqlite,
   openSceneForgeSqliteDatabase,
@@ -131,6 +134,7 @@ function toPreviewResource(resource: CivitaiResourceDetail): SelectedCivitaiReso
     recommendations: resource.recommendations,
     previewImage: resource.previewImage,
     modelFileName: makeCivitaiResourceTargetFileName(resource),
+    ...(resource.resourceType === "model" ? { modelStorageKind: getCivitaiModelStorageKind(resource) } : {}),
     promptReferences: getPromptReferences(resource),
   };
 }

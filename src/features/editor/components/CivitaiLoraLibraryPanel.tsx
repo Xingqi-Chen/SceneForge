@@ -41,6 +41,7 @@ type CacheRepairResult = {
 const EMPTY_CIVITAI_LIBRARY_SETTINGS: CivitaiLibrarySettings = {
   loraDownloadPath: "",
   checkpointDownloadPath: "",
+  diffusionModelPath: "",
   controlNetModelPath: "",
 };
 
@@ -801,6 +802,7 @@ export function CivitaiLoraLibraryPanel() {
     const nextSettings: CivitaiLibrarySettings = {
       loraDownloadPath: settingsDraft.loraDownloadPath.trim(),
       checkpointDownloadPath: settingsDraft.checkpointDownloadPath.trim(),
+      diffusionModelPath: settingsDraft.diffusionModelPath.trim(),
       controlNetModelPath: settingsDraft.controlNetModelPath.trim(),
     };
 
@@ -1239,7 +1241,7 @@ export function CivitaiLoraLibraryPanel() {
                         </span>
                       ) : null}
                     </div>
-                    <div className="mt-4 grid gap-3 md:grid-cols-3">
+                    <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
                       <label className="block text-xs font-medium text-slate-600">
                         <span>LoRA 下载路径</span>
                         <input
@@ -1262,6 +1264,18 @@ export function CivitaiLoraLibraryPanel() {
                           }
                           placeholder="D:/StableDiffusion/models/Stable-diffusion"
                           value={settingsDraft.checkpointDownloadPath}
+                        />
+                      </label>
+                      <label className="block text-xs font-medium text-slate-600">
+                        <span>Diffusion 模型下载路径</span>
+                        <input
+                          className="mt-1 h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm font-normal text-slate-800 outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 disabled:opacity-60"
+                          disabled={settingsLoadStatus === "loading" || settingsSaveStatus === "loading"}
+                          onChange={(event) =>
+                            setSettingsDraft((current) => ({ ...current, diffusionModelPath: event.target.value }))
+                          }
+                          placeholder="D:/ComfyUI/models/diffusion_models"
+                          value={settingsDraft.diffusionModelPath}
                         />
                       </label>
                       <label className="block text-xs font-medium text-slate-600">
