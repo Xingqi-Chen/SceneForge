@@ -44,6 +44,7 @@ import {
   COMFYUI_FACE_DETAILER_SAM_MASK_HINT_USE_NEGATIVE_OPTIONS,
   COMFYUI_INPAINT_UPSCALE_MODEL_PRESETS,
   COMFYUI_INPAINT_MODE_OPTIONS,
+  createComfyUiInpaintPreviewRequest,
   createComfyUiTextToImagePreviewRequest,
   DEFAULT_COMFYUI_FACE_DETAILER_DETECTOR_MODEL,
   DEFAULT_COMFYUI_HAND_DETAILER_DETECTOR_MODEL,
@@ -52,6 +53,7 @@ import {
   DEFAULT_COMFYUI_INPAINT_MODE,
   MIN_COMFYUI_VAE_INPAINT_DENOISE,
   COMFYUI_LATENT_IMAGE_NODE_OPTIONS,
+  getComfyUiPreviewSteps,
   normalizeComfyUiInpaintDenoiseForMode,
   type ComfyUiGeneratedImage,
   type ComfyUiGenerateSam2MaskResponse,
@@ -4747,6 +4749,7 @@ export function ComfyUiGenerationDialog({
   const [downloadActionError, setDownloadActionError] = useState("");
   const [submitStatus, setSubmitStatus] = useState<SubmitStatus>("idle");
   const [activeGenerationSubmitMode, setActiveGenerationSubmitMode] = useState<GenerationSubmitMode | null>(null);
+  const [previewGenerationEnabled, setPreviewGenerationEnabled] = useState(false);
   const [submitError, setSubmitError] = useState("");
   const [saveMessage, setSaveMessage] = useState("");
   const [waitMessage, setWaitMessage] = useState("");
@@ -6591,27 +6594,18 @@ export function ComfyUiGenerationDialog({
                     >
                       关闭
                     </Button>
-                    <Button
-                      className="h-10 rounded-md border-sky-200 bg-white text-sky-700 hover:bg-sky-50"
-                      disabled={!canSubmitGeneration}
-                      onClick={() => void submitGeneration("preview")}
-                      type="button"
-                      variant="secondary"
-                    >
-                      {submitStatus === "loading" && activeGenerationSubmitMode === "preview" ? (
-                        <Loader2 className="size-4 animate-spin" />
-                      ) : (
-                        <Play className="size-4" />
-                      )}
-                      Preview
-                    </Button>
+                    <BooleanInput
+                      checked={previewGenerationEnabled}
+                      label="Preview"
+                      onChange={setPreviewGenerationEnabled}
+                    />
                     <Button
                       className="h-10 rounded-md bg-sky-600 text-white hover:bg-sky-700"
                       disabled={!canSubmitGeneration}
-                      onClick={() => void submitGeneration("full")}
+                      onClick={() => void submitGeneration(previewGenerationEnabled ? "preview" : "full")}
                       type="button"
                     >
-                      {submitStatus === "loading" && activeGenerationSubmitMode === "full" ? (
+                      {submitStatus === "loading" && activeGenerationSubmitMode !== null ? (
                         <Loader2 className="size-4 animate-spin" />
                       ) : (
                         <Play className="size-4" />
@@ -7711,6 +7705,7 @@ function ComicSequenceWorkspaceDialog({
   const [submitStatus, setSubmitStatus] = useState<SubmitStatus>("idle");
   const [activeSubmitMode, setActiveSubmitMode] = useState<ComicSequenceSubmitMode | null>(null);
   const [activeSubmitGenerationMode, setActiveSubmitGenerationMode] = useState<GenerationSubmitMode | null>(null);
+  const [previewSequenceEnabled, setPreviewSequenceEnabled] = useState(false);
   const [submitError, setSubmitError] = useState("");
   const [waitMessage, setWaitMessage] = useState("");
   const [historySaveStatus, setHistorySaveStatus] = useState<"idle" | "saving" | "success" | "error">("idle");
@@ -8849,6 +8844,7 @@ function ComicSequenceWorkspaceDialog({
         const handDetailer = previewMode
           ? { ...shotDraft.handDetailer, enabled: false }
           : shotDraft.handDetailer;
+        const steps = previewMode ? getComfyUiPreviewSteps(shotDraft.steps) : shotDraft.steps;
         const draftSnapshot: GenerationDraft = {
           ...shotDraft,
           faceDetailer,
@@ -8863,8 +8859,9 @@ function ComicSequenceWorkspaceDialog({
             growMaskBy: reference.growMaskBy,
             mode: reference.inpaintMode,
           },
+          steps,
         };
-        const request = toInpaintRequestPayload(draftSnapshot, {
+        const baseRequest = toInpaintRequestPayload(draftSnapshot, {
           denoise: reference.denoise,
           faceDetailer,
           growMaskBy: reference.growMaskBy,
@@ -8882,6 +8879,9 @@ function ComicSequenceWorkspaceDialog({
             scaleBy: 2,
           },
         });
+        const request = previewMode
+          ? createComfyUiInpaintPreviewRequest(baseRequest)
+          : baseRequest;
 
         return {
           draftSnapshot,
@@ -9944,60 +9944,37 @@ function ComicSequenceWorkspaceDialog({
             >
               Close
             </Button>
+            <BooleanInput
+              checked={previewSequenceEnabled}
+              label="Preview"
+              onChange={setPreviewSequenceEnabled}
+            />
             <Button
               className="h-10 rounded-md border-sky-200 bg-white text-sky-700 hover:bg-sky-50"
               disabled={submitStatus === "loading" || !selectedShot || !allResourceDownloadsReady}
-              onClick={() => void submitSequence("shot", "preview")}
+              onClick={() => void submitSequence("shot", previewSequenceEnabled ? "preview" : "full")}
               type="button"
               variant="secondary"
             >
-              {submitStatus === "loading" && activeSubmitMode === "shot" && activeSubmitGenerationMode === "preview" ? (
+              {submitStatus === "loading" && activeSubmitMode === "shot" && activeSubmitGenerationMode !== null ? (
                 <Loader2 className="size-4 animate-spin" />
               ) : (
                 <Play className="size-4" />
               )}
-              Preview shot
-            </Button>
-            <Button
-              className="h-10 rounded-md border-sky-200 bg-white text-sky-700 hover:bg-sky-50"
-              disabled={submitStatus === "loading" || !sequence?.shots.length || !allResourceDownloadsReady}
-              onClick={() => void submitSequence("sequence", "preview")}
-              type="button"
-              variant="secondary"
-            >
-              {submitStatus === "loading" && activeSubmitMode === "sequence" && activeSubmitGenerationMode === "preview" ? (
-                <Loader2 className="size-4 animate-spin" />
-              ) : (
-                <Play className="size-4" />
-              )}
-              Preview sequence
-            </Button>
-            <Button
-              className="h-10 rounded-md border-sky-200 bg-white text-sky-700 hover:bg-sky-50"
-              disabled={submitStatus === "loading" || !selectedShot || !allResourceDownloadsReady}
-              onClick={() => void submitSequence("shot", "full")}
-              type="button"
-              variant="secondary"
-            >
-              {submitStatus === "loading" && activeSubmitMode === "shot" && activeSubmitGenerationMode === "full" ? (
-                <Loader2 className="size-4 animate-spin" />
-              ) : (
-                <Play className="size-4" />
-              )}
-              Generate shot
+              {previewSequenceEnabled ? "Generate shot preview" : "Generate shot"}
             </Button>
             <Button
               className="h-10 rounded-md bg-sky-600 text-white hover:bg-sky-700"
               disabled={submitStatus === "loading" || !sequence?.shots.length || !allResourceDownloadsReady}
-              onClick={() => void submitSequence("sequence", "full")}
+              onClick={() => void submitSequence("sequence", previewSequenceEnabled ? "preview" : "full")}
               type="button"
             >
-              {submitStatus === "loading" && activeSubmitMode === "sequence" && activeSubmitGenerationMode === "full" ? (
+              {submitStatus === "loading" && activeSubmitMode === "sequence" && activeSubmitGenerationMode !== null ? (
                 <Loader2 className="size-4 animate-spin" />
               ) : (
                 <Play className="size-4" />
               )}
-              Generate sequence
+              {previewSequenceEnabled ? "Generate sequence preview" : "Generate sequence"}
             </Button>
           </div>
         </div>

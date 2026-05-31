@@ -5,6 +5,7 @@ import {
   ComfyUiApiError,
   buildBasicInpaintWorkflow,
   createComfyUiClient,
+  createComfyUiInpaintPreviewRequest,
   summarizeComfyUiErrorDetails,
   validateComfyUiInpaintRequest,
   validateComfyUiInpaintRequestAgainstObjectInfo,
@@ -223,7 +224,10 @@ export async function POST(request: Request) {
       apiKey: process.env.COMFYUI_API_KEY || undefined,
     });
     const objectInfo = await client.getObjectInfo();
-    const objectValidation = validateComfyUiInpaintRequestAgainstObjectInfo(validation.request, objectInfo);
+    const inpaintRequest = validation.request.preview
+      ? createComfyUiInpaintPreviewRequest(validation.request)
+      : validation.request;
+    const objectValidation = validateComfyUiInpaintRequestAgainstObjectInfo(inpaintRequest, objectInfo);
 
     if (objectValidation.errors.length > 0) {
       return errorResponse("ComfyUI inpaint request does not match the current ComfyUI model/node options.", 400, {

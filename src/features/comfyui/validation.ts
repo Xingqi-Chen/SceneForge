@@ -1366,6 +1366,13 @@ export function validateComfyUiInpaintRequest(value: unknown): ComfyUiInpaintVal
     };
   }
 
+  if (!isOptionalBoolean(value.preview)) {
+    return {
+      ok: false,
+      message: "preview must be a boolean when provided.",
+    };
+  }
+
   for (const field of ["steps"] as const) {
     if (!isOptionalPositiveInteger(value[field])) {
       return {
@@ -1425,6 +1432,7 @@ export function validateComfyUiInpaintRequest(value: unknown): ComfyUiInpaintVal
       faceDetailer,
       handDetailer,
       upscaleBeforeInpaint,
+      preview: typeof value.preview === "boolean" ? value.preview : undefined,
     },
   };
 }

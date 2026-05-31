@@ -12,6 +12,7 @@ Summary:
 - Added `preview` flow-through for ordinary `/api/comfyui/generate-image` and `/api/comfyui/sequence-image` requests.
 - Added preview generation entries to the legacy `/editor` ComfyUI dialog, Style Palette reuse path, and Comic Sequence shot/sequence controls.
 - Follow-up: changed preview acceleration from resolution downscaling to fixed 10-step sampling while preserving the requested width and height; preview still limits output to one image and disables face/hand detailers.
+- Follow-up: capped preview sampling at a maximum of 10 steps so low-step requests stay low, added preview handling for Comic Sequence previous-shot img2img/inpaint, and replaced separate preview generation buttons with a Preview toggle that changes the normal Generate action.
 
 Files changed:
 
