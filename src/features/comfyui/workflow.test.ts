@@ -119,9 +119,9 @@ describe("ComfyUI workflow builder", () => {
       inputs: {
         clip_name: "anima-clip.safetensors",
         type: "stable_diffusion",
-        device: "default",
       },
     });
+    expect(result.workflow["2"].inputs).not.toHaveProperty("device");
     expect(result.workflow["3"]).toMatchObject({
       class_type: "VAELoader",
       inputs: {

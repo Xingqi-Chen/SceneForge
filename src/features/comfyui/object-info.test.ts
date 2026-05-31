@@ -407,6 +407,42 @@ describe("ComfyUI object info helpers", () => {
     });
   });
 
+  it("does not require Anima CLIP device when the local CLIPLoader omits that input", () => {
+    const result = validateComfyUiRequestAgainstObjectInfo(
+      {
+        checkpointName: "pencil-xl-diffusion.safetensors",
+        modelBaseModel: "Anima",
+        modelStorageKind: "diffusion",
+        clipName: "anima-clip.safetensors",
+        clipDevice: "default",
+        vaeName: "anima-vae.safetensors",
+        positivePrompt: "scene",
+      },
+      {
+        ...objectInfoWithAnima,
+        CLIPLoader: {
+          input: {
+            required: {
+              clip_name: [["anima-clip.safetensors"], {}],
+              type: [["stable_diffusion"], {}],
+            },
+          },
+        },
+      },
+    );
+
+    expect(result.errors).toEqual([]);
+    expect(result.warnings).toEqual([
+      "Anima CLIP device was ignored because CLIPLoader.device is not available in ComfyUI object_info.",
+    ]);
+    expect(result.request).toMatchObject({
+      checkpointName: "pencil-xl-diffusion.safetensors",
+      clipName: "anima-clip.safetensors",
+      vaeName: "anima-vae.safetensors",
+    });
+    expect(result.request.clipDevice).toBeUndefined();
+  });
+
   it("reports missing Anima required input fields before queueing", () => {
     const result = validateComfyUiRequestAgainstObjectInfo(
       {
@@ -442,10 +478,8 @@ describe("ComfyUI object info helpers", () => {
 
     expect(result.errors).toEqual([
       "UNETLoader.weight_dtype input is not available in ComfyUI object_info.",
-      "CLIPLoader.device input is not available in ComfyUI object_info.",
       "VAELoader.vae_name input is not available in ComfyUI object_info.",
       "Anima UNET weight dtype is not available in ComfyUI.",
-      "Anima CLIP device is not available in ComfyUI.",
       "Anima VAE model is not available in ComfyUI.",
     ]);
   });

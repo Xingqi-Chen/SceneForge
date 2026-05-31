@@ -22,7 +22,6 @@ import {
   resolveComfyUiTextToImageRequest,
 } from "./validation";
 import {
-  DEFAULT_COMFYUI_ANIMA_CLIP_DEVICE,
   DEFAULT_COMFYUI_ANIMA_CLIP_TYPE,
   DEFAULT_COMFYUI_ANIMA_UNET_WEIGHT_DTYPE,
   resolveComfyUiTextToImageWorkflowProfile,
@@ -509,7 +508,7 @@ function buildAnimaTextToImageWorkflow(
     {
       clip_name: resolvedRequest.clipName ?? "",
       type: DEFAULT_COMFYUI_ANIMA_CLIP_TYPE,
-      device: resolvedRequest.clipDevice ?? DEFAULT_COMFYUI_ANIMA_CLIP_DEVICE,
+      ...(resolvedRequest.clipDevice ? { device: resolvedRequest.clipDevice } : {}),
     },
     "Load Anima CLIP",
   );

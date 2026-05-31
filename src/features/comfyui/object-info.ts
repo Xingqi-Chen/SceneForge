@@ -497,7 +497,7 @@ export function validateComfyUiRequestAgainstObjectInfo(
 
   if (isAnimaProfile) {
     validateRequiredInputs(objectInfo, "UNETLoader", ["unet_name", "weight_dtype"], errors);
-    validateRequiredInputs(objectInfo, "CLIPLoader", ["clip_name", "type", "device"], errors);
+    validateRequiredInputs(objectInfo, "CLIPLoader", ["clip_name", "type"], errors);
     validateRequiredInputs(objectInfo, "VAELoader", ["vae_name"], errors);
   } else {
     validateRequiredInputs(objectInfo, "CheckpointLoaderSimple", ["ckpt_name"], errors);
@@ -551,7 +551,11 @@ export function validateComfyUiRequestAgainstObjectInfo(
       requested: DEFAULT_COMFYUI_ANIMA_CLIP_TYPE,
     });
   }
-  const animaClipDevice = isAnimaProfile
+  const hasAnimaClipDeviceInput = isAnimaProfile && hasRequiredInput(objectInfo, "CLIPLoader", "device");
+  if (isAnimaProfile && request.clipDevice && !hasAnimaClipDeviceInput) {
+    warnings.push("Anima CLIP device was ignored because CLIPLoader.device is not available in ComfyUI object_info.");
+  }
+  const animaClipDevice = hasAnimaClipDeviceInput
     ? resolveRequiredOption({
         classType: "CLIPLoader",
         errors,
