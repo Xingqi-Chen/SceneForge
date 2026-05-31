@@ -24,6 +24,8 @@ Files changed:
 - `src/features/comfyui/index.ts`
 - `src/app/api/comfyui/generate-image/route.ts`
 - `src/app/api/comfyui/generate-image/route.test.ts`
+- `src/app/api/comfyui/inpaint-image/route.ts`
+- `src/app/api/comfyui/inpaint-image/route.test.ts`
 - `src/app/api/comfyui/sequence-image/route.ts`
 - `src/app/api/comfyui/sequence-image/route.test.ts`
 - `src/features/editor/components/ImageGenerationPanel.tsx`

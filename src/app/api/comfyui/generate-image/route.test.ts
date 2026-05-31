@@ -390,6 +390,51 @@ describe("ComfyUI generate image route", () => {
     });
   });
 
+  it("does not increase low-step preview requests", async () => {
+    process.env.COMFYUI_BASE_URL = "http://comfyui.test";
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      if (input === "http://comfyui.test/object_info") {
+        return Response.json(objectInfo);
+      }
+
+      expect(input).toBe("http://comfyui.test/prompt");
+      const body = JSON.parse(String(init?.body));
+      const samplerNode = Object.values(body.prompt).find(
+        (node) => (node as { class_type?: string }).class_type === "KSampler",
+      ) as { inputs?: { steps?: number } } | undefined;
+      expect(samplerNode?.inputs?.steps).toBe(6);
+
+      return Response.json({
+        prompt_id: "prompt-preview-low-steps",
+        number: 13,
+        node_errors: {},
+      });
+    });
+
+    const response = await POST(
+      new Request("http://localhost/api/comfyui/generate-image", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          checkpointName: "model.safetensors",
+          positivePrompt: "a scene",
+          steps: 6,
+          preview: true,
+        }),
+      }),
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(payload).toMatchObject({
+      promptId: "prompt-preview-low-steps",
+      request: {
+        steps: 6,
+        batchSize: 1,
+      },
+    });
+  });
+
   it("queues preview ControlNet requests at original latent dimensions", async () => {
     process.env.COMFYUI_BASE_URL = "http://comfyui.test";
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {

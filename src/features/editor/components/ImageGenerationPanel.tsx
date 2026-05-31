@@ -5397,6 +5397,7 @@ export function ComfyUiGenerationDialog({
         height: requestPayload.height ?? draft.height,
         imageCount: submittedImageCount,
         seed,
+        steps: requestPayload.steps ?? draft.steps,
         width: requestPayload.width ?? draft.width,
       };
       if (previewMode) {
@@ -8763,6 +8764,7 @@ function ComicSequenceWorkspaceDialog({
           negativePrompt,
           positivePrompt,
           seed,
+          steps: request.steps ?? requestShotDraft.steps,
           width: request.width ?? requestShotDraft.width,
         };
 

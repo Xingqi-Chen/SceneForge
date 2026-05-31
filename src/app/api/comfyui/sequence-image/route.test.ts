@@ -406,6 +406,72 @@ describe("ComfyUI sequence image route", () => {
     });
   });
 
+  it("does not increase low-step sequence preview shot requests", async () => {
+    process.env.COMFYUI_BASE_URL = "http://comfyui.test";
+    const promptBodies: PromptBody[] = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      if (input === "http://comfyui.test/object_info") {
+        return Response.json(objectInfo);
+      }
+
+      expect(input).toBe("http://comfyui.test/prompt");
+      const body = JSON.parse(String(init?.body)) as PromptBody;
+      promptBodies.push(body);
+
+      return Response.json({
+        prompt_id: "prompt-preview-low-steps-shot",
+        number: 2,
+        node_errors: {},
+      });
+    });
+
+    const response = await POST(
+      new Request("http://localhost/api/comfyui/sequence-image", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          baseRequest: {
+            checkpointName: "model.safetensors",
+            positivePrompt: "base prompt",
+            samplerName: "euler",
+            scheduler: "normal",
+            steps: 6,
+            batchSize: 4,
+          },
+          characters: [],
+          imageCount: 4,
+          preview: true,
+          sequenceId: "seq-preview-low-steps",
+          shots: [
+            {
+              id: "shot-preview-low-steps",
+              prompt: "preview this shot",
+            },
+          ],
+        }),
+      }),
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(findPromptNode(promptBodies[0], "KSampler")?.inputs).toMatchObject({
+      steps: 6,
+    });
+    expect(payload).toMatchObject({
+      sequenceId: "seq-preview-low-steps",
+      shots: [
+        {
+          imageCount: 1,
+          promptId: "prompt-preview-low-steps-shot",
+          request: {
+            steps: 6,
+            batchSize: 1,
+          },
+        },
+      ],
+    });
+  });
+
   it("applies preview mode to sequence ControlNet shot requests", async () => {
     process.env.COMFYUI_BASE_URL = "http://comfyui.test";
     const promptBodies: PromptBody[] = [];
