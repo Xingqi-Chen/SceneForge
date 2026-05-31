@@ -83,3 +83,48 @@ export function applyComicSequenceShotSettingsPatchToSequence(
     }),
   };
 }
+
+export function bindComicSequenceShotImageIds(
+  sequence: SavedComicSequence,
+  shotId: string,
+  imageIds: string[],
+  options: { limit?: number; updatedAt?: string } = {},
+): SavedComicSequence {
+  const cleanImageIds = imageIds
+    .map((imageId) => imageId.trim())
+    .filter((imageId, index, ids) => imageId.length > 0 && ids.indexOf(imageId) === index);
+  if (cleanImageIds.length === 0) {
+    return sequence;
+  }
+
+  const updatedAt = options.updatedAt ?? new Date().toISOString();
+  const limit = Math.max(1, Math.floor(options.limit ?? 12));
+  let changed = false;
+
+  const shots = sequence.shots.map((shot) => {
+    if (shot.id !== shotId) {
+      return shot;
+    }
+
+    const currentIds = shot.boundImageIds ?? [];
+    const nextIds = [
+      ...cleanImageIds,
+      ...currentIds.filter((imageId) => !cleanImageIds.includes(imageId)),
+    ].slice(0, limit);
+    if (
+      currentIds.length === nextIds.length &&
+      currentIds.every((imageId, index) => imageId === nextIds[index])
+    ) {
+      return shot;
+    }
+
+    changed = true;
+    return {
+      ...shot,
+      boundImageIds: nextIds,
+      updatedAt,
+    };
+  });
+
+  return changed ? { ...sequence, shots } : sequence;
+}

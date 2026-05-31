@@ -72,23 +72,56 @@ export function findComicSequencePreviousShotSource({
   return null;
 }
 
-function createPreviousShotResultFromSavedImage(
+export function createComicSequenceImageFromSavedImage(
   record: SavedComfyUiGeneratedImage,
-  shotId: string,
-): ComicSequencePreviousShotResult {
+): ComfyUiGeneratedImage {
   const sourceReference = record.sourceReference ?? record;
-  const image: ComfyUiGeneratedImage = {
+
+  return {
     filename: sourceReference.filename,
     nodeId: record.nodeId,
     ...(sourceReference.subfolder !== undefined ? { subfolder: sourceReference.subfolder } : {}),
     ...(sourceReference.type !== undefined ? { type: sourceReference.type } : {}),
     url: record.url,
   };
+}
+
+function createPreviousShotResultFromSavedImage(
+  record: SavedComfyUiGeneratedImage,
+  shotId: string,
+): ComicSequencePreviousShotResult {
+  const image = createComicSequenceImageFromSavedImage(record);
 
   return {
     images: [image],
     shotId,
   };
+}
+
+export function promoteComicSequenceResultImage<Result extends { images: ComfyUiGeneratedImage[]; promptId: string }>(
+  results: Result[],
+  promptId: string,
+  image: ComfyUiGeneratedImage,
+): Result[] {
+  const targetKey = getComfyUiGeneratedImageReferenceKey(image);
+
+  return results.map((result) => {
+    if (result.promptId !== promptId) {
+      return result;
+    }
+
+    const remainingImages = result.images.filter(
+      (candidate) => getComfyUiGeneratedImageReferenceKey(candidate) !== targetKey,
+    );
+    if (remainingImages.length === result.images.length) {
+      return result;
+    }
+
+    return {
+      ...result,
+      images: [image, ...remainingImages],
+    };
+  });
 }
 
 export function createComicSequenceSavedPreviousShotResults(
