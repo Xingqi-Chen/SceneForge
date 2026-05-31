@@ -127,6 +127,29 @@ describe("ComfyUI generation parameters", () => {
     expect(settings.loras[0].source).toBe("ai");
   });
 
+  it("preserves selected checkpoint metadata for workflow profile routing", () => {
+    const settings = resolveComfyUiGenerationSettings({
+      activePrompt: "portrait",
+      baseNegativePrompt: "",
+      selectedResources: {
+        checkpoint: makeResource("model", "Pencil XL", {
+          baseModel: "Anima",
+          modelFileName: "pencil-xl-diffusion.safetensors",
+          modelStorageKind: "diffusion",
+        }),
+        loras: [],
+      },
+      aiAdvice: null,
+      savedParameters: null,
+    });
+
+    expect(settings.request).toMatchObject({
+      checkpointName: "pencil-xl-diffusion.safetensors",
+      modelBaseModel: "Anima",
+      modelStorageKind: "diffusion",
+    });
+  });
+
   it("falls back to reference values when AI suggestions are missing or invalid", () => {
     const selectedResources: SelectedCivitaiResourcesPreview = {
       checkpoint: makeResource("model", "Base Model"),

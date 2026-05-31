@@ -28,6 +28,8 @@ const objectInfo = {
     },
   },
   EmptyLatentImage: {},
+  CLIPTextEncode: {},
+  VAEDecode: {},
   IPAdapterAdvanced: {},
   IPAdapterUnifiedLoader: {},
   LoadImage: {},

@@ -4,6 +4,42 @@ This log records dated implementation and documentation work. Keep entries conci
 
 ## 2026-05-31
 
+### T-AN1 Anima Workflow Profiles
+
+Summary:
+
+- Added a ComfyUI text-to-image workflow profile boundary with the existing Illustrious/default checkpoint workflow as fallback.
+- Added Anima txt2img workflow generation using `UNETLoader`, `CLIPLoader`, `VAELoader`, optional standard `LoraLoader`, `EmptyLatentImage`, `KSampler`, `VAEDecode`, and `PreviewImage`.
+- Kept unknown and non-Anima diffusion models on the default checkpoint workflow.
+- Made text-to-image `object_info` validation profile-aware so default and Anima profiles validate their own required loader nodes, inputs, and model file options before queueing.
+- Preserved preview request metadata while retaining the preview step cap behavior.
+
+Files changed:
+
+- `src/features/comfyui/workflow-profiles.ts`
+- `src/features/comfyui/workflow.ts`
+- `src/features/comfyui/object-info.ts`
+- `src/features/comfyui/types.ts`
+- `src/features/comfyui/validation.ts`
+- `src/features/comfyui/index.ts`
+- `src/features/comfyui/workflow.test.ts`
+- `src/features/comfyui/object-info.test.ts`
+- `src/features/comfyui/preview.test.ts`
+- `src/app/api/comfyui/generate-image/route.test.ts`
+- `src/app/api/comfyui/sequence-image/route.test.ts`
+- `src/features/editor/ai-prompt/comfyui-generation-params.ts`
+- `src/features/editor/components/ImageGenerationPanel.tsx`
+- `docs/tech-spec.md`
+- `docs/dev-log.md`
+
+Validation:
+
+- `npm test -- src/features/comfyui/workflow.test.ts src/features/comfyui/object-info.test.ts src/features/comfyui/preview.test.ts src/app/api/comfyui/generate-image/route.test.ts src/app/api/comfyui/workflow/text-to-image/route.test.ts` passed.
+- `npm test -- src/app/api/comfyui/sequence-image/route.test.ts` passed.
+- `npm test -- src/features/editor/ai-prompt/comfyui-generation-params.test.ts` passed.
+- `npm run typecheck` passed.
+- `npm run lint` passed with the existing 22 `@next/next/no-img-element` warnings.
+
 ### Legacy Editor ComfyUI Preview Generation
 
 Summary:

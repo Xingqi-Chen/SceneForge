@@ -13,6 +13,7 @@ import type {
   ComfyUiInpaintUpscaleMode,
   ComfyUiInpaintUpscaleStrategy,
   ComfyUiLoraInput,
+  ComfyUiModelStorageKind,
   ComfyUiSam2Bbox,
   ComfyUiSam2Device,
   ComfyUiSam2MaskRequest,
@@ -184,6 +185,7 @@ const MAX_CHARACTER_REFERENCE_IMAGE_COUNT = 4;
 const CONTROLNET_TYPES = ["openpose", "depth", "normal"] as const satisfies readonly ComfyUiControlNetType[];
 const IPADAPTER_REFERENCE_MODES = ["ipadapter", "face", "faceid"] as const satisfies readonly ComfyUiIpAdapterReferenceMode[];
 const IPADAPTER_COMBINE_EMBEDS = ["concat", "add", "subtract", "average", "norm average"] as const satisfies readonly ComfyUiIpAdapterCombineEmbeds[];
+const COMFYUI_MODEL_STORAGE_KINDS = ["checkpoint", "diffusion"] as const;
 const INPAINT_UPSCALE_MODES = ["lanczos", "real-esrgan-x2", "aniscale2-x2"] as const satisfies readonly ComfyUiInpaintUpscaleMode[];
 const INPAINT_UPSCALE_STRATEGIES = ["full-image", "local-region"] as const satisfies readonly ComfyUiInpaintUpscaleStrategy[];
 const INPAINT_LOCAL_REGION_SOURCES = ["mask-bounds", "box"] as const satisfies readonly ComfyUiInpaintLocalRegionSource[];
@@ -263,6 +265,10 @@ function getString(value: unknown, fallback: string) {
   return value.trim() || fallback;
 }
 
+function getOptionalTrimmedStringValue(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
 function getOptionalNumber(value: unknown): number | undefined {
   return typeof value === "number" ? value : undefined;
 }
@@ -339,6 +345,10 @@ function isOptionalFaceDetailerOption<T extends string>(
 
 function isControlNetType(value: unknown): value is ComfyUiControlNetType {
   return typeof value === "string" && CONTROLNET_TYPES.some((type) => type === value);
+}
+
+function isComfyUiModelStorageKind(value: unknown): value is ComfyUiModelStorageKind {
+  return typeof value === "string" && COMFYUI_MODEL_STORAGE_KINDS.some((kind) => kind === value);
 }
 
 function isIpAdapterReferenceMode(value: unknown): value is ComfyUiIpAdapterReferenceMode {
@@ -958,6 +968,22 @@ export function validateComfyUiTextToImageRequest(value: unknown): ComfyUiTextTo
     };
   }
 
+  for (const field of ["modelBaseModel", "clipName", "clipDevice", "vaeName", "unetWeightDtype"] as const) {
+    if (value[field] !== undefined && value[field] !== null && typeof value[field] !== "string") {
+      return {
+        ok: false,
+        message: `${field} must be a string when provided.`,
+      };
+    }
+  }
+
+  if (value.modelStorageKind !== undefined && !isComfyUiModelStorageKind(value.modelStorageKind)) {
+    return {
+      ok: false,
+      message: "modelStorageKind must be checkpoint or diffusion when provided.",
+    };
+  }
+
   if (value.negativePrompt !== undefined && typeof value.negativePrompt !== "string") {
     return {
       ok: false,
@@ -1145,6 +1171,12 @@ export function validateComfyUiTextToImageRequest(value: unknown): ComfyUiTextTo
     ok: true,
     request: {
       checkpointName: value.checkpointName.trim(),
+      modelBaseModel: getOptionalTrimmedStringValue(value.modelBaseModel),
+      modelStorageKind: isComfyUiModelStorageKind(value.modelStorageKind) ? value.modelStorageKind : undefined,
+      clipName: getOptionalTrimmedStringValue(value.clipName),
+      clipDevice: getOptionalTrimmedStringValue(value.clipDevice),
+      vaeName: getOptionalTrimmedStringValue(value.vaeName),
+      unetWeightDtype: getOptionalTrimmedStringValue(value.unetWeightDtype),
       positivePrompt: value.positivePrompt.trim(),
       negativePrompt: typeof value.negativePrompt === "string" ? value.negativePrompt.trim() : undefined,
       loras: normalizeOptionalLoras(value.loras),
@@ -1701,6 +1733,12 @@ export function resolveComfyUiTextToImageRequest(
 ): ResolvedComfyUiTextToImageRequest {
   return {
     checkpointName: request.checkpointName.trim(),
+    modelBaseModel: getOptionalTrimmedStringValue(request.modelBaseModel),
+    modelStorageKind: isComfyUiModelStorageKind(request.modelStorageKind) ? request.modelStorageKind : undefined,
+    clipName: getOptionalTrimmedStringValue(request.clipName),
+    clipDevice: getOptionalTrimmedStringValue(request.clipDevice),
+    vaeName: getOptionalTrimmedStringValue(request.vaeName),
+    unetWeightDtype: getOptionalTrimmedStringValue(request.unetWeightDtype),
     positivePrompt: request.positivePrompt.trim(),
     negativePrompt: getString(request.negativePrompt, DEFAULT_TEXT_TO_IMAGE_REQUEST.negativePrompt),
     loras: (request.loras ?? []).map((lora) => ({

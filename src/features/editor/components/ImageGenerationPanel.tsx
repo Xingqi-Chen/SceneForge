@@ -307,7 +307,29 @@ type GenerationDraftInpaint = {
   mode: ComfyUiInpaintMode;
 };
 
-type GenerationDraft = Required<Omit<ComfyUiTextToImageRequest, "loras" | "promptWrapper" | "faceDetailer" | "handDetailer" | "controlNet" | "controlNets" | "characterReferences" | "preview">> & {
+type GenerationDraft = Required<Omit<
+  ComfyUiTextToImageRequest,
+  | "loras"
+  | "promptWrapper"
+  | "faceDetailer"
+  | "handDetailer"
+  | "controlNet"
+  | "controlNets"
+  | "characterReferences"
+  | "preview"
+  | "modelBaseModel"
+  | "modelStorageKind"
+  | "clipName"
+  | "clipDevice"
+  | "vaeName"
+  | "unetWeightDtype"
+>> & {
+  modelBaseModel?: ComfyUiTextToImageRequest["modelBaseModel"];
+  modelStorageKind?: ComfyUiTextToImageRequest["modelStorageKind"];
+  clipName?: ComfyUiTextToImageRequest["clipName"];
+  clipDevice?: ComfyUiTextToImageRequest["clipDevice"];
+  vaeName?: ComfyUiTextToImageRequest["vaeName"];
+  unetWeightDtype?: ComfyUiTextToImageRequest["unetWeightDtype"];
   loras: GenerationDraftLora[];
   imageCount: number;
   promptWrapper: Required<NonNullable<ComfyUiTextToImageRequest["promptWrapper"]>>;
@@ -869,6 +891,12 @@ function toDraft(
 
   return {
     checkpointName: request.checkpointName,
+    modelBaseModel: request.modelBaseModel,
+    modelStorageKind: request.modelStorageKind,
+    clipName: request.clipName,
+    clipDevice: request.clipDevice,
+    vaeName: request.vaeName,
+    unetWeightDtype: request.unetWeightDtype,
     positivePrompt: request.positivePrompt,
     negativePrompt: request.negativePrompt ?? "",
     loras: loraSettings
@@ -1087,6 +1115,12 @@ function toRequestPayload(
 
   return {
     checkpointName: draft.checkpointName,
+    modelBaseModel: draft.modelBaseModel,
+    modelStorageKind: draft.modelStorageKind,
+    clipName: draft.clipName,
+    clipDevice: draft.clipDevice,
+    vaeName: draft.vaeName,
+    unetWeightDtype: draft.unetWeightDtype,
     positivePrompt: draft.positivePrompt,
     negativePrompt: draft.negativePrompt,
     loras: draft.loras
