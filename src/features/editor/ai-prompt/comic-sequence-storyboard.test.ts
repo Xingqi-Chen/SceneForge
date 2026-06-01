@@ -46,9 +46,14 @@ describe("comic sequence storyboard AI helpers", () => {
     });
 
     expect(messages[0].content).toContain("English Anima local shot prompt");
-    expect(messages[0].content).toContain("anime-style natural-language visual phrases");
+    expect(messages[0].content).toContain("descriptive English anime-style visual phrases or short clauses");
+    expect(messages[0].content).toContain("Prefer visible clauses over bare tags");
+    expect(messages[0].content).toContain("immediate setting, lighting, atmosphere, camera, and composition");
     expect(messages[0].content).toContain("not full prose paragraphs");
-    expect(messages[0].content).toContain("compact visual phrases");
+    expect(messages[0].content).toContain("foreground/background relationship as descriptive visual clauses");
+    expect(messages[0].content).toContain("distinct hairstyle and a distinct pose or action");
+    expect(messages[0].content).toContain("character A with short black hair");
+    expect(messages[0].content).toContain("low-angle action composition");
     expect(messages[0].content).not.toContain("English booru-style local shot prompt");
     expect(messages[0].content).not.toContain("not natural-language sentences");
     expect(messages[0].content).not.toContain("Rewrite them as tags like");

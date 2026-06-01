@@ -77,12 +77,13 @@ export function buildComicSequenceStoryboardMessages({
   const promptStyleInstructions = animaPrompt
     ? [
         "Each prompt must be an English Anima local shot prompt:",
-        "compact anime-style natural-language visual phrases, comma-separated, not full prose paragraphs.",
+        "descriptive English anime-style visual phrases or short clauses, comma-separated, not full prose paragraphs.",
+        "Prefer visible clauses over bare tags for action, expression, immediate setting, lighting, atmosphere, camera, and composition.",
         "",
         "Use anime visual phrasing such as:",
-        "a low-angle close-up as the hero raises one arm, a dynamic sword draw with motion blur,",
-        "determined expression amid debris and impact lines, reaching out to grab an arm,",
-        "leaning close while facing each other, looking at another with a surprised expression.",
+        "1girl, drawing a sword while stepping through flying debris, determined expression amid impact lines,",
+        "character A with short black hair leaning close in the foreground, character B with long silver hair recoiling in the background,",
+        "a low-angle close-up as the hero raises one arm, warm rim light from a broken doorway, motion blur around the strike.",
       ]
     : [
         "Each prompt must be an English booru-style local shot prompt:",
@@ -95,15 +96,15 @@ export function buildComicSequenceStoryboardMessages({
         "facing each other, looking at another, reacting, surprised expression.",
       ];
   const promptFocusInstruction = animaPrompt
-    ? "Focus each prompt on local action, camera framing, pose, expression, gesture, motion, character placement, interaction, and immediate setting as compact visual phrases."
+    ? "Focus each prompt on local action, visible facial expression, camera framing, pose, gesture, motion, character placement, interaction, immediate setting, lighting, atmosphere, and foreground/background relationship as descriptive visual clauses."
     : "Focus each prompt on local action, camera framing, pose, expression, gesture, motion, character placement, interaction, and immediate setting as tags.";
   const proseExampleInstructions = animaPrompt
     ? [
-        "Do not write full prose paragraphs like:",
+        "Do not write full prose paragraphs or abstract narration like:",
         "\"the hero jumps forward while blocking a strike, and the camera follows the motion\"",
         "",
-        "Rewrite them as compact visual phrases like:",
-        "2 people, character A in the foreground leaping forward, character B in the background blocking with a sword, impact lines, determined expression.",
+        "Rewrite them as comma-separated visual clauses like:",
+        "2 people, character A with spiky brown hair leaping forward in the foreground, character B with long white hair blocking with a sword in the background, sparks at the contact point, determined expression, low-angle action composition.",
       ]
     : [
         "Do not write prose sentences like:",
@@ -137,6 +138,9 @@ export function buildComicSequenceStoryboardMessages({
         "- Clearly describe interaction direction: who acts, who receives, who reacts.",
         "- Include the contact point or shared object when relevant, such as hands near cup, hand on shoulder, grabbing wrist, sword between them.",
         "- Include gaze relationship when relevant, such as eye contact, looking at another, character A looking at character B, character B looking away.",
+        animaPrompt
+          ? "- For Anima prompts, give each visible person a distinct hairstyle and a distinct pose or action."
+          : null,
         "- Prefer both visible, clear separation between characters, readable silhouettes for interaction shots.",
         "- Avoid vague phrases like interacting, together, with another person unless supported by concrete action tags.",
         "",
@@ -151,7 +155,7 @@ export function buildComicSequenceStoryboardMessages({
         ...proseExampleInstructions,
         "",
         "Keep each prompt concise but specific enough to paste into a Manual shot prompt field.",
-      ].join("\n"),
+      ].filter((line): line is string => line !== null).join("\n"),
     },
     {
       role: "user",

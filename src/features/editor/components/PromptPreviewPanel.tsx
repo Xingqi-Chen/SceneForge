@@ -489,25 +489,31 @@ export function buildAiSystemPrompt(
       : "Spatial hints: use simple viewer-left/right, foreground/background, beside/near — not anatomical ruler language.",
     constraints.pose
       ? animaPrompt
-        ? "ACTION CONSTRAINT: strongly preserve the character pose from the screenshot using compact anime-style visual phrases, e.g. leaning forward with one arm raised, seen from the side."
+        ? "ACTION CONSTRAINT: strongly preserve the character pose from the screenshot using descriptive English anime-style action clauses, e.g. leaning forward with one arm raised while seen from the side."
         : "ACTION CONSTRAINT: strongly preserve the character pose from the screenshot using Danbooru-style pose/action tags and short tag phrases, e.g. dynamic pose, leaning, one arm raised, from side."
       : null,
     constraints.visual
       ? animaPrompt
-        ? "VISUAL CONSTRAINT: strongly preserve the current camera view using compact anime-style composition phrases, e.g. a close-up low-angle view, a wide shot from above."
+        ? "VISUAL CONSTRAINT: strongly preserve the current camera view using descriptive English anime-style camera and composition clauses, e.g. a close-up low-angle view, a wide shot from above."
         : "VISUAL CONSTRAINT: strongly preserve the current camera view using Danbooru-style composition tags and short tag phrases, e.g. close-up, low angle, from above, dutch angle, wide shot."
       : null,
     stableDiffusion
       ? animaPrompt
-        ? "Section values MUST be concise anime-style natural-language visual phrases, not long prose paragraphs."
+        ? "Section values MUST be comma-separated descriptive English visual phrases or short clauses, not terse tag-only output and not long prose paragraphs."
         : "Section values MUST be Danbooru/booru-style tags: comma-separated tokens and short tag phrases, not natural-language sentences."
       : "Final output MUST be Danbooru/booru-style tags: comma-separated tokens and short tag phrases, not natural-language sentences.",
     animaPrompt
-      ? "Prefer anime visual prompt language such as a solo schoolgirl with long flowing hair, looking back at the viewer, a dynamic low-angle cowboy shot, soft rainy street lighting."
+      ? "Prefer anime visual prompt language such as 1girl, a solo schoolgirl with long flowing hair looking back at the viewer, soft rainy street lighting, a dynamic low-angle cowboy shot."
       : "Prefer canonical anime prompt vocabulary such as 1girl, solo, looking at viewer, long hair, school uniform, dynamic pose, cowboy shot, simple background. Do not connect separate words with underscores; preserve underscores only when they are part of a known canonical tag or exact source token.",
     animaPrompt
-      ? "Describe pose, expression, props, clothing, camera, and composition as compact visual phrases only. Never echo raw coordinates, pixel math, or awkward joint-vs-joint alignment phrases (e.g. do not write \"wrist level with neck\", \"ankle left of other ankle\", \"horizontally aligned with neck\")."
+      ? "Describe pose, expression, props, clothing, environment, lighting, atmosphere, camera, foreground/background relationship, and composition as visible image details. Never echo raw coordinates, pixel math, or awkward joint-vs-joint alignment phrases (e.g. do not write \"wrist level with neck\", \"ankle left of other ankle\", \"horizontally aligned with neck\")."
       : "Describe pose, expression, props, clothing, camera, and composition as tags or short tag phrases only. Never echo raw coordinates, pixel math, or awkward joint-vs-joint alignment phrases (e.g. do not write \"wrist level with neck\", \"ankle left of other ankle\", \"horizontally aligned with neck\").",
+    animaPrompt
+      ? "For multi-person scenes, each visible person needs a distinct hairstyle and a distinct pose or action so Anima can separate them clearly."
+      : null,
+    animaPrompt
+      ? "Avoid abstract psychological narration unless it is visible as facial expression, body language, lighting, weather, or atmosphere."
+      : null,
     "Skeleton notes in the summary are hints only; infer a plausible pose from the image, do not transcribe joint tuples.",
     "Merge duplicates; keep token economy; preserve style and subject tags from the preview when they matter.",
     stableDiffusion
@@ -518,7 +524,7 @@ export function buildAiSystemPrompt(
   const prompt = [
     stableDiffusion
       ? animaPrompt
-        ? "You are SceneForge's visual prompt assistant. Produce structured Anima Stable Diffusion prompt sections using concise anime-style natural-language visual phrases."
+        ? "You are SceneForge's visual prompt assistant. Produce structured Anima Stable Diffusion prompt sections using descriptive English anime-style visual clauses."
         : "You are SceneForge's visual prompt assistant. Produce structured Illustrious-compatible Stable Diffusion prompt sections using concise Danbooru/booru-style anime tags and short tag phrases; not natural language."
       : "You are SceneForge's visual prompt assistant. Produce ONE concise Danbooru/booru-style image-generation prompt (comma-separated anime tags and short tag phrases; not natural language).",
     "",
@@ -568,23 +574,25 @@ export function buildAiUserText({
   return [
     modelFormat === "stable-diffusion"
       ? promptProfile === "anima"
-        ? "Generate stronger ordered Anima positive prompt sections as anime-style natural-language visual phrases from the preview + screenshot below."
+        ? "Generate stronger ordered Anima positive prompt sections as descriptive English anime-style visual phrases or short clauses from the preview + screenshot below."
         : "Generate stronger ordered Illustrious-compatible positive prompt sections as Danbooru/booru-style tags from the preview + screenshot below."
       : "Generate a stronger Danbooru-style positive tag prompt from the preview + screenshot below.",
     constraints.layout || constraints.pose || constraints.visual
       ? `Order of trust: (1) enabled hard constraints and canvas image, (2) prompt preview, (3) character/object descriptions and prompt tags.`
       : "Order of trust: (1) canvas image and prompt preview, (2) character/object descriptions and prompt tags, (3) coarse layout hints in the structured summary.",
     constraints.layout
-      ? "Translate layout constraints into compact composition/location tags, while keeping every important placement relationship."
+      ? promptProfile === "anima"
+        ? "Translate layout constraints into natural composition and location clauses, while keeping every important placement relationship."
+        : "Translate layout constraints into compact composition/location tags, while keeping every important placement relationship."
       : "Do not paste structured-summary wording verbatim if it reads like geometry homework.",
     constraints.pose
       ? promptProfile === "anima"
-        ? "Action constraint is enabled: the final prompt must strongly emphasize recreating the character's pose from the screenshot using compact anime-style action phrases, not coordinate prose."
+        ? "Action constraint is enabled: the final prompt must strongly emphasize recreating the character's visible pose, action, and facial expression from the screenshot using descriptive English action clauses, not coordinate prose."
         : "Action constraint is enabled: the final prompt must strongly emphasize recreating the character's pose from the screenshot using pose/action tags, not coordinate prose."
       : null,
     constraints.visual
       ? promptProfile === "anima"
-        ? "Visual constraint is enabled: the final prompt must strongly emphasize recreating the screenshot's camera angle, framing, and perspective using compact anime-style composition phrases."
+        ? "Visual constraint is enabled: the final prompt must strongly emphasize recreating the screenshot's camera angle, framing, perspective, foreground/background relationship, lighting, and atmosphere using descriptive English composition clauses."
         : "Visual constraint is enabled: the final prompt must strongly emphasize recreating the screenshot's camera angle, framing, and perspective using composition tags."
       : null,
     constraints.layout

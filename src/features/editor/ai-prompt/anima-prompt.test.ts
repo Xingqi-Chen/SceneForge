@@ -44,11 +44,19 @@ function makeResource(
 }
 
 describe("Anima prompt renderer", () => {
-  it("instructs LLM responses to use anime-style natural-language phrases", () => {
+  it("instructs LLM responses to use descriptive natural visual clauses", () => {
     const instructions = buildAnimaAiResponseInstructions();
 
-    expect(instructions).toContain("anime-style natural-language visual phrases");
-    expect(instructions).toContain("Keep phrases compact and prompt-like");
+    expect(instructions).toContain("detailed English anime-style visual phrases or short descriptive clauses");
+    expect(instructions).toContain("Keep output comma-separated and prompt-like");
+    expect(instructions).toContain("Prefer visible descriptive clauses over bare tags");
+    expect(instructions).toContain("action, expression, scene, lighting, atmosphere, camera, and composition");
+    expect(instructions).toContain("Keep character identity early and clear");
+    expect(instructions).toContain("visible pose/action and facial expression");
+    expect(instructions).toContain("distinct hairstyle and a distinct pose or action");
+    expect(instructions).toContain("foreground/background relationship");
+    expect(instructions).toContain("Avoid abstract psychological narration");
+    expect(instructions).toContain("standing beside a rain-streaked window in an unlit room");
     expect(instructions).toContain("Return JSON only");
     expect(instructions).not.toContain("booru-style tags or short tag phrases");
   });

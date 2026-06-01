@@ -4,6 +4,32 @@ This log records dated implementation and documentation work. Keep entries conci
 
 ## 2026-06-01
 
+### T-AN6 / Issue #33 Anima Natural Prompt Clauses
+
+Summary:
+
+- Strengthened Anima AI prompt instructions to prefer descriptive English visual phrases and short clauses over bare tag-only output.
+- Kept Anima output comma-separated and prompt-like while explicitly requesting visible action, expression, scene, lighting, atmosphere, camera/framing, composition, foreground/background relationships, and motion details.
+- Added Anima multi-person guidance requiring distinct hairstyle and distinct pose/action per visible person.
+- Aligned Anima Comic Sequence storyboard prompt instructions with the same natural visual clause style.
+- Preserved non-Anima Illustrious/default prompt instructions, Anima safety defaults, and artist formatting behavior.
+
+Files changed:
+
+- `src/features/editor/ai-prompt/anima-prompt.ts`
+- `src/features/editor/ai-prompt/anima-prompt.test.ts`
+- `src/features/editor/ai-prompt/comic-sequence-storyboard.ts`
+- `src/features/editor/ai-prompt/comic-sequence-storyboard.test.ts`
+- `src/features/editor/components/PromptPreviewPanel.tsx`
+- `src/features/editor/components/PromptPreviewPanel.test.tsx`
+- `docs/dev-log.md`
+
+Validation:
+
+- `npm test -- src/features/editor/ai-prompt/anima-prompt.test.ts src/features/editor/components/PromptPreviewPanel.test.tsx src/features/editor/ai-prompt/comic-sequence-storyboard.test.ts` passed with 28 tests.
+- `npm run typecheck` passed.
+- `npm run lint` passed with existing `<img>` warnings.
+
 ### T-AN5 / Issue #31 Anima Prompt Formatting
 
 Summary:
