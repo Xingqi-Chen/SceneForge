@@ -21,6 +21,8 @@ Files changed:
 
 - `src/features/editor/ai-prompt/anima-prompt.ts`
 - `src/features/editor/ai-prompt/anima-prompt.test.ts`
+- `src/features/editor/ai-prompt/comic-sequence-storyboard.ts`
+- `src/features/editor/ai-prompt/comic-sequence-storyboard.test.ts`
 - `src/features/editor/ai-prompt/comfyui-generation-params.ts`
 - `src/features/editor/ai-prompt/comfyui-generation-params.test.ts`
 - `src/features/editor/components/ImageGenerationPanel.tsx`
