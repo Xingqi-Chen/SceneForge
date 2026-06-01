@@ -17,7 +17,8 @@ import type {
   CivitaiResourceRecommendation,
   SelectedCivitaiResourcePreview,
 } from "./types";
-import { makeCivitaiResourceTargetFileName } from "./download";
+import { getCivitaiModelStorageKind, makeCivitaiResourceTargetFileName } from "./download";
+import { isSameCivitaiBaseModel } from "./base-model";
 
 export const CIVITAI_RECOMMENDATION_CHECKPOINT_LIMIT = 8;
 export const CIVITAI_RECOMMENDATION_LORA_LIMIT = 24;
@@ -288,6 +289,7 @@ function toPreviewResource(resource: CivitaiResourceDetail): SelectedCivitaiReso
     recommendations: resource.recommendations,
     previewImage: resource.previewImage,
     modelFileName: makeCivitaiResourceTargetFileName(resource),
+    ...(resource.resourceType === "model" ? { modelStorageKind: getCivitaiModelStorageKind(resource) } : {}),
   };
 }
 
@@ -409,6 +411,7 @@ export function buildCivitaiCombinationRecommendationMessages({
         "Use ONLY candidate ids provided by the user message. Never invent ids, names, trigger words, or unavailable resources.",
         `Select exactly one checkpoint id and 0-${maxLoras} LoRA ids. Prefer fewer LoRAs when the effect can be achieved cleanly.`,
         "Use candidate metadata, observed weights, Civitai recommendations, and common pairings to choose a compatible combination.",
+        "Only pair LoRAs with the same baseModel as the selected checkpoint; Anima checkpoints may only use Anima LoRAs.",
         "Return JSON ONLY. No markdown fences, no commentary.",
         "Write checkpointReason, LoRA reasons, recommendationReason, and overallEffect in Simplified Chinese.",
         "suggestedWeight must be a number between 0 and 2, or null when uncertain.",
@@ -555,6 +558,16 @@ export function validateCivitaiCombinationRecommendation({
     if (selectedLoras.length >= maxLoras) {
       warnings.push(`AI 返回的 LoRA 超过 ${maxLoras} 个，已只保留前 ${maxLoras} 个。`);
       break;
+    }
+
+    if (
+      checkpointCandidate.resource.baseModel &&
+      !isSameCivitaiBaseModel(candidate.resource.baseModel, checkpointCandidate.resource.baseModel)
+    ) {
+      warnings.push(
+        `AI returned incompatible LoRA ${candidate.resource.name} for checkpoint baseModel ${checkpointCandidate.resource.baseModel}; ignored.`,
+      );
+      continue;
     }
 
     seenLoras.add(lora.id);

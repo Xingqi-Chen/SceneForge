@@ -1,4 +1,5 @@
 export * from "./ai-recommendation";
+export * from "./base-model";
 export * from "./classification";
 export * from "./client";
 export * from "./download";

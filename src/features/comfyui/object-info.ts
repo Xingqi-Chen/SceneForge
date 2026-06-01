@@ -24,8 +24,10 @@ import {
 } from "./validation";
 import {
   DEFAULT_COMFYUI_ANIMA_CLIP_DEVICE,
+  DEFAULT_COMFYUI_ANIMA_CLIP_NAME,
   DEFAULT_COMFYUI_ANIMA_CLIP_TYPE,
   DEFAULT_COMFYUI_ANIMA_UNET_WEIGHT_DTYPE,
+  DEFAULT_COMFYUI_ANIMA_VAE_NAME,
   resolveComfyUiTextToImageWorkflowProfile,
 } from "./workflow-profiles";
 
@@ -559,17 +561,18 @@ export function validateComfyUiRequestAgainstObjectInfo(
         inputName: "weight_dtype",
         label: "Anima UNET weight dtype",
         objectInfo,
-        requested: request.unetWeightDtype,
+        requested: DEFAULT_COMFYUI_ANIMA_UNET_WEIGHT_DTYPE,
       })
     : undefined;
   const animaClipName = isAnimaProfile
     ? resolveRequiredOption({
         classType: "CLIPLoader",
         errors,
+        fallback: DEFAULT_COMFYUI_ANIMA_CLIP_NAME,
         inputName: "clip_name",
         label: "Anima CLIP model",
         objectInfo,
-        requested: request.clipName,
+        requested: DEFAULT_COMFYUI_ANIMA_CLIP_NAME,
       })
     : undefined;
   if (isAnimaProfile) {
@@ -583,9 +586,6 @@ export function validateComfyUiRequestAgainstObjectInfo(
     });
   }
   const hasAnimaClipDeviceInput = isAnimaProfile && hasInput(objectInfo, "CLIPLoader", "device");
-  if (isAnimaProfile && request.clipDevice && !hasAnimaClipDeviceInput) {
-    warnings.push("Anima CLIP device was ignored because CLIPLoader.device is not available in ComfyUI object_info.");
-  }
   const animaClipDevice = hasAnimaClipDeviceInput
     ? resolveRequiredOption({
         classType: "CLIPLoader",
@@ -594,17 +594,18 @@ export function validateComfyUiRequestAgainstObjectInfo(
         inputName: "device",
         label: "Anima CLIP device",
         objectInfo,
-        requested: request.clipDevice,
+        requested: DEFAULT_COMFYUI_ANIMA_CLIP_DEVICE,
       })
     : undefined;
   const animaVaeName = isAnimaProfile
     ? resolveRequiredOption({
         classType: "VAELoader",
         errors,
+        fallback: DEFAULT_COMFYUI_ANIMA_VAE_NAME,
         inputName: "vae_name",
         label: "Anima VAE model",
         objectInfo,
-        requested: request.vaeName,
+        requested: DEFAULT_COMFYUI_ANIMA_VAE_NAME,
       })
     : undefined;
   const sampler = findSampler(request.samplerName, samplerOptions, schedulerOptions);
@@ -778,6 +779,7 @@ export function validateComfyUiRequestAgainstObjectInfo(
     warnings,
     request: {
       ...request,
+      workflowProfile: profile.id,
       checkpointName: isAnimaProfile ? animaUnetName ?? request.checkpointName : checkpointName ?? request.checkpointName,
       clipName: isAnimaProfile ? animaClipName : request.clipName,
       clipDevice: isAnimaProfile ? animaClipDevice : request.clipDevice,

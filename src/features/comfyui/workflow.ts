@@ -22,8 +22,10 @@ import {
   resolveComfyUiTextToImageRequest,
 } from "./validation";
 import {
+  DEFAULT_COMFYUI_ANIMA_CLIP_NAME,
   DEFAULT_COMFYUI_ANIMA_CLIP_TYPE,
   DEFAULT_COMFYUI_ANIMA_UNET_WEIGHT_DTYPE,
+  DEFAULT_COMFYUI_ANIMA_VAE_NAME,
   resolveComfyUiTextToImageWorkflowProfile,
 } from "./workflow-profiles";
 
@@ -506,7 +508,7 @@ function buildAnimaTextToImageWorkflow(
   const clipLoader = builder.addNode(
     "CLIPLoader",
     {
-      clip_name: resolvedRequest.clipName ?? "",
+      clip_name: resolvedRequest.clipName ?? DEFAULT_COMFYUI_ANIMA_CLIP_NAME,
       type: DEFAULT_COMFYUI_ANIMA_CLIP_TYPE,
       ...(resolvedRequest.clipDevice ? { device: resolvedRequest.clipDevice } : {}),
     },
@@ -515,7 +517,7 @@ function buildAnimaTextToImageWorkflow(
   const vaeLoader = builder.addNode(
     "VAELoader",
     {
-      vae_name: resolvedRequest.vaeName ?? "",
+      vae_name: resolvedRequest.vaeName ?? DEFAULT_COMFYUI_ANIMA_VAE_NAME,
     },
     "Load Anima VAE",
   );

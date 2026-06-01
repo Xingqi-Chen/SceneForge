@@ -771,6 +771,18 @@ function sanitizeFiniteNumber(raw: unknown, fallback: number): number {
   return typeof raw === "number" && Number.isFinite(raw) ? raw : fallback;
 }
 
+function sanitizeOptionalText(raw: unknown): string | undefined {
+  return typeof raw === "string" && raw.trim() ? raw.trim() : undefined;
+}
+
+function sanitizeSavedWorkflowProfile(raw: unknown) {
+  return raw === "default" || raw === "anima" ? raw : undefined;
+}
+
+function sanitizeSavedModelStorageKind(raw: unknown) {
+  return raw === "checkpoint" || raw === "diffusion" ? raw : undefined;
+}
+
 function sanitizeNumberInRangeLoose(raw: unknown, fallback: number, min: number, max: number): number {
   return typeof raw === "number" && Number.isFinite(raw)
     ? Math.min(max, Math.max(min, raw))
@@ -900,6 +912,13 @@ function sanitizeSavedComfyUiGenerationParams(
     : 0;
   const seedMode = raw.seedMode === "fixed" ? "fixed" : "random";
   const denoise = sanitizeFiniteNumber(raw.denoise, 1);
+  const workflowProfile = sanitizeSavedWorkflowProfile(raw.workflowProfile);
+  const modelBaseModel = sanitizeOptionalText(raw.modelBaseModel);
+  const modelStorageKind = sanitizeSavedModelStorageKind(raw.modelStorageKind);
+  const clipName = sanitizeOptionalText(raw.clipName);
+  const clipDevice = sanitizeOptionalText(raw.clipDevice);
+  const vaeName = sanitizeOptionalText(raw.vaeName);
+  const unetWeightDtype = sanitizeOptionalText(raw.unetWeightDtype);
   const latentImageNode =
     raw.latentImageNode === "EmptyLatentImage" || raw.latentImageNode === "EmptySD3LatentImage"
       ? raw.latentImageNode
@@ -949,6 +968,13 @@ function sanitizeSavedComfyUiGenerationParams(
     : undefined;
 
   return {
+    ...(workflowProfile ? { workflowProfile } : {}),
+    ...(modelBaseModel ? { modelBaseModel } : {}),
+    ...(modelStorageKind ? { modelStorageKind } : {}),
+    ...(clipName ? { clipName } : {}),
+    ...(clipDevice ? { clipDevice } : {}),
+    ...(vaeName ? { vaeName } : {}),
+    ...(unetWeightDtype ? { unetWeightDtype } : {}),
     width: sanitizePositiveInteger(raw.width, 1024),
     height: sanitizePositiveInteger(raw.height, 1024),
     seed,

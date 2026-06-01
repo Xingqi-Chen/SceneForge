@@ -3,6 +3,8 @@ import type { PromptTag, PromptTagCategory, PromptTagSubcategory, Scene } from "
 export type PromptModelFormat = "generic" | "stable-diffusion";
 export type ArtistStringPromptRenderMode = "novelai" | "artist-weight" | "by-weight";
 export type SavedComfyUiGenerationSeedMode = "random" | "fixed";
+export type SavedComfyUiWorkflowProfile = "default" | "anima";
+export type SavedComfyUiModelStorageKind = "checkpoint" | "diffusion";
 
 export type SavedComfyUiGenerationLoraParams = {
   loraName: string;
@@ -53,6 +55,13 @@ export type SavedComfyUiFaceDetailerParams = {
 export type SavedComfyUiHandDetailerParams = SavedComfyUiFaceDetailerParams;
 
 export type SavedComfyUiGenerationParams = {
+  workflowProfile?: SavedComfyUiWorkflowProfile;
+  modelBaseModel?: string;
+  modelStorageKind?: SavedComfyUiModelStorageKind;
+  clipName?: string;
+  clipDevice?: string;
+  vaeName?: string;
+  unetWeightDtype?: string;
   width: number;
   height: number;
   seed: number;

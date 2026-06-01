@@ -185,6 +185,33 @@ describe("selected Civitai resources route", () => {
     });
   });
 
+  it("filters LoRAs that do not match the selected checkpoint base model", async () => {
+    const checkpoint = upsertCivitaiResourceToSqlite(
+      db,
+      makeResourceInput("model", "Anima Checkpoint", { baseModel: "Anima" }),
+    ).resource;
+    const compatible = upsertCivitaiResourceToSqlite(
+      db,
+      makeResourceInput("lora", "Anima LoRA", { baseModel: "Anima" }),
+    ).resource;
+    const incompatible = upsertCivitaiResourceToSqlite(
+      db,
+      makeResourceInput("lora", "Pony LoRA", { baseModel: "Pony" }),
+    ).resource;
+
+    const response = await GET(
+      new Request(`http://localhost/api?checkpointId=${checkpoint.id}&loraIds=${incompatible.id},${compatible.id}`),
+    );
+    const payload = await response.json();
+
+    expect(payload.checkpoint).toMatchObject({
+      id: checkpoint.id,
+      baseModel: "Anima",
+      modelStorageKind: "diffusion",
+    });
+    expect(payload.loras.map((lora: { id: string }) => lora.id)).toEqual([compatible.id]);
+  });
+
   it("trims HTML descriptions to a short LLM-safe snippet", async () => {
     const longDescription = `<div>${"alpha ".repeat(180)}<strong>omega</strong></div>`;
     const lora = upsertCivitaiResourceToSqlite(

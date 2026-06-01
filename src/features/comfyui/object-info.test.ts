@@ -58,8 +58,8 @@ const objectInfoWithAnima = {
   CLIPLoader: {
     input: {
       required: {
-        clip_name: [["anima-clip.safetensors"], {}],
-        type: [["stable_diffusion"], {}],
+        clip_name: [["qwen_3_06b_base.safetensors"], {}],
+        type: [["qwen_image"], {}],
         device: [["default", "cpu"], {}],
       },
     },
@@ -67,7 +67,7 @@ const objectInfoWithAnima = {
   VAELoader: {
     input: {
       required: {
-        vae_name: [["anima-vae.safetensors"], {}],
+        vae_name: [["qwen_image_vae.safetensors"], {}],
       },
     },
   },
@@ -434,14 +434,36 @@ describe("ComfyUI object info helpers", () => {
       errors: [],
       request: {
         checkpointName: "pencil-xl-diffusion.safetensors",
-        clipName: "anima-clip.safetensors",
+        workflowProfile: "anima",
+        clipName: "qwen_3_06b_base.safetensors",
         clipDevice: "default",
-        vaeName: "anima-vae.safetensors",
+        vaeName: "qwen_image_vae.safetensors",
         unetWeightDtype: "default",
         samplerName: "dpmpp_2m",
         scheduler: "karras",
         latentImageNode: "EmptyLatentImage",
       },
+    });
+  });
+
+  it("uses fixed Anima CLIP and VAE settings without explicit request selections", () => {
+    const result = validateComfyUiRequestAgainstObjectInfo(
+      {
+        checkpointName: "pencil-xl-diffusion.safetensors",
+        modelBaseModel: "Anima",
+        modelStorageKind: "diffusion",
+        positivePrompt: "scene",
+      },
+      objectInfoWithAnima,
+    );
+
+    expect(result.errors).toEqual([]);
+    expect(result.request).toMatchObject({
+      workflowProfile: "anima",
+      clipName: "qwen_3_06b_base.safetensors",
+      clipDevice: "default",
+      vaeName: "qwen_image_vae.safetensors",
+      unetWeightDtype: "default",
     });
   });
 
@@ -451,9 +473,6 @@ describe("ComfyUI object info helpers", () => {
         checkpointName: "pencil-xl-diffusion.safetensors",
         modelBaseModel: "Anima",
         modelStorageKind: "diffusion",
-        clipName: "anima-clip.safetensors",
-        clipDevice: "default",
-        vaeName: "anima-vae.safetensors",
         positivePrompt: "scene",
       },
       {
@@ -461,8 +480,8 @@ describe("ComfyUI object info helpers", () => {
         CLIPLoader: {
           input: {
             required: {
-              clip_name: [["anima-clip.safetensors"], {}],
-              type: [["stable_diffusion"], {}],
+              clip_name: [["qwen_3_06b_base.safetensors"], {}],
+              type: [["qwen_image"], {}],
             },
           },
         },
@@ -470,13 +489,11 @@ describe("ComfyUI object info helpers", () => {
     );
 
     expect(result.errors).toEqual([]);
-    expect(result.warnings).toEqual([
-      "Anima CLIP device was ignored because CLIPLoader.device is not available in ComfyUI object_info.",
-    ]);
+    expect(result.warnings).toEqual([]);
     expect(result.request).toMatchObject({
       checkpointName: "pencil-xl-diffusion.safetensors",
-      clipName: "anima-clip.safetensors",
-      vaeName: "anima-vae.safetensors",
+      clipName: "qwen_3_06b_base.safetensors",
+      vaeName: "qwen_image_vae.safetensors",
     });
     expect(result.request.clipDevice).toBeUndefined();
   });
@@ -487,9 +504,6 @@ describe("ComfyUI object info helpers", () => {
         checkpointName: "pencil-xl-diffusion.safetensors",
         modelBaseModel: "Anima",
         modelStorageKind: "diffusion",
-        clipName: "anima-clip.safetensors",
-        clipDevice: "default",
-        vaeName: "anima-vae.safetensors",
         positivePrompt: "scene",
       },
       {
@@ -497,8 +511,8 @@ describe("ComfyUI object info helpers", () => {
         CLIPLoader: {
           input: {
             required: {
-              clip_name: [["anima-clip.safetensors"], {}],
-              type: [["stable_diffusion"], {}],
+              clip_name: [["qwen_3_06b_base.safetensors"], {}],
+              type: [["qwen_image"], {}],
             },
             optional: {
               device: [["default", "cpu"], { advanced: true }],
@@ -535,8 +549,8 @@ describe("ComfyUI object info helpers", () => {
         CLIPLoader: {
           input: {
             required: {
-              clip_name: [["anima-clip.safetensors"], {}],
-              type: [["stable_diffusion"], {}],
+              clip_name: [["qwen_3_06b_base.safetensors"], {}],
+              type: [["qwen_image"], {}],
             },
           },
         },
@@ -551,8 +565,8 @@ describe("ComfyUI object info helpers", () => {
     expect(result.errors).toEqual([
       "UNETLoader.weight_dtype input is not available in ComfyUI object_info.",
       "VAELoader.vae_name input is not available in ComfyUI object_info.",
-      "Anima UNET weight dtype is not available in ComfyUI.",
-      "Anima VAE model is not available in ComfyUI.",
+      "Anima UNET weight dtype is not available in ComfyUI: default",
+      "Anima VAE model is not available in ComfyUI: qwen_image_vae.safetensors",
     ]);
   });
 
@@ -564,8 +578,6 @@ describe("ComfyUI object info helpers", () => {
           modelBaseModel: "Anima",
           modelStorageKind: "diffusion",
           positivePrompt: "scene",
-          clipName: "missing-clip.safetensors",
-          vaeName: "missing-vae.safetensors",
         },
         {
           ...objectInfoWithAnima,
@@ -591,10 +603,11 @@ describe("ComfyUI object info helpers", () => {
     ).toEqual([
       "UNETLoader node is not available in ComfyUI.",
       "Anima UNET model is not available in ComfyUI: Anima Pencil XL.safetensors",
-      "Anima UNET weight dtype is not available in ComfyUI.",
-      "Anima CLIP model is not available in ComfyUI: missing-clip.safetensors",
-      "Anima CLIP type is not available in ComfyUI: stable_diffusion",
-      "Anima VAE model is not available in ComfyUI: missing-vae.safetensors",
+      "Anima UNET weight dtype is not available in ComfyUI: default",
+      "Anima CLIP model is not available in ComfyUI: qwen_3_06b_base.safetensors",
+      "Anima CLIP type is not available in ComfyUI: qwen_image",
+      "Anima CLIP device is not available in ComfyUI: default",
+      "Anima VAE model is not available in ComfyUI: qwen_image_vae.safetensors",
     ]);
   });
 

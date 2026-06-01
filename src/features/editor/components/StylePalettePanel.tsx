@@ -17,6 +17,10 @@ import type {
 } from "@/features/civitai-lora-library";
 import { getCivitaiImageVariantUrl } from "@/features/civitai-lora-library/image-url";
 import {
+  getCivitaiModelStorageKind,
+  makeCivitaiResourceTargetFileName,
+} from "@/features/civitai-lora-library/resource-files";
+import {
   parseCivitaiAiPromptResponse,
   selectedCivitaiResourceCards,
   type CivitaiAiPromptResult,
@@ -200,7 +204,8 @@ function previewFromCivitaiListItem(resource: CivitaiResourceListItem): Selected
     maxWeight: resource.maxWeight,
     recommendations: resource.recommendations,
     previewImage: resource.previewImage,
-    modelFileName: resource.name,
+    modelFileName: makeCivitaiResourceTargetFileName(resource),
+    ...(resource.resourceType === "model" ? { modelStorageKind: getCivitaiModelStorageKind(resource) } : {}),
   };
 }
 
@@ -782,6 +787,13 @@ export function StylePalettePanel() {
           `/api/civitai-lora-library/selected-resources?${civitaiQuery}`,
           { signal: controller.signal },
         );
+        const compatibleLoraIds = payload.loras.map((lora) => lora.id);
+        if (
+          compatibleLoraIds.length !== loraIds.length ||
+          compatibleLoraIds.some((id, index) => id !== loraIds[index])
+        ) {
+          updateProjectSettings({ selectedCivitaiLoraIds: compatibleLoraIds });
+        }
         setSelectedResources(payload);
         setSelectedCivitaiStatus("success");
       } catch (error) {
@@ -802,7 +814,7 @@ export function StylePalettePanel() {
       controller.abort();
       window.clearTimeout(timeout);
     };
-  }, [open, selectedCheckpointId, selectedLoraIdsKey]);
+  }, [open, selectedCheckpointId, selectedLoraIdsKey, updateProjectSettings]);
 
   useEffect(() => {
     if (!open) {

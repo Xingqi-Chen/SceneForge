@@ -483,6 +483,34 @@ describe("StylePalettePanel", () => {
     expect(useEditorStore.getState().project.settings.selectedCivitaiLoraIds).toEqual([]);
   });
 
+  it("removes selected Civitai LoRAs that are filtered out by the selected-resource refresh", async () => {
+    mockFetch({
+      selectedResourcesResponse: () =>
+        jsonResponse({
+          checkpoint: checkpointResource,
+          loras: [],
+        }),
+    });
+
+    act(() => {
+      root.render(<StylePalettePanel />);
+    });
+
+    const openButton = container.querySelector("section button") as HTMLButtonElement | null;
+    expect(openButton).not.toBeNull();
+
+    await act(async () => {
+      openButton?.click();
+    });
+
+    await waitFor(() => {
+      expect(useEditorStore.getState().project.settings.selectedCivitaiCheckpointId).toBe(checkpointResource.id);
+      expect(useEditorStore.getState().project.settings.selectedCivitaiLoraIds).toEqual([]);
+      expect(getButtonByAriaLabel("Remove checkpoint Dream Checkpoint")).not.toBeNull();
+    });
+    expect(getButtonByAriaLabel("Remove LoRA Neon Detail LoRA")).toBeNull();
+  });
+
   it("keeps selected Civitai cards mounted while selected resources refresh", async () => {
     await openPaletteAndWaitForContext();
 

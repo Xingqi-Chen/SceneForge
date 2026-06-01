@@ -145,9 +145,59 @@ describe("ComfyUI generation parameters", () => {
 
     expect(settings.request).toMatchObject({
       checkpointName: "pencil-xl-diffusion.safetensors",
+      workflowProfile: "anima",
       modelBaseModel: "Anima",
       modelStorageKind: "diffusion",
     });
+  });
+
+  it("ignores legacy saved Anima CLIP and VAE overrides because the profile uses fixed settings", () => {
+    const settings = resolveComfyUiGenerationSettings({
+      activePrompt: "portrait",
+      baseNegativePrompt: "",
+      selectedResources: {
+        checkpoint: makeResource("model", "Pencil XL", {
+          baseModel: "Anima",
+          modelFileName: "pencil-xl-diffusion.safetensors",
+          modelStorageKind: "diffusion",
+        }),
+        loras: [],
+      },
+      aiAdvice: null,
+      savedParameters: {
+        cfg: 7,
+        clipDevice: "cuda",
+        clipName: "custom-clip.safetensors",
+        denoise: 1,
+        height: 1024,
+        imageCount: 1,
+        loras: [],
+        modelBaseModel: "Anima",
+        modelStorageKind: "diffusion",
+        outputPrefix: "SceneForge",
+        samplerName: "euler",
+        savedAt: "2026-05-23T00:00:00.000Z",
+        scheduler: "normal",
+        seed: 123,
+        seedMode: "fixed",
+        steps: 30,
+        unetWeightDtype: "fp8_e4m3fn",
+        vaeName: "custom-vae.safetensors",
+        width: 1024,
+        workflowProfile: "anima",
+      },
+    });
+
+    expect(settings.request).toMatchObject({
+      checkpointName: "pencil-xl-diffusion.safetensors",
+      workflowProfile: "anima",
+      modelBaseModel: "Anima",
+      modelStorageKind: "diffusion",
+    });
+    expect(settings.request.clipName).toBeUndefined();
+    expect(settings.request.clipDevice).toBeUndefined();
+    expect(settings.request.vaeName).toBeUndefined();
+    expect(settings.request.unetWeightDtype).toBeUndefined();
   });
 
   it("falls back to reference values when AI suggestions are missing or invalid", () => {

@@ -1,6 +1,8 @@
-import type { ComfyUiTextToImageRequest, ResolvedComfyUiTextToImageRequest } from "./types";
-
-export type ComfyUiTextToImageWorkflowProfileId = "default" | "anima";
+import type {
+  ComfyUiTextToImageRequest,
+  ComfyUiTextToImageWorkflowProfileId,
+  ResolvedComfyUiTextToImageRequest,
+} from "./types";
 
 export type ComfyUiTextToImageWorkflowProfile = {
   id: ComfyUiTextToImageWorkflowProfileId;
@@ -8,8 +10,10 @@ export type ComfyUiTextToImageWorkflowProfile = {
   requiredNodeClasses: readonly string[];
 };
 
-export const DEFAULT_COMFYUI_ANIMA_CLIP_TYPE = "stable_diffusion";
+export const DEFAULT_COMFYUI_ANIMA_CLIP_TYPE = "qwen_image";
 export const DEFAULT_COMFYUI_ANIMA_CLIP_DEVICE = "default";
+export const DEFAULT_COMFYUI_ANIMA_CLIP_NAME = "qwen_3_06b_base.safetensors";
+export const DEFAULT_COMFYUI_ANIMA_VAE_NAME = "qwen_image_vae.safetensors";
 export const DEFAULT_COMFYUI_ANIMA_UNET_WEIGHT_DTYPE = "default";
 
 export const COMFYUI_TEXT_TO_IMAGE_WORKFLOW_PROFILES = {
