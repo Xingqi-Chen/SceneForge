@@ -1,7 +1,7 @@
 "use client";
 
 import { Check, Eye, EyeOff, Loader2, Palette, Plus, Search, Sparkles, X } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import type {
@@ -74,6 +74,7 @@ const ARTIST_STRING_PROMPT_RENDER_MODE_OPTIONS: Array<{
   label: string;
 }> = [
   { value: "artist-weight", label: "(artist:name:weight)" },
+  { value: "anima", label: "@artist (:weight)" },
   { value: "by-weight", label: "by name:weight" },
   { value: "novelai", label: "NovelAI" },
 ];
@@ -117,6 +118,10 @@ function buildSelectedCivitaiResourcesQuery(checkpointId: string | null, loraIds
 
 function formatArtistPrompt(item: ArtistStringItemRecord, renderMode: ArtistStringPromptRenderMode) {
   return formatArtistStringForPlatform(item.structuredArtistString, item.promptFormat, { renderMode });
+}
+
+function isAnimaStylePaletteBaseModel(value: string | null | undefined) {
+  return value?.trim().toLocaleLowerCase() === "anima";
 }
 
 function createPromptTagId(prefix: string) {
@@ -500,10 +505,23 @@ export function StylePalettePanel() {
   const selectedResourceCards = useMemo(() => selectedCivitaiResourceCards(selectedResources), [selectedResources]);
   const selectedCheckpointBaseModel =
     selectedResources.checkpoint?.id === selectedCheckpointId ? (selectedResources.checkpoint.baseModel ?? null) : null;
+  const animaPromptContext = isAnimaStylePaletteBaseModel(selectedCheckpointBaseModel);
+  const effectiveArtistRenderMode: ArtistStringPromptRenderMode = animaPromptContext
+    ? "anima"
+    : artistRenderMode === "anima"
+      ? "artist-weight"
+      : artistRenderMode;
+  const visibleArtistRenderModeOptions = animaPromptContext
+    ? ARTIST_STRING_PROMPT_RENDER_MODE_OPTIONS.filter((option) => option.value === "anima")
+    : ARTIST_STRING_PROMPT_RENDER_MODE_OPTIONS.filter((option) => option.value !== "anima");
   const storedArtistPrompts = project.settings.selectedArtistStringPrompts ?? [];
   const artistPrompts = selectedArtistStringIds.map((id, index) => {
     const item = selectedArtistStrings.find((entry) => entry.id === id);
-    return storedArtistPrompts[index] ?? (item ? formatArtistPrompt(item, artistRenderMode) : "");
+    return artistRenderMode === effectiveArtistRenderMode
+      ? storedArtistPrompts[index] ?? (item ? formatArtistPrompt(item, effectiveArtistRenderMode) : "")
+      : item
+        ? formatArtistPrompt(item, effectiveArtistRenderMode)
+        : "";
   }).filter((prompt) => prompt.trim());
   const effectiveArtistPrompts = artistStringsMasked ? [] : artistPrompts;
   const effectiveSelectedResources = useMemo<SelectedCivitaiResourcesPreview>(
@@ -548,7 +566,7 @@ export function StylePalettePanel() {
     );
   });
 
-  function removeSceneArtistPrompt(prompt: string | null) {
+  const removeSceneArtistPrompt = useCallback((prompt: string | null) => {
     if (!prompt) {
       return;
     }
@@ -556,9 +574,9 @@ export function StylePalettePanel() {
     for (const tagId of findSceneArtistPromptTagIds(project.scene.promptTags, prompt)) {
       removePromptTag({ kind: "scene" }, tagId);
     }
-  }
+  }, [project.scene.promptTags, removePromptTag]);
 
-  function handleArtistStringPromptRenderModeChange(nextMode: ArtistStringPromptRenderMode) {
+  const handleArtistStringPromptRenderModeChange = useCallback((nextMode: ArtistStringPromptRenderMode) => {
     if (nextMode === artistRenderMode) {
       return;
     }
@@ -596,7 +614,33 @@ export function StylePalettePanel() {
       selectedArtistStringPrompts: nextPrompts,
     });
     setAdvice({ error: "", result: null, status: "idle" });
-  }
+  }, [
+    addPromptTag,
+    artistRenderMode,
+    project.settings.selectedArtistStringIds,
+    project.settings.selectedArtistStringPrompts,
+    removeSceneArtistPrompt,
+    selectedArtistStrings,
+    updateProjectSettings,
+  ]);
+
+  useEffect(() => {
+    const selectedIds = project.settings.selectedArtistStringIds ?? [];
+    const loadedSelectedArtistIds = new Set(selectedArtistStrings.map((item) => item.id));
+    const loadedSelectedArtists = selectedIds.every((id) => loadedSelectedArtistIds.has(id));
+    if (effectiveArtistRenderMode !== artistRenderMode && loadedSelectedArtists) {
+      const timeoutId = window.setTimeout(() => {
+        handleArtistStringPromptRenderModeChange(effectiveArtistRenderMode);
+      }, 0);
+      return () => window.clearTimeout(timeoutId);
+    }
+  }, [
+    artistRenderMode,
+    effectiveArtistRenderMode,
+    handleArtistStringPromptRenderModeChange,
+    project.settings.selectedArtistStringIds,
+    selectedArtistStrings,
+  ]);
 
   function removeArtistStringSelection(item: ArtistStringItemRecord) {
     const selectedIds = project.settings.selectedArtistStringIds ?? [];
@@ -632,7 +676,7 @@ export function StylePalettePanel() {
       return;
     }
 
-    const formattedPrompt = formatArtistPrompt(item, artistRenderMode);
+    const formattedPrompt = formatArtistPrompt(item, effectiveArtistRenderMode);
     if (!formattedPrompt.trim()) {
       return;
     }
@@ -1267,9 +1311,9 @@ export function StylePalettePanel() {
                   handleArtistStringPromptRenderModeChange(event.target.value as ArtistStringPromptRenderMode)
                 }
                 title="选择添加到 Prompt 的画师串格式"
-                value={artistRenderMode}
+                value={effectiveArtistRenderMode}
               >
-                {ARTIST_STRING_PROMPT_RENDER_MODE_OPTIONS.map((option) => (
+                {visibleArtistRenderModeOptions.map((option) => (
                   <option key={option.value} value={option.value}>
                     {option.label}
                   </option>
@@ -1395,7 +1439,9 @@ export function StylePalettePanel() {
             {selectedArtistStrings.length > 0 ? (
               selectedArtistStrings.map((item) => {
                 const index = selectedArtistStringIds.indexOf(item.id);
-                const prompt = storedArtistPrompts[index] ?? formatArtistPrompt(item, artistRenderMode);
+                const prompt = artistRenderMode === effectiveArtistRenderMode
+                  ? storedArtistPrompts[index] ?? formatArtistPrompt(item, effectiveArtistRenderMode)
+                  : formatArtistPrompt(item, effectiveArtistRenderMode);
                 return (
                   <ArtistStringCard
                     item={item}

@@ -1,8 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 import type { SelectedCivitaiResourcePreview, SelectedCivitaiResourcesPreview } from "@/features/civitai-lora-library";
+import type { GeneratedPrompt } from "@/features/prompt-engine";
 
 import { parseComfyUiAiGenerationParameters, resolveComfyUiGenerationSettings } from "./comfyui-generation-params";
+import {
+  formatGeneratedPromptForAnimaContext,
+  resolveAnimaPromptContextFromResources,
+} from "./anima-prompt";
 
 function makeResource(
   resourceType: "model" | "lora",
@@ -129,7 +134,7 @@ describe("ComfyUI generation parameters", () => {
 
   it("preserves selected checkpoint metadata for workflow profile routing", () => {
     const settings = resolveComfyUiGenerationSettings({
-      activePrompt: "portrait",
+      activePrompt: "city street, 1girl, artist:Alpha",
       baseNegativePrompt: "",
       selectedResources: {
         checkpoint: makeResource("model", "Pencil XL", {
@@ -148,7 +153,87 @@ describe("ComfyUI generation parameters", () => {
       workflowProfile: "anima",
       modelBaseModel: "Anima",
       modelStorageKind: "diffusion",
+      positivePrompt: "masterpiece, best quality, score_7, safe, 1girl, @Alpha, city street",
+      negativePrompt: "low quality, worst quality, bad anatomy, bad hands",
     });
+  });
+
+  it("does not let stale saved Anima metadata force Anima formatting for a selected non-Anima checkpoint", () => {
+    const selectedResources: SelectedCivitaiResourcesPreview = {
+      checkpoint: makeResource("model", "Illustrious Checkpoint", {
+        baseModel: "Illustrious",
+        modelFileName: "illustrious.safetensors",
+        modelStorageKind: "checkpoint",
+      }),
+      loras: [],
+    };
+    const generated: GeneratedPrompt = {
+      prompt: "city street, 1girl, artist:Alpha",
+      negativePrompt: "low quality",
+      parts: ["city street", "1girl", "artist:Alpha"],
+    };
+    const previewPrompt = formatGeneratedPromptForAnimaContext(
+      generated,
+      resolveAnimaPromptContextFromResources({
+        resources: selectedResources,
+        supportsNsfw: false,
+      }),
+    );
+    const settings = resolveComfyUiGenerationSettings({
+      activePrompt: previewPrompt.prompt,
+      baseNegativePrompt: previewPrompt.negativePrompt,
+      selectedResources,
+      aiAdvice: null,
+      savedParameters: {
+        cfg: 7,
+        denoise: 1,
+        height: 1024,
+        imageCount: 1,
+        loras: [],
+        modelBaseModel: "Anima",
+        modelStorageKind: "diffusion",
+        outputPrefix: "SceneForge",
+        samplerName: "euler",
+        savedAt: "2026-05-23T00:00:00.000Z",
+        scheduler: "normal",
+        seed: 123,
+        seedMode: "fixed",
+        steps: 30,
+        width: 1024,
+        workflowProfile: "anima",
+      },
+    });
+
+    expect(previewPrompt).toEqual(generated);
+    expect(settings.request).toMatchObject({
+      checkpointName: "illustrious.safetensors",
+      workflowProfile: "default",
+      modelBaseModel: "Illustrious",
+      modelStorageKind: "checkpoint",
+      positivePrompt: generated.prompt,
+      negativePrompt: generated.negativePrompt,
+    });
+  });
+
+  it("omits Anima default safe when the project supports NSFW", () => {
+    const settings = resolveComfyUiGenerationSettings({
+      activePrompt: "1girl, city street",
+      baseNegativePrompt: "",
+      selectedResources: {
+        checkpoint: makeResource("model", "Pencil XL", {
+          baseModel: "Anima",
+          modelFileName: "pencil-xl-diffusion.safetensors",
+          modelStorageKind: "diffusion",
+        }),
+        loras: [],
+      },
+      aiAdvice: null,
+      savedParameters: null,
+      supportsNsfw: true,
+    });
+
+    expect(settings.request.positivePrompt).toBe("masterpiece, best quality, score_7, 1girl, city street");
+    expect(settings.request.positivePrompt).not.toContain("safe");
   });
 
   it("ignores legacy saved Anima CLIP and VAE overrides because the profile uses fixed settings", () => {

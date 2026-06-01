@@ -1468,7 +1468,8 @@ function sanitizeSettings(settings: unknown): SceneForgeProject["settings"] {
     artistStringPromptRenderMode:
       settings.artistStringPromptRenderMode === "novelai" ||
       settings.artistStringPromptRenderMode === "artist-weight" ||
-      settings.artistStringPromptRenderMode === "by-weight"
+      settings.artistStringPromptRenderMode === "by-weight" ||
+      settings.artistStringPromptRenderMode === "anima"
         ? settings.artistStringPromptRenderMode
         : "artist-weight",
     ...(savedComfyUiGenerationParams !== undefined ? { savedComfyUiGenerationParams } : {}),

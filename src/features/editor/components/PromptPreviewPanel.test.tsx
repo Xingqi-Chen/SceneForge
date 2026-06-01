@@ -5,6 +5,10 @@ import type {
   SelectedCivitaiResourcesPreview,
 } from "@/features/civitai-lora-library";
 import { createDefaultProject } from "@/features/editor/store/defaults";
+import {
+  isAnimaPromptContext,
+  resolveAnimaPromptContextFromResources,
+} from "@/features/editor/ai-prompt/anima-prompt";
 import { generatePrompt } from "@/features/prompt-engine";
 
 import {
@@ -119,13 +123,53 @@ describe("PromptPreviewPanel AI prompt messages", () => {
     expect(systemPrompt).toContain("Illustrious prompt ordering");
     expect(systemPrompt).toContain("Return JSON only");
     expect(systemPrompt).toContain("Do not add rating tags");
-    expect(userText).toContain("your reply must be Illustrious JSON sections");
+    expect(userText).toContain("your reply must be JSON sections");
     expect(userText).not.toContain("positive prompt text only");
     expect(userText).toContain("Selected Civitai resources");
     expect(userText).toContain("Checkpoint:");
     expect(userText).toContain("- trainedWords: checkpoint trigger");
     expect(userText).toContain("LoRA 1:");
     expect(userText).toContain("- trainedWords: style trigger");
+  });
+
+  it("adds Anima section instructions when the Stable Diffusion prompt profile is Anima", () => {
+    const project = createDefaultProject();
+    project.settings.modelFormat = "stable-diffusion";
+    const systemPrompt = buildAiSystemPrompt(
+      {
+        layout: false,
+        pose: true,
+        visual: true,
+      },
+      { modelFormat: "stable-diffusion", promptProfile: "anima" },
+    );
+    const userText = buildAiUserText({
+      constraints: {
+        layout: false,
+        pose: false,
+        visual: false,
+      },
+      layoutConstraints: null,
+      modelFormat: "stable-diffusion",
+      promptProfile: "anima",
+      promptForAi: generatePrompt(project),
+      project,
+      structuredSummary: "character: standing pose",
+    });
+
+    expect(systemPrompt).toContain("Anima Stable Diffusion prompt sections");
+    expect(systemPrompt).toContain("anime-style natural-language visual phrases");
+    expect(systemPrompt).toContain("compact anime-style visual phrases");
+    expect(systemPrompt).toContain("compact anime-style composition phrases");
+    expect(systemPrompt).toContain("Anima prompt ordering");
+    expect(systemPrompt).toContain("quality/meta/year/safety, subject count, character, series/source, artist, general");
+    expect(systemPrompt).toContain("Use @artist syntax");
+    expect(systemPrompt).not.toContain("Danbooru-style pose/action tags");
+    expect(systemPrompt).not.toContain("Danbooru/booru-style anime tags and short tag phrases; not natural language");
+    expect(systemPrompt).not.toContain("Illustrious prompt ordering");
+    expect(userText).toContain("Anima positive prompt sections");
+    expect(userText).toContain("anime-style natural-language visual phrases");
+    expect(userText).not.toContain("Illustrious-compatible positive prompt sections");
   });
 });
 
@@ -199,5 +243,49 @@ describe("resolveSelectedCivitaiResourcesForAi", () => {
       }),
     ).resolves.toBe(cachedResources);
     expect(fetchSelectedResources).not.toHaveBeenCalled();
+  });
+
+  it("routes AI prompt instructions from fetched current resources instead of stale Anima previews", async () => {
+    const staleAnimaResources: SelectedCivitaiResourcesPreview = {
+      checkpoint: makeResource("model", "Anima Checkpoint", {
+        baseModel: "Anima",
+      }),
+      loras: [],
+    };
+    const fetchedIllustriousResources: SelectedCivitaiResourcesPreview = {
+      checkpoint: makeResource("model", "Illustrious Checkpoint", {
+        baseModel: "Illustrious",
+      }),
+      loras: [],
+    };
+    const fetchSelectedResources = vi.fn<(query: string) => Promise<SelectedCivitaiResourcesPreview>>()
+      .mockResolvedValue(fetchedIllustriousResources);
+
+    const selectedResourcesForAi = await resolveSelectedCivitaiResourcesForAi({
+      fetchSelectedResources,
+      modelFormat: "stable-diffusion",
+      selectedResources: staleAnimaResources,
+      selectedResourcesQuery: "checkpointId=illustrious",
+      selectedResourcesResultQuery: "checkpointId=anima",
+      selectedResourceStatus: "success",
+      shouldLoadSelectedResources: true,
+    });
+    const aiPromptContext = resolveAnimaPromptContextFromResources({
+      resources: selectedResourcesForAi,
+      supportsNsfw: false,
+    });
+    const systemPrompt = buildAiSystemPrompt(
+      { layout: false, pose: false, visual: false },
+      {
+        modelFormat: "stable-diffusion",
+        promptProfile: isAnimaPromptContext(aiPromptContext) ? "anima" : "default",
+      },
+    );
+
+    expect(fetchSelectedResources).toHaveBeenCalledWith("checkpointId=illustrious");
+    expect(selectedResourcesForAi).toBe(fetchedIllustriousResources);
+    expect(isAnimaPromptContext(aiPromptContext)).toBe(false);
+    expect(systemPrompt).toContain("Illustrious prompt ordering");
+    expect(systemPrompt).not.toContain("Anima prompt ordering");
   });
 });

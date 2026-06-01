@@ -123,6 +123,11 @@ import {
   mergeNegativePrompts,
 } from "@/features/editor/ai-prompt/illustrious-prompt";
 import {
+  buildAnimaComicSequencePrompt,
+  isAnimaPromptContext,
+  mergeAnimaNegativePrompts,
+} from "@/features/editor/ai-prompt/anima-prompt";
+import {
   findMaskAlphaBounds,
   padAndAlignLocalRegion,
   resolveInpaintLocalRegion,
@@ -4854,6 +4859,7 @@ export function ComfyUiGenerationDialog({
   title = "ComfyUI 生图",
 }: ComfyUiGenerationDialogProps) {
   const scene = useEditorStore((state) => state.project.scene);
+  const nsfwEnabled = useEditorStore((state) => state.project.settings.supportsNsfw === true);
   const comfyUiGeneratedImages = useEditorStore(
     (state) => state.project.settings.comfyUiGeneratedImages ?? [],
   );
@@ -5030,6 +5036,7 @@ export function ComfyUiGenerationDialog({
         selectedResources: resources,
         aiAdvice: advice,
         savedParameters,
+        supportsNsfw: nsfwEnabled,
       });
 
       setSelectedResources(resources);
@@ -6926,6 +6933,9 @@ function buildComicSequencePositivePrompt({
   reference,
   resources,
   shotPrompt,
+  supportsNsfw,
+  workflowProfile,
+  modelBaseModel,
 }: {
   basePrompt: string;
   hasReferenceImages: boolean;
@@ -6933,6 +6943,9 @@ function buildComicSequencePositivePrompt({
   reference: SavedComicSequenceReferenceParams;
   resources: SelectedCivitaiResourcesPreview;
   shotPrompt: string;
+  supportsNsfw: boolean;
+  workflowProfile?: GenerationDraft["workflowProfile"];
+  modelBaseModel?: string;
 }) {
   if (modelFormat !== "stable-diffusion") {
     const referencePrompt = hasReferenceImages
@@ -6942,6 +6955,20 @@ function buildComicSequencePositivePrompt({
       : undefined;
 
     return joinSequencePrompt([basePrompt, referencePrompt, shotPrompt]);
+  }
+
+  if (isAnimaPromptContext({ baseModel: modelBaseModel, resources, supportsNsfw, workflowProfile })) {
+    return buildAnimaComicSequencePrompt({
+      basePrompt,
+      hasReferenceImages,
+      reference: {
+        characterName: reference.characterName,
+        characterPrompt: reference.characterPrompt,
+      },
+      resources,
+      shotPrompt,
+      supportsNsfw,
+    });
   }
 
   return buildIllustriousComicSequencePrompt({
@@ -6955,6 +6982,28 @@ function buildComicSequencePositivePrompt({
     resources,
     shotPrompt,
   });
+}
+
+function buildComicSequenceNegativePrompt({
+  baseNegativePrompt,
+  modelBaseModel,
+  resources,
+  shotNegativePrompt,
+  supportsNsfw,
+  workflowProfile,
+}: {
+  baseNegativePrompt: string;
+  modelBaseModel?: string;
+  resources: SelectedCivitaiResourcesPreview;
+  shotNegativePrompt: string;
+  supportsNsfw: boolean;
+  workflowProfile?: GenerationDraft["workflowProfile"];
+}) {
+  const parts = [baseNegativePrompt, shotNegativePrompt];
+
+  return isAnimaPromptContext({ baseModel: modelBaseModel, resources, supportsNsfw, workflowProfile })
+    ? mergeAnimaNegativePrompts(parts)
+    : mergeNegativePrompts(parts);
 }
 
 function getComicSequenceShotPrompt(project: SceneForgeProject, scene: Scene) {
@@ -7085,6 +7134,8 @@ function ComicSequenceDialog({
   selectedLoraIds: string[];
 }) {
   const scene = useEditorStore((state) => state.project.scene);
+  const nsfwEnabled = useEditorStore((state) => state.project.settings.supportsNsfw === true);
+  const modelFormat = useEditorStore((state) => state.project.settings.modelFormat);
   const comfyUiGeneratedImages = useEditorStore(
     (state) => state.project.settings.comfyUiGeneratedImages ?? [],
   );
@@ -7173,6 +7224,7 @@ function ComicSequenceDialog({
             selectedResources: resources,
             aiAdvice: null,
             savedParameters,
+            supportsNsfw: nsfwEnabled,
           });
 
           setSelectedResources(resources);
@@ -7321,6 +7373,38 @@ function ComicSequenceDialog({
           shots: shots.map((prompt, index) => ({
             id: `shot-${index + 1}`,
             prompt,
+            request: {
+              ...baseRequest,
+              negativePrompt: buildComicSequenceNegativePrompt({
+                baseNegativePrompt: draft.negativePrompt,
+                modelBaseModel: draft.modelBaseModel,
+                resources: selectedResources,
+                shotNegativePrompt: "",
+                supportsNsfw: nsfwEnabled,
+                workflowProfile: draft.workflowProfile,
+              }),
+              positivePrompt: buildComicSequencePositivePrompt({
+                basePrompt: draft.positivePrompt,
+                hasReferenceImages: references.length > 0,
+                modelBaseModel: draft.modelBaseModel,
+                modelFormat,
+                reference: {
+                  characterName,
+                  characterPrompt,
+                  face: createComicSequenceReferenceChannel("face"),
+                  character: createComicSequenceReferenceChannel("ipadapter"),
+                  mode: referenceMode,
+                  weight: referenceStrength,
+                  startAt: referenceStartAt,
+                  endAt: referenceEndAt,
+                  images: [],
+                },
+                resources: selectedResources,
+                shotPrompt: prompt,
+                supportsNsfw: nsfwEnabled,
+                workflowProfile: draft.workflowProfile,
+              }),
+            },
           })),
         }),
       });
@@ -8020,6 +8104,7 @@ function ComicSequenceWorkspaceDialog({
       selectedResources: resources,
       aiAdvice: null,
       savedParameters,
+      supportsNsfw: nsfwEnabled,
     });
     const draft = toDraft(settings.request, settings.loras, savedParameters?.seedMode, savedParameters);
 
@@ -8036,6 +8121,7 @@ function ComicSequenceWorkspaceDialog({
       selectedResources: resources,
       aiAdvice: null,
       savedParameters: shot.parameters,
+      supportsNsfw: nsfwEnabled,
     });
 
     return applyComicSequenceControlNetParams(
@@ -8482,6 +8568,14 @@ function ComicSequenceWorkspaceDialog({
             existingShotCount: sequence.shots.length,
             globalPrompt: activePrompt,
             negativePrompt: baseNegativePrompt,
+            promptProfile: isAnimaPromptContext({
+              baseModel: draft?.modelBaseModel,
+              resources: selectedResources,
+              supportsNsfw: nsfwEnabled,
+              workflowProfile: draft?.workflowProfile,
+            })
+              ? "anima"
+              : "default",
             story,
             targetShotCount,
           }),
@@ -8868,12 +8962,22 @@ function ComicSequenceWorkspaceDialog({
         const positivePrompt = buildComicSequencePositivePrompt({
           basePrompt: shot.positivePrompt,
           hasReferenceImages,
+          modelBaseModel: shotDraft.modelBaseModel,
           modelFormat: project.settings.modelFormat,
           reference: shot.reference,
           resources: selectedResources,
           shotPrompt: shot.shotPrompt,
+          supportsNsfw: nsfwEnabled,
+          workflowProfile: shotDraft.workflowProfile,
         });
-        const negativePrompt = mergeNegativePrompts([baseNegativePrompt, shot.negativePrompt]);
+        const negativePrompt = buildComicSequenceNegativePrompt({
+          baseNegativePrompt,
+          modelBaseModel: shotDraft.modelBaseModel,
+          resources: selectedResources,
+          shotNegativePrompt: shot.negativePrompt,
+          supportsNsfw: nsfwEnabled,
+          workflowProfile: shotDraft.workflowProfile,
+        });
         const requestShotDraft = shotDraft;
         const shotPreview = buildComfyUiControlNetOpenPosePreview(shot.scene, {
           width: requestShotDraft.width,
@@ -8980,12 +9084,22 @@ function ComicSequenceWorkspaceDialog({
         const positivePrompt = buildComicSequencePositivePrompt({
           basePrompt: shot.positivePrompt,
           hasReferenceImages,
+          modelBaseModel: shotDraft.modelBaseModel,
           modelFormat: project.settings.modelFormat,
           reference: shot.reference,
           resources: selectedResources,
           shotPrompt: shot.shotPrompt,
+          supportsNsfw: nsfwEnabled,
+          workflowProfile: shotDraft.workflowProfile,
         });
-        const negativePrompt = mergeNegativePrompts([baseNegativePrompt, shot.negativePrompt]);
+        const negativePrompt = buildComicSequenceNegativePrompt({
+          baseNegativePrompt,
+          modelBaseModel: shotDraft.modelBaseModel,
+          resources: selectedResources,
+          shotNegativePrompt: shot.negativePrompt,
+          supportsNsfw: nsfwEnabled,
+          workflowProfile: shotDraft.workflowProfile,
+        });
         const faceDetailer = previewMode
           ? { ...shotDraft.faceDetailer, enabled: false }
           : shotDraft.faceDetailer;
