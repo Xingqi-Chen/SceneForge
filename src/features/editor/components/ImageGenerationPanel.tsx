@@ -8568,6 +8568,14 @@ function ComicSequenceWorkspaceDialog({
             existingShotCount: sequence.shots.length,
             globalPrompt: activePrompt,
             negativePrompt: baseNegativePrompt,
+            promptProfile: isAnimaPromptContext({
+              baseModel: draft?.modelBaseModel,
+              resources: selectedResources,
+              supportsNsfw: nsfwEnabled,
+              workflowProfile: draft?.workflowProfile,
+            })
+              ? "anima"
+              : "default",
             story,
             targetShotCount,
           }),

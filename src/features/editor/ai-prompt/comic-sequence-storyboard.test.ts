@@ -38,6 +38,23 @@ describe("comic sequence storyboard AI helpers", () => {
     expect(messages[1].content).toContain("\"targetShotCount\": \"auto\"");
   });
 
+  it("builds Anima storyboard instructions with natural-language visual phrases", () => {
+    const messages = buildComicSequenceStoryboardMessages({
+      promptProfile: "anima",
+      story: "The hero draws a sword, leaps forward, and blocks a strike.",
+      targetShotCount: 3,
+    });
+
+    expect(messages[0].content).toContain("English Anima local shot prompt");
+    expect(messages[0].content).toContain("anime-style natural-language visual phrases");
+    expect(messages[0].content).toContain("not full prose paragraphs");
+    expect(messages[0].content).toContain("compact visual phrases");
+    expect(messages[0].content).not.toContain("English booru-style local shot prompt");
+    expect(messages[0].content).not.toContain("not natural-language sentences");
+    expect(messages[0].content).not.toContain("Rewrite them as tags like");
+    expect(messages[1].content).toContain("\"targetShotCount\": 3");
+  });
+
   it("builds target-count instructions when requested", () => {
     const messages = buildComicSequenceStoryboardMessages({
       story: "A chase across rooftops.",

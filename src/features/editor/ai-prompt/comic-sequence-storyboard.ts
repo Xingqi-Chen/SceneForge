@@ -12,10 +12,13 @@ export type ComicSequenceStoryboardResult = {
   shots: ComicSequenceStoryboardShot[];
 };
 
+export type ComicSequenceStoryboardPromptProfile = "default" | "anima";
+
 export type BuildComicSequenceStoryboardMessagesInput = {
   existingShotCount?: number;
   globalPrompt?: string;
   negativePrompt?: string;
+  promptProfile?: ComicSequenceStoryboardPromptProfile;
   story: string;
   targetShotCount?: number;
 };
@@ -62,6 +65,7 @@ export function buildComicSequenceStoryboardMessages({
   existingShotCount,
   globalPrompt,
   negativePrompt,
+  promptProfile = "default",
   story,
   targetShotCount,
 }: BuildComicSequenceStoryboardMessagesInput): LlmChatMessage[] {
@@ -69,6 +73,45 @@ export function buildComicSequenceStoryboardMessages({
   const shotCountInstruction = normalizedTarget
     ? `Create exactly ${normalizedTarget} shots.`
     : `Choose the natural number of shots for the action rhythm, with an upper limit of ${COMIC_SEQUENCE_STORYBOARD_MAX_SHOTS}.`;
+  const animaPrompt = promptProfile === "anima";
+  const promptStyleInstructions = animaPrompt
+    ? [
+        "Each prompt must be an English Anima local shot prompt:",
+        "compact anime-style natural-language visual phrases, comma-separated, not full prose paragraphs.",
+        "",
+        "Use anime visual phrasing such as:",
+        "a low-angle close-up as the hero raises one arm, a dynamic sword draw with motion blur,",
+        "determined expression amid debris and impact lines, reaching out to grab an arm,",
+        "leaning close while facing each other, looking at another with a surprised expression.",
+      ]
+    : [
+        "Each prompt must be an English booru-style local shot prompt:",
+        "comma-separated tags and short tag phrases, not natural-language sentences.",
+        "",
+        "Use anime prompt vocabulary such as:",
+        "low angle, close-up, dynamic pose, one arm raised, sword draw, blocking attack,",
+        "motion blur, determined expression, debris, impact lines, eye contact,",
+        "reaching out, holding hands, grabbing arm, hand on shoulder, leaning close,",
+        "facing each other, looking at another, reacting, surprised expression.",
+      ];
+  const promptFocusInstruction = animaPrompt
+    ? "Focus each prompt on local action, camera framing, pose, expression, gesture, motion, character placement, interaction, and immediate setting as compact visual phrases."
+    : "Focus each prompt on local action, camera framing, pose, expression, gesture, motion, character placement, interaction, and immediate setting as tags.";
+  const proseExampleInstructions = animaPrompt
+    ? [
+        "Do not write full prose paragraphs like:",
+        "\"the hero jumps forward while blocking a strike, and the camera follows the motion\"",
+        "",
+        "Rewrite them as compact visual phrases like:",
+        "2 people, character A in the foreground leaping forward, character B in the background blocking with a sword, impact lines, determined expression.",
+      ]
+    : [
+        "Do not write prose sentences like:",
+        "\"the hero jumps forward while blocking a strike\"",
+        "",
+        "Rewrite them as tags like:",
+        "2 people, character A in foreground, character B in background, dynamic pose, jumping, blocking attack, sword clash, impact lines, determined expression.",
+      ];
 
   return [
     {
@@ -84,14 +127,7 @@ export function buildComicSequenceStoryboardMessages({
         "",
         "Include a short natural-language title for each shot when possible. The title is only for the UI.",
         "",
-        "Each prompt must be an English booru-style local shot prompt:",
-        "comma-separated tags and short tag phrases, not natural-language sentences.",
-        "",
-        "Use anime prompt vocabulary such as:",
-        "low angle, close-up, dynamic pose, one arm raised, sword draw, blocking attack,",
-        "motion blur, determined expression, debris, impact lines, eye contact,",
-        "reaching out, holding hands, grabbing arm, hand on shoulder, leaning close,",
-        "facing each other, looking at another, reacting, surprised expression.",
+        ...promptStyleInstructions,
         "",
         "For shots with two or more active visible characters:",
         "- Mark the visible active character count, such as 2 people, 1girl, 1boy, 2girls, or 2boys. Use many people or crowd for crowd shots instead of inventing an exact count.",
@@ -106,17 +142,13 @@ export function buildComicSequenceStoryboardMessages({
         "",
         "Do not connect separate words with underscores; preserve underscores only when they are part of a known canonical tag or exact source token.",
         "",
-        "Focus each prompt on local action, camera framing, pose, expression, gesture, motion, character placement, interaction, and immediate setting as tags.",
+        promptFocusInstruction,
         "",
         "Do not repeat broad global art style, quality boilerplate, LoRA syntax, model names, or negative prompt terms.",
         "",
         "Do not invent character identities, extra characters, model resources, or off-screen events not implied by the user's paragraph.",
         "",
-        "Do not write prose sentences like:",
-        "\"the hero jumps forward while blocking a strike\"",
-        "",
-        "Rewrite them as tags like:",
-        "2 people, character A in foreground, character B in background, dynamic pose, jumping, blocking attack, sword clash, impact lines, determined expression.",
+        ...proseExampleInstructions,
         "",
         "Keep each prompt concise but specific enough to paste into a Manual shot prompt field.",
       ].join("\n"),
