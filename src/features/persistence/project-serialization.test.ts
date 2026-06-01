@@ -1039,6 +1039,16 @@ describe("project serialization", () => {
     expect(imported.settings.artistStringPromptRenderMode).toBe("by-weight");
   });
 
+  it("preserves the Anima artist string render mode on project import", () => {
+    const project = createDefaultProject();
+    const raw = JSON.parse(serializeProject(project));
+    raw.settings.artistStringPromptRenderMode = "anima";
+
+    const imported = importProjectFromJson(JSON.stringify(raw));
+
+    expect(imported.settings.artistStringPromptRenderMode).toBe("anima");
+  });
+
   it("migrates legacy selected artist string settings on project import", () => {
     const project = createDefaultProject();
     const raw = JSON.parse(serializeProject(project));

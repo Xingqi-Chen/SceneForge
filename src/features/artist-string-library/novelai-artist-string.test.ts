@@ -72,16 +72,19 @@ describe("NovelAI artist string parsing", () => {
   });
 
   it("formats platform prompts with all supported render modes", () => {
-    const ast = parseNovelAiArtistString("[artist:torino aqua,{artist:ask}]");
+    const ast = parseNovelAiArtistString("[artist:torino aqua,{artist:ask}], year 2023");
 
     expect(formatArtistStringForPlatform(ast, "novelai", { renderMode: "novelai" })).toBe(
-      "[artist:torino aqua,{artist:ask}]",
+      "[artist:torino aqua,{artist:ask}],year 2023",
     );
     expect(formatArtistStringForPlatform(ast, "novelai", { renderMode: "artist-weight" })).toBe(
-      "(artist:torino aqua:0.9),artist:ask",
+      "(artist:torino aqua:0.9),artist:ask,year 2023",
     );
     expect(formatArtistStringForPlatform(ast, "novelai", { renderMode: "by-weight" })).toBe(
-      "by torino aqua:0.9,by ask",
+      "by torino aqua:0.9,by ask,year 2023",
+    );
+    expect(formatArtistStringForPlatform(ast, "novelai", { renderMode: "anima" })).toBe(
+      "(@torino aqua:0.9),@ask,year 2023",
     );
   });
 

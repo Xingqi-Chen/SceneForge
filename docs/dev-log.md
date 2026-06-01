@@ -13,6 +13,7 @@ Summary:
 - Routed Anima formatting through prompt preview, AI prompt response rendering, ComfyUI generation settings, Comic Sequence shots, and previous-shot img2img/inpaint requests.
 - Split LLM prompt instructions by prompt profile so Anima AI responses use compact anime-style natural-language visual phrases while Illustrious/default responses keep booru-style tag instructions.
 - Split Comic Sequence storyboard shot prompts by prompt profile so Anima storyboards use compact anime-style natural-language visual phrases while default storyboards keep booru-style shot tags.
+- Synced the Style Palette Artist String render mode with Anima context so Anima checkpoints only show the `@artist` dropdown format and automatically use it in selected cards, active prompt, and saved project settings.
 - Added Anima safety behavior: default `safe` is included only when NSFW is disabled, while explicit safety/rating tags are preserved.
 - Converted compatible selected Artist String tags into Anima `@artist` syntax when they land in the artist section.
 - Kept non-Anima Illustrious/default prompt ordering and negative prompt behavior unchanged.
@@ -25,15 +26,23 @@ Files changed:
 - `src/features/editor/ai-prompt/comic-sequence-storyboard.test.ts`
 - `src/features/editor/ai-prompt/comfyui-generation-params.ts`
 - `src/features/editor/ai-prompt/comfyui-generation-params.test.ts`
+- `src/features/artist-string-library/novelai-artist-string.ts`
+- `src/features/artist-string-library/novelai-artist-string.test.ts`
 - `src/features/editor/components/ImageGenerationPanel.tsx`
 - `src/features/editor/components/PromptPreviewPanel.tsx`
 - `src/features/editor/components/PromptPreviewPanel.test.tsx`
+- `src/features/editor/components/StylePalettePanel.tsx`
+- `src/features/editor/components/StylePalettePanel.test.tsx`
+- `src/features/persistence/project-serialization.ts`
+- `src/features/persistence/project-serialization.test.ts`
+- `src/shared/types/project.ts`
 - `docs/dev-log.md`
 
 Validation:
 
 - `npm test -- src/features/editor/ai-prompt/anima-prompt.test.ts src/features/editor/ai-prompt/illustrious-prompt.test.ts src/features/editor/ai-prompt/comfyui-generation-params.test.ts src/features/editor/components/PromptPreviewPanel.test.tsx` passed with 37 tests.
-- `npm test` passed: 84 files, 618 tests.
+- `npm test -- src/features/artist-string-library/novelai-artist-string.test.ts src/features/editor/components/StylePalettePanel.test.tsx src/features/persistence/project-serialization.test.ts` passed with 69 tests.
+- `npm test` passed: 84 files, 622 tests.
 - `npm run typecheck` passed.
 - `npm run lint` passed with the existing 22 `@next/next/no-img-element` warnings.
 

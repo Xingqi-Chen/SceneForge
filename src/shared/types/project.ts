@@ -1,7 +1,7 @@
 import type { PromptTag, PromptTagCategory, PromptTagSubcategory, Scene } from "./scene";
 
 export type PromptModelFormat = "generic" | "stable-diffusion";
-export type ArtistStringPromptRenderMode = "novelai" | "artist-weight" | "by-weight";
+export type ArtistStringPromptRenderMode = "novelai" | "artist-weight" | "by-weight" | "anima";
 export type SavedComfyUiGenerationSeedMode = "random" | "fixed";
 export type SavedComfyUiWorkflowProfile = "default" | "anima";
 export type SavedComfyUiModelStorageKind = "checkpoint" | "diffusion";

@@ -299,6 +299,68 @@ function formatWeightedNovelAiNode(
   return children.length > 0 ? children.join(",") : null;
 }
 
+function isAnimaMetadataTag(text: string) {
+  const key = text.trim().toLocaleLowerCase().replace(/\s+/g, "_");
+  return (
+    /^year_?\d{4}$/.test(key) ||
+    /^(?:safe|general|sensitive|questionable|explicit|nsfw)$/.test(key) ||
+    /^score_[4-9]$/.test(key) ||
+    /^(?:masterpiece|best_quality|high_quality|low_quality|worst_quality|newest|latest|recent|old|oldest)$/.test(key)
+  );
+}
+
+function formatAnimaArtistTag(text: string, weight: number | null) {
+  const normalized = normalizeText(text);
+  if (!normalized) {
+    return null;
+  }
+
+  if (isAnimaMetadataTag(normalized)) {
+    return normalized;
+  }
+
+  const tagText = normalized.startsWith("@") ? normalized : `@${normalized}`;
+  if (weight === null || Math.abs(weight - 1) < 0.0001) {
+    return tagText;
+  }
+
+  return `(${tagText}:${formatWeight(weight)})`;
+}
+
+function formatAnimaNovelAiNode(
+  node: NovelAiArtistStringNode,
+  weightDelta = 0,
+): string | null {
+  if (node.type === "raw") {
+    const text = normalizeText(node.text);
+    return text || null;
+  }
+
+  if (node.type === "tag") {
+    const explicitWeight = typeof node.weight === "number" && Number.isFinite(node.weight) ? node.weight : null;
+    const finalWeight = explicitWeight !== null
+      ? explicitWeight + weightDelta
+      : weightDelta === 0
+        ? null
+        : 1 + weightDelta;
+    return formatAnimaArtistTag(node.text, finalWeight);
+  }
+
+  const nextWeightDelta = weightDelta + (node.emphasis === "increase" ? GROUP_WEIGHT_STEP : -GROUP_WEIGHT_STEP);
+  const children = node.nodes
+    .map((child) => formatAnimaNovelAiNode(child, nextWeightDelta))
+    .filter((child): child is string => Boolean(child));
+
+  return children.length > 0 ? children.join(",") : null;
+}
+
+export function formatAnimaArtistString(ast: NovelAiArtistStringAst): string {
+  return ast.nodes
+    .map((node) => formatAnimaNovelAiNode(node))
+    .filter((node): node is string => Boolean(node))
+    .join(",");
+}
+
 export function formatWeightedNovelAiArtistString(
   ast: NovelAiArtistStringAst,
   options: NovelAiWeightedFormatterOptions = { artistReferenceSyntax: "artist-prefix" },
@@ -387,6 +449,10 @@ export function formatArtistStringForPlatform(
   if (promptFormat === "novelai") {
     if (options?.renderMode === "novelai") {
       return formatNovelAiArtistString(structured);
+    }
+
+    if (options?.renderMode === "anima") {
+      return formatAnimaArtistString(structured);
     }
 
     if (options?.renderMode === "by-weight") {

@@ -11,6 +11,7 @@ import type {
 import { STYLE_PALETTE_PROMPT_PRESETS } from "@/features/editor/ai-prompt/style-palette-prompts";
 import { createDefaultProject } from "@/features/editor/store/defaults";
 import { useEditorStore } from "@/features/editor/store/editor-store";
+import type { SavedComfyUiGenerationParams } from "@/shared/types";
 
 const dialogProps = vi.hoisted(() => [] as Array<Record<string, unknown>>);
 
@@ -41,7 +42,15 @@ const artistString: ArtistStringItemRecord = {
   structuredArtistString: {
     type: "novelai",
     raw: "artist:example",
-    nodes: [],
+    nodes: [
+      {
+        type: "tag",
+        text: "example",
+        artistPrefix: true,
+        artistSyntax: "artist-prefix",
+        raw: "artist:example",
+      },
+    ],
     warnings: [],
   },
   promptFormat: "novelai",
@@ -68,6 +77,13 @@ const alternateCheckpointResource = createSelectedResource({
   resourceType: "model",
 });
 
+const animaCheckpointResource = createSelectedResource({
+  id: "checkpoint-anima",
+  name: "Anima Checkpoint",
+  baseModel: "Anima",
+  resourceType: "model",
+});
+
 const noBaseCheckpointResource = createSelectedResource({
   id: "checkpoint-no-base",
   name: "Metadata Light Checkpoint",
@@ -84,7 +100,25 @@ const loraResource = createSelectedResource({
 
 const checkpointListItem = createResourceListItem(checkpointResource);
 const alternateCheckpointListItem = createResourceListItem(alternateCheckpointResource);
+const animaCheckpointListItem = createResourceListItem(animaCheckpointResource);
 const loraListItem = createResourceListItem(loraResource);
+
+const staleAnimaSavedParameters: SavedComfyUiGenerationParams = {
+  cfg: 7,
+  denoise: 1,
+  height: 1024,
+  imageCount: 1,
+  loras: [],
+  outputPrefix: "SceneForge",
+  samplerName: "euler",
+  savedAt: "2026-05-30T00:00:00.000Z",
+  scheduler: "normal",
+  seed: 42,
+  seedMode: "fixed",
+  steps: 30,
+  width: 1024,
+  workflowProfile: "anima",
+};
 
 function createSelectedResource(
   overrides: Partial<SelectedCivitaiResourcePreview>,
@@ -161,9 +195,11 @@ function selectedResourcesForUrl(url: string): SelectedCivitaiResourcesPreview {
         ? checkpointResource
         : checkpointId === alternateCheckpointResource.id
           ? alternateCheckpointResource
-          : checkpointId === noBaseCheckpointResource.id
-            ? noBaseCheckpointResource
-            : null,
+          : checkpointId === animaCheckpointResource.id
+            ? animaCheckpointResource
+            : checkpointId === noBaseCheckpointResource.id
+              ? noBaseCheckpointResource
+              : null,
     loras: loraIds.includes(loraResource.id) ? [loraResource] : [],
   };
 }
@@ -224,7 +260,7 @@ function mockFetch(
         const baseModel = params.get("baseModel");
 
         if (resourceType === "model") {
-          return jsonResponse({ items: [checkpointListItem, alternateCheckpointListItem] });
+          return jsonResponse({ items: [checkpointListItem, alternateCheckpointListItem, animaCheckpointListItem] });
         }
 
         if (resourceType === "lora") {
@@ -405,6 +441,20 @@ function getPresetSelect(): HTMLSelectElement {
   return select as HTMLSelectElement;
 }
 
+function getArtistStringRenderModeSelect(): HTMLSelectElement {
+  const select = Array.from(container.querySelectorAll("select")).find((candidate) =>
+    Array.from(candidate.options).some((option) =>
+      ["artist-weight", "by-weight", "novelai", "anima"].includes(option.value),
+    ),
+  );
+  expect(select).toBeInstanceOf(HTMLSelectElement);
+  return select as HTMLSelectElement;
+}
+
+function getSelectOptionValues(select: HTMLSelectElement): string[] {
+  return Array.from(select.options).map((option) => option.value);
+}
+
 function getSubjectInput(): HTMLInputElement {
   const input = container.querySelector('input[aria-label="Subject Input"]');
   expect(input).toBeInstanceOf(HTMLInputElement);
@@ -481,6 +531,56 @@ describe("StylePalettePanel", () => {
 
     expect(useEditorStore.getState().project.settings.selectedCivitaiCheckpointId).toBeNull();
     expect(useEditorStore.getState().project.settings.selectedCivitaiLoraIds).toEqual([]);
+  });
+
+  it("syncs the artist string render mode and selected prompt to Anima checkpoints", async () => {
+    act(() => {
+      useEditorStore.getState().updateProjectSettings({
+        selectedCivitaiCheckpointId: animaCheckpointResource.id,
+      });
+    });
+
+    await openPaletteAndWaitForContext();
+
+    await waitFor(() => {
+      const renderModeSelect = getArtistStringRenderModeSelect();
+      expect(renderModeSelect.value).toBe("anima");
+      expect(getSelectOptionValues(renderModeSelect)).toEqual(["anima"]);
+      expect(renderModeSelect.selectedOptions[0]?.textContent).toBe("@artist (:weight)");
+      expect(useEditorStore.getState().project.settings.artistStringPromptRenderMode).toBe("anima");
+      expect(useEditorStore.getState().project.settings.selectedArtistStringPrompts).toEqual(["@example"]);
+      expect(String(dialogProps.at(-1)?.activePrompt)).toContain("@example");
+    });
+    expect(useEditorStore.getState().project.scene.promptTags).toEqual(
+      expect.arrayContaining([expect.objectContaining({ prompt: "@example" })]),
+    );
+    expect(useEditorStore.getState().project.scene.promptTags).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ prompt: "stored artist prompt" })]),
+    );
+  });
+
+  it("hides the Anima artist string format for non-Anima checkpoints", async () => {
+    await openPaletteAndWaitForContext();
+
+    const renderModeSelect = getArtistStringRenderModeSelect();
+    expect(renderModeSelect.value).toBe("artist-weight");
+    expect(getSelectOptionValues(renderModeSelect)).toEqual(["artist-weight", "by-weight", "novelai"]);
+  });
+
+  it("uses the selected checkpoint base model instead of a stale saved Anima workflow profile", async () => {
+    act(() => {
+      useEditorStore.getState().updateProjectSettings({
+        savedComfyUiGenerationParams: staleAnimaSavedParameters,
+      });
+    });
+
+    await openPaletteAndWaitForContext();
+
+    const renderModeSelect = getArtistStringRenderModeSelect();
+    expect(renderModeSelect.value).toBe("artist-weight");
+    expect(getSelectOptionValues(renderModeSelect)).toEqual(["artist-weight", "by-weight", "novelai"]);
+    expect(useEditorStore.getState().project.settings.artistStringPromptRenderMode).toBe("artist-weight");
+    expect(useEditorStore.getState().project.settings.selectedArtistStringPrompts).toEqual(["stored artist prompt"]);
   });
 
   it("removes selected Civitai LoRAs that are filtered out by the selected-resource refresh", async () => {
