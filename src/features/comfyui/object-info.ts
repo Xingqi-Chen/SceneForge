@@ -422,6 +422,27 @@ function getMissingCharacterReferenceNodes(
   return missingNodes;
 }
 
+function validateAnimaCharacterReferenceNodes(
+  references: ComfyUiTextToImageRequest["characterReferences"],
+  objectInfo: unknown,
+  errors: string[],
+) {
+  for (const reference of references ?? []) {
+    if (reference.enabled === false) {
+      continue;
+    }
+
+    const missingNodes = getMissingCharacterReferenceNodes(reference, objectInfo);
+    if (missingNodes.length === 0) {
+      continue;
+    }
+
+    errors.push(
+      `Character reference "${reference.name}" requires ComfyUI nodes for Anima: ${missingNodes.join(", ")}. Install ComfyUI_IPAdapter_plus to use character references with Anima.`,
+    );
+  }
+}
+
 function validateDimension(value: number | undefined, label: string, latentImageNode: string, errors: string[]) {
   if (value === undefined) {
     return;
@@ -663,52 +684,32 @@ export function validateComfyUiRequestAgainstObjectInfo(
     errors.push(`Latent image node is not available in ComfyUI: ${latentImageNode}`);
   }
 
-  if (isAnimaProfile) {
-    if (request.faceDetailer?.enabled) {
-      errors.push("Anima text-to-image profile does not support FaceDetailer yet.");
-    }
-
-    if (request.handDetailer?.enabled) {
-      errors.push("Anima text-to-image profile does not support HandDetailer yet.");
-    }
-
-    if (getRequestControlNetUnits(request).some((unit) => unit.enabled)) {
-      errors.push("Anima text-to-image profile does not support ControlNet yet.");
-    }
-
-    if ((request.characterReferences ?? []).some((reference) => reference.enabled !== false)) {
-      errors.push("Anima text-to-image profile does not support character references yet.");
-    }
-  }
-
-  if (!isAnimaProfile) {
-    faceDetailer = validateDetailerAgainstObjectInfo({
-      defaultDetectorModel: DEFAULT_COMFYUI_FACE_DETAILER_DETECTOR_MODEL,
-      detailer: request.faceDetailer,
-      errors,
-      findPreferredDetectorModel: findPreferredFaceDetailerDetectorModel,
-      label: "FaceDetailer",
-      objectInfo,
-      samplerOptions,
-      schedulerOptions,
-      ultralyticsDetectorOptions,
-    });
-    handDetailer = validateDetailerAgainstObjectInfo({
-      defaultDetectorModel: DEFAULT_COMFYUI_HAND_DETAILER_DETECTOR_MODEL,
-      detailer: request.handDetailer,
-      errors,
-      findPreferredDetectorModel: findPreferredHandDetailerDetectorModel,
-      label: "HandDetailer",
-      objectInfo,
-      samplerOptions,
-      schedulerOptions,
-      ultralyticsDetectorOptions,
-    });
-  }
+  faceDetailer = validateDetailerAgainstObjectInfo({
+    defaultDetectorModel: DEFAULT_COMFYUI_FACE_DETAILER_DETECTOR_MODEL,
+    detailer: request.faceDetailer,
+    errors,
+    findPreferredDetectorModel: findPreferredFaceDetailerDetectorModel,
+    label: "FaceDetailer",
+    objectInfo,
+    samplerOptions,
+    schedulerOptions,
+    ultralyticsDetectorOptions,
+  });
+  handDetailer = validateDetailerAgainstObjectInfo({
+    defaultDetectorModel: DEFAULT_COMFYUI_HAND_DETAILER_DETECTOR_MODEL,
+    detailer: request.handDetailer,
+    errors,
+    findPreferredDetectorModel: findPreferredHandDetailerDetectorModel,
+    label: "HandDetailer",
+    objectInfo,
+    samplerOptions,
+    schedulerOptions,
+    ultralyticsDetectorOptions,
+  });
 
   let controlNets = getRequestControlNetUnits(request);
   let characterReferences = request.characterReferences ?? [];
-  if (!isAnimaProfile && controlNets.some((unit) => unit.enabled)) {
+  if (controlNets.some((unit) => unit.enabled)) {
     if (!hasNodeInfo(objectInfo, "LoadImage")) {
       errors.push("LoadImage node is not available in ComfyUI. It is required for ControlNet images.");
     }
@@ -746,7 +747,9 @@ export function validateComfyUiRequestAgainstObjectInfo(
     });
   }
 
-  if (!isAnimaProfile) {
+  if (isAnimaProfile) {
+    validateAnimaCharacterReferenceNodes(characterReferences, objectInfo, errors);
+  } else {
     characterReferences = characterReferences.map((reference) => {
       if (reference.enabled === false) {
         return reference;
@@ -1035,38 +1038,28 @@ export function validateComfyUiInpaintRequestAgainstObjectInfo(
     }
   }
 
-  if (isAnimaProfile) {
-    if (request.faceDetailer?.enabled) {
-      errors.push("Anima inpaint profile does not support FaceDetailer yet.");
-    }
-
-    if (request.handDetailer?.enabled) {
-      errors.push("Anima inpaint profile does not support HandDetailer yet.");
-    }
-  } else {
-    faceDetailer = validateDetailerAgainstObjectInfo({
-      defaultDetectorModel: DEFAULT_COMFYUI_FACE_DETAILER_DETECTOR_MODEL,
-      detailer: request.faceDetailer,
-      errors,
-      findPreferredDetectorModel: findPreferredFaceDetailerDetectorModel,
-      label: "FaceDetailer",
-      objectInfo,
-      samplerOptions,
-      schedulerOptions,
-      ultralyticsDetectorOptions,
-    });
-    handDetailer = validateDetailerAgainstObjectInfo({
-      defaultDetectorModel: DEFAULT_COMFYUI_HAND_DETAILER_DETECTOR_MODEL,
-      detailer: request.handDetailer,
-      errors,
-      findPreferredDetectorModel: findPreferredHandDetailerDetectorModel,
-      label: "HandDetailer",
-      objectInfo,
-      samplerOptions,
-      schedulerOptions,
-      ultralyticsDetectorOptions,
-    });
-  }
+  faceDetailer = validateDetailerAgainstObjectInfo({
+    defaultDetectorModel: DEFAULT_COMFYUI_FACE_DETAILER_DETECTOR_MODEL,
+    detailer: request.faceDetailer,
+    errors,
+    findPreferredDetectorModel: findPreferredFaceDetailerDetectorModel,
+    label: "FaceDetailer",
+    objectInfo,
+    samplerOptions,
+    schedulerOptions,
+    ultralyticsDetectorOptions,
+  });
+  handDetailer = validateDetailerAgainstObjectInfo({
+    defaultDetectorModel: DEFAULT_COMFYUI_HAND_DETAILER_DETECTOR_MODEL,
+    detailer: request.handDetailer,
+    errors,
+    findPreferredDetectorModel: findPreferredHandDetailerDetectorModel,
+    label: "HandDetailer",
+    objectInfo,
+    samplerOptions,
+    schedulerOptions,
+    ultralyticsDetectorOptions,
+  });
 
   if (request.samplerName && samplerName && samplerName !== request.samplerName) {
     warnings.push(`Normalized sampler ${request.samplerName} to ${samplerName}.`);

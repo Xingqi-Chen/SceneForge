@@ -1820,7 +1820,7 @@ export function resolveComfyUiTextToImageRequest(
     scheduler: getString(request.scheduler, DEFAULT_TEXT_TO_IMAGE_REQUEST.scheduler),
     denoise: request.denoise ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.denoise,
     batchSize: request.batchSize ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.batchSize,
-    latentImageNode: request.latentImageNode ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.latentImageNode,
+    latentImageNode: isAnimaProfile ? "EmptyLatentImage" : request.latentImageNode ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.latentImageNode,
     promptWrapper: {
       positivePrefix: request.promptWrapper?.positivePrefix ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.promptWrapper.positivePrefix,
       negativePrefix: request.promptWrapper?.negativePrefix ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.promptWrapper.negativePrefix,

@@ -2,6 +2,37 @@
 
 This log records dated implementation and documentation work. Keep entries concise and evidence-oriented.
 
+## 2026-06-01
+
+### T-AN4 / Issue #29 Anima Add-ons
+
+Summary:
+
+- Reused the shared text-to-image add-on graph for Anima so ControlNet, IPAdapter character references, Face Detailer, and Hand Detailer consume the Anima `UNETLoader`, `CLIPLoader`, and `VAELoader` context instead of `CheckpointLoaderSimple`.
+- Kept Anima txt2img on `EmptyLatentImage` while preserving the resolved Anima profile metadata in workflow requests.
+- Removed the Anima pre-queue blockers for supported add-ons and replaced them with object_info validation for missing ControlNet, IPAdapter, Face Detailer, Hand Detailer, detector model, and model file resources.
+- Enabled Anima inpaint and high-res inpaint detailers through the existing shared inpaint model/CLIP/VAE context.
+
+Files changed:
+
+- `src/app/api/comfyui/generate-image/route.test.ts`
+- `src/app/api/comfyui/sequence-image/route.test.ts`
+- `src/features/comfyui/object-info.ts`
+- `src/features/comfyui/object-info.test.ts`
+- `src/features/comfyui/validation.ts`
+- `src/features/comfyui/workflow.ts`
+- `src/features/comfyui/workflow.test.ts`
+- `docs/dev-log.md`
+
+Validation:
+
+- `npm test -- src/features/comfyui/workflow.test.ts src/features/comfyui/object-info.test.ts` passed with 76 tests.
+- `npm test -- src/app/api/comfyui/generate-image/route.test.ts src/app/api/comfyui/inpaint-image/route.test.ts src/app/api/comfyui/sequence-image/route.test.ts` passed with 34 tests.
+- `npm test -- src/app/api/comfyui/generate-image/route.test.ts src/app/api/comfyui/sequence-image/route.test.ts` passed with 25 tests.
+- `npm test -- src/features/comfyui/workflow.test.ts src/features/comfyui/object-info.test.ts src/app/api/comfyui/generate-image/route.test.ts src/app/api/comfyui/inpaint-image/route.test.ts src/app/api/comfyui/sequence-image/route.test.ts` passed with 113 tests.
+- `npm run typecheck` passed.
+- `npm run lint` passed with the existing 22 `@next/next/no-img-element` warnings.
+
 ## 2026-05-31
 
 ### T-AN3 Anima Img2Img, Inpaint, and Sequence Inheritance
