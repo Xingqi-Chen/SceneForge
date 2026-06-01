@@ -233,6 +233,94 @@ describe("project serialization", () => {
     });
   });
 
+  it("round-trips saved Anima model metadata and legacy CLIP/VAE fields", () => {
+    const project = createDefaultProject();
+    const animaParameters = {
+      ...createSavedComfyUiImage().parameters,
+      workflowProfile: "anima" as const,
+      modelBaseModel: "Anima",
+      modelStorageKind: "diffusion" as const,
+      clipName: " qwen_3_06b_base.safetensors ",
+      clipDevice: "cuda",
+      vaeName: "qwen_image_vae.safetensors",
+      unetWeightDtype: "fp8_e4m3fn",
+    };
+    const historyImage = createSavedComfyUiImage({
+      id: "anima-history",
+      parameters: animaParameters,
+    });
+
+    project.settings.savedComfyUiGenerationParams = animaParameters;
+    project.settings.comfyUiGeneratedImages = [historyImage];
+    project.settings.savedComicSequence = {
+      version: 1,
+      defaults: animaParameters,
+      selectedShotId: "shot-1",
+      shots: [
+        {
+          id: "shot-1",
+          title: "Anima shot",
+          scene: project.scene,
+          positivePrompt: "scene",
+          negativePrompt: "",
+          shotPrompt: "",
+          parameters: animaParameters,
+          controlNets: [],
+          reference: {
+            characterName: "Character 1",
+            characterPrompt: "",
+            face: {
+              enabled: false,
+              mode: "face",
+              weight: 0.45,
+              startAt: 0,
+              endAt: 1,
+              images: [],
+            },
+            character: {
+              enabled: false,
+              mode: "ipadapter",
+              weight: 0.45,
+              startAt: 0,
+              endAt: 1,
+              images: [],
+            },
+            mode: "face",
+            weight: 0.45,
+            startAt: 0,
+            endAt: 1,
+            images: [],
+          },
+          createdAt: "2026-05-27T12:00:00.000Z",
+          updatedAt: "2026-05-27T12:00:00.000Z",
+        },
+      ],
+    };
+
+    const imported = importProjectFromJson(serializeProject(project));
+
+    const expectedAnimaModelSettings = {
+      workflowProfile: "anima",
+      modelBaseModel: "Anima",
+      modelStorageKind: "diffusion",
+      clipName: "qwen_3_06b_base.safetensors",
+      clipDevice: "cuda",
+      vaeName: "qwen_image_vae.safetensors",
+      unetWeightDtype: "fp8_e4m3fn",
+    };
+
+    expect(imported.settings.savedComfyUiGenerationParams).toMatchObject(expectedAnimaModelSettings);
+    expect(imported.settings.comfyUiGeneratedImages[0]?.parameters).toMatchObject({
+      ...expectedAnimaModelSettings,
+    });
+    expect(imported.settings.savedComicSequence?.defaults).toMatchObject({
+      ...expectedAnimaModelSettings,
+    });
+    expect(imported.settings.savedComicSequence?.shots[0]?.parameters).toMatchObject({
+      ...expectedAnimaModelSettings,
+    });
+  });
+
   it("round-trips saved Comic Sequence shots and per-shot node settings", () => {
     const project = createDefaultProject();
     const baseParameters = createSavedComfyUiImage().parameters;

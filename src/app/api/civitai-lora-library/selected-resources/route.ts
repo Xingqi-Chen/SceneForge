@@ -8,6 +8,7 @@ import type {
 } from "@/features/civitai-lora-library";
 import {
   getCivitaiModelStorageKind,
+  isSameCivitaiBaseModel,
   makeCivitaiResourceTargetFileName,
 } from "@/features/civitai-lora-library";
 import {
@@ -157,7 +158,8 @@ export async function GET(request: Request) {
     const loras = loraIds
       .map((id) => getCivitaiResourceDetailFromSqlite(db, id))
       .filter((resource): resource is CivitaiResourceDetail => resource?.resourceType === "lora")
-      .map(toPreviewResource);
+      .map(toPreviewResource)
+      .filter((lora) => !checkpoint?.baseModel || isSameCivitaiBaseModel(lora.baseModel, checkpoint.baseModel));
 
     const payload: SelectedCivitaiResourcesPreview = { checkpoint, loras };
     return NextResponse.json(payload);

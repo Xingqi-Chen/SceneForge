@@ -10,6 +10,7 @@ import {
   DEFAULT_COMFYUI_HAND_DETAILER_DETECTOR_MODEL,
   DEFAULT_COMFYUI_LATENT_IMAGE_NODE,
   normalizeComfyUiLatentImageNode,
+  resolveComfyUiTextToImageWorkflowProfile,
   type ComfyUiTextToImageRequest,
 } from "@/features/comfyui";
 import type { SavedComfyUiGenerationParams } from "@/shared/types";
@@ -453,6 +454,7 @@ export function resolveComfyUiGenerationSettings(input: {
       steps,
     }),
   };
+  request.workflowProfile = resolveComfyUiTextToImageWorkflowProfile(request).id;
 
   return {
     request,

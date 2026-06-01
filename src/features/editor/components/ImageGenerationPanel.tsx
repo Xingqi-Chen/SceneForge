@@ -55,6 +55,7 @@ import {
   COMFYUI_LATENT_IMAGE_NODE_OPTIONS,
   getComfyUiPreviewSteps,
   normalizeComfyUiInpaintDenoiseForMode,
+  resolveComfyUiTextToImageWorkflowProfile,
   type ComfyUiGeneratedImage,
   type ComfyUiGenerateSam2MaskResponse,
   type ComfyUiInpaintMode,
@@ -328,6 +329,7 @@ type GenerationDraft = Required<Omit<
   | "controlNets"
   | "characterReferences"
   | "preview"
+  | "workflowProfile"
   | "modelBaseModel"
   | "modelStorageKind"
   | "clipName"
@@ -335,6 +337,7 @@ type GenerationDraft = Required<Omit<
   | "vaeName"
   | "unetWeightDtype"
 >> & {
+  workflowProfile?: ComfyUiTextToImageRequest["workflowProfile"];
   modelBaseModel?: ComfyUiTextToImageRequest["modelBaseModel"];
   modelStorageKind?: ComfyUiTextToImageRequest["modelStorageKind"];
   clipName?: ComfyUiTextToImageRequest["clipName"];
@@ -941,6 +944,7 @@ function toDraft(
 
   return {
     checkpointName: request.checkpointName,
+    workflowProfile: request.workflowProfile,
     modelBaseModel: request.modelBaseModel,
     modelStorageKind: request.modelStorageKind,
     clipName: request.clipName,
@@ -1000,8 +1004,18 @@ function toDraft(
   };
 }
 
+function trimOptionalModelSetting(value: string | undefined) {
+  return value?.trim() || undefined;
+}
+
 function toSavedParameters(draft: GenerationDraft): SavedComfyUiGenerationParams {
+  const workflowProfile = resolveComfyUiTextToImageWorkflowProfile(draft).id;
+  const modelBaseModel = trimOptionalModelSetting(draft.modelBaseModel);
+
   return {
+    workflowProfile,
+    ...(modelBaseModel ? { modelBaseModel } : {}),
+    ...(draft.modelStorageKind ? { modelStorageKind: draft.modelStorageKind } : {}),
     width: draft.width,
     height: draft.height,
     seed: draft.seed,
@@ -1123,6 +1137,8 @@ function toRequestPayload(
   controlNetPreview?: ComfyUiControlNetOpenPosePreview | null,
   normalPreview?: ComfyUiNormalControlImagePreview | null,
 ): ComfyUiTextToImageRequest {
+  const workflowProfile = resolveComfyUiTextToImageWorkflowProfile(draft).id;
+  const isAnimaProfile = workflowProfile === "anima";
   const controlNetUnits = [
     {
       draft: draft.controlNets.openpose,
@@ -1165,12 +1181,13 @@ function toRequestPayload(
 
   return {
     checkpointName: draft.checkpointName,
+    workflowProfile,
     modelBaseModel: draft.modelBaseModel,
     modelStorageKind: draft.modelStorageKind,
-    clipName: draft.clipName,
-    clipDevice: draft.clipDevice,
-    vaeName: draft.vaeName,
-    unetWeightDtype: draft.unetWeightDtype,
+    ...(isAnimaProfile ? {} : { clipName: draft.clipName }),
+    ...(isAnimaProfile ? {} : { clipDevice: draft.clipDevice }),
+    ...(isAnimaProfile ? {} : { vaeName: draft.vaeName }),
+    ...(isAnimaProfile ? {} : { unetWeightDtype: draft.unetWeightDtype }),
     positivePrompt: draft.positivePrompt,
     negativePrompt: draft.negativePrompt,
     loras: draft.loras
@@ -4881,6 +4898,7 @@ export function ComfyUiGenerationDialog({
     loadStatus === "success" &&
     Boolean(draft) &&
     allResourceDownloadsReady;
+  const draftWorkflowProfile = draft ? resolveComfyUiTextToImageWorkflowProfile(draft) : null;
   const controlNetOpenPosePreview = useMemo(
     () =>
       allowControlNet && draft
@@ -6067,6 +6085,11 @@ export function ComfyUiGenerationDialog({
                                 ) : null}
                               </div>
                               <p className="mt-1 break-all text-xs text-slate-500">{draft.checkpointName}</p>
+                              <p className="mt-2 text-[11px] text-slate-400">
+                                profile: {draftWorkflowProfile?.label ?? "Illustrious/default txt2img"} | base:{" "}
+                                {draft.modelBaseModel ?? selectedResources.checkpoint?.baseModel ?? "unknown"} | storage:{" "}
+                                {draft.modelStorageKind ?? selectedResources.checkpoint?.modelStorageKind ?? "checkpoint"}
+                              </p>
                             </div>
                             {draft.loras.length > 0 ? (
                               draft.loras.map((lora, index) => (

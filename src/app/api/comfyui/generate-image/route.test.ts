@@ -46,8 +46,8 @@ const objectInfoWithAnima = {
   CLIPLoader: {
     input: {
       required: {
-        clip_name: [["anima-clip.safetensors"], {}],
-        type: [["stable_diffusion"], {}],
+        clip_name: [["qwen_3_06b_base.safetensors"], {}],
+        type: [["qwen_image"], {}],
         device: [["default"], {}],
       },
     },
@@ -55,7 +55,7 @@ const objectInfoWithAnima = {
   VAELoader: {
     input: {
       required: {
-        vae_name: [["anima-vae.safetensors"], {}],
+        vae_name: [["qwen_image_vae.safetensors"], {}],
       },
     },
   },
@@ -216,7 +216,7 @@ describe("ComfyUI generate image route", () => {
     });
   });
 
-  it("queues an Anima text-to-image workflow with profile-aware object_info defaults", async () => {
+  it("queues an Anima text-to-image workflow with fixed model settings", async () => {
     process.env.COMFYUI_BASE_URL = "http://comfyui.test";
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
       if (input === "http://comfyui.test/object_info") {
@@ -235,15 +235,15 @@ describe("ComfyUI generate image route", () => {
       expect(body.prompt["2"]).toMatchObject({
         class_type: "CLIPLoader",
         inputs: {
-          clip_name: "anima-clip.safetensors",
-          type: "stable_diffusion",
+          clip_name: "qwen_3_06b_base.safetensors",
+          type: "qwen_image",
           device: "default",
         },
       });
       expect(body.prompt["3"]).toMatchObject({
         class_type: "VAELoader",
         inputs: {
-          vae_name: "anima-vae.safetensors",
+          vae_name: "qwen_image_vae.safetensors",
         },
       });
       expect(body.prompt["8"].class_type).toBe("VAEDecode");
@@ -284,8 +284,9 @@ describe("ComfyUI generate image route", () => {
       },
       request: {
         checkpointName: "pencil-xl-diffusion.safetensors",
-        clipName: "anima-clip.safetensors",
-        vaeName: "anima-vae.safetensors",
+        workflowProfile: "anima",
+        clipName: "qwen_3_06b_base.safetensors",
+        vaeName: "qwen_image_vae.safetensors",
       },
     });
   });
@@ -299,8 +300,8 @@ describe("ComfyUI generate image route", () => {
           CLIPLoader: {
             input: {
               required: {
-                clip_name: [["anima-clip.safetensors"], {}],
-                type: [["stable_diffusion"], {}],
+                clip_name: [["qwen_3_06b_base.safetensors"], {}],
+                type: [["qwen_image"], {}],
               },
             },
           },
@@ -312,8 +313,8 @@ describe("ComfyUI generate image route", () => {
       expect(body.prompt["2"]).toMatchObject({
         class_type: "CLIPLoader",
         inputs: {
-          clip_name: "anima-clip.safetensors",
-          type: "stable_diffusion",
+          clip_name: "qwen_3_06b_base.safetensors",
+          type: "qwen_image",
         },
       });
       expect(body.prompt["2"].inputs).not.toHaveProperty("device");
@@ -333,7 +334,6 @@ describe("ComfyUI generate image route", () => {
           checkpointName: "pencil-xl-diffusion.safetensors",
           modelBaseModel: "Anima",
           modelStorageKind: "diffusion",
-          clipDevice: "default",
           positivePrompt: "a scene",
           seed: 123,
         }),
@@ -345,11 +345,11 @@ describe("ComfyUI generate image route", () => {
     expect(fetchSpy).toHaveBeenCalledTimes(2);
     expect(payload).toMatchObject({
       promptId: "prompt-anima-no-device",
-      warnings: ["Anima CLIP device was ignored because CLIPLoader.device is not available in ComfyUI object_info."],
+      warnings: [],
       request: {
         checkpointName: "pencil-xl-diffusion.safetensors",
-        clipName: "anima-clip.safetensors",
-        vaeName: "anima-vae.safetensors",
+        clipName: "qwen_3_06b_base.safetensors",
+        vaeName: "qwen_image_vae.safetensors",
       },
     });
     expect(payload.request.clipDevice).toBeUndefined();
@@ -365,7 +365,7 @@ describe("ComfyUI generate image route", () => {
             input: {
               required: {
                 clip_name: [["other-clip.safetensors"], {}],
-                type: [["stable_diffusion"], {}],
+                type: [["qwen_image"], {}],
                 device: [["default"], {}],
               },
             },
@@ -391,8 +391,6 @@ describe("ComfyUI generate image route", () => {
           checkpointName: "pencil-xl-diffusion.safetensors",
           modelBaseModel: "Anima",
           modelStorageKind: "diffusion",
-          clipName: "missing-clip.safetensors",
-          vaeName: "missing-vae.safetensors",
           positivePrompt: "a scene",
           seed: 123,
         }),
@@ -404,8 +402,8 @@ describe("ComfyUI generate image route", () => {
     expect(fetchSpy).toHaveBeenCalledTimes(1);
     expect(payload.error.message).toContain("current ComfyUI");
     expect(payload.error.details.errors).toEqual([
-      "Anima CLIP model is not available in ComfyUI: missing-clip.safetensors",
-      "Anima VAE model is not available in ComfyUI: missing-vae.safetensors",
+      "Anima CLIP model is not available in ComfyUI: qwen_3_06b_base.safetensors",
+      "Anima VAE model is not available in ComfyUI: qwen_image_vae.safetensors",
     ]);
   });
 

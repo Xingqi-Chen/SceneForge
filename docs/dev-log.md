@@ -4,6 +4,53 @@ This log records dated implementation and documentation work. Keep entries conci
 
 ## 2026-05-31
 
+### T-AN2 Fixed Anima Model Settings Persistence
+
+Summary:
+
+- Added Anima profile metadata to ComfyUI text-to-image requests and saved generation parameter serialization.
+- Fixed Anima CLIP and VAE model names at the workflow profile level (`qwen_3_06b_base.safetensors` and `qwen_image_vae.safetensors`) while preserving base model, workflow profile, and storage kind metadata through editor request construction, generated-image parameters, Comic Sequence defaults/shots, and project serialization.
+- Validated the fixed Anima CLIP/VAE files against ComfyUI `object_info` before queueing.
+- Filtered Civitai selected LoRAs and AI recommendations by checkpoint base model so Anima checkpoints only keep Anima-compatible LoRAs.
+- Kept Anima CLIP/VAE out of the editor generation dialog so users no longer choose those model files manually; Illustrious/default behavior stays on the existing checkpoint workflow.
+
+Files changed:
+
+- `src/app/api/civitai-lora-library/selected-resources/route.ts`
+- `src/app/api/civitai-lora-library/selected-resources/route.test.ts`
+- `src/app/api/comfyui/generate-image/route.test.ts`
+- `src/features/civitai-lora-library/base-model.ts`
+- `src/features/civitai-lora-library/ai-recommendation.ts`
+- `src/features/civitai-lora-library/ai-recommendation.test.ts`
+- `src/features/civitai-lora-library/download.ts`
+- `src/features/civitai-lora-library/index.ts`
+- `src/features/civitai-lora-library/resource-files.ts`
+- `src/features/comfyui/object-info.ts`
+- `src/features/comfyui/object-info.test.ts`
+- `src/features/comfyui/preview.test.ts`
+- `src/features/comfyui/types.ts`
+- `src/features/comfyui/validation.ts`
+- `src/features/comfyui/workflow-profiles.ts`
+- `src/features/comfyui/workflow.ts`
+- `src/features/comfyui/workflow.test.ts`
+- `src/features/editor/ai-prompt/comfyui-generation-params.ts`
+- `src/features/editor/ai-prompt/comfyui-generation-params.test.ts`
+- `src/features/editor/components/CivitaiLoraLibraryPanel.tsx`
+- `src/features/editor/components/ImageGenerationPanel.tsx`
+- `src/features/editor/components/StylePalettePanel.tsx`
+- `src/features/editor/components/StylePalettePanel.test.tsx`
+- `src/features/persistence/project-serialization.ts`
+- `src/features/persistence/project-serialization.test.ts`
+- `src/shared/types/project.ts`
+
+Validation:
+
+- `npm test -- src/features/comfyui/object-info.test.ts src/features/comfyui/workflow.test.ts src/features/comfyui/preview.test.ts src/app/api/comfyui/generate-image/route.test.ts src/app/api/civitai-lora-library/selected-resources/route.test.ts src/features/civitai-lora-library/ai-recommendation.test.ts src/features/editor/ai-prompt/comfyui-generation-params.test.ts src/features/editor/components/StylePalettePanel.test.tsx src/features/persistence/project-serialization.test.ts` passed with 154 tests.
+- `npm test -- src/features/civitai-lora-library/download.test.ts` passed with 4 tests during review.
+- `npm run typecheck` passed.
+- `npm run lint` passed with the existing 22 `@next/next/no-img-element` warnings.
+- `npm run build` passed with the existing Turbopack NFT trace warning for `sequence-reference-storage`.
+
 ### T-AN1 Anima Workflow Profiles
 
 Summary:

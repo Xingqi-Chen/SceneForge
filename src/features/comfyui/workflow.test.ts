@@ -80,8 +80,8 @@ describe("ComfyUI workflow builder", () => {
       checkpointName: "pencil-xl-diffusion.safetensors",
       modelBaseModel: "Anima",
       modelStorageKind: "diffusion",
-      clipName: "anima-clip.safetensors",
-      vaeName: "anima-vae.safetensors",
+      clipName: "qwen_3_06b_base.safetensors",
+      vaeName: "qwen_image_vae.safetensors",
       positivePrompt: "a quiet forest",
       negativePrompt: "low quality",
       seed: 123,
@@ -117,15 +117,15 @@ describe("ComfyUI workflow builder", () => {
     expect(result.workflow["2"]).toMatchObject({
       class_type: "CLIPLoader",
       inputs: {
-        clip_name: "anima-clip.safetensors",
-        type: "stable_diffusion",
+        clip_name: "qwen_3_06b_base.safetensors",
+        type: "qwen_image",
       },
     });
     expect(result.workflow["2"].inputs).not.toHaveProperty("device");
     expect(result.workflow["3"]).toMatchObject({
       class_type: "VAELoader",
       inputs: {
-        vae_name: "anima-vae.safetensors",
+        vae_name: "qwen_image_vae.safetensors",
       },
     });
     expect(result.workflow["4"]).toMatchObject({
@@ -158,6 +158,46 @@ describe("ComfyUI workflow builder", () => {
     });
     expect(result.workflow["10"].inputs).toEqual({
       images: ["9", 0],
+    });
+  });
+
+  it("ignores legacy Anima CLIP, VAE, and dtype overrides when building workflows", () => {
+    const result = buildBasicTextToImageWorkflow({
+      checkpointName: "pencil-xl-diffusion.safetensors",
+      modelBaseModel: "Anima",
+      modelStorageKind: "diffusion",
+      clipName: "custom-clip.safetensors",
+      vaeName: "custom-vae.safetensors",
+      unetWeightDtype: "fp8_e4m3fn",
+      positivePrompt: "a quiet forest",
+      seed: 123,
+    });
+
+    expect(result.workflow["1"]).toMatchObject({
+      class_type: "UNETLoader",
+      inputs: {
+        unet_name: "pencil-xl-diffusion.safetensors",
+        weight_dtype: "default",
+      },
+    });
+    expect(result.workflow["2"]).toMatchObject({
+      class_type: "CLIPLoader",
+      inputs: {
+        clip_name: "qwen_3_06b_base.safetensors",
+        type: "qwen_image",
+      },
+    });
+    expect(result.workflow["3"]).toMatchObject({
+      class_type: "VAELoader",
+      inputs: {
+        vae_name: "qwen_image_vae.safetensors",
+      },
+    });
+    expect(result.request).toMatchObject({
+      workflowProfile: "anima",
+      clipName: "qwen_3_06b_base.safetensors",
+      vaeName: "qwen_image_vae.safetensors",
+      unetWeightDtype: "default",
     });
   });
 

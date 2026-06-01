@@ -20,6 +20,7 @@ import type {
   ComfyUiSam2Point,
   ComfyUiSam2Precision,
   ComfyUiTextToImageRequest,
+  ComfyUiTextToImageWorkflowProfileId,
   ResolvedComfyUiCharacterReferenceConfig,
   ResolvedComfyUiControlNetUnitConfig,
   ResolvedComfyUiFaceDetailerConfig,
@@ -45,6 +46,12 @@ import {
   normalizeComfyUiInpaintDenoiseForMode,
   normalizeComfyUiInpaintMode,
 } from "./inpaint";
+import {
+  DEFAULT_COMFYUI_ANIMA_CLIP_NAME,
+  DEFAULT_COMFYUI_ANIMA_UNET_WEIGHT_DTYPE,
+  DEFAULT_COMFYUI_ANIMA_VAE_NAME,
+  resolveComfyUiTextToImageWorkflowProfile,
+} from "./workflow-profiles";
 
 export const COMFYUI_INPAINT_UPSCALE_MODEL_PRESETS = {
   "real-esrgan-x2": {
@@ -112,7 +119,7 @@ const DEFAULT_TEXT_TO_IMAGE_REQUEST = {
   },
   controlNets: [],
   characterReferences: [],
-} satisfies Omit<ResolvedComfyUiTextToImageRequest, "checkpointName" | "positivePrompt" | "seed">;
+} satisfies Omit<ResolvedComfyUiTextToImageRequest, "checkpointName" | "positivePrompt" | "seed" | "workflowProfile">;
 const DEFAULT_CONTROLNET_UNIT = {
   enabled: false,
   modelName: "",
@@ -186,6 +193,7 @@ const CONTROLNET_TYPES = ["openpose", "depth", "normal"] as const satisfies read
 const IPADAPTER_REFERENCE_MODES = ["ipadapter", "face", "faceid"] as const satisfies readonly ComfyUiIpAdapterReferenceMode[];
 const IPADAPTER_COMBINE_EMBEDS = ["concat", "add", "subtract", "average", "norm average"] as const satisfies readonly ComfyUiIpAdapterCombineEmbeds[];
 const COMFYUI_MODEL_STORAGE_KINDS = ["checkpoint", "diffusion"] as const;
+const COMFYUI_TEXT_TO_IMAGE_WORKFLOW_PROFILE_IDS = ["default", "anima"] as const satisfies readonly ComfyUiTextToImageWorkflowProfileId[];
 const INPAINT_UPSCALE_MODES = ["lanczos", "real-esrgan-x2", "aniscale2-x2"] as const satisfies readonly ComfyUiInpaintUpscaleMode[];
 const INPAINT_UPSCALE_STRATEGIES = ["full-image", "local-region"] as const satisfies readonly ComfyUiInpaintUpscaleStrategy[];
 const INPAINT_LOCAL_REGION_SOURCES = ["mask-bounds", "box"] as const satisfies readonly ComfyUiInpaintLocalRegionSource[];
@@ -349,6 +357,10 @@ function isControlNetType(value: unknown): value is ComfyUiControlNetType {
 
 function isComfyUiModelStorageKind(value: unknown): value is ComfyUiModelStorageKind {
   return typeof value === "string" && COMFYUI_MODEL_STORAGE_KINDS.some((kind) => kind === value);
+}
+
+function isComfyUiTextToImageWorkflowProfileId(value: unknown): value is ComfyUiTextToImageWorkflowProfileId {
+  return typeof value === "string" && COMFYUI_TEXT_TO_IMAGE_WORKFLOW_PROFILE_IDS.some((profile) => profile === value);
 }
 
 function isIpAdapterReferenceMode(value: unknown): value is ComfyUiIpAdapterReferenceMode {
@@ -984,6 +996,13 @@ export function validateComfyUiTextToImageRequest(value: unknown): ComfyUiTextTo
     };
   }
 
+  if (value.workflowProfile !== undefined && !isComfyUiTextToImageWorkflowProfileId(value.workflowProfile)) {
+    return {
+      ok: false,
+      message: "workflowProfile must be default or anima when provided.",
+    };
+  }
+
   if (value.negativePrompt !== undefined && typeof value.negativePrompt !== "string") {
     return {
       ok: false,
@@ -1171,6 +1190,7 @@ export function validateComfyUiTextToImageRequest(value: unknown): ComfyUiTextTo
     ok: true,
     request: {
       checkpointName: value.checkpointName.trim(),
+      workflowProfile: isComfyUiTextToImageWorkflowProfileId(value.workflowProfile) ? value.workflowProfile : undefined,
       modelBaseModel: getOptionalTrimmedStringValue(value.modelBaseModel),
       modelStorageKind: isComfyUiModelStorageKind(value.modelStorageKind) ? value.modelStorageKind : undefined,
       clipName: getOptionalTrimmedStringValue(value.clipName),
@@ -1731,14 +1751,27 @@ function resolveInpaintUpscaleConfig(upscale: ComfyUiInpaintUpscaleConfig | unde
 export function resolveComfyUiTextToImageRequest(
   request: ComfyUiTextToImageRequest,
 ): ResolvedComfyUiTextToImageRequest {
+  const checkpointName = request.checkpointName.trim();
+  const modelBaseModel = getOptionalTrimmedStringValue(request.modelBaseModel);
+  const modelStorageKind = isComfyUiModelStorageKind(request.modelStorageKind) ? request.modelStorageKind : undefined;
+  const workflowProfile = resolveComfyUiTextToImageWorkflowProfile({
+    checkpointName,
+    modelBaseModel,
+    modelStorageKind,
+  }).id;
+  const isAnimaProfile = workflowProfile === "anima";
+
   return {
-    checkpointName: request.checkpointName.trim(),
-    modelBaseModel: getOptionalTrimmedStringValue(request.modelBaseModel),
-    modelStorageKind: isComfyUiModelStorageKind(request.modelStorageKind) ? request.modelStorageKind : undefined,
-    clipName: getOptionalTrimmedStringValue(request.clipName),
+    checkpointName,
+    workflowProfile,
+    modelBaseModel,
+    modelStorageKind,
+    clipName: isAnimaProfile ? DEFAULT_COMFYUI_ANIMA_CLIP_NAME : getOptionalTrimmedStringValue(request.clipName),
     clipDevice: getOptionalTrimmedStringValue(request.clipDevice),
-    vaeName: getOptionalTrimmedStringValue(request.vaeName),
-    unetWeightDtype: getOptionalTrimmedStringValue(request.unetWeightDtype),
+    vaeName: isAnimaProfile ? DEFAULT_COMFYUI_ANIMA_VAE_NAME : getOptionalTrimmedStringValue(request.vaeName),
+    unetWeightDtype: isAnimaProfile
+      ? DEFAULT_COMFYUI_ANIMA_UNET_WEIGHT_DTYPE
+      : getOptionalTrimmedStringValue(request.unetWeightDtype),
     positivePrompt: request.positivePrompt.trim(),
     negativePrompt: getString(request.negativePrompt, DEFAULT_TEXT_TO_IMAGE_REQUEST.negativePrompt),
     loras: (request.loras ?? []).map((lora) => ({

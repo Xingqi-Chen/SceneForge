@@ -156,4 +156,45 @@ describe("Civitai AI recommendation helpers", () => {
       "AI 返回的 LoRA 超过 2 个，已只保留前 2 个。",
     ]);
   });
+
+  it("ignores LoRAs whose base model does not match the recommended checkpoint", () => {
+    const checkpoint = rankCivitaiRecommendationCandidates(
+      [
+        makeDetail({
+          id: "anima-checkpoint",
+          resourceType: "model",
+          name: "Anima Checkpoint",
+          baseModel: "Anima",
+        }),
+      ],
+      "anima",
+    );
+    const loras = rankCivitaiRecommendationCandidates(
+      [
+        makeDetail({ id: "anima-lora", name: "Anima LoRA", baseModel: "Anima" }),
+        makeDetail({ id: "pony-lora", name: "Pony LoRA", baseModel: "Pony" }),
+      ],
+      "lora",
+    );
+    const result = validateCivitaiCombinationRecommendation({
+      checkpointCandidates: checkpoint,
+      loraCandidates: loras,
+      maxLoras: 3,
+      parsed: {
+        checkpointId: "anima-checkpoint",
+        checkpointReason: "checkpoint reason",
+        loras: [
+          { id: "pony-lora", suggestedWeight: 0.7, reason: "wrong base" },
+          { id: "anima-lora", suggestedWeight: 0.6, reason: "right base" },
+        ],
+        recommendationReason: "overall reason",
+        overallEffect: "effect",
+      },
+    });
+
+    expect(result.loras.map((entry) => entry.resource.id)).toEqual(["anima-lora"]);
+    expect(result.warnings).toContain(
+      "AI returned incompatible LoRA Pony LoRA for checkpoint baseModel Anima; ignored.",
+    );
+  });
 });

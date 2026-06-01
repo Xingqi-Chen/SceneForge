@@ -6,6 +6,7 @@ import type { ComfyUiInpaintMode } from "./inpaint";
 import type { ComfyUiLatentImageNode } from "./latent-image-node";
 
 export type ComfyUiModelStorageKind = "checkpoint" | "diffusion";
+export type ComfyUiTextToImageWorkflowProfileId = "default" | "anima";
 
 export type ComfyUiNodeConnection = [nodeId: string, outputIndex: number];
 
@@ -32,6 +33,7 @@ export type ComfyUiWorkflow = Record<string, ComfyUiWorkflowNode>;
 
 export type ComfyUiTextToImageRequest = {
   checkpointName: string;
+  workflowProfile?: ComfyUiTextToImageWorkflowProfileId;
   modelBaseModel?: string;
   modelStorageKind?: ComfyUiModelStorageKind;
   clipName?: string;
@@ -265,6 +267,7 @@ export type ResolvedComfyUiLoraInput = {
 
 export type ResolvedComfyUiTextToImageRequest = {
   checkpointName: string;
+  workflowProfile: ComfyUiTextToImageWorkflowProfileId;
   modelBaseModel?: string;
   modelStorageKind?: ComfyUiModelStorageKind;
   clipName?: string;

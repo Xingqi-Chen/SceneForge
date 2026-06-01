@@ -22,7 +22,9 @@ import type {
   ImportedImageDetail,
   ImportedImageListItem,
   SelectedCivitaiResourcePreview,
+  SelectedCivitaiResourcesPreview,
 } from "@/features/civitai-lora-library";
+import { isAnimaCivitaiBaseModel, isSameCivitaiBaseModel } from "@/features/civitai-lora-library/base-model";
 import { getCivitaiImageVariantUrl } from "@/features/civitai-lora-library/image-url";
 import {
   isOpenCivitaiLibraryResourceDetailEvent,
@@ -103,6 +105,24 @@ async function fetchJson<T>(input: RequestInfo | URL, init?: RequestInit): Promi
   }
 
   return payload as T;
+}
+
+function buildSelectedCivitaiResourcesQuery(checkpointId: string | null, loraIds: string[]) {
+  const params = new URLSearchParams();
+
+  if (checkpointId) {
+    params.set("checkpointId", checkpointId);
+  }
+
+  if (loraIds.length > 0) {
+    params.set("loraIds", loraIds.join(","));
+  }
+
+  return params.toString();
+}
+
+function formatBaseModelLabel(value: string | null | undefined) {
+  return value?.trim() || "unknown";
 }
 
 function formatWeight(value: number | null | undefined) {
@@ -382,7 +402,6 @@ function AiRecommendationResourceCard({
 export function CivitaiLoraLibraryPanel() {
   const selectedCivitaiCheckpointId = useEditorStore((state) => state.project.settings.selectedCivitaiCheckpointId);
   const selectedCivitaiLoraIds = useEditorStore((state) => state.project.settings.selectedCivitaiLoraIds);
-  const selectCivitaiCheckpoint = useEditorStore((state) => state.selectCivitaiCheckpoint);
   const toggleCivitaiLora = useEditorStore((state) => state.toggleCivitaiLora);
   const setSelectedCivitaiResources = useEditorStore((state) => state.setSelectedCivitaiResources);
   const [open, setOpen] = useState(false);
@@ -396,6 +415,7 @@ export function CivitaiLoraLibraryPanel() {
   const [imageDetail, setImageDetail] = useState<ImportedImageDetail | null>(null);
   const [detailStatus, setDetailStatus] = useState<LoadStatus>("idle");
   const [detailError, setDetailError] = useState("");
+  const [selectionError, setSelectionError] = useState("");
   const [loraWeightEditing, setLoraWeightEditing] = useState(false);
   const [loraWeightDrafts, setLoraWeightDrafts] = useState<Record<string, string>>({});
   const [loraWeightSaveStatus, setLoraWeightSaveStatus] = useState<LoadStatus>("idle");
@@ -554,6 +574,7 @@ export function CivitaiLoraLibraryPanel() {
   async function loadDetail(resourceId: string) {
     setDetailStatus("loading");
     setDetailError("");
+    setSelectionError("");
     setDetail(null);
     setImageDetail(null);
     setLoraWeightEditing(false);
@@ -580,6 +601,7 @@ export function CivitaiLoraLibraryPanel() {
   async function loadImageDetail(importedImageId: string) {
     setDetailStatus("loading");
     setDetailError("");
+    setSelectionError("");
     setDetail(null);
     setImageDetail(null);
     setLoraWeightEditing(false);
@@ -968,13 +990,66 @@ export function CivitaiLoraLibraryPanel() {
     }
   }
 
-  function handleToggleSelectedResource() {
+  async function handleToggleSelectedResource() {
     if (!detail || (detail.resourceType !== "lora" && detail.resourceType !== "model")) {
       return;
     }
 
+    setSelectionError("");
+
     if (detail.resourceType === "model") {
-      selectCivitaiCheckpoint(detail.id);
+      if (selectedCivitaiCheckpointId === detail.id) {
+        setSelectedCivitaiResources(null, []);
+        return;
+      }
+
+      try {
+        const query = buildSelectedCivitaiResourcesQuery(detail.id, selectedCivitaiLoraIds);
+        const resources = await fetchJson<SelectedCivitaiResourcesPreview>(
+          `/api/civitai-lora-library/selected-resources?${query}`,
+        );
+        const compatibleLoraIds = resources.loras.map((lora) => lora.id);
+
+        setSelectedCivitaiResources(detail.id, compatibleLoraIds);
+        if (compatibleLoraIds.length < selectedCivitaiLoraIds.length) {
+          setSelectionError("Some selected LoRAs were removed because their baseModel does not match this checkpoint.");
+        }
+      } catch (error) {
+        setSelectionError(error instanceof Error ? error.message : "Unable to validate selected LoRAs.");
+      }
+      return;
+    }
+
+    if (detailIsSelected) {
+      toggleCivitaiLora(detail.id);
+      return;
+    }
+
+    if (!selectedCivitaiCheckpointId) {
+      if (isAnimaCivitaiBaseModel(detail.baseModel)) {
+        setSelectionError("Select an Anima checkpoint before selecting this Anima LoRA.");
+        return;
+      }
+
+      toggleCivitaiLora(detail.id);
+      return;
+    }
+
+    try {
+      const query = buildSelectedCivitaiResourcesQuery(selectedCivitaiCheckpointId, []);
+      const resources = await fetchJson<SelectedCivitaiResourcesPreview>(
+        `/api/civitai-lora-library/selected-resources?${query}`,
+      );
+      const checkpointBaseModel = resources.checkpoint?.baseModel;
+
+      if (!isSameCivitaiBaseModel(detail.baseModel, checkpointBaseModel)) {
+        setSelectionError(
+          `This LoRA baseModel (${formatBaseModelLabel(detail.baseModel)}) does not match the selected checkpoint baseModel (${formatBaseModelLabel(checkpointBaseModel)}).`,
+        );
+        return;
+      }
+    } catch (error) {
+      setSelectionError(error instanceof Error ? error.message : "Unable to validate selected checkpoint.");
       return;
     }
 
@@ -2340,7 +2415,7 @@ export function CivitaiLoraLibraryPanel() {
                                           ? "border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
                                           : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
                                       }`}
-                                      onClick={handleToggleSelectedResource}
+                                      onClick={() => void handleToggleSelectedResource()}
                                       size="sm"
                                       type="button"
                                       variant="secondary"
@@ -2408,6 +2483,9 @@ export function CivitaiLoraLibraryPanel() {
                                     <p className="max-w-[360px] truncate text-right text-[11px] text-slate-500" title={downloadStatus.targetPath ?? undefined}>
                                       {downloadStatus.targetFileName}
                                     </p>
+                                  ) : null}
+                                  {selectionError ? (
+                                    <p className="max-w-[360px] text-right text-[11px] leading-relaxed text-rose-600">{selectionError}</p>
                                   ) : null}
                                   {downloadActionStatus === "success" && downloadActionMessage ? (
                                     <p className="max-w-[360px] text-right text-[11px] leading-relaxed text-emerald-700">{downloadActionMessage}</p>
