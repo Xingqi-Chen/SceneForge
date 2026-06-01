@@ -131,6 +131,7 @@ const DEFAULT_CONTROLNET_UNIT = {
   imageName: "",
 };
 const DEFAULT_INPAINT_REQUEST = {
+  workflowProfile: "default",
   negativePrompt: "",
   loras: [],
   steps: 30,
@@ -1244,6 +1245,29 @@ export function validateComfyUiInpaintRequest(value: unknown): ComfyUiInpaintVal
     };
   }
 
+  for (const field of ["modelBaseModel", "clipName", "clipDevice", "vaeName", "unetWeightDtype"] as const) {
+    if (value[field] !== undefined && value[field] !== null && typeof value[field] !== "string") {
+      return {
+        ok: false,
+        message: `${field} must be a string when provided.`,
+      };
+    }
+  }
+
+  if (value.modelStorageKind !== undefined && !isComfyUiModelStorageKind(value.modelStorageKind)) {
+    return {
+      ok: false,
+      message: "modelStorageKind must be checkpoint or diffusion when provided.",
+    };
+  }
+
+  if (value.workflowProfile !== undefined && !isComfyUiTextToImageWorkflowProfileId(value.workflowProfile)) {
+    return {
+      ok: false,
+      message: "workflowProfile must be default or anima when provided.",
+    };
+  }
+
   if (value.negativePrompt !== undefined && typeof value.negativePrompt !== "string") {
     return {
       ok: false,
@@ -1461,6 +1485,13 @@ export function validateComfyUiInpaintRequest(value: unknown): ComfyUiInpaintVal
     ok: true,
     request: {
       checkpointName: value.checkpointName.trim(),
+      workflowProfile: isComfyUiTextToImageWorkflowProfileId(value.workflowProfile) ? value.workflowProfile : undefined,
+      modelBaseModel: getOptionalTrimmedStringValue(value.modelBaseModel),
+      modelStorageKind: isComfyUiModelStorageKind(value.modelStorageKind) ? value.modelStorageKind : undefined,
+      clipName: getOptionalTrimmedStringValue(value.clipName),
+      clipDevice: getOptionalTrimmedStringValue(value.clipDevice),
+      vaeName: getOptionalTrimmedStringValue(value.vaeName),
+      unetWeightDtype: getOptionalTrimmedStringValue(value.unetWeightDtype),
       positivePrompt: value.positivePrompt.trim(),
       negativePrompt: typeof value.negativePrompt === "string" ? value.negativePrompt.trim() : undefined,
       loras: normalizeOptionalLoras(value.loras),
@@ -1756,6 +1787,7 @@ export function resolveComfyUiTextToImageRequest(
   const modelStorageKind = isComfyUiModelStorageKind(request.modelStorageKind) ? request.modelStorageKind : undefined;
   const workflowProfile = resolveComfyUiTextToImageWorkflowProfile({
     checkpointName,
+    workflowProfile: request.workflowProfile,
     modelBaseModel,
     modelStorageKind,
   }).id;
@@ -1802,10 +1834,29 @@ export function resolveComfyUiTextToImageRequest(
 }
 
 export function resolveComfyUiInpaintRequest(request: ComfyUiInpaintRequest): ResolvedComfyUiInpaintRequest {
+  const checkpointName = request.checkpointName.trim();
+  const modelBaseModel = getOptionalTrimmedStringValue(request.modelBaseModel);
+  const modelStorageKind = isComfyUiModelStorageKind(request.modelStorageKind) ? request.modelStorageKind : undefined;
+  const workflowProfile = resolveComfyUiTextToImageWorkflowProfile({
+    checkpointName,
+    workflowProfile: request.workflowProfile,
+    modelBaseModel,
+    modelStorageKind,
+  }).id;
+  const isAnimaProfile = workflowProfile === "anima";
   const inpaintMode = request.inpaintMode ?? DEFAULT_INPAINT_REQUEST.inpaintMode;
 
   return {
-    checkpointName: request.checkpointName.trim(),
+    checkpointName,
+    workflowProfile,
+    modelBaseModel,
+    modelStorageKind,
+    clipName: isAnimaProfile ? DEFAULT_COMFYUI_ANIMA_CLIP_NAME : getOptionalTrimmedStringValue(request.clipName),
+    clipDevice: getOptionalTrimmedStringValue(request.clipDevice),
+    vaeName: isAnimaProfile ? DEFAULT_COMFYUI_ANIMA_VAE_NAME : getOptionalTrimmedStringValue(request.vaeName),
+    unetWeightDtype: isAnimaProfile
+      ? DEFAULT_COMFYUI_ANIMA_UNET_WEIGHT_DTYPE
+      : getOptionalTrimmedStringValue(request.unetWeightDtype),
     positivePrompt: request.positivePrompt.trim(),
     negativePrompt: getString(request.negativePrompt, DEFAULT_INPAINT_REQUEST.negativePrompt),
     loras: (request.loras ?? []).map((lora) => ({

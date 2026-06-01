@@ -4,6 +4,40 @@ This log records dated implementation and documentation work. Keep entries conci
 
 ## 2026-05-31
 
+### T-AN3 Anima Img2Img, Inpaint, and Sequence Inheritance
+
+Summary:
+
+- Extended Anima workflow metadata and fixed CLIP/VAE defaults from text-to-image into inpaint request validation, resolution, and workflow generation.
+- Added a shared ComfyUI model context builder so Anima inpaint and previous-shot img2img use `UNETLoader`, `CLIPLoader`, `VAELoader`, source-image VAE encoding, and `VAEEncodeForInpaint` without `CheckpointLoaderSimple`.
+- Kept high-res and local-region inpaint behavior intact while routing VAE encode/decode and harmonization through the selected Anima VAE context.
+- Merged sequence per-shot requests over base requests so `workflowProfile`, base model, storage kind, fixed CLIP/VAE, clip device, and UNET dtype metadata inherit into Anima sequence shots.
+- Preserved Anima metadata in generated-image saved parameter records and kept T-AN4 features such as detailers blocked by pre-queue validation for Anima inpaint.
+
+Files changed:
+
+- `src/app/api/comfyui/inpaint-image/route.test.ts`
+- `src/app/api/comfyui/sequence-image/route.test.ts`
+- `src/app/api/comfyui/sequence-image/route.ts`
+- `src/features/comfyui/object-info.test.ts`
+- `src/features/comfyui/object-info.ts`
+- `src/features/comfyui/types.ts`
+- `src/features/comfyui/validation.ts`
+- `src/features/comfyui/workflow-profiles.ts`
+- `src/features/comfyui/workflow.test.ts`
+- `src/features/comfyui/workflow.ts`
+- `src/features/editor/components/ImageGenerationPanel.tsx`
+- `docs/dev-log.md`
+
+Validation:
+
+- `npm test -- src/features/comfyui/workflow.test.ts src/features/comfyui/object-info.test.ts src/app/api/comfyui/inpaint-image/route.test.ts src/app/api/comfyui/sequence-image/route.test.ts` passed with 83 tests.
+- `npm test -- src/features/editor/ai-prompt/comfyui-generation-params.test.ts src/features/persistence/project-serialization.test.ts src/features/comfyui/preview.test.ts` passed with 56 tests.
+- `npm test` passed: 83 files, 585 tests.
+- `npm run typecheck` passed.
+- `npm run lint` passed with the existing 22 `@next/next/no-img-element` warnings.
+- `npm run build` passed with the existing Turbopack NFT trace warning for `sequence-reference-storage`.
+
 ### T-AN2 Fixed Anima Model Settings Persistence
 
 Summary:

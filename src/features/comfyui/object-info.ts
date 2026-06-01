@@ -517,6 +517,79 @@ function validateDetailerAgainstObjectInfo({
   return resolvedDetailer;
 }
 
+function resolveAnimaProfileObjectInfoOptions({
+  errors,
+  objectInfo,
+  request,
+}: {
+  errors: string[];
+  objectInfo: unknown;
+  request: Pick<ComfyUiTextToImageRequest | ComfyUiInpaintRequest, "checkpointName">;
+}) {
+  const unetName = resolveRequiredOption({
+    classType: "UNETLoader",
+    errors,
+    inputName: "unet_name",
+    label: "Anima UNET model",
+    objectInfo,
+    requested: request.checkpointName,
+  });
+  const unetWeightDtype = resolveRequiredOption({
+    classType: "UNETLoader",
+    errors,
+    fallback: DEFAULT_COMFYUI_ANIMA_UNET_WEIGHT_DTYPE,
+    inputName: "weight_dtype",
+    label: "Anima UNET weight dtype",
+    objectInfo,
+    requested: DEFAULT_COMFYUI_ANIMA_UNET_WEIGHT_DTYPE,
+  });
+  const clipName = resolveRequiredOption({
+    classType: "CLIPLoader",
+    errors,
+    fallback: DEFAULT_COMFYUI_ANIMA_CLIP_NAME,
+    inputName: "clip_name",
+    label: "Anima CLIP model",
+    objectInfo,
+    requested: DEFAULT_COMFYUI_ANIMA_CLIP_NAME,
+  });
+  resolveRequiredOption({
+    classType: "CLIPLoader",
+    errors,
+    inputName: "type",
+    label: "Anima CLIP type",
+    objectInfo,
+    requested: DEFAULT_COMFYUI_ANIMA_CLIP_TYPE,
+  });
+  const clipDevice = hasInput(objectInfo, "CLIPLoader", "device")
+    ? resolveRequiredOption({
+        classType: "CLIPLoader",
+        errors,
+        fallback: DEFAULT_COMFYUI_ANIMA_CLIP_DEVICE,
+        inputName: "device",
+        label: "Anima CLIP device",
+        objectInfo,
+        requested: DEFAULT_COMFYUI_ANIMA_CLIP_DEVICE,
+      })
+    : undefined;
+  const vaeName = resolveRequiredOption({
+    classType: "VAELoader",
+    errors,
+    fallback: DEFAULT_COMFYUI_ANIMA_VAE_NAME,
+    inputName: "vae_name",
+    label: "Anima VAE model",
+    objectInfo,
+    requested: DEFAULT_COMFYUI_ANIMA_VAE_NAME,
+  });
+
+  return {
+    clipDevice,
+    clipName,
+    unetName,
+    unetWeightDtype,
+    vaeName,
+  };
+}
+
 export function validateComfyUiRequestAgainstObjectInfo(
   request: ComfyUiTextToImageRequest,
   objectInfo: unknown,
@@ -543,70 +616,8 @@ export function validateComfyUiRequestAgainstObjectInfo(
   const ultralyticsDetectorOptions = readInputOptions(objectInfo, "UltralyticsDetectorProvider", "model_name");
   const controlNetOptions = readInputOptions(objectInfo, "ControlNetLoader", "control_net_name");
   const checkpointName = findOption(request.checkpointName, checkpointOptions);
-  const animaUnetName = isAnimaProfile
-    ? resolveRequiredOption({
-        classType: "UNETLoader",
-        errors,
-        inputName: "unet_name",
-        label: "Anima UNET model",
-        objectInfo,
-        requested: request.checkpointName,
-      })
-    : undefined;
-  const animaUnetWeightDtype = isAnimaProfile
-    ? resolveRequiredOption({
-        classType: "UNETLoader",
-        errors,
-        fallback: DEFAULT_COMFYUI_ANIMA_UNET_WEIGHT_DTYPE,
-        inputName: "weight_dtype",
-        label: "Anima UNET weight dtype",
-        objectInfo,
-        requested: DEFAULT_COMFYUI_ANIMA_UNET_WEIGHT_DTYPE,
-      })
-    : undefined;
-  const animaClipName = isAnimaProfile
-    ? resolveRequiredOption({
-        classType: "CLIPLoader",
-        errors,
-        fallback: DEFAULT_COMFYUI_ANIMA_CLIP_NAME,
-        inputName: "clip_name",
-        label: "Anima CLIP model",
-        objectInfo,
-        requested: DEFAULT_COMFYUI_ANIMA_CLIP_NAME,
-      })
-    : undefined;
-  if (isAnimaProfile) {
-    resolveRequiredOption({
-      classType: "CLIPLoader",
-      errors,
-      inputName: "type",
-      label: "Anima CLIP type",
-      objectInfo,
-      requested: DEFAULT_COMFYUI_ANIMA_CLIP_TYPE,
-    });
-  }
-  const hasAnimaClipDeviceInput = isAnimaProfile && hasInput(objectInfo, "CLIPLoader", "device");
-  const animaClipDevice = hasAnimaClipDeviceInput
-    ? resolveRequiredOption({
-        classType: "CLIPLoader",
-        errors,
-        fallback: DEFAULT_COMFYUI_ANIMA_CLIP_DEVICE,
-        inputName: "device",
-        label: "Anima CLIP device",
-        objectInfo,
-        requested: DEFAULT_COMFYUI_ANIMA_CLIP_DEVICE,
-      })
-    : undefined;
-  const animaVaeName = isAnimaProfile
-    ? resolveRequiredOption({
-        classType: "VAELoader",
-        errors,
-        fallback: DEFAULT_COMFYUI_ANIMA_VAE_NAME,
-        inputName: "vae_name",
-        label: "Anima VAE model",
-        objectInfo,
-        requested: DEFAULT_COMFYUI_ANIMA_VAE_NAME,
-      })
+  const animaOptions = isAnimaProfile
+    ? resolveAnimaProfileObjectInfoOptions({ errors, objectInfo, request })
     : undefined;
   const sampler = findSampler(request.samplerName, samplerOptions, schedulerOptions);
   const samplerName = sampler.samplerName;
@@ -780,11 +791,11 @@ export function validateComfyUiRequestAgainstObjectInfo(
     request: {
       ...request,
       workflowProfile: profile.id,
-      checkpointName: isAnimaProfile ? animaUnetName ?? request.checkpointName : checkpointName ?? request.checkpointName,
-      clipName: isAnimaProfile ? animaClipName : request.clipName,
-      clipDevice: isAnimaProfile ? animaClipDevice : request.clipDevice,
-      vaeName: isAnimaProfile ? animaVaeName : request.vaeName,
-      unetWeightDtype: isAnimaProfile ? animaUnetWeightDtype : request.unetWeightDtype,
+      checkpointName: isAnimaProfile ? animaOptions?.unetName ?? request.checkpointName : checkpointName ?? request.checkpointName,
+      clipName: isAnimaProfile ? animaOptions?.clipName : request.clipName,
+      clipDevice: isAnimaProfile ? animaOptions?.clipDevice : request.clipDevice,
+      vaeName: isAnimaProfile ? animaOptions?.vaeName : request.vaeName,
+      unetWeightDtype: isAnimaProfile ? animaOptions?.unetWeightDtype : request.unetWeightDtype,
       samplerName: samplerName ?? request.samplerName,
       scheduler: scheduler ?? request.scheduler,
       latentImageNode: latentImageNode ?? request.latentImageNode,
@@ -803,6 +814,25 @@ export function validateComfyUiInpaintRequestAgainstObjectInfo(
 ): ComfyUiInpaintRequestObjectInfoValidation {
   const errors: string[] = [];
   const warnings: string[] = [];
+  const profile = resolveComfyUiTextToImageWorkflowProfile(request);
+  const isAnimaProfile = profile.id === "anima";
+  validateRequiredNodeClasses(
+    objectInfo,
+    isAnimaProfile
+      ? ["UNETLoader", "CLIPLoader", "VAELoader", "CLIPTextEncode", "KSampler", "PreviewImage"]
+      : ["CheckpointLoaderSimple", "CLIPTextEncode", "KSampler", "PreviewImage"],
+    errors,
+  );
+  validateRequiredInputs(objectInfo, "KSampler", ["sampler_name", "scheduler"], errors);
+
+  if (isAnimaProfile) {
+    validateRequiredInputs(objectInfo, "UNETLoader", ["unet_name", "weight_dtype"], errors);
+    validateRequiredInputs(objectInfo, "CLIPLoader", ["clip_name", "type"], errors);
+    validateRequiredInputs(objectInfo, "VAELoader", ["vae_name"], errors);
+  } else {
+    validateRequiredInputs(objectInfo, "CheckpointLoaderSimple", ["ckpt_name"], errors);
+  }
+
   const checkpointOptions = readInputOptions(objectInfo, "CheckpointLoaderSimple", "ckpt_name");
   const loraOptions = readInputOptions(objectInfo, "LoraLoader", "lora_name");
   const samplerOptions = readInputOptions(objectInfo, "KSampler", "sampler_name");
@@ -812,6 +842,9 @@ export function validateComfyUiInpaintRequestAgainstObjectInfo(
   const imageScaleMethodOptions = readInputOptions(objectInfo, "ImageScale", "upscale_method");
   const upscaleModelOptions = readInputOptions(objectInfo, "UpscaleModelLoader", "model_name");
   const checkpointName = findOption(request.checkpointName, checkpointOptions);
+  const animaOptions = isAnimaProfile
+    ? resolveAnimaProfileObjectInfoOptions({ errors, objectInfo, request })
+    : undefined;
   const sampler = findSampler(request.samplerName, samplerOptions, schedulerOptions);
   const samplerName = sampler.samplerName;
   const requestedScheduler = request.scheduler ? findOption(request.scheduler, schedulerOptions) : null;
@@ -855,7 +888,7 @@ export function validateComfyUiInpaintRequestAgainstObjectInfo(
     };
   });
 
-  if (!checkpointName) {
+  if (!isAnimaProfile && !checkpointName) {
     errors.push(`Checkpoint is not available in ComfyUI: ${request.checkpointName}`);
   }
 
@@ -869,10 +902,6 @@ export function validateComfyUiInpaintRequestAgainstObjectInfo(
 
   if (!hasNodeInfo(objectInfo, "LoadImage")) {
     errors.push("LoadImage node is not available in ComfyUI. It is required for inpaint source images.");
-  }
-
-  if (!hasNodeInfo(objectInfo, "PreviewImage")) {
-    errors.push("PreviewImage node is not available in ComfyUI. It is required to preview inpaint results before saving.");
   }
 
   if (!hasNodeInfo(objectInfo, "LoadImageMask")) {
@@ -1006,28 +1035,38 @@ export function validateComfyUiInpaintRequestAgainstObjectInfo(
     }
   }
 
-  faceDetailer = validateDetailerAgainstObjectInfo({
-    defaultDetectorModel: DEFAULT_COMFYUI_FACE_DETAILER_DETECTOR_MODEL,
-    detailer: request.faceDetailer,
-    errors,
-    findPreferredDetectorModel: findPreferredFaceDetailerDetectorModel,
-    label: "FaceDetailer",
-    objectInfo,
-    samplerOptions,
-    schedulerOptions,
-    ultralyticsDetectorOptions,
-  });
-  handDetailer = validateDetailerAgainstObjectInfo({
-    defaultDetectorModel: DEFAULT_COMFYUI_HAND_DETAILER_DETECTOR_MODEL,
-    detailer: request.handDetailer,
-    errors,
-    findPreferredDetectorModel: findPreferredHandDetailerDetectorModel,
-    label: "HandDetailer",
-    objectInfo,
-    samplerOptions,
-    schedulerOptions,
-    ultralyticsDetectorOptions,
-  });
+  if (isAnimaProfile) {
+    if (request.faceDetailer?.enabled) {
+      errors.push("Anima inpaint profile does not support FaceDetailer yet.");
+    }
+
+    if (request.handDetailer?.enabled) {
+      errors.push("Anima inpaint profile does not support HandDetailer yet.");
+    }
+  } else {
+    faceDetailer = validateDetailerAgainstObjectInfo({
+      defaultDetectorModel: DEFAULT_COMFYUI_FACE_DETAILER_DETECTOR_MODEL,
+      detailer: request.faceDetailer,
+      errors,
+      findPreferredDetectorModel: findPreferredFaceDetailerDetectorModel,
+      label: "FaceDetailer",
+      objectInfo,
+      samplerOptions,
+      schedulerOptions,
+      ultralyticsDetectorOptions,
+    });
+    handDetailer = validateDetailerAgainstObjectInfo({
+      defaultDetectorModel: DEFAULT_COMFYUI_HAND_DETAILER_DETECTOR_MODEL,
+      detailer: request.handDetailer,
+      errors,
+      findPreferredDetectorModel: findPreferredHandDetailerDetectorModel,
+      label: "HandDetailer",
+      objectInfo,
+      samplerOptions,
+      schedulerOptions,
+      ultralyticsDetectorOptions,
+    });
+  }
 
   if (request.samplerName && samplerName && samplerName !== request.samplerName) {
     warnings.push(`Normalized sampler ${request.samplerName} to ${samplerName}.`);
@@ -1048,7 +1087,12 @@ export function validateComfyUiInpaintRequestAgainstObjectInfo(
     warnings,
     request: {
       ...request,
-      checkpointName: checkpointName ?? request.checkpointName,
+      workflowProfile: profile.id,
+      checkpointName: isAnimaProfile ? animaOptions?.unetName ?? request.checkpointName : checkpointName ?? request.checkpointName,
+      clipName: isAnimaProfile ? animaOptions?.clipName : request.clipName,
+      clipDevice: isAnimaProfile ? animaOptions?.clipDevice : request.clipDevice,
+      vaeName: isAnimaProfile ? animaOptions?.vaeName : request.vaeName,
+      unetWeightDtype: isAnimaProfile ? animaOptions?.unetWeightDtype : request.unetWeightDtype,
       samplerName: samplerName ?? request.samplerName,
       scheduler: scheduler ?? request.scheduler,
       inpaintMode,

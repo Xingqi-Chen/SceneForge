@@ -297,7 +297,7 @@ function buildShotRequest({
     shot.cameraPrompt,
   ]);
   const explicitRequest = shot.request;
-  const requestBase = explicitRequest ?? baseRequest;
+  const requestBase = explicitRequest ? { ...baseRequest, ...explicitRequest } : baseRequest;
 
   return {
     request: {

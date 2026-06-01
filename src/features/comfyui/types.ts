@@ -65,6 +65,13 @@ export type ComfyUiTextToImageRequest = {
 
 export type ComfyUiInpaintRequest = {
   checkpointName: string;
+  workflowProfile?: ComfyUiTextToImageWorkflowProfileId;
+  modelBaseModel?: string;
+  modelStorageKind?: ComfyUiModelStorageKind;
+  clipName?: string;
+  clipDevice?: string;
+  vaeName?: string;
+  unetWeightDtype?: string;
   positivePrompt: string;
   negativePrompt?: string;
   loras?: ComfyUiLoraInput[];
@@ -297,6 +304,13 @@ export type ResolvedComfyUiTextToImageRequest = {
 
 export type ResolvedComfyUiInpaintRequest = {
   checkpointName: string;
+  workflowProfile: ComfyUiTextToImageWorkflowProfileId;
+  modelBaseModel?: string;
+  modelStorageKind?: ComfyUiModelStorageKind;
+  clipName?: string;
+  clipDevice?: string;
+  vaeName?: string;
+  unetWeightDtype?: string;
   positivePrompt: string;
   negativePrompt: string;
   loras: ResolvedComfyUiLoraInput[];
@@ -470,7 +484,10 @@ export type BasicTextToImageNodeIds = {
 };
 
 export type BasicInpaintNodeIds = {
-  checkpoint: string;
+  checkpoint?: string;
+  unetLoader?: string;
+  clipLoader?: string;
+  vaeLoader?: string;
   loraLoaders: string[];
   positivePrompt: string;
   negativePrompt: string;

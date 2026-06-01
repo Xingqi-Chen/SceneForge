@@ -46,6 +46,10 @@ import {
   COMFYUI_INPAINT_MODE_OPTIONS,
   createComfyUiInpaintPreviewRequest,
   createComfyUiTextToImagePreviewRequest,
+  DEFAULT_COMFYUI_ANIMA_CLIP_DEVICE,
+  DEFAULT_COMFYUI_ANIMA_CLIP_NAME,
+  DEFAULT_COMFYUI_ANIMA_UNET_WEIGHT_DTYPE,
+  DEFAULT_COMFYUI_ANIMA_VAE_NAME,
   DEFAULT_COMFYUI_FACE_DETAILER_DETECTOR_MODEL,
   DEFAULT_COMFYUI_HAND_DETAILER_DETECTOR_MODEL,
   DEFAULT_COMFYUI_INPAINT_DENOISE,
@@ -1011,11 +1015,25 @@ function trimOptionalModelSetting(value: string | undefined) {
 function toSavedParameters(draft: GenerationDraft): SavedComfyUiGenerationParams {
   const workflowProfile = resolveComfyUiTextToImageWorkflowProfile(draft).id;
   const modelBaseModel = trimOptionalModelSetting(draft.modelBaseModel);
+  const isAnimaProfile = workflowProfile === "anima";
 
   return {
     workflowProfile,
     ...(modelBaseModel ? { modelBaseModel } : {}),
     ...(draft.modelStorageKind ? { modelStorageKind: draft.modelStorageKind } : {}),
+    ...(isAnimaProfile
+      ? {
+          clipName: DEFAULT_COMFYUI_ANIMA_CLIP_NAME,
+          clipDevice: DEFAULT_COMFYUI_ANIMA_CLIP_DEVICE,
+          vaeName: DEFAULT_COMFYUI_ANIMA_VAE_NAME,
+          unetWeightDtype: DEFAULT_COMFYUI_ANIMA_UNET_WEIGHT_DTYPE,
+        }
+      : {
+          ...(trimOptionalModelSetting(draft.clipName) ? { clipName: trimOptionalModelSetting(draft.clipName) } : {}),
+          ...(trimOptionalModelSetting(draft.clipDevice) ? { clipDevice: trimOptionalModelSetting(draft.clipDevice) } : {}),
+          ...(trimOptionalModelSetting(draft.vaeName) ? { vaeName: trimOptionalModelSetting(draft.vaeName) } : {}),
+          ...(trimOptionalModelSetting(draft.unetWeightDtype) ? { unetWeightDtype: trimOptionalModelSetting(draft.unetWeightDtype) } : {}),
+        }),
     width: draft.width,
     height: draft.height,
     seed: draft.seed,
@@ -1238,8 +1256,18 @@ type InpaintSubmitInput = {
 };
 
 function toInpaintRequestPayload(draft: GenerationDraft, input: InpaintSubmitInput): ComfyUiInpaintRequest {
+  const workflowProfile = resolveComfyUiTextToImageWorkflowProfile(draft).id;
+  const isAnimaProfile = workflowProfile === "anima";
+
   return {
     checkpointName: draft.checkpointName,
+    workflowProfile,
+    modelBaseModel: draft.modelBaseModel,
+    modelStorageKind: draft.modelStorageKind,
+    ...(isAnimaProfile ? {} : { clipName: draft.clipName }),
+    ...(isAnimaProfile ? {} : { clipDevice: draft.clipDevice }),
+    ...(isAnimaProfile ? {} : { vaeName: draft.vaeName }),
+    ...(isAnimaProfile ? {} : { unetWeightDtype: draft.unetWeightDtype }),
     positivePrompt: input.positivePrompt,
     negativePrompt: input.negativePrompt,
     loras: draft.loras

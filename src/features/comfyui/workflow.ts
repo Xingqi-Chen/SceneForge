@@ -12,6 +12,8 @@ import type {
   ComfyUiWorkflowNode,
   ResolvedComfyUiCharacterReferenceConfig,
   ResolvedComfyUiFaceDetailerConfig,
+  ResolvedComfyUiInpaintRequest,
+  ResolvedComfyUiLoraInput,
   ResolvedComfyUiTextToImageRequest,
 } from "./types";
 import { getComfyUiLatentImageNodeTitle } from "./latent-image-node";
@@ -90,6 +92,120 @@ function getTiledVaeInputs() {
     overlap: HIGH_RES_INPAINT_VAE_TILE_OVERLAP,
     temporal_size: HIGH_RES_INPAINT_VAE_TEMPORAL_SIZE,
     temporal_overlap: HIGH_RES_INPAINT_VAE_TEMPORAL_OVERLAP,
+  };
+}
+
+function addLoraLoaderNodes({
+  builder,
+  clipConnection,
+  loras,
+  modelConnection,
+}: {
+  builder: ComfyUiWorkflowBuilder;
+  clipConnection: ComfyUiNodeConnection;
+  loras: ResolvedComfyUiLoraInput[];
+  modelConnection: ComfyUiNodeConnection;
+}) {
+  const loraLoaders = loras.map((lora, index) => {
+    const loraLoader = builder.addNode(
+      "LoraLoader",
+      {
+        model: modelConnection,
+        clip: clipConnection,
+        lora_name: lora.loraName,
+        strength_model: lora.strengthModel,
+        strength_clip: lora.strengthClip,
+      },
+      `Load LoRA ${index + 1}`,
+    );
+
+    modelConnection = builder.connect(loraLoader, 0);
+    clipConnection = builder.connect(loraLoader, 1);
+
+    return loraLoader;
+  });
+
+  return {
+    clipConnection,
+    loraLoaders,
+    modelConnection,
+  };
+}
+
+function addModelContextNodes({
+  builder,
+  request,
+}: {
+  builder: ComfyUiWorkflowBuilder;
+  request: ResolvedComfyUiTextToImageRequest | ResolvedComfyUiInpaintRequest;
+}) {
+  if (request.workflowProfile === "anima") {
+    const unetLoader = builder.addNode(
+      "UNETLoader",
+      {
+        unet_name: request.checkpointName,
+        weight_dtype: request.unetWeightDtype ?? DEFAULT_COMFYUI_ANIMA_UNET_WEIGHT_DTYPE,
+      },
+      "Load Anima UNET",
+    );
+    const clipLoader = builder.addNode(
+      "CLIPLoader",
+      {
+        clip_name: request.clipName ?? DEFAULT_COMFYUI_ANIMA_CLIP_NAME,
+        type: DEFAULT_COMFYUI_ANIMA_CLIP_TYPE,
+        ...(request.clipDevice ? { device: request.clipDevice } : {}),
+      },
+      "Load Anima CLIP",
+    );
+    const vaeLoader = builder.addNode(
+      "VAELoader",
+      {
+        vae_name: request.vaeName ?? DEFAULT_COMFYUI_ANIMA_VAE_NAME,
+      },
+      "Load Anima VAE",
+    );
+    const loraContext = addLoraLoaderNodes({
+      builder,
+      clipConnection: builder.connect(clipLoader, 0),
+      loras: request.loras,
+      modelConnection: builder.connect(unetLoader, 0),
+    });
+
+    return {
+      clipConnection: loraContext.clipConnection,
+      modelConnection: loraContext.modelConnection,
+      nodeIds: {
+        unetLoader,
+        clipLoader,
+        vaeLoader,
+        loraLoaders: loraContext.loraLoaders,
+      },
+      vaeConnection: builder.connect(vaeLoader, 0),
+    };
+  }
+
+  const checkpoint = builder.addNode(
+    "CheckpointLoaderSimple",
+    {
+      ckpt_name: request.checkpointName,
+    },
+    "Load Checkpoint",
+  );
+  const loraContext = addLoraLoaderNodes({
+    builder,
+    clipConnection: builder.connect(checkpoint, 1),
+    loras: request.loras,
+    modelConnection: builder.connect(checkpoint, 0),
+  });
+
+  return {
+    clipConnection: loraContext.clipConnection,
+    modelConnection: loraContext.modelConnection,
+    nodeIds: {
+      checkpoint,
+      loraLoaders: loraContext.loraLoaders,
+    },
+    vaeConnection: builder.connect(checkpoint, 2),
   };
 }
 
@@ -284,33 +400,9 @@ function buildDefaultTextToImageWorkflow(
 ): BasicTextToImageWorkflow {
   const builder = new ComfyUiWorkflowBuilder();
 
-  const checkpoint = builder.addNode(
-    "CheckpointLoaderSimple",
-    {
-      ckpt_name: resolvedRequest.checkpointName,
-    },
-    "Load Checkpoint",
-  );
-  let modelConnection = builder.connect(checkpoint, 0);
-  let clipConnection = builder.connect(checkpoint, 1);
-  const loraLoaders = resolvedRequest.loras.map((lora, index) => {
-    const loraLoader = builder.addNode(
-      "LoraLoader",
-      {
-        lora_name: lora.loraName,
-        strength_model: lora.strengthModel,
-        strength_clip: lora.strengthClip,
-        model: modelConnection,
-        clip: clipConnection,
-      },
-      `Load LoRA ${index + 1}`,
-    );
-
-    modelConnection = builder.connect(loraLoader, 0);
-    clipConnection = builder.connect(loraLoader, 1);
-
-    return loraLoader;
-  });
+  const modelContext = addModelContextNodes({ builder, request: resolvedRequest });
+  let modelConnection = modelContext.modelConnection;
+  const clipConnection = modelContext.clipConnection;
   const positivePrompt = builder.addNode(
     "CLIPTextEncode",
     {
@@ -407,7 +499,7 @@ function buildDefaultTextToImageWorkflow(
     },
     "KSampler",
   );
-  const vaeConnection = builder.connect(checkpoint, 2);
+  const vaeConnection = modelContext.vaeConnection;
   const vaeDecode = builder.addNode(
     "VAEDecode",
     {
@@ -470,8 +562,7 @@ function buildDefaultTextToImageWorkflow(
   return {
     workflow: builder.toWorkflow(),
     nodeIds: {
-      checkpoint,
-      loraLoaders,
+      ...modelContext.nodeIds,
       positivePrompt,
       negativePrompt,
       ...(controlNetNodeIds.length > 0 ? { controlNets: controlNetNodeIds } : {}),
@@ -497,50 +588,9 @@ function buildAnimaTextToImageWorkflow(
   resolvedRequest: ResolvedComfyUiTextToImageRequest,
 ): BasicTextToImageWorkflow {
   const builder = new ComfyUiWorkflowBuilder();
-  const unetLoader = builder.addNode(
-    "UNETLoader",
-    {
-      unet_name: resolvedRequest.checkpointName,
-      weight_dtype: resolvedRequest.unetWeightDtype ?? DEFAULT_COMFYUI_ANIMA_UNET_WEIGHT_DTYPE,
-    },
-    "Load Anima UNET",
-  );
-  const clipLoader = builder.addNode(
-    "CLIPLoader",
-    {
-      clip_name: resolvedRequest.clipName ?? DEFAULT_COMFYUI_ANIMA_CLIP_NAME,
-      type: DEFAULT_COMFYUI_ANIMA_CLIP_TYPE,
-      ...(resolvedRequest.clipDevice ? { device: resolvedRequest.clipDevice } : {}),
-    },
-    "Load Anima CLIP",
-  );
-  const vaeLoader = builder.addNode(
-    "VAELoader",
-    {
-      vae_name: resolvedRequest.vaeName ?? DEFAULT_COMFYUI_ANIMA_VAE_NAME,
-    },
-    "Load Anima VAE",
-  );
-  let modelConnection = builder.connect(unetLoader, 0);
-  let clipConnection = builder.connect(clipLoader, 0);
-  const loraLoaders = resolvedRequest.loras.map((lora, index) => {
-    const loraLoader = builder.addNode(
-      "LoraLoader",
-      {
-        model: modelConnection,
-        clip: clipConnection,
-        lora_name: lora.loraName,
-        strength_model: lora.strengthModel,
-        strength_clip: lora.strengthClip,
-      },
-      `Load LoRA ${index + 1}`,
-    );
-
-    modelConnection = builder.connect(loraLoader, 0);
-    clipConnection = builder.connect(loraLoader, 1);
-
-    return loraLoader;
-  });
+  const modelContext = addModelContextNodes({ builder, request: resolvedRequest });
+  const modelConnection = modelContext.modelConnection;
+  const clipConnection = modelContext.clipConnection;
   const positivePrompt = builder.addNode(
     "CLIPTextEncode",
     {
@@ -586,7 +636,7 @@ function buildAnimaTextToImageWorkflow(
     "VAEDecode",
     {
       samples: builder.connect(sampler, 0),
-      vae: builder.connect(vaeLoader, 0),
+      vae: modelContext.vaeConnection,
     },
     "Decode Image",
   );
@@ -601,10 +651,7 @@ function buildAnimaTextToImageWorkflow(
   return {
     workflow: builder.toWorkflow(),
     nodeIds: {
-      unetLoader,
-      clipLoader,
-      vaeLoader,
-      loraLoaders,
+      ...modelContext.nodeIds,
       positivePrompt,
       negativePrompt,
       latentImage,
@@ -624,34 +671,10 @@ export function buildBasicInpaintWorkflow(request: ComfyUiInpaintRequest): Basic
   const resolvedRequest = resolveComfyUiInpaintRequest(request);
   const builder = new ComfyUiWorkflowBuilder();
 
-  const checkpoint = builder.addNode(
-    "CheckpointLoaderSimple",
-    {
-      ckpt_name: resolvedRequest.checkpointName,
-    },
-    "Load Checkpoint",
-  );
-  let modelConnection = builder.connect(checkpoint, 0);
-  let clipConnection = builder.connect(checkpoint, 1);
-  const vaeConnection = builder.connect(checkpoint, 2);
-  const loraLoaders = resolvedRequest.loras.map((lora, index) => {
-    const loraLoader = builder.addNode(
-      "LoraLoader",
-      {
-        lora_name: lora.loraName,
-        strength_model: lora.strengthModel,
-        strength_clip: lora.strengthClip,
-        model: modelConnection,
-        clip: clipConnection,
-      },
-      `Load LoRA ${index + 1}`,
-    );
-
-    modelConnection = builder.connect(loraLoader, 0);
-    clipConnection = builder.connect(loraLoader, 1);
-
-    return loraLoader;
-  });
+  const modelContext = addModelContextNodes({ builder, request: resolvedRequest });
+  const modelConnection = modelContext.modelConnection;
+  const clipConnection = modelContext.clipConnection;
+  const vaeConnection = modelContext.vaeConnection;
   const positivePrompt = builder.addNode(
     "CLIPTextEncode",
     {
@@ -1012,8 +1035,7 @@ export function buildBasicInpaintWorkflow(request: ComfyUiInpaintRequest): Basic
   return {
     workflow: builder.toWorkflow(),
     nodeIds: {
-      checkpoint,
-      loraLoaders,
+      ...modelContext.nodeIds,
       positivePrompt,
       negativePrompt,
       sourceImage,

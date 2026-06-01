@@ -1,6 +1,8 @@
 import type {
+  ComfyUiInpaintRequest,
   ComfyUiTextToImageRequest,
   ComfyUiTextToImageWorkflowProfileId,
+  ResolvedComfyUiInpaintRequest,
   ResolvedComfyUiTextToImageRequest,
 } from "./types";
 
@@ -44,6 +46,15 @@ export const COMFYUI_TEXT_TO_IMAGE_WORKFLOW_PROFILES = {
   },
 } as const satisfies Record<ComfyUiTextToImageWorkflowProfileId, ComfyUiTextToImageWorkflowProfile>;
 
+type ComfyUiWorkflowProfileRequest =
+  Pick<ComfyUiTextToImageRequest | ResolvedComfyUiTextToImageRequest | ComfyUiInpaintRequest | ResolvedComfyUiInpaintRequest, "checkpointName"> &
+  Partial<
+    Pick<
+      ComfyUiTextToImageRequest | ResolvedComfyUiTextToImageRequest | ComfyUiInpaintRequest | ResolvedComfyUiInpaintRequest,
+      "modelBaseModel" | "modelStorageKind" | "workflowProfile"
+    >
+  >;
+
 function hasAnimaModelMarker(value: string | null | undefined) {
   if (typeof value !== "string") {
     return false;
@@ -55,9 +66,12 @@ function hasAnimaModelMarker(value: string | null | undefined) {
 }
 
 export function isComfyUiAnimaTextToImageRequest(
-  request: Pick<ComfyUiTextToImageRequest | ResolvedComfyUiTextToImageRequest, "checkpointName"> &
-    Partial<Pick<ComfyUiTextToImageRequest | ResolvedComfyUiTextToImageRequest, "modelBaseModel" | "modelStorageKind">>,
+  request: ComfyUiWorkflowProfileRequest,
 ) {
+  if (request.workflowProfile === "anima") {
+    return true;
+  }
+
   if (hasAnimaModelMarker(request.modelBaseModel)) {
     return true;
   }
@@ -70,8 +84,7 @@ export function isComfyUiAnimaTextToImageRequest(
 }
 
 export function resolveComfyUiTextToImageWorkflowProfile(
-  request: Pick<ComfyUiTextToImageRequest | ResolvedComfyUiTextToImageRequest, "checkpointName"> &
-    Partial<Pick<ComfyUiTextToImageRequest | ResolvedComfyUiTextToImageRequest, "modelBaseModel" | "modelStorageKind">>,
+  request: ComfyUiWorkflowProfileRequest,
 ): ComfyUiTextToImageWorkflowProfile {
   return isComfyUiAnimaTextToImageRequest(request)
     ? COMFYUI_TEXT_TO_IMAGE_WORKFLOW_PROFILES.anima

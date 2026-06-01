@@ -54,6 +54,51 @@ const objectInfoWithControlNet = {
   },
 };
 
+const objectInfoWithAnima = {
+  LoraLoader: {
+    input: {
+      required: {
+        lora_name: [["style.safetensors"], {}],
+      },
+    },
+  },
+  KSampler: {
+    input: {
+      required: {
+        sampler_name: [["euler"], {}],
+        scheduler: [["normal"], {}],
+      },
+    },
+  },
+  EmptyLatentImage: {},
+  CLIPTextEncode: {},
+  VAEDecode: {},
+  PreviewImage: {},
+  UNETLoader: {
+    input: {
+      required: {
+        unet_name: [["pencil-xl-diffusion.safetensors"], {}],
+        weight_dtype: [["default"], {}],
+      },
+    },
+  },
+  CLIPLoader: {
+    input: {
+      required: {
+        clip_name: [["qwen_3_06b_base.safetensors"], {}],
+        type: [["qwen_image"], {}],
+      },
+    },
+  },
+  VAELoader: {
+    input: {
+      required: {
+        vae_name: [["qwen_image_vae.safetensors"], {}],
+      },
+    },
+  },
+};
+
 const openPoseSvg = '<svg xmlns="http://www.w3.org/2000/svg" width="512" height="384"><rect width="512" height="384" fill="#000" /></svg>';
 const normalPngDataUrl = "data:image/png;base64,aGVsbG8=";
 
@@ -322,6 +367,116 @@ describe("ComfyUI sequence image route", () => {
         shotId: "shot-b",
       },
     ]);
+  });
+
+  it("inherits Anima workflow metadata into per-shot requests before queueing", async () => {
+    process.env.COMFYUI_BASE_URL = "http://comfyui.test";
+    const promptBodies: PromptBody[] = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      if (input === "http://comfyui.test/object_info") {
+        return Response.json(objectInfoWithAnima);
+      }
+
+      expect(input).toBe("http://comfyui.test/prompt");
+      const body = JSON.parse(String(init?.body)) as PromptBody;
+      promptBodies.push(body);
+
+      return Response.json({
+        prompt_id: "prompt-anima-shot",
+        number: 1,
+        node_errors: {},
+      });
+    });
+
+    const response = await POST(
+      new Request("http://localhost/api/comfyui/sequence-image", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          baseRequest: {
+            checkpointName: "pencil-xl-diffusion.safetensors",
+            workflowProfile: "anima",
+            modelBaseModel: "Anima",
+            modelStorageKind: "diffusion",
+            positivePrompt: "base global",
+            negativePrompt: "base negative",
+            samplerName: "euler",
+            scheduler: "normal",
+            width: 1024,
+            height: 1024,
+            batchSize: 1,
+            seed: 11,
+          },
+          baseSeed: 700,
+          characters: [],
+          clientId: "client-seq",
+          imageCount: 1,
+          sequenceId: "seq-anima",
+          shots: [
+            {
+              id: "shot-anima",
+              prompt: "fallback prompt",
+              request: {
+                positivePrompt: "shot explicit prompt",
+                width: 768,
+                height: 512,
+              },
+            },
+          ],
+        }),
+      }),
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(promptBodies).toHaveLength(1);
+    expect(Object.values(promptBodies[0].prompt).some((node) => node.class_type === "CheckpointLoaderSimple")).toBe(false);
+    expect(promptBodies[0].prompt["1"]).toMatchObject({
+      class_type: "UNETLoader",
+      inputs: {
+        unet_name: "pencil-xl-diffusion.safetensors",
+        weight_dtype: "default",
+      },
+    });
+    expect(promptBodies[0].prompt["2"]).toMatchObject({
+      class_type: "CLIPLoader",
+      inputs: {
+        clip_name: "qwen_3_06b_base.safetensors",
+        type: "qwen_image",
+      },
+    });
+    expect(promptBodies[0].prompt["3"]).toMatchObject({
+      class_type: "VAELoader",
+      inputs: {
+        vae_name: "qwen_image_vae.safetensors",
+      },
+    });
+    expect(promptBodies[0].prompt["4"].inputs.text).toBe("shot explicit prompt");
+    expect(findPromptNode(promptBodies[0], "EmptyLatentImage")?.inputs).toMatchObject({
+      batch_size: 1,
+      height: 512,
+      width: 768,
+    });
+    expect(payload).toMatchObject({
+      sequenceId: "seq-anima",
+      shots: [
+        {
+          imageCount: 1,
+          promptId: "prompt-anima-shot",
+          request: {
+            checkpointName: "pencil-xl-diffusion.safetensors",
+            workflowProfile: "anima",
+            modelBaseModel: "Anima",
+            modelStorageKind: "diffusion",
+            clipName: "qwen_3_06b_base.safetensors",
+            vaeName: "qwen_image_vae.safetensors",
+            unetWeightDtype: "default",
+          },
+          seed: 700,
+          shotId: "shot-anima",
+        },
+      ],
+    });
   });
 
   it("applies preview mode to sequence shot requests", async () => {

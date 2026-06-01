@@ -589,6 +589,225 @@ describe("ComfyUI workflow builder", () => {
     });
   });
 
+  it("builds an Anima latent noise mask inpaint workflow without CheckpointLoaderSimple", () => {
+    const result = buildBasicInpaintWorkflow({
+      checkpointName: "pencil-xl-diffusion.safetensors",
+      modelBaseModel: "Anima",
+      modelStorageKind: "diffusion",
+      positivePrompt: "continue the previous shot",
+      imageName: "SceneForge/source.png",
+      maskName: "SceneForge/full-mask.png",
+      seed: 123,
+      denoise: 0.55,
+    });
+
+    expect(result.nodeIds).toEqual({
+      unetLoader: "1",
+      clipLoader: "2",
+      vaeLoader: "3",
+      loraLoaders: [],
+      positivePrompt: "4",
+      negativePrompt: "5",
+      sourceImage: "6",
+      maskImage: "7",
+      vaeEncode: "8",
+      setLatentNoiseMask: "9",
+      sampler: "10",
+      vaeDecode: "11",
+      previewImage: "12",
+    });
+    expect(Object.values(result.workflow).some((node) => node.class_type === "CheckpointLoaderSimple")).toBe(false);
+    expect(result.workflow["1"]).toMatchObject({
+      class_type: "UNETLoader",
+      inputs: {
+        unet_name: "pencil-xl-diffusion.safetensors",
+        weight_dtype: "default",
+      },
+    });
+    expect(result.workflow["2"]).toMatchObject({
+      class_type: "CLIPLoader",
+      inputs: {
+        clip_name: "qwen_3_06b_base.safetensors",
+        type: "qwen_image",
+      },
+    });
+    expect(result.workflow["3"]).toMatchObject({
+      class_type: "VAELoader",
+      inputs: {
+        vae_name: "qwen_image_vae.safetensors",
+      },
+    });
+    expect(result.workflow["8"]).toMatchObject({
+      class_type: "VAEEncode",
+      inputs: {
+        pixels: ["6", 0],
+        vae: ["3", 0],
+      },
+    });
+    expect(result.workflow["10"].inputs).toMatchObject({
+      model: ["1", 0],
+      positive: ["4", 0],
+      negative: ["5", 0],
+      latent_image: ["9", 0],
+    });
+    expect(result.workflow["11"].inputs).toEqual({
+      samples: ["10", 0],
+      vae: ["3", 0],
+    });
+    expect(result.request).toMatchObject({
+      workflowProfile: "anima",
+      clipName: "qwen_3_06b_base.safetensors",
+      vaeName: "qwen_image_vae.safetensors",
+      unetWeightDtype: "default",
+    });
+  });
+
+  it("builds an Anima VAE inpaint workflow with source pixels encoded by the Anima VAE", () => {
+    const result = buildBasicInpaintWorkflow({
+      checkpointName: "pencil-xl-diffusion.safetensors",
+      modelBaseModel: "Anima",
+      modelStorageKind: "diffusion",
+      positivePrompt: "repair the sleeve",
+      imageName: "SceneForge/source.png",
+      maskName: "SceneForge/mask.png",
+      inpaintMode: "vae-inpaint",
+      growMaskBy: 8,
+      seed: 321,
+      loras: [
+        {
+          loraName: "anima-style.safetensors",
+          strengthModel: 0.75,
+          strengthClip: 0.65,
+        },
+      ],
+    });
+
+    expect(Object.values(result.workflow).some((node) => node.class_type === "CheckpointLoaderSimple")).toBe(false);
+    expect(result.workflow["4"]).toMatchObject({
+      class_type: "LoraLoader",
+      inputs: {
+        model: ["1", 0],
+        clip: ["2", 0],
+        lora_name: "anima-style.safetensors",
+      },
+    });
+    expect(result.workflow["9"]).toMatchObject({
+      class_type: "VAEEncodeForInpaint",
+      inputs: {
+        pixels: ["7", 0],
+        vae: ["3", 0],
+        mask: ["8", 0],
+        grow_mask_by: 8,
+      },
+    });
+    expect(result.workflow["10"].inputs).toMatchObject({
+      model: ["4", 0],
+      positive: ["5", 0],
+      negative: ["6", 0],
+      latent_image: ["9", 0],
+    });
+    expect(result.workflow["11"].inputs.vae).toEqual(["3", 0]);
+  });
+
+  it("keeps Anima VAE context through local-region high-res inpaint and harmonization", () => {
+    const result = buildBasicInpaintWorkflow({
+      checkpointName: "pencil-xl-diffusion.safetensors",
+      modelBaseModel: "Anima",
+      modelStorageKind: "diffusion",
+      positivePrompt: "repair the sleeve",
+      imageName: "SceneForge/source.png",
+      imageWidth: 1024,
+      imageHeight: 768,
+      maskName: "SceneForge/mask.png",
+      seed: 123,
+      upscaleBeforeInpaint: {
+        enabled: true,
+        mode: "lanczos",
+        scaleBy: 2,
+        strategy: "local-region",
+        localRegion: {
+          x: 128,
+          y: 96,
+          width: 320,
+          height: 256,
+          source: "box",
+          padding: 128,
+          feather: 32,
+          harmonizeAfter: {
+            enabled: true,
+            denoise: 0.12,
+          },
+        },
+      },
+    });
+
+    expect(Object.values(result.workflow).some((node) => node.class_type === "CheckpointLoaderSimple")).toBe(false);
+    expect(result.nodeIds).toMatchObject({
+      unetLoader: "1",
+      clipLoader: "2",
+      vaeLoader: "3",
+      sourceImageCrop: "8",
+      maskCrop: "9",
+      compositeMaskFeather: "10",
+      sourceImageScaleBy: "11",
+      vaeEncode: "15",
+      setLatentNoiseMask: "16",
+      sampler: "17",
+      vaeDecode: "18",
+      localPatchScale: "19",
+      localComposite: "20",
+      harmonizeVaeEncode: "21",
+      harmonizeSampler: "22",
+      harmonizeVaeDecode: "23",
+      previewImage: "24",
+    });
+    expect(result.workflow["15"]).toMatchObject({
+      class_type: "VAEEncodeTiled",
+      inputs: {
+        pixels: ["11", 0],
+        vae: ["3", 0],
+      },
+    });
+    expect(result.workflow["17"].inputs).toMatchObject({
+      model: ["1", 0],
+      latent_image: ["16", 0],
+    });
+    expect(result.workflow["18"]).toMatchObject({
+      class_type: "VAEDecodeTiled",
+      inputs: {
+        samples: ["17", 0],
+        vae: ["3", 0],
+      },
+    });
+    expect(result.workflow["20"]).toMatchObject({
+      class_type: "ImageCompositeMasked",
+      inputs: {
+        destination: ["6", 0],
+        source: ["19", 0],
+        mask: ["10", 0],
+      },
+    });
+    expect(result.workflow["21"]).toMatchObject({
+      class_type: "VAEEncodeTiled",
+      inputs: {
+        pixels: ["20", 0],
+        vae: ["3", 0],
+      },
+    });
+    expect(result.workflow["22"].inputs).toMatchObject({
+      denoise: 0.12,
+      model: ["1", 0],
+      latent_image: ["21", 0],
+    });
+    expect(result.workflow["23"]).toMatchObject({
+      class_type: "VAEDecodeTiled",
+      inputs: {
+        samples: ["22", 0],
+        vae: ["3", 0],
+      },
+    });
+  });
+
   it("upscales source and mask before latent noise mask inpaint with lanczos mode", () => {
     const result = buildBasicInpaintWorkflow({
       checkpointName: "dream.safetensors",
