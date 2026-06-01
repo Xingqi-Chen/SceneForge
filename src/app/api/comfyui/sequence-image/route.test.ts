@@ -99,6 +99,21 @@ const objectInfoWithAnima = {
   },
 };
 
+const objectInfoWithAnimaAddons = {
+  ...objectInfoWithAnima,
+  LoadImage: {},
+  IPAdapterAdvanced: {},
+  IPAdapterUnifiedLoader: {},
+  ControlNetApplyAdvanced: {},
+  ControlNetLoader: {
+    input: {
+      required: {
+        control_net_name: [["control_v11p_sd15_openpose.pth"], {}],
+      },
+    },
+  },
+};
+
 const openPoseSvg = '<svg xmlns="http://www.w3.org/2000/svg" width="512" height="384"><rect width="512" height="384" fill="#000" /></svg>';
 const normalPngDataUrl = "data:image/png;base64,aGVsbG8=";
 
@@ -474,6 +489,181 @@ describe("ComfyUI sequence image route", () => {
           },
           seed: 700,
           shotId: "shot-anima",
+        },
+      ],
+    });
+  });
+
+  it("inherits Anima character references and ControlNet add-ons into per-shot requests before queueing", async () => {
+    process.env.COMFYUI_BASE_URL = "http://comfyui.test";
+    const promptBodies: PromptBody[] = [];
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      if (input === "http://comfyui.test/object_info") {
+        return Response.json(objectInfoWithAnimaAddons);
+      }
+
+      if (input === "http://comfyui.test/upload/image") {
+        expect(init?.method).toBe("POST");
+        expect(init?.body).toBeInstanceOf(FormData);
+        const image = init?.body instanceof FormData ? init.body.get("image") : undefined;
+        const filename = image && typeof image === "object" && "name" in image && typeof image.name === "string"
+          ? image.name
+          : "";
+
+        if (filename.includes("hero")) {
+          return Response.json({
+            name: "hero-reference.png",
+            type: "input",
+          });
+        }
+
+        return Response.json({
+          name: "uploaded-openpose.png",
+          subfolder: "SceneForge",
+          type: "input",
+        });
+      }
+
+      expect(input).toBe("http://comfyui.test/prompt");
+      const body = JSON.parse(String(init?.body)) as PromptBody;
+      promptBodies.push(body);
+
+      return Response.json({
+        prompt_id: "prompt-anima-addons-shot",
+        number: 2,
+        node_errors: {},
+      });
+    });
+
+    const response = await POST(
+      new Request("http://localhost/api/comfyui/sequence-image", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          baseRequest: {
+            checkpointName: "pencil-xl-diffusion.safetensors",
+            workflowProfile: "anima",
+            modelBaseModel: "Anima",
+            modelStorageKind: "diffusion",
+            positivePrompt: "base global",
+            negativePrompt: "base negative",
+            samplerName: "euler",
+            scheduler: "normal",
+            width: 1024,
+            height: 1024,
+            batchSize: 1,
+            seed: 11,
+            controlNets: [
+              {
+                type: "openpose",
+                enabled: true,
+                strength: 0.75,
+                svg: openPoseSvg,
+              },
+            ],
+          },
+          baseSeed: 800,
+          characters: [
+            {
+              id: "hero",
+              name: "Hero",
+              prompt: "silver armor",
+              references: [
+                {
+                  id: "hero-ref",
+                  imageDataUrl: "data:image/png;base64,aGVsbG8=",
+                },
+              ],
+            },
+          ],
+          clientId: "client-seq",
+          imageCount: 1,
+          sequenceId: "seq-anima-addons",
+          shots: [
+            {
+              id: "shot-anima-addons",
+              prompt: "raising a sword",
+            },
+          ],
+        }),
+      }),
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(fetchSpy).toHaveBeenCalledTimes(4);
+    expect(promptBodies).toHaveLength(1);
+    expect(promptBodies[0].client_id).toBe("client-seq:shot-anima-addons");
+    expect(Object.values(promptBodies[0].prompt).some((node) => node.class_type === "CheckpointLoaderSimple")).toBe(false);
+    expect(promptBodies[0].prompt["1"]).toMatchObject({
+      class_type: "UNETLoader",
+      inputs: {
+        unet_name: "pencil-xl-diffusion.safetensors",
+      },
+    });
+    expect(promptBodies[0].prompt["6"]).toMatchObject({
+      class_type: "LoadImage",
+      inputs: {
+        image: "SceneForge/uploaded-openpose.png",
+      },
+    });
+    expect(promptBodies[0].prompt["8"]).toMatchObject({
+      class_type: "ControlNetApplyAdvanced",
+      inputs: {
+        positive: ["4", 0],
+        negative: ["5", 0],
+      },
+    });
+    expect(promptBodies[0].prompt["9"]).toMatchObject({
+      class_type: "LoadImage",
+      inputs: {
+        image: "hero-reference.png",
+      },
+    });
+    expect(promptBodies[0].prompt["10"]).toMatchObject({
+      class_type: "IPAdapterUnifiedLoader",
+      inputs: {
+        model: ["1", 0],
+      },
+    });
+    expect(promptBodies[0].prompt["11"]).toMatchObject({
+      class_type: "IPAdapterAdvanced",
+      inputs: {
+        model: ["10", 0],
+      },
+    });
+    expect(promptBodies[0].prompt["13"].inputs).toMatchObject({
+      model: ["11", 0],
+      positive: ["8", 0],
+      negative: ["8", 1],
+    });
+    expect(payload).toMatchObject({
+      sequenceId: "seq-anima-addons",
+      warnings: [],
+      shots: [
+        {
+          characterReferenceIds: ["hero-ref"],
+          outputNodeId: "15",
+          promptId: "prompt-anima-addons-shot",
+          request: {
+            workflowProfile: "anima",
+            modelBaseModel: "Anima",
+            modelStorageKind: "diffusion",
+            controlNets: [
+              {
+                type: "openpose",
+                imageName: "SceneForge/uploaded-openpose.png",
+                modelName: "control_v11p_sd15_openpose.pth",
+                svg: "",
+              },
+            ],
+            characterReferences: [
+              {
+                id: "hero",
+                name: "Hero",
+              },
+            ],
+          },
         },
       ],
     });

@@ -161,6 +161,152 @@ describe("ComfyUI workflow builder", () => {
     });
   });
 
+  it("builds Anima ControlNet text-to-image workflows from Anima model context", () => {
+    const result = buildBasicTextToImageWorkflow({
+      checkpointName: "pencil-xl-diffusion.safetensors",
+      modelBaseModel: "Anima",
+      modelStorageKind: "diffusion",
+      positivePrompt: "pose guided portrait",
+      seed: 123,
+      controlNets: [
+        {
+          type: "openpose",
+          enabled: true,
+          modelName: "control-anima-openpose.safetensors",
+          imageName: "SceneForge/openpose.png",
+        },
+      ],
+    });
+
+    expect(Object.values(result.workflow).some((node) => node.class_type === "CheckpointLoaderSimple")).toBe(false);
+    expect(result.nodeIds).toMatchObject({
+      unetLoader: "1",
+      clipLoader: "2",
+      vaeLoader: "3",
+      controlNets: [{ type: "openpose", image: "6", loader: "7", apply: "8" }],
+      sampler: "10",
+      vaeDecode: "11",
+      previewImage: "12",
+    });
+    expect(result.workflow["8"]).toMatchObject({
+      class_type: "ControlNetApplyAdvanced",
+      inputs: {
+        positive: ["4", 0],
+        negative: ["5", 0],
+        control_net: ["7", 0],
+        image: ["6", 0],
+      },
+    });
+    expect(result.workflow["10"].inputs).toMatchObject({
+      model: ["1", 0],
+      positive: ["8", 0],
+      negative: ["8", 1],
+    });
+    expect(result.workflow["11"].inputs.vae).toEqual(["3", 0]);
+  });
+
+  it("builds Anima character reference workflows from Anima model context", () => {
+    const result = buildBasicTextToImageWorkflow({
+      checkpointName: "pencil-xl-diffusion.safetensors",
+      modelBaseModel: "Anima",
+      modelStorageKind: "diffusion",
+      positivePrompt: "character consistent portrait",
+      seed: 123,
+      characterReferences: [
+        {
+          id: "hero",
+          name: "Hero",
+          images: [{ imageName: "hero.png" }],
+        },
+      ],
+    });
+
+    expect(Object.values(result.workflow).some((node) => node.class_type === "CheckpointLoaderSimple")).toBe(false);
+    expect(result.nodeIds.characterReferences).toEqual([
+      {
+        characterId: "hero",
+        imageLoaders: ["6"],
+        imageBatchers: [],
+        loader: "7",
+        apply: "8",
+      },
+    ]);
+    expect(result.workflow["7"]).toMatchObject({
+      class_type: "IPAdapterUnifiedLoader",
+      inputs: {
+        model: ["1", 0],
+        preset: "PLUS (high strength)",
+      },
+    });
+    expect(result.workflow["8"]).toMatchObject({
+      class_type: "IPAdapterAdvanced",
+      inputs: {
+        model: ["7", 0],
+        ipadapter: ["7", 1],
+        image: ["6", 0],
+      },
+    });
+    expect(result.workflow["10"].inputs.model).toEqual(["8", 0]);
+    expect(result.workflow["11"].inputs.vae).toEqual(["3", 0]);
+  });
+
+  it("builds Anima text-to-image detailers from Anima model, CLIP, and VAE context", () => {
+    const result = buildBasicTextToImageWorkflow({
+      checkpointName: "pencil-xl-diffusion.safetensors",
+      modelBaseModel: "Anima",
+      modelStorageKind: "diffusion",
+      positivePrompt: "portrait with hands",
+      seed: 123,
+      handDetailer: {
+        enabled: true,
+        detectorModelName: "bbox/hand_yolov8s.pt",
+      },
+      faceDetailer: {
+        enabled: true,
+        detectorModelName: "bbox/face_yolov8s.pt",
+      },
+    });
+
+    expect(Object.values(result.workflow).some((node) => node.class_type === "CheckpointLoaderSimple")).toBe(false);
+    expect(result.nodeIds).toMatchObject({
+      unetLoader: "1",
+      clipLoader: "2",
+      vaeLoader: "3",
+      handUltralyticsDetectorProvider: "9",
+      handDetailer: "10",
+      ultralyticsDetectorProvider: "11",
+      faceDetailer: "12",
+      previewImage: "13",
+    });
+    expect(result.workflow["10"]).toMatchObject({
+      class_type: "FaceDetailer",
+      _meta: {
+        title: "HandDetailer",
+      },
+      inputs: {
+        image: ["8", 0],
+        model: ["1", 0],
+        clip: ["2", 0],
+        vae: ["3", 0],
+      },
+    });
+    expect(result.workflow["12"]).toMatchObject({
+      class_type: "FaceDetailer",
+      _meta: {
+        title: "FaceDetailer",
+      },
+      inputs: {
+        image: ["10", 0],
+        model: ["1", 0],
+        clip: ["2", 0],
+        vae: ["3", 0],
+      },
+    });
+    expect(result.workflow["13"].inputs).toEqual({
+      images: ["12", 0],
+    });
+  });
+
   it("ignores legacy Anima CLIP, VAE, and dtype overrides when building workflows", () => {
     const result = buildBasicTextToImageWorkflow({
       checkpointName: "pencil-xl-diffusion.safetensors",
@@ -805,6 +951,73 @@ describe("ComfyUI workflow builder", () => {
         samples: ["22", 0],
         vae: ["3", 0],
       },
+    });
+  });
+
+  it("builds Anima high-res inpaint detailers from Anima model, CLIP, and VAE context", () => {
+    const result = buildBasicInpaintWorkflow({
+      checkpointName: "pencil-xl-diffusion.safetensors",
+      modelBaseModel: "Anima",
+      modelStorageKind: "diffusion",
+      positivePrompt: "repair detailed hands and face",
+      imageName: "SceneForge/source.png",
+      maskName: "SceneForge/mask.png",
+      seed: 123,
+      upscaleBeforeInpaint: {
+        enabled: true,
+        mode: "lanczos",
+        scaleBy: 2,
+      },
+      handDetailer: {
+        enabled: true,
+        detectorModelName: "bbox/hand_yolov8s.pt",
+      },
+      faceDetailer: {
+        enabled: true,
+        detectorModelName: "bbox/face_yolov8s.pt",
+      },
+    });
+
+    expect(Object.values(result.workflow).some((node) => node.class_type === "CheckpointLoaderSimple")).toBe(false);
+    expect(result.nodeIds).toMatchObject({
+      unetLoader: "1",
+      clipLoader: "2",
+      vaeLoader: "3",
+      vaeEncode: "12",
+      sampler: "14",
+      vaeDecode: "15",
+      handUltralyticsDetectorProvider: "16",
+      handDetailer: "17",
+      ultralyticsDetectorProvider: "18",
+      faceDetailer: "19",
+      previewImage: "20",
+    });
+    expect(result.workflow["17"]).toMatchObject({
+      class_type: "FaceDetailer",
+      _meta: {
+        title: "HandDetailer",
+      },
+      inputs: {
+        image: ["15", 0],
+        model: ["1", 0],
+        clip: ["2", 0],
+        vae: ["3", 0],
+      },
+    });
+    expect(result.workflow["19"]).toMatchObject({
+      class_type: "FaceDetailer",
+      _meta: {
+        title: "FaceDetailer",
+      },
+      inputs: {
+        image: ["17", 0],
+        model: ["1", 0],
+        clip: ["2", 0],
+        vae: ["3", 0],
+      },
+    });
+    expect(result.workflow["20"].inputs).toEqual({
+      images: ["19", 0],
     });
   });
 

@@ -587,84 +587,10 @@ function buildDefaultTextToImageWorkflow(
 function buildAnimaTextToImageWorkflow(
   resolvedRequest: ResolvedComfyUiTextToImageRequest,
 ): BasicTextToImageWorkflow {
-  const builder = new ComfyUiWorkflowBuilder();
-  const modelContext = addModelContextNodes({ builder, request: resolvedRequest });
-  const modelConnection = modelContext.modelConnection;
-  const clipConnection = modelContext.clipConnection;
-  const positivePrompt = builder.addNode(
-    "CLIPTextEncode",
-    {
-      text: applyPromptPrefix(resolvedRequest.promptWrapper.positivePrefix, resolvedRequest.positivePrompt),
-      clip: clipConnection,
-    },
-    "Positive Prompt",
-  );
-  const negativePrompt = builder.addNode(
-    "CLIPTextEncode",
-    {
-      text: applyPromptPrefix(resolvedRequest.promptWrapper.negativePrefix, resolvedRequest.negativePrompt),
-      clip: clipConnection,
-    },
-    "Negative Prompt",
-  );
-  const latentImage = builder.addNode(
-    "EmptyLatentImage",
-    {
-      width: resolvedRequest.width,
-      height: resolvedRequest.height,
-      batch_size: resolvedRequest.batchSize,
-    },
-    getComfyUiLatentImageNodeTitle("EmptyLatentImage"),
-  );
-  const sampler = builder.addNode(
-    "KSampler",
-    {
-      seed: resolvedRequest.seed,
-      steps: resolvedRequest.steps,
-      cfg: resolvedRequest.cfg,
-      sampler_name: resolvedRequest.samplerName,
-      scheduler: resolvedRequest.scheduler,
-      denoise: resolvedRequest.denoise,
-      model: modelConnection,
-      positive: builder.connect(positivePrompt, 0),
-      negative: builder.connect(negativePrompt, 0),
-      latent_image: builder.connect(latentImage, 0),
-    },
-    "KSampler",
-  );
-  const vaeDecode = builder.addNode(
-    "VAEDecode",
-    {
-      samples: builder.connect(sampler, 0),
-      vae: modelContext.vaeConnection,
-    },
-    "Decode Image",
-  );
-  const previewImage = builder.addNode(
-    "PreviewImage",
-    {
-      images: builder.connect(vaeDecode, 0),
-    },
-    "Preview Image",
-  );
-
-  return {
-    workflow: builder.toWorkflow(),
-    nodeIds: {
-      ...modelContext.nodeIds,
-      positivePrompt,
-      negativePrompt,
-      latentImage,
-      sampler,
-      vaeDecode,
-      previewImage,
-    },
-    outputNodeId: previewImage,
-    request: {
-      ...resolvedRequest,
-      latentImageNode: "EmptyLatentImage",
-    },
-  };
+  return buildDefaultTextToImageWorkflow({
+    ...resolvedRequest,
+    latentImageNode: "EmptyLatentImage",
+  });
 }
 
 export function buildBasicInpaintWorkflow(request: ComfyUiInpaintRequest): BasicInpaintWorkflow {

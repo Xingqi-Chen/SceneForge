@@ -93,6 +93,29 @@ const objectInfoWithControlNet = {
   },
 };
 
+const objectInfoWithAnimaAddons = {
+  ...objectInfoWithAnima,
+  LoadImage: {},
+  ControlNetApplyAdvanced: {},
+  ControlNetLoader: {
+    input: {
+      required: {
+        control_net_name: [["control_v11p_sd15_openpose.pth"], {}],
+      },
+    },
+  },
+  FaceDetailer: {},
+  IPAdapterAdvanced: {},
+  IPAdapterUnifiedLoader: {},
+  UltralyticsDetectorProvider: {
+    input: {
+      required: {
+        model_name: [["bbox/face_yolov8s.pt", "bbox/hand_yolov8s.pt"], {}],
+      },
+    },
+  },
+};
+
 const openPoseSvg = '<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><rect width="64" height="64" fill="#000" /></svg>';
 const depthSvg = '<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><rect width="64" height="64" fill="#888" /></svg>';
 const normalPngDataUrl = "data:image/png;base64,aGVsbG8=";
@@ -353,6 +376,250 @@ describe("ComfyUI generate image route", () => {
       },
     });
     expect(payload.request.clipDevice).toBeUndefined();
+  });
+
+  it("uploads Anima ControlNet images and queues detailers with Anima model context", async () => {
+    process.env.COMFYUI_BASE_URL = "http://comfyui.test";
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      if (input === "http://comfyui.test/object_info") {
+        return Response.json(objectInfoWithAnimaAddons);
+      }
+
+      if (input === "http://comfyui.test/upload/image") {
+        expect(init?.method).toBe("POST");
+        expect(init?.body).toBeInstanceOf(FormData);
+        return Response.json({
+          name: "uploaded-openpose.png",
+          subfolder: "SceneForge",
+          type: "input",
+        });
+      }
+
+      expect(input).toBe("http://comfyui.test/prompt");
+      const body = JSON.parse(String(init?.body));
+      expect(Object.values(body.prompt).some((node) => (node as { class_type?: string }).class_type === "CheckpointLoaderSimple")).toBe(false);
+      expect(body.prompt["1"]).toMatchObject({
+        class_type: "UNETLoader",
+        inputs: {
+          unet_name: "pencil-xl-diffusion.safetensors",
+        },
+      });
+      expect(body.prompt["2"]).toMatchObject({
+        class_type: "CLIPLoader",
+        inputs: {
+          clip_name: "qwen_3_06b_base.safetensors",
+          type: "qwen_image",
+          device: "default",
+        },
+      });
+      expect(body.prompt["3"]).toMatchObject({
+        class_type: "VAELoader",
+        inputs: {
+          vae_name: "qwen_image_vae.safetensors",
+        },
+      });
+      expect(body.prompt["8"]).toMatchObject({
+        class_type: "ControlNetApplyAdvanced",
+        inputs: {
+          positive: ["4", 0],
+          negative: ["5", 0],
+          control_net: ["7", 0],
+          image: ["6", 0],
+        },
+      });
+      expect(body.prompt["10"].inputs).toMatchObject({
+        model: ["1", 0],
+        positive: ["8", 0],
+        negative: ["8", 1],
+      });
+      expect(body.prompt["13"]).toMatchObject({
+        class_type: "FaceDetailer",
+        _meta: {
+          title: "HandDetailer",
+        },
+        inputs: {
+          image: ["11", 0],
+          model: ["1", 0],
+          clip: ["2", 0],
+          vae: ["3", 0],
+        },
+      });
+      expect(body.prompt["15"]).toMatchObject({
+        class_type: "FaceDetailer",
+        _meta: {
+          title: "FaceDetailer",
+        },
+        inputs: {
+          image: ["13", 0],
+          model: ["1", 0],
+          clip: ["2", 0],
+          vae: ["3", 0],
+        },
+      });
+
+      return Response.json({
+        prompt_id: "prompt-anima-controlnet-detailers",
+        number: 12,
+        node_errors: {},
+      });
+    });
+
+    const response = await POST(
+      new Request("http://localhost/api/comfyui/generate-image", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          checkpointName: "pencil-xl-diffusion.safetensors",
+          modelBaseModel: "Anima",
+          modelStorageKind: "diffusion",
+          positivePrompt: "pose guided portrait with hands",
+          seed: 123,
+          controlNets: [
+            {
+              type: "openpose",
+              enabled: true,
+              strength: 0.8,
+              svg: openPoseSvg,
+            },
+          ],
+          handDetailer: {
+            enabled: true,
+          },
+          faceDetailer: {
+            enabled: true,
+          },
+        }),
+      }),
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(fetchSpy).toHaveBeenCalledTimes(3);
+    expect(payload).toMatchObject({
+      promptId: "prompt-anima-controlnet-detailers",
+      outputNodeId: "16",
+      nodeIds: {
+        unetLoader: "1",
+        clipLoader: "2",
+        vaeLoader: "3",
+        controlNets: [{ type: "openpose", image: "6", loader: "7", apply: "8" }],
+        handDetailer: "13",
+        faceDetailer: "15",
+        previewImage: "16",
+      },
+      request: {
+        workflowProfile: "anima",
+        checkpointName: "pencil-xl-diffusion.safetensors",
+        controlNets: [
+          {
+            type: "openpose",
+            enabled: true,
+            imageName: "SceneForge/uploaded-openpose.png",
+            modelName: "control_v11p_sd15_openpose.pth",
+            svg: "",
+          },
+        ],
+        handDetailer: {
+          enabled: true,
+          detectorModelName: "bbox/hand_yolov8s.pt",
+        },
+        faceDetailer: {
+          enabled: true,
+          detectorModelName: "bbox/face_yolov8s.pt",
+        },
+      },
+    });
+  });
+
+  it("queues Anima character references through IPAdapter with Anima model context", async () => {
+    process.env.COMFYUI_BASE_URL = "http://comfyui.test";
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      if (input === "http://comfyui.test/object_info") {
+        return Response.json(objectInfoWithAnimaAddons);
+      }
+
+      expect(input).toBe("http://comfyui.test/prompt");
+      const body = JSON.parse(String(init?.body));
+      expect(Object.values(body.prompt).some((node) => (node as { class_type?: string }).class_type === "CheckpointLoaderSimple")).toBe(false);
+      expect(body.prompt["7"]).toMatchObject({
+        class_type: "IPAdapterUnifiedLoader",
+        inputs: {
+          model: ["1", 0],
+          preset: "PLUS (high strength)",
+        },
+      });
+      expect(body.prompt["8"]).toMatchObject({
+        class_type: "IPAdapterAdvanced",
+        inputs: {
+          model: ["7", 0],
+          ipadapter: ["7", 1],
+          image: ["6", 0],
+        },
+      });
+      expect(body.prompt["10"].inputs).toMatchObject({
+        model: ["8", 0],
+      });
+      expect(body.prompt["11"].inputs.vae).toEqual(["3", 0]);
+
+      return Response.json({
+        prompt_id: "prompt-anima-character-reference",
+        number: 13,
+        node_errors: {},
+      });
+    });
+
+    const response = await POST(
+      new Request("http://localhost/api/comfyui/generate-image", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          checkpointName: "pencil-xl-diffusion.safetensors",
+          modelBaseModel: "Anima",
+          modelStorageKind: "diffusion",
+          positivePrompt: "character consistent portrait",
+          seed: 123,
+          characterReferences: [
+            {
+              id: "hero",
+              name: "Hero",
+              images: [{ imageName: "hero-reference.png" }],
+            },
+          ],
+        }),
+      }),
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(payload).toMatchObject({
+      promptId: "prompt-anima-character-reference",
+      outputNodeId: "12",
+      nodeIds: {
+        unetLoader: "1",
+        clipLoader: "2",
+        vaeLoader: "3",
+        characterReferences: [
+          {
+            characterId: "hero",
+            imageLoaders: ["6"],
+            loader: "7",
+            apply: "8",
+          },
+        ],
+        previewImage: "12",
+      },
+      request: {
+        workflowProfile: "anima",
+        characterReferences: [
+          {
+            id: "hero",
+            name: "Hero",
+            enabled: true,
+          },
+        ],
+      },
+    });
   });
 
   it("returns Anima object_info validation errors before queueing when required files are missing", async () => {

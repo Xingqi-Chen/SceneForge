@@ -103,6 +103,16 @@ const objectInfoWithIpAdapter = {
   IPAdapterUnifiedLoaderFaceID: {},
 };
 
+const objectInfoWithAnimaControlNet = {
+  ...objectInfoWithAnima,
+  ...objectInfoWithControlNet,
+};
+
+const objectInfoWithAnimaIpAdapter = {
+  ...objectInfoWithAnima,
+  ...objectInfoWithIpAdapter,
+};
+
 const objectInfoWithInpaint = {
   ...objectInfo,
   LoadImage: {},
@@ -474,6 +484,190 @@ describe("ComfyUI object info helpers", () => {
         latentImageNode: "EmptyLatentImage",
       },
     });
+  });
+
+  it("validates Anima ControlNet add-ons without falling back to CheckpointLoaderSimple", () => {
+    const animaOnlyObjectInfo: Record<string, unknown> = { ...objectInfoWithAnimaControlNet };
+    delete animaOnlyObjectInfo.CheckpointLoaderSimple;
+    const result = validateComfyUiRequestAgainstObjectInfo(
+      {
+        checkpointName: "pencil-xl-diffusion.safetensors",
+        modelBaseModel: "Anima",
+        modelStorageKind: "diffusion",
+        positivePrompt: "scene",
+        controlNets: [
+          {
+            type: "depth",
+            enabled: true,
+            imageName: "SceneForge/depth.png",
+          },
+        ],
+      },
+      animaOnlyObjectInfo,
+    );
+
+    expect(result).toMatchObject({
+      errors: [],
+      request: {
+        checkpointName: "pencil-xl-diffusion.safetensors",
+        workflowProfile: "anima",
+        controlNets: [
+          {
+            type: "depth",
+            enabled: true,
+            modelName: "control_v11f1p_sd15_depth.pth",
+          },
+        ],
+      },
+    });
+  });
+
+  it("reports missing Anima ControlNet nodes and models before queueing", () => {
+    const result = validateComfyUiRequestAgainstObjectInfo(
+      {
+        checkpointName: "pencil-xl-diffusion.safetensors",
+        modelBaseModel: "Anima",
+        modelStorageKind: "diffusion",
+        positivePrompt: "scene",
+        controlNets: [
+          {
+            type: "openpose",
+            enabled: true,
+            imageName: "SceneForge/openpose.png",
+          },
+        ],
+      },
+      objectInfoWithAnima,
+    );
+
+    expect(result.errors).toEqual([
+      "LoadImage node is not available in ComfyUI. It is required for ControlNet images.",
+      "ControlNetLoader node is not available in ComfyUI. Install ControlNet support to use ControlNet.",
+      "ControlNetApplyAdvanced node is not available in ComfyUI. Update ComfyUI or install ControlNet support.",
+      "OpenPose ControlNet model is not available in ComfyUI.",
+    ]);
+    expect(result.errors).not.toContain("Anima text-to-image profile does not support ControlNet yet.");
+    expect(result.errors).not.toContain("Checkpoint is not available in ComfyUI: pencil-xl-diffusion.safetensors");
+  });
+
+  it("validates Anima character references without falling back to CheckpointLoaderSimple", () => {
+    const animaOnlyObjectInfo: Record<string, unknown> = { ...objectInfoWithAnimaIpAdapter };
+    delete animaOnlyObjectInfo.CheckpointLoaderSimple;
+    const result = validateComfyUiRequestAgainstObjectInfo(
+      {
+        checkpointName: "pencil-xl-diffusion.safetensors",
+        modelBaseModel: "Anima",
+        modelStorageKind: "diffusion",
+        positivePrompt: "scene",
+        characterReferences: [
+          {
+            id: "hero",
+            name: "Hero",
+            images: [{ imageName: "hero.png" }],
+          },
+        ],
+      },
+      animaOnlyObjectInfo,
+    );
+
+    expect(result.errors).toEqual([]);
+    expect(result.warnings).toEqual([]);
+    expect(result.request).toMatchObject({
+      workflowProfile: "anima",
+      characterReferences: [
+        {
+          id: "hero",
+          name: "Hero",
+        },
+      ],
+    });
+  });
+
+  it("blocks Anima character references when IPAdapter nodes are missing", () => {
+    const result = validateComfyUiRequestAgainstObjectInfo(
+      {
+        checkpointName: "pencil-xl-diffusion.safetensors",
+        modelBaseModel: "Anima",
+        modelStorageKind: "diffusion",
+        positivePrompt: "scene",
+        characterReferences: [
+          {
+            id: "hero",
+            name: "Hero",
+            images: [{ imageName: "hero.png" }],
+          },
+        ],
+      },
+      objectInfoWithAnima,
+    );
+
+    expect(result.errors).toEqual([
+      "Character reference \"Hero\" requires ComfyUI nodes for Anima: LoadImage, IPAdapterAdvanced, IPAdapterUnifiedLoader. Install ComfyUI_IPAdapter_plus to use character references with Anima.",
+    ]);
+    expect(result.warnings).toEqual([]);
+    expect(result.request.characterReferences?.[0]).toMatchObject({
+      id: "hero",
+    });
+    expect(result.request.characterReferences?.[0]?.enabled).toBeUndefined();
+  });
+
+  it("validates and normalizes Anima detailer add-ons before queueing", () => {
+    const result = validateComfyUiRequestAgainstObjectInfo(
+      {
+        checkpointName: "pencil-xl-diffusion.safetensors",
+        modelBaseModel: "Anima",
+        modelStorageKind: "diffusion",
+        positivePrompt: "scene",
+        faceDetailer: {
+          enabled: true,
+        },
+        handDetailer: {
+          enabled: true,
+        },
+      },
+      objectInfoWithAnima,
+    );
+
+    expect(result).toMatchObject({
+      errors: [],
+      request: {
+        workflowProfile: "anima",
+        faceDetailer: {
+          enabled: true,
+          detectorModelName: "bbox/face_yolov8s.pt",
+        },
+        handDetailer: {
+          enabled: true,
+          detectorModelName: "bbox/hand_yolov8s.pt",
+        },
+      },
+    });
+  });
+
+  it("reports missing Anima detailer custom nodes before queueing", () => {
+    const result = validateComfyUiRequestAgainstObjectInfo(
+      {
+        checkpointName: "pencil-xl-diffusion.safetensors",
+        modelBaseModel: "Anima",
+        modelStorageKind: "diffusion",
+        positivePrompt: "scene",
+        faceDetailer: {
+          enabled: true,
+        },
+      },
+      {
+        ...objectInfoWithAnima,
+        FaceDetailer: undefined,
+        UltralyticsDetectorProvider: undefined,
+      },
+    );
+
+    expect(result.errors).toEqual([
+      "FaceDetailer node is not available in ComfyUI. Install ComfyUI Impact Pack to use FaceDetailer.",
+      "UltralyticsDetectorProvider node is not available in ComfyUI. Install ComfyUI Impact Subpack to use FaceDetailer.",
+      "FaceDetailer detector model is not available in ComfyUI.",
+    ]);
+    expect(result.errors).not.toContain("Anima text-to-image profile does not support FaceDetailer yet.");
   });
 
   it("uses fixed Anima CLIP and VAE settings without explicit request selections", () => {
@@ -1042,7 +1236,7 @@ describe("ComfyUI object info helpers", () => {
     });
   });
 
-  it("reports missing Anima inpaint profile files and unsupported detailers before queueing", () => {
+  it("reports missing Anima inpaint profile files without requiring CheckpointLoaderSimple", () => {
     const result = validateComfyUiInpaintRequestAgainstObjectInfo(
       {
         checkpointName: "pencil-xl-diffusion.safetensors",
@@ -1051,9 +1245,6 @@ describe("ComfyUI object info helpers", () => {
         positivePrompt: "repair hands",
         sourceImage: { filename: "source.png", type: "output" },
         maskName: "mask.png",
-        faceDetailer: {
-          enabled: true,
-        },
       },
       {
         ...objectInfoWithAnimaInpaint,
@@ -1082,9 +1273,71 @@ describe("ComfyUI object info helpers", () => {
       "Anima CLIP model is not available in ComfyUI: qwen_3_06b_base.safetensors",
       "Anima CLIP type is not available in ComfyUI: qwen_image",
       "Anima VAE model is not available in ComfyUI: qwen_image_vae.safetensors",
-      "Anima inpaint profile does not support FaceDetailer yet.",
     ]));
     expect(result.errors).not.toContain("Checkpoint is not available in ComfyUI: pencil-xl-diffusion.safetensors");
+  });
+
+  it("validates and normalizes Anima inpaint detailer settings before queueing", () => {
+    expect(
+      validateComfyUiInpaintRequestAgainstObjectInfo(
+        {
+          checkpointName: "pencil-xl-diffusion.safetensors",
+          modelBaseModel: "Anima",
+          modelStorageKind: "diffusion",
+          positivePrompt: "repair hands",
+          sourceImage: { filename: "source.png", type: "output" },
+          maskName: "mask.png",
+          faceDetailer: {
+            enabled: true,
+          },
+          handDetailer: {
+            enabled: true,
+          },
+        },
+        objectInfoWithAnimaInpaint,
+      ),
+    ).toMatchObject({
+      errors: [],
+      request: {
+        workflowProfile: "anima",
+        faceDetailer: {
+          enabled: true,
+          detectorModelName: "bbox/face_yolov8s.pt",
+        },
+        handDetailer: {
+          enabled: true,
+          detectorModelName: "bbox/hand_yolov8s.pt",
+        },
+      },
+    });
+  });
+
+  it("reports missing Anima inpaint detailer custom nodes before queueing", () => {
+    const result = validateComfyUiInpaintRequestAgainstObjectInfo(
+      {
+        checkpointName: "pencil-xl-diffusion.safetensors",
+        modelBaseModel: "Anima",
+        modelStorageKind: "diffusion",
+        positivePrompt: "repair hands",
+        sourceImage: { filename: "source.png", type: "output" },
+        maskName: "mask.png",
+        handDetailer: {
+          enabled: true,
+        },
+      },
+      {
+        ...objectInfoWithAnimaInpaint,
+        FaceDetailer: undefined,
+        UltralyticsDetectorProvider: undefined,
+      },
+    );
+
+    expect(result.errors).toEqual([
+      "FaceDetailer node is not available in ComfyUI. Install ComfyUI Impact Pack to use HandDetailer.",
+      "UltralyticsDetectorProvider node is not available in ComfyUI. Install ComfyUI Impact Subpack to use HandDetailer.",
+      "HandDetailer detector model is not available in ComfyUI.",
+    ]);
+    expect(result.errors).not.toContain("Anima inpaint profile does not support HandDetailer yet.");
   });
 
   it("validates and normalizes inpaint detailer settings before queueing", () => {
