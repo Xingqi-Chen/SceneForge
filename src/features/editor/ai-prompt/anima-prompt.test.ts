@@ -4,6 +4,7 @@ import type { SelectedCivitaiResourcePreview } from "@/features/civitai-lora-lib
 import type { GeneratedPrompt } from "@/features/prompt-engine";
 
 import {
+  buildAnimaAiResponseInstructions,
   buildAnimaComicSequencePrompt,
   classifyFlatPromptToAnimaSections,
   formatGeneratedPromptForAnimaContext,
@@ -43,6 +44,15 @@ function makeResource(
 }
 
 describe("Anima prompt renderer", () => {
+  it("instructs LLM responses to use anime-style natural-language phrases", () => {
+    const instructions = buildAnimaAiResponseInstructions();
+
+    expect(instructions).toContain("anime-style natural-language visual phrases");
+    expect(instructions).toContain("Keep phrases compact and prompt-like");
+    expect(instructions).toContain("Return JSON only");
+    expect(instructions).not.toContain("booru-style tags or short tag phrases");
+  });
+
   it("detects Anima contexts by workflow profile or base model", () => {
     expect(isAnimaPromptContext({ workflowProfile: "anima" })).toBe(true);
     expect(isAnimaPromptContext({ baseModel: "Anima" })).toBe(true);

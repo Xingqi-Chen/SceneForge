@@ -11,6 +11,7 @@ Summary:
 - Added a reusable Anima prompt renderer for `/editor` that activates from Anima workflow profile or base model metadata.
 - Ordered Anima positive prompts as quality/meta/year/safety, subject count, character, series/source, artist, and general tags, with case-insensitive dedupe after ordering.
 - Routed Anima formatting through prompt preview, AI prompt response rendering, ComfyUI generation settings, Comic Sequence shots, and previous-shot img2img/inpaint requests.
+- Split LLM prompt instructions by prompt profile so Anima AI responses use compact anime-style natural-language visual phrases while Illustrious/default responses keep booru-style tag instructions.
 - Added Anima safety behavior: default `safe` is included only when NSFW is disabled, while explicit safety/rating tags are preserved.
 - Converted compatible selected Artist String tags into Anima `@artist` syntax when they land in the artist section.
 - Kept non-Anima Illustrious/default prompt ordering and negative prompt behavior unchanged.
@@ -29,7 +30,7 @@ Files changed:
 Validation:
 
 - `npm test -- src/features/editor/ai-prompt/anima-prompt.test.ts src/features/editor/ai-prompt/illustrious-prompt.test.ts src/features/editor/ai-prompt/comfyui-generation-params.test.ts src/features/editor/components/PromptPreviewPanel.test.tsx` passed with 37 tests.
-- `npm test` passed: 84 files, 616 tests.
+- `npm test` passed: 84 files, 617 tests.
 - `npm run typecheck` passed.
 - `npm run lint` passed with the existing 22 `@next/next/no-img-element` warnings.
 
