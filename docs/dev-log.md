@@ -13,6 +13,8 @@ Summary:
 - Kept unknown and non-Anima diffusion models on the default checkpoint workflow.
 - Made text-to-image `object_info` validation profile-aware so default and Anima profiles validate their own required loader nodes, inputs, and model file options before queueing.
 - Preserved preview request metadata while retaining the preview step cap behavior.
+- Follow-up: parsed ComfyUI `object_info` optional inputs so Anima `CLIPLoader.device` can be retained when ComfyUI exposes it as optional.
+- Follow-up: expanded KSampler sampler/scheduler fallback options and added a server-side sampler-options endpoint so editor dropdowns can use the local ComfyUI `object_info` values.
 
 Files changed:
 
@@ -26,8 +28,12 @@ Files changed:
 - `src/features/comfyui/object-info.test.ts`
 - `src/features/comfyui/preview.test.ts`
 - `src/app/api/comfyui/generate-image/route.test.ts`
+- `src/app/api/comfyui/sampler-options/route.ts`
+- `src/app/api/comfyui/sampler-options/route.test.ts`
 - `src/app/api/comfyui/sequence-image/route.test.ts`
 - `src/features/editor/ai-prompt/comfyui-generation-params.ts`
+- `src/features/editor/ai-prompt/comfyui-generation-options.ts`
+- `src/features/editor/ai-prompt/comfyui-generation-options.test.ts`
 - `src/features/editor/components/ImageGenerationPanel.tsx`
 - `docs/tech-spec.md`
 - `docs/dev-log.md`
@@ -37,8 +43,11 @@ Validation:
 - `npm test -- src/features/comfyui/workflow.test.ts src/features/comfyui/object-info.test.ts src/features/comfyui/preview.test.ts src/app/api/comfyui/generate-image/route.test.ts src/app/api/comfyui/workflow/text-to-image/route.test.ts` passed.
 - `npm test -- src/app/api/comfyui/sequence-image/route.test.ts` passed.
 - `npm test -- src/features/editor/ai-prompt/comfyui-generation-params.test.ts` passed.
+- `npm test -- src/features/editor/ai-prompt/comfyui-generation-options.test.ts src/features/editor/ai-prompt/comfyui-generation-params.test.ts src/features/comfyui/object-info.test.ts src/app/api/comfyui/sampler-options/route.test.ts` passed.
+- `npm test -- src/features/comfyui src/app/api/comfyui src/features/editor/ai-prompt/comfyui-generation-options.test.ts src/features/editor/ai-prompt/comfyui-generation-params.test.ts src/features/editor/ai-prompt/comfyui-generation-diagnosis.test.ts src/features/editor/ai-prompt/style-palette-prompts.test.ts` passed.
 - `npm run typecheck` passed.
 - `npm run lint` passed with the existing 22 `@next/next/no-img-element` warnings.
+- Merged PR #24 and confirmed Issue #23 closed.
 
 ### Legacy Editor ComfyUI Preview Generation
 
