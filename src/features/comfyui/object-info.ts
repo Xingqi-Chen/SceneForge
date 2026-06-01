@@ -22,9 +22,16 @@ import {
   getComfyUiInpaintUpscaleModelName,
   isComfyUiInpaintModelUpscaleMode,
 } from "./validation";
+import {
+  DEFAULT_COMFYUI_ANIMA_CLIP_DEVICE,
+  DEFAULT_COMFYUI_ANIMA_CLIP_TYPE,
+  DEFAULT_COMFYUI_ANIMA_UNET_WEIGHT_DTYPE,
+  resolveComfyUiTextToImageWorkflowProfile,
+} from "./workflow-profiles";
 
 type ComfyUiObjectInfoNode = {
   input?: {
+    optional?: Record<string, unknown>;
     required?: Record<string, unknown>;
   };
 };
@@ -51,11 +58,18 @@ export type ComfyUiSam2MaskRequestObjectInfoValidation = {
 
 const SAMPLER_ALIASES: Record<string, string> = {
   dpmpp2m: "dpmpp_2m",
+  dpmpp2mcfgpp: "dpmpp_2m_cfg_pp",
   dpm2m: "dpmpp_2m",
+  dpm2mcfgpp: "dpmpp_2m_cfg_pp",
   dpm2msde: "dpmpp_2m_sde",
   dpm2msdegpu: "dpmpp_2m_sde_gpu",
+  dpm2msdeheun: "dpmpp_2m_sde_heun",
+  dpm2msdeheungpu: "dpmpp_2m_sde_heun_gpu",
   dpmpp2msde: "dpmpp_2m_sde",
   dpmpp2msdegpu: "dpmpp_2m_sde_gpu",
+  dpmpp2msdeheun: "dpmpp_2m_sde_heun",
+  dpmpp2msdeheungpu: "dpmpp_2m_sde_heun_gpu",
+  dpmpp2sancestralcfgpp: "dpmpp_2s_ancestral_cfg_pp",
   dpm3msde: "dpmpp_3m_sde",
   dpm3msdegpu: "dpmpp_3m_sde_gpu",
   dpmpp3msde: "dpmpp_3m_sde",
@@ -65,7 +79,14 @@ const SAMPLER_ALIASES: Record<string, string> = {
   dpmppsde: "dpmpp_sde",
   dpmppsdegpu: "dpmpp_sde_gpu",
   eulera: "euler_ancestral",
+  euleracfgpp: "euler_ancestral_cfg_pp",
   eulerancestral: "euler_ancestral",
+  eulerancestralcfgpp: "euler_ancestral_cfg_pp",
+  eulercfgpp: "euler_cfg_pp",
+  resmultistep: "res_multistep",
+  resmultistepancestral: "res_multistep_ancestral",
+  resmultistepancestralcfgpp: "res_multistep_ancestral_cfg_pp",
+  resmultistepcfgpp: "res_multistep_cfg_pp",
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -82,11 +103,13 @@ function readInputOptions(objectInfo: unknown, classType: string, inputName: str
   }
 
   const nodeInfo = objectInfo[classType];
-  if (!isRecord(nodeInfo) || !isRecord(nodeInfo.input) || !isRecord(nodeInfo.input.required)) {
+  if (!isRecord(nodeInfo) || !isRecord(nodeInfo.input)) {
     return [];
   }
 
-  const inputInfo = nodeInfo.input.required[inputName];
+  const requiredInputs = isRecord(nodeInfo.input.required) ? nodeInfo.input.required : {};
+  const optionalInputs = isRecord(nodeInfo.input.optional) ? nodeInfo.input.optional : {};
+  const inputInfo = requiredInputs[inputName] ?? optionalInputs[inputName];
   if (!Array.isArray(inputInfo)) {
     return [];
   }
@@ -102,8 +125,93 @@ function readInputOptions(objectInfo: unknown, classType: string, inputName: str
   return [];
 }
 
+function hasInput(objectInfo: unknown, classType: string, inputName: string) {
+  if (!isRecord(objectInfo)) {
+    return false;
+  }
+
+  const nodeInfo = objectInfo[classType];
+  return isRecord(nodeInfo) &&
+    isRecord(nodeInfo.input) &&
+    (
+      (isRecord(nodeInfo.input.required) && inputName in nodeInfo.input.required) ||
+      (isRecord(nodeInfo.input.optional) && inputName in nodeInfo.input.optional)
+    );
+}
+
+function hasRequiredInput(objectInfo: unknown, classType: string, inputName: string) {
+  if (!isRecord(objectInfo)) {
+    return false;
+  }
+
+  const nodeInfo = objectInfo[classType];
+  return isRecord(nodeInfo) &&
+    isRecord(nodeInfo.input) &&
+    isRecord(nodeInfo.input.required) &&
+    inputName in nodeInfo.input.required;
+}
+
 function hasNodeInfo(objectInfo: unknown, classType: string) {
   return isRecord(objectInfo) && isRecord(objectInfo[classType]);
+}
+
+function validateRequiredNodeClasses(
+  objectInfo: unknown,
+  classTypes: readonly string[],
+  errors: string[],
+) {
+  for (const classType of classTypes) {
+    if (!hasNodeInfo(objectInfo, classType)) {
+      errors.push(`${classType} node is not available in ComfyUI.`);
+    }
+  }
+}
+
+function validateRequiredInputs(
+  objectInfo: unknown,
+  classType: string,
+  inputNames: readonly string[],
+  errors: string[],
+) {
+  if (!hasNodeInfo(objectInfo, classType)) {
+    return;
+  }
+
+  for (const inputName of inputNames) {
+    if (!hasRequiredInput(objectInfo, classType, inputName)) {
+      errors.push(`${classType}.${inputName} input is not available in ComfyUI object_info.`);
+    }
+  }
+}
+
+function resolveRequiredOption({
+  classType,
+  errors,
+  fallback,
+  inputName,
+  label,
+  objectInfo,
+  requested,
+}: {
+  classType: string;
+  errors: string[];
+  fallback?: string;
+  inputName: string;
+  label: string;
+  objectInfo: unknown;
+  requested: string | undefined;
+}) {
+  const options = readInputOptions(objectInfo, classType, inputName);
+  const requestedOption = requested ? findOption(requested, options) : null;
+  const fallbackOption = fallback ? findOption(fallback, options) : null;
+  const resolved = requestedOption ?? (!requested ? fallbackOption ?? options[0] ?? null : null);
+
+  if (!resolved) {
+    errors.push(requested ? `${label} is not available in ComfyUI: ${requested}` : `${label} is not available in ComfyUI.`);
+    return requested ?? fallback;
+  }
+
+  return resolved;
 }
 
 function findOption(value: string, options: string[]) {
@@ -413,6 +521,19 @@ export function validateComfyUiRequestAgainstObjectInfo(
 ): ComfyUiRequestObjectInfoValidation {
   const errors: string[] = [];
   const warnings: string[] = [];
+  const profile = resolveComfyUiTextToImageWorkflowProfile(request);
+  const isAnimaProfile = profile.id === "anima";
+  validateRequiredNodeClasses(objectInfo, profile.requiredNodeClasses, errors);
+  validateRequiredInputs(objectInfo, "KSampler", ["sampler_name", "scheduler"], errors);
+
+  if (isAnimaProfile) {
+    validateRequiredInputs(objectInfo, "UNETLoader", ["unet_name", "weight_dtype"], errors);
+    validateRequiredInputs(objectInfo, "CLIPLoader", ["clip_name", "type"], errors);
+    validateRequiredInputs(objectInfo, "VAELoader", ["vae_name"], errors);
+  } else {
+    validateRequiredInputs(objectInfo, "CheckpointLoaderSimple", ["ckpt_name"], errors);
+  }
+
   const checkpointOptions = readInputOptions(objectInfo, "CheckpointLoaderSimple", "ckpt_name");
   const loraOptions = readInputOptions(objectInfo, "LoraLoader", "lora_name");
   const samplerOptions = readInputOptions(objectInfo, "KSampler", "sampler_name");
@@ -420,11 +541,78 @@ export function validateComfyUiRequestAgainstObjectInfo(
   const ultralyticsDetectorOptions = readInputOptions(objectInfo, "UltralyticsDetectorProvider", "model_name");
   const controlNetOptions = readInputOptions(objectInfo, "ControlNetLoader", "control_net_name");
   const checkpointName = findOption(request.checkpointName, checkpointOptions);
+  const animaUnetName = isAnimaProfile
+    ? resolveRequiredOption({
+        classType: "UNETLoader",
+        errors,
+        inputName: "unet_name",
+        label: "Anima UNET model",
+        objectInfo,
+        requested: request.checkpointName,
+      })
+    : undefined;
+  const animaUnetWeightDtype = isAnimaProfile
+    ? resolveRequiredOption({
+        classType: "UNETLoader",
+        errors,
+        fallback: DEFAULT_COMFYUI_ANIMA_UNET_WEIGHT_DTYPE,
+        inputName: "weight_dtype",
+        label: "Anima UNET weight dtype",
+        objectInfo,
+        requested: request.unetWeightDtype,
+      })
+    : undefined;
+  const animaClipName = isAnimaProfile
+    ? resolveRequiredOption({
+        classType: "CLIPLoader",
+        errors,
+        inputName: "clip_name",
+        label: "Anima CLIP model",
+        objectInfo,
+        requested: request.clipName,
+      })
+    : undefined;
+  if (isAnimaProfile) {
+    resolveRequiredOption({
+      classType: "CLIPLoader",
+      errors,
+      inputName: "type",
+      label: "Anima CLIP type",
+      objectInfo,
+      requested: DEFAULT_COMFYUI_ANIMA_CLIP_TYPE,
+    });
+  }
+  const hasAnimaClipDeviceInput = isAnimaProfile && hasInput(objectInfo, "CLIPLoader", "device");
+  if (isAnimaProfile && request.clipDevice && !hasAnimaClipDeviceInput) {
+    warnings.push("Anima CLIP device was ignored because CLIPLoader.device is not available in ComfyUI object_info.");
+  }
+  const animaClipDevice = hasAnimaClipDeviceInput
+    ? resolveRequiredOption({
+        classType: "CLIPLoader",
+        errors,
+        fallback: DEFAULT_COMFYUI_ANIMA_CLIP_DEVICE,
+        inputName: "device",
+        label: "Anima CLIP device",
+        objectInfo,
+        requested: request.clipDevice,
+      })
+    : undefined;
+  const animaVaeName = isAnimaProfile
+    ? resolveRequiredOption({
+        classType: "VAELoader",
+        errors,
+        inputName: "vae_name",
+        label: "Anima VAE model",
+        objectInfo,
+        requested: request.vaeName,
+      })
+    : undefined;
   const sampler = findSampler(request.samplerName, samplerOptions, schedulerOptions);
   const samplerName = sampler.samplerName;
   const requestedScheduler = request.scheduler ? findOption(request.scheduler, schedulerOptions) : null;
   const scheduler = sampler.scheduler ?? requestedScheduler;
-  const latentImageNode = normalizeComfyUiLatentImageNode(request.latentImageNode);
+  const requestedLatentImageNode = normalizeComfyUiLatentImageNode(request.latentImageNode);
+  const latentImageNode = isAnimaProfile ? "EmptyLatentImage" : requestedLatentImageNode ?? "EmptyLatentImage";
   let faceDetailer = request.faceDetailer;
   let handDetailer = request.handDetailer;
   const loras = (request.loras ?? []).map((lora, index) => {
@@ -439,7 +627,11 @@ export function validateComfyUiRequestAgainstObjectInfo(
     };
   });
 
-  if (!checkpointName) {
+  if ((request.loras ?? []).length > 0 && !hasNodeInfo(objectInfo, "LoraLoader")) {
+    errors.push("LoraLoader node is not available in ComfyUI. It is required when LoRAs are enabled.");
+  }
+
+  if (!isAnimaProfile && !checkpointName) {
     errors.push(`Checkpoint is not available in ComfyUI: ${request.checkpointName}`);
   }
 
@@ -451,7 +643,7 @@ export function validateComfyUiRequestAgainstObjectInfo(
     errors.push(`Scheduler is not available in ComfyUI: ${request.scheduler}`);
   }
 
-  if (request.latentImageNode && !latentImageNode) {
+  if (request.latentImageNode && !requestedLatentImageNode) {
     errors.push(`Latent image node is not supported by SceneForge: ${request.latentImageNode}`);
   }
 
@@ -459,36 +651,52 @@ export function validateComfyUiRequestAgainstObjectInfo(
     errors.push(`Latent image node is not available in ComfyUI: ${latentImageNode}`);
   }
 
-  if (!hasNodeInfo(objectInfo, "PreviewImage")) {
-    errors.push("PreviewImage node is not available in ComfyUI. It is required to preview generated images before saving.");
+  if (isAnimaProfile) {
+    if (request.faceDetailer?.enabled) {
+      errors.push("Anima text-to-image profile does not support FaceDetailer yet.");
+    }
+
+    if (request.handDetailer?.enabled) {
+      errors.push("Anima text-to-image profile does not support HandDetailer yet.");
+    }
+
+    if (getRequestControlNetUnits(request).some((unit) => unit.enabled)) {
+      errors.push("Anima text-to-image profile does not support ControlNet yet.");
+    }
+
+    if ((request.characterReferences ?? []).some((reference) => reference.enabled !== false)) {
+      errors.push("Anima text-to-image profile does not support character references yet.");
+    }
   }
 
-  faceDetailer = validateDetailerAgainstObjectInfo({
-    defaultDetectorModel: DEFAULT_COMFYUI_FACE_DETAILER_DETECTOR_MODEL,
-    detailer: request.faceDetailer,
-    errors,
-    findPreferredDetectorModel: findPreferredFaceDetailerDetectorModel,
-    label: "FaceDetailer",
-    objectInfo,
-    samplerOptions,
-    schedulerOptions,
-    ultralyticsDetectorOptions,
-  });
-  handDetailer = validateDetailerAgainstObjectInfo({
-    defaultDetectorModel: DEFAULT_COMFYUI_HAND_DETAILER_DETECTOR_MODEL,
-    detailer: request.handDetailer,
-    errors,
-    findPreferredDetectorModel: findPreferredHandDetailerDetectorModel,
-    label: "HandDetailer",
-    objectInfo,
-    samplerOptions,
-    schedulerOptions,
-    ultralyticsDetectorOptions,
-  });
+  if (!isAnimaProfile) {
+    faceDetailer = validateDetailerAgainstObjectInfo({
+      defaultDetectorModel: DEFAULT_COMFYUI_FACE_DETAILER_DETECTOR_MODEL,
+      detailer: request.faceDetailer,
+      errors,
+      findPreferredDetectorModel: findPreferredFaceDetailerDetectorModel,
+      label: "FaceDetailer",
+      objectInfo,
+      samplerOptions,
+      schedulerOptions,
+      ultralyticsDetectorOptions,
+    });
+    handDetailer = validateDetailerAgainstObjectInfo({
+      defaultDetectorModel: DEFAULT_COMFYUI_HAND_DETAILER_DETECTOR_MODEL,
+      detailer: request.handDetailer,
+      errors,
+      findPreferredDetectorModel: findPreferredHandDetailerDetectorModel,
+      label: "HandDetailer",
+      objectInfo,
+      samplerOptions,
+      schedulerOptions,
+      ultralyticsDetectorOptions,
+    });
+  }
 
   let controlNets = getRequestControlNetUnits(request);
   let characterReferences = request.characterReferences ?? [];
-  if (controlNets.some((unit) => unit.enabled)) {
+  if (!isAnimaProfile && controlNets.some((unit) => unit.enabled)) {
     if (!hasNodeInfo(objectInfo, "LoadImage")) {
       errors.push("LoadImage node is not available in ComfyUI. It is required for ControlNet images.");
     }
@@ -526,25 +734,27 @@ export function validateComfyUiRequestAgainstObjectInfo(
     });
   }
 
-  characterReferences = characterReferences.map((reference) => {
-    if (reference.enabled === false) {
-      return reference;
-    }
+  if (!isAnimaProfile) {
+    characterReferences = characterReferences.map((reference) => {
+      if (reference.enabled === false) {
+        return reference;
+      }
 
-    const missingNodes = getMissingCharacterReferenceNodes(reference, objectInfo);
-    if (missingNodes.length === 0) {
-      return reference;
-    }
+      const missingNodes = getMissingCharacterReferenceNodes(reference, objectInfo);
+      if (missingNodes.length === 0) {
+        return reference;
+      }
 
-    warnings.push(
-      `Character reference "${reference.name}" was disabled because ComfyUI is missing nodes: ${missingNodes.join(", ")}. Install ComfyUI_IPAdapter_plus to enable character consistency.`,
-    );
+      warnings.push(
+        `Character reference "${reference.name}" was disabled because ComfyUI is missing nodes: ${missingNodes.join(", ")}. Install ComfyUI_IPAdapter_plus to enable character consistency.`,
+      );
 
-    return {
-      ...reference,
-      enabled: false,
-    };
-  });
+      return {
+        ...reference,
+        enabled: false,
+      };
+    });
+  }
 
   validateDimension(request.width, "width", latentImageNode ?? "EmptyLatentImage", errors);
   validateDimension(request.height, "height", latentImageNode ?? "EmptyLatentImage", errors);
@@ -568,7 +778,11 @@ export function validateComfyUiRequestAgainstObjectInfo(
     warnings,
     request: {
       ...request,
-      checkpointName: checkpointName ?? request.checkpointName,
+      checkpointName: isAnimaProfile ? animaUnetName ?? request.checkpointName : checkpointName ?? request.checkpointName,
+      clipName: isAnimaProfile ? animaClipName : request.clipName,
+      clipDevice: isAnimaProfile ? animaClipDevice : request.clipDevice,
+      vaeName: isAnimaProfile ? animaVaeName : request.vaeName,
+      unetWeightDtype: isAnimaProfile ? animaUnetWeightDtype : request.unetWeightDtype,
       samplerName: samplerName ?? request.samplerName,
       scheduler: scheduler ?? request.scheduler,
       latentImageNode: latentImageNode ?? request.latentImageNode,
@@ -846,6 +1060,13 @@ export function validateComfyUiInpaintRequestAgainstObjectInfo(
 
 export function readComfyUiUpscaleModelOptions(objectInfo: unknown) {
   return readInputOptions(objectInfo, "UpscaleModelLoader", "model_name");
+}
+
+export function readComfyUiKSamplerOptions(objectInfo: unknown) {
+  return {
+    samplers: readInputOptions(objectInfo, "KSampler", "sampler_name"),
+    schedulers: readInputOptions(objectInfo, "KSampler", "scheduler"),
+  };
 }
 
 export function validateComfyUiSam2MaskRequestAgainstObjectInfo(

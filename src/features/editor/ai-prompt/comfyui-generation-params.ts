@@ -417,6 +417,8 @@ export function resolveComfyUiGenerationSettings(input: {
   const scheduler = savedSamplerSettings.scheduler ?? parsedAi?.scheduler ?? DEFAULT_SCHEDULER;
   const request: ComfyUiTextToImageRequest = {
     checkpointName: checkpoint?.modelFileName ?? "",
+    modelBaseModel: checkpoint?.baseModel ?? undefined,
+    modelStorageKind: checkpoint?.modelStorageKind,
     positivePrompt: input.activePrompt.trim(),
     negativePrompt: makeNegativePrompt(input.baseNegativePrompt, parsedAi?.negativePromptAdditions),
     loras: loras

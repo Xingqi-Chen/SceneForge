@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  readComfyUiKSamplerOptions,
   summarizeComfyUiErrorDetails,
   validateComfyUiInpaintRequestAgainstObjectInfo,
   validateComfyUiRequestAgainstObjectInfo,
@@ -31,12 +32,42 @@ const objectInfo = {
   },
   EmptyLatentImage: {},
   EmptySD3LatentImage: {},
+  CLIPTextEncode: {},
+  VAEDecode: {},
   PreviewImage: {},
   FaceDetailer: {},
   UltralyticsDetectorProvider: {
     input: {
       required: {
         model_name: [["bbox/face_yolov8s.pt", "bbox/hand_yolov8s.pt", "bbox/person_yolov8n.pt"], {}],
+      },
+    },
+  },
+};
+
+const objectInfoWithAnima = {
+  ...objectInfo,
+  UNETLoader: {
+    input: {
+      required: {
+        unet_name: [["pencil-xl-diffusion.safetensors", "Anima Pencil XL.safetensors"], {}],
+        weight_dtype: [["default", "fp8_e4m3fn"], {}],
+      },
+    },
+  },
+  CLIPLoader: {
+    input: {
+      required: {
+        clip_name: [["anima-clip.safetensors"], {}],
+        type: [["stable_diffusion"], {}],
+        device: [["default", "cpu"], {}],
+      },
+    },
+  },
+  VAELoader: {
+    input: {
+      required: {
+        vae_name: [["anima-vae.safetensors"], {}],
       },
     },
   },
@@ -121,6 +152,43 @@ const objectInfoWithLocalRegionInpaint = {
 };
 
 describe("ComfyUI object info helpers", () => {
+  it("reads KSampler options from current object_info", () => {
+    expect(
+      readComfyUiKSamplerOptions({
+        KSampler: {
+          input: {
+            required: {
+              sampler_name: [["euler", "dpmpp_2m_sde_heun_gpu"], {}],
+              scheduler: ["COMBO", { options: ["normal", "kl_optimal"] }],
+            },
+          },
+        },
+      }),
+    ).toEqual({
+      samplers: ["euler", "dpmpp_2m_sde_heun_gpu"],
+      schedulers: ["normal", "kl_optimal"],
+    });
+  });
+
+  it("reads KSampler options when object_info exposes them as optional inputs", () => {
+    expect(
+      readComfyUiKSamplerOptions({
+        KSampler: {
+          input: {
+            required: {},
+            optional: {
+              sampler_name: [["euler_cfg_pp"], {}],
+              scheduler: ["COMBO", { options: ["linear_quadratic"] }],
+            },
+          },
+        },
+      }),
+    ).toEqual({
+      samplers: ["euler_cfg_pp"],
+      schedulers: ["linear_quadratic"],
+    });
+  });
+
   it("normalizes common sampler display names", () => {
     expect(
       validateComfyUiRequestAgainstObjectInfo(
@@ -344,6 +412,209 @@ describe("ComfyUI object info helpers", () => {
       "Sampler is not available in ComfyUI: DPM++ 4M",
       "width must be between 16 and 16384 and divisible by 8 for ComfyUI EmptyLatentImage.",
     ]);
+  });
+
+  it("validates Anima UNET, CLIP, and VAE options without requiring CheckpointLoaderSimple", () => {
+    const animaOnlyObjectInfo: Record<string, unknown> = { ...objectInfoWithAnima };
+    delete animaOnlyObjectInfo.CheckpointLoaderSimple;
+    const result = validateComfyUiRequestAgainstObjectInfo(
+      {
+        checkpointName: "pencil-xl-diffusion.safetensors",
+        modelBaseModel: "Anima",
+        modelStorageKind: "diffusion",
+        positivePrompt: "scene",
+        samplerName: "DPM++ 2M",
+        scheduler: "Karras",
+        loras: [{ loraName: "style.safetensors", strengthModel: 0.7 }],
+      },
+      animaOnlyObjectInfo,
+    );
+
+    expect(result).toMatchObject({
+      errors: [],
+      request: {
+        checkpointName: "pencil-xl-diffusion.safetensors",
+        clipName: "anima-clip.safetensors",
+        clipDevice: "default",
+        vaeName: "anima-vae.safetensors",
+        unetWeightDtype: "default",
+        samplerName: "dpmpp_2m",
+        scheduler: "karras",
+        latentImageNode: "EmptyLatentImage",
+      },
+    });
+  });
+
+  it("does not require Anima CLIP device when the local CLIPLoader omits that input", () => {
+    const result = validateComfyUiRequestAgainstObjectInfo(
+      {
+        checkpointName: "pencil-xl-diffusion.safetensors",
+        modelBaseModel: "Anima",
+        modelStorageKind: "diffusion",
+        clipName: "anima-clip.safetensors",
+        clipDevice: "default",
+        vaeName: "anima-vae.safetensors",
+        positivePrompt: "scene",
+      },
+      {
+        ...objectInfoWithAnima,
+        CLIPLoader: {
+          input: {
+            required: {
+              clip_name: [["anima-clip.safetensors"], {}],
+              type: [["stable_diffusion"], {}],
+            },
+          },
+        },
+      },
+    );
+
+    expect(result.errors).toEqual([]);
+    expect(result.warnings).toEqual([
+      "Anima CLIP device was ignored because CLIPLoader.device is not available in ComfyUI object_info.",
+    ]);
+    expect(result.request).toMatchObject({
+      checkpointName: "pencil-xl-diffusion.safetensors",
+      clipName: "anima-clip.safetensors",
+      vaeName: "anima-vae.safetensors",
+    });
+    expect(result.request.clipDevice).toBeUndefined();
+  });
+
+  it("resolves Anima CLIP device when ComfyUI exposes it as an optional input", () => {
+    const result = validateComfyUiRequestAgainstObjectInfo(
+      {
+        checkpointName: "pencil-xl-diffusion.safetensors",
+        modelBaseModel: "Anima",
+        modelStorageKind: "diffusion",
+        clipName: "anima-clip.safetensors",
+        clipDevice: "default",
+        vaeName: "anima-vae.safetensors",
+        positivePrompt: "scene",
+      },
+      {
+        ...objectInfoWithAnima,
+        CLIPLoader: {
+          input: {
+            required: {
+              clip_name: [["anima-clip.safetensors"], {}],
+              type: [["stable_diffusion"], {}],
+            },
+            optional: {
+              device: [["default", "cpu"], { advanced: true }],
+            },
+          },
+        },
+      },
+    );
+
+    expect(result.errors).toEqual([]);
+    expect(result.warnings).toEqual([]);
+    expect(result.request).toMatchObject({
+      clipDevice: "default",
+    });
+  });
+
+  it("reports missing Anima required input fields before queueing", () => {
+    const result = validateComfyUiRequestAgainstObjectInfo(
+      {
+        checkpointName: "pencil-xl-diffusion.safetensors",
+        modelBaseModel: "Anima",
+        modelStorageKind: "diffusion",
+        positivePrompt: "scene",
+      },
+      {
+        ...objectInfoWithAnima,
+        UNETLoader: {
+          input: {
+            required: {
+              unet_name: [["pencil-xl-diffusion.safetensors"], {}],
+            },
+          },
+        },
+        CLIPLoader: {
+          input: {
+            required: {
+              clip_name: [["anima-clip.safetensors"], {}],
+              type: [["stable_diffusion"], {}],
+            },
+          },
+        },
+        VAELoader: {
+          input: {
+            required: {},
+          },
+        },
+      },
+    );
+
+    expect(result.errors).toEqual([
+      "UNETLoader.weight_dtype input is not available in ComfyUI object_info.",
+      "VAELoader.vae_name input is not available in ComfyUI object_info.",
+      "Anima UNET weight dtype is not available in ComfyUI.",
+      "Anima VAE model is not available in ComfyUI.",
+    ]);
+  });
+
+  it("reports missing Anima profile nodes and files before queueing", () => {
+    expect(
+      validateComfyUiRequestAgainstObjectInfo(
+        {
+          checkpointName: "Anima Pencil XL.safetensors",
+          modelBaseModel: "Anima",
+          modelStorageKind: "diffusion",
+          positivePrompt: "scene",
+          clipName: "missing-clip.safetensors",
+          vaeName: "missing-vae.safetensors",
+        },
+        {
+          ...objectInfoWithAnima,
+          UNETLoader: undefined,
+          CLIPLoader: {
+            input: {
+              required: {
+                clip_name: [["other-clip.safetensors"], {}],
+                type: [["sdxl"], {}],
+                device: [["cpu"], {}],
+              },
+            },
+          },
+          VAELoader: {
+            input: {
+              required: {
+                vae_name: [["other-vae.safetensors"], {}],
+              },
+            },
+          },
+        },
+      ).errors,
+    ).toEqual([
+      "UNETLoader node is not available in ComfyUI.",
+      "Anima UNET model is not available in ComfyUI: Anima Pencil XL.safetensors",
+      "Anima UNET weight dtype is not available in ComfyUI.",
+      "Anima CLIP model is not available in ComfyUI: missing-clip.safetensors",
+      "Anima CLIP type is not available in ComfyUI: stable_diffusion",
+      "Anima VAE model is not available in ComfyUI: missing-vae.safetensors",
+    ]);
+  });
+
+  it("keeps unknown diffusion models on the fallback checkpoint profile", () => {
+    expect(
+      validateComfyUiRequestAgainstObjectInfo(
+        {
+          checkpointName: "model.safetensors",
+          modelBaseModel: "Flux.1 D",
+          modelStorageKind: "diffusion",
+          positivePrompt: "scene",
+        },
+        objectInfo,
+      ),
+    ).toMatchObject({
+      errors: [],
+      request: {
+        checkpointName: "model.safetensors",
+      },
+    });
   });
 
   it("validates the requested latent image node before queueing", () => {

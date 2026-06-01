@@ -75,6 +75,128 @@ describe("ComfyUI workflow builder", () => {
     });
   });
 
+  it("builds the Anima text-to-image workflow without CheckpointLoaderSimple", () => {
+    const result = buildBasicTextToImageWorkflow({
+      checkpointName: "pencil-xl-diffusion.safetensors",
+      modelBaseModel: "Anima",
+      modelStorageKind: "diffusion",
+      clipName: "anima-clip.safetensors",
+      vaeName: "anima-vae.safetensors",
+      positivePrompt: "a quiet forest",
+      negativePrompt: "low quality",
+      seed: 123,
+      loras: [
+        {
+          loraName: "anima-style.safetensors",
+          strengthModel: 0.8,
+          strengthClip: 0.7,
+        },
+      ],
+    });
+
+    expect(result.nodeIds).toEqual({
+      unetLoader: "1",
+      clipLoader: "2",
+      vaeLoader: "3",
+      loraLoaders: ["4"],
+      positivePrompt: "5",
+      negativePrompt: "6",
+      latentImage: "7",
+      sampler: "8",
+      vaeDecode: "9",
+      previewImage: "10",
+    });
+    expect(Object.values(result.workflow).some((node) => node.class_type === "CheckpointLoaderSimple")).toBe(false);
+    expect(result.workflow["1"]).toMatchObject({
+      class_type: "UNETLoader",
+      inputs: {
+        unet_name: "pencil-xl-diffusion.safetensors",
+        weight_dtype: "default",
+      },
+    });
+    expect(result.workflow["2"]).toMatchObject({
+      class_type: "CLIPLoader",
+      inputs: {
+        clip_name: "anima-clip.safetensors",
+        type: "stable_diffusion",
+      },
+    });
+    expect(result.workflow["2"].inputs).not.toHaveProperty("device");
+    expect(result.workflow["3"]).toMatchObject({
+      class_type: "VAELoader",
+      inputs: {
+        vae_name: "anima-vae.safetensors",
+      },
+    });
+    expect(result.workflow["4"]).toMatchObject({
+      class_type: "LoraLoader",
+      inputs: {
+        model: ["1", 0],
+        clip: ["2", 0],
+        lora_name: "anima-style.safetensors",
+        strength_model: 0.8,
+        strength_clip: 0.7,
+      },
+    });
+    expect(result.workflow["7"]).toMatchObject({
+      class_type: "EmptyLatentImage",
+      inputs: {
+        width: 1024,
+        height: 1024,
+        batch_size: 1,
+      },
+    });
+    expect(result.workflow["8"].inputs).toMatchObject({
+      model: ["4", 0],
+      positive: ["5", 0],
+      negative: ["6", 0],
+      latent_image: ["7", 0],
+    });
+    expect(result.workflow["9"].inputs).toEqual({
+      samples: ["8", 0],
+      vae: ["3", 0],
+    });
+    expect(result.workflow["10"].inputs).toEqual({
+      images: ["9", 0],
+    });
+  });
+
+  it("uses the default profile for unknown diffusion models", () => {
+    const result = buildBasicTextToImageWorkflow({
+      checkpointName: "Flux Model.safetensors",
+      modelBaseModel: "Flux.1 D",
+      modelStorageKind: "diffusion",
+      positivePrompt: "a quiet forest",
+      seed: 123,
+    });
+
+    expect(result.workflow["1"]).toMatchObject({
+      class_type: "CheckpointLoaderSimple",
+      inputs: {
+        ckpt_name: "Flux Model.safetensors",
+      },
+    });
+    expect(Object.values(result.workflow).some((node) => node.class_type === "UNETLoader")).toBe(false);
+  });
+
+  it("uses the default profile for checkpoint models even when the filename contains Anima", () => {
+    const result = buildBasicTextToImageWorkflow({
+      checkpointName: "Anima styled checkpoint.safetensors",
+      modelBaseModel: "Illustrious",
+      modelStorageKind: "checkpoint",
+      positivePrompt: "a quiet forest",
+      seed: 123,
+    });
+
+    expect(result.workflow["1"]).toMatchObject({
+      class_type: "CheckpointLoaderSimple",
+      inputs: {
+        ckpt_name: "Anima styled checkpoint.safetensors",
+      },
+    });
+    expect(Object.values(result.workflow).some((node) => node.class_type === "UNETLoader")).toBe(false);
+  });
+
   it("patches the model with IPAdapter character references before sampling", () => {
     const result = buildBasicTextToImageWorkflow({
       checkpointName: "dream.safetensors",

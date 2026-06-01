@@ -27,7 +27,38 @@ const objectInfo = {
       },
     },
   },
+  EmptyLatentImage: {},
+  CLIPTextEncode: {},
+  VAEDecode: {},
   PreviewImage: {},
+};
+
+const objectInfoWithAnima = {
+  ...objectInfo,
+  UNETLoader: {
+    input: {
+      required: {
+        unet_name: [["pencil-xl-diffusion.safetensors"], {}],
+        weight_dtype: [["default"], {}],
+      },
+    },
+  },
+  CLIPLoader: {
+    input: {
+      required: {
+        clip_name: [["anima-clip.safetensors"], {}],
+        type: [["stable_diffusion"], {}],
+        device: [["default"], {}],
+      },
+    },
+  },
+  VAELoader: {
+    input: {
+      required: {
+        vae_name: [["anima-vae.safetensors"], {}],
+      },
+    },
+  },
 };
 
 const objectInfoWithFaceDetailer = {
@@ -183,6 +214,199 @@ describe("ComfyUI generate image route", () => {
         seed: 123,
       },
     });
+  });
+
+  it("queues an Anima text-to-image workflow with profile-aware object_info defaults", async () => {
+    process.env.COMFYUI_BASE_URL = "http://comfyui.test";
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      if (input === "http://comfyui.test/object_info") {
+        return Response.json(objectInfoWithAnima);
+      }
+
+      expect(input).toBe("http://comfyui.test/prompt");
+      const body = JSON.parse(String(init?.body));
+      expect(Object.values(body.prompt).some((node) => (node as { class_type?: string }).class_type === "CheckpointLoaderSimple")).toBe(false);
+      expect(body.prompt["1"]).toMatchObject({
+        class_type: "UNETLoader",
+        inputs: {
+          unet_name: "pencil-xl-diffusion.safetensors",
+        },
+      });
+      expect(body.prompt["2"]).toMatchObject({
+        class_type: "CLIPLoader",
+        inputs: {
+          clip_name: "anima-clip.safetensors",
+          type: "stable_diffusion",
+          device: "default",
+        },
+      });
+      expect(body.prompt["3"]).toMatchObject({
+        class_type: "VAELoader",
+        inputs: {
+          vae_name: "anima-vae.safetensors",
+        },
+      });
+      expect(body.prompt["8"].class_type).toBe("VAEDecode");
+      expect(body.prompt["9"].class_type).toBe("PreviewImage");
+
+      return Response.json({
+        prompt_id: "prompt-anima",
+        number: 10,
+        node_errors: {},
+      });
+    });
+
+    const response = await POST(
+      new Request("http://localhost/api/comfyui/generate-image", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          checkpointName: "pencil-xl-diffusion.safetensors",
+          modelBaseModel: "Anima",
+          modelStorageKind: "diffusion",
+          positivePrompt: "a scene",
+          seed: 123,
+        }),
+      }),
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(payload).toMatchObject({
+      promptId: "prompt-anima",
+      outputNodeId: "9",
+      nodeIds: {
+        unetLoader: "1",
+        clipLoader: "2",
+        vaeLoader: "3",
+        previewImage: "9",
+      },
+      request: {
+        checkpointName: "pencil-xl-diffusion.safetensors",
+        clipName: "anima-clip.safetensors",
+        vaeName: "anima-vae.safetensors",
+      },
+    });
+  });
+
+  it("queues an Anima text-to-image workflow when CLIPLoader has no device input", async () => {
+    process.env.COMFYUI_BASE_URL = "http://comfyui.test";
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      if (input === "http://comfyui.test/object_info") {
+        return Response.json({
+          ...objectInfoWithAnima,
+          CLIPLoader: {
+            input: {
+              required: {
+                clip_name: [["anima-clip.safetensors"], {}],
+                type: [["stable_diffusion"], {}],
+              },
+            },
+          },
+        });
+      }
+
+      expect(input).toBe("http://comfyui.test/prompt");
+      const body = JSON.parse(String(init?.body));
+      expect(body.prompt["2"]).toMatchObject({
+        class_type: "CLIPLoader",
+        inputs: {
+          clip_name: "anima-clip.safetensors",
+          type: "stable_diffusion",
+        },
+      });
+      expect(body.prompt["2"].inputs).not.toHaveProperty("device");
+
+      return Response.json({
+        prompt_id: "prompt-anima-no-device",
+        number: 11,
+        node_errors: {},
+      });
+    });
+
+    const response = await POST(
+      new Request("http://localhost/api/comfyui/generate-image", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          checkpointName: "pencil-xl-diffusion.safetensors",
+          modelBaseModel: "Anima",
+          modelStorageKind: "diffusion",
+          clipDevice: "default",
+          positivePrompt: "a scene",
+          seed: 123,
+        }),
+      }),
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(payload).toMatchObject({
+      promptId: "prompt-anima-no-device",
+      warnings: ["Anima CLIP device was ignored because CLIPLoader.device is not available in ComfyUI object_info."],
+      request: {
+        checkpointName: "pencil-xl-diffusion.safetensors",
+        clipName: "anima-clip.safetensors",
+        vaeName: "anima-vae.safetensors",
+      },
+    });
+    expect(payload.request.clipDevice).toBeUndefined();
+  });
+
+  it("returns Anima object_info validation errors before queueing when required files are missing", async () => {
+    process.env.COMFYUI_BASE_URL = "http://comfyui.test";
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      if (input === "http://comfyui.test/object_info") {
+        return Response.json({
+          ...objectInfoWithAnima,
+          CLIPLoader: {
+            input: {
+              required: {
+                clip_name: [["other-clip.safetensors"], {}],
+                type: [["stable_diffusion"], {}],
+                device: [["default"], {}],
+              },
+            },
+          },
+          VAELoader: {
+            input: {
+              required: {
+                vae_name: [["other-vae.safetensors"], {}],
+              },
+            },
+          },
+        });
+      }
+
+      throw new Error("Anima requests with missing required files should not be queued.");
+    });
+
+    const response = await POST(
+      new Request("http://localhost/api/comfyui/generate-image", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          checkpointName: "pencil-xl-diffusion.safetensors",
+          modelBaseModel: "Anima",
+          modelStorageKind: "diffusion",
+          clipName: "missing-clip.safetensors",
+          vaeName: "missing-vae.safetensors",
+          positivePrompt: "a scene",
+          seed: 123,
+        }),
+      }),
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(payload.error.message).toContain("current ComfyUI");
+    expect(payload.error.details.errors).toEqual([
+      "Anima CLIP model is not available in ComfyUI: missing-clip.safetensors",
+      "Anima VAE model is not available in ComfyUI: missing-vae.safetensors",
+    ]);
   });
 
   it("queues a text-to-image workflow with FaceDetailer when enabled", async () => {

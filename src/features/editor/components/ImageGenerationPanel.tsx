@@ -107,6 +107,7 @@ import {
 } from "@/features/editor/ai-prompt/comfyui-generation-params";
 import { mergeDraftWithPromptRefresh } from "@/features/editor/ai-prompt/comfyui-generation-draft";
 import {
+  buildComfyUiOptionsFromValues,
   COMFYUI_SAMPLER_OPTIONS,
   COMFYUI_SCHEDULER_OPTIONS,
   normalizeComfyUiSamplerSettings,
@@ -194,6 +195,11 @@ type DiagnosisStatus = "idle" | "analyzing" | "searching" | "suggesting" | "succ
 type InpaintMaskTool = "brush" | "eraser" | "sam-positive" | "sam-negative" | "sam-box";
 type SamMaskStatus = "idle" | "generating" | "success" | "error";
 
+type ComfyUiOption = {
+  label: string;
+  value: string;
+};
+
 type ControlNetModelOption = {
   label: string;
   value: string;
@@ -214,6 +220,11 @@ type InpaintModelUpscaleOption = {
 type UpscaleModelsResponse = {
   models: string[];
   modelUpscaleOptions: InpaintModelUpscaleOption[];
+};
+
+type KSamplerOptionsResponse = {
+  samplers: string[];
+  schedulers: string[];
 };
 
 type GenerationHistoryContext = {
@@ -307,7 +318,29 @@ type GenerationDraftInpaint = {
   mode: ComfyUiInpaintMode;
 };
 
-type GenerationDraft = Required<Omit<ComfyUiTextToImageRequest, "loras" | "promptWrapper" | "faceDetailer" | "handDetailer" | "controlNet" | "controlNets" | "characterReferences" | "preview">> & {
+type GenerationDraft = Required<Omit<
+  ComfyUiTextToImageRequest,
+  | "loras"
+  | "promptWrapper"
+  | "faceDetailer"
+  | "handDetailer"
+  | "controlNet"
+  | "controlNets"
+  | "characterReferences"
+  | "preview"
+  | "modelBaseModel"
+  | "modelStorageKind"
+  | "clipName"
+  | "clipDevice"
+  | "vaeName"
+  | "unetWeightDtype"
+>> & {
+  modelBaseModel?: ComfyUiTextToImageRequest["modelBaseModel"];
+  modelStorageKind?: ComfyUiTextToImageRequest["modelStorageKind"];
+  clipName?: ComfyUiTextToImageRequest["clipName"];
+  clipDevice?: ComfyUiTextToImageRequest["clipDevice"];
+  vaeName?: ComfyUiTextToImageRequest["vaeName"];
+  unetWeightDtype?: ComfyUiTextToImageRequest["unetWeightDtype"];
   loras: GenerationDraftLora[];
   imageCount: number;
   promptWrapper: Required<NonNullable<ComfyUiTextToImageRequest["promptWrapper"]>>;
@@ -417,6 +450,45 @@ async function fetchJson<T>(input: RequestInfo | URL, init?: RequestInit): Promi
   }
 
   return payload as T;
+}
+
+function useComfyUiKSamplerOptions(open: boolean) {
+  const [samplerOptions, setSamplerOptions] = useState<ComfyUiOption[]>(() => [...COMFYUI_SAMPLER_OPTIONS]);
+  const [schedulerOptions, setSchedulerOptions] = useState<ComfyUiOption[]>(() => [...COMFYUI_SCHEDULER_OPTIONS]);
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+
+    let cancelled = false;
+    void fetchJson<KSamplerOptionsResponse>("/api/comfyui/sampler-options")
+      .then((payload) => {
+        if (cancelled) {
+          return;
+        }
+
+        setSamplerOptions(buildComfyUiOptionsFromValues(payload.samplers, COMFYUI_SAMPLER_OPTIONS));
+        setSchedulerOptions(buildComfyUiOptionsFromValues(payload.schedulers, COMFYUI_SCHEDULER_OPTIONS));
+      })
+      .catch(() => {
+        if (cancelled) {
+          return;
+        }
+
+        setSamplerOptions([...COMFYUI_SAMPLER_OPTIONS]);
+        setSchedulerOptions([...COMFYUI_SCHEDULER_OPTIONS]);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
+
+  return {
+    samplerOptions,
+    schedulerOptions,
+  };
 }
 
 function delay(ms: number) {
@@ -869,6 +941,12 @@ function toDraft(
 
   return {
     checkpointName: request.checkpointName,
+    modelBaseModel: request.modelBaseModel,
+    modelStorageKind: request.modelStorageKind,
+    clipName: request.clipName,
+    clipDevice: request.clipDevice,
+    vaeName: request.vaeName,
+    unetWeightDtype: request.unetWeightDtype,
     positivePrompt: request.positivePrompt,
     negativePrompt: request.negativePrompt ?? "",
     loras: loraSettings
@@ -1087,6 +1165,12 @@ function toRequestPayload(
 
   return {
     checkpointName: draft.checkpointName,
+    modelBaseModel: draft.modelBaseModel,
+    modelStorageKind: draft.modelStorageKind,
+    clipName: draft.clipName,
+    clipDevice: draft.clipDevice,
+    vaeName: draft.vaeName,
+    unetWeightDtype: draft.unetWeightDtype,
     positivePrompt: draft.positivePrompt,
     negativePrompt: draft.negativePrompt,
     loras: draft.loras
@@ -1743,11 +1827,15 @@ function DetailerFoldout({
   label,
   onChange,
   parameterLabel,
+  samplerOptions,
+  schedulerOptions,
 }: {
   detailer: GenerationDraft["faceDetailer"];
   label: string;
   onChange: (patch: Partial<GenerationDraft["faceDetailer"]>) => void;
   parameterLabel: string;
+  samplerOptions: readonly ComfyUiOption[];
+  schedulerOptions: readonly ComfyUiOption[];
 }) {
   return (
     <div className="grid gap-3 rounded-md border border-slate-200 bg-white p-3 sm:col-span-2 lg:col-span-3">
@@ -1805,13 +1893,13 @@ function DetailerFoldout({
           <SelectInput
             label={`${parameterLabel} sampler`}
             onChange={(value) => onChange({ samplerName: value })}
-            options={COMFYUI_SAMPLER_OPTIONS}
+            options={samplerOptions}
             value={detailer.samplerName}
           />
           <SelectInput
             label={`${parameterLabel} scheduler`}
             onChange={(value) => onChange({ scheduler: value })}
-            options={COMFYUI_SCHEDULER_OPTIONS}
+            options={schedulerOptions}
             value={detailer.scheduler}
           />
           <NumberInput
@@ -4772,6 +4860,7 @@ export function ComfyUiGenerationDialog({
   const [diagnosisResult, setDiagnosisResult] = useState<ComfyUiGenerationDiagnosisResult | null>(null);
   const [diagnosisBaseConfig, setDiagnosisBaseConfig] = useState<ComfyUiGenerationDiagnosisConfig | null>(null);
   const [diagnosisApplied, setDiagnosisApplied] = useState(false);
+  const { samplerOptions, schedulerOptions } = useComfyUiKSamplerOptions(open);
   const downloadItemById = useMemo(
     () => new Map(downloadItems.map((item) => [item.resource.id, item])),
     [downloadItems],
@@ -6155,13 +6244,13 @@ export function ComfyUiGenerationDialog({
                             <SelectInput
                               label="sampler"
                               onChange={(value) => patchDraft({ samplerName: value })}
-                              options={COMFYUI_SAMPLER_OPTIONS}
+                              options={samplerOptions}
                               value={draft.samplerName}
                             />
                             <SelectInput
                               label="scheduler"
                               onChange={(value) => patchDraft({ scheduler: value })}
-                              options={COMFYUI_SCHEDULER_OPTIONS}
+                              options={schedulerOptions}
                               value={draft.scheduler}
                             />
                             <SelectInput
@@ -6187,12 +6276,16 @@ export function ComfyUiGenerationDialog({
                               label="HandDetailer"
                               onChange={patchHandDetailer}
                               parameterLabel="hand"
+                              samplerOptions={samplerOptions}
+                              schedulerOptions={schedulerOptions}
                             />
                             <DetailerFoldout
                               detailer={draft.faceDetailer}
                               label="FaceDetailer"
                               onChange={patchFaceDetailer}
                               parameterLabel="face"
+                              samplerOptions={samplerOptions}
+                              schedulerOptions={schedulerOptions}
                             />
                           </div>
                           <div className="mt-5">
@@ -6967,6 +7060,7 @@ function ComicSequenceDialog({
   const [uploadedReferences, setUploadedReferences] = useState<SequenceUploadedReference[]>([]);
   const [results, setResults] = useState<GenerationResult[]>([]);
   const [savedCurrentImageKeys, setSavedCurrentImageKeys] = useState<Set<string>>(() => new Set());
+  const { samplerOptions, schedulerOptions } = useComfyUiKSamplerOptions(open);
   const referenceCandidates = comfyUiGeneratedImages.slice(0, 24);
   const allResourceDownloadsReady =
     downloadItems.length > 0 && downloadItems.every((item) => !item.error && isComfyUiGenerationResourceReady(item.status));
@@ -7530,13 +7624,13 @@ function ComicSequenceDialog({
                     <SelectInput
                       label="sampler"
                       onChange={(value) => patchDraft({ samplerName: value })}
-                      options={COMFYUI_SAMPLER_OPTIONS}
+                      options={samplerOptions}
                       value={draft.samplerName}
                     />
                     <SelectInput
                       label="scheduler"
                       onChange={(value) => patchDraft({ scheduler: value })}
-                      options={COMFYUI_SCHEDULER_OPTIONS}
+                      options={schedulerOptions}
                       value={draft.scheduler}
                     />
                   </div>
@@ -7722,6 +7816,7 @@ function ComicSequenceWorkspaceDialog({
   const [storyboardStatus, setStoryboardStatus] = useState<SubmitStatus>("idle");
   const [storyboardError, setStoryboardError] = useState("");
   const [storyboardMessage, setStoryboardMessage] = useState("");
+  const { samplerOptions, schedulerOptions } = useComfyUiKSamplerOptions(open);
   const savedImageById = useMemo(
     () => new Map((project.settings.comfyUiGeneratedImages ?? []).map((image) => [image.id, image])),
     [project.settings.comfyUiGeneratedImages],
@@ -9791,8 +9886,8 @@ function ComicSequenceWorkspaceDialog({
                           onChange={(value) => patchDraft({ imageCount: normalizeComfyUiGenerationImageCount(value) })}
                           value={draft.imageCount}
                         />
-                        <SelectInput label="sampler" onChange={(value) => patchDraft({ samplerName: value })} options={COMFYUI_SAMPLER_OPTIONS} value={draft.samplerName} />
-                        <SelectInput label="scheduler" onChange={(value) => patchDraft({ scheduler: value })} options={COMFYUI_SCHEDULER_OPTIONS} value={draft.scheduler} />
+                        <SelectInput label="sampler" onChange={(value) => patchDraft({ samplerName: value })} options={samplerOptions} value={draft.samplerName} />
+                        <SelectInput label="scheduler" onChange={(value) => patchDraft({ scheduler: value })} options={schedulerOptions} value={draft.scheduler} />
                         <SelectInput
                           label="latent"
                           onChange={(value) => patchDraft({ latentImageNode: value as GenerationDraft["latentImageNode"] })}
@@ -9849,12 +9944,16 @@ function ComicSequenceWorkspaceDialog({
                       label="HandDetailer"
                       onChange={patchHandDetailer}
                       parameterLabel="hand"
+                      samplerOptions={samplerOptions}
+                      schedulerOptions={schedulerOptions}
                     />
                     <DetailerFoldout
                       detailer={draft.faceDetailer}
                       label="FaceDetailer"
                       onChange={patchFaceDetailer}
                       parameterLabel="face"
+                      samplerOptions={samplerOptions}
+                      schedulerOptions={schedulerOptions}
                     />
                   </>
                 ) : (

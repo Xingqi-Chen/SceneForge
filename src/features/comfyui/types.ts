@@ -5,6 +5,8 @@ import type {
 import type { ComfyUiInpaintMode } from "./inpaint";
 import type { ComfyUiLatentImageNode } from "./latent-image-node";
 
+export type ComfyUiModelStorageKind = "checkpoint" | "diffusion";
+
 export type ComfyUiNodeConnection = [nodeId: string, outputIndex: number];
 
 export type ComfyUiInputValue =
@@ -30,6 +32,12 @@ export type ComfyUiWorkflow = Record<string, ComfyUiWorkflowNode>;
 
 export type ComfyUiTextToImageRequest = {
   checkpointName: string;
+  modelBaseModel?: string;
+  modelStorageKind?: ComfyUiModelStorageKind;
+  clipName?: string;
+  clipDevice?: string;
+  vaeName?: string;
+  unetWeightDtype?: string;
   positivePrompt: string;
   negativePrompt?: string;
   loras?: ComfyUiLoraInput[];
@@ -257,6 +265,12 @@ export type ResolvedComfyUiLoraInput = {
 
 export type ResolvedComfyUiTextToImageRequest = {
   checkpointName: string;
+  modelBaseModel?: string;
+  modelStorageKind?: ComfyUiModelStorageKind;
+  clipName?: string;
+  clipDevice?: string;
+  vaeName?: string;
+  unetWeightDtype?: string;
   positivePrompt: string;
   negativePrompt: string;
   loras: ResolvedComfyUiLoraInput[];
@@ -430,7 +444,10 @@ export type BasicTextToImageCharacterReferenceNodeIds = {
 };
 
 export type BasicTextToImageNodeIds = {
-  checkpoint: string;
+  checkpoint?: string;
+  unetLoader?: string;
+  clipLoader?: string;
+  vaeLoader?: string;
   loraLoaders: string[];
   positivePrompt: string;
   negativePrompt: string;
