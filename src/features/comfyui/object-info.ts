@@ -31,6 +31,7 @@ import {
 
 type ComfyUiObjectInfoNode = {
   input?: {
+    optional?: Record<string, unknown>;
     required?: Record<string, unknown>;
   };
 };
@@ -57,11 +58,18 @@ export type ComfyUiSam2MaskRequestObjectInfoValidation = {
 
 const SAMPLER_ALIASES: Record<string, string> = {
   dpmpp2m: "dpmpp_2m",
+  dpmpp2mcfgpp: "dpmpp_2m_cfg_pp",
   dpm2m: "dpmpp_2m",
+  dpm2mcfgpp: "dpmpp_2m_cfg_pp",
   dpm2msde: "dpmpp_2m_sde",
   dpm2msdegpu: "dpmpp_2m_sde_gpu",
+  dpm2msdeheun: "dpmpp_2m_sde_heun",
+  dpm2msdeheungpu: "dpmpp_2m_sde_heun_gpu",
   dpmpp2msde: "dpmpp_2m_sde",
   dpmpp2msdegpu: "dpmpp_2m_sde_gpu",
+  dpmpp2msdeheun: "dpmpp_2m_sde_heun",
+  dpmpp2msdeheungpu: "dpmpp_2m_sde_heun_gpu",
+  dpmpp2sancestralcfgpp: "dpmpp_2s_ancestral_cfg_pp",
   dpm3msde: "dpmpp_3m_sde",
   dpm3msdegpu: "dpmpp_3m_sde_gpu",
   dpmpp3msde: "dpmpp_3m_sde",
@@ -71,7 +79,14 @@ const SAMPLER_ALIASES: Record<string, string> = {
   dpmppsde: "dpmpp_sde",
   dpmppsdegpu: "dpmpp_sde_gpu",
   eulera: "euler_ancestral",
+  euleracfgpp: "euler_ancestral_cfg_pp",
   eulerancestral: "euler_ancestral",
+  eulerancestralcfgpp: "euler_ancestral_cfg_pp",
+  eulercfgpp: "euler_cfg_pp",
+  resmultistep: "res_multistep",
+  resmultistepancestral: "res_multistep_ancestral",
+  resmultistepancestralcfgpp: "res_multistep_ancestral_cfg_pp",
+  resmultistepcfgpp: "res_multistep_cfg_pp",
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -88,11 +103,13 @@ function readInputOptions(objectInfo: unknown, classType: string, inputName: str
   }
 
   const nodeInfo = objectInfo[classType];
-  if (!isRecord(nodeInfo) || !isRecord(nodeInfo.input) || !isRecord(nodeInfo.input.required)) {
+  if (!isRecord(nodeInfo) || !isRecord(nodeInfo.input)) {
     return [];
   }
 
-  const inputInfo = nodeInfo.input.required[inputName];
+  const requiredInputs = isRecord(nodeInfo.input.required) ? nodeInfo.input.required : {};
+  const optionalInputs = isRecord(nodeInfo.input.optional) ? nodeInfo.input.optional : {};
+  const inputInfo = requiredInputs[inputName] ?? optionalInputs[inputName];
   if (!Array.isArray(inputInfo)) {
     return [];
   }
@@ -106,6 +123,20 @@ function readInputOptions(objectInfo: unknown, classType: string, inputName: str
   }
 
   return [];
+}
+
+function hasInput(objectInfo: unknown, classType: string, inputName: string) {
+  if (!isRecord(objectInfo)) {
+    return false;
+  }
+
+  const nodeInfo = objectInfo[classType];
+  return isRecord(nodeInfo) &&
+    isRecord(nodeInfo.input) &&
+    (
+      (isRecord(nodeInfo.input.required) && inputName in nodeInfo.input.required) ||
+      (isRecord(nodeInfo.input.optional) && inputName in nodeInfo.input.optional)
+    );
 }
 
 function hasRequiredInput(objectInfo: unknown, classType: string, inputName: string) {
@@ -551,7 +582,7 @@ export function validateComfyUiRequestAgainstObjectInfo(
       requested: DEFAULT_COMFYUI_ANIMA_CLIP_TYPE,
     });
   }
-  const hasAnimaClipDeviceInput = isAnimaProfile && hasRequiredInput(objectInfo, "CLIPLoader", "device");
+  const hasAnimaClipDeviceInput = isAnimaProfile && hasInput(objectInfo, "CLIPLoader", "device");
   if (isAnimaProfile && request.clipDevice && !hasAnimaClipDeviceInput) {
     warnings.push("Anima CLIP device was ignored because CLIPLoader.device is not available in ComfyUI object_info.");
   }
@@ -1029,6 +1060,13 @@ export function validateComfyUiInpaintRequestAgainstObjectInfo(
 
 export function readComfyUiUpscaleModelOptions(objectInfo: unknown) {
   return readInputOptions(objectInfo, "UpscaleModelLoader", "model_name");
+}
+
+export function readComfyUiKSamplerOptions(objectInfo: unknown) {
+  return {
+    samplers: readInputOptions(objectInfo, "KSampler", "sampler_name"),
+    schedulers: readInputOptions(objectInfo, "KSampler", "scheduler"),
+  };
 }
 
 export function validateComfyUiSam2MaskRequestAgainstObjectInfo(

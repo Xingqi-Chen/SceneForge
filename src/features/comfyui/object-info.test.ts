@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  readComfyUiKSamplerOptions,
   summarizeComfyUiErrorDetails,
   validateComfyUiInpaintRequestAgainstObjectInfo,
   validateComfyUiRequestAgainstObjectInfo,
@@ -151,6 +152,43 @@ const objectInfoWithLocalRegionInpaint = {
 };
 
 describe("ComfyUI object info helpers", () => {
+  it("reads KSampler options from current object_info", () => {
+    expect(
+      readComfyUiKSamplerOptions({
+        KSampler: {
+          input: {
+            required: {
+              sampler_name: [["euler", "dpmpp_2m_sde_heun_gpu"], {}],
+              scheduler: ["COMBO", { options: ["normal", "kl_optimal"] }],
+            },
+          },
+        },
+      }),
+    ).toEqual({
+      samplers: ["euler", "dpmpp_2m_sde_heun_gpu"],
+      schedulers: ["normal", "kl_optimal"],
+    });
+  });
+
+  it("reads KSampler options when object_info exposes them as optional inputs", () => {
+    expect(
+      readComfyUiKSamplerOptions({
+        KSampler: {
+          input: {
+            required: {},
+            optional: {
+              sampler_name: [["euler_cfg_pp"], {}],
+              scheduler: ["COMBO", { options: ["linear_quadratic"] }],
+            },
+          },
+        },
+      }),
+    ).toEqual({
+      samplers: ["euler_cfg_pp"],
+      schedulers: ["linear_quadratic"],
+    });
+  });
+
   it("normalizes common sampler display names", () => {
     expect(
       validateComfyUiRequestAgainstObjectInfo(
@@ -441,6 +479,40 @@ describe("ComfyUI object info helpers", () => {
       vaeName: "anima-vae.safetensors",
     });
     expect(result.request.clipDevice).toBeUndefined();
+  });
+
+  it("resolves Anima CLIP device when ComfyUI exposes it as an optional input", () => {
+    const result = validateComfyUiRequestAgainstObjectInfo(
+      {
+        checkpointName: "pencil-xl-diffusion.safetensors",
+        modelBaseModel: "Anima",
+        modelStorageKind: "diffusion",
+        clipName: "anima-clip.safetensors",
+        clipDevice: "default",
+        vaeName: "anima-vae.safetensors",
+        positivePrompt: "scene",
+      },
+      {
+        ...objectInfoWithAnima,
+        CLIPLoader: {
+          input: {
+            required: {
+              clip_name: [["anima-clip.safetensors"], {}],
+              type: [["stable_diffusion"], {}],
+            },
+            optional: {
+              device: [["default", "cpu"], { advanced: true }],
+            },
+          },
+        },
+      },
+    );
+
+    expect(result.errors).toEqual([]);
+    expect(result.warnings).toEqual([]);
+    expect(result.request).toMatchObject({
+      clipDevice: "default",
+    });
   });
 
   it("reports missing Anima required input fields before queueing", () => {
