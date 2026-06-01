@@ -17,6 +17,11 @@ import type { SavedComfyUiGenerationParams } from "@/shared/types";
 
 import type { CivitaiAiPromptResult } from "./civitai-ai-context";
 import { normalizeComfyUiSamplerSettings } from "./comfyui-generation-options";
+import {
+  isAnimaPromptContext,
+  mergeAnimaNegativePrompts,
+  renderAnimaPromptForContext,
+} from "./anima-prompt";
 
 export type ComfyUiGenerationParameterSource = "ai" | "reference" | "diagnosis" | "saved";
 
@@ -387,6 +392,7 @@ export function resolveComfyUiGenerationSettings(input: {
   selectedResources: SelectedCivitaiResourcesPreview;
   aiAdvice: CivitaiAiPromptResult | null;
   savedParameters?: SavedComfyUiGenerationParams | null;
+  supportsNsfw?: boolean;
 }): ComfyUiGenerationSettings {
   const parsedAi = parseComfyUiAiGenerationParameters(input.aiAdvice?.parameterSuggestions ?? null);
   const savedParameters = input.savedParameters ?? null;
@@ -455,6 +461,20 @@ export function resolveComfyUiGenerationSettings(input: {
     }),
   };
   request.workflowProfile = resolveComfyUiTextToImageWorkflowProfile(request).id;
+  if (isAnimaPromptContext({
+    baseModel: request.modelBaseModel,
+    resources: input.selectedResources,
+    supportsNsfw: input.supportsNsfw,
+    workflowProfile: request.workflowProfile,
+  })) {
+    request.positivePrompt = renderAnimaPromptForContext(request.positivePrompt, {
+      baseModel: request.modelBaseModel,
+      resources: input.selectedResources,
+      supportsNsfw: input.supportsNsfw,
+      workflowProfile: request.workflowProfile,
+    });
+    request.negativePrompt = mergeAnimaNegativePrompts([request.negativePrompt]);
+  }
 
   return {
     request,

@@ -20,6 +20,13 @@ import {
   buildIllustriousAiResponseInstructions,
   renderIllustriousPromptFromAiResponse,
 } from "@/features/editor/ai-prompt/illustrious-prompt";
+import {
+  buildAnimaAiResponseInstructions,
+  formatGeneratedPromptForAnimaContext,
+  isAnimaPromptContext,
+  renderAnimaPromptFromAiResponse,
+  resolveAnimaPromptContextFromResources,
+} from "@/features/editor/ai-prompt/anima-prompt";
 import { useEditorStore } from "@/features/editor/store/editor-store";
 import { generatePrompt } from "@/features/prompt-engine";
 import { inferSceneLayoutConstraints } from "@/features/prompt-engine/spatial-relations";
@@ -463,9 +470,10 @@ function getConstraintButtonClass(enabled: boolean) {
 
 export function buildAiSystemPrompt(
   constraints: AiGenerationConstraints,
-  options: { modelFormat?: PromptModelFormat } = {},
+  options: { modelFormat?: PromptModelFormat; promptProfile?: "default" | "anima" } = {},
 ) {
   const stableDiffusion = options.modelFormat === "stable-diffusion";
+  const animaPrompt = stableDiffusion && options.promptProfile === "anima";
   const priority = [
     constraints.layout ? "hard layout constraints" : null,
     constraints.pose ? "the character pose in the screenshot" : null,
@@ -499,7 +507,9 @@ export function buildAiSystemPrompt(
 
   const prompt = [
     stableDiffusion
-      ? "You are SceneForge's visual prompt assistant. Produce structured Illustrious-compatible Stable Diffusion prompt sections using concise Danbooru/booru-style anime tags and short tag phrases; not natural language."
+      ? `You are SceneForge's visual prompt assistant. Produce structured ${
+          animaPrompt ? "Anima" : "Illustrious-compatible"
+        } Stable Diffusion prompt sections using concise Danbooru/booru-style anime tags and short tag phrases; not natural language.`
       : "You are SceneForge's visual prompt assistant. Produce ONE concise Danbooru/booru-style image-generation prompt (comma-separated anime tags and short tag phrases; not natural language).",
     "",
     `Prioritize ${priority}.`,
@@ -515,7 +525,11 @@ export function buildAiSystemPrompt(
     return prompt;
   }
 
-  return [prompt, "", buildIllustriousAiResponseInstructions()].join("\n");
+  return [
+    prompt,
+    "",
+    animaPrompt ? buildAnimaAiResponseInstructions() : buildIllustriousAiResponseInstructions(),
+  ].join("\n");
 }
 
 export function buildAiUserText({
@@ -541,7 +555,7 @@ export function buildAiUserText({
 
   return [
     modelFormat === "stable-diffusion"
-      ? "Generate stronger Illustrious ordered positive prompt sections from the preview + screenshot below."
+      ? "Generate stronger ordered Stable Diffusion positive prompt sections from the preview + screenshot below."
       : "Generate a stronger Danbooru-style positive tag prompt from the preview + screenshot below.",
     constraints.layout || constraints.pose || constraints.visual
       ? `Order of trust: (1) enabled hard constraints and canvas image, (2) prompt preview, (3) character/object descriptions and prompt tags.`
@@ -561,7 +575,7 @@ export function buildAiUserText({
     "",
     `Prompt preview: ${promptForAi.prompt || "(empty)"}`,
     modelFormat === "stable-diffusion"
-      ? `Negative prompt (from scene tags and legacy settings; reference only; your reply must be Illustrious JSON sections): ${promptForAi.negativePrompt || "(none)"}`
+      ? `Negative prompt (from scene tags and legacy settings; reference only; your reply must be JSON sections): ${promptForAi.negativePrompt || "(none)"}`
       : `Negative prompt (from scene tags and legacy settings; reference only; your reply must be the positive prompt text only): ${promptForAi.negativePrompt || "(none)"}`,
     constraints.layout ? "" : null,
     constraints.layout ? "Hard layout constraints (must be preserved in the final prompt):" : null,
@@ -603,7 +617,7 @@ export function PromptPreviewPanel({ onCaptureCanvas }: PromptPreviewPanelProps)
   const [selectedArtistStringStatus, setSelectedArtistStringStatus] = useState<SelectedResourceStatus>("idle");
   const [selectedArtistStringError, setSelectedArtistStringError] = useState("");
   const [selectedArtistStringResultKey, setSelectedArtistStringResultKey] = useState("");
-  const generatedPrompt = generatePrompt(project);
+  const baseGeneratedPrompt = generatePrompt(project);
   const nsfwEnabled = project.settings.supportsNsfw === true;
   const selectedCheckpointId = project.settings.selectedCivitaiCheckpointId;
   const selectedLoraIds = project.settings.selectedCivitaiLoraIds ?? [];
@@ -646,6 +660,11 @@ export function PromptPreviewPanel({ onCaptureCanvas }: PromptPreviewPanelProps)
     shouldLoadSelectedArtistStrings && selectedArtistStringResultKey === selectedArtistStringIdsKey
       ? selectedArtistStrings
       : [];
+  const promptContext = resolveAnimaPromptContextFromResources({
+    resources: displayedSelectedResources,
+    supportsNsfw: nsfwEnabled,
+  });
+  const generatedPrompt = formatGeneratedPromptForAnimaContext(baseGeneratedPrompt, promptContext);
 
   useEffect(() => {
     if (!shouldLoadSelectedArtistStrings) {
@@ -788,7 +807,7 @@ export function PromptPreviewPanel({ onCaptureCanvas }: PromptPreviewPanelProps)
     setAiError("");
 
     try {
-      const promptForAi = generatePrompt(project, {
+      const basePromptForAi = generatePrompt(project, {
         includeLayoutConstraints: useLayoutConstraints,
       });
       const constraints: AiGenerationConstraints = {
@@ -828,8 +847,14 @@ export function PromptPreviewPanel({ onCaptureCanvas }: PromptPreviewPanelProps)
         selectedResourceStatus,
         shouldLoadSelectedResources,
       });
+      const aiPromptContext = resolveAnimaPromptContextFromResources({
+        resources: selectedResourcesForAi,
+        supportsNsfw: nsfwEnabled,
+      });
+      const promptForAi = formatGeneratedPromptForAnimaContext(basePromptForAi, aiPromptContext);
       const systemPrompt = buildAiSystemPrompt(constraints, {
         modelFormat: project.settings.modelFormat,
+        promptProfile: isAnimaPromptContext(aiPromptContext) ? "anima" : "default",
       });
       const userText = buildAiUserText({
         constraints,
@@ -914,10 +939,16 @@ export function PromptPreviewPanel({ onCaptureCanvas }: PromptPreviewPanelProps)
       });
 
       const nextAiPrompt = project.settings.modelFormat === "stable-diffusion"
-        ? renderIllustriousPromptFromAiResponse({
-            rawContent: payload.content,
-            resources: selectedResourcesForAi,
-          })
+        ? isAnimaPromptContext(aiPromptContext)
+          ? renderAnimaPromptFromAiResponse({
+              rawContent: payload.content,
+              resources: selectedResourcesForAi,
+              supportsNsfw: nsfwEnabled,
+            })
+          : renderIllustriousPromptFromAiResponse({
+              rawContent: payload.content,
+              resources: selectedResourcesForAi,
+            })
         : payload.content.trim();
       setAiGeneratedPrompt(nextAiPrompt);
       setAiStatus("success");
