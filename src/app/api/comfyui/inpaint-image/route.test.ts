@@ -29,6 +29,7 @@ const objectInfoWithInpaint = {
       },
     },
   },
+  CLIPTextEncode: {},
   LoadImage: {},
   LoadImageMask: {},
   SetLatentNoiseMask: {},
@@ -53,6 +54,37 @@ const objectInfoWithInpaintWithoutDetailers = Object.fromEntries(
     ([nodeName]) => nodeName !== "FaceDetailer" && nodeName !== "UltralyticsDetectorProvider",
   ),
 );
+
+const objectInfoWithAnimaInpaint = {
+  ...objectInfoWithInpaintWithoutDetailers,
+  CheckpointLoaderSimple: undefined,
+  UNETLoader: {
+    input: {
+      required: {
+        unet_name: [["pencil-xl-diffusion.safetensors"], {}],
+        weight_dtype: [["default", "fp8_e4m3fn"], {}],
+      },
+    },
+  },
+  CLIPLoader: {
+    input: {
+      required: {
+        clip_name: [["qwen_3_06b_base.safetensors"], {}],
+        type: [["qwen_image"], {}],
+      },
+      optional: {
+        device: [["default", "cpu"], {}],
+      },
+    },
+  },
+  VAELoader: {
+    input: {
+      required: {
+        vae_name: [["qwen_image_vae.safetensors"], {}],
+      },
+    },
+  },
+};
 
 const objectInfoWithHighResInpaint = {
   ...objectInfoWithInpaint,
@@ -438,6 +470,171 @@ describe("ComfyUI inpaint image route", () => {
         sourceImageDataUrl: "",
       },
     });
+  });
+
+  it("queues an Anima VAE inpaint workflow with Anima UNET, CLIP, and VAE loaders", async () => {
+    process.env.COMFYUI_BASE_URL = "http://comfyui.test";
+    const sourceImageDataUrl = await createPngDataUrl(8, 8, "#336699");
+    const maskDataUrl = await createPngDataUrl();
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      if (input === "http://comfyui.test/object_info") {
+        return Response.json(objectInfoWithAnimaInpaint);
+      }
+
+      if (input === "http://comfyui.test/upload/image") {
+        const kind = readUploadedKind(init?.body);
+
+        return Response.json({
+          name: kind === "mask" ? "uploaded-mask.png" : "uploaded-source.png",
+          subfolder: "SceneForge",
+          type: "input",
+        });
+      }
+
+      expect(input).toBe("http://comfyui.test/prompt");
+      const body = JSON.parse(String(init?.body));
+      expect(Object.values(body.prompt).some((node) => (node as { class_type?: string }).class_type === "CheckpointLoaderSimple")).toBe(false);
+      expect(body.prompt["1"]).toMatchObject({
+        class_type: "UNETLoader",
+        inputs: {
+          unet_name: "pencil-xl-diffusion.safetensors",
+          weight_dtype: "default",
+        },
+      });
+      expect(body.prompt["2"]).toMatchObject({
+        class_type: "CLIPLoader",
+        inputs: {
+          clip_name: "qwen_3_06b_base.safetensors",
+          device: "default",
+          type: "qwen_image",
+        },
+      });
+      expect(body.prompt["3"]).toMatchObject({
+        class_type: "VAELoader",
+        inputs: {
+          vae_name: "qwen_image_vae.safetensors",
+        },
+      });
+      expect(body.prompt["8"]).toMatchObject({
+        class_type: "VAEEncodeForInpaint",
+        inputs: {
+          pixels: ["6", 0],
+          vae: ["3", 0],
+          mask: ["7", 0],
+        },
+      });
+      expect(body.prompt["9"].inputs).toMatchObject({
+        model: ["1", 0],
+        latent_image: ["8", 0],
+      });
+      expect(body.prompt["10"].inputs.vae).toEqual(["3", 0]);
+
+      return Response.json({
+        prompt_id: "prompt-anima-inpaint",
+        number: 19,
+        node_errors: {},
+      });
+    });
+
+    const response = await POST(
+      new Request("http://localhost/api/comfyui/inpaint-image", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          checkpointName: "pencil-xl-diffusion.safetensors",
+          workflowProfile: "anima",
+          modelBaseModel: "Anima",
+          modelStorageKind: "diffusion",
+          positivePrompt: "repair the sleeve",
+          sourceImageDataUrl,
+          maskDataUrl,
+          seed: 123,
+          inpaintMode: "vae-inpaint",
+        }),
+      }),
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(fetchSpy).toHaveBeenCalledTimes(4);
+    expect(payload).toMatchObject({
+      promptId: "prompt-anima-inpaint",
+      outputNodeId: "11",
+      nodeIds: {
+        unetLoader: "1",
+        clipLoader: "2",
+        vaeLoader: "3",
+        vaeEncodeForInpaint: "8",
+        previewImage: "11",
+      },
+      request: {
+        workflowProfile: "anima",
+        clipName: "qwen_3_06b_base.safetensors",
+        clipDevice: "default",
+        vaeName: "qwen_image_vae.safetensors",
+        unetWeightDtype: "default",
+        sourceImageDataUrl: "",
+      },
+    });
+  });
+
+  it("returns Anima inpaint object_info errors before uploading source or mask images", async () => {
+    process.env.COMFYUI_BASE_URL = "http://comfyui.test";
+    const sourceImageDataUrl = await createPngDataUrl(8, 8, "#336699");
+    const maskDataUrl = await createPngDataUrl();
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      expect(input).toBe("http://comfyui.test/object_info");
+
+      return Response.json({
+        ...objectInfoWithAnimaInpaint,
+        UNETLoader: undefined,
+        CLIPLoader: {
+          input: {
+            required: {
+              clip_name: [["other-clip.safetensors"], {}],
+              type: [["sdxl"], {}],
+            },
+          },
+        },
+        VAELoader: {
+          input: {
+            required: {
+              vae_name: [["other-vae.safetensors"], {}],
+            },
+          },
+        },
+      });
+    });
+
+    const response = await POST(
+      new Request("http://localhost/api/comfyui/inpaint-image", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          checkpointName: "pencil-xl-diffusion.safetensors",
+          workflowProfile: "anima",
+          modelBaseModel: "Anima",
+          modelStorageKind: "diffusion",
+          positivePrompt: "repair the sleeve",
+          sourceImageDataUrl,
+          maskDataUrl,
+          inpaintMode: "vae-inpaint",
+        }),
+      }),
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(payload.error.message).toBe("ComfyUI inpaint request does not match the current ComfyUI model/node options.");
+    expect(payload.error.details.errors).toEqual(expect.arrayContaining([
+      "UNETLoader node is not available in ComfyUI.",
+      "Anima UNET model is not available in ComfyUI: pencil-xl-diffusion.safetensors",
+      "Anima CLIP model is not available in ComfyUI: qwen_3_06b_base.safetensors",
+      "Anima CLIP type is not available in ComfyUI: qwen_image",
+      "Anima VAE model is not available in ComfyUI: qwen_image_vae.safetensors",
+    ]));
+    expect(payload.error.details.errors).not.toContain("Checkpoint is not available in ComfyUI: pencil-xl-diffusion.safetensors");
   });
 
   it("queues a model-based 2x high-res inpaint workflow after uploading source and mask", async () => {

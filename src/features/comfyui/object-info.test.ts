@@ -115,6 +115,36 @@ const objectInfoWithInpaint = {
   VAEDecodeTiled: {},
 };
 
+const objectInfoWithAnimaInpaint = {
+  ...objectInfoWithInpaint,
+  UNETLoader: {
+    input: {
+      required: {
+        unet_name: [["pencil-xl-diffusion.safetensors"], {}],
+        weight_dtype: [["default", "fp8_e4m3fn"], {}],
+      },
+    },
+  },
+  CLIPLoader: {
+    input: {
+      required: {
+        clip_name: [["qwen_3_06b_base.safetensors"], {}],
+        type: [["qwen_image"], {}],
+      },
+      optional: {
+        device: [["default", "cpu"], {}],
+      },
+    },
+  },
+  VAELoader: {
+    input: {
+      required: {
+        vae_name: [["qwen_image_vae.safetensors"], {}],
+      },
+    },
+  },
+};
+
 const objectInfoWithHighResInpaint = {
   ...objectInfoWithInpaint,
   ImageScaleBy: {
@@ -978,6 +1008,83 @@ describe("ComfyUI object info helpers", () => {
         },
       ).errors,
     ).toContain("SetLatentNoiseMask node is not available in ComfyUI. It is required for latent noise mask inpaint mode.");
+  });
+
+  it("validates Anima inpaint nodes and model files without requiring CheckpointLoaderSimple", () => {
+    const animaOnlyObjectInfo: Record<string, unknown> = { ...objectInfoWithAnimaInpaint };
+    delete animaOnlyObjectInfo.CheckpointLoaderSimple;
+    const result = validateComfyUiInpaintRequestAgainstObjectInfo(
+      {
+        checkpointName: "pencil-xl-diffusion.safetensors",
+        modelBaseModel: "Anima",
+        modelStorageKind: "diffusion",
+        positivePrompt: "continue the previous shot",
+        sourceImage: { filename: "source.png", type: "output" },
+        maskName: "mask.png",
+        samplerName: "DPM++ 2M",
+        scheduler: "Karras",
+      },
+      animaOnlyObjectInfo,
+    );
+
+    expect(result).toMatchObject({
+      errors: [],
+      request: {
+        checkpointName: "pencil-xl-diffusion.safetensors",
+        workflowProfile: "anima",
+        clipName: "qwen_3_06b_base.safetensors",
+        clipDevice: "default",
+        vaeName: "qwen_image_vae.safetensors",
+        unetWeightDtype: "default",
+        samplerName: "dpmpp_2m",
+        scheduler: "karras",
+      },
+    });
+  });
+
+  it("reports missing Anima inpaint profile files and unsupported detailers before queueing", () => {
+    const result = validateComfyUiInpaintRequestAgainstObjectInfo(
+      {
+        checkpointName: "pencil-xl-diffusion.safetensors",
+        modelBaseModel: "Anima",
+        modelStorageKind: "diffusion",
+        positivePrompt: "repair hands",
+        sourceImage: { filename: "source.png", type: "output" },
+        maskName: "mask.png",
+        faceDetailer: {
+          enabled: true,
+        },
+      },
+      {
+        ...objectInfoWithAnimaInpaint,
+        UNETLoader: undefined,
+        CLIPLoader: {
+          input: {
+            required: {
+              clip_name: [["other-clip.safetensors"], {}],
+              type: [["sdxl"], {}],
+            },
+          },
+        },
+        VAELoader: {
+          input: {
+            required: {
+              vae_name: [["other-vae.safetensors"], {}],
+            },
+          },
+        },
+      },
+    );
+
+    expect(result.errors).toEqual(expect.arrayContaining([
+      "UNETLoader node is not available in ComfyUI.",
+      "Anima UNET model is not available in ComfyUI: pencil-xl-diffusion.safetensors",
+      "Anima CLIP model is not available in ComfyUI: qwen_3_06b_base.safetensors",
+      "Anima CLIP type is not available in ComfyUI: qwen_image",
+      "Anima VAE model is not available in ComfyUI: qwen_image_vae.safetensors",
+      "Anima inpaint profile does not support FaceDetailer yet.",
+    ]));
+    expect(result.errors).not.toContain("Checkpoint is not available in ComfyUI: pencil-xl-diffusion.safetensors");
   });
 
   it("validates and normalizes inpaint detailer settings before queueing", () => {
