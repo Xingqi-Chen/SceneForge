@@ -37,6 +37,7 @@ Validation:
 - `npm run typecheck` passed.
 - `npm run lint` passed with the existing 22 `@next/next/no-img-element` warnings.
 - `npm run build` passed with the existing Turbopack NFT trace warning for `sequence-reference-storage`.
+- Merged PR #28 and confirmed Issue #27 closed.
 
 ### T-AN2 Fixed Anima Model Settings Persistence
 
