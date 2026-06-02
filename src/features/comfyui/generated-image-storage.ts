@@ -36,11 +36,11 @@ function readOptionalString(value: unknown) {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
-function getGeneratedImagesDir() {
+export function getResolvedGeneratedImagesDir() {
   return path.resolve(/*turbopackIgnore: true*/ process.env.SCENEFORGE_GENERATED_IMAGES_DIR || DEFAULT_GENERATED_IMAGE_DIR);
 }
 
-function getComfyUiTempDir() {
+export function getResolvedComfyUiTempDir() {
   return process.env.COMFYUI_TEMP_DIR?.trim()
     ? path.resolve(/*turbopackIgnore: true*/ process.env.COMFYUI_TEMP_DIR)
     : null;
@@ -100,7 +100,7 @@ export function getGeneratedImagePath(filename: string) {
     return null;
   }
 
-  const root = getGeneratedImagesDir();
+  const root = getResolvedGeneratedImagesDir();
   const target = path.resolve(/*turbopackIgnore: true*/ root, filename);
   assertInsideDirectory(root, target);
   return target;
@@ -174,7 +174,7 @@ export async function deleteComfyUiLocalImage(reference: ComfyUiViewImageReferen
     throw new ComfyUiGeneratedImageStorageError("Only ComfyUI temporary files can be deleted.", 400);
   }
 
-  const root = getComfyUiTempDir();
+  const root = getResolvedComfyUiTempDir();
   if (!root) {
     throw new ComfyUiGeneratedImageStorageError(
       "COMFYUI_TEMP_DIR is not configured; cannot delete the ComfyUI temporary file.",

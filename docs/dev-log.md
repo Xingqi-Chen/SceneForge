@@ -4,6 +4,40 @@ This log records dated implementation and documentation work. Keep entries conci
 
 ## 2026-06-01
 
+### T6 / Issue #36 Centralized Settings Page
+
+Summary:
+
+- Replaced the `/settings` placeholder with a centralized settings workspace for NSFW status, read-only storage paths, editable Civitai resource paths, and redacted integration status.
+- Added server-side `/api/settings` status/update handling so the client does not read environment variables or server-only path helpers.
+- Added Civitai resource path validation before SQLite persistence and kept secret-backed integration values redacted.
+- Changed the Civitai library panel to link to centralized settings as the primary path editing surface.
+
+Files changed:
+
+- `src/app/settings/page.tsx`
+- `src/app/settings/page.test.tsx`
+- `src/app/api/settings/route.ts`
+- `src/app/api/settings/route.test.ts`
+- `src/app/api/civitai-lora-library/settings/route.ts`
+- `src/features/settings/`
+- `src/features/civitai-lora-library/settings.ts`
+- `src/features/civitai-lora-library/settings.test.ts`
+- `src/features/comfyui/generated-image-storage.ts`
+- `src/features/comfyui/sequence-reference-storage.ts`
+- `src/features/editor/components/CivitaiLoraLibraryPanel.tsx`
+- `docs/dev-log.md`
+
+Validation:
+
+- `npm test -- src/app/api/settings/route.test.ts src/app/settings/page.test.tsx src/features/civitai-lora-library/settings.test.ts src/features/settings/central-settings.test.ts` passed with 12 tests.
+- `npm test` passed with 637 tests.
+- `npm run typecheck` passed.
+- `npm run lint` passed with existing `<img>` warnings.
+- `npm run build` passed.
+- `git diff --check` passed with line-ending warnings only.
+- Browser verification loaded `/settings`, confirmed General, Storage Paths, Civitai Resource Paths, Integration Status, and invalid-path field errors with no console errors.
+
 ### T-AN6 / Issue #33 Anima Natural Prompt Clauses
 
 Summary:

@@ -1,6 +1,7 @@
 "use client";
 
-import { Check, ChevronDown, Database, Download, ExternalLink, ImageIcon, Loader2, Pencil, Save, Search, Settings, ShieldCheck, Sparkles, Upload, X } from "lucide-react";
+import Link from "next/link";
+import { Check, ChevronDown, Database, Download, ExternalLink, ImageIcon, Loader2, Pencil, Save, Search, ShieldCheck, Sparkles, Upload, X } from "lucide-react";
 import { type ImgHTMLAttributes, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
@@ -432,13 +433,9 @@ export function CivitaiLoraLibraryPanel() {
   const [repairStatus, setRepairStatus] = useState<LoadStatus>("idle");
   const [repairError, setRepairError] = useState("");
   const [repairResult, setRepairResult] = useState<CacheRepairResult | null>(null);
-  const [settingsOpen, setSettingsOpen] = useState(false);
   const [settings, setSettings] = useState<CivitaiLibrarySettings>(EMPTY_CIVITAI_LIBRARY_SETTINGS);
-  const [settingsDraft, setSettingsDraft] = useState<CivitaiLibrarySettings>(EMPTY_CIVITAI_LIBRARY_SETTINGS);
   const [settingsLoadStatus, setSettingsLoadStatus] = useState<LoadStatus>("idle");
   const [settingsLoadError, setSettingsLoadError] = useState("");
-  const [settingsSaveStatus, setSettingsSaveStatus] = useState<LoadStatus>("idle");
-  const [settingsSaveError, setSettingsSaveError] = useState("");
   const [downloadStatus, setDownloadStatus] = useState<CivitaiResourceDownloadStatus | null>(null);
   const [downloadStatusLoadStatus, setDownloadStatusLoadStatus] = useState<LoadStatus>("idle");
   const [downloadActionStatus, setDownloadActionStatus] = useState<LoadStatus>("idle");
@@ -460,6 +457,7 @@ export function CivitaiLoraLibraryPanel() {
   const detailPaneRef = useRef<HTMLElement | null>(null);
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
   const resourceLoadRequestIdRef = useRef(0);
+  const configuredCivitaiPathCount = Object.values(settings).filter((value) => value.trim()).length;
 
   async function loadResources() {
     const requestId = resourceLoadRequestIdRef.current + 1;
@@ -798,56 +796,10 @@ export function CivitaiLoraLibraryPanel() {
     try {
       const payload = await fetchJson<CivitaiLibrarySettings>("/api/civitai-lora-library/settings");
       setSettings(payload);
-      setSettingsDraft(payload);
       setSettingsLoadStatus("success");
     } catch (error) {
       setSettingsLoadStatus("error");
       setSettingsLoadError(error instanceof Error ? error.message : "无法读取路径设置。");
-    }
-  }
-
-  function handleOpenSettings() {
-    setSettingsDraft(settings);
-    setSettingsSaveStatus("idle");
-    setSettingsSaveError("");
-    setSettingsOpen(true);
-  }
-
-  function handleCancelSettings() {
-    setSettingsDraft(settings);
-    setSettingsSaveStatus("idle");
-    setSettingsSaveError("");
-    setSettingsOpen(false);
-  }
-
-  async function handleSaveSettings() {
-    const nextSettings: CivitaiLibrarySettings = {
-      loraDownloadPath: settingsDraft.loraDownloadPath.trim(),
-      checkpointDownloadPath: settingsDraft.checkpointDownloadPath.trim(),
-      diffusionModelPath: settingsDraft.diffusionModelPath.trim(),
-      controlNetModelPath: settingsDraft.controlNetModelPath.trim(),
-    };
-
-    setSettingsSaveStatus("loading");
-    setSettingsSaveError("");
-
-    try {
-      await fetchJson<{ ok: true }>("/api/civitai-lora-library/settings", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(nextSettings),
-      });
-      setSettings(nextSettings);
-      setSettingsDraft(nextSettings);
-      setSettingsLoadStatus("success");
-      setSettingsLoadError("");
-      setSettingsSaveStatus("success");
-      if (detail?.resourceType === "lora" || detail?.resourceType === "model") {
-        void loadDownloadStatus(detail.id);
-      }
-    } catch (error) {
-      setSettingsSaveStatus("error");
-      setSettingsSaveError(error instanceof Error ? error.message : "无法保存路径设置。");
     }
   }
 
@@ -1277,19 +1229,14 @@ export function CivitaiLoraLibraryPanel() {
                     <h3 className="text-lg font-bold text-slate-950">Civitai LoRA 收藏库</h3>
                     <p className="mt-1 text-xs leading-relaxed text-slate-500">{METADATA_NOTICE}</p>
                   </div>
-                  <button
-                    aria-label={settingsOpen ? "关闭路径设置" : "打开路径设置"}
-                    className={`rounded-full p-2 transition ${
-                      settingsOpen
-                        ? "bg-indigo-50 text-indigo-700"
-                        : "text-slate-400 hover:bg-slate-100 hover:text-slate-700"
-                    }`}
-                    onClick={settingsOpen ? handleCancelSettings : handleOpenSettings}
-                    title="路径设置"
-                    type="button"
+                  <Link
+                    aria-label="Open centralized settings"
+                    className="rounded-full p-2 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
+                    href="/settings"
+                    title="Central settings"
                   >
-                    <Settings className="size-5" />
-                  </button>
+                    <ExternalLink className="size-5" />
+                  </Link>
                   <button
                     aria-label="关闭 Civitai LoRA Library"
                     className="rounded-full p-2 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
@@ -1300,110 +1247,27 @@ export function CivitaiLoraLibraryPanel() {
                   </button>
                 </header>
 
-                {settingsOpen ? (
-                  <div className="shrink-0 border-b border-slate-100 bg-slate-50 p-5">
-                    <div className="flex flex-wrap items-start justify-between gap-3">
-                      <div>
-                        <h4 className="text-sm font-bold text-slate-900">路径设置</h4>
-                        <p className="mt-1 text-xs text-slate-500">
-                          LoRA、Checkpoint 下载目录与 ControlNet 模型扫描目录在这里统一配置。
-                        </p>
-                      </div>
-                      {settingsLoadStatus === "loading" ? (
-                        <span className="inline-flex items-center gap-2 rounded-md bg-white px-2.5 py-1.5 text-xs text-slate-500">
-                          <Loader2 className="size-3.5 animate-spin" />
-                          正在读取设置
-                        </span>
+                <div className="shrink-0 border-b border-slate-100 bg-slate-50 p-5">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <h4 className="text-sm font-bold text-slate-900">Resource path settings</h4>
+                      <p className="mt-1 text-xs leading-relaxed text-slate-500">
+                        Civitai download and model scan paths are managed in centralized settings.
+                        {settingsLoadStatus === "loading" ? " Loading current status..." : ` ${configuredCivitaiPathCount}/4 paths configured.`}
+                      </p>
+                      {settingsLoadStatus === "error" ? (
+                        <p className="mt-1 text-xs leading-relaxed text-rose-600">{settingsLoadError}</p>
                       ) : null}
                     </div>
-                    <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-                      <label className="block text-xs font-medium text-slate-600">
-                        <span>LoRA 下载路径</span>
-                        <input
-                          className="mt-1 h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm font-normal text-slate-800 outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 disabled:opacity-60"
-                          disabled={settingsLoadStatus === "loading" || settingsSaveStatus === "loading"}
-                          onChange={(event) =>
-                            setSettingsDraft((current) => ({ ...current, loraDownloadPath: event.target.value }))
-                          }
-                          placeholder="D:/StableDiffusion/models/Lora"
-                          value={settingsDraft.loraDownloadPath}
-                        />
-                      </label>
-                      <label className="block text-xs font-medium text-slate-600">
-                        <span>Checkpoint 下载路径</span>
-                        <input
-                          className="mt-1 h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm font-normal text-slate-800 outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 disabled:opacity-60"
-                          disabled={settingsLoadStatus === "loading" || settingsSaveStatus === "loading"}
-                          onChange={(event) =>
-                            setSettingsDraft((current) => ({ ...current, checkpointDownloadPath: event.target.value }))
-                          }
-                          placeholder="D:/StableDiffusion/models/Stable-diffusion"
-                          value={settingsDraft.checkpointDownloadPath}
-                        />
-                      </label>
-                      <label className="block text-xs font-medium text-slate-600">
-                        <span>Diffusion 模型下载路径</span>
-                        <input
-                          className="mt-1 h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm font-normal text-slate-800 outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 disabled:opacity-60"
-                          disabled={settingsLoadStatus === "loading" || settingsSaveStatus === "loading"}
-                          onChange={(event) =>
-                            setSettingsDraft((current) => ({ ...current, diffusionModelPath: event.target.value }))
-                          }
-                          placeholder="D:/ComfyUI/models/diffusion_models"
-                          value={settingsDraft.diffusionModelPath}
-                        />
-                      </label>
-                      <label className="block text-xs font-medium text-slate-600">
-                        <span>ControlNet 模型路径</span>
-                        <input
-                          className="mt-1 h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm font-normal text-slate-800 outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 disabled:opacity-60"
-                          disabled={settingsLoadStatus === "loading" || settingsSaveStatus === "loading"}
-                          onChange={(event) =>
-                            setSettingsDraft((current) => ({ ...current, controlNetModelPath: event.target.value }))
-                          }
-                          placeholder="D:/ComfyUI/models/controlnet"
-                          value={settingsDraft.controlNetModelPath}
-                        />
-                      </label>
-                    </div>
-                    <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
-                      <div className="min-h-5 text-xs">
-                        {settingsLoadStatus === "error" ? (
-                          <span className="text-rose-600">{settingsLoadError}</span>
-                        ) : null}
-                        {settingsSaveStatus === "success" ? (
-                          <span className="text-emerald-700">设置已保存。</span>
-                        ) : null}
-                        {settingsSaveStatus === "error" ? (
-                          <span className="text-rose-600">{settingsSaveError}</span>
-                        ) : null}
-                      </div>
-                      <div className="flex gap-2">
-                        <Button
-                          className="h-9 rounded-md border-slate-200 bg-white px-4 text-xs text-slate-700 hover:bg-slate-50"
-                          disabled={settingsSaveStatus === "loading"}
-                          onClick={handleCancelSettings}
-                          size="sm"
-                          type="button"
-                          variant="secondary"
-                        >
-                          <X className="size-4" />
-                          取消
-                        </Button>
-                        <Button
-                          className="h-9 rounded-md bg-indigo-600 px-4 text-xs text-white hover:bg-indigo-700"
-                          disabled={settingsLoadStatus === "loading" || settingsSaveStatus === "loading"}
-                          onClick={() => void handleSaveSettings()}
-                          size="sm"
-                          type="button"
-                        >
-                          {settingsSaveStatus === "loading" ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />}
-                          保存设置
-                        </Button>
-                      </div>
-                    </div>
+                    <Link
+                      className="inline-flex h-9 items-center justify-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 shadow-sm transition hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-700"
+                      href="/settings"
+                    >
+                      <ExternalLink className="size-3.5" />
+                      Open settings
+                    </Link>
                   </div>
-                ) : null}
+                </div>
 
                 <div className="grid min-h-0 flex-1 grid-rows-[auto_1fr] overflow-hidden">
                   <div className="border-b border-slate-100 bg-slate-50 p-4">
