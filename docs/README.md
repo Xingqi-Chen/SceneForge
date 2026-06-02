@@ -10,6 +10,7 @@ This directory contains the working documents used by the Orchestrator and the f
 - `plan.md`: local roadmap, development tracker, Track-to-Issue mapping, and Orchestrator workflow state. Maintained by `product-agent` and the Orchestrator.
 - `dev-log.md`: dated implementation notes, validation evidence, command changes, and documentation updates. Maintained by `dev-agent` and the Orchestrator.
 - `lessons-learned.md`: reusable engineering, testing, review, and workflow lessons. Updated only when a lesson should affect future work.
+- `third-party-licenses.md`: npm dependency license inventory generated from `package-lock.json` for open-source readiness and release review.
 
 Agent reasoning effort policy lives in `AGENTS.md`. The short version is: Orchestrator and reviewer default to `xhigh`; product, dev, and tester default to `high`; dev/test/product escalate to `xhigh` for high-risk, ambiguous, security-sensitive, persistence, integration, 3D, LLM, or cross-module work.
 

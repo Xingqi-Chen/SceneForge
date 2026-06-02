@@ -6,7 +6,7 @@ import type { ComfyUiViewImageReference } from "./types";
 
 export const COMFYUI_GENERATED_IMAGE_ROUTE_PREFIX = "/api/comfyui/generated-images";
 
-const DEFAULT_GENERATED_IMAGE_DIR = path.join(process.cwd(), "data", "comfyui-generated-images");
+const DEFAULT_GENERATED_IMAGE_DIR = path.join(/*turbopackIgnore: true*/ process.cwd(), "data", "comfyui-generated-images");
 const GENERATED_IMAGE_FILENAME_PATTERN = /^[a-f0-9]{32}\.(?:gif|jpg|jpeg|png|webp)$/i;
 const MAX_GENERATED_IMAGE_BYTES = 64 * 1024 * 1024;
 
@@ -37,12 +37,12 @@ function readOptionalString(value: unknown) {
 }
 
 function getGeneratedImagesDir() {
-  return path.resolve(process.env.SCENEFORGE_GENERATED_IMAGES_DIR || DEFAULT_GENERATED_IMAGE_DIR);
+  return path.resolve(/*turbopackIgnore: true*/ process.env.SCENEFORGE_GENERATED_IMAGES_DIR || DEFAULT_GENERATED_IMAGE_DIR);
 }
 
 function getComfyUiTempDir() {
   return process.env.COMFYUI_TEMP_DIR?.trim()
-    ? path.resolve(process.env.COMFYUI_TEMP_DIR)
+    ? path.resolve(/*turbopackIgnore: true*/ process.env.COMFYUI_TEMP_DIR)
     : null;
 }
 
@@ -101,7 +101,7 @@ export function getGeneratedImagePath(filename: string) {
   }
 
   const root = getGeneratedImagesDir();
-  const target = path.resolve(root, filename);
+  const target = path.resolve(/*turbopackIgnore: true*/ root, filename);
   assertInsideDirectory(root, target);
   return target;
 }
@@ -147,8 +147,8 @@ export async function storeGeneratedImage(bytes: Uint8Array, contentType: string
     throw new ComfyUiGeneratedImageStorageError("Invalid generated image filename.");
   }
 
-  await fs.mkdir(path.dirname(filePath), { recursive: true });
-  await fs.writeFile(filePath, bytes);
+  await fs.mkdir(/*turbopackIgnore: true*/ path.dirname(filePath), { recursive: true });
+  await fs.writeFile(/*turbopackIgnore: true*/ filePath, bytes);
 
   return {
     byteLength: bytes.byteLength,
@@ -164,7 +164,7 @@ export async function deleteGeneratedImage(filename: string) {
     throw new ComfyUiGeneratedImageStorageError("Invalid generated image filename.");
   }
 
-  await fs.rm(filePath, { force: true });
+  await fs.rm(/*turbopackIgnore: true*/ filePath, { force: true });
   return { deleted: true };
 }
 
@@ -184,12 +184,13 @@ export async function deleteComfyUiLocalImage(reference: ComfyUiViewImageReferen
 
   const safeReference = sanitizeComfyUiViewImageReference(reference);
   const target = path.resolve(
+    /*turbopackIgnore: true*/
     root,
     safeReference.subfolder ?? "",
     safeReference.filename,
   );
   assertInsideDirectory(root, target);
 
-  await fs.rm(target, { force: true });
+  await fs.rm(/*turbopackIgnore: true*/ target, { force: true });
   return { deleted: true };
 }

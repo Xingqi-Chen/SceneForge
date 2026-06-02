@@ -84,6 +84,30 @@ Runtime data is stored under `data/` by default or in configured absolute paths.
 
 Important environment variables are documented in `.env.example`.
 
+## Privacy and Local Logs
+
+SceneForge is designed for local use. The LiteLLM route writes local request, response, and error records to `data/logs/llm-chat.jsonl` by default. These records can include scene prompts, user text, image data URLs, model responses, and diagnostic details. The log directory is ignored by git, but users should still treat it as private local data.
+
+To disable LLM local logging, set:
+
+```bash
+SCENEFORGE_LLM_LOG_FILE=off
+```
+
+To clear existing logs, delete `data/logs/llm-chat.jsonl` or the custom file configured by `SCENEFORGE_LLM_LOG_FILE`.
+
+## Third-Party Services and Content
+
+SceneForge can connect to local or user-configured services such as LiteLLM, ComfyUI, Tavily, Civitai, and artist-string source pages. Users are responsible for complying with each service's terms, model licenses, content policies, and applicable law. The repository does not distribute generated images, downloaded models, LoRAs, checkpoints, Civitai caches, prompt-library runtime data, or local project files.
+
+Do not expose the development server directly to the public internet without adding authentication, authorization, rate limiting, path isolation, and a deployment-specific review of the local file and integration routes.
+
+## License
+
+SceneForge is released under the MIT License. See `LICENSE`.
+
+Third-party dependency license inventory is maintained in `docs/third-party-licenses.md`.
+
 ## Documentation
 
 Product and technical planning lives in:

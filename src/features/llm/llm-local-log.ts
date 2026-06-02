@@ -12,7 +12,12 @@ type LlmLocalLogRecord = {
 };
 
 function getLlmLogFilePath() {
-  return process.env.SCENEFORGE_LLM_LOG_FILE?.trim() || DEFAULT_LLM_LOG_FILE;
+  const override = process.env.SCENEFORGE_LLM_LOG_FILE?.trim();
+  if (override && ["0", "false", "off", "none", "disabled"].includes(override.toLocaleLowerCase())) {
+    return null;
+  }
+
+  return override || DEFAULT_LLM_LOG_FILE;
 }
 
 export function serializeErrorForLlmLog(error: unknown) {
@@ -29,6 +34,9 @@ export function serializeErrorForLlmLog(error: unknown) {
 
 export async function appendLlmLocalLog(record: LlmLocalLogRecord) {
   const filePath = getLlmLogFilePath();
+  if (!filePath) {
+    return;
+  }
 
   try {
     await fs.mkdir(/*turbopackIgnore: true*/ path.dirname(filePath), { recursive: true });
