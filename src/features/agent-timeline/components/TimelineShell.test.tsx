@@ -4,6 +4,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createDefaultProject } from "@/features/editor/store/defaults";
 import { useEditorStore } from "@/features/editor/store/editor-store";
+import {
+  completeTimelineNode,
+  confirmTimelineGeneration,
+  type TimelineWorkflowState,
+} from "@/features/agent-timeline";
 import type { PromptTag } from "@/shared/types";
 
 const savePromptLibraryMock = vi.hoisted(() =>
@@ -73,6 +78,56 @@ function createJsonResponse(payload: unknown, status = 200) {
       "content-type": "application/json",
     },
   });
+}
+
+function createConfirmedGenerationWorkflow(workflow: TimelineWorkflowState) {
+  let confirmedWorkflow = confirmTimelineGeneration(workflow);
+  confirmedWorkflow = completeTimelineNode(
+    confirmedWorkflow,
+    "comfyui-execution",
+    {
+      nodeIds: {},
+      outputNodeId: "9",
+      promptId: "prompt-confirmed",
+      request: {
+        batchSize: 1,
+        checkpointName: "Cyber Checkpoint__v1__mv101.safetensors",
+        positivePrompt: "neon market alley, sunrise, courier sprinting",
+        preview: false,
+      },
+      warnings: [],
+    },
+    "system",
+  );
+  confirmedWorkflow = completeTimelineNode(
+    confirmedWorkflow,
+    "result-display",
+    {
+      completed: true,
+      image: {
+        filename: "timeline-confirmed.png",
+        nodeId: "9",
+        type: "output",
+        url: "/api/comfyui/generated-images/timeline-confirmed.png",
+      },
+      promptId: "prompt-confirmed",
+      sourceImage: {
+        filename: "timeline-confirmed.png",
+        nodeId: "9",
+        type: "output",
+      },
+      storedImage: {
+        byteLength: 12,
+        contentType: "image/png",
+        filename: "timeline-confirmed.png",
+        url: "/api/comfyui/generated-images/timeline-confirmed.png",
+      },
+      warnings: [],
+    },
+    "system",
+  );
+
+  return confirmedWorkflow;
 }
 
 function createPoseResponse() {
@@ -669,8 +724,9 @@ describe("TimelineShell", () => {
 
       const generationGateSection = getSectionByHeading("Review / export");
       expect(generationGateSection.textContent).toContain(
-        "ComfyUI execution requires explicit future confirmation. This shell stops at the gate and never starts generation.",
+        "ComfyUI execution requires explicit confirmation. The timeline stops here until you confirm the single-image request.",
       );
+      expect(generationGateSection.textContent).toContain("Confirm and render");
 
       const comfyButton = container.querySelector('button[data-node-id="comfyui-execution"]') as HTMLButtonElement | null;
       act(() => {
@@ -678,9 +734,8 @@ describe("TimelineShell", () => {
       });
 
       const comfyExecutionSection = getSectionByHeading("Render execution");
-      expect(comfyExecutionSection.textContent).toContain("Reserved");
       expect(comfyExecutionSection.textContent).toContain(
-        "ComfyUI remains blocked until a future explicit confirmation flow starts generation.",
+        "Waiting for explicit confirmation before queuing ComfyUI.",
       );
 
       const resultButton = container.querySelector('button[data-node-id="result-display"]') as HTMLButtonElement | null;
@@ -689,9 +744,8 @@ describe("TimelineShell", () => {
       });
 
       const resultSection = getSectionByHeading("Artifact result");
-      expect(resultSection.textContent).toContain("Reserved");
       expect(resultSection.textContent).toContain(
-        "Result display remains empty until confirmed ComfyUI execution returns an image.",
+        "Waiting for confirmed ComfyUI execution to return an image.",
       );
 
       expect(storageSpy).not.toHaveBeenCalled();
@@ -741,6 +795,72 @@ describe("TimelineShell", () => {
         "/api/civitai-lora-library/ai-recommendation",
         "/api/comfyui/sampler-options",
       ]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("posts to the confirmed-generation API only after clicking Confirm and render", async () => {
+    const originalFetch = globalThis.fetch;
+    const t5FetchMock = mockT5Fetch();
+    const confirmPayloads: TimelineWorkflowState[] = [];
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = getFetchUrl(input);
+
+      if (url === "/api/agent-timeline/confirm-generation") {
+        const payload = typeof init?.body === "string" ? JSON.parse(init.body) : {};
+        confirmPayloads.push(payload.workflow as TimelineWorkflowState);
+
+        return createJsonResponse({
+          workflow: createConfirmedGenerationWorkflow(payload.workflow as TimelineWorkflowState),
+        });
+      }
+
+      return t5FetchMock(input, init);
+    });
+
+    globalThis.fetch = fetchMock;
+
+    try {
+      act(() => {
+        root.render(<TimelineShell />);
+      });
+
+      await submitSceneAndChoosePromptTagReview(
+        "A neon market alley with a courier at sunrise",
+        "本次保留，不入词库",
+      );
+
+      expect(fetchMock.mock.calls.map(([input]) => getFetchUrl(input))).not.toContain(
+        "/api/agent-timeline/confirm-generation",
+      );
+
+      const generationGateButton = container.querySelector('button[data-node-id="generation-gate"]') as HTMLButtonElement | null;
+      act(() => {
+        generationGateButton?.click();
+      });
+
+      const confirmButton = getButtonByText("Confirm and render");
+      expect(confirmButton.disabled).toBe(false);
+
+      act(() => {
+        confirmButton.click();
+      });
+      await flushAsyncWork();
+
+      expect(confirmPayloads).toHaveLength(1);
+      expect(confirmPayloads[0]?.generationConfirmed).toBe(false);
+      expect(confirmPayloads[0]?.nodes["generation-gate"].status).toBe("blocked");
+      expect(confirmPayloads[0]?.nodes["generation-gate"].error?.code).toBe("confirmation_required");
+
+      const fetchUrls = fetchMock.mock.calls.map(([input]) => getFetchUrl(input));
+      expect(fetchUrls.filter((url) => url === "/api/agent-timeline/confirm-generation")).toHaveLength(1);
+      expect(fetchUrls).not.toContain("/api/comfyui/generate-image");
+      expect(fetchUrls).not.toContain("/api/comfyui/generated-images");
+
+      const resultSection = getSectionByHeading("Artifact result");
+      expect(resultSection.textContent).toContain("Done");
+      expect(resultSection.textContent).toContain("timeline-confirmed.png");
     } finally {
       globalThis.fetch = originalFetch;
     }

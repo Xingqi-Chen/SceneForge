@@ -46,14 +46,13 @@ export const executableTimelineNodeIds = [
   "resource-recommendation",
   "parameter-recommendation",
   "generation-gate",
+  "comfyui-execution",
+  "result-display",
 ] as const satisfies readonly TimelineNodeId[];
 
 export type TimelineExecutableNodeId = (typeof executableTimelineNodeIds)[number];
 
-export const reservedTimelineNodeIds = [
-  "comfyui-execution",
-  "result-display",
-] as const satisfies readonly TimelineNodeId[];
+export const reservedTimelineNodeIds = [] as const satisfies readonly TimelineNodeId[];
 
 export type TimelineReservedNodeId = (typeof reservedTimelineNodeIds)[number];
 
@@ -217,6 +216,44 @@ export type ParameterRecommendationTimelineResult = {
 export type GenerationGateTimelineResult = {
   confirmationRequired: boolean;
   confirmed: boolean;
+};
+
+export type ComfyUiExecutionTimelineResult = {
+  nodeErrors?: unknown;
+  nodeIds: unknown;
+  number?: number;
+  outputNodeId: string;
+  promptId: string;
+  request: ComfyUiTextToImageRequest;
+  warnings: string[];
+  workflow?: unknown;
+};
+
+export type TimelineStoredGeneratedImage = {
+  byteLength: number;
+  contentType: string;
+  filename: string;
+  url: string;
+};
+
+export type ResultDisplayTimelineResult = {
+  completed: boolean;
+  image: {
+    filename: string;
+    nodeId: string;
+    subfolder?: string;
+    type?: string;
+    url: string;
+  };
+  promptId: string;
+  sourceImage: {
+    filename: string;
+    nodeId: string;
+    subfolder?: string;
+    type?: string;
+  };
+  storedImage: TimelineStoredGeneratedImage;
+  warnings: string[];
 };
 
 export type TimelineNodeExecutionContext = {

@@ -172,6 +172,8 @@ export function createTimelineLangGraph(adapters: TimelineNodeAdapters, options:
     .addNode("resource-recommendation", createTimelineGraphNode("resource-recommendation", adapters, options))
     .addNode("parameter-recommendation", createTimelineGraphNode("parameter-recommendation", adapters, options))
     .addNode("generation-gate", createTimelineGraphNode("generation-gate", adapters, options))
+    .addNode("comfyui-execution", createTimelineGraphNode("comfyui-execution", adapters, options))
+    .addNode("result-display", createTimelineGraphNode("result-display", adapters, options))
     .addEdge(START, "scene-input")
     .addEdge("scene-input", "scene-prompt")
     .addEdge("scene-prompt", "character-tags")
@@ -180,7 +182,9 @@ export function createTimelineLangGraph(adapters: TimelineNodeAdapters, options:
     .addEdge(["scene-prompt", "character-tags", "character-action"], "resource-recommendation")
     .addEdge(["canvas-binding", "resource-recommendation"], "parameter-recommendation")
     .addEdge("parameter-recommendation", "generation-gate")
-    .addEdge("generation-gate", END)
+    .addEdge("generation-gate", "comfyui-execution")
+    .addEdge("comfyui-execution", "result-display")
+    .addEdge("result-display", END)
     .compile();
 }
 

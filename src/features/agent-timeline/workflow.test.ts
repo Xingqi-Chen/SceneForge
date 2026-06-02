@@ -107,7 +107,7 @@ describe("agent timeline workflow foundation", () => {
     expect(canRunTimelineNode(workflowWithInput, "character-tags")).toBe(false);
   });
 
-  it("runs nodes only after predecessors are done or manual and keeps only execution nodes reserved", () => {
+  it("runs nodes only after predecessors are done or manual and keeps execution blocked before confirmation", () => {
     const clock = createClock();
     let workflow = createTimelineWorkflowState({
       workflowId: "dependency-gates",
@@ -141,8 +141,8 @@ describe("agent timeline workflow foundation", () => {
     expect(isReservedTimelineNodeId("parameter-recommendation")).toBe(false);
     expect(canRunTimelineNode(workflow, "resource-recommendation")).toBe(true);
     expect(canRunTimelineNode(workflow, "parameter-recommendation")).toBe(false);
-    expect(isReservedTimelineNodeId("comfyui-execution")).toBe(true);
-    expect(isReservedTimelineNodeId("result-display")).toBe(true);
+    expect(isReservedTimelineNodeId("comfyui-execution")).toBe(false);
+    expect(isReservedTimelineNodeId("result-display")).toBe(false);
     expect(canRunTimelineNode(workflow, "comfyui-execution")).toBe(false);
     expect(canRunTimelineNode(workflow, "result-display")).toBe(false);
     expect(getRunnableTimelineNodeIds(workflow)).not.toContain("comfyui-execution");
@@ -405,5 +405,79 @@ describe("agent timeline workflow foundation", () => {
     expect(result.nodes["comfyui-execution"].status).not.toBe("done");
     expect(result.nodes["result-display"].status).not.toBe("running");
     expect(result.nodes["result-display"].status).not.toBe("done");
+  });
+
+  it("runs ComfyUI execution and result display only after explicit confirmation", async () => {
+    const clock = createClock();
+    let workflow: TimelineWorkflowState = createReadyForGateWorkflow(clock);
+    workflow = confirmTimelineGeneration(workflow, undefined, { now: clock });
+
+    const adapters: TimelineNodeAdapters = {
+      "comfyui-execution": (context) => {
+        expect(context.workflow.generationConfirmed).toBe(true);
+        expect(context.workflow.nodes["generation-gate"].status).toBe("manual");
+
+        return {
+          value: {
+            nodeIds: {},
+            outputNodeId: "9",
+            promptId: "prompt-1",
+            request: {
+              checkpointName: "local.safetensors",
+              positivePrompt: "glass greenhouse",
+            },
+            warnings: [],
+          },
+          source: "system",
+        };
+      },
+      "result-display": (context) => {
+        expect(context.workflow.nodes["comfyui-execution"].result).toMatchObject({
+          promptId: "prompt-1",
+        });
+
+        return {
+          value: {
+            completed: true,
+            image: {
+              filename: "stored.png",
+              nodeId: "9",
+              url: "/api/comfyui/generated-images/stored.png",
+            },
+            promptId: "prompt-1",
+            sourceImage: {
+              filename: "source.png",
+              nodeId: "9",
+              type: "temp",
+            },
+            storedImage: {
+              byteLength: 10,
+              contentType: "image/png",
+              filename: "stored.png",
+              url: "/api/comfyui/generated-images/stored.png",
+            },
+            warnings: [],
+          },
+          source: "system",
+        };
+      },
+    };
+
+    const result = await executeTimelineGraph(workflow, adapters, { now: clock });
+
+    expect(result.nodes["comfyui-execution"]).toMatchObject({
+      status: "done",
+      result: {
+        promptId: "prompt-1",
+      },
+    });
+    expect(result.nodes["result-display"]).toMatchObject({
+      status: "done",
+      result: {
+        image: {
+          url: "/api/comfyui/generated-images/stored.png",
+        },
+      },
+    });
   });
 });
