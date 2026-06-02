@@ -158,6 +158,38 @@ describe("ComfyUI generation parameters", () => {
     });
   });
 
+  it("preserves selected checkpoint filename aliases for Anima object_info resolution", () => {
+    const settings = resolveComfyUiGenerationSettings({
+      activePrompt: "city street, 1girl",
+      baseNegativePrompt: "",
+      selectedResources: {
+        checkpoint: makeResource("model", "Pencil XL", {
+          baseModel: "Anima",
+          modelFileName: "Anima__base-v1.0__mv2945208__bd43b7cffe.safetensors",
+          modelFileNameAliases: [
+            "Anima__base-v1.0__mv2945208__bd43b7cffe.safetensors",
+            "pencil-xl-diffusion.safetensors",
+          ],
+          modelStorageKind: "diffusion",
+        }),
+        loras: [],
+      },
+      aiAdvice: null,
+      savedParameters: null,
+    });
+
+    expect(settings.request).toMatchObject({
+      checkpointName: "Anima__base-v1.0__mv2945208__bd43b7cffe.safetensors",
+      checkpointNameAliases: [
+        "Anima__base-v1.0__mv2945208__bd43b7cffe.safetensors",
+        "pencil-xl-diffusion.safetensors",
+      ],
+      workflowProfile: "anima",
+      modelBaseModel: "Anima",
+      modelStorageKind: "diffusion",
+    });
+  });
+
   it("does not let stale saved Anima metadata force Anima formatting for a selected non-Anima checkpoint", () => {
     const selectedResources: SelectedCivitaiResourcesPreview = {
       checkpoint: makeResource("model", "Illustrious Checkpoint", {

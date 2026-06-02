@@ -22,7 +22,11 @@ import type {
   CivitaiResourceRecommendation,
   SelectedCivitaiResourcePreview,
 } from "./types";
-import { getCivitaiModelStorageKind, makeCivitaiResourceTargetFileName } from "./download";
+import {
+  getCivitaiModelStorageKind,
+  makeCivitaiResourceFileNameAliases,
+  makeCivitaiResourceTargetFileName,
+} from "./download";
 import { isSameCivitaiBaseModel } from "./base-model";
 
 export const CIVITAI_RECOMMENDATION_CHECKPOINT_LIMIT = 8;
@@ -276,6 +280,8 @@ function scoreResource(resource: CivitaiResourceDetail, tokens: string[]) {
 }
 
 function toPreviewResource(resource: CivitaiResourceDetail): SelectedCivitaiResourcePreview {
+  const modelFileName = makeCivitaiResourceTargetFileName(resource);
+
   return {
     id: resource.id,
     resourceType: resource.resourceType === "model" ? "model" : "lora",
@@ -293,7 +299,8 @@ function toPreviewResource(resource: CivitaiResourceDetail): SelectedCivitaiReso
     maxWeight: resource.maxWeight,
     recommendations: resource.recommendations,
     previewImage: resource.previewImage,
-    modelFileName: makeCivitaiResourceTargetFileName(resource),
+    modelFileName,
+    modelFileNameAliases: makeCivitaiResourceFileNameAliases(resource),
     ...(resource.resourceType === "model" ? { modelStorageKind: getCivitaiModelStorageKind(resource) } : {}),
   };
 }

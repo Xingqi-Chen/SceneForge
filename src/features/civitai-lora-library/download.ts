@@ -15,6 +15,7 @@ export {
   getCivitaiModelStorageKind,
   getCivitaiResourceConfiguredDownloadPath,
   getCivitaiResourceDownloadLabel,
+  makeCivitaiResourceFileNameAliases,
   getCivitaiResourceFileMetadata,
   makeCivitaiResourceTargetFileName,
 } from "./resource-files";

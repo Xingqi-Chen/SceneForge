@@ -61,6 +61,7 @@ import type {
 } from "@/features/civitai-lora-library/types";
 import {
   getCivitaiModelStorageKind,
+  makeCivitaiResourceFileNameAliases,
   makeCivitaiResourceTargetFileName,
 } from "@/features/civitai-lora-library/resource-files";
 import {
@@ -280,6 +281,8 @@ function sanitizeDescriptionSnippet(value: string | null) {
 }
 
 function toSelectedCivitaiResourcePreview(resource: CivitaiResourceListItem): SelectedCivitaiResourcePreview {
+  const modelFileName = makeCivitaiResourceTargetFileName(resource);
+
   return {
     id: resource.id,
     resourceType: resource.resourceType === "model" ? "model" : "lora",
@@ -297,7 +300,8 @@ function toSelectedCivitaiResourcePreview(resource: CivitaiResourceListItem): Se
     maxWeight: resource.maxWeight,
     recommendations: resource.recommendations,
     previewImage: resource.previewImage,
-    modelFileName: makeCivitaiResourceTargetFileName(resource),
+    modelFileName,
+    modelFileNameAliases: makeCivitaiResourceFileNameAliases(resource),
     ...(resource.resourceType === "model" ? { modelStorageKind: getCivitaiModelStorageKind(resource) } : {}),
   };
 }

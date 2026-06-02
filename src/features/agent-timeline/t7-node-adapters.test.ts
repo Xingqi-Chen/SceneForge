@@ -670,6 +670,48 @@ describe("T7 timeline adapters", () => {
     expect(result.requestPreview.positivePrompt.match(/neon_style/g)).toHaveLength(1);
   });
 
+  it("passes Anima checkpoint filename aliases into the request preview", () => {
+    const checkpoint = makeResource("model", "checkpoint-anima", "Anima Checkpoint", "Anima", {
+      modelFileName: "Anima__base-v1.0__mv2945208__bd43b7cffe.safetensors",
+      modelFileNameAliases: [
+        "Anima__base-v1.0__mv2945208__bd43b7cffe.safetensors",
+        "pencil-xl-diffusion.safetensors",
+      ],
+      modelStorageKind: "diffusion",
+    });
+    const resourceResult: ResourceRecommendationTimelineResult = {
+      checkpoint: {
+        resource: checkpoint,
+        reason: "Local checkpoint.",
+      },
+      loras: [],
+      candidates: {
+        checkpoints: [makeCandidate(checkpoint)],
+        loras: [],
+      },
+      recommendationReason: "Local recommendation.",
+      overallEffect: "Anima portrait.",
+      warnings: [],
+    };
+
+    const result = createTimelineParameterRecommendation({
+      resourceResult,
+      scenePrompt: makeScenePrompt("anima"),
+      canvasBinding: null,
+    });
+
+    expect(result.requestPreview).toMatchObject({
+      checkpointName: "Anima__base-v1.0__mv2945208__bd43b7cffe.safetensors",
+      checkpointNameAliases: [
+        "Anima__base-v1.0__mv2945208__bd43b7cffe.safetensors",
+        "pencil-xl-diffusion.safetensors",
+      ],
+      workflowProfile: "anima",
+      modelBaseModel: "Anima",
+      modelStorageKind: "diffusion",
+    });
+  });
+
   it("normalizes fallback sampler and scheduler to the live ComfyUI option set", () => {
     const checkpoint = {
       ...makeResource("model", "checkpoint-local", "Local Checkpoint"),

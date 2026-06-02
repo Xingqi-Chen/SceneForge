@@ -425,6 +425,7 @@ export function resolveComfyUiGenerationSettings(input: {
   const scheduler = savedSamplerSettings.scheduler ?? parsedAi?.scheduler ?? DEFAULT_SCHEDULER;
   const request: ComfyUiTextToImageRequest = {
     checkpointName: checkpoint?.modelFileName ?? "",
+    checkpointNameAliases: checkpoint?.modelFileNameAliases,
     modelBaseModel: checkpoint?.baseModel ?? undefined,
     modelStorageKind: checkpoint?.modelStorageKind,
     positivePrompt: input.activePrompt.trim(),

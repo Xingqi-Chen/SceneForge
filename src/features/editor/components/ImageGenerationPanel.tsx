@@ -331,6 +331,7 @@ type GenerationDraftInpaint = {
 type GenerationDraft = Required<Omit<
   ComfyUiTextToImageRequest,
   | "loras"
+  | "checkpointNameAliases"
   | "promptWrapper"
   | "faceDetailer"
   | "handDetailer"
@@ -346,6 +347,7 @@ type GenerationDraft = Required<Omit<
   | "vaeName"
   | "unetWeightDtype"
 >> & {
+  checkpointNameAliases?: ComfyUiTextToImageRequest["checkpointNameAliases"];
   workflowProfile?: ComfyUiTextToImageRequest["workflowProfile"];
   modelBaseModel?: ComfyUiTextToImageRequest["modelBaseModel"];
   modelStorageKind?: ComfyUiTextToImageRequest["modelStorageKind"];
@@ -953,6 +955,7 @@ function toDraft(
 
   return {
     checkpointName: request.checkpointName,
+    checkpointNameAliases: request.checkpointNameAliases,
     workflowProfile: request.workflowProfile,
     modelBaseModel: request.modelBaseModel,
     modelStorageKind: request.modelStorageKind,
@@ -1204,6 +1207,7 @@ function toRequestPayload(
 
   return {
     checkpointName: draft.checkpointName,
+    checkpointNameAliases: draft.checkpointNameAliases,
     workflowProfile,
     modelBaseModel: draft.modelBaseModel,
     modelStorageKind: draft.modelStorageKind,
