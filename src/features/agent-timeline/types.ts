@@ -206,6 +206,7 @@ export type ParameterRecommendationTimelineResult = {
   scheduler: string;
   denoise: number;
   seedPolicy: TimelineSeedPolicy;
+  finalPositivePrompt?: string;
   negativeAdditions: string[];
   negativePrompt: string;
   requestPreview: ComfyUiTextToImageRequest;

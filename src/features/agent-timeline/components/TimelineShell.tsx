@@ -224,12 +224,32 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function getApiErrorMessage(payload: unknown, fallback: string) {
-  if (isRecord(payload) && isRecord(payload.error) && typeof payload.error.message === "string") {
-    return payload.error.message;
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === "string");
+}
+
+function collectApiErrorDetailMessages(value: unknown): string[] {
+  if (!isRecord(value)) {
+    return [];
   }
 
-  return fallback;
+  const ownErrors = isStringArray(value.errors) ? value.errors : [];
+
+  return [
+    ...ownErrors,
+    ...collectApiErrorDetailMessages(value.details),
+    ...collectApiErrorDetailMessages(value.error),
+  ];
+}
+
+function getApiErrorMessage(payload: unknown, fallback: string) {
+  const message = isRecord(payload) && isRecord(payload.error) && typeof payload.error.message === "string"
+    ? payload.error.message
+    : fallback;
+  const details = Array.from(new Set(collectApiErrorDetailMessages(payload)))
+    .filter((detail) => !message.includes(detail));
+
+  return details.length > 0 ? [message, ...details].join(" ") : message;
 }
 
 function sanitizeDescriptionSnippet(value: string | null) {
@@ -895,6 +915,8 @@ export function TimelineShell() {
       }
 
       setWorkflow(result);
+      const executionNode = result.nodes["comfyui-execution"];
+      const executionErrorMessage = executionNode.status === "error" ? executionNode.error?.message : null;
       setSelectedNodeId(result.nodes["result-display"].status === "done" ? "result-display" : "comfyui-execution");
       setOutputDisplayModes((current) => ({
         ...current,
@@ -902,7 +924,7 @@ export function TimelineShell() {
       }));
       setNotices((current) => ({
         ...current,
-        "comfyui-execution": "Confirmed ComfyUI request finished graph execution.",
+        "comfyui-execution": executionErrorMessage ?? "Confirmed ComfyUI request finished graph execution.",
       }));
     } catch (error) {
       if (!isCurrentRun(runId)) {

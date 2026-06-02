@@ -10,6 +10,15 @@ import {
   resolveComfyUiGenerationSettings,
 } from "@/features/editor/ai-prompt/comfyui-generation-params";
 import type { CivitaiAiPromptResult } from "@/features/editor/ai-prompt/civitai-ai-context";
+import {
+  renderAnimaPrompt,
+} from "@/features/editor/ai-prompt/anima-prompt";
+import {
+  classifyFlatPromptToIllustriousSections,
+  mergePromptParts,
+  renderIllustriousPrompt,
+  splitPromptParts,
+} from "@/features/editor/ai-prompt/illustrious-prompt";
 
 import { createTimelineNodeError } from "./state";
 import {
@@ -198,11 +207,55 @@ function getCandidateMap(candidates: CivitaiRecommendationCandidate[]) {
   return new Map(candidates.map((candidate) => [candidate.resource.id, candidate]));
 }
 
+function normalizeResourceMatchValue(value: string | null | undefined) {
+  return value?.trim().toLocaleLowerCase() ?? "";
+}
+
+function getResourceMatchAliases(resource: SelectedCivitaiResourcePreview) {
+  return [
+    resource.id,
+    resource.name,
+    resource.modelFileName,
+  ]
+    .map(normalizeResourceMatchValue)
+    .filter(Boolean);
+}
+
+function findUnambiguousLocalCandidate(
+  recommended: SelectedCivitaiResourcePreview,
+  candidates: CivitaiRecommendationCandidate[],
+) {
+  const byId = getCandidateMap(candidates).get(recommended.id);
+  if (byId) {
+    return byId;
+  }
+
+  const recommendedAliases = new Set(getResourceMatchAliases(recommended));
+  const matches = candidates.filter((candidate) =>
+    getResourceMatchAliases(candidate.resource).some((alias) => recommendedAliases.has(alias)),
+  );
+
+  return matches.length === 1 ? matches[0] : null;
+}
+
 function isCompatibleLora(
   lora: SelectedCivitaiResourcePreview,
   checkpoint: SelectedCivitaiResourcePreview,
 ) {
   return !checkpoint.baseModel || !lora.baseModel || isSameCivitaiBaseModel(lora.baseModel, checkpoint.baseModel);
+}
+
+function appendMappedResourceWarning(
+  warnings: string[],
+  resourceKind: "checkpoint" | "LoRA",
+  recommended: SelectedCivitaiResourcePreview,
+  selected: SelectedCivitaiResourcePreview,
+) {
+  if (recommended.id === selected.id) {
+    return;
+  }
+
+  warnings.push(`Mapped recommended ${resourceKind} ${recommended.name} to local candidate ${selected.name}.`);
 }
 
 export function validateTimelineResourceRecommendation({
@@ -212,25 +265,35 @@ export function validateTimelineResourceRecommendation({
   candidates: ResourceRecommendationTimelineResult["candidates"];
   recommendation: CivitaiAiRecommendationResponse;
 }): ResourceRecommendationTimelineResult {
-  const checkpointMap = getCandidateMap(candidates.checkpoints);
-  const loraMap = getCandidateMap(candidates.loras);
-  const checkpointCandidate = checkpointMap.get(recommendation.checkpoint.resource.id);
+  const checkpointCandidate = findUnambiguousLocalCandidate(
+    recommendation.checkpoint.resource,
+    candidates.checkpoints,
+  );
 
   if (!checkpointCandidate) {
     invalidResourceSelection("Recommended checkpoint is not in the local candidate set.", {
       checkpointId: recommendation.checkpoint.resource.id,
+      checkpointName: recommendation.checkpoint.resource.name,
     });
   }
 
   const warnings = [...recommendation.warnings];
+  appendMappedResourceWarning(
+    warnings,
+    "checkpoint",
+    recommendation.checkpoint.resource,
+    checkpointCandidate.resource,
+  );
   const selectedLoras: ResourceRecommendationTimelineResult["loras"] = [];
   const seenLoras = new Set<string>();
 
   for (const lora of recommendation.loras) {
-    const candidate = loraMap.get(lora.resource.id);
+    const candidate = findUnambiguousLocalCandidate(lora.resource, candidates.loras);
     if (!candidate) {
-      warnings.push(`Ignored unavailable LoRA ${lora.resource.name}.`);
-      continue;
+      invalidResourceSelection("Recommended LoRA is not in the local candidate set.", {
+        loraId: lora.resource.id,
+        loraName: lora.resource.name,
+      });
     }
 
     if (seenLoras.has(candidate.resource.id)) {
@@ -248,6 +311,7 @@ export function validateTimelineResourceRecommendation({
       continue;
     }
 
+    appendMappedResourceWarning(warnings, "LoRA", lora.resource, candidate.resource);
     seenLoras.add(candidate.resource.id);
     selectedLoras.push({
       resource: candidate.resource,
@@ -267,6 +331,73 @@ export function validateTimelineResourceRecommendation({
     overallEffect: recommendation.overallEffect,
     warnings,
   };
+}
+
+function getSelectedResources(resourceResult: ResourceRecommendationTimelineResult): SelectedCivitaiResourcesPreview {
+  return {
+    checkpoint: resourceResult.checkpoint.resource,
+    loras: resourceResult.loras.map((lora) => lora.resource),
+  };
+}
+
+function normalizeBaseModel(value: string | null | undefined) {
+  return value?.trim().toLocaleLowerCase() ?? "";
+}
+
+function isAnimaBaseModel(value: string | null | undefined) {
+  return normalizeBaseModel(value) === "anima";
+}
+
+function isIllustriousBaseModel(value: string | null | undefined) {
+  return normalizeBaseModel(value).includes("illustrious");
+}
+
+function isPonyBaseModel(value: string | null | undefined) {
+  return normalizeBaseModel(value).includes("pony");
+}
+
+function getLoraTrainedWordPrompt(resources: SelectedCivitaiResourcesPreview) {
+  return resources.loras.flatMap((lora) => lora.trainedWords.flatMap(splitPromptParts)).join(", ");
+}
+
+export function buildTimelineFinalPositivePrompt({
+  resourceResult,
+  scenePrompt,
+  supportsNsfw = false,
+}: {
+  resourceResult: ResourceRecommendationTimelineResult;
+  scenePrompt: ScenePromptTimelineResult;
+  supportsNsfw?: boolean;
+}) {
+  const resources = getSelectedResources(resourceResult);
+  const baseModel = resources.checkpoint?.baseModel;
+  const sourcePrompt = scenePrompt.positivePrompt;
+
+  if (isAnimaBaseModel(baseModel)) {
+    return renderAnimaPrompt({
+      resources,
+      sourcePrompt,
+      supportsNsfw,
+    });
+  }
+
+  if (isIllustriousBaseModel(baseModel)) {
+    return renderIllustriousPrompt({
+      resources,
+      sections: classifyFlatPromptToIllustriousSections(sourcePrompt),
+    });
+  }
+
+  const loraTrainedWords = getLoraTrainedWordPrompt(resources);
+  if (isPonyBaseModel(baseModel)) {
+    return mergePromptParts([
+      "score_9, score_8_up, score_7_up",
+      sourcePrompt,
+      loraTrainedWords,
+    ]);
+  }
+
+  return mergePromptParts([sourcePrompt, loraTrainedWords]);
 }
 
 function getReferenceSampler(resource: SelectedCivitaiResourcePreview) {
@@ -349,6 +480,7 @@ function createAiAdvice(
   scenePrompt: ScenePromptTimelineResult,
   canvasBinding: CanvasBindingTimelineResult | null,
   samplerOptions: TimelineSamplerOptions,
+  finalPositivePrompt: string,
 ): CivitaiAiPromptResult {
   const checkpoint = resourceResult.checkpoint.resource;
   const referenceSampler = getReferenceSampler(checkpoint)
@@ -360,7 +492,7 @@ function createAiAdvice(
   const scheduler = pickSupportedValue(parsedSampler?.scheduler, samplerOptions.schedulers, "normal");
 
   return {
-    prompt: scenePrompt.positivePrompt,
+    prompt: finalPositivePrompt,
     parameterSuggestionReason: "SceneForge selected conservative text-to-image parameters from local resource metadata.",
     overallEffect: resourceResult.overallEffect,
     parseWarning: null,
@@ -394,14 +526,17 @@ export function createTimelineParameterRecommendation({
   supportsNsfw?: boolean;
 }): ParameterRecommendationTimelineResult {
   const samplerOptions = normalizeOptions(rawSamplerOptions);
-  const selectedResources: SelectedCivitaiResourcesPreview = {
-    checkpoint: resourceResult.checkpoint.resource,
-    loras: resourceResult.loras.map((lora) => lora.resource),
-  };
+  const selectedResources = getSelectedResources(resourceResult);
+  const finalPositivePrompt = buildTimelineFinalPositivePrompt({
+    resourceResult,
+    scenePrompt,
+    supportsNsfw,
+  });
   const baseNegativePrompt = scenePrompt.negativeSuggestions.join(", ");
   const settings = resolveComfyUiGenerationSettings({
-    activePrompt: scenePrompt.positivePrompt,
-    aiAdvice: createAiAdvice(resourceResult, scenePrompt, canvasBinding, samplerOptions),
+    activePrompt: finalPositivePrompt,
+    activePromptAlreadyFormatted: true,
+    aiAdvice: createAiAdvice(resourceResult, scenePrompt, canvasBinding, samplerOptions, finalPositivePrompt),
     baseNegativePrompt,
     selectedResources,
     supportsNsfw,
@@ -426,6 +561,7 @@ export function createTimelineParameterRecommendation({
     scheduler,
     denoise: requestPreview.denoise ?? 1,
     seedPolicy: makeSeedPolicy(requestPreview.seed),
+    finalPositivePrompt: requestPreview.positivePrompt,
     negativeAdditions: scenePrompt.negativeSuggestions,
     negativePrompt: requestPreview.negativePrompt ?? "",
     requestPreview,

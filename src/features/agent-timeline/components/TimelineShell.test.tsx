@@ -7,6 +7,7 @@ import { useEditorStore } from "@/features/editor/store/editor-store";
 import {
   completeTimelineNode,
   confirmTimelineGeneration,
+  failTimelineNode,
   type TimelineWorkflowState,
 } from "@/features/agent-timeline";
 import type { PromptTag } from "@/shared/types";
@@ -128,6 +129,25 @@ function createConfirmedGenerationWorkflow(workflow: TimelineWorkflowState) {
   );
 
   return confirmedWorkflow;
+}
+
+function createObjectInfoMismatchWorkflow(workflow: TimelineWorkflowState) {
+  const message = [
+    "ComfyUI request does not match the current ComfyUI model/node options.",
+    "Checkpoint is not available in ComfyUI: missing.safetensors",
+    "LoRA 1 is not available in ComfyUI: missing-lora.safetensors",
+  ].join(" ");
+
+  return failTimelineNode(confirmTimelineGeneration(workflow), "comfyui-execution", {
+    code: "comfyui_object_info_mismatch",
+    message,
+    details: {
+      errors: [
+        "Checkpoint is not available in ComfyUI: missing.safetensors",
+        "LoRA 1 is not available in ComfyUI: missing-lora.safetensors",
+      ],
+    },
+  });
 }
 
 function createPoseResponse() {
@@ -861,6 +881,61 @@ describe("TimelineShell", () => {
       const resultSection = getSectionByHeading("Artifact result");
       expect(resultSection.textContent).toContain("Done");
       expect(resultSection.textContent).toContain("timeline-confirmed.png");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("shows object_info mismatch details returned by confirmed timeline generation", async () => {
+    const originalFetch = globalThis.fetch;
+    const t5FetchMock = mockT5Fetch();
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = getFetchUrl(input);
+
+      if (url === "/api/agent-timeline/confirm-generation") {
+        const payload = typeof init?.body === "string" ? JSON.parse(init.body) : {};
+
+        return createJsonResponse({
+          workflow: createObjectInfoMismatchWorkflow(payload.workflow as TimelineWorkflowState),
+        });
+      }
+
+      return t5FetchMock(input, init);
+    });
+
+    globalThis.fetch = fetchMock;
+
+    try {
+      act(() => {
+        root.render(<TimelineShell />);
+      });
+
+      await submitSceneAndChoosePromptTagReview(
+        "A neon market alley with a courier at sunrise",
+        "本次保留，不入词库",
+      );
+
+      const generationGateButton = container.querySelector('button[data-node-id="generation-gate"]') as HTMLButtonElement | null;
+      act(() => {
+        generationGateButton?.click();
+      });
+
+      const confirmButton = getButtonByText("Confirm and render");
+      act(() => {
+        confirmButton.click();
+      });
+      await flushAsyncWork();
+
+      const comfyExecutionSection = getSectionByHeading("Render execution");
+      expect(comfyExecutionSection.textContent).toContain(
+        "ComfyUI request does not match the current ComfyUI model/node options.",
+      );
+      expect(comfyExecutionSection.textContent).toContain(
+        "Checkpoint is not available in ComfyUI: missing.safetensors",
+      );
+      expect(comfyExecutionSection.textContent).toContain(
+        "LoRA 1 is not available in ComfyUI: missing-lora.safetensors",
+      );
     } finally {
       globalThis.fetch = originalFetch;
     }

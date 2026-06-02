@@ -388,6 +388,7 @@ function makeNegativePrompt(baseNegativePrompt: string, additions: string | unde
 
 export function resolveComfyUiGenerationSettings(input: {
   activePrompt: string;
+  activePromptAlreadyFormatted?: boolean;
   baseNegativePrompt: string;
   selectedResources: SelectedCivitaiResourcesPreview;
   aiAdvice: CivitaiAiPromptResult | null;
@@ -467,12 +468,14 @@ export function resolveComfyUiGenerationSettings(input: {
     supportsNsfw: input.supportsNsfw,
     workflowProfile: request.workflowProfile,
   })) {
-    request.positivePrompt = renderAnimaPromptForContext(request.positivePrompt, {
-      baseModel: request.modelBaseModel,
-      resources: input.selectedResources,
-      supportsNsfw: input.supportsNsfw,
-      workflowProfile: request.workflowProfile,
-    });
+    if (!input.activePromptAlreadyFormatted) {
+      request.positivePrompt = renderAnimaPromptForContext(request.positivePrompt, {
+        baseModel: request.modelBaseModel,
+        resources: input.selectedResources,
+        supportsNsfw: input.supportsNsfw,
+        workflowProfile: request.workflowProfile,
+      });
+    }
     request.negativePrompt = mergeAnimaNegativePrompts([request.negativePrompt]);
   }
 
