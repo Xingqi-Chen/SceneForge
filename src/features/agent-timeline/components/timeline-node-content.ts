@@ -68,19 +68,17 @@ export const timelineNodeContent: Record<TimelineNodeId, TimelineNodeContent> = 
   },
   "comfyui-execution": {
     title: "Render execution",
-    shellState: "Reserved ComfyUI node",
-    emptyState: "ComfyUI remains blocked until a future explicit confirmation flow starts generation.",
+    shellState: "Confirmed ComfyUI execution",
+    emptyState: "Waiting for explicit confirmation before queuing ComfyUI.",
     editLabel: "Execution locked",
     aiLabel: "Diagnose",
-    reserved: true,
   },
   "result-display": {
     title: "Artifact result",
-    shellState: "Reserved output node",
-    emptyState: "Result display remains empty until confirmed ComfyUI execution returns an image.",
+    shellState: "Standalone timeline image",
+    emptyState: "Waiting for confirmed ComfyUI execution to return an image.",
     editLabel: "Result locked",
     aiLabel: "Review result",
-    reserved: true,
   },
 };
 
@@ -116,6 +114,18 @@ export function getTimelineNodeOutputText(node: TimelineNodeResult) {
 
     if (typeof node.result.confirmed === "boolean") {
       return node.result.confirmed ? "Generation confirmed." : "Generation confirmation is required.";
+    }
+
+    if (typeof node.result.promptId === "string" && typeof node.result.outputNodeId === "string") {
+      return `Queued prompt ${node.result.promptId}.`;
+    }
+
+    if (
+      typeof node.result.promptId === "string" &&
+      isRecord(node.result.image) &&
+      typeof node.result.image.url === "string"
+    ) {
+      return `Generated image for prompt ${node.result.promptId}.`;
     }
 
     if (

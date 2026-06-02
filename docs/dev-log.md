@@ -2,6 +2,38 @@
 
 This log records dated implementation and documentation work. Keep entries concise and evidence-oriented.
 
+## 2026-06-02
+
+### T8 / Issue #40 Confirmed ComfyUI Execution Timeline
+
+Summary:
+
+- Converted the ComfyUI execution and result-display timeline nodes from reserved placeholders into post-confirmation executable graph nodes.
+- Kept the generation gate blocking before explicit confirmation and guarded confirmed request conversion so ComfyUI requests are not constructed by T8 adapters before confirmation.
+- Added a thin confirmation API route that confirms eligible timeline state, runs LangGraph with server-side T8 adapters, validates against ComfyUI `object_info`, queues the existing text-to-image workflow, polls for one image, and stores the returned image as standalone timeline result state.
+- Updated the timeline shell with a `Confirm and render` gate action, queue/result status copy, and visual result display without appending to project generated-image history.
+
+Files changed:
+
+- `src/app/api/agent-timeline/confirm-generation/route.ts`
+- `src/features/agent-timeline/graph.ts`
+- `src/features/agent-timeline/index.ts`
+- `src/features/agent-timeline/t8-node-adapters.ts`
+- `src/features/agent-timeline/t8-node-adapters.test.ts`
+- `src/features/agent-timeline/t8-server-adapters.ts`
+- `src/features/agent-timeline/types.ts`
+- `src/features/agent-timeline/workflow.test.ts`
+- `src/features/agent-timeline/components/TimelineShell.tsx`
+- `src/features/agent-timeline/components/TimelineShell.test.tsx`
+- `src/features/agent-timeline/components/timeline-node-content.ts`
+
+Validation:
+
+- `npm test -- src/features/agent-timeline/workflow.test.ts src/features/agent-timeline/t8-node-adapters.test.ts src/features/agent-timeline/t8-server-adapters.test.ts src/features/agent-timeline/components/TimelineShell.test.tsx` passed with 29 tests.
+- `npm run typecheck` passed.
+- `npm run lint` passed with the existing 22 `<img>` warnings in unrelated editor components.
+- `npm run build` passed and listed `/api/agent-timeline/confirm-generation` as a dynamic route.
+
 ## 2026-06-01
 
 ### T7 / Issue #38 Timeline Resource and Parameter Recommendations

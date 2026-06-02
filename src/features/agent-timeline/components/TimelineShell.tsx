@@ -1,6 +1,7 @@
 "use client";
 
 import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import Image from "next/image";
 import Link from "next/link";
 import {
   ArrowRight,
@@ -45,6 +46,7 @@ import {
   type CanvasBindingTimelineResult,
   type CharacterActionTimelineResult,
   type ParameterRecommendationTimelineResult,
+  type ResultDisplayTimelineResult,
   type ResourceRecommendationTimelineResult,
   type ScenePromptTimelineResult,
   type SceneInputTimelineResult,
@@ -168,13 +170,13 @@ const stepDisplay: Record<TimelineNodeId, StepDisplay> = {
     agent: "ComfyUI agent",
     artifact: "Queue metadata",
     icon: Braces,
-    transform: "Reserved execution handoff",
+    transform: "Validate and queue the confirmed single-image ComfyUI request",
   },
   "result-display": {
     agent: "Artifact agent",
     artifact: "Generated image result",
     icon: ImageIcon,
-    transform: "Reserved artifact display",
+    transform: "Store the returned image as standalone timeline state",
   },
 };
 
@@ -186,6 +188,7 @@ const visualOutputNodeIds = new Set<TimelineNodeId>([
   "canvas-binding",
   "resource-recommendation",
   "parameter-recommendation",
+  "result-display",
 ]);
 const nonEditableAiNodeIds = new Set<TimelineNodeId>(["character-tags", "character-action"]);
 const parallelNodeIds = new Set<TimelineNodeId>(["character-tags", "character-action"]);
@@ -465,6 +468,112 @@ function canRawEditNode(nodeId: TimelineNodeId, workflow: TimelineWorkflowState 
   return Boolean(workflow) && rawEditableNodeIds.has(nodeId);
 }
 
+function areGateDependenciesDone(workflow: TimelineWorkflowState) {
+  return getTimelineNodeDependencies("generation-gate").every((nodeId) => {
+    const status = workflow.nodes[nodeId].status;
+
+    return status === "done" || status === "manual";
+  });
+}
+
+function canConfirmTimelineWorkflow(workflow: TimelineWorkflowState | null) {
+  if (!workflow || workflow.generationConfirmed || !areGateDependenciesDone(workflow)) {
+    return false;
+  }
+
+  const gate = workflow.nodes["generation-gate"];
+
+  return gate.status === "ready" ||
+    gate.status === "blocked" && gate.error?.code === "confirmation_required";
+}
+
+async function confirmTimelineGenerationViaApi(workflow: TimelineWorkflowState) {
+  const response = await fetch("/api/agent-timeline/confirm-generation", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ workflow }),
+  });
+  const payload: unknown = await response.json();
+
+  if (!response.ok) {
+    throw new Error(getApiErrorMessage(payload, "Unable to confirm and run timeline generation."));
+  }
+
+  if (!isRecord(payload) || !isRecord(payload.workflow)) {
+    throw new Error("Timeline generation response did not include workflow state.");
+  }
+
+  return payload.workflow as TimelineWorkflowState;
+}
+
+function isResultDisplayTimelineResult(value: unknown): value is ResultDisplayTimelineResult {
+  return (
+    isRecord(value) &&
+    isRecord(value.image) &&
+    typeof value.image.url === "string" &&
+    typeof value.promptId === "string" &&
+    isRecord(value.storedImage)
+  );
+}
+
+function TimelineResultDisplayWorkspace({
+  emptyState,
+  node,
+}: {
+  emptyState: string;
+  node: TimelineWorkflowState["nodes"][TimelineNodeId];
+}) {
+  const result = isResultDisplayTimelineResult(node.result) ? node.result : null;
+
+  if (!result) {
+    return (
+      <div className="rounded-md border border-dashed border-slate-200 bg-slate-50 p-3 text-xs leading-relaxed text-slate-500">
+        {node.error?.message ?? emptyState}
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-3" data-testid="timeline-result-workspace">
+      <div className="overflow-hidden rounded-md border border-slate-200 bg-slate-50">
+        <Image
+          alt="Timeline generated ComfyUI result"
+          className="max-h-[42rem] w-full object-contain"
+          height={1024}
+          src={result.image.url}
+          unoptimized
+          width={1024}
+        />
+      </div>
+      <dl className="grid gap-2 rounded-md border border-slate-200 bg-white p-3 text-xs md:grid-cols-2">
+        <div>
+          <dt className="font-semibold uppercase text-slate-500">Prompt ID</dt>
+          <dd className="mt-1 break-all text-slate-800">{result.promptId}</dd>
+        </div>
+        <div>
+          <dt className="font-semibold uppercase text-slate-500">Stored image</dt>
+          <dd className="mt-1 break-all text-slate-800">{result.storedImage.filename}</dd>
+        </div>
+        <div>
+          <dt className="font-semibold uppercase text-slate-500">Content type</dt>
+          <dd className="mt-1 text-slate-800">{result.storedImage.contentType}</dd>
+        </div>
+        <div>
+          <dt className="font-semibold uppercase text-slate-500">Bytes</dt>
+          <dd className="mt-1 text-slate-800">{result.storedImage.byteLength.toLocaleString()}</dd>
+        </div>
+      </dl>
+      {result.warnings.length > 0 ? (
+        <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-xs leading-relaxed text-amber-800">
+          {result.warnings.join(" ")}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 export function TimelineShell() {
   const [sceneRequest, setSceneRequest] = useState("");
   const [workflow, setWorkflow] = useState<TimelineWorkflowState | null>(null);
@@ -502,6 +611,7 @@ export function TimelineShell() {
     selectedContent.reserved ||
     selectedNode.status === "blocked" ||
     selectedNode.status === "running";
+  const generationCanBeConfirmed = canConfirmTimelineWorkflow(workflow);
   const workflowTitle = workflow ? sceneRequest : "Untitled workflow";
   const workflowMode = workflow ? "Run shell" : "Draft setup";
 
@@ -755,6 +865,55 @@ export function TimelineShell() {
       setNotices((current) => ({
         ...current,
         [selectedNodeId]: error instanceof Error ? error.message : "Timeline graph execution failed.",
+      }));
+    } finally {
+      if (isCurrentRun(runId)) {
+        setIsRunning(false);
+      }
+    }
+  }
+
+  async function handleConfirmGeneration() {
+    if (!workflow || !generationCanBeConfirmed || isRunning) {
+      return;
+    }
+
+    const runId = activeRunIdRef.current + 1;
+    activeRunIdRef.current = runId;
+    setIsRunning(true);
+    setSelectedNodeId("comfyui-execution");
+    setNotices((current) => ({
+      ...current,
+      "comfyui-execution": "Confirmed request is being validated and queued in ComfyUI.",
+    }));
+
+    try {
+      const result = await confirmTimelineGenerationViaApi(workflow);
+
+      if (!isCurrentRun(runId)) {
+        return;
+      }
+
+      setWorkflow(result);
+      setSelectedNodeId(result.nodes["result-display"].status === "done" ? "result-display" : "comfyui-execution");
+      setOutputDisplayModes((current) => ({
+        ...current,
+        "result-display": "visual",
+      }));
+      setNotices((current) => ({
+        ...current,
+        "comfyui-execution": "Confirmed ComfyUI request finished graph execution.",
+      }));
+    } catch (error) {
+      if (!isCurrentRun(runId)) {
+        return;
+      }
+
+      console.error("[SceneForge] [timeline] confirmed generation failed", { error });
+      setSelectedNodeId("generation-gate");
+      setNotices((current) => ({
+        ...current,
+        "generation-gate": error instanceof Error ? error.message : "Timeline generation failed.",
       }));
     } finally {
       if (isCurrentRun(runId)) {
@@ -1169,12 +1328,23 @@ export function TimelineShell() {
                 </div>
 
                 {selectedNodeId === "generation-gate" ? (
-                  <div className="flex gap-2 rounded-md border border-amber-200 bg-amber-50 p-3 text-xs leading-relaxed text-amber-800">
-                    <LockKeyhole className="mt-0.5 size-4 shrink-0" />
-                    <p>
-                      ComfyUI execution requires explicit future confirmation. This shell stops at the gate and never
-                      starts generation.
-                    </p>
+                  <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-amber-200 bg-amber-50 p-3 text-xs leading-relaxed text-amber-800">
+                    <div className="flex min-w-0 gap-2">
+                      <LockKeyhole className="mt-0.5 size-4 shrink-0" />
+                      <p>
+                        ComfyUI execution requires explicit confirmation. The timeline stops here until you confirm the
+                        single-image request.
+                      </p>
+                    </div>
+                    <Button
+                      className="h-8 shrink-0 px-3 text-xs shadow-none"
+                      disabled={!generationCanBeConfirmed || isRunning}
+                      onClick={handleConfirmGeneration}
+                      type="button"
+                    >
+                      <Play className="size-3.5" />
+                      Confirm and render
+                    </Button>
                   </div>
                 ) : null}
 
@@ -1302,6 +1472,12 @@ export function TimelineShell() {
                       node={selectedNode}
                       onSave={handleSaveParameterRecommendationVisual}
                     />
+                  ) : selectedOutputDisplayMode === "visual" && selectedNodeId === "result-display" ? (
+                    <TimelineResultDisplayWorkspace
+                      emptyState={selectedContent.emptyState}
+                      key={selectedNode.updatedAt}
+                      node={selectedNode}
+                    />
                   ) : selectedOutputDisplayMode === "visual" && isTimelineEditorWorkspaceNode(selectedNodeId) ? (
                     <TimelineEditorWorkspace
                       workflow={activeWorkflow}
@@ -1366,9 +1542,13 @@ export function TimelineShell() {
                   </p>
                 </div>
                 <div className="flex gap-2">
-                  <span className="mt-1 size-2 shrink-0 rounded-full bg-slate-300" />
+                  <span className={cn(
+                    "mt-1 size-2 shrink-0 rounded-full",
+                    activeWorkflow.nodes["result-display"].status === "done" ? "bg-emerald-500" : "bg-slate-300",
+                  )} />
                   <p className="leading-relaxed text-slate-600">
-                    ComfyUI execution, image storage, and result display remain blocked until T8.
+                    Confirmed renders queue through the timeline graph and store the returned image as a standalone
+                    result.
                   </p>
                 </div>
               </div>
@@ -1380,7 +1560,7 @@ export function TimelineShell() {
               </header>
               <div className="p-3 text-xs leading-relaxed text-slate-500">
                 {workflow
-                  ? "Timeline uses /api/llm/chat, local Civitai recommendation, and ComfyUI sampler-option preview only."
+                  ? "Timeline uses /api/llm/chat, local Civitai recommendation, ComfyUI sampler options, and confirmed timeline generation."
                   : "No external tools have been called by this shell."}
               </div>
             </section>
@@ -1390,9 +1570,20 @@ export function TimelineShell() {
                 <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Generated artifacts</h2>
               </header>
               <div className="p-3">
-                <div className="rounded-md border border-dashed border-slate-200 bg-slate-50 p-3 text-xs leading-relaxed text-slate-500">
-                  Artifact preview will appear after confirmed render execution.
-                </div>
+                {isResultDisplayTimelineResult(activeWorkflow.nodes["result-display"].result) ? (
+                  <Image
+                    alt="Timeline generated artifact"
+                    className="aspect-square w-full rounded-md border border-slate-200 object-cover"
+                    height={320}
+                    src={activeWorkflow.nodes["result-display"].result.image.url}
+                    unoptimized
+                    width={320}
+                  />
+                ) : (
+                  <div className="rounded-md border border-dashed border-slate-200 bg-slate-50 p-3 text-xs leading-relaxed text-slate-500">
+                    Artifact preview will appear after confirmed render execution.
+                  </div>
+                )}
               </div>
             </section>
           </div>
