@@ -29,6 +29,10 @@ type CivitaiResourceDownloadStatusOptions = {
   verifyChecksum?: boolean;
 };
 
+export function isCivitaiResourceDownloadReady(status: CivitaiResourceDownloadStatus | null) {
+  return status?.status === "verified" || (status?.status === "unverified" && status.fileExists);
+}
+
 export async function calculateFileSha256(filePath: string): Promise<string> {
   return new Promise((resolve, reject) => {
     const hash = crypto.createHash("sha256");

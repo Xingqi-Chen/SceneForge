@@ -852,8 +852,8 @@ describe("TimelineShell", () => {
         "/api/llm/chat",
         "/api/llm/chat",
         "/api/llm/chat",
-        "/api/civitai-lora-library/resources?resourceType=model&category=all&nsfw=sfw",
-        "/api/civitai-lora-library/resources?resourceType=lora&category=all&nsfw=sfw",
+        "/api/civitai-lora-library/resources?resourceType=model&category=all&nsfw=sfw&downloaded=ready",
+        "/api/civitai-lora-library/resources?resourceType=lora&category=all&nsfw=sfw&downloaded=ready",
         "/api/civitai-lora-library/ai-recommendation",
         "/api/comfyui/sampler-options",
       ]);
@@ -887,8 +887,8 @@ describe("TimelineShell", () => {
         "/api/llm/chat",
         "/api/llm/chat",
         "/api/llm/chat",
-        "/api/civitai-lora-library/resources?resourceType=model&category=all&nsfw=all",
-        "/api/civitai-lora-library/resources?resourceType=lora&category=all&nsfw=all",
+        "/api/civitai-lora-library/resources?resourceType=model&category=all&nsfw=all&downloaded=ready",
+        "/api/civitai-lora-library/resources?resourceType=lora&category=all&nsfw=all&downloaded=ready",
         "/api/civitai-lora-library/ai-recommendation",
         "/api/comfyui/sampler-options",
       ]);

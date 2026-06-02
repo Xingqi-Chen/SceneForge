@@ -513,7 +513,7 @@ describe("ComfyUI object info helpers", () => {
     });
   });
 
-  it("falls back to the only available Anima UNET when stale requests have no filename aliases", () => {
+  it("does not guess an Anima UNET when the requested filename and aliases do not match", () => {
     const animaOnlyObjectInfo: Record<string, unknown> = {
       ...objectInfoWithAnima,
       UNETLoader: {
@@ -529,28 +529,7 @@ describe("ComfyUI object info helpers", () => {
     const result = validateComfyUiRequestAgainstObjectInfo(
       {
         checkpointName: "Anima__base-v1.0__mv2945208__bd43b7cffe.safetensors",
-        modelBaseModel: "Anima",
-        modelStorageKind: "diffusion",
-        positivePrompt: "scene",
-        samplerName: "DPM++ 2M",
-        scheduler: "Karras",
-      },
-      animaOnlyObjectInfo,
-    );
-
-    expect(result.errors).toEqual([]);
-    expect(result.warnings).toContain(
-      "Anima UNET model Anima__base-v1.0__mv2945208__bd43b7cffe.safetensors is not listed by ComfyUI; using the only available Anima UNET model: pencil-xl-diffusion.safetensors.",
-    );
-    expect(result.request.checkpointName).toBe("pencil-xl-diffusion.safetensors");
-  });
-
-  it("does not guess an Anima UNET when multiple unmatched local options exist", () => {
-    const animaOnlyObjectInfo: Record<string, unknown> = { ...objectInfoWithAnima };
-    delete animaOnlyObjectInfo.CheckpointLoaderSimple;
-    const result = validateComfyUiRequestAgainstObjectInfo(
-      {
-        checkpointName: "Anima__base-v1.0__mv2945208__bd43b7cffe.safetensors",
+        checkpointNameAliases: ["missing-anima-file.safetensors"],
         modelBaseModel: "Anima",
         modelStorageKind: "diffusion",
         positivePrompt: "scene",
@@ -563,6 +542,8 @@ describe("ComfyUI object info helpers", () => {
     expect(result.errors).toContain(
       "Anima UNET model is not available in ComfyUI: Anima__base-v1.0__mv2945208__bd43b7cffe.safetensors",
     );
+    expect(result.warnings).not.toEqual(expect.arrayContaining([expect.stringContaining("using the only available Anima UNET model")]));
+    expect(result.request.checkpointName).toBe("Anima__base-v1.0__mv2945208__bd43b7cffe.safetensors");
   });
 
   it("validates Anima ControlNet add-ons without falling back to CheckpointLoaderSimple", () => {

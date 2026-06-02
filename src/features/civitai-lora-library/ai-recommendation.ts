@@ -7,6 +7,7 @@ import {
 import { appendLlmLocalLog, serializeErrorForLlmLog } from "@/features/llm/llm-local-log";
 import {
   getCivitaiResourceDetailFromSqlite,
+  loadCivitaiLibrarySettingsFromSqlite,
   listCivitaiResourcesFromSqlite,
   type SceneForgeSqliteDatabase,
 } from "@/features/persistence/sqlite-storage";
@@ -24,6 +25,9 @@ import type {
 } from "./types";
 import {
   getCivitaiModelStorageKind,
+  getCivitaiResourceConfiguredDownloadPath,
+  getCivitaiResourceDownloadStatus,
+  isCivitaiResourceDownloadReady,
   makeCivitaiResourceFileNameAliases,
   makeCivitaiResourceTargetFileName,
 } from "./download";
@@ -363,20 +367,42 @@ function filterCivitaiRecommendationCandidatesForPromptProfile(
   return candidates.filter((candidate) => isProfileBaseModel(candidate.resource.baseModel, promptProfile));
 }
 
+async function filterDownloadedResourceDetails(
+  db: SceneForgeSqliteDatabase,
+  resources: CivitaiResourceDetail[],
+) {
+  const settings = loadCivitaiLibrarySettingsFromSqlite(db);
+  const statuses = await Promise.all(
+    resources.map(async (resource) => ({
+      resource,
+      status: await getCivitaiResourceDownloadStatus(
+        resource,
+        getCivitaiResourceConfiguredDownloadPath(resource, settings),
+      ),
+    })),
+  );
+
+  return statuses.filter(({ status }) => isCivitaiResourceDownloadReady(status)).map(({ resource }) => resource);
+}
+
 function loadResourceDetails(db: SceneForgeSqliteDatabase, resourceType: "lora" | "model") {
   return listCivitaiResourcesFromSqlite(db, { resourceType })
     .map((resource) => getCivitaiResourceDetailFromSqlite(db, resource.id))
     .filter((resource): resource is CivitaiResourceDetail => Boolean(resource));
 }
 
-export function loadCivitaiRecommendationCandidates(
+export async function loadCivitaiRecommendationCandidates(
   db: SceneForgeSqliteDatabase,
   desiredEffect: string,
   options: { promptProfile?: PromptProfileId } = {},
 ) {
   const promptProfile = isPromptProfileId(options.promptProfile) ? options.promptProfile : null;
-  const rankedCheckpoints = rankCivitaiRecommendationCandidates(loadResourceDetails(db, "model"), desiredEffect);
-  const rankedLoras = rankCivitaiRecommendationCandidates(loadResourceDetails(db, "lora"), desiredEffect);
+  const [downloadedCheckpoints, downloadedLoras] = await Promise.all([
+    filterDownloadedResourceDetails(db, loadResourceDetails(db, "model")),
+    filterDownloadedResourceDetails(db, loadResourceDetails(db, "lora")),
+  ]);
+  const rankedCheckpoints = rankCivitaiRecommendationCandidates(downloadedCheckpoints, desiredEffect);
+  const rankedLoras = rankCivitaiRecommendationCandidates(downloadedLoras, desiredEffect);
 
   return {
     checkpoints: (promptProfile
@@ -460,8 +486,9 @@ export function buildCivitaiCombinationRecommendationMessages({
     {
       role: "system",
       content: [
-        "You recommend Stable Diffusion Civitai checkpoint + LoRA combinations from a local library.",
+        "You recommend Stable Diffusion Civitai checkpoint + LoRA combinations from downloaded local files.",
         "Use ONLY candidate ids provided by the user message. Never invent ids, names, trigger words, or unavailable resources.",
+        "Every candidate has already been checked as downloaded locally; do not mention or recommend resources outside this downloaded set.",
         `Select exactly one checkpoint id and 0-${maxLoras} LoRA ids. Prefer fewer LoRAs when the effect can be achieved cleanly.`,
         "Use candidate metadata, observed weights, Civitai recommendations, and common pairings to choose a compatible combination.",
         ...profileInstructions,
@@ -726,7 +753,7 @@ export async function recommendCivitaiResourceCombination({
 
   const maxLoras = normalizeMaxLoras(rawMaxLoras);
   const promptProfile = isPromptProfileId(rawPromptProfile) ? rawPromptProfile : undefined;
-  const { checkpoints, loras } = loadCivitaiRecommendationCandidates(db, trimmedEffect, { promptProfile });
+  const { checkpoints, loras } = await loadCivitaiRecommendationCandidates(db, trimmedEffect, { promptProfile });
   const warnings: string[] = [];
 
   if (checkpoints.length === 0) {

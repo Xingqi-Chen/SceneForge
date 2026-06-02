@@ -320,7 +320,7 @@ function toTimelineResourceCandidate(resource: CivitaiResourceListItem) {
 
 async function loadCivitaiResourceItems(resourceType: "lora" | "model", supportsNsfw: boolean) {
   const nsfw = supportsNsfw ? "all" : "sfw";
-  const response = await fetch(`/api/civitai-lora-library/resources?resourceType=${resourceType}&category=all&nsfw=${nsfw}`);
+  const response = await fetch(`/api/civitai-lora-library/resources?resourceType=${resourceType}&category=all&nsfw=${nsfw}&downloaded=ready`);
   const payload: unknown = await response.json();
 
   if (!response.ok) {
