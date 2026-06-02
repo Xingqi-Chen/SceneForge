@@ -7,6 +7,7 @@ import { useEditorStore } from "@/features/editor/store/editor-store";
 import {
   completeTimelineNode,
   confirmTimelineGeneration,
+  failTimelineNode,
   type TimelineWorkflowState,
 } from "@/features/agent-timeline";
 import type { PromptTag } from "@/shared/types";
@@ -130,6 +131,25 @@ function createConfirmedGenerationWorkflow(workflow: TimelineWorkflowState) {
   return confirmedWorkflow;
 }
 
+function createObjectInfoMismatchWorkflow(workflow: TimelineWorkflowState) {
+  const message = [
+    "ComfyUI request does not match the current ComfyUI model/node options.",
+    "Checkpoint is not available in ComfyUI: missing.safetensors",
+    "LoRA 1 is not available in ComfyUI: missing-lora.safetensors",
+  ].join(" ");
+
+  return failTimelineNode(confirmTimelineGeneration(workflow), "comfyui-execution", {
+    code: "comfyui_object_info_mismatch",
+    message,
+    details: {
+      errors: [
+        "Checkpoint is not available in ComfyUI: missing.safetensors",
+        "LoRA 1 is not available in ComfyUI: missing-lora.safetensors",
+      ],
+    },
+  });
+}
+
 function createPoseResponse() {
   return JSON.stringify({
     characterDescription: "courier leaping across wet pavement",
@@ -159,6 +179,17 @@ function getFetchUrl(input: RequestInfo | URL) {
   return typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
 }
 
+function getFetchBody(init?: RequestInit) {
+  return typeof init?.body === "string" ? JSON.parse(init.body) : null;
+}
+
+function isStyleAdviceRequest(init?: RequestInit) {
+  const body = getFetchBody(init);
+  const systemContent = body?.messages?.[0]?.content;
+
+  return typeof systemContent === "string" && systemContent.includes("style palette assistant");
+}
+
 function makeCivitaiResource(resourceType: "lora" | "model", id: string, name: string) {
   return {
     id,
@@ -168,7 +199,7 @@ function makeCivitaiResource(resourceType: "lora" | "model", id: string, name: s
     name,
     versionName: "v1",
     hash: null,
-    baseModel: "Pony",
+    baseModel: "Illustrious",
     creator: "creator",
     trainedWords: resourceType === "lora" ? ["neon_style"] : [],
     tags: ["anime", "neon"],
@@ -188,7 +219,7 @@ function makeCivitaiResource(resourceType: "lora" | "model", id: string, name: s
     recommendations: [
       {
         condition: "neon scene",
-        baseModel: "Pony",
+        baseModel: "Illustrious",
         checkpoint: null,
         sampler: "euler",
         loraWeightMin: null,
@@ -245,6 +276,26 @@ function createTimelineRecommendationResponse() {
     recommendationReason: "Selected from local Civitai candidates.",
     overallEffect: "Neon anime rendering.",
     warnings: [],
+  });
+}
+
+function createStyleAdviceResponse() {
+  return createJsonResponse({
+    role: "assistant",
+    content: JSON.stringify({
+      prompt: "ignored style advice prompt",
+      parameterSuggestions: {
+        cfgScale: 6,
+        loraWeights: [{ name: "Neon LoRA", suggestedWeight: 0.72, reason: "Keeps the LoRA at its observed style-test weight." }],
+        negativePromptAdditions: "jpeg artifacts",
+        resolution: "1216x800",
+        sampler: "euler",
+        scheduler: "normal",
+        steps: 36,
+      },
+      parameterSuggestionReason: "AI Style Advice tuned the render parameters for the selected local resources.",
+      overallEffect: "Neon anime rendering.",
+    }),
   });
 }
 
@@ -306,6 +357,10 @@ function mockT5Fetch() {
   return vi.fn<typeof fetch>(async (input, init) => {
     const url = getFetchUrl(input);
 
+    if (url === "/api/llm/chat" && isStyleAdviceRequest(init)) {
+      return createStyleAdviceResponse();
+    }
+
     if (url.startsWith("/api/civitai-lora-library/resources")) {
       return createJsonResponse({
         items: url.includes("resourceType=model") ? [checkpointResource] : [loraResource],
@@ -335,6 +390,10 @@ function mockT5FetchWithDeferredPose() {
 
   const fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
     const url = getFetchUrl(_input);
+    if (url === "/api/llm/chat" && isStyleAdviceRequest(init)) {
+      return createStyleAdviceResponse();
+    }
+
     if (url.startsWith("/api/civitai-lora-library/resources")) {
       return createJsonResponse({
         items: url.includes("resourceType=model") ? [checkpointResource] : [loraResource],
@@ -374,6 +433,10 @@ function mockT5FetchWithDeferredPrompt() {
 
   const fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
     const url = getFetchUrl(_input);
+    if (url === "/api/llm/chat" && isStyleAdviceRequest(init)) {
+      return createStyleAdviceResponse();
+    }
+
     if (url.startsWith("/api/civitai-lora-library/resources")) {
       return createJsonResponse({
         items: url.includes("resourceType=model") ? [checkpointResource] : [loraResource],
@@ -456,6 +519,17 @@ function setNativeTextAreaValue(textarea: HTMLTextAreaElement, value: string) {
   textarea.dispatchEvent(new Event("input", { bubbles: true }));
 }
 
+function setNativeSelectValue(select: HTMLSelectElement, value: string) {
+  const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")?.set;
+
+  if (!setter) {
+    throw new Error("Unable to set select value.");
+  }
+
+  setter.call(select, value);
+  select.dispatchEvent(new Event("change", { bubbles: true }));
+}
+
 async function submitInitialScene(sceneRequest: string) {
   const textarea = container.querySelector("#scene-request") as HTMLTextAreaElement | null;
   const form = container.querySelector("form");
@@ -536,10 +610,17 @@ describe("TimelineShell", () => {
     });
 
     const sceneInput = container.querySelector("#scene-request") as HTMLTextAreaElement | null;
+    const promptProfile = container.querySelector("#prompt-profile") as HTMLSelectElement | null;
     const startButton = getButtonByText("Start workflow");
     const settingsLink = container.querySelector('a[href="/settings"]');
 
     expect(sceneInput).not.toBeNull();
+    expect(promptProfile?.value).toBe("illustrious");
+    expect(Array.from(promptProfile?.options ?? []).map((option) => option.value)).toEqual([
+      "illustrious",
+      "anima",
+      "generic",
+    ]);
     expect(startButton.disabled).toBe(true);
     expect(settingsLink?.textContent).toContain("Settings");
     expect(getWorkflowStepTitles()).toEqual(nodeTitles);
@@ -579,6 +660,47 @@ describe("TimelineShell", () => {
     });
 
     expect(getButtonByText("Start workflow").disabled).toBe(true);
+  });
+
+  it("persists the selected prompt profile in scene input before prompt generation", async () => {
+    const originalFetch = globalThis.fetch;
+    const fetchMock = mockT5Fetch();
+    globalThis.fetch = fetchMock;
+
+    try {
+      act(() => {
+        root.render(<TimelineShell />);
+      });
+
+      const promptProfile = container.querySelector("#prompt-profile") as HTMLSelectElement | null;
+      expect(promptProfile).not.toBeNull();
+
+      act(() => {
+        setNativeSelectValue(promptProfile as HTMLSelectElement, "anima");
+      });
+
+      await submitInitialScene("A rainy courier under station lights");
+
+      const promptRequest = fetchMock.mock.calls
+        .map(([, init]) => (typeof init?.body === "string" ? JSON.parse(init.body) : null))
+        .find((body) => body?.purpose === "stable-diffusion-prompt-generation");
+
+      expect(promptRequest).toBeDefined();
+      expect(promptRequest.messages[0].content).toContain("Selected prompt profile: Anima (anima)");
+      expect(JSON.parse(promptRequest.messages[1].content)).toMatchObject({
+        promptProfile: "anima",
+        sceneRequest: "A rainy courier under station lights",
+      });
+      const fetchUrls = fetchMock.mock.calls.map(([input]) => String(input));
+      expect(fetchUrls).toContain(
+        "/api/civitai-lora-library/resources?resourceType=model&category=all&downloaded=ready&promptProfile=anima",
+      );
+      expect(fetchUrls).toContain(
+        "/api/civitai-lora-library/resources?resourceType=lora&category=all&downloaded=ready&promptProfile=anima",
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 
   it("submits a usable scene request through timeline recommendations without persistence or execution calls", async () => {
@@ -705,6 +827,18 @@ describe("TimelineShell", () => {
       expect(resourceSection.textContent).toContain("Neon LoRA");
       expect(resourceSection.querySelector('[data-testid="timeline-resource-workspace"]')).not.toBeNull();
       expect(resourceSection.textContent).toContain("Save resources");
+      const resourceRawJsonButton = Array.from(resourceSection.querySelectorAll("button")).find(
+        (button) => button.textContent?.replace(/\s+/g, " ").trim() === "Raw JSON",
+      ) as HTMLButtonElement | undefined;
+      expect(resourceRawJsonButton).not.toBeUndefined();
+
+      act(() => {
+        resourceRawJsonButton?.click();
+      });
+
+      expect(resourceSection.textContent).toContain('"loras"');
+      expect(resourceSection.textContent).toContain('"suggestedWeight": 0.72');
+      expect(resourceSection.textContent).toContain('"modelFileName": "Neon LoRA__v1__mv201__201.safetensors"');
 
       const parameterButton = container.querySelector('button[data-node-id="parameter-recommendation"]') as HTMLButtonElement | null;
       act(() => {
@@ -714,8 +848,21 @@ describe("TimelineShell", () => {
       const parameterSection = getSectionByHeading("Render prompt");
       expect(parameterSection.textContent).not.toContain("Reserved");
       expect(parameterSection.querySelector('[data-testid="timeline-parameter-workspace"]')).not.toBeNull();
-      expect(parameterSection.textContent).toContain("Request preview");
+      expect(parameterSection.textContent).not.toContain("Request preview");
       expect(parameterSection.textContent).toContain("Save parameters");
+      const parameterRawJsonButton = Array.from(parameterSection.querySelectorAll("button")).find(
+        (button) => button.textContent?.replace(/\s+/g, " ").trim() === "Raw JSON",
+      ) as HTMLButtonElement | undefined;
+      expect(parameterRawJsonButton).not.toBeUndefined();
+
+      act(() => {
+        parameterRawJsonButton?.click();
+      });
+
+      expect(parameterSection.textContent).toContain('"requestPreview"');
+      expect(parameterSection.textContent).toContain('"loras"');
+      expect(parameterSection.textContent).toContain('"strengthModel": 0.72');
+      expect(parameterSection.textContent).toContain('"strengthClip": 0.72');
 
       const generationGateButton = container.querySelector('button[data-node-id="generation-gate"]') as HTMLButtonElement | null;
       act(() => {
@@ -755,10 +902,11 @@ describe("TimelineShell", () => {
         "/api/llm/chat",
         "/api/llm/chat",
         "/api/llm/chat",
-        "/api/civitai-lora-library/resources?resourceType=model&category=all&nsfw=sfw",
-        "/api/civitai-lora-library/resources?resourceType=lora&category=all&nsfw=sfw",
+        "/api/civitai-lora-library/resources?resourceType=model&category=all&downloaded=ready&promptProfile=illustrious",
+        "/api/civitai-lora-library/resources?resourceType=lora&category=all&downloaded=ready&promptProfile=illustrious",
         "/api/civitai-lora-library/ai-recommendation",
         "/api/comfyui/sampler-options",
+        "/api/llm/chat",
       ]);
       expect(fetchUrls).not.toContain("/api/comfyui/generate-image");
       expect(fetchUrls).not.toContain("/api/comfyui/generated-images");
@@ -770,7 +918,7 @@ describe("TimelineShell", () => {
     }
   });
 
-  it("loads local resource candidates with NSFW filtering enabled from project settings", async () => {
+  it("loads local resource candidates without NSFW filtering when project NSFW is enabled", async () => {
     const originalFetch = globalThis.fetch;
     const fetchMock = mockT5Fetch();
     setProjectSupportsNsfw(true);
@@ -790,10 +938,11 @@ describe("TimelineShell", () => {
         "/api/llm/chat",
         "/api/llm/chat",
         "/api/llm/chat",
-        "/api/civitai-lora-library/resources?resourceType=model&category=all&nsfw=all",
-        "/api/civitai-lora-library/resources?resourceType=lora&category=all&nsfw=all",
+        "/api/civitai-lora-library/resources?resourceType=model&category=all&downloaded=ready&promptProfile=illustrious",
+        "/api/civitai-lora-library/resources?resourceType=lora&category=all&downloaded=ready&promptProfile=illustrious",
         "/api/civitai-lora-library/ai-recommendation",
         "/api/comfyui/sampler-options",
+        "/api/llm/chat",
       ]);
     } finally {
       globalThis.fetch = originalFetch;
@@ -861,6 +1010,61 @@ describe("TimelineShell", () => {
       const resultSection = getSectionByHeading("Artifact result");
       expect(resultSection.textContent).toContain("Done");
       expect(resultSection.textContent).toContain("timeline-confirmed.png");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("shows object_info mismatch details returned by confirmed timeline generation", async () => {
+    const originalFetch = globalThis.fetch;
+    const t5FetchMock = mockT5Fetch();
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = getFetchUrl(input);
+
+      if (url === "/api/agent-timeline/confirm-generation") {
+        const payload = typeof init?.body === "string" ? JSON.parse(init.body) : {};
+
+        return createJsonResponse({
+          workflow: createObjectInfoMismatchWorkflow(payload.workflow as TimelineWorkflowState),
+        });
+      }
+
+      return t5FetchMock(input, init);
+    });
+
+    globalThis.fetch = fetchMock;
+
+    try {
+      act(() => {
+        root.render(<TimelineShell />);
+      });
+
+      await submitSceneAndChoosePromptTagReview(
+        "A neon market alley with a courier at sunrise",
+        "本次保留，不入词库",
+      );
+
+      const generationGateButton = container.querySelector('button[data-node-id="generation-gate"]') as HTMLButtonElement | null;
+      act(() => {
+        generationGateButton?.click();
+      });
+
+      const confirmButton = getButtonByText("Confirm and render");
+      act(() => {
+        confirmButton.click();
+      });
+      await flushAsyncWork();
+
+      const comfyExecutionSection = getSectionByHeading("Render execution");
+      expect(comfyExecutionSection.textContent).toContain(
+        "ComfyUI request does not match the current ComfyUI model/node options.",
+      );
+      expect(comfyExecutionSection.textContent).toContain(
+        "Checkpoint is not available in ComfyUI: missing.safetensors",
+      );
+      expect(comfyExecutionSection.textContent).toContain(
+        "LoRA 1 is not available in ComfyUI: missing-lora.safetensors",
+      );
     } finally {
       globalThis.fetch = originalFetch;
     }

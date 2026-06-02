@@ -77,6 +77,17 @@ function setNativeInputValue(input: HTMLInputElement, value: string) {
   input.dispatchEvent(new Event("input", { bubbles: true }));
 }
 
+function setNativeTextareaValue(textarea: HTMLTextAreaElement, value: string) {
+  const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
+
+  if (!setter) {
+    throw new Error("Unable to set textarea value.");
+  }
+
+  setter.call(textarea, value);
+  textarea.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
 function clickButton(label: string) {
   const button = Array.from(container.querySelectorAll("button")).find(
     (candidate) => candidate.textContent?.replace(/\s+/g, " ").trim() === label,
@@ -209,8 +220,13 @@ describe("timeline recommendation workspaces", () => {
 
     const inputs = Array.from(container.querySelectorAll('input[type="number"]')) as HTMLInputElement[];
     expect(inputs).toHaveLength(5);
+    const positivePrompt = Array.from(container.querySelectorAll("textarea")).find(
+      (textarea) => textarea.value === "courier, neon alley",
+    ) as HTMLTextAreaElement | undefined;
+    expect(positivePrompt).not.toBeUndefined();
 
     act(() => {
+      setNativeTextareaValue(positivePrompt as HTMLTextAreaElement, "manual edited prompt, neon reflections");
       setNativeInputValue(inputs[0] as HTMLInputElement, "17");
       setNativeInputValue(inputs[1] as HTMLInputElement, "20000");
       setNativeInputValue(inputs[2] as HTMLInputElement, "999");
@@ -223,17 +239,90 @@ describe("timeline recommendation workspaces", () => {
       expect.objectContaining({
         cfg: 0,
         denoise: 1,
+        finalPositivePrompt: "manual edited prompt, neon reflections",
         height: 16384,
         reason: "Manual render parameter selection.",
         requestPreview: expect.objectContaining({
           cfg: 0,
           denoise: 1,
           height: 16384,
+          negativePrompt: "low quality",
+          positivePrompt: "manual edited prompt, neon reflections",
           steps: 150,
           width: 16,
         }),
         steps: 150,
         width: 16,
+      }),
+    );
+  });
+
+  it("preserves complete Anima negative prompt defaults when saving manual parameters", () => {
+    const result: ParameterRecommendationTimelineResult = {
+      availableSamplers: ["euler"],
+      availableSchedulers: ["normal"],
+      width: 1216,
+      height: 800,
+      steps: 36,
+      cfg: 6,
+      samplerName: "euler",
+      scheduler: "normal",
+      denoise: 1,
+      seedPolicy: { mode: "random" },
+      negativeAdditions: ["scene clutter"],
+      negativePrompt:
+        "worst quality, low quality, lowres, score_1, score_2, score_3, blurry, jpeg artifacts, bad anatomy, watermark, artist name, nsfw, bad_hands, scene clutter",
+      requestPreview: {
+        checkpointName: "Anima.safetensors",
+        positivePrompt: "score_9, score_8, score_7, witch over town",
+        negativePrompt:
+          "worst quality, low quality, lowres, score_1, score_2, score_3, blurry, jpeg artifacts, bad anatomy, watermark, artist name, nsfw, bad_hands, scene clutter",
+        width: 1216,
+        height: 800,
+        steps: 36,
+        cfg: 6,
+        samplerName: "euler",
+        scheduler: "normal",
+        denoise: 1,
+        loras: [{ loraName: "Local LoRA.safetensors", strengthModel: 0.72 }],
+      },
+      finalPositivePrompt: "score_9, score_8, score_7, witch over town",
+      reason: "AI Style Advice tuned the render parameters.",
+      warnings: [],
+    };
+    const onSave = vi.fn();
+
+    act(() => {
+      root.render(
+        <TimelineParameterRecommendationWorkspace
+          editable
+          emptyState="No parameters."
+          node={makeNode(result)}
+          onSave={onSave}
+        />,
+      );
+    });
+
+    const positivePrompt = Array.from(container.querySelectorAll("textarea")).find(
+      (textarea) => textarea.value === "score_9, score_8, score_7, witch over town",
+    ) as HTMLTextAreaElement | undefined;
+    expect(positivePrompt).not.toBeUndefined();
+
+    act(() => {
+      setNativeTextareaValue(positivePrompt as HTMLTextAreaElement, "score_9, score_8, score_7, edited witch prompt");
+    });
+    clickButton("Save parameters");
+
+    expect(onSave).toHaveBeenCalledWith(
+      expect.objectContaining({
+        finalPositivePrompt: "score_9, score_8, score_7, edited witch prompt",
+        negativePrompt:
+          "worst quality, low quality, lowres, score_1, score_2, score_3, blurry, jpeg artifacts, bad anatomy, watermark, artist name, nsfw, bad_hands, scene clutter",
+        requestPreview: expect.objectContaining({
+          negativePrompt:
+            "worst quality, low quality, lowres, score_1, score_2, score_3, blurry, jpeg artifacts, bad anatomy, watermark, artist name, nsfw, bad_hands, scene clutter",
+          positivePrompt: "score_9, score_8, score_7, edited witch prompt",
+        }),
       }),
     );
   });

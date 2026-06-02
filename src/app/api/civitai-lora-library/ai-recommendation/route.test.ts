@@ -6,9 +6,14 @@ import path from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { CivitaiResourceUpsertInput } from "@/features/civitai-lora-library";
+import type { CivitaiLibrarySettings, CivitaiResourceRecord, CivitaiResourceUpsertInput } from "@/features/civitai-lora-library";
+import {
+  getCivitaiResourceConfiguredDownloadPath,
+  makeCivitaiResourceTargetFileName,
+} from "@/features/civitai-lora-library";
 import {
   openSceneForgeSqliteDatabase,
+  saveCivitaiLibrarySettingsToSqlite,
   upsertCivitaiResourceToSqlite,
   type SceneForgeSqliteDatabase,
 } from "@/features/persistence/sqlite-storage";
@@ -47,7 +52,7 @@ function makeResourceInput(
     name,
     versionName: "v1",
     hash: `${name}-hash`,
-    baseModel: "SDXL 1.0",
+    baseModel: "Illustrious",
     trainedWords: resourceType === "lora" ? [`${name} trigger`] : [],
     tags: resourceType === "lora" ? ["cyberpunk", "lighting"] : ["realistic", "cinematic"],
     description: `<p>${name} description with useful metadata.</p>`,
@@ -61,7 +66,7 @@ function makeResourceInput(
     recommendations: [
       {
         condition: "default",
-        baseModel: "SDXL 1.0",
+        baseModel: "Illustrious",
         checkpoint: resourceType === "model" ? name : null,
         sampler: "DPM++ 2M",
         loraWeightMin: resourceType === "lora" ? 0.6 : null,
@@ -85,6 +90,7 @@ function makeResourceInput(
 describe("Civitai AI recommendation route", () => {
   let tempDir: string;
   let db: SceneForgeSqliteDatabase;
+  let settings: CivitaiLibrarySettings;
   let previousSqliteFile: string | undefined;
 
   beforeEach(async () => {
@@ -93,6 +99,14 @@ describe("Civitai AI recommendation route", () => {
     previousSqliteFile = process.env.SCENEFORGE_SQLITE_FILE;
     process.env.SCENEFORGE_SQLITE_FILE = path.join(tempDir, "sceneforge.sqlite");
     db = await openSceneForgeSqliteDatabase();
+    settings = {
+      checkpointDownloadPath: path.join(tempDir, "checkpoints"),
+      controlNetModelPath: path.join(tempDir, "controlnet"),
+      diffusionModelPath: path.join(tempDir, "diffusion"),
+      loraDownloadPath: path.join(tempDir, "loras"),
+    };
+    await Promise.all(Object.values(settings).map((directory) => fs.mkdir(directory, { recursive: true })));
+    saveCivitaiLibrarySettingsToSqlite(db, settings);
   });
 
   afterEach(async () => {
@@ -104,6 +118,11 @@ describe("Civitai AI recommendation route", () => {
     }
     await fs.rm(tempDir, { recursive: true, force: true });
   });
+
+  async function markDownloaded(resource: CivitaiResourceRecord) {
+    const downloadPath = getCivitaiResourceConfiguredDownloadPath(resource, settings);
+    await fs.writeFile(path.join(downloadPath, makeCivitaiResourceTargetFileName(resource)), "downloaded");
+  }
 
   it("returns an error before calling the LLM when no checkpoint exists", async () => {
     const response = await POST(
@@ -119,13 +138,18 @@ describe("Civitai AI recommendation route", () => {
     expect(mockCompleteChat).not.toHaveBeenCalled();
   });
 
-  it("recommends a verified checkpoint and LoRA selection from local candidates", async () => {
+  it("recommends a downloaded checkpoint and LoRA selection from local candidates", async () => {
     const checkpoint = upsertCivitaiResourceToSqlite(
       db,
       makeResourceInput("model", "Cyber Checkpoint"),
     ).resource;
     const loraA = upsertCivitaiResourceToSqlite(db, makeResourceInput("lora", "Neon Rain")).resource;
     const loraB = upsertCivitaiResourceToSqlite(db, makeResourceInput("lora", "Glow Detail")).resource;
+    const notDownloadedLora = upsertCivitaiResourceToSqlite(
+      db,
+      makeResourceInput("lora", "Not Downloaded"),
+    ).resource;
+    await Promise.all([markDownloaded(checkpoint), markDownloaded(loraA), markDownloaded(loraB)]);
 
     mockCompleteChat.mockResolvedValue({
       content: JSON.stringify({
@@ -161,7 +185,156 @@ describe("Civitai AI recommendation route", () => {
     expect(payload.loras[0].suggestedWeight).toBe(0.72);
     expect(userContent.checkpointCandidates).toHaveLength(1);
     expect(userContent.loraCandidates.length).toBeGreaterThanOrEqual(2);
+    expect(userContent.loraCandidates.map((candidate: { id: string }) => candidate.id)).not.toContain(
+      notDownloadedLora.id,
+    );
     expect(JSON.stringify(userContent)).not.toContain("model.safetensors");
     expect(JSON.stringify(userContent)).not.toContain(`${loraA.name}-hash`);
+  });
+
+  it("passes promptProfile through and only sends matching profile candidates to the LLM", async () => {
+    upsertCivitaiResourceToSqlite(db, makeResourceInput("model", "Illustrious Checkpoint"));
+    upsertCivitaiResourceToSqlite(db, makeResourceInput("lora", "Illustrious LoRA"));
+    const animaCheckpoint = upsertCivitaiResourceToSqlite(
+      db,
+      makeResourceInput("model", "Anima Checkpoint", {
+        baseModel: "Anima",
+        recommendations: [
+          {
+            condition: "default",
+            baseModel: "Anima",
+            checkpoint: "Anima Checkpoint",
+            sampler: "DPM++ 2M",
+            loraWeightMin: null,
+            loraWeightMax: null,
+            loraWeight: null,
+            hdRedrawRate: null,
+            notes: "Anima recommendation.",
+          },
+        ],
+      }),
+    ).resource;
+    const animaLora = upsertCivitaiResourceToSqlite(
+      db,
+      makeResourceInput("lora", "Anima LoRA", {
+        baseModel: "Anima",
+        recommendations: [
+          {
+            condition: "default",
+            baseModel: "Anima",
+            checkpoint: null,
+            sampler: "DPM++ 2M",
+            loraWeightMin: 0.6,
+            loraWeightMax: 0.9,
+            loraWeight: 0.7,
+            hdRedrawRate: null,
+            notes: "Anima LoRA recommendation.",
+          },
+        ],
+      }),
+    ).resource;
+    await Promise.all([markDownloaded(animaCheckpoint), markDownloaded(animaLora)]);
+
+    mockCompleteChat.mockResolvedValue({
+      content: JSON.stringify({
+        checkpointId: animaCheckpoint.id,
+        checkpointReason: "Anima checkpoint matches the selected profile.",
+        loras: [
+          { id: animaLora.id, suggestedWeight: 0.7, reason: "Anima LoRA matches the selected profile." },
+        ],
+        recommendationReason: "Selected only Anima resources.",
+        overallEffect: "Anima-styled render.",
+      }),
+      role: "assistant",
+    });
+
+    const response = await POST(
+      new Request("http://localhost/api/civitai-lora-library/ai-recommendation", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          desiredEffect: "rainy anime courier",
+          maxLoras: 3,
+          promptProfile: "anima",
+        }),
+      }),
+    );
+    const payload = await response.json();
+    const request = mockCompleteChat.mock.calls[0]?.[0];
+    const userContent = JSON.parse(request.messages[1].content);
+
+    expect(response.status).toBe(200);
+    expect(payload.checkpoint.resource.id).toBe(animaCheckpoint.id);
+    expect(payload.loras.map((entry: { resource: { id: string } }) => entry.resource.id)).toEqual([
+      animaLora.id,
+    ]);
+    expect(userContent.promptProfile).toBe("anima");
+    expect(userContent.checkpointCandidates.map((candidate: { id: string }) => candidate.id)).toEqual([
+      animaCheckpoint.id,
+    ]);
+    expect(userContent.loraCandidates.map((candidate: { id: string }) => candidate.id)).toEqual([
+      animaLora.id,
+    ]);
+    expect(request.messages[0].content).toContain("selected prompt/base-model profile is Anima (anima)");
+  });
+
+  it("keeps unprofiled recommendation requests backward compatible with all local candidates", async () => {
+    const illustriousCheckpoint = upsertCivitaiResourceToSqlite(
+      db,
+      makeResourceInput("model", "Illustrious Checkpoint"),
+    ).resource;
+    const sdxlCheckpoint = upsertCivitaiResourceToSqlite(
+      db,
+      makeResourceInput("model", "SDXL Checkpoint", {
+        baseModel: "SDXL 1.0",
+        recommendations: [
+          {
+            condition: "default",
+            baseModel: "SDXL 1.0",
+            checkpoint: "SDXL Checkpoint",
+            sampler: "DPM++ 2M",
+            loraWeightMin: null,
+            loraWeightMax: null,
+            loraWeight: null,
+            hdRedrawRate: null,
+            notes: "SDXL recommendation.",
+          },
+        ],
+      }),
+    ).resource;
+    await Promise.all([markDownloaded(illustriousCheckpoint), markDownloaded(sdxlCheckpoint)]);
+
+    mockCompleteChat.mockResolvedValue({
+      content: JSON.stringify({
+        checkpointId: sdxlCheckpoint.id,
+        checkpointReason: "SDXL remains available when no prompt profile is provided.",
+        loras: [],
+        recommendationReason: "Selected a generic local checkpoint.",
+        overallEffect: "Generic SDXL render.",
+      }),
+      role: "assistant",
+    });
+
+    const response = await POST(
+      new Request("http://localhost/api/civitai-lora-library/ai-recommendation", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          desiredEffect: "generic cinematic portrait",
+          maxLoras: 3,
+        }),
+      }),
+    );
+    const payload = await response.json();
+    const request = mockCompleteChat.mock.calls[0]?.[0];
+    const userContent = JSON.parse(request.messages[1].content);
+
+    expect(response.status).toBe(200);
+    expect(payload.checkpoint.resource.id).toBe(sdxlCheckpoint.id);
+    expect(userContent.promptProfile).toBeUndefined();
+    expect(userContent.checkpointCandidates.map((candidate: { id: string }) => candidate.id)).toEqual(
+      expect.arrayContaining([illustriousCheckpoint.id, sdxlCheckpoint.id]),
+    );
+    expect(request.messages[0].content).toContain("No prompt/base-model profile was provided");
   });
 });

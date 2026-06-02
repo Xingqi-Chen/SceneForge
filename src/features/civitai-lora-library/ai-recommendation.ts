@@ -7,9 +7,16 @@ import {
 import { appendLlmLocalLog, serializeErrorForLlmLog } from "@/features/llm/llm-local-log";
 import {
   getCivitaiResourceDetailFromSqlite,
+  loadCivitaiLibrarySettingsFromSqlite,
   listCivitaiResourcesFromSqlite,
   type SceneForgeSqliteDatabase,
 } from "@/features/persistence/sqlite-storage";
+import {
+  formatPromptProfileLabel,
+  isPromptProfileId,
+  type PromptProfileId,
+} from "@/shared/prompt-profile";
+import { isCivitaiBaseModelCompatibleWithPromptProfile } from "./base-model";
 
 import type {
   CivitaiAiRecommendationResponse,
@@ -17,7 +24,14 @@ import type {
   CivitaiResourceRecommendation,
   SelectedCivitaiResourcePreview,
 } from "./types";
-import { getCivitaiModelStorageKind, makeCivitaiResourceTargetFileName } from "./download";
+import {
+  getCivitaiModelStorageKind,
+  getCivitaiResourceConfiguredDownloadPath,
+  getCivitaiResourceDownloadStatus,
+  isCivitaiResourceDownloadReady,
+  makeCivitaiResourceFileNameAliases,
+  makeCivitaiResourceTargetFileName,
+} from "./download";
 import { isSameCivitaiBaseModel } from "./base-model";
 
 export const CIVITAI_RECOMMENDATION_CHECKPOINT_LIMIT = 8;
@@ -271,6 +285,8 @@ function scoreResource(resource: CivitaiResourceDetail, tokens: string[]) {
 }
 
 function toPreviewResource(resource: CivitaiResourceDetail): SelectedCivitaiResourcePreview {
+  const modelFileName = makeCivitaiResourceTargetFileName(resource);
+
   return {
     id: resource.id,
     resourceType: resource.resourceType === "model" ? "model" : "lora",
@@ -288,7 +304,8 @@ function toPreviewResource(resource: CivitaiResourceDetail): SelectedCivitaiReso
     maxWeight: resource.maxWeight,
     recommendations: resource.recommendations,
     previewImage: resource.previewImage,
-    modelFileName: makeCivitaiResourceTargetFileName(resource),
+    modelFileName,
+    modelFileNameAliases: makeCivitaiResourceFileNameAliases(resource),
     ...(resource.resourceType === "model" ? { modelStorageKind: getCivitaiModelStorageKind(resource) } : {}),
   };
 }
@@ -327,25 +344,61 @@ export function rankCivitaiRecommendationCandidates(
   return resources.map((resource) => toCandidate(resource, tokens)).sort(byRecommendationRank);
 }
 
+function filterCivitaiRecommendationCandidatesForPromptProfile(
+  candidates: CivitaiRecommendationCandidate[],
+  promptProfile: PromptProfileId,
+) {
+  return candidates.filter((candidate) =>
+    isCivitaiBaseModelCompatibleWithPromptProfile(candidate.resource.baseModel, promptProfile),
+  );
+}
+
+async function filterDownloadedResourceDetails(
+  db: SceneForgeSqliteDatabase,
+  resources: CivitaiResourceDetail[],
+) {
+  const settings = loadCivitaiLibrarySettingsFromSqlite(db);
+  const statuses = await Promise.all(
+    resources.map(async (resource) => ({
+      resource,
+      status: await getCivitaiResourceDownloadStatus(
+        resource,
+        getCivitaiResourceConfiguredDownloadPath(resource, settings),
+      ),
+    })),
+  );
+
+  return statuses.filter(({ status }) => isCivitaiResourceDownloadReady(status)).map(({ resource }) => resource);
+}
+
 function loadResourceDetails(db: SceneForgeSqliteDatabase, resourceType: "lora" | "model") {
   return listCivitaiResourcesFromSqlite(db, { resourceType })
     .map((resource) => getCivitaiResourceDetailFromSqlite(db, resource.id))
     .filter((resource): resource is CivitaiResourceDetail => Boolean(resource));
 }
 
-export function loadCivitaiRecommendationCandidates(
+export async function loadCivitaiRecommendationCandidates(
   db: SceneForgeSqliteDatabase,
   desiredEffect: string,
+  options: { promptProfile?: PromptProfileId } = {},
 ) {
+  const promptProfile = isPromptProfileId(options.promptProfile) ? options.promptProfile : null;
+  const [downloadedCheckpoints, downloadedLoras] = await Promise.all([
+    filterDownloadedResourceDetails(db, loadResourceDetails(db, "model")),
+    filterDownloadedResourceDetails(db, loadResourceDetails(db, "lora")),
+  ]);
+  const rankedCheckpoints = rankCivitaiRecommendationCandidates(downloadedCheckpoints, desiredEffect);
+  const rankedLoras = rankCivitaiRecommendationCandidates(downloadedLoras, desiredEffect);
+
   return {
-    checkpoints: rankCivitaiRecommendationCandidates(loadResourceDetails(db, "model"), desiredEffect).slice(
-      0,
-      CIVITAI_RECOMMENDATION_CHECKPOINT_LIMIT,
-    ),
-    loras: rankCivitaiRecommendationCandidates(loadResourceDetails(db, "lora"), desiredEffect).slice(
-      0,
-      CIVITAI_RECOMMENDATION_LORA_LIMIT,
-    ),
+    checkpoints: (promptProfile
+      ? filterCivitaiRecommendationCandidatesForPromptProfile(rankedCheckpoints, promptProfile)
+      : rankedCheckpoints
+    ).slice(0, CIVITAI_RECOMMENDATION_CHECKPOINT_LIMIT),
+    loras: (promptProfile
+      ? filterCivitaiRecommendationCandidatesForPromptProfile(rankedLoras, promptProfile)
+      : rankedLoras
+    ).slice(0, CIVITAI_RECOMMENDATION_LORA_LIMIT),
   };
 }
 
@@ -397,20 +450,34 @@ export function buildCivitaiCombinationRecommendationMessages({
   desiredEffect,
   loraCandidates,
   maxLoras,
+  promptProfile,
 }: {
   checkpointCandidates: CivitaiRecommendationCandidate[];
   desiredEffect: string;
   loraCandidates: CivitaiRecommendationCandidate[];
   maxLoras: number;
+  promptProfile?: PromptProfileId;
 }): LlmChatMessage[] {
+  const resolvedProfile = isPromptProfileId(promptProfile) ? promptProfile : null;
+  const profileInstructions = resolvedProfile
+    ? [
+        `The selected prompt/base-model profile is ${formatPromptProfileLabel(resolvedProfile)} (${resolvedProfile}).`,
+        "Candidates have already been narrowed to the selected prompt/base-model profile; do not recommend resources outside that candidate set.",
+      ]
+    : [
+        "No prompt/base-model profile was provided; choose from all local candidates and rely on compatibility metadata.",
+      ];
+
   return [
     {
       role: "system",
       content: [
-        "You recommend Stable Diffusion Civitai checkpoint + LoRA combinations from a local library.",
+        "You recommend Stable Diffusion Civitai checkpoint + LoRA combinations from downloaded local files.",
         "Use ONLY candidate ids provided by the user message. Never invent ids, names, trigger words, or unavailable resources.",
+        "Every candidate has already been checked as downloaded locally; do not mention or recommend resources outside this downloaded set.",
         `Select exactly one checkpoint id and 0-${maxLoras} LoRA ids. Prefer fewer LoRAs when the effect can be achieved cleanly.`,
         "Use candidate metadata, observed weights, Civitai recommendations, and common pairings to choose a compatible combination.",
+        ...profileInstructions,
         "Only pair LoRAs with the same baseModel as the selected checkpoint; Anima checkpoints may only use Anima LoRAs.",
         "Return JSON ONLY. No markdown fences, no commentary.",
         "Write checkpointReason, LoRA reasons, recommendationReason, and overallEffect in Simplified Chinese.",
@@ -425,6 +492,7 @@ export function buildCivitaiCombinationRecommendationMessages({
       content: JSON.stringify({
         desiredEffect,
         maxLoras,
+        ...(resolvedProfile ? { promptProfile: resolvedProfile } : {}),
         checkpointCandidates: checkpointCandidates.map(toLlmCivitaiRecommendationCandidate),
         loraCandidates: loraCandidates.map(toLlmCivitaiRecommendationCandidate),
       }),
@@ -656,11 +724,13 @@ export async function recommendCivitaiResourceCombination({
   db,
   desiredEffect,
   maxLoras: rawMaxLoras,
+  promptProfile: rawPromptProfile,
 }: {
   completeChat?: (request: LlmChatRequest) => Promise<LlmChatResponse>;
   db: SceneForgeSqliteDatabase;
   desiredEffect: string;
   maxLoras?: number;
+  promptProfile?: PromptProfileId;
 }): Promise<CivitaiAiRecommendationResponse> {
   const trimmedEffect = desiredEffect.trim();
   if (!trimmedEffect) {
@@ -668,7 +738,8 @@ export async function recommendCivitaiResourceCombination({
   }
 
   const maxLoras = normalizeMaxLoras(rawMaxLoras);
-  const { checkpoints, loras } = loadCivitaiRecommendationCandidates(db, trimmedEffect);
+  const promptProfile = isPromptProfileId(rawPromptProfile) ? rawPromptProfile : undefined;
+  const { checkpoints, loras } = await loadCivitaiRecommendationCandidates(db, trimmedEffect, { promptProfile });
   const warnings: string[] = [];
 
   if (checkpoints.length === 0) {
@@ -687,6 +758,7 @@ export async function recommendCivitaiResourceCombination({
       desiredEffect: trimmedEffect,
       loraCandidates: loras,
       maxLoras,
+      promptProfile,
     }),
     temperature: 0.2,
     maxTokens: 1000,

@@ -187,6 +187,7 @@ function validateRequiredInputs(
 }
 
 function resolveRequiredOption({
+  aliases = [],
   classType,
   errors,
   fallback,
@@ -195,6 +196,7 @@ function resolveRequiredOption({
   objectInfo,
   requested,
 }: {
+  aliases?: string[];
   classType: string;
   errors: string[];
   fallback?: string;
@@ -205,8 +207,9 @@ function resolveRequiredOption({
 }) {
   const options = readInputOptions(objectInfo, classType, inputName);
   const requestedOption = requested ? findOption(requested, options) : null;
+  const aliasOption = aliases.map((alias) => findOption(alias, options)).find(Boolean) ?? null;
   const fallbackOption = fallback ? findOption(fallback, options) : null;
-  const resolved = requestedOption ?? (!requested ? fallbackOption ?? options[0] ?? null : null);
+  const resolved = requestedOption ?? aliasOption ?? (!requested ? fallbackOption ?? options[0] ?? null : null);
 
   if (!resolved) {
     errors.push(requested ? `${label} is not available in ComfyUI: ${requested}` : `${label} is not available in ComfyUI.`);
@@ -545,9 +548,11 @@ function resolveAnimaProfileObjectInfoOptions({
 }: {
   errors: string[];
   objectInfo: unknown;
-  request: Pick<ComfyUiTextToImageRequest | ComfyUiInpaintRequest, "checkpointName">;
+  request: Pick<ComfyUiTextToImageRequest | ComfyUiInpaintRequest, "checkpointName"> &
+    Partial<Pick<ComfyUiTextToImageRequest | ComfyUiInpaintRequest, "checkpointNameAliases">>;
 }) {
   const unetName = resolveRequiredOption({
+    aliases: request.checkpointNameAliases,
     classType: "UNETLoader",
     errors,
     inputName: "unet_name",

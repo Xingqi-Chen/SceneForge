@@ -5,6 +5,16 @@ import {
   parseStickFigurePoseGenerationResponse,
 } from "@/features/editor/stick-figure-3d/llm-pose-generation";
 import {
+  buildAnimaAiResponseInstructions,
+  parseAnimaPromptSectionsFromResponse,
+  type AnimaPromptSections,
+} from "@/features/editor/ai-prompt/anima-prompt";
+import {
+  buildIllustriousAiResponseInstructions,
+  parseIllustriousPromptSectionsFromResponse,
+  type IllustriousPromptSections,
+} from "@/features/editor/ai-prompt/illustrious-prompt";
+import {
   buildCharacterTextPromptTagMessages,
   isCharacterBodyPromptTagCategory,
   parseCharacterImagePromptTagsContent,
@@ -12,6 +22,7 @@ import {
 } from "@/features/prompt-engine/prompt-library/character-image-prompt-tags";
 import type { PromptTagCategory, SceneObject3DTransform } from "@/shared/types";
 import type { StickFigurePoseV1 } from "@/shared/types/stick-figure-pose";
+import { formatPromptProfileLabel, normalizePromptProfileId, type PromptProfileId } from "@/shared/prompt-profile";
 
 import { createLlmTimelineNodeAdapter, type TimelineCompleteChat } from "./llm-adapter";
 import { createTimelineNodeError } from "./state";
@@ -151,7 +162,26 @@ function normalizePromptFragments(value: unknown, maxItems = 5): TimelinePromptF
     .slice(0, maxItems);
 }
 
-export function normalizeScenePromptTimelineResult(raw: unknown): ScenePromptTimelineResult {
+function normalizeProfileSections<SectionMap>(
+  value: unknown,
+  parser: (rawContent: string) => SectionMap | null,
+) {
+  if (typeof value === "string") {
+    return parser(value) ?? undefined;
+  }
+
+  if (isRecord(value)) {
+    const parsed = parser(JSON.stringify(value));
+    return parsed ?? undefined;
+  }
+
+  return undefined;
+}
+
+export function normalizeScenePromptTimelineResult(
+  raw: unknown,
+  fallbackPromptProfile?: PromptProfileId,
+): ScenePromptTimelineResult {
   const parsed = typeof raw === "string" ? parseJsonObjectFromText(raw) : raw;
 
   if (!isRecord(parsed)) {
@@ -180,8 +210,18 @@ export function normalizeScenePromptTimelineResult(raw: unknown): ScenePromptTim
   const sceneIntent = compactText(parsed.sceneIntent ?? parsed.scene_intent ?? parsed.globalSceneIntent, 800);
   const styleTone = compactText(parsed.styleTone ?? parsed.style_tone ?? parsed.tone, 400);
   const setting = compactText(parsed.setting ?? parsed.location, 400);
+  const promptProfile = normalizePromptProfileId(parsed.promptProfile ?? parsed.prompt_profile ?? fallbackPromptProfile);
+  const illustriousSections = normalizeProfileSections<IllustriousPromptSections>(
+    parsed.illustriousSections ?? parsed.illustrious_sections ?? parsed.sections,
+    parseIllustriousPromptSectionsFromResponse,
+  );
+  const animaSections = normalizeProfileSections<AnimaPromptSections>(
+    parsed.animaSections ?? parsed.anima_sections ?? parsed.sections,
+    parseAnimaPromptSectionsFromResponse,
+  );
 
   return {
+    promptProfile,
     primaryCharacter: {
       name: primaryName,
       identity: primaryIdentity || positivePrompt,
@@ -202,6 +242,8 @@ export function normalizeScenePromptTimelineResult(raw: unknown): ScenePromptTim
     style: normalizePromptFragments(parsed.style),
     camera: normalizePromptFragments(parsed.camera),
     lighting: normalizePromptFragments(parsed.lighting),
+    ...(illustriousSections ? { illustriousSections } : {}),
+    ...(animaSections ? { animaSections } : {}),
   };
 }
 
@@ -313,7 +355,10 @@ function getSceneInput(workflow: TimelineNodeExecutionContext["workflow"]) {
   const result = workflow.nodes["scene-input"].result;
 
   if (isRecord(result) && typeof result.rawIntent === "string") {
-    return result as SceneInputTimelineResult;
+    return {
+      ...result,
+      promptProfile: normalizePromptProfileId(result.promptProfile),
+    } as SceneInputTimelineResult;
   }
 
   invalidTimelineInput("Scene input result is missing rawIntent.", { result });
@@ -334,9 +379,11 @@ function getManualTextResult(result: unknown) {
 function getScenePromptResult(workflow: TimelineNodeExecutionContext["workflow"]): ScenePromptTimelineResult {
   const result = workflow.nodes["scene-prompt"].result;
   const manualText = getManualTextResult(result);
+  const promptProfile = getSceneInput(workflow).promptProfile;
 
   if (manualText) {
     return {
+      promptProfile,
       primaryCharacter: {
         name: "Primary character",
         identity: manualText,
@@ -355,7 +402,7 @@ function getScenePromptResult(workflow: TimelineNodeExecutionContext["workflow"]
   }
 
   try {
-    return normalizeScenePromptTimelineResult(result);
+    return normalizeScenePromptTimelineResult(result, promptProfile);
   } catch (error) {
     if (error instanceof TimelineNodeExecutionError) {
       invalidTimelineInput("Scene prompt dependency is not usable for downstream execution.", {
@@ -430,6 +477,7 @@ function getCharacterActionResult(workflow: TimelineNodeExecutionContext["workfl
 
 function buildScenePromptRequest(context: TimelineNodeExecutionContext): LlmChatRequest {
   const sceneInput = getSceneInput(context.workflow);
+  const profileInstructions = buildPromptProfileSceneInstructions(sceneInput.promptProfile);
 
   return {
     purpose: "stable-diffusion-prompt-generation",
@@ -443,7 +491,9 @@ function buildScenePromptRequest(context: TimelineNodeExecutionContext): LlmChat
           "Include primary character identity, common/public character facts, global scene intent, style/tone, setting, and other shared facts.",
           "All generated natural-language fields must be English, including positivePrompt, negativeSuggestions, labels, prompts, character identity, scene intent, style, camera, and lighting.",
           "Do not choose checkpoints, LoRAs, render parameters, file paths, or external resources.",
-          'Required shape: {"primaryCharacter":{"name":"...","identity":"...","publicFacts":["..."]},"sceneIntent":"...","styleTone":"...","setting":"...","sharedFacts":["..."],"positivePrompt":"...","negativeSuggestions":["..."],"style":[{"label":"...","prompt":"..."}],"camera":[{"label":"...","prompt":"..."}],"lighting":[{"label":"...","prompt":"..."}]}',
+          `Selected prompt profile: ${formatPromptProfileLabel(sceneInput.promptProfile)} (${sceneInput.promptProfile}).`,
+          profileInstructions,
+          'Required shape: {"promptProfile":"illustrious|anima|generic","primaryCharacter":{"name":"...","identity":"...","publicFacts":["..."]},"sceneIntent":"...","styleTone":"...","setting":"...","sharedFacts":["..."],"positivePrompt":"...","negativeSuggestions":["..."],"style":[{"label":"...","prompt":"..."}],"camera":[{"label":"...","prompt":"..."}],"lighting":[{"label":"...","prompt":"..."}],"illustriousSections"?:{},"animaSections"?:{}}',
         ].join("\n"),
       },
       {
@@ -451,6 +501,7 @@ function buildScenePromptRequest(context: TimelineNodeExecutionContext): LlmChat
         content: JSON.stringify(
           {
             sceneRequest: sceneInput.rawIntent,
+            promptProfile: sceneInput.promptProfile,
             notes: [
               "Keep this single-image only.",
               "Keep the schema narrow and suitable for a fixed editable table.",
@@ -464,6 +515,32 @@ function buildScenePromptRequest(context: TimelineNodeExecutionContext): LlmChat
     temperature: 0.35,
     maxTokens: 900,
   };
+}
+
+function buildPromptProfileSceneInstructions(promptProfile: PromptProfileId) {
+  if (promptProfile === "illustrious") {
+    return [
+      buildIllustriousAiResponseInstructions(),
+      "For this scene context response, set promptProfile to illustrious and include illustriousSections.",
+      "Make positivePrompt a concise comma-separated booru tag summary, not a prose paragraph.",
+      "Map visible subject, appearance, outfit, action, setting, spatial composition, camera, lighting, and detail into the closest illustriousSections keys.",
+    ].join("\n");
+  }
+
+  if (promptProfile === "anima") {
+    return [
+      buildAnimaAiResponseInstructions(),
+      "For this scene context response, set promptProfile to anima and include animaSections.",
+      "Make positivePrompt detailed comma-separated anime image clauses, not Illustrious booru-only tags.",
+      "Describe visible character identity, action, expression, environment, camera, and lighting as concise anime clauses.",
+    ].join("\n");
+  }
+
+  return [
+    "Use generic Stable Diffusion prompt behavior.",
+    "For this scene context response, set promptProfile to generic.",
+    "Make positivePrompt a concise comma-separated visual prompt without Illustrious quality/aesthetic defaults or Anima score defaults.",
+  ].join("\n");
 }
 
 function buildCharacterTagSourceText(scenePrompt: ScenePromptTimelineResult) {
@@ -611,7 +688,8 @@ export function createTimelineT5NodeAdapters({
     "scene-prompt": createLlmTimelineNodeAdapter({
       completeChat,
       buildRequest: buildScenePromptRequest,
-      parseResponse: (response) => normalizeScenePromptTimelineResult(response.content),
+      parseResponse: (response, context) =>
+        normalizeScenePromptTimelineResult(response.content, getSceneInput(context.workflow).promptProfile),
     }),
     "character-tags": createLlmTimelineNodeAdapter({
       completeChat,

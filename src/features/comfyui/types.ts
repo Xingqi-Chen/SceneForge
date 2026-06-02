@@ -33,6 +33,7 @@ export type ComfyUiWorkflow = Record<string, ComfyUiWorkflowNode>;
 
 export type ComfyUiTextToImageRequest = {
   checkpointName: string;
+  checkpointNameAliases?: string[];
   workflowProfile?: ComfyUiTextToImageWorkflowProfileId;
   modelBaseModel?: string;
   modelStorageKind?: ComfyUiModelStorageKind;
@@ -65,6 +66,7 @@ export type ComfyUiTextToImageRequest = {
 
 export type ComfyUiInpaintRequest = {
   checkpointName: string;
+  checkpointNameAliases?: string[];
   workflowProfile?: ComfyUiTextToImageWorkflowProfileId;
   modelBaseModel?: string;
   modelStorageKind?: ComfyUiModelStorageKind;
@@ -274,6 +276,7 @@ export type ResolvedComfyUiLoraInput = {
 
 export type ResolvedComfyUiTextToImageRequest = {
   checkpointName: string;
+  checkpointNameAliases?: string[];
   workflowProfile: ComfyUiTextToImageWorkflowProfileId;
   modelBaseModel?: string;
   modelStorageKind?: ComfyUiModelStorageKind;
@@ -304,6 +307,7 @@ export type ResolvedComfyUiTextToImageRequest = {
 
 export type ResolvedComfyUiInpaintRequest = {
   checkpointName: string;
+  checkpointNameAliases?: string[];
   workflowProfile: ComfyUiTextToImageWorkflowProfileId;
   modelBaseModel?: string;
   modelStorageKind?: ComfyUiModelStorageKind;

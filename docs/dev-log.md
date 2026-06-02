@@ -4,6 +4,55 @@ This log records dated implementation and documentation work. Keep entries conci
 
 ## 2026-06-02
 
+### T9 / Issue #42 Resource-Aware Final Prompt Formatting
+
+Summary:
+
+- Added timeline final positive prompt assembly inside the parameter recommendation path after local checkpoint and LoRA resources are selected.
+- Reused Anima and Illustrious prompt renderers, added Pony score-tag formatting, and kept SDXL/generic fallback focused on the semantic prompt plus selected local LoRA trained words.
+- Inserted selected LoRA trained words from local metadata into the final prompt with de-duping, while allowing selected LoRAs without trained words to remain valid.
+- Tightened resource recommendation validation so unavailable checkpoint or LoRA recommendations fail the node instead of completing; only exact ID or unambiguous local name/model-file matches are mapped.
+- Ensured the parameter recommendation request preview carries the final formatted prompt consumed by the generation gate and confirmed ComfyUI request.
+- Follow-up: preserved ComfyUI `object_info` mismatch details in the step 9 node error message so missing checkpoints, LoRAs, samplers, or nodes are visible to the user.
+- Follow-up: prevented timeline-assembled Anima prompts from being formatted a second time inside shared ComfyUI generation settings.
+- Follow-up: included nested API error detail messages in timeline notices for non-OK confirmation responses.
+- Follow-up: added explicit timeline prompt/base-model profile selection for Illustrious, Anima, and Generic; defaulted missing selections to Illustrious; made scene prompt generation, local Civitai candidate filtering, and final prompt assembly profile-aware.
+
+Files changed:
+
+- `src/features/agent-timeline/t7-node-adapters.ts`
+- `src/features/agent-timeline/t7-node-adapters.test.ts`
+- `src/features/agent-timeline/t8-server-adapters.ts`
+- `src/features/agent-timeline/t8-server-adapters.test.ts`
+- `src/app/api/agent-timeline/confirm-generation/route.test.ts`
+- `src/features/agent-timeline/components/TimelineShell.tsx`
+- `src/features/agent-timeline/components/TimelineShell.test.tsx`
+- `src/features/agent-timeline/components/TimelineScenePromptWorkspace.tsx`
+- `src/features/agent-timeline/t5-node-adapters.ts`
+- `src/features/agent-timeline/t5-node-adapters.test.ts`
+- `src/features/editor/ai-prompt/comfyui-generation-params.ts`
+- `src/features/civitai-lora-library/ai-recommendation.ts`
+- `src/features/civitai-lora-library/ai-recommendation.test.ts`
+- `src/app/api/civitai-lora-library/ai-recommendation/route.ts`
+- `src/app/api/civitai-lora-library/ai-recommendation/route.test.ts`
+- `src/shared/prompt-profile.ts`
+- `src/features/agent-timeline/types.ts`
+- `docs/plan.md`
+- `docs/dev-log.md`
+
+Validation:
+
+- `npm test -- src/features/agent-timeline/t7-node-adapters.test.ts` passed with 13 tests.
+- `npm test -- src/features/agent-timeline/t7-node-adapters.test.ts src/features/agent-timeline/t8-node-adapters.test.ts src/features/agent-timeline/components/TimelineRecommendationWorkspaces.test.tsx` passed with 18 tests.
+- Follow-up: `npm test -- src/features/agent-timeline/t7-node-adapters.test.ts src/features/agent-timeline/t8-server-adapters.test.ts` passed with 19 tests.
+- Follow-up: `npm test -- src/features/agent-timeline/components/TimelineShell.test.tsx` passed with 12 tests.
+- Follow-up: `npm test -- src/app/api/agent-timeline/confirm-generation/route.test.ts src/features/agent-timeline/t7-node-adapters.test.ts src/features/agent-timeline/t8-server-adapters.test.ts src/features/agent-timeline/components/TimelineShell.test.tsx src/features/editor/ai-prompt/comfyui-generation-params.test.ts` passed with 44 tests.
+- Follow-up: `npm test -- --run src/features/agent-timeline/t5-node-adapters.test.ts src/features/agent-timeline/t7-node-adapters.test.ts src/features/agent-timeline/components/TimelineShell.test.tsx src/app/api/civitai-lora-library/ai-recommendation/route.test.ts src/features/civitai-lora-library/ai-recommendation.test.ts` passed with 39 tests.
+- Follow-up: `npm test` passed with 669 tests.
+- `npm run typecheck` passed.
+- `npm run lint` passed with the existing 22 `@next/next/no-img-element` warnings in unrelated editor components.
+- Follow-up: `npm run build` passed.
+
 ### T8 / Issue #40 Confirmed ComfyUI Execution Timeline
 
 Summary:

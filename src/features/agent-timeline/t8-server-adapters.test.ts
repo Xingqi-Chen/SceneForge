@@ -314,6 +314,53 @@ describe("timeline T8 server adapters", () => {
     expect(storeGeneratedImageMock).not.toHaveBeenCalled();
   });
 
+  it("preserves object_info validation errors in the timeline node message", async () => {
+    const getObjectInfo = vi.fn().mockResolvedValue({ CheckpointLoaderSimple: {} });
+    comfyUiMocks.createComfyUiClient.mockReturnValue({
+      getObjectInfo,
+    });
+    comfyUiMocks.validateComfyUiTextToImageRequest.mockReturnValue({
+      ok: true,
+      request: {
+        batchSize: 1,
+        checkpointName: "missing.safetensors",
+        positivePrompt: "glass greenhouse pilot",
+        preview: false,
+      },
+    });
+    comfyUiMocks.validateComfyUiRequestAgainstObjectInfo.mockReturnValue({
+      errors: [
+        "Checkpoint is not available in ComfyUI: missing.safetensors",
+        "LoRA 1 is not available in ComfyUI: missing-lora.safetensors",
+      ],
+      request: {
+        batchSize: 1,
+        checkpointName: "missing.safetensors",
+        positivePrompt: "glass greenhouse pilot",
+        preview: false,
+      },
+      warnings: ["using default sampler"],
+    });
+
+    const workflow = confirmWorkflow(createGateReadyWorkflow());
+    const result = await executeTimelineGraph(workflow, createTimelineT8ServerNodeAdapters());
+
+    expect(result.nodes["comfyui-execution"]).toMatchObject({
+      status: "error",
+      error: {
+        code: "comfyui_object_info_mismatch",
+        message: "ComfyUI request does not match the current ComfyUI model/node options. Checkpoint is not available in ComfyUI: missing.safetensors LoRA 1 is not available in ComfyUI: missing-lora.safetensors",
+        details: {
+          errors: [
+            "Checkpoint is not available in ComfyUI: missing.safetensors",
+            "LoRA 1 is not available in ComfyUI: missing-lora.safetensors",
+          ],
+          warnings: ["using default sampler"],
+        },
+      },
+    });
+  });
+
   it("invalidates confirmed execution and result nodes after an upstream manual edit", async () => {
     let workflow = confirmWorkflow(createGateReadyWorkflow());
     workflow = completeTimelineNode(

@@ -59,6 +59,13 @@ function throwTimelineComfyUiError(error: ComfyUiApiError): never {
   );
 }
 
+function makeObjectInfoMismatchMessage(errors: string[]) {
+  return [
+    "ComfyUI request does not match the current ComfyUI model/node options.",
+    ...errors,
+  ].join(" ");
+}
+
 async function executeTimelineTextToImage(
   request: ComfyUiTextToImageRequest,
   context: TimelineNodeExecutionContext,
@@ -79,7 +86,7 @@ async function executeTimelineTextToImage(
       throw new TimelineNodeExecutionError(
         createTimelineNodeError(
           "comfyui_object_info_mismatch",
-          "ComfyUI request does not match the current ComfyUI model/node options.",
+          makeObjectInfoMismatchMessage(objectValidation.errors),
           {
             errors: objectValidation.errors,
             warnings: objectValidation.warnings,

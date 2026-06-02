@@ -212,6 +212,37 @@ describe("selected Civitai resources route", () => {
     expect(payload.loras.map((lora: { id: string }) => lora.id)).toEqual([compatible.id]);
   });
 
+  it("returns model filename aliases for selected Anima checkpoints", async () => {
+    const checkpoint = upsertCivitaiResourceToSqlite(
+      db,
+      makeResourceInput("model", "Anima", {
+        baseModel: "Anima",
+        civitaiModelVersionId: 2945208,
+        filesJson: [
+          {
+            primary: true,
+            name: "pencil-xl-diffusion.safetensors",
+            type: "Model",
+            downloadUrl: "https://civitai.test/pencil-xl-diffusion.safetensors",
+            hashes: {
+              AutoV2: "BD43B7CFFE",
+            },
+          },
+        ],
+        versionName: "base-v1.0",
+      }),
+    ).resource;
+
+    const response = await GET(new Request(`http://localhost/api?checkpointId=${checkpoint.id}`));
+    const payload = await response.json();
+
+    expect(payload.checkpoint.modelFileName).toBe("Anima__base-v1.0__mv2945208__bd43b7cffe.safetensors");
+    expect(payload.checkpoint.modelFileNameAliases).toEqual([
+      "Anima__base-v1.0__mv2945208__bd43b7cffe.safetensors",
+      "pencil-xl-diffusion.safetensors",
+    ]);
+  });
+
   it("trims HTML descriptions to a short LLM-safe snippet", async () => {
     const longDescription = `<div>${"alpha ".repeat(180)}<strong>omega</strong></div>`;
     const lora = upsertCivitaiResourceToSqlite(

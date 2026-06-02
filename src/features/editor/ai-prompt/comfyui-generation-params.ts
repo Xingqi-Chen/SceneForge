@@ -388,6 +388,7 @@ function makeNegativePrompt(baseNegativePrompt: string, additions: string | unde
 
 export function resolveComfyUiGenerationSettings(input: {
   activePrompt: string;
+  activePromptAlreadyFormatted?: boolean;
   baseNegativePrompt: string;
   selectedResources: SelectedCivitaiResourcesPreview;
   aiAdvice: CivitaiAiPromptResult | null;
@@ -424,6 +425,7 @@ export function resolveComfyUiGenerationSettings(input: {
   const scheduler = savedSamplerSettings.scheduler ?? parsedAi?.scheduler ?? DEFAULT_SCHEDULER;
   const request: ComfyUiTextToImageRequest = {
     checkpointName: checkpoint?.modelFileName ?? "",
+    checkpointNameAliases: checkpoint?.modelFileNameAliases,
     modelBaseModel: checkpoint?.baseModel ?? undefined,
     modelStorageKind: checkpoint?.modelStorageKind,
     positivePrompt: input.activePrompt.trim(),
@@ -467,12 +469,14 @@ export function resolveComfyUiGenerationSettings(input: {
     supportsNsfw: input.supportsNsfw,
     workflowProfile: request.workflowProfile,
   })) {
-    request.positivePrompt = renderAnimaPromptForContext(request.positivePrompt, {
-      baseModel: request.modelBaseModel,
-      resources: input.selectedResources,
-      supportsNsfw: input.supportsNsfw,
-      workflowProfile: request.workflowProfile,
-    });
+    if (!input.activePromptAlreadyFormatted) {
+      request.positivePrompt = renderAnimaPromptForContext(request.positivePrompt, {
+        baseModel: request.modelBaseModel,
+        resources: input.selectedResources,
+        supportsNsfw: input.supportsNsfw,
+        workflowProfile: request.workflowProfile,
+      });
+    }
     request.negativePrompt = mergeAnimaNegativePrompts([request.negativePrompt]);
   }
 

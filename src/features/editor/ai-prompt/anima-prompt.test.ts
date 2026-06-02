@@ -98,6 +98,8 @@ describe("Anima prompt renderer", () => {
       [
         "masterpiece",
         "best quality",
+        "score_9",
+        "score_8",
         "score_7",
         "safe",
         "1girl",
@@ -134,6 +136,8 @@ describe("Anima prompt renderer", () => {
       [
         "masterpiece",
         "best quality",
+        "score_9",
+        "score_8",
         "score_7",
         "explicit",
         "1girl",
@@ -155,7 +159,7 @@ describe("Anima prompt renderer", () => {
       supportsNsfw: false,
     });
 
-    expect(prompt).toBe("masterpiece, best quality, score_7, Safe, 1girl, @Alpha, city");
+    expect(prompt).toBe("masterpiece, best quality, score_9, score_8, score_7, Safe, 1girl, @Alpha, city");
     expect(prompt.match(/\bcity\b/gi)).toHaveLength(1);
   });
 
@@ -182,8 +186,9 @@ describe("Anima prompt renderer", () => {
     expect(renderAnimaPromptForContext(generated.prompt, { workflowProfile: "default" })).toBe(generated.prompt);
     expect(formatGeneratedPromptForAnimaContext(generated, { workflowProfile: "default" })).toBe(generated);
     expect(formatGeneratedPromptForAnimaContext(generated, { workflowProfile: "anima" })).toMatchObject({
-      prompt: "masterpiece, best quality, score_7, safe, 1girl, @Alpha, city",
-      negativePrompt: "low quality, worst quality, bad anatomy, bad hands, blurry",
+      prompt: "masterpiece, best quality, score_9, score_8, score_7, safe, 1girl, @Alpha, city",
+      negativePrompt:
+        "worst quality, low quality, lowres, score_1, score_2, score_3, blurry, jpeg artifacts, bad anatomy, watermark, artist name, nsfw, bad_hands",
     });
   });
 
@@ -228,8 +233,9 @@ describe("Anima prompt renderer", () => {
     const payloadPrompt = formatGeneratedPromptForAnimaContext(previewPrompt, context);
 
     expect(previewPrompt).toMatchObject({
-      prompt: "masterpiece, best quality, score_7, questionable, 1girl, @Alpha, city",
-      negativePrompt: "low quality, worst quality, bad anatomy, bad hands, blurry",
+      prompt: "masterpiece, best quality, score_9, score_8, score_7, questionable, 1girl, @Alpha, city",
+      negativePrompt:
+        "worst quality, low quality, lowres, score_1, score_2, score_3, blurry, jpeg artifacts, bad anatomy, watermark, artist name, nsfw, bad_hands",
     });
     expect(previewPrompt.prompt).not.toContain("safe");
     expect(payloadPrompt).toEqual(previewPrompt);
@@ -279,7 +285,7 @@ describe("Anima prompt renderer", () => {
 
   it("merges Anima negative defaults without duplicate prompt parts", () => {
     expect(mergeAnimaNegativePrompts(["low quality, blurry", "bad hands, blurry"])).toBe(
-      "low quality, worst quality, bad anatomy, bad hands, blurry",
+      "worst quality, low quality, lowres, score_1, score_2, score_3, blurry, jpeg artifacts, bad anatomy, watermark, artist name, nsfw, bad_hands, bad hands",
     );
   });
 });

@@ -17,11 +17,13 @@ import {
   type TimelineNodeSource,
   type TimelineWorkflowState,
 } from "./types";
+import { normalizePromptProfileId, type PromptProfileId } from "@/shared/prompt-profile";
 
 type TimelineClock = () => string;
 
 type TimelineWorkflowOptions = {
   workflowId?: string;
+  promptProfile?: PromptProfileId;
   sceneRequest?: string;
   settingsSnapshot?: unknown;
   now?: TimelineClock;
@@ -173,6 +175,7 @@ export function createTimelineWorkflowState(options: TimelineWorkflowOptions = {
     status: "manual",
     result: {
       rawIntent: options.sceneRequest,
+      promptProfile: normalizePromptProfileId(options.promptProfile),
       settingsSnapshot: options.settingsSnapshot,
     } satisfies SceneInputTimelineResult,
     source: "manual",

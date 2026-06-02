@@ -153,8 +153,41 @@ describe("ComfyUI generation parameters", () => {
       workflowProfile: "anima",
       modelBaseModel: "Anima",
       modelStorageKind: "diffusion",
-      positivePrompt: "masterpiece, best quality, score_7, safe, 1girl, @Alpha, city street",
-      negativePrompt: "low quality, worst quality, bad anatomy, bad hands",
+      positivePrompt: "masterpiece, best quality, score_9, score_8, score_7, safe, 1girl, @Alpha, city street",
+      negativePrompt:
+        "worst quality, low quality, lowres, score_1, score_2, score_3, blurry, jpeg artifacts, bad anatomy, watermark, artist name, nsfw, bad_hands",
+    });
+  });
+
+  it("preserves selected checkpoint filename aliases for Anima object_info resolution", () => {
+    const settings = resolveComfyUiGenerationSettings({
+      activePrompt: "city street, 1girl",
+      baseNegativePrompt: "",
+      selectedResources: {
+        checkpoint: makeResource("model", "Pencil XL", {
+          baseModel: "Anima",
+          modelFileName: "Anima__base-v1.0__mv2945208__bd43b7cffe.safetensors",
+          modelFileNameAliases: [
+            "Anima__base-v1.0__mv2945208__bd43b7cffe.safetensors",
+            "pencil-xl-diffusion.safetensors",
+          ],
+          modelStorageKind: "diffusion",
+        }),
+        loras: [],
+      },
+      aiAdvice: null,
+      savedParameters: null,
+    });
+
+    expect(settings.request).toMatchObject({
+      checkpointName: "Anima__base-v1.0__mv2945208__bd43b7cffe.safetensors",
+      checkpointNameAliases: [
+        "Anima__base-v1.0__mv2945208__bd43b7cffe.safetensors",
+        "pencil-xl-diffusion.safetensors",
+      ],
+      workflowProfile: "anima",
+      modelBaseModel: "Anima",
+      modelStorageKind: "diffusion",
     });
   });
 
@@ -232,7 +265,7 @@ describe("ComfyUI generation parameters", () => {
       supportsNsfw: true,
     });
 
-    expect(settings.request.positivePrompt).toBe("masterpiece, best quality, score_7, 1girl, city street");
+    expect(settings.request.positivePrompt).toBe("masterpiece, best quality, score_9, score_8, score_7, 1girl, city street");
     expect(settings.request.positivePrompt).not.toContain("safe");
   });
 

@@ -9,6 +9,7 @@ import type {
 import {
   getCivitaiModelStorageKind,
   isSameCivitaiBaseModel,
+  makeCivitaiResourceFileNameAliases,
   makeCivitaiResourceTargetFileName,
 } from "@/features/civitai-lora-library";
 import {
@@ -135,6 +136,7 @@ function toPreviewResource(resource: CivitaiResourceDetail): SelectedCivitaiReso
     recommendations: resource.recommendations,
     previewImage: resource.previewImage,
     modelFileName: makeCivitaiResourceTargetFileName(resource),
+    modelFileNameAliases: makeCivitaiResourceFileNameAliases(resource),
     ...(resource.resourceType === "model" ? { modelStorageKind: getCivitaiModelStorageKind(resource) } : {}),
     promptReferences: getPromptReferences(resource),
   };

@@ -213,3 +213,12 @@ export function makeCivitaiResourceTargetFileName(resource: DownloadableCivitaiR
 
   return `${parts.join("__")}${metadata.extension}`;
 }
+
+export function makeCivitaiResourceFileNameAliases(resource: DownloadableCivitaiResource): string[] {
+  const targetFileName = makeCivitaiResourceTargetFileName(resource);
+  const originalFileName = getCivitaiResourceFileMetadata(resource).name;
+
+  return Array.from(
+    new Set([targetFileName, originalFileName].filter((value): value is string => Boolean(value))),
+  );
+}

@@ -5,6 +5,7 @@ import {
   recommendCivitaiResourceCombination,
 } from "@/features/civitai-lora-library/ai-recommendation";
 import { openSceneForgeSqliteDatabase } from "@/features/persistence/sqlite-storage";
+import { isPromptProfileId } from "@/shared/prompt-profile";
 
 export const runtime = "nodejs";
 
@@ -28,6 +29,10 @@ function normalizeMaxLoras(value: unknown) {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
+function normalizePromptProfile(value: unknown) {
+  return isPromptProfileId(value) ? value : undefined;
+}
+
 export async function POST(request: Request) {
   let payload: unknown;
 
@@ -47,6 +52,7 @@ export async function POST(request: Request) {
       db,
       desiredEffect: payload.desiredEffect,
       maxLoras: normalizeMaxLoras(payload.maxLoras),
+      promptProfile: normalizePromptProfile(payload.promptProfile),
     });
 
     return NextResponse.json(recommendation);

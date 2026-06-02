@@ -278,6 +278,19 @@ function getOptionalTrimmedStringValue(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
+function getOptionalTrimmedStringList(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+
+  const values = value
+    .filter((item): item is string => typeof item === "string")
+    .map((item) => item.trim())
+    .filter(Boolean);
+
+  return values.length > 0 ? Array.from(new Set(values)) : undefined;
+}
+
 function getOptionalNumber(value: unknown): number | undefined {
   return typeof value === "number" ? value : undefined;
 }
@@ -1191,6 +1204,7 @@ export function validateComfyUiTextToImageRequest(value: unknown): ComfyUiTextTo
     ok: true,
     request: {
       checkpointName: value.checkpointName.trim(),
+      checkpointNameAliases: getOptionalTrimmedStringList(value.checkpointNameAliases),
       workflowProfile: isComfyUiTextToImageWorkflowProfileId(value.workflowProfile) ? value.workflowProfile : undefined,
       modelBaseModel: getOptionalTrimmedStringValue(value.modelBaseModel),
       modelStorageKind: isComfyUiModelStorageKind(value.modelStorageKind) ? value.modelStorageKind : undefined,
@@ -1485,6 +1499,7 @@ export function validateComfyUiInpaintRequest(value: unknown): ComfyUiInpaintVal
     ok: true,
     request: {
       checkpointName: value.checkpointName.trim(),
+      checkpointNameAliases: getOptionalTrimmedStringList(value.checkpointNameAliases),
       workflowProfile: isComfyUiTextToImageWorkflowProfileId(value.workflowProfile) ? value.workflowProfile : undefined,
       modelBaseModel: getOptionalTrimmedStringValue(value.modelBaseModel),
       modelStorageKind: isComfyUiModelStorageKind(value.modelStorageKind) ? value.modelStorageKind : undefined,
@@ -1795,6 +1810,7 @@ export function resolveComfyUiTextToImageRequest(
 
   return {
     checkpointName,
+    checkpointNameAliases: request.checkpointNameAliases,
     workflowProfile,
     modelBaseModel,
     modelStorageKind,
@@ -1848,6 +1864,7 @@ export function resolveComfyUiInpaintRequest(request: ComfyUiInpaintRequest): Re
 
   return {
     checkpointName,
+    checkpointNameAliases: request.checkpointNameAliases,
     workflowProfile,
     modelBaseModel,
     modelStorageKind,

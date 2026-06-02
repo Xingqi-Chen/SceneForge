@@ -306,6 +306,7 @@ export type SelectedCivitaiResourcePreview = {
   recommendations: CivitaiResourceRecommendation[];
   previewImage: string | null;
   modelFileName: string;
+  modelFileNameAliases?: string[];
   modelStorageKind?: CivitaiModelStorageKind;
   promptReferences?: CivitaiPromptReference[];
 };

@@ -9,6 +9,9 @@ import type {
   SceneObject3DTransform,
 } from "@/shared/types";
 import type { StickFigurePoseV1 } from "@/shared/types/stick-figure-pose";
+import type { PromptProfileId } from "@/shared/prompt-profile";
+import type { AnimaPromptSections } from "@/features/editor/ai-prompt/anima-prompt";
+import type { IllustriousPromptSections } from "@/features/editor/ai-prompt/illustrious-prompt";
 
 export const timelineNodeStatuses = [
   "blocked",
@@ -106,6 +109,7 @@ export type TimelineWorkflowState = {
 
 export type SceneInputTimelineResult = {
   rawIntent: string;
+  promptProfile: PromptProfileId;
   settingsSnapshot?: unknown;
 };
 
@@ -115,6 +119,7 @@ export type TimelinePromptFragment = {
 };
 
 export type ScenePromptTimelineResult = {
+  promptProfile: PromptProfileId;
   primaryCharacter: {
     name: string;
     identity: string;
@@ -129,6 +134,8 @@ export type ScenePromptTimelineResult = {
   style: TimelinePromptFragment[];
   camera: TimelinePromptFragment[];
   lighting: TimelinePromptFragment[];
+  illustriousSections?: IllustriousPromptSections;
+  animaSections?: AnimaPromptSections;
 };
 
 type CharacterPromptTagBase = Omit<PromptTag, "id">;
@@ -206,6 +213,7 @@ export type ParameterRecommendationTimelineResult = {
   scheduler: string;
   denoise: number;
   seedPolicy: TimelineSeedPolicy;
+  finalPositivePrompt?: string;
   negativeAdditions: string[];
   negativePrompt: string;
   requestPreview: ComfyUiTextToImageRequest;
