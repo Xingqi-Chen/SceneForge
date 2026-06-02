@@ -4,7 +4,7 @@ import path from "node:path";
 
 export const COMFYUI_SEQUENCE_REFERENCE_ROUTE_PREFIX = "/api/comfyui/sequence-references";
 
-const DEFAULT_SEQUENCE_REFERENCE_DIR = path.join(process.cwd(), "data", "comfyui-sequence-references");
+const DEFAULT_SEQUENCE_REFERENCE_DIR = path.join(/*turbopackIgnore: true*/ process.cwd(), "data", "comfyui-sequence-references");
 const SEQUENCE_REFERENCE_FILENAME_PATTERN = /^[a-f0-9]{32}\.(?:jpg|jpeg|png|webp)$/i;
 const MAX_SEQUENCE_REFERENCE_BYTES = 24 * 1024 * 1024;
 
@@ -26,7 +26,7 @@ export class ComfyUiSequenceReferenceStorageError extends Error {
 }
 
 function getSequenceReferenceDir() {
-  return path.resolve(process.env.SCENEFORGE_SEQUENCE_REFERENCE_DIR || DEFAULT_SEQUENCE_REFERENCE_DIR);
+  return path.resolve(/*turbopackIgnore: true*/ process.env.SCENEFORGE_SEQUENCE_REFERENCE_DIR || DEFAULT_SEQUENCE_REFERENCE_DIR);
 }
 
 function assertInsideDirectory(root: string, target: string) {
@@ -61,7 +61,7 @@ export function getSequenceReferencePath(filename: string) {
   }
 
   const root = getSequenceReferenceDir();
-  const target = path.resolve(root, filename);
+  const target = path.resolve(/*turbopackIgnore: true*/ root, filename);
   assertInsideDirectory(root, target);
   return target;
 }
@@ -97,8 +97,8 @@ export async function storeSequenceReferenceImage(dataUrl: string) {
     throw new ComfyUiSequenceReferenceStorageError("Invalid reference image filename.");
   }
 
-  await fs.mkdir(path.dirname(filePath), { recursive: true });
-  await fs.writeFile(filePath, parsed.bytes);
+  await fs.mkdir(/*turbopackIgnore: true*/ path.dirname(filePath), { recursive: true });
+  await fs.writeFile(/*turbopackIgnore: true*/ filePath, parsed.bytes);
 
   return {
     byteLength: parsed.bytes.byteLength,
@@ -116,7 +116,7 @@ export async function readSequenceReferenceImage(filename: string) {
 
   try {
     return {
-      bytes: await fs.readFile(filePath),
+      bytes: await fs.readFile(/*turbopackIgnore: true*/ filePath),
       contentType: getSequenceReferenceContentType(filename),
     };
   } catch (error) {
