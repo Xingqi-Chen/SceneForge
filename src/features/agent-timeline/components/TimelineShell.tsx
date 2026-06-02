@@ -38,17 +38,29 @@ import {
   normalizeScenePromptTimelineResult,
   type TimelineCanvasBindingInput,
 } from "@/features/agent-timeline/t5-node-adapters";
+import { createTimelineT7NodeAdapters } from "@/features/agent-timeline/t7-node-adapters";
 import {
   timelineNodeIds,
   TimelineNodeExecutionError,
   type CanvasBindingTimelineResult,
   type CharacterActionTimelineResult,
+  type ParameterRecommendationTimelineResult,
+  type ResourceRecommendationTimelineResult,
   type ScenePromptTimelineResult,
   type SceneInputTimelineResult,
   type TimelineNodeId,
   type TimelineNodeStatus,
   type TimelineWorkflowState,
 } from "@/features/agent-timeline/types";
+import type {
+  CivitaiAiRecommendationResponse,
+  CivitaiResourceListItem,
+  SelectedCivitaiResourcePreview,
+} from "@/features/civitai-lora-library/types";
+import {
+  getCivitaiModelStorageKind,
+  makeCivitaiResourceTargetFileName,
+} from "@/features/civitai-lora-library/resource-files";
 import {
   bindPrimaryTimelineCharacterToEditorStore,
   createTimelinePromptTagSuggestions,
@@ -79,6 +91,8 @@ import {
   isTimelineEditorWorkspaceNode,
   TimelineEditorWorkspace,
 } from "./TimelineEditorWorkspace";
+import { TimelineParameterRecommendationWorkspace } from "./TimelineParameterRecommendationWorkspace";
+import { TimelineResourceRecommendationWorkspace } from "./TimelineResourceRecommendationWorkspace";
 import { TimelineScenePromptWorkspace } from "./TimelineScenePromptWorkspace";
 import { getTimelineNodeOutputText, timelineNodeContent } from "./timeline-node-content";
 
@@ -167,7 +181,12 @@ const stepDisplay: Record<TimelineNodeId, StepDisplay> = {
 const settingsLinkClassName =
   "inline-flex h-9 items-center justify-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-xs font-medium text-slate-700 transition-colors hover:border-slate-300 hover:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-400";
 const rawEditableNodeIds = new Set<TimelineNodeId>(["scene-input", "scene-prompt"]);
-const visualOutputNodeIds = new Set<TimelineNodeId>(["scene-prompt", "canvas-binding"]);
+const visualOutputNodeIds = new Set<TimelineNodeId>([
+  "scene-prompt",
+  "canvas-binding",
+  "resource-recommendation",
+  "parameter-recommendation",
+]);
 const nonEditableAiNodeIds = new Set<TimelineNodeId>(["character-tags", "character-action"]);
 const parallelNodeIds = new Set<TimelineNodeId>(["character-tags", "character-action"]);
 
@@ -196,6 +215,128 @@ async function completeTimelineChatViaApi(request: LlmChatRequest): Promise<LlmC
   }
 
   return payload;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function getApiErrorMessage(payload: unknown, fallback: string) {
+  if (isRecord(payload) && isRecord(payload.error) && typeof payload.error.message === "string") {
+    return payload.error.message;
+  }
+
+  return fallback;
+}
+
+function sanitizeDescriptionSnippet(value: string | null) {
+  return value
+    ?.replace(/<[^>]*>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 800) || null;
+}
+
+function toSelectedCivitaiResourcePreview(resource: CivitaiResourceListItem): SelectedCivitaiResourcePreview {
+  return {
+    id: resource.id,
+    resourceType: resource.resourceType === "model" ? "model" : "lora",
+    name: resource.name,
+    versionName: resource.versionName,
+    baseModel: resource.baseModel,
+    creator: resource.creator,
+    trainedWords: resource.trainedWords,
+    tags: resource.tags,
+    categories: resource.categories,
+    usageGuide: resource.usageGuide,
+    descriptionSnippet: sanitizeDescriptionSnippet(resource.description),
+    averageWeight: resource.averageWeight,
+    minWeight: resource.minWeight,
+    maxWeight: resource.maxWeight,
+    recommendations: resource.recommendations,
+    previewImage: resource.previewImage,
+    modelFileName: makeCivitaiResourceTargetFileName(resource),
+    ...(resource.resourceType === "model" ? { modelStorageKind: getCivitaiModelStorageKind(resource) } : {}),
+  };
+}
+
+function toTimelineResourceCandidate(resource: CivitaiResourceListItem) {
+  const preview = toSelectedCivitaiResourcePreview(resource);
+
+  return {
+    resource: preview,
+    importedImageCount: resource.importedImageCount,
+    commonCheckpoints: [],
+    commonLoras: [],
+    score: resource.importedImageCount,
+  };
+}
+
+async function loadCivitaiResourceItems(resourceType: "lora" | "model", supportsNsfw: boolean) {
+  const nsfw = supportsNsfw ? "all" : "sfw";
+  const response = await fetch(`/api/civitai-lora-library/resources?resourceType=${resourceType}&category=all&nsfw=${nsfw}`);
+  const payload: unknown = await response.json();
+
+  if (!response.ok) {
+    throw new Error(getApiErrorMessage(payload, "Unable to load local Civitai resources."));
+  }
+
+  if (!isRecord(payload) || !Array.isArray(payload.items)) {
+    throw new Error("Civitai resource response did not include an item list.");
+  }
+
+  return payload.items as CivitaiResourceListItem[];
+}
+
+async function loadTimelineResourceCandidatesViaApi() {
+  const supportsNsfw = useEditorStore.getState().project.settings.supportsNsfw;
+  const [checkpoints, loras] = await Promise.all([
+    loadCivitaiResourceItems("model", supportsNsfw),
+    loadCivitaiResourceItems("lora", supportsNsfw),
+  ]);
+
+  return {
+    checkpoints: checkpoints.map(toTimelineResourceCandidate),
+    loras: loras.map(toTimelineResourceCandidate),
+  };
+}
+
+async function recommendTimelineResourcesViaApi(desiredEffect: string) {
+  const response = await fetch("/api/civitai-lora-library/ai-recommendation", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      desiredEffect,
+      maxLoras: 3,
+    }),
+  });
+  const payload: unknown = await response.json();
+
+  if (!response.ok) {
+    throw new Error(getApiErrorMessage(payload, "Unable to recommend local Civitai resources."));
+  }
+
+  return payload as CivitaiAiRecommendationResponse;
+}
+
+async function loadTimelineSamplerOptionsViaApi() {
+  try {
+    const response = await fetch("/api/comfyui/sampler-options");
+    const payload: unknown = await response.json();
+
+    if (!response.ok || !isRecord(payload) || !Array.isArray(payload.samplers) || !Array.isArray(payload.schedulers)) {
+      return { samplers: [], schedulers: [] };
+    }
+
+    return {
+      samplers: payload.samplers.filter((value): value is string => typeof value === "string"),
+      schedulers: payload.schedulers.filter((value): value is string => typeof value === "string"),
+    };
+  } catch {
+    return { samplers: [], schedulers: [] };
+  }
 }
 
 function parseManualJson(value: string) {
@@ -528,29 +669,55 @@ export function TimelineShell() {
     try {
       const result = await executeTimelineGraph(
         nextWorkflow,
-        createTimelineT5NodeAdapters({
-          completeChat: async (request) => {
-            if (!isCurrentRun(runId)) {
-              throw new Error("Timeline run was superseded.");
-            }
+        {
+          ...createTimelineT5NodeAdapters({
+            completeChat: async (request) => {
+              if (!isCurrentRun(runId)) {
+                throw new Error("Timeline run was superseded.");
+              }
 
-            const response = await completeTimelineChatViaApi(request);
+              const response = await completeTimelineChatViaApi(request);
 
-            if (!isCurrentRun(runId)) {
-              throw new Error("Timeline run was superseded.");
-            }
+              if (!isCurrentRun(runId)) {
+                throw new Error("Timeline run was superseded.");
+              }
 
-            return response;
-          },
-          bindCanvas: async (input) => {
-            if (!isCurrentRun(runId)) {
-              throw new Error("Timeline run was superseded.");
-            }
+              return response;
+            },
+            bindCanvas: async (input) => {
+              if (!isCurrentRun(runId)) {
+                throw new Error("Timeline run was superseded.");
+              }
 
-            return bindCanvasWithPromptLibraryReview(input, runId);
-          },
-          getCurrentPose: getPrimaryTimelineCharacterPoseFromEditorStore,
-        }),
+              return bindCanvasWithPromptLibraryReview(input, runId);
+            },
+            getCurrentPose: getPrimaryTimelineCharacterPoseFromEditorStore,
+          }),
+          ...createTimelineT7NodeAdapters({
+            loadResourceCandidates: async () => {
+              if (!isCurrentRun(runId)) {
+                throw new Error("Timeline run was superseded.");
+              }
+
+              return loadTimelineResourceCandidatesViaApi();
+            },
+            loadSamplerOptions: async () => {
+              if (!isCurrentRun(runId)) {
+                throw new Error("Timeline run was superseded.");
+              }
+
+              return loadTimelineSamplerOptionsViaApi();
+            },
+            recommendResources: async (request) => {
+              if (!isCurrentRun(runId)) {
+                throw new Error("Timeline run was superseded.");
+              }
+
+              return recommendTimelineResourcesViaApi(request.desiredEffect);
+            },
+            supportsNsfw: () => useEditorStore.getState().project.settings.supportsNsfw,
+          }),
+        },
       );
 
       if (!isCurrentRun(runId)) {
@@ -698,6 +865,48 @@ export function TimelineShell() {
     setOutputDisplayModes((current) => ({
       ...current,
       "scene-prompt": "visual",
+    }));
+    setEditingNodeId(null);
+  }
+
+  function handleSaveResourceRecommendationVisual(result: ResourceRecommendationTimelineResult) {
+    if (!workflow) {
+      return;
+    }
+
+    invalidateTimelineRun();
+    setIsRunning(false);
+    const nextWorkflow = setTimelineNodeManualResult(workflow, "resource-recommendation", result);
+
+    setWorkflow(nextWorkflow);
+    setDrafts((current) => ({
+      ...current,
+      "resource-recommendation": JSON.stringify(result, null, 2),
+    }));
+    setOutputDisplayModes((current) => ({
+      ...current,
+      "resource-recommendation": "visual",
+    }));
+    setEditingNodeId(null);
+  }
+
+  function handleSaveParameterRecommendationVisual(result: ParameterRecommendationTimelineResult) {
+    if (!workflow) {
+      return;
+    }
+
+    invalidateTimelineRun();
+    setIsRunning(false);
+    const nextWorkflow = setTimelineNodeManualResult(workflow, "parameter-recommendation", result);
+
+    setWorkflow(nextWorkflow);
+    setDrafts((current) => ({
+      ...current,
+      "parameter-recommendation": JSON.stringify(result, null, 2),
+    }));
+    setOutputDisplayModes((current) => ({
+      ...current,
+      "parameter-recommendation": "visual",
     }));
     setEditingNodeId(null);
   }
@@ -1077,6 +1286,22 @@ export function TimelineShell() {
                       node={selectedNode}
                       onSave={handleSaveScenePromptVisual}
                     />
+                  ) : selectedOutputDisplayMode === "visual" && selectedNodeId === "resource-recommendation" ? (
+                    <TimelineResourceRecommendationWorkspace
+                      editable={Boolean(workflow)}
+                      emptyState={selectedContent.emptyState}
+                      key={selectedNode.updatedAt}
+                      node={selectedNode}
+                      onSave={handleSaveResourceRecommendationVisual}
+                    />
+                  ) : selectedOutputDisplayMode === "visual" && selectedNodeId === "parameter-recommendation" ? (
+                    <TimelineParameterRecommendationWorkspace
+                      editable={Boolean(workflow)}
+                      emptyState={selectedContent.emptyState}
+                      key={selectedNode.updatedAt}
+                      node={selectedNode}
+                      onSave={handleSaveParameterRecommendationVisual}
+                    />
                   ) : selectedOutputDisplayMode === "visual" && isTimelineEditorWorkspaceNode(selectedNodeId) ? (
                     <TimelineEditorWorkspace
                       workflow={activeWorkflow}
@@ -1136,14 +1361,14 @@ export function TimelineShell() {
                   <span className={cn("mt-1 size-2 shrink-0 rounded-full", isRunning ? "bg-indigo-500" : selectedNode.status === "ready" ? "bg-blue-500" : "bg-slate-300")} />
                   <p className="leading-relaxed text-slate-600">
                     {isRunning
-                      ? "LangGraph is running T5 inference through the existing LLM chat boundary."
+                      ? "LangGraph is running timeline inference and recommendation nodes."
                       : `${selectedContent.title} is ${getCompactStatusLabel(selectedNode.status).toLowerCase()}.`}
                   </p>
                 </div>
                 <div className="flex gap-2">
                   <span className="mt-1 size-2 shrink-0 rounded-full bg-slate-300" />
                   <p className="leading-relaxed text-slate-600">
-                    Civitai, ComfyUI, image storage, and render execution remain blocked.
+                    ComfyUI execution, image storage, and result display remain blocked until T8.
                   </p>
                 </div>
               </div>
@@ -1155,7 +1380,7 @@ export function TimelineShell() {
               </header>
               <div className="p-3 text-xs leading-relaxed text-slate-500">
                 {workflow
-                  ? "T5 inference uses /api/llm/chat only. Resource and render services are not called."
+                  ? "Timeline uses /api/llm/chat, local Civitai recommendation, and ComfyUI sampler-option preview only."
                   : "No external tools have been called by this shell."}
               </div>
             </section>

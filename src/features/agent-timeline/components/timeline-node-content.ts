@@ -51,7 +51,6 @@ export const timelineNodeContent: Record<TimelineNodeId, TimelineNodeContent> = 
     emptyState: "Waiting for prompt, tags, action, and local resources.",
     editLabel: "Edit resources",
     aiLabel: "Suggest resources",
-    reserved: true,
   },
   "parameter-recommendation": {
     title: "Render prompt",
@@ -59,7 +58,6 @@ export const timelineNodeContent: Record<TimelineNodeId, TimelineNodeContent> = 
     emptyState: "Waiting for prompt, canvas, and resources.",
     editLabel: "Edit parameters",
     aiLabel: "Suggest parameters",
-    reserved: true,
   },
   "generation-gate": {
     title: "Review / export",
@@ -118,6 +116,25 @@ export function getTimelineNodeOutputText(node: TimelineNodeResult) {
 
     if (typeof node.result.confirmed === "boolean") {
       return node.result.confirmed ? "Generation confirmed." : "Generation confirmation is required.";
+    }
+
+    if (
+      isRecord(node.result.checkpoint) &&
+      isRecord(node.result.checkpoint.resource) &&
+      typeof node.result.checkpoint.resource.name === "string" &&
+      Array.isArray(node.result.loras)
+    ) {
+      const loraCount = node.result.loras.length;
+      return `${node.result.checkpoint.resource.name} with ${loraCount} LoRA${loraCount === 1 ? "" : "s"}.`;
+    }
+
+    if (
+      typeof node.result.width === "number" &&
+      typeof node.result.height === "number" &&
+      typeof node.result.steps === "number" &&
+      typeof node.result.samplerName === "string"
+    ) {
+      return `${node.result.width}x${node.result.height}, ${node.result.steps} steps, ${node.result.samplerName}.`;
     }
   }
 

@@ -4,6 +4,41 @@ This log records dated implementation and documentation work. Keep entries conci
 
 ## 2026-06-01
 
+### T7 / Issue #38 Timeline Resource and Parameter Recommendations
+
+Summary:
+
+- Activated the timeline resource recommendation and parameter recommendation nodes before the generation gate.
+- Added T7 adapters that validate AI checkpoint picks against local Civitai candidates, filter unavailable, duplicate, and incompatible LoRAs, and keep ComfyUI execution blocked for T8.
+- Added parameter recommendation output with ComfyUI request previews built from the existing generation settings helpers and sampler options.
+- Kept automatic and manual sampler/scheduler selections constrained to the live ComfyUI option set used by the timeline run.
+- Added visual workspaces for manual checkpoint, LoRA, and render parameter review before future generation execution.
+
+Files changed:
+
+- `docs/plan.md`
+- `src/features/agent-timeline/types.ts`
+- `src/features/agent-timeline/t7-node-adapters.ts`
+- `src/features/agent-timeline/t7-node-adapters.test.ts`
+- `src/features/agent-timeline/index.ts`
+- `src/features/agent-timeline/components/TimelineShell.tsx`
+- `src/features/agent-timeline/components/TimelineResourceRecommendationWorkspace.tsx`
+- `src/features/agent-timeline/components/TimelineParameterRecommendationWorkspace.tsx`
+- `src/features/agent-timeline/components/TimelineRecommendationWorkspaces.test.tsx`
+- `src/features/agent-timeline/components/timeline-node-content.ts`
+- `src/features/agent-timeline/components/TimelineShell.test.tsx`
+- `src/features/agent-timeline/workflow.test.ts`
+- `src/features/agent-timeline/t5-node-adapters.test.ts`
+- `docs/dev-log.md`
+
+Validation:
+
+- `npm test -- src/features/agent-timeline/workflow.test.ts src/features/agent-timeline/t7-node-adapters.test.ts src/features/agent-timeline/components/TimelineShell.test.tsx src/features/agent-timeline/components/TimelineRecommendationWorkspaces.test.tsx` passed with 29 tests.
+- `npm test` passed with 646 tests.
+- `npm run typecheck` passed.
+- `npm run lint` passed with existing `<img>` warnings.
+- Browser smoke loaded `http://localhost:3000/`, confirmed the timeline shell shows 10 steps including Model resources and Render prompt, with no browser console errors.
+
 ### T6 / Issue #36 Centralized Settings Page
 
 Summary:

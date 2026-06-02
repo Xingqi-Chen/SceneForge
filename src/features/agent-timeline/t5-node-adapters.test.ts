@@ -173,24 +173,54 @@ describe("T5 timeline node adapters", () => {
 
     const result = await executeTimelineGraph(
       workflow,
-      createTimelineT5NodeAdapters({
-        completeChat,
-        bindCanvas: (input) => {
-          bindings.push(input);
-          return {
-            primaryCharacter: {
-              id: "editor-character-1",
-              name: input.primaryCharacter.name,
-              description: input.primaryCharacter.description,
+      {
+        ...createTimelineT5NodeAdapters({
+          completeChat,
+          bindCanvas: (input) => {
+            bindings.push(input);
+            return {
+              primaryCharacter: {
+                id: "editor-character-1",
+                name: input.primaryCharacter.name,
+                description: input.primaryCharacter.description,
+              },
+              characterTags: input.characterTags,
+              action: input.action,
+              transform: input.transform,
+              pose: input.pose,
+              spatialSummary: input.spatialSummary,
+            };
+          },
+        }),
+        "resource-recommendation": () => ({
+          source: "ai",
+          value: {
+            checkpoint: "local-checkpoint.safetensors",
+            loras: [],
+            candidates: {
+              checkpoints: [],
+              loras: [],
             },
-            characterTags: input.characterTags,
-            action: input.action,
-            transform: input.transform,
-            pose: input.pose,
-            spatialSummary: input.spatialSummary,
-          };
-        },
-      }),
+          },
+        }),
+        "parameter-recommendation": () => ({
+          source: "system",
+          value: {
+            availableSamplers: ["euler"],
+            availableSchedulers: ["normal"],
+            width: 1024,
+            height: 768,
+            steps: 28,
+            cfgScale: 7,
+            sampler: "euler",
+            scheduler: "normal",
+            denoise: 1,
+            seedPolicy: "random",
+            negativePromptAdditions: [],
+            requestPreview: null,
+          },
+        }),
+      },
       { now: () => "2026-05-29T00:00:01.000Z" },
     );
 
@@ -286,8 +316,8 @@ describe("T5 timeline node adapters", () => {
         },
       },
     });
-    expect(result.nodes["resource-recommendation"].status).toBe("blocked");
-    expect(result.nodes["parameter-recommendation"].status).toBe("blocked");
+    expect(result.nodes["resource-recommendation"].status).toBe("done");
+    expect(result.nodes["parameter-recommendation"].status).toBe("done");
     expect(result.nodes["generation-gate"].status).toBe("blocked");
   });
 
