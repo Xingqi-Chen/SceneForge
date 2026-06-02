@@ -16,6 +16,7 @@ import {
   isPromptProfileId,
   type PromptProfileId,
 } from "@/shared/prompt-profile";
+import { isCivitaiBaseModelCompatibleWithPromptProfile } from "./base-model";
 
 import type {
   CivitaiAiRecommendationResponse,
@@ -343,28 +344,13 @@ export function rankCivitaiRecommendationCandidates(
   return resources.map((resource) => toCandidate(resource, tokens)).sort(byRecommendationRank);
 }
 
-function isProfileBaseModel(
-  baseModel: string | null | undefined,
-  promptProfile: PromptProfileId,
-) {
-  const normalized = normalizeSearchText(baseModel);
-
-  if (promptProfile === "illustrious") {
-    return normalized.includes("illustrious");
-  }
-
-  if (promptProfile === "anima") {
-    return normalized === "anima";
-  }
-
-  return !normalized || (!normalized.includes("illustrious") && normalized !== "anima");
-}
-
 function filterCivitaiRecommendationCandidatesForPromptProfile(
   candidates: CivitaiRecommendationCandidate[],
   promptProfile: PromptProfileId,
 ) {
-  return candidates.filter((candidate) => isProfileBaseModel(candidate.resource.baseModel, promptProfile));
+  return candidates.filter((candidate) =>
+    isCivitaiBaseModelCompatibleWithPromptProfile(candidate.resource.baseModel, promptProfile),
+  );
 }
 
 async function filterDownloadedResourceDetails(

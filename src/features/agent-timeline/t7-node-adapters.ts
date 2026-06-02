@@ -4,7 +4,10 @@ import type {
   SelectedCivitaiResourcePreview,
   SelectedCivitaiResourcesPreview,
 } from "@/features/civitai-lora-library";
-import { isSameCivitaiBaseModel } from "@/features/civitai-lora-library/base-model";
+import {
+  isCivitaiBaseModelCompatibleWithPromptProfile,
+  isSameCivitaiBaseModel,
+} from "@/features/civitai-lora-library/base-model";
 import {
   parseComfyUiAiGenerationParameters,
   resolveComfyUiGenerationSettings,
@@ -375,23 +378,6 @@ function getLoraTrainedWordPrompt(resources: SelectedCivitaiResourcesPreview) {
   return resources.loras.flatMap((lora) => lora.trainedWords.flatMap(splitPromptParts)).join(", ");
 }
 
-function isProfileBaseModel(
-  baseModel: string | null | undefined,
-  promptProfile: PromptProfileId,
-) {
-  const normalized = normalizeBaseModel(baseModel);
-
-  if (promptProfile === "illustrious") {
-    return normalized.includes("illustrious");
-  }
-
-  if (promptProfile === "anima") {
-    return normalized === "anima";
-  }
-
-  return !normalized || (!normalized.includes("illustrious") && normalized !== "anima");
-}
-
 function isPonyBaseModel(value: string | null | undefined) {
   return normalizeBaseModel(value).includes("pony");
 }
@@ -404,10 +390,10 @@ export function filterTimelineResourceCandidatesForPromptProfile(
 
   return {
     checkpoints: candidates.checkpoints.filter((candidate) =>
-      isProfileBaseModel(candidate.resource.baseModel, resolvedProfile),
+      isCivitaiBaseModelCompatibleWithPromptProfile(candidate.resource.baseModel, resolvedProfile),
     ),
     loras: candidates.loras.filter((candidate) =>
-      isProfileBaseModel(candidate.resource.baseModel, resolvedProfile),
+      isCivitaiBaseModelCompatibleWithPromptProfile(candidate.resource.baseModel, resolvedProfile),
     ),
   };
 }

@@ -111,4 +111,47 @@ describe("Civitai resources route", () => {
     expect(payload.items.map((item: { id: string }) => item.id)).toEqual([downloaded.id]);
     expect(payload.items.map((item: { id: string }) => item.id)).not.toContain(missing.id);
   });
+
+  it("filters downloaded resources by the selected prompt profile", async () => {
+    const illustriousCheckpoint = upsertCivitaiResourceToSqlite(
+      db,
+      makeResourceInput("model", "Illustrious Checkpoint", { baseModel: "Illustrious XL" }),
+    ).resource;
+    const animaCheckpoint = upsertCivitaiResourceToSqlite(
+      db,
+      makeResourceInput("model", "Anima Checkpoint", { baseModel: "Anima" }),
+    ).resource;
+    const illustriousLora = upsertCivitaiResourceToSqlite(
+      db,
+      makeResourceInput("lora", "Illustrious LoRA", { baseModel: "Illustrious" }),
+    ).resource;
+    const animaLora = upsertCivitaiResourceToSqlite(
+      db,
+      makeResourceInput("lora", "Anima LoRA", { baseModel: "Anima" }),
+    ).resource;
+    await Promise.all([
+      markDownloaded(illustriousCheckpoint),
+      markDownloaded(animaCheckpoint),
+      markDownloaded(illustriousLora),
+      markDownloaded(animaLora),
+    ]);
+
+    const checkpointResponse = await GET(
+      new Request(
+        "http://localhost/api/civitai-lora-library/resources?resourceType=model&downloaded=ready&promptProfile=illustrious",
+      ),
+    );
+    const loraResponse = await GET(
+      new Request(
+        "http://localhost/api/civitai-lora-library/resources?resourceType=lora&downloaded=ready&promptProfile=illustrious",
+      ),
+    );
+    const checkpointPayload = await checkpointResponse.json();
+    const loraPayload = await loraResponse.json();
+
+    expect(checkpointResponse.status).toBe(200);
+    expect(loraResponse.status).toBe(200);
+    expect(checkpointPayload.items.map((item: { id: string }) => item.id)).toEqual([illustriousCheckpoint.id]);
+    expect(loraPayload.items.map((item: { id: string }) => item.id)).toEqual([illustriousLora.id]);
+  });
 });

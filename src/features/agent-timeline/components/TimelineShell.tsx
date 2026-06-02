@@ -318,9 +318,21 @@ function toTimelineResourceCandidate(resource: CivitaiResourceListItem) {
   };
 }
 
-async function loadCivitaiResourceItems(resourceType: "lora" | "model", supportsNsfw: boolean) {
+function getTimelineWorkflowPromptProfile(workflow: TimelineWorkflowState) {
+  const sceneInput = workflow.nodes["scene-input"].result;
+
+  return isRecord(sceneInput) ? normalizePromptProfileId(sceneInput.promptProfile) : defaultPromptProfileId;
+}
+
+async function loadCivitaiResourceItems(
+  resourceType: "lora" | "model",
+  supportsNsfw: boolean,
+  promptProfile: PromptProfileId,
+) {
   const nsfw = supportsNsfw ? "all" : "sfw";
-  const response = await fetch(`/api/civitai-lora-library/resources?resourceType=${resourceType}&category=all&nsfw=${nsfw}&downloaded=ready`);
+  const response = await fetch(
+    `/api/civitai-lora-library/resources?resourceType=${resourceType}&category=all&nsfw=${nsfw}&downloaded=ready&promptProfile=${promptProfile}`,
+  );
   const payload: unknown = await response.json();
 
   if (!response.ok) {
@@ -334,11 +346,11 @@ async function loadCivitaiResourceItems(resourceType: "lora" | "model", supports
   return payload.items as CivitaiResourceListItem[];
 }
 
-async function loadTimelineResourceCandidatesViaApi() {
+async function loadTimelineResourceCandidatesViaApi(promptProfile: PromptProfileId) {
   const supportsNsfw = useEditorStore.getState().project.settings.supportsNsfw;
   const [checkpoints, loras] = await Promise.all([
-    loadCivitaiResourceItems("model", supportsNsfw),
-    loadCivitaiResourceItems("lora", supportsNsfw),
+    loadCivitaiResourceItems("model", supportsNsfw, promptProfile),
+    loadCivitaiResourceItems("lora", supportsNsfw, promptProfile),
   ]);
 
   return {
@@ -858,12 +870,12 @@ export function TimelineShell() {
             getCurrentPose: getPrimaryTimelineCharacterPoseFromEditorStore,
           }),
           ...createTimelineT7NodeAdapters({
-            loadResourceCandidates: async () => {
+            loadResourceCandidates: async (_desiredEffect, context) => {
               if (!isCurrentRun(runId)) {
                 throw new Error("Timeline run was superseded.");
               }
 
-              return loadTimelineResourceCandidatesViaApi();
+              return loadTimelineResourceCandidatesViaApi(getTimelineWorkflowPromptProfile(context.workflow));
             },
             loadSamplerOptions: async () => {
               if (!isCurrentRun(runId)) {

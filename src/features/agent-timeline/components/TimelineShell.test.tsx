@@ -648,6 +648,13 @@ describe("TimelineShell", () => {
         promptProfile: "anima",
         sceneRequest: "A rainy courier under station lights",
       });
+      const fetchUrls = fetchMock.mock.calls.map(([input]) => String(input));
+      expect(fetchUrls).toContain(
+        "/api/civitai-lora-library/resources?resourceType=model&category=all&nsfw=sfw&downloaded=ready&promptProfile=anima",
+      );
+      expect(fetchUrls).toContain(
+        "/api/civitai-lora-library/resources?resourceType=lora&category=all&nsfw=sfw&downloaded=ready&promptProfile=anima",
+      );
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -852,8 +859,8 @@ describe("TimelineShell", () => {
         "/api/llm/chat",
         "/api/llm/chat",
         "/api/llm/chat",
-        "/api/civitai-lora-library/resources?resourceType=model&category=all&nsfw=sfw&downloaded=ready",
-        "/api/civitai-lora-library/resources?resourceType=lora&category=all&nsfw=sfw&downloaded=ready",
+        "/api/civitai-lora-library/resources?resourceType=model&category=all&nsfw=sfw&downloaded=ready&promptProfile=illustrious",
+        "/api/civitai-lora-library/resources?resourceType=lora&category=all&nsfw=sfw&downloaded=ready&promptProfile=illustrious",
         "/api/civitai-lora-library/ai-recommendation",
         "/api/comfyui/sampler-options",
       ]);
@@ -887,8 +894,8 @@ describe("TimelineShell", () => {
         "/api/llm/chat",
         "/api/llm/chat",
         "/api/llm/chat",
-        "/api/civitai-lora-library/resources?resourceType=model&category=all&nsfw=all&downloaded=ready",
-        "/api/civitai-lora-library/resources?resourceType=lora&category=all&nsfw=all&downloaded=ready",
+        "/api/civitai-lora-library/resources?resourceType=model&category=all&nsfw=all&downloaded=ready&promptProfile=illustrious",
+        "/api/civitai-lora-library/resources?resourceType=lora&category=all&nsfw=all&downloaded=ready&promptProfile=illustrious",
         "/api/civitai-lora-library/ai-recommendation",
         "/api/comfyui/sampler-options",
       ]);
