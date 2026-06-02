@@ -107,7 +107,7 @@ describe("agent timeline workflow foundation", () => {
     expect(canRunTimelineNode(workflowWithInput, "character-tags")).toBe(false);
   });
 
-  it("runs nodes only after predecessors are done or manual and never exposes reserved nodes", () => {
+  it("runs nodes only after predecessors are done or manual and keeps only execution nodes reserved", () => {
     const clock = createClock();
     let workflow = createTimelineWorkflowState({
       workflowId: "dependency-gates",
@@ -136,10 +136,10 @@ describe("agent timeline workflow foundation", () => {
 
     workflow = completeTimelineNode(workflow, "character-tags", { tags: ["robot"] }, "ai", { now: clock });
 
-    expect(getRunnableTimelineNodeIds(workflow)).toEqual(["canvas-binding"]);
-    expect(isReservedTimelineNodeId("resource-recommendation")).toBe(true);
-    expect(isReservedTimelineNodeId("parameter-recommendation")).toBe(true);
-    expect(canRunTimelineNode(workflow, "resource-recommendation")).toBe(false);
+    expect(getRunnableTimelineNodeIds(workflow)).toEqual(["canvas-binding", "resource-recommendation"]);
+    expect(isReservedTimelineNodeId("resource-recommendation")).toBe(false);
+    expect(isReservedTimelineNodeId("parameter-recommendation")).toBe(false);
+    expect(canRunTimelineNode(workflow, "resource-recommendation")).toBe(true);
     expect(canRunTimelineNode(workflow, "parameter-recommendation")).toBe(false);
     expect(isReservedTimelineNodeId("comfyui-execution")).toBe(true);
     expect(isReservedTimelineNodeId("result-display")).toBe(true);
@@ -283,7 +283,7 @@ describe("agent timeline workflow foundation", () => {
     expect(result.nodes["canvas-binding"].status).toBe("blocked");
   });
 
-  it("runs canvas binding while keeping future resource and parameter nodes blocked", async () => {
+  it("runs canvas binding and resource recommendation while keeping execution nodes blocked", async () => {
     const clock = createClock();
     const seen: string[] = [];
     const adapters: TimelineNodeAdapters = {
@@ -294,6 +294,14 @@ describe("agent timeline workflow foundation", () => {
         seen.push("canvas-binding");
         return { value: { primaryCharacterId: "character-1" }, source: "system" };
       },
+      "resource-recommendation": () => {
+        seen.push("resource-recommendation");
+        return { value: { checkpoint: "local.safetensors", loras: [] }, source: "ai" };
+      },
+      "parameter-recommendation": () => {
+        seen.push("parameter-recommendation");
+        return { value: { width: 1024 }, source: "system" };
+      },
     };
     const workflow = createTimelineWorkflowState({
       workflowId: "branch-merge",
@@ -303,13 +311,14 @@ describe("agent timeline workflow foundation", () => {
 
     const result = await executeTimelineGraph(workflow, adapters, { now: clock });
 
-    expect(seen).toEqual(["canvas-binding"]);
+    expect(seen).toEqual(["canvas-binding", "resource-recommendation", "parameter-recommendation"]);
     expect(result.nodes["canvas-binding"]).toMatchObject({
       status: "done",
       result: { primaryCharacterId: "character-1" },
     });
-    expect(result.nodes["resource-recommendation"].status).toBe("blocked");
-    expect(result.nodes["parameter-recommendation"].status).toBe("blocked");
+    expect(result.nodes["resource-recommendation"].status).toBe("done");
+    expect(result.nodes["parameter-recommendation"].status).toBe("done");
+    expect(result.nodes["generation-gate"].status).toBe("blocked");
   });
 
   it("keeps runtime timeline execution in memory without browser persistence writes", async () => {
@@ -323,6 +332,8 @@ describe("agent timeline workflow foundation", () => {
       "character-tags": () => ({ value: { tags: ["archivist"] }, source: "ai" }),
       "character-action": () => ({ value: { action: "sorting slides" }, source: "ai" }),
       "canvas-binding": () => ({ value: { primaryCharacterId: "character-1" }, source: "system" }),
+      "resource-recommendation": () => ({ value: { checkpoint: "local.safetensors", loras: [] }, source: "ai" }),
+      "parameter-recommendation": () => ({ value: { width: 1024 }, source: "system" }),
     };
     const workflow = createTimelineWorkflowState({
       workflowId: "memory-only",
@@ -333,8 +344,8 @@ describe("agent timeline workflow foundation", () => {
     const result = await executeTimelineGraph(workflow, adapters, { now: clock });
 
     expect(result.nodes["canvas-binding"].status).toBe("done");
-    expect(result.nodes["resource-recommendation"].status).toBe("blocked");
-    expect(result.nodes["parameter-recommendation"].status).toBe("blocked");
+    expect(result.nodes["resource-recommendation"].status).toBe("done");
+    expect(result.nodes["parameter-recommendation"].status).toBe("done");
     expect(result.nodes["generation-gate"].status).toBe("blocked");
     expect(setItemSpy).not.toHaveBeenCalled();
     expect(window.localStorage.length).toBe(0);
@@ -363,14 +374,16 @@ describe("agent timeline workflow foundation", () => {
       "character-tags": () => ({ value: { tags: ["pilot", "raincoat"] }, source: "ai" }),
       "character-action": () => ({ value: { action: "checking controls" }, source: "ai" }),
       "canvas-binding": () => ({ value: { primaryCharacterId: "character-1" }, source: "system" }),
+      "resource-recommendation": () => ({ value: { checkpoint: "local.safetensors", loras: [] }, source: "ai" }),
+      "parameter-recommendation": () => ({ value: { width: 1024 }, source: "system" }),
     };
 
     const result = await executeTimelineGraph(workflow, adapters, { now: clock });
 
     expect(result.generationConfirmed).toBe(false);
-    expect(result.nodes["resource-recommendation"].status).toBe("stale");
-    expect(result.nodes["parameter-recommendation"].status).toBe("stale");
-    expect(result.nodes["generation-gate"].status).toBe("stale");
+    expect(result.nodes["resource-recommendation"].status).toBe("done");
+    expect(result.nodes["parameter-recommendation"].status).toBe("done");
+    expect(result.nodes["generation-gate"].status).toBe("blocked");
     expect(result.nodes["comfyui-execution"].status).not.toBe("done");
     expect(result.nodes["result-display"].status).not.toBe("done");
   });

@@ -100,6 +100,99 @@ function getFetchPurpose(init: RequestInit | undefined) {
   return typeof init?.body === "string" ? (JSON.parse(init.body) as { purpose?: string }).purpose : undefined;
 }
 
+function getFetchUrl(input: RequestInfo | URL) {
+  return typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+}
+
+function makeCivitaiResource(resourceType: "lora" | "model", id: string, name: string) {
+  return {
+    id,
+    resourceType,
+    civitaiModelId: 10,
+    civitaiModelVersionId: resourceType === "model" ? 101 : 201,
+    name,
+    versionName: "v1",
+    hash: null,
+    baseModel: "Pony",
+    creator: "creator",
+    trainedWords: resourceType === "lora" ? ["neon_style"] : [],
+    tags: ["anime", "neon"],
+    description: "Neon resource",
+    downloadUrl: null,
+    filesJson: [
+      {
+        name: `${name}.safetensors`,
+        primary: true,
+        type: "Model",
+      },
+    ],
+    officialImagesJson: [],
+    category: resourceType === "lora" ? "style" : null,
+    categories: resourceType === "lora" ? ["style"] : [],
+    usageGuide: null,
+    recommendations: [
+      {
+        condition: "neon scene",
+        baseModel: "Pony",
+        checkpoint: null,
+        sampler: "euler",
+        loraWeightMin: null,
+        loraWeightMax: null,
+        loraWeight: resourceType === "lora" ? 0.72 : null,
+        hdRedrawRate: null,
+        notes: null,
+      },
+    ],
+    enrichmentStatus: "fallback",
+    enrichmentError: null,
+    nsfw: false,
+    aiNsfwLevel: "sfw",
+    aiNsfwConfidence: 0.8,
+    aiNsfwReason: "safe",
+    rawVersionJson: {},
+    createdAt: "2026-06-01T00:00:00.000Z",
+    updatedAt: "2026-06-01T00:00:00.000Z",
+    importedImageCount: 2,
+    averageWeight: resourceType === "lora" ? 0.72 : null,
+    minWeight: resourceType === "lora" ? 0.6 : null,
+    maxWeight: resourceType === "lora" ? 0.9 : null,
+    previewImage: null,
+  };
+}
+
+const checkpointResource = makeCivitaiResource("model", "checkpoint-a", "Cyber Checkpoint");
+const loraResource = makeCivitaiResource("lora", "lora-a", "Neon LoRA");
+
+function createTimelineRecommendationResponse() {
+  return createJsonResponse({
+    checkpoint: {
+      resource: {
+        ...checkpointResource,
+        resourceType: "model",
+        descriptionSnippet: "Neon resource",
+        modelFileName: "Cyber Checkpoint__v1__mv101.safetensors",
+        modelStorageKind: "checkpoint",
+      },
+      reason: "Local checkpoint fits the neon scene.",
+    },
+    loras: [
+      {
+        resource: {
+          ...loraResource,
+          resourceType: "lora",
+          descriptionSnippet: "Neon resource",
+          modelFileName: "Neon LoRA__v1__mv201.safetensors",
+        },
+        suggestedWeight: 0.72,
+        reason: "Adds neon styling.",
+      },
+    ],
+    recommendationReason: "Selected from local Civitai candidates.",
+    overallEffect: "Neon anime rendering.",
+    warnings: [],
+  });
+}
+
 function createT5ResponseForPurpose(purpose: string | undefined) {
   if (purpose === "stable-diffusion-prompt-generation") {
     return createJsonResponse({
@@ -155,7 +248,28 @@ function createT5ResponseForPurpose(purpose: string | undefined) {
 }
 
 function mockT5Fetch() {
-  return vi.fn<typeof fetch>(async (_input, init) => createT5ResponseForPurpose(getFetchPurpose(init)));
+  return vi.fn<typeof fetch>(async (input, init) => {
+    const url = getFetchUrl(input);
+
+    if (url.startsWith("/api/civitai-lora-library/resources")) {
+      return createJsonResponse({
+        items: url.includes("resourceType=model") ? [checkpointResource] : [loraResource],
+      });
+    }
+
+    if (url === "/api/civitai-lora-library/ai-recommendation") {
+      return createTimelineRecommendationResponse();
+    }
+
+    if (url === "/api/comfyui/sampler-options") {
+      return createJsonResponse({
+        samplers: ["euler", "dpmpp_2m"],
+        schedulers: ["normal", "karras"],
+      });
+    }
+
+    return createT5ResponseForPurpose(getFetchPurpose(init));
+  });
 }
 
 function mockT5FetchWithDeferredPose() {
@@ -165,6 +279,21 @@ function mockT5FetchWithDeferredPose() {
   }> = [];
 
   const fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
+    const url = getFetchUrl(_input);
+    if (url.startsWith("/api/civitai-lora-library/resources")) {
+      return createJsonResponse({
+        items: url.includes("resourceType=model") ? [checkpointResource] : [loraResource],
+      });
+    }
+
+    if (url === "/api/civitai-lora-library/ai-recommendation") {
+      return createTimelineRecommendationResponse();
+    }
+
+    if (url === "/api/comfyui/sampler-options") {
+      return createJsonResponse({ samplers: ["euler"], schedulers: ["normal"] });
+    }
+
     const purpose = getFetchPurpose(init);
 
     if (purpose !== "stick-figure-pose-generation") {
@@ -189,6 +318,21 @@ function mockT5FetchWithDeferredPrompt() {
   }> = [];
 
   const fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
+    const url = getFetchUrl(_input);
+    if (url.startsWith("/api/civitai-lora-library/resources")) {
+      return createJsonResponse({
+        items: url.includes("resourceType=model") ? [checkpointResource] : [loraResource],
+      });
+    }
+
+    if (url === "/api/civitai-lora-library/ai-recommendation") {
+      return createTimelineRecommendationResponse();
+    }
+
+    if (url === "/api/comfyui/sampler-options") {
+      return createJsonResponse({ samplers: ["euler"], schedulers: ["normal"] });
+    }
+
     const purpose = getFetchPurpose(init);
 
     if (purpose !== "stable-diffusion-prompt-generation") {
@@ -294,6 +438,12 @@ function setPromptLibraryTags(promptLibraryTags: PromptTag[]) {
   useEditorStore.getState().setProject(project);
 }
 
+function setProjectSupportsNsfw(supportsNsfw: boolean) {
+  const project = createDefaultProject();
+  project.settings.supportsNsfw = supportsNsfw;
+  useEditorStore.getState().setProject(project);
+}
+
 async function choosePromptTagReviewOption(label: string) {
   act(() => {
     getButtonByText(label).click();
@@ -376,7 +526,7 @@ describe("TimelineShell", () => {
     expect(getButtonByText("Start workflow").disabled).toBe(true);
   });
 
-  it("submits a usable scene request into the LangGraph T5 timeline without persistence or reserved service calls", async () => {
+  it("submits a usable scene request through timeline recommendations without persistence or execution calls", async () => {
     const storageSpy = vi.spyOn(Storage.prototype, "setItem");
     const originalFetch = globalThis.fetch;
     const fetchMock = mockT5Fetch();
@@ -489,6 +639,29 @@ describe("TimelineShell", () => {
       });
       expect(canvasSection.querySelector('[data-testid="timeline-prompt-library-drawer"]')).not.toBeNull();
 
+      const resourceButton = container.querySelector('button[data-node-id="resource-recommendation"]') as HTMLButtonElement | null;
+      act(() => {
+        resourceButton?.click();
+      });
+
+      const resourceSection = getSectionByHeading("Model resources");
+      expect(resourceSection.textContent).not.toContain("Reserved");
+      expect(resourceSection.textContent).toContain("Cyber Checkpoint");
+      expect(resourceSection.textContent).toContain("Neon LoRA");
+      expect(resourceSection.querySelector('[data-testid="timeline-resource-workspace"]')).not.toBeNull();
+      expect(resourceSection.textContent).toContain("Save resources");
+
+      const parameterButton = container.querySelector('button[data-node-id="parameter-recommendation"]') as HTMLButtonElement | null;
+      act(() => {
+        parameterButton?.click();
+      });
+
+      const parameterSection = getSectionByHeading("Render prompt");
+      expect(parameterSection.textContent).not.toContain("Reserved");
+      expect(parameterSection.querySelector('[data-testid="timeline-parameter-workspace"]')).not.toBeNull();
+      expect(parameterSection.textContent).toContain("Request preview");
+      expect(parameterSection.textContent).toContain("Save parameters");
+
       const generationGateButton = container.querySelector('button[data-node-id="generation-gate"]') as HTMLButtonElement | null;
       act(() => {
         generationGateButton?.click();
@@ -523,13 +696,51 @@ describe("TimelineShell", () => {
 
       expect(storageSpy).not.toHaveBeenCalled();
       expect(savePromptLibraryMock).not.toHaveBeenCalled();
-      expect(fetchMock).toHaveBeenCalledTimes(3);
-      expect(
-        fetchMock.mock.calls.map(([input]) => String(input)),
-      ).toEqual(["/api/llm/chat", "/api/llm/chat", "/api/llm/chat"]);
+      const fetchUrls = fetchMock.mock.calls.map(([input]) => String(input));
+      expect(fetchUrls).toEqual([
+        "/api/llm/chat",
+        "/api/llm/chat",
+        "/api/llm/chat",
+        "/api/civitai-lora-library/resources?resourceType=model&category=all&nsfw=sfw",
+        "/api/civitai-lora-library/resources?resourceType=lora&category=all&nsfw=sfw",
+        "/api/civitai-lora-library/ai-recommendation",
+        "/api/comfyui/sampler-options",
+      ]);
+      expect(fetchUrls).not.toContain("/api/comfyui/generate-image");
+      expect(fetchUrls).not.toContain("/api/comfyui/generated-images");
       expect(window.localStorage.length).toBe(0);
       expect(window.sessionStorage.length).toBe(0);
       expect(container.textContent).not.toMatch(/C:\\|SCENEFORGE_|API_KEY|generated-images|data\//);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("loads local resource candidates with NSFW filtering enabled from project settings", async () => {
+    const originalFetch = globalThis.fetch;
+    const fetchMock = mockT5Fetch();
+    setProjectSupportsNsfw(true);
+    globalThis.fetch = fetchMock;
+
+    try {
+      act(() => {
+        root.render(<TimelineShell />);
+      });
+
+      await submitSceneAndChoosePromptTagReview(
+        "A neon market alley with a courier at sunrise",
+        "本次保留，不入词库",
+      );
+
+      expect(fetchMock.mock.calls.map(([input]) => String(input))).toEqual([
+        "/api/llm/chat",
+        "/api/llm/chat",
+        "/api/llm/chat",
+        "/api/civitai-lora-library/resources?resourceType=model&category=all&nsfw=all",
+        "/api/civitai-lora-library/resources?resourceType=lora&category=all&nsfw=all",
+        "/api/civitai-lora-library/ai-recommendation",
+        "/api/comfyui/sampler-options",
+      ]);
     } finally {
       globalThis.fetch = originalFetch;
     }

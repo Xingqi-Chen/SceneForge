@@ -1,4 +1,9 @@
 import type {
+  CivitaiRecommendationCandidate,
+  SelectedCivitaiResourcePreview,
+} from "@/features/civitai-lora-library";
+import type { ComfyUiTextToImageRequest } from "@/features/comfyui";
+import type {
   BodyPartId,
   PromptTag,
   SceneObject3DTransform,
@@ -46,8 +51,6 @@ export const executableTimelineNodeIds = [
 export type TimelineExecutableNodeId = (typeof executableTimelineNodeIds)[number];
 
 export const reservedTimelineNodeIds = [
-  "resource-recommendation",
-  "parameter-recommendation",
   "comfyui-execution",
   "result-display",
 ] as const satisfies readonly TimelineNodeId[];
@@ -162,6 +165,53 @@ export type CanvasBindingTimelineResult = {
   transform: SceneObject3DTransform;
   pose: StickFigurePoseV1;
   spatialSummary: string;
+};
+
+export type ResourceRecommendationTimelineResult = {
+  checkpoint: {
+    resource: SelectedCivitaiResourcePreview;
+    reason: string;
+  };
+  loras: Array<{
+    resource: SelectedCivitaiResourcePreview;
+    suggestedWeight: number | null;
+    reason: string;
+  }>;
+  candidates: {
+    checkpoints: CivitaiRecommendationCandidate[];
+    loras: CivitaiRecommendationCandidate[];
+  };
+  recommendationReason: string;
+  overallEffect: string;
+  warnings: string[];
+};
+
+export type TimelineSeedPolicy =
+  | {
+      mode: "random";
+      seed?: never;
+    }
+  | {
+      mode: "fixed";
+      seed: number;
+    };
+
+export type ParameterRecommendationTimelineResult = {
+  availableSamplers: string[];
+  availableSchedulers: string[];
+  width: number;
+  height: number;
+  steps: number;
+  cfg: number;
+  samplerName: string;
+  scheduler: string;
+  denoise: number;
+  seedPolicy: TimelineSeedPolicy;
+  negativeAdditions: string[];
+  negativePrompt: string;
+  requestPreview: ComfyUiTextToImageRequest;
+  reason: string;
+  warnings: string[];
 };
 
 export type GenerationGateTimelineResult = {
