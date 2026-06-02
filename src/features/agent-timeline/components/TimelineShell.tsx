@@ -252,6 +252,18 @@ function getApiErrorMessage(payload: unknown, fallback: string) {
   return details.length > 0 ? [message, ...details].join(" ") : message;
 }
 
+function getTimelineNodeRawJsonText(node: TimelineWorkflowState["nodes"][TimelineNodeId]) {
+  if (node.result !== undefined) {
+    return JSON.stringify(node.result, null, 2);
+  }
+
+  if (node.error) {
+    return JSON.stringify({ error: node.error }, null, 2);
+  }
+
+  return "";
+}
+
 function sanitizeDescriptionSnippet(value: string | null) {
   return value
     ?.replace(/<[^>]*>/g, " ")
@@ -616,6 +628,7 @@ export function TimelineShell() {
   const selectedDisplay = stepDisplay[selectedNodeId];
   const SelectedIcon = selectedDisplay.icon;
   const selectedOutput = getTimelineNodeOutputText(selectedNode);
+  const selectedRawJsonOutput = getTimelineNodeRawJsonText(selectedNode);
   const selectedHasVisualOutput = hasVisualOutputMode(selectedNodeId);
   const selectedIsVisualOnlyEditable = selectedNodeId === "canvas-binding";
   const selectedOutputDisplayMode: OutputDisplayMode = selectedHasVisualOutput
@@ -1504,6 +1517,10 @@ export function TimelineShell() {
                     <TimelineEditorWorkspace
                       workflow={activeWorkflow}
                     />
+                  ) : selectedOutputDisplayMode === "json" && selectedRawJsonOutput ? (
+                    <pre className="whitespace-pre-wrap rounded-md border border-slate-200 bg-slate-50 p-3 font-mono text-xs leading-relaxed text-slate-700">
+                      {selectedRawJsonOutput}
+                    </pre>
                   ) : selectedOutput ? (
                     <pre className="whitespace-pre-wrap rounded-md border border-slate-200 bg-slate-50 p-3 font-mono text-xs leading-relaxed text-slate-700">
                       {selectedOutput}

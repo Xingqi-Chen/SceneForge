@@ -725,6 +725,18 @@ describe("TimelineShell", () => {
       expect(resourceSection.textContent).toContain("Neon LoRA");
       expect(resourceSection.querySelector('[data-testid="timeline-resource-workspace"]')).not.toBeNull();
       expect(resourceSection.textContent).toContain("Save resources");
+      const resourceRawJsonButton = Array.from(resourceSection.querySelectorAll("button")).find(
+        (button) => button.textContent?.replace(/\s+/g, " ").trim() === "Raw JSON",
+      ) as HTMLButtonElement | undefined;
+      expect(resourceRawJsonButton).not.toBeUndefined();
+
+      act(() => {
+        resourceRawJsonButton?.click();
+      });
+
+      expect(resourceSection.textContent).toContain('"loras"');
+      expect(resourceSection.textContent).toContain('"suggestedWeight": 0.72');
+      expect(resourceSection.textContent).toContain('"modelFileName": "Neon LoRA__v1__mv201__201.safetensors"');
 
       const parameterButton = container.querySelector('button[data-node-id="parameter-recommendation"]') as HTMLButtonElement | null;
       act(() => {
@@ -734,8 +746,21 @@ describe("TimelineShell", () => {
       const parameterSection = getSectionByHeading("Render prompt");
       expect(parameterSection.textContent).not.toContain("Reserved");
       expect(parameterSection.querySelector('[data-testid="timeline-parameter-workspace"]')).not.toBeNull();
-      expect(parameterSection.textContent).toContain("Request preview");
+      expect(parameterSection.textContent).not.toContain("Request preview");
       expect(parameterSection.textContent).toContain("Save parameters");
+      const parameterRawJsonButton = Array.from(parameterSection.querySelectorAll("button")).find(
+        (button) => button.textContent?.replace(/\s+/g, " ").trim() === "Raw JSON",
+      ) as HTMLButtonElement | undefined;
+      expect(parameterRawJsonButton).not.toBeUndefined();
+
+      act(() => {
+        parameterRawJsonButton?.click();
+      });
+
+      expect(parameterSection.textContent).toContain('"requestPreview"');
+      expect(parameterSection.textContent).toContain('"loras"');
+      expect(parameterSection.textContent).toContain('"strengthModel": 0.72');
+      expect(parameterSection.textContent).toContain('"strengthClip": 0.72');
 
       const generationGateButton = container.querySelector('button[data-node-id="generation-gate"]') as HTMLButtonElement | null;
       act(() => {

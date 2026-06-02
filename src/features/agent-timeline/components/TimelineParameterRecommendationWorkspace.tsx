@@ -320,13 +320,6 @@ export function TimelineParameterRecommendationWorkspace({
         {result.reason}
       </div>
 
-      <details className="rounded-md border border-slate-200 bg-white p-3 text-xs text-slate-600">
-        <summary className="cursor-pointer font-semibold text-slate-800">Request preview</summary>
-        <pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap rounded-md bg-slate-50 p-2 font-mono text-[11px] leading-relaxed">
-          {JSON.stringify(result.requestPreview, null, 2)}
-        </pre>
-      </details>
-
       <div className="flex justify-end">
         <Button className="h-8 px-3 text-xs shadow-none" disabled={!editable} onClick={handleSave} type="button">
           Save parameters
