@@ -8,18 +8,20 @@ import type {
 import {
   buildTimelineFinalPositivePrompt,
   createTimelineParameterRecommendation,
+  filterTimelineResourceCandidatesForPromptProfile,
   validateTimelineResourceRecommendation,
 } from "./t7-node-adapters";
 import type {
   ResourceRecommendationTimelineResult,
   ScenePromptTimelineResult,
 } from "./types";
+import type { PromptProfileId } from "@/shared/prompt-profile";
 
 function makeResource(
   resourceType: "model" | "lora",
   id: string,
   name: string,
-  baseModel = "Pony",
+  baseModel: string | null = "Pony",
   overrides: Partial<SelectedCivitaiResourcePreview> = {},
 ): SelectedCivitaiResourcePreview {
   return {
@@ -67,8 +69,9 @@ function makeCandidate(resource: SelectedCivitaiResourcePreview): CivitaiRecomme
   };
 }
 
-function makeScenePrompt(): ScenePromptTimelineResult {
+function makeScenePrompt(promptProfile: PromptProfileId = "generic"): ScenePromptTimelineResult {
   return {
+    promptProfile,
     primaryCharacter: {
       name: "Courier",
       identity: "A courier in a neon alley",
@@ -140,6 +143,43 @@ describe("T7 timeline adapters", () => {
     expect(result.warnings).toEqual([
       "Ignored incompatible LoRA Incompatible LoRA.",
     ]);
+  });
+
+  it("filters local resource candidates by selected prompt profile", () => {
+    const illustriousCheckpoint = makeResource("model", "checkpoint-illustrious", "Illustrious", "Illustrious");
+    const animaCheckpoint = makeResource("model", "checkpoint-anima", "Anima", "Anima");
+    const genericCheckpoint = makeResource("model", "checkpoint-sdxl", "SDXL", "SDXL 1.0");
+    const unknownCheckpoint = makeResource("model", "checkpoint-unknown", "Unknown", null);
+    const illustriousLora = makeResource("lora", "lora-illustrious", "Illustrious LoRA", "Illustrious");
+    const animaLora = makeResource("lora", "lora-anima", "Anima LoRA", "Anima");
+    const genericLora = makeResource("lora", "lora-sdxl", "SDXL LoRA", "SDXL 1.0");
+
+    const candidates = {
+      checkpoints: [
+        makeCandidate(illustriousCheckpoint),
+        makeCandidate(animaCheckpoint),
+        makeCandidate(genericCheckpoint),
+        makeCandidate(unknownCheckpoint),
+      ],
+      loras: [
+        makeCandidate(illustriousLora),
+        makeCandidate(animaLora),
+        makeCandidate(genericLora),
+      ],
+    };
+
+    expect(
+      filterTimelineResourceCandidatesForPromptProfile(candidates, undefined)
+        .checkpoints.map((candidate) => candidate.resource.id),
+    ).toEqual(["checkpoint-illustrious"]);
+    expect(
+      filterTimelineResourceCandidatesForPromptProfile(candidates, "anima")
+        .loras.map((candidate) => candidate.resource.id),
+    ).toEqual(["lora-anima"]);
+    expect(
+      filterTimelineResourceCandidatesForPromptProfile(candidates, "generic")
+        .checkpoints.map((candidate) => candidate.resource.id),
+    ).toEqual(["checkpoint-sdxl", "checkpoint-unknown"]);
   });
 
   it("rejects an invented LoRA that is not in the local candidate set", () => {
@@ -471,7 +511,7 @@ describe("T7 timeline adapters", () => {
 
     const result = createTimelineParameterRecommendation({
       resourceResult,
-      scenePrompt: makeScenePrompt(),
+      scenePrompt: makeScenePrompt("generic"),
       canvasBinding: null,
     });
 
@@ -485,52 +525,110 @@ describe("T7 timeline adapters", () => {
     ]);
   });
 
-  it("formats Anima and Illustrious/generic prompts differently by checkpoint base model", () => {
-    const scenePrompt = makeScenePrompt();
-    const animaCheckpoint = makeResource("model", "checkpoint-anima", "Anima Checkpoint", "Anima");
-    const illustriousCheckpoint = makeResource(
-      "model",
-      "checkpoint-illustrious",
-      "Illustrious Checkpoint",
-      "Illustrious",
-    );
+  it("formats Anima, Illustrious, and Generic prompts by selected profile", () => {
     const genericCheckpoint = makeResource("model", "checkpoint-generic", "Generic Checkpoint", "SDXL");
+    const ponyCheckpoint = makeResource("model", "checkpoint-pony", "Pony Checkpoint", "Pony");
 
     const makeResourceResult = (
       checkpoint: SelectedCivitaiResourcePreview,
-    ): ResourceRecommendationTimelineResult => ({
-      checkpoint: {
-        resource: checkpoint,
-        reason: "Local checkpoint.",
-      },
-      loras: [],
-      candidates: {
-        checkpoints: [makeCandidate(checkpoint)],
+    ): ResourceRecommendationTimelineResult => {
+      return {
+        checkpoint: {
+          resource: checkpoint,
+          reason: "Local checkpoint.",
+        },
         loras: [],
-      },
-      recommendationReason: "Local recommendation.",
-      overallEffect: "Neon portrait.",
-      warnings: [],
+        candidates: {
+          checkpoints: [makeCandidate(checkpoint)],
+          loras: [],
+        },
+        recommendationReason: "Local recommendation.",
+        overallEffect: "Neon portrait.",
+        warnings: [],
+      };
+    };
+
+    const resourceResult = makeResourceResult(genericCheckpoint);
+    const ponyResourceResult = makeResourceResult(ponyCheckpoint);
+
+    const ponyGeneric = buildTimelineFinalPositivePrompt({
+      resourceResult: ponyResourceResult,
+      scenePrompt: makeScenePrompt("generic"),
     });
 
+    expect(ponyGeneric).toBe(
+      "score_9, score_8_up, score_7_up, courier, neon alley, cinematic anime",
+    );
+
+    const genericScenePrompt = makeScenePrompt("generic");
+    const generic = buildTimelineFinalPositivePrompt({
+      resourceResult,
+      scenePrompt: genericScenePrompt,
+    });
+
+    expect(generic).toBe(genericScenePrompt.positivePrompt);
+    expect(generic).not.toContain("score_9");
+    expect(generic).not.toContain("masterpiece");
+
     const anima = buildTimelineFinalPositivePrompt({
-      resourceResult: makeResourceResult(animaCheckpoint),
-      scenePrompt,
+      resourceResult,
+      scenePrompt: makeScenePrompt("anima"),
     });
     const illustrious = buildTimelineFinalPositivePrompt({
-      resourceResult: makeResourceResult(illustriousCheckpoint),
-      scenePrompt,
-    });
-    const generic = buildTimelineFinalPositivePrompt({
-      resourceResult: makeResourceResult(genericCheckpoint),
-      scenePrompt,
+      resourceResult,
+      scenePrompt: {
+        ...makeScenePrompt("illustrious"),
+        positivePrompt: "A courier runs through a neon alley in cinematic anime lighting.",
+        illustriousSections: {
+          subjectIdentity: ["solo courier"],
+          backgroundEnvironmentObjects: ["neon alley"],
+          lightingFocus: ["cinematic lighting"],
+        },
+      },
     });
 
     expect(anima).toContain("score_7");
     expect(illustrious).toContain("amazing quality");
-    expect(generic).toBe(scenePrompt.positivePrompt);
+    expect(illustrious).toContain("solo courier");
+    expect(illustrious).not.toContain("A courier runs");
     expect(anima).not.toBe(generic);
     expect(illustrious).not.toBe(generic);
+  });
+
+  it("keeps Pony score tags under the Generic profile when the selected checkpoint is Pony", () => {
+    const checkpoint = makeResource("model", "checkpoint-pony", "Pony Checkpoint", "Pony");
+    const lora = makeResource("lora", "lora-pony", "Pony LoRA", "Pony", {
+      trainedWords: ["pony_trigger"],
+    });
+    const resourceResult: ResourceRecommendationTimelineResult = {
+      checkpoint: {
+        resource: checkpoint,
+        reason: "Local checkpoint.",
+      },
+      loras: [
+        {
+          resource: lora,
+          suggestedWeight: 0.72,
+          reason: "Local LoRA.",
+        },
+      ],
+      candidates: {
+        checkpoints: [makeCandidate(checkpoint)],
+        loras: [makeCandidate(lora)],
+      },
+      recommendationReason: "Local recommendation.",
+      overallEffect: "Neon portrait.",
+      warnings: [],
+    };
+
+    const result = buildTimelineFinalPositivePrompt({
+      resourceResult,
+      scenePrompt: makeScenePrompt("generic"),
+    });
+
+    expect(result).toBe(
+      "score_9, score_8_up, score_7_up, courier, neon alley, cinematic anime, pony_trigger",
+    );
   });
 
   it("does not format an assembled Anima prompt a second time in the request preview", () => {
@@ -561,7 +659,7 @@ describe("T7 timeline adapters", () => {
 
     const result = createTimelineParameterRecommendation({
       resourceResult,
-      scenePrompt: makeScenePrompt(),
+      scenePrompt: makeScenePrompt("anima"),
       canvasBinding: null,
     });
 

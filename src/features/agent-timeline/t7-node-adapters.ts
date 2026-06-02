@@ -19,6 +19,11 @@ import {
   renderIllustriousPrompt,
   splitPromptParts,
 } from "@/features/editor/ai-prompt/illustrious-prompt";
+import {
+  formatPromptProfileLabel,
+  normalizePromptProfileId,
+  type PromptProfileId,
+} from "@/shared/prompt-profile";
 
 import { createTimelineNodeError } from "./state";
 import {
@@ -43,6 +48,7 @@ export type TimelineSamplerOptions = {
 export type TimelineResourceRecommendationRequest = {
   desiredEffect: string;
   maxLoras: number;
+  promptProfile: PromptProfileId;
 };
 
 export type TimelineResourceRecommendationProvider = (
@@ -104,12 +110,28 @@ function getManualTextResult(result: unknown) {
   return "";
 }
 
+function getTimelinePromptProfile(workflow: TimelineNodeExecutionContext["workflow"]) {
+  const sceneInput = workflow.nodes["scene-input"].result;
+  if (isRecord(sceneInput)) {
+    return normalizePromptProfileId(sceneInput.promptProfile);
+  }
+
+  const scenePrompt = workflow.nodes["scene-prompt"].result;
+  if (isRecord(scenePrompt)) {
+    return normalizePromptProfileId(scenePrompt.promptProfile);
+  }
+
+  return normalizePromptProfileId(undefined);
+}
+
 function getScenePromptResult(workflow: TimelineNodeExecutionContext["workflow"]): ScenePromptTimelineResult {
   const result = workflow.nodes["scene-prompt"].result;
   const manualText = getManualTextResult(result);
+  const promptProfile = getTimelinePromptProfile(workflow);
 
   if (manualText) {
     return {
+      promptProfile,
       primaryCharacter: {
         name: "Primary character",
         identity: manualText,
@@ -133,7 +155,10 @@ function getScenePromptResult(workflow: TimelineNodeExecutionContext["workflow"]
     typeof result.positivePrompt === "string" &&
     Array.isArray(result.negativeSuggestions)
   ) {
-    return result as ScenePromptTimelineResult;
+    return {
+      ...result,
+      promptProfile: normalizePromptProfileId(result.promptProfile ?? promptProfile),
+    } as ScenePromptTimelineResult;
   }
 
   invalidTimelineInput("Scene prompt dependency is not usable for recommendations.", { result });
@@ -190,8 +215,10 @@ function buildDesiredEffect(context: TimelineNodeExecutionContext) {
   const characterTags = getCharacterTagsResult(context.workflow);
   const action = getCharacterActionResult(context.workflow);
   const tagPrompts = characterTags.items.map((item) => item.prompt).filter(Boolean).slice(0, 12);
+  const promptProfile = getTimelinePromptProfile(context.workflow);
 
   return [
+    `Prompt profile: ${formatPromptProfileLabel(promptProfile)} (${promptProfile})`,
     scenePrompt.sceneIntent,
     scenePrompt.positivePrompt,
     scenePrompt.styleTone,
@@ -344,52 +371,91 @@ function normalizeBaseModel(value: string | null | undefined) {
   return value?.trim().toLocaleLowerCase() ?? "";
 }
 
-function isAnimaBaseModel(value: string | null | undefined) {
-  return normalizeBaseModel(value) === "anima";
+function getLoraTrainedWordPrompt(resources: SelectedCivitaiResourcesPreview) {
+  return resources.loras.flatMap((lora) => lora.trainedWords.flatMap(splitPromptParts)).join(", ");
 }
 
-function isIllustriousBaseModel(value: string | null | undefined) {
-  return normalizeBaseModel(value).includes("illustrious");
+function isProfileBaseModel(
+  baseModel: string | null | undefined,
+  promptProfile: PromptProfileId,
+) {
+  const normalized = normalizeBaseModel(baseModel);
+
+  if (promptProfile === "illustrious") {
+    return normalized.includes("illustrious");
+  }
+
+  if (promptProfile === "anima") {
+    return normalized === "anima";
+  }
+
+  return !normalized || (!normalized.includes("illustrious") && normalized !== "anima");
 }
 
 function isPonyBaseModel(value: string | null | undefined) {
   return normalizeBaseModel(value).includes("pony");
 }
 
-function getLoraTrainedWordPrompt(resources: SelectedCivitaiResourcesPreview) {
-  return resources.loras.flatMap((lora) => lora.trainedWords.flatMap(splitPromptParts)).join(", ");
+export function filterTimelineResourceCandidatesForPromptProfile(
+  candidates: ResourceRecommendationTimelineResult["candidates"],
+  promptProfile: PromptProfileId | undefined,
+): ResourceRecommendationTimelineResult["candidates"] {
+  const resolvedProfile = normalizePromptProfileId(promptProfile);
+
+  return {
+    checkpoints: candidates.checkpoints.filter((candidate) =>
+      isProfileBaseModel(candidate.resource.baseModel, resolvedProfile),
+    ),
+    loras: candidates.loras.filter((candidate) =>
+      isProfileBaseModel(candidate.resource.baseModel, resolvedProfile),
+    ),
+  };
+}
+
+function hasPromptSectionContent(sections: Record<string, string | string[] | undefined> | undefined) {
+  return Object.values(sections ?? {}).some((value) =>
+    Array.isArray(value)
+      ? value.flatMap(splitPromptParts).length > 0
+      : splitPromptParts(value ?? "").length > 0,
+  );
 }
 
 export function buildTimelineFinalPositivePrompt({
+  promptProfile,
   resourceResult,
   scenePrompt,
   supportsNsfw = false,
 }: {
+  promptProfile?: PromptProfileId;
   resourceResult: ResourceRecommendationTimelineResult;
   scenePrompt: ScenePromptTimelineResult;
   supportsNsfw?: boolean;
 }) {
   const resources = getSelectedResources(resourceResult);
-  const baseModel = resources.checkpoint?.baseModel;
+  const resolvedProfile = normalizePromptProfileId(promptProfile ?? scenePrompt.promptProfile);
   const sourcePrompt = scenePrompt.positivePrompt;
 
-  if (isAnimaBaseModel(baseModel)) {
+  if (resolvedProfile === "anima") {
     return renderAnimaPrompt({
       resources,
-      sourcePrompt,
+      ...(hasPromptSectionContent(scenePrompt.animaSections)
+        ? { sections: scenePrompt.animaSections }
+        : { sourcePrompt }),
       supportsNsfw,
     });
   }
 
-  if (isIllustriousBaseModel(baseModel)) {
+  if (resolvedProfile === "illustrious") {
     return renderIllustriousPrompt({
       resources,
-      sections: classifyFlatPromptToIllustriousSections(sourcePrompt),
+      sections: hasPromptSectionContent(scenePrompt.illustriousSections)
+        ? scenePrompt.illustriousSections
+        : classifyFlatPromptToIllustriousSections(sourcePrompt),
     });
   }
 
   const loraTrainedWords = getLoraTrainedWordPrompt(resources);
-  if (isPonyBaseModel(baseModel)) {
+  if (isPonyBaseModel(resources.checkpoint?.baseModel)) {
     return mergePromptParts([
       "score_9, score_8_up, score_7_up",
       sourcePrompt,
@@ -513,12 +579,14 @@ function createAiAdvice(
 }
 
 export function createTimelineParameterRecommendation({
+  promptProfile,
   resourceResult,
   scenePrompt,
   canvasBinding,
   samplerOptions: rawSamplerOptions,
   supportsNsfw = false,
 }: {
+  promptProfile?: PromptProfileId;
   resourceResult: ResourceRecommendationTimelineResult;
   scenePrompt: ScenePromptTimelineResult;
   canvasBinding: CanvasBindingTimelineResult | null;
@@ -528,6 +596,7 @@ export function createTimelineParameterRecommendation({
   const samplerOptions = normalizeOptions(rawSamplerOptions);
   const selectedResources = getSelectedResources(resourceResult);
   const finalPositivePrompt = buildTimelineFinalPositivePrompt({
+    promptProfile,
     resourceResult,
     scenePrompt,
     supportsNsfw,
@@ -583,15 +652,22 @@ export function createTimelineT7NodeAdapters({
   return {
     "resource-recommendation": async (context) => {
       const desiredEffect = buildDesiredEffect(context);
-      const candidates = await loadResourceCandidates(desiredEffect, context);
+      const promptProfile = getTimelinePromptProfile(context.workflow);
+      const candidates = filterTimelineResourceCandidatesForPromptProfile(
+        await loadResourceCandidates(desiredEffect, context),
+        promptProfile,
+      );
       if (candidates.checkpoints.length === 0) {
-        invalidResourceSelection("No local checkpoint candidates are available. Import or configure Civitai checkpoints first.");
+        invalidResourceSelection(
+          `No local ${formatPromptProfileLabel(promptProfile)} checkpoint candidates are available. Import or configure matching Civitai checkpoints first.`,
+        );
       }
 
       const recommendation = await recommendResources(
         {
           desiredEffect,
           maxLoras: maxTimelineLoras,
+          promptProfile,
         },
         context,
       );
@@ -603,12 +679,14 @@ export function createTimelineT7NodeAdapters({
     },
     "parameter-recommendation": async (context) => {
       const scenePrompt = getScenePromptResult(context.workflow);
+      const promptProfile = getTimelinePromptProfile(context.workflow);
       const resourceResult = getResourceRecommendationResult(context.workflow.nodes["resource-recommendation"]);
       const samplerOptions = loadSamplerOptions ? await loadSamplerOptions(context) : defaultSamplerOptions;
 
       return {
         value: createTimelineParameterRecommendation({
           canvasBinding: getCanvasBindingResult(context.workflow),
+          promptProfile,
           resourceResult,
           samplerOptions,
           scenePrompt,

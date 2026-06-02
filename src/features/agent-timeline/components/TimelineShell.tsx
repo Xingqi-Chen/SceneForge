@@ -87,6 +87,13 @@ import {
 import { savePromptLibrary } from "@/features/persistence";
 import type { CharacterPromptTagTarget } from "@/features/prompt-engine/prompt-library/character-image-prompt-tags";
 import { cn } from "@/shared/utils/cn";
+import {
+  defaultPromptProfileId,
+  formatPromptProfileLabel,
+  normalizePromptProfileId,
+  promptProfileIds,
+  type PromptProfileId,
+} from "@/shared/prompt-profile";
 
 import { TimelineNodeStatus as TimelineStatusChip } from "./TimelineNodeStatus";
 import {
@@ -336,7 +343,13 @@ async function loadTimelineResourceCandidatesViaApi() {
   };
 }
 
-async function recommendTimelineResourcesViaApi(desiredEffect: string) {
+async function recommendTimelineResourcesViaApi({
+  desiredEffect,
+  promptProfile,
+}: {
+  desiredEffect: string;
+  promptProfile: PromptProfileId;
+}) {
   const response = await fetch("/api/civitai-lora-library/ai-recommendation", {
     method: "POST",
     headers: {
@@ -345,6 +358,7 @@ async function recommendTimelineResourcesViaApi(desiredEffect: string) {
     body: JSON.stringify({
       desiredEffect,
       maxLoras: 3,
+      promptProfile,
     }),
   });
   const payload: unknown = await response.json();
@@ -382,10 +396,11 @@ function parseManualJson(value: string) {
   }
 }
 
-function createManualResult(nodeId: TimelineNodeId, value: string) {
+function createManualResult(nodeId: TimelineNodeId, value: string, promptProfile: PromptProfileId) {
   if (nodeId === "scene-input") {
     return {
       rawIntent: value,
+      promptProfile,
     } satisfies SceneInputTimelineResult;
   }
 
@@ -608,6 +623,8 @@ function TimelineResultDisplayWorkspace({
 
 export function TimelineShell() {
   const [sceneRequest, setSceneRequest] = useState("");
+  const [selectedPromptProfile, setSelectedPromptProfile] =
+    useState<PromptProfileId>(defaultPromptProfileId);
   const [workflow, setWorkflow] = useState<TimelineWorkflowState | null>(null);
   const [selectedNodeId, setSelectedNodeId] = useState<TimelineNodeId>("scene-input");
   const [editingNodeId, setEditingNodeId] = useState<TimelineNodeId | null>(null);
@@ -856,7 +873,10 @@ export function TimelineShell() {
                 throw new Error("Timeline run was superseded.");
               }
 
-              return recommendTimelineResourcesViaApi(request.desiredEffect);
+              return recommendTimelineResourcesViaApi({
+                desiredEffect: request.desiredEffect,
+                promptProfile: request.promptProfile,
+              });
             },
             supportsNsfw: () => useEditorStore.getState().project.settings.supportsNsfw,
           }),
@@ -964,7 +984,10 @@ export function TimelineShell() {
       return;
     }
 
-    const nextWorkflow = createTimelineWorkflowState({ sceneRequest: trimmedSceneRequest });
+    const nextWorkflow = createTimelineWorkflowState({
+      promptProfile: selectedPromptProfile,
+      sceneRequest: trimmedSceneRequest,
+    });
 
     setWorkflow(nextWorkflow);
     setSceneRequest(trimmedSceneRequest);
@@ -974,6 +997,32 @@ export function TimelineShell() {
     setOutputDisplayModes({});
     setNotices({});
     void runTimelineGraph(nextWorkflow);
+  }
+
+  function handlePromptProfileChange(value: string) {
+    const promptProfile = normalizePromptProfileId(value);
+
+    setSelectedPromptProfile(promptProfile);
+
+    if (!workflow || isRunning) {
+      return;
+    }
+
+    const rawIntent = sceneRequest.trim() ||
+      (isRecord(workflow.nodes["scene-input"].result) &&
+      typeof workflow.nodes["scene-input"].result.rawIntent === "string"
+        ? workflow.nodes["scene-input"].result.rawIntent
+        : "");
+
+    if (!rawIntent) {
+      return;
+    }
+
+    invalidateTimelineRun();
+    setWorkflow(setTimelineNodeManualResult(workflow, "scene-input", {
+      rawIntent,
+      promptProfile,
+    } satisfies SceneInputTimelineResult));
   }
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -1029,7 +1078,7 @@ export function TimelineShell() {
 
     invalidateTimelineRun();
     setIsRunning(false);
-    setWorkflow(setTimelineNodeManualResult(workflow, nodeId, createManualResult(nodeId, draft)));
+    setWorkflow(setTimelineNodeManualResult(workflow, nodeId, createManualResult(nodeId, draft, selectedPromptProfile)));
     setEditingNodeId(null);
     setDrafts((current) => ({
       ...current,
@@ -1128,6 +1177,7 @@ export function TimelineShell() {
     invalidateTimelineRun();
     setWorkflow(null);
     setSceneRequest("");
+    setSelectedPromptProfile(defaultPromptProfileId);
     setSelectedNodeId("scene-input");
     setEditingNodeId(null);
     setDrafts({});
@@ -1300,6 +1350,27 @@ export function TimelineShell() {
                       <label className="text-[11px] font-semibold uppercase tracking-wide text-slate-500" htmlFor="scene-request">
                         Command composer
                       </label>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2 border-b border-slate-200 bg-white px-3 py-2">
+                      <label
+                        className="text-[11px] font-semibold uppercase tracking-wide text-slate-500"
+                        htmlFor="prompt-profile"
+                      >
+                        Prompt profile
+                      </label>
+                      <select
+                        className="h-8 rounded-md border border-slate-200 bg-white px-2 text-xs text-slate-800 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+                        disabled={isRunning}
+                        id="prompt-profile"
+                        onChange={(event) => handlePromptProfileChange(event.target.value)}
+                        value={selectedPromptProfile}
+                      >
+                        {promptProfileIds.map((profile) => (
+                          <option key={profile} value={profile}>
+                            {formatPromptProfileLabel(profile)}
+                          </option>
+                        ))}
+                      </select>
                     </div>
                     <textarea
                       className="min-h-28 w-full resize-none border-0 bg-white px-3 py-3 text-sm leading-relaxed text-slate-900 outline-none placeholder:text-slate-400"
@@ -1490,6 +1561,7 @@ export function TimelineShell() {
                       key={selectedNode.updatedAt}
                       node={selectedNode}
                       onSave={handleSaveScenePromptVisual}
+                      promptProfile={selectedPromptProfile}
                     />
                   ) : selectedOutputDisplayMode === "visual" && selectedNodeId === "resource-recommendation" ? (
                     <TimelineResourceRecommendationWorkspace

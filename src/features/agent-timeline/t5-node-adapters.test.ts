@@ -46,6 +46,7 @@ describe("T5 timeline node adapters", () => {
 {"positivePrompt":" neon alley courier ","negativeSuggestions":[" blur "],"style":["cinematic"],"camera":[{"label":"Lens","prompt":"wide lens"}],"lighting":["sunrise rim light"]}
 \`\`\``),
     ).toEqual({
+      promptProfile: "illustrious",
       primaryCharacter: {
         name: "Primary character",
         identity: "neon alley courier",
@@ -100,6 +101,102 @@ describe("T5 timeline node adapters", () => {
           prompt: "determined expression",
         },
       ],
+    });
+  });
+
+  it("defaults scene input to Illustrious and builds profile-specific scene prompt instructions", async () => {
+    const requests: LlmChatRequest[] = [];
+    const workflow = createTimelineWorkflowState({
+      workflowId: "profile-default",
+      sceneRequest: "A pilot in a glass greenhouse",
+      now: () => "2026-05-29T00:00:00.000Z",
+    });
+    const adapter = createTimelineT5NodeAdapters({
+      completeChat: async (request) => {
+        requests.push(request);
+        return {
+          role: "assistant",
+          content: JSON.stringify({
+            positivePrompt: "solo pilot, glass greenhouse",
+            illustriousSections: {
+              subjectIdentity: ["solo pilot"],
+              backgroundEnvironmentObjects: ["glass greenhouse"],
+            },
+          }),
+        };
+      },
+    })["scene-prompt"];
+
+    expect(workflow.nodes["scene-input"].result).toMatchObject({
+      promptProfile: "illustrious",
+      rawIntent: "A pilot in a glass greenhouse",
+    });
+
+    const result = await adapter?.({
+      dependencies: [workflow.nodes["scene-input"]],
+      nodeId: "scene-prompt",
+      workflow,
+    });
+
+    expect(requests).toHaveLength(1);
+    expect(String(requests[0]?.messages[0]?.content)).toContain("Selected prompt profile: Illustrious (illustrious)");
+    expect(String(requests[0]?.messages[0]?.content)).toContain("include illustriousSections");
+    expect(JSON.parse(String(requests[0]?.messages[1]?.content))).toMatchObject({
+      promptProfile: "illustrious",
+      sceneRequest: "A pilot in a glass greenhouse",
+    });
+    expect(result).toMatchObject({
+      value: {
+        promptProfile: "illustrious",
+        illustriousSections: {
+          subjectIdentity: ["solo pilot"],
+        },
+      },
+    });
+  });
+
+  it("builds Anima scene prompt instructions when the selected profile is Anima", async () => {
+    const requests: LlmChatRequest[] = [];
+    const workflow = createTimelineWorkflowState({
+      workflowId: "profile-anima",
+      promptProfile: "anima",
+      sceneRequest: "A courier waits beside a rainy window",
+      now: () => "2026-05-29T00:00:00.000Z",
+    });
+    const adapter = createTimelineT5NodeAdapters({
+      completeChat: async (request) => {
+        requests.push(request);
+        return {
+          role: "assistant",
+          content: JSON.stringify({
+            positivePrompt: "1girl, courier beside a rainy window",
+            animaSections: {
+              character: ["1girl courier"],
+              general: ["rainy window"],
+            },
+          }),
+        };
+      },
+    })["scene-prompt"];
+
+    const result = await adapter?.({
+      dependencies: [workflow.nodes["scene-input"]],
+      nodeId: "scene-prompt",
+      workflow,
+    });
+
+    expect(String(requests[0]?.messages[0]?.content)).toContain("Selected prompt profile: Anima (anima)");
+    expect(String(requests[0]?.messages[0]?.content)).toContain("include animaSections");
+    expect(JSON.parse(String(requests[0]?.messages[1]?.content))).toMatchObject({
+      promptProfile: "anima",
+    });
+    expect(result).toMatchObject({
+      value: {
+        promptProfile: "anima",
+        animaSections: {
+          character: ["1girl courier"],
+        },
+      },
     });
   });
 

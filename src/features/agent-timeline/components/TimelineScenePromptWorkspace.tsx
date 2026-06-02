@@ -5,12 +5,14 @@ import { CheckCircle2, TableProperties } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import type { ScenePromptTimelineResult, TimelineNodeResult } from "@/features/agent-timeline";
+import { formatPromptProfileLabel, normalizePromptProfileId, type PromptProfileId } from "@/shared/prompt-profile";
 
 type TimelineScenePromptWorkspaceProps = {
   editable: boolean;
   emptyState: string;
   node: TimelineNodeResult;
   onSave: (result: ScenePromptTimelineResult) => void;
+  promptProfile: PromptProfileId;
 };
 
 type ScenePromptDraft = {
@@ -67,8 +69,9 @@ function getManualText(value: unknown) {
   return "";
 }
 
-function createMinimalScenePromptResult(value: string): ScenePromptTimelineResult {
+function createMinimalScenePromptResult(value: string, promptProfile: PromptProfileId): ScenePromptTimelineResult {
   return {
+    promptProfile,
     primaryCharacter: {
       name: "Primary character",
       identity: value,
@@ -121,12 +124,16 @@ function createDraftFromResult(result: ScenePromptTimelineResult | null): SceneP
   };
 }
 
-function createResultFromDraft(draft: ScenePromptDraft): ScenePromptTimelineResult {
+function createResultFromDraft(
+  draft: ScenePromptDraft,
+  previousResult: ScenePromptTimelineResult | null,
+): ScenePromptTimelineResult {
   const positivePrompt = draft.positivePrompt.trim() || draft.sceneIntent.trim();
   const sceneIntent = draft.sceneIntent.trim() || positivePrompt;
   const primaryCharacterIdentity = draft.primaryCharacterIdentity.trim() || positivePrompt;
 
   return {
+    promptProfile: normalizePromptProfileId(previousResult?.promptProfile),
     primaryCharacter: {
       name: draft.primaryCharacterName.trim() || "Primary character",
       identity: primaryCharacterIdentity,
@@ -141,6 +148,8 @@ function createResultFromDraft(draft: ScenePromptDraft): ScenePromptTimelineResu
     style: linesToFragments(draft.style),
     camera: linesToFragments(draft.camera),
     lighting: linesToFragments(draft.lighting),
+    ...(previousResult?.illustriousSections ? { illustriousSections: previousResult.illustriousSections } : {}),
+    ...(previousResult?.animaSections ? { animaSections: previousResult.animaSections } : {}),
   };
 }
 
@@ -174,6 +183,7 @@ export function TimelineScenePromptWorkspace({
   emptyState,
   node,
   onSave,
+  promptProfile,
 }: TimelineScenePromptWorkspaceProps) {
   const scenePrompt = useMemo(
     () => {
@@ -182,12 +192,12 @@ export function TimelineScenePromptWorkspace({
       }
 
       const manualText = getManualText(node.result).trim();
-      return manualText ? createMinimalScenePromptResult(manualText) : null;
+      return manualText ? createMinimalScenePromptResult(manualText, promptProfile) : null;
     },
-    [node.result],
+    [node.result, promptProfile],
   );
   const [draft, setDraft] = useState(() => createDraftFromResult(scenePrompt));
-  const saveDisabled = !editable || !createResultFromDraft(draft).positivePrompt.trim();
+  const saveDisabled = !editable || !createResultFromDraft(draft, scenePrompt).positivePrompt.trim();
 
   function updateDraft<Key extends keyof ScenePromptDraft>(key: Key, value: ScenePromptDraft[Key]) {
     setDraft((current) => ({
@@ -214,7 +224,7 @@ export function TimelineScenePromptWorkspace({
           <Button
             className="h-8 px-2.5 text-xs shadow-none"
             disabled={saveDisabled}
-            onClick={() => onSave(createResultFromDraft(draft))}
+            onClick={() => onSave(createResultFromDraft(draft, scenePrompt))}
             type="button"
           >
             <CheckCircle2 className="size-3.5" />
@@ -230,6 +240,16 @@ export function TimelineScenePromptWorkspace({
 
         <table className="w-full border-collapse text-left text-xs">
           <tbody className="divide-y divide-slate-100">
+            <tr>
+              <th className="w-44 align-top bg-slate-50 px-3 py-3 font-semibold text-slate-600">
+                Prompt profile
+              </th>
+              <td className="px-3 py-3">
+                <div className="h-9 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
+                  {formatPromptProfileLabel(normalizePromptProfileId(scenePrompt?.promptProfile))}
+                </div>
+              </td>
+            </tr>
             <tr>
               <th className="w-44 align-top bg-slate-50 px-3 py-3 font-semibold text-slate-600">
                 Primary character

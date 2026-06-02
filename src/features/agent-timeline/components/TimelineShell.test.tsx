@@ -188,7 +188,7 @@ function makeCivitaiResource(resourceType: "lora" | "model", id: string, name: s
     name,
     versionName: "v1",
     hash: null,
-    baseModel: "Pony",
+    baseModel: "Illustrious",
     creator: "creator",
     trainedWords: resourceType === "lora" ? ["neon_style"] : [],
     tags: ["anime", "neon"],
@@ -208,7 +208,7 @@ function makeCivitaiResource(resourceType: "lora" | "model", id: string, name: s
     recommendations: [
       {
         condition: "neon scene",
-        baseModel: "Pony",
+        baseModel: "Illustrious",
         checkpoint: null,
         sampler: "euler",
         loraWeightMin: null,
@@ -476,6 +476,17 @@ function setNativeTextAreaValue(textarea: HTMLTextAreaElement, value: string) {
   textarea.dispatchEvent(new Event("input", { bubbles: true }));
 }
 
+function setNativeSelectValue(select: HTMLSelectElement, value: string) {
+  const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")?.set;
+
+  if (!setter) {
+    throw new Error("Unable to set select value.");
+  }
+
+  setter.call(select, value);
+  select.dispatchEvent(new Event("change", { bubbles: true }));
+}
+
 async function submitInitialScene(sceneRequest: string) {
   const textarea = container.querySelector("#scene-request") as HTMLTextAreaElement | null;
   const form = container.querySelector("form");
@@ -556,10 +567,17 @@ describe("TimelineShell", () => {
     });
 
     const sceneInput = container.querySelector("#scene-request") as HTMLTextAreaElement | null;
+    const promptProfile = container.querySelector("#prompt-profile") as HTMLSelectElement | null;
     const startButton = getButtonByText("Start workflow");
     const settingsLink = container.querySelector('a[href="/settings"]');
 
     expect(sceneInput).not.toBeNull();
+    expect(promptProfile?.value).toBe("illustrious");
+    expect(Array.from(promptProfile?.options ?? []).map((option) => option.value)).toEqual([
+      "illustrious",
+      "anima",
+      "generic",
+    ]);
     expect(startButton.disabled).toBe(true);
     expect(settingsLink?.textContent).toContain("Settings");
     expect(getWorkflowStepTitles()).toEqual(nodeTitles);
@@ -599,6 +617,40 @@ describe("TimelineShell", () => {
     });
 
     expect(getButtonByText("Start workflow").disabled).toBe(true);
+  });
+
+  it("persists the selected prompt profile in scene input before prompt generation", async () => {
+    const originalFetch = globalThis.fetch;
+    const fetchMock = mockT5Fetch();
+    globalThis.fetch = fetchMock;
+
+    try {
+      act(() => {
+        root.render(<TimelineShell />);
+      });
+
+      const promptProfile = container.querySelector("#prompt-profile") as HTMLSelectElement | null;
+      expect(promptProfile).not.toBeNull();
+
+      act(() => {
+        setNativeSelectValue(promptProfile as HTMLSelectElement, "anima");
+      });
+
+      await submitInitialScene("A rainy courier under station lights");
+
+      const promptRequest = fetchMock.mock.calls
+        .map(([, init]) => (typeof init?.body === "string" ? JSON.parse(init.body) : null))
+        .find((body) => body?.purpose === "stable-diffusion-prompt-generation");
+
+      expect(promptRequest).toBeDefined();
+      expect(promptRequest.messages[0].content).toContain("Selected prompt profile: Anima (anima)");
+      expect(JSON.parse(promptRequest.messages[1].content)).toMatchObject({
+        promptProfile: "anima",
+        sceneRequest: "A rainy courier under station lights",
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 
   it("submits a usable scene request through timeline recommendations without persistence or execution calls", async () => {
