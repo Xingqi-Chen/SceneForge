@@ -13,6 +13,7 @@ import {
   GitBranch,
   ImageIcon,
   LayoutDashboard,
+  LoaderCircle,
   LockKeyhole,
   PencilLine,
   Play,
@@ -28,9 +29,12 @@ import type { LucideIcon } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { getTimelineNodeDependencies } from "@/features/agent-timeline/dag";
-import { executeTimelineGraph } from "@/features/agent-timeline/graph";
+import { executeTimelineGraph, type TimelineWorkflowUpdate } from "@/features/agent-timeline/graph";
 import {
   createTimelineWorkflowState,
+  DEFAULT_TIMELINE_IMAGE_COUNT,
+  markTimelineNodeRunning,
+  normalizeTimelineImageCount,
   setTimelineNodeManualResult,
 } from "@/features/agent-timeline/state";
 import {
@@ -93,6 +97,12 @@ import {
 } from "@/features/llm";
 import { savePromptLibrary } from "@/features/persistence";
 import type { CharacterPromptTagTarget } from "@/features/prompt-engine/prompt-library/character-image-prompt-tags";
+import {
+  defaultSceneForgeUserSettings,
+  type CharacterTagNewTermDefaultOption,
+  type CentralSettingsPayload,
+  type SceneForgeWorkflowSettings,
+} from "@/features/settings/types";
 import { cn } from "@/shared/utils/cn";
 import {
   defaultPromptProfileId,
@@ -116,6 +126,7 @@ type DraftMap = Partial<Record<TimelineNodeId, string>>;
 type NoticeMap = Partial<Record<TimelineNodeId, string>>;
 type OutputDisplayMode = "json" | "visual";
 type OutputDisplayModeMap = Partial<Record<TimelineNodeId, OutputDisplayMode>>;
+type SceneInputAiAction = "rewrite" | "suggest";
 
 type PendingTimelinePromptTagReview = {
   input: TimelineCanvasBindingInput;
@@ -184,19 +195,20 @@ const stepDisplay: Record<TimelineNodeId, StepDisplay> = {
     agent: "ComfyUI agent",
     artifact: "Queue metadata",
     icon: Braces,
-    transform: "Validate and queue the confirmed single-image ComfyUI request",
+    transform: "Validate and queue the confirmed ComfyUI render request",
   },
   "result-display": {
     agent: "Artifact agent",
-    artifact: "Generated image result",
+    artifact: "Generated image results",
     icon: ImageIcon,
-    transform: "Store the returned image as standalone timeline state",
+    transform: "Store returned images as standalone timeline state",
   },
 };
 
 const settingsLinkClassName =
   "inline-flex h-9 items-center justify-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-xs font-medium text-slate-700 transition-colors hover:border-slate-300 hover:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-400";
 const rawEditableNodeIds = new Set<TimelineNodeId>(["scene-input", "scene-prompt"]);
+const timelineImageCountOptions = [1, 2, 3, 4] as const;
 const visualOutputNodeIds = new Set<TimelineNodeId>([
   "scene-prompt",
   "canvas-binding",
@@ -451,11 +463,131 @@ function parseManualJson(value: string) {
   }
 }
 
-function createManualResult(nodeId: TimelineNodeId, value: string, promptProfile: PromptProfileId) {
+function parseSceneInputAiJson(value: string) {
+  const trimmed = value.trim();
+  const candidates = [
+    trimmed,
+    ...Array.from(trimmed.matchAll(/```(?:json)?\s*([\s\S]*?)```/gi), (match) => match[1]?.trim() ?? ""),
+  ];
+  const firstBrace = trimmed.indexOf("{");
+  const lastBrace = trimmed.lastIndexOf("}");
+
+  if (firstBrace >= 0 && lastBrace > firstBrace) {
+    candidates.push(trimmed.slice(firstBrace, lastBrace + 1));
+  }
+
+  for (const candidate of candidates) {
+    if (!candidate) {
+      continue;
+    }
+
+    try {
+      const parsed = JSON.parse(candidate) as unknown;
+
+      if (isRecord(parsed) && typeof parsed.sceneRequest === "string") {
+        return parsed.sceneRequest;
+      }
+    } catch {
+      // Try the next likely JSON span.
+    }
+  }
+
+  return trimmed;
+}
+
+function normalizeSceneInputAiText(value: string) {
+  return value
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/^["']|["']$/g, "")
+    .slice(0, 1200);
+}
+
+function getSceneInputRawIntent(workflow: TimelineWorkflowState | null) {
+  const result = workflow?.nodes["scene-input"].result;
+
+  return isRecord(result) && typeof result.rawIntent === "string" ? result.rawIntent : "";
+}
+
+function getSceneInputImageCount(workflow: TimelineWorkflowState | null) {
+  const result = workflow?.nodes["scene-input"].result;
+
+  return isRecord(result)
+    ? normalizeTimelineImageCount(result.imageCount)
+    : DEFAULT_TIMELINE_IMAGE_COUNT;
+}
+
+function parseSceneInputAiResponse(response: LlmChatResponse) {
+  return normalizeSceneInputAiText(parseSceneInputAiJson(response.content));
+}
+
+function buildSceneInputAiRequest({
+  action,
+  promptProfile,
+  sceneRequest,
+}: {
+  action: SceneInputAiAction;
+  promptProfile: PromptProfileId;
+  sceneRequest: string;
+}): LlmChatRequest {
+  const actionInstruction = action === "rewrite"
+    ? [
+        "Rewrite the provided scene request into a clearer, more generation-ready command.",
+        "Preserve the user's subject, setting, mood, camera intent, and constraints.",
+        "Do not add a second main character unless the user already requested one.",
+      ]
+    : [
+        sceneRequest
+          ? "Suggest one stronger alternate scene request inspired by the current draft."
+          : "Suggest one concise, visually rich scene request for a single image.",
+        "Make it specific enough to start the SceneForge timeline.",
+        "Avoid file paths, model names, checkpoint names, LoRA names, render parameters, and implementation details.",
+      ];
+
+  return {
+    purpose: "stable-diffusion-prompt-generation",
+    messages: [
+      {
+        role: "system",
+        content: [
+          "You are SceneForge's scene input agent.",
+          "Return only valid JSON. No markdown, comments, or prose.",
+          "All natural-language fields must be English.",
+          "Keep the result as a single-image scene request for an editable visual prompt workflow.",
+          `Selected prompt profile: ${formatPromptProfileLabel(promptProfile)} (${promptProfile}).`,
+          ...actionInstruction,
+          'Required shape: {"sceneRequest":"..."}',
+        ].join("\n"),
+      },
+      {
+        role: "user",
+        content: JSON.stringify(
+          {
+            action,
+            currentSceneRequest: sceneRequest,
+            promptProfile,
+          },
+          null,
+          2,
+        ),
+      },
+    ],
+    temperature: action === "rewrite" ? 0.25 : 0.55,
+    maxTokens: 300,
+  };
+}
+
+function createManualResult(
+  nodeId: TimelineNodeId,
+  value: string,
+  promptProfile: PromptProfileId,
+  imageCount = DEFAULT_TIMELINE_IMAGE_COUNT,
+) {
   if (nodeId === "scene-input") {
     return {
       rawIntent: value,
       promptProfile,
+      imageCount: normalizeTimelineImageCount(imageCount),
     } satisfies SceneInputTimelineResult;
   }
 
@@ -589,6 +721,20 @@ function canConfirmTimelineWorkflow(workflow: TimelineWorkflowState | null) {
     gate.status === "blocked" && gate.error?.code === "confirmation_required";
 }
 
+function mergeTimelineWorkflowUpdate(
+  workflow: TimelineWorkflowState,
+  update: TimelineWorkflowUpdate,
+): TimelineWorkflowState {
+  return {
+    ...workflow,
+    ...update,
+    nodes: {
+      ...workflow.nodes,
+      ...update.nodes,
+    },
+  };
+}
+
 async function confirmTimelineGenerationViaApi(workflow: TimelineWorkflowState) {
   const response = await fetch("/api/agent-timeline/confirm-generation", {
     method: "POST",
@@ -610,6 +756,35 @@ async function confirmTimelineGenerationViaApi(workflow: TimelineWorkflowState) 
   return payload.workflow as TimelineWorkflowState;
 }
 
+async function loadTimelineSettingsViaApi(): Promise<CentralSettingsPayload> {
+  const response = await fetch("/api/settings");
+  const payload: unknown = await response.json();
+
+  if (!response.ok) {
+    throw new Error(getApiErrorMessage(payload, "Unable to load timeline settings."));
+  }
+
+  return payload as CentralSettingsPayload;
+}
+
+function getNewPromptTagApplyMode(
+  option: CharacterTagNewTermDefaultOption,
+): NewPromptTagApplyMode | null {
+  if (option === "existing-only") {
+    return "skip";
+  }
+
+  if (option === "temporary") {
+    return "temporary";
+  }
+
+  if (option === "import") {
+    return "import";
+  }
+
+  return null;
+}
+
 function isResultDisplayTimelineResult(value: unknown): value is ResultDisplayTimelineResult {
   return (
     isRecord(value) &&
@@ -618,6 +793,14 @@ function isResultDisplayTimelineResult(value: unknown): value is ResultDisplayTi
     typeof value.promptId === "string" &&
     isRecord(value.storedImage)
   );
+}
+
+function getTimelineResultImages(result: ResultDisplayTimelineResult) {
+  return result.images?.length ? result.images : [result.image];
+}
+
+function getTimelineResultStoredImages(result: ResultDisplayTimelineResult) {
+  return result.storedImages?.length ? result.storedImages : [result.storedImage];
 }
 
 function TimelineResultDisplayWorkspace({
@@ -637,17 +820,33 @@ function TimelineResultDisplayWorkspace({
     );
   }
 
+  const resultImages = getTimelineResultImages(result);
+  const storedImages = getTimelineResultStoredImages(result);
+  const totalBytes = storedImages.reduce((total, image) => total + image.byteLength, 0);
+
   return (
     <div className="flex flex-col gap-3" data-testid="timeline-result-workspace">
-      <div className="overflow-hidden rounded-md border border-slate-200 bg-slate-50">
-        <Image
-          alt="Timeline generated ComfyUI result"
-          className="max-h-[42rem] w-full object-contain"
-          height={1024}
-          src={result.image.url}
-          unoptimized
-          width={1024}
-        />
+      <div className={cn(
+        "grid gap-3 rounded-md border border-slate-200 bg-slate-50 p-3",
+        resultImages.length > 1 ? "md:grid-cols-2" : "grid-cols-1",
+      )}>
+        {resultImages.map((image, index) => (
+          <figure className="overflow-hidden rounded-md border border-slate-200 bg-white" key={`${image.nodeId}:${image.filename}:${index}`}>
+            <Image
+              alt={`Timeline generated ComfyUI result ${index + 1}`}
+              className="max-h-[42rem] w-full object-contain"
+              height={1024}
+              src={image.url}
+              unoptimized
+              width={1024}
+            />
+            {resultImages.length > 1 ? (
+              <figcaption className="border-t border-slate-100 px-3 py-2 text-[11px] font-semibold text-slate-500">
+                Image {index + 1} of {resultImages.length}
+              </figcaption>
+            ) : null}
+          </figure>
+        ))}
       </div>
       <dl className="grid gap-2 rounded-md border border-slate-200 bg-white p-3 text-xs md:grid-cols-2">
         <div>
@@ -655,16 +854,18 @@ function TimelineResultDisplayWorkspace({
           <dd className="mt-1 break-all text-slate-800">{result.promptId}</dd>
         </div>
         <div>
-          <dt className="font-semibold uppercase text-slate-500">Stored image</dt>
-          <dd className="mt-1 break-all text-slate-800">{result.storedImage.filename}</dd>
+          <dt className="font-semibold uppercase text-slate-500">Stored images</dt>
+          <dd className="mt-1 break-all text-slate-800">
+            {storedImages.length === 1 ? result.storedImage.filename : `${storedImages.length} images`}
+          </dd>
         </div>
         <div>
           <dt className="font-semibold uppercase text-slate-500">Content type</dt>
           <dd className="mt-1 text-slate-800">{result.storedImage.contentType}</dd>
         </div>
         <div>
-          <dt className="font-semibold uppercase text-slate-500">Bytes</dt>
-          <dd className="mt-1 text-slate-800">{result.storedImage.byteLength.toLocaleString()}</dd>
+          <dt className="font-semibold uppercase text-slate-500">Total bytes</dt>
+          <dd className="mt-1 text-slate-800">{totalBytes.toLocaleString()}</dd>
         </div>
       </dl>
       {result.warnings.length > 0 ? (
@@ -680,6 +881,7 @@ export function TimelineShell() {
   const [sceneRequest, setSceneRequest] = useState("");
   const [selectedPromptProfile, setSelectedPromptProfile] =
     useState<PromptProfileId>(defaultPromptProfileId);
+  const [selectedImageCount, setSelectedImageCount] = useState(DEFAULT_TIMELINE_IMAGE_COUNT);
   const [workflow, setWorkflow] = useState<TimelineWorkflowState | null>(null);
   const [selectedNodeId, setSelectedNodeId] = useState<TimelineNodeId>("scene-input");
   const [editingNodeId, setEditingNodeId] = useState<TimelineNodeId | null>(null);
@@ -691,6 +893,9 @@ export function TimelineShell() {
   const [pendingPromptTagReview, setPendingPromptTagReview] =
     useState<PendingTimelinePromptTagReview | null>(null);
   const [isSavingPromptTagReview, setIsSavingPromptTagReview] = useState(false);
+  const [timelineSettings, setTimelineSettings] = useState<SceneForgeWorkflowSettings>(
+    defaultSceneForgeUserSettings.workflow,
+  );
   const pendingPromptTagReviewRef = useRef<PendingTimelinePromptTagReview | null>(null);
 
   const previewWorkflow = useMemo(() => createTimelineWorkflowState({ workflowId: "draft-workflow" }), []);
@@ -719,6 +924,7 @@ export function TimelineShell() {
   const generationCanBeConfirmed = canConfirmTimelineWorkflow(workflow);
   const workflowTitle = workflow ? sceneRequest : "Untitled workflow";
   const workflowMode = workflow ? "Run shell" : "Draft setup";
+  const sceneInputAiSource = sceneRequest.trim() || getSceneInputRawIntent(workflow).trim();
 
   function clearPendingPromptTagReview() {
     pendingPromptTagReviewRef.current = null;
@@ -747,6 +953,29 @@ export function TimelineShell() {
     };
   }, []);
 
+  useEffect(() => {
+    let canceled = false;
+
+    void loadTimelineSettingsViaApi()
+      .then((payload) => {
+        if (canceled) {
+          return;
+        }
+
+        setTimelineSettings(payload.workflow);
+        useEditorStore.getState().updateProjectSettings({
+          supportsNsfw: payload.general.nsfw.supportsNsfw,
+        });
+      })
+      .catch((error) => {
+        console.error("[SceneForge] [timeline] failed to load settings", { error });
+      });
+
+    return () => {
+      canceled = true;
+    };
+  }, []);
+
   function isCurrentRun(runId: number) {
     return activeRunIdRef.current === runId;
   }
@@ -764,6 +993,13 @@ export function TimelineShell() {
     input: TimelineCanvasBindingInput,
     review: PendingPromptTagImportReview,
   ) {
+    const defaultMode = getNewPromptTagApplyMode(
+      timelineSettings.characterTagNewTermDefaultOption,
+    );
+    if (defaultMode) {
+      return Promise.resolve(defaultMode);
+    }
+
     const existingPending = pendingPromptTagReviewRef.current;
     if (existingPending) {
       existingPending.reject(new Error("Timeline prompt tag review was superseded."));
@@ -881,6 +1117,20 @@ export function TimelineShell() {
     setIsRunning(true);
     setNotices({});
 
+    const handleWorkflowUpdate = (update: TimelineWorkflowUpdate) => {
+      if (!isCurrentRun(runId)) {
+        return;
+      }
+
+      setWorkflow((currentWorkflow) => {
+        if (!currentWorkflow || currentWorkflow.workflowId !== nextWorkflow.workflowId) {
+          return currentWorkflow;
+        }
+
+        return mergeTimelineWorkflowUpdate(currentWorkflow, update);
+      });
+    };
+
     try {
       const result = await executeTimelineGraph(
         nextWorkflow,
@@ -949,6 +1199,9 @@ export function TimelineShell() {
             supportsNsfw: () => useEditorStore.getState().project.settings.supportsNsfw,
           }),
         },
+        {
+          onWorkflowUpdate: handleWorkflowUpdate,
+        },
       );
 
       if (!isCurrentRun(runId)) {
@@ -977,6 +1230,9 @@ export function TimelineShell() {
       }
 
       setWorkflow(result);
+      if (timelineSettings.autoReview && canConfirmTimelineWorkflow(result)) {
+        void runConfirmGeneration(result, { allowWhileRunning: true });
+      }
     } catch (error) {
       if (!isCurrentRun(runId)) {
         return;
@@ -994,8 +1250,11 @@ export function TimelineShell() {
     }
   }
 
-  async function handleConfirmGeneration() {
-    if (!workflow || !generationCanBeConfirmed || isRunning) {
+  async function runConfirmGeneration(
+    targetWorkflow: TimelineWorkflowState | null,
+    options: { allowWhileRunning?: boolean } = {},
+  ) {
+    if (!targetWorkflow || !canConfirmTimelineWorkflow(targetWorkflow) || (!options.allowWhileRunning && isRunning)) {
       return;
     }
 
@@ -1003,13 +1262,20 @@ export function TimelineShell() {
     activeRunIdRef.current = runId;
     setIsRunning(true);
     setSelectedNodeId("comfyui-execution");
+    setWorkflow((currentWorkflow) => {
+      if (!currentWorkflow || currentWorkflow.workflowId !== targetWorkflow.workflowId) {
+        return currentWorkflow;
+      }
+
+      return markTimelineNodeRunning(currentWorkflow, "comfyui-execution");
+    });
     setNotices((current) => ({
       ...current,
       "comfyui-execution": "Confirmed request is being validated and queued in ComfyUI.",
     }));
 
     try {
-      const result = await confirmTimelineGenerationViaApi(workflow);
+      const result = await confirmTimelineGenerationViaApi(targetWorkflow);
 
       if (!isCurrentRun(runId)) {
         return;
@@ -1053,6 +1319,7 @@ export function TimelineShell() {
     }
 
     const nextWorkflow = createTimelineWorkflowState({
+      imageCount: selectedImageCount,
       promptProfile: selectedPromptProfile,
       sceneRequest: trimmedSceneRequest,
     });
@@ -1089,8 +1356,34 @@ export function TimelineShell() {
     invalidateTimelineRun();
     setWorkflow(setTimelineNodeManualResult(workflow, "scene-input", {
       rawIntent,
+      imageCount: selectedImageCount,
       promptProfile,
     } satisfies SceneInputTimelineResult));
+  }
+
+  function handleImageCountChange(value: string) {
+    const imageCount = normalizeTimelineImageCount(value);
+    setSelectedImageCount(imageCount);
+
+    if (!workflow || isRunning) {
+      return;
+    }
+
+    const rawIntent = sceneRequest.trim() || getSceneInputRawIntent(workflow).trim();
+    if (!rawIntent) {
+      return;
+    }
+
+    invalidateTimelineRun();
+    setWorkflow(setTimelineNodeManualResult(workflow, "scene-input", {
+      rawIntent,
+      imageCount,
+      promptProfile: selectedPromptProfile,
+    } satisfies SceneInputTimelineResult));
+    setNotices((current) => ({
+      ...current,
+      "scene-input": "Image count updated. Downstream nodes are pending regeneration.",
+    }));
   }
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -1146,7 +1439,11 @@ export function TimelineShell() {
 
     invalidateTimelineRun();
     setIsRunning(false);
-    setWorkflow(setTimelineNodeManualResult(workflow, nodeId, createManualResult(nodeId, draft, selectedPromptProfile)));
+    setWorkflow(setTimelineNodeManualResult(
+      workflow,
+      nodeId,
+      createManualResult(nodeId, draft, selectedPromptProfile, selectedImageCount),
+    ));
     setEditingNodeId(null);
     setDrafts((current) => ({
       ...current,
@@ -1222,11 +1519,114 @@ export function TimelineShell() {
     setEditingNodeId(null);
   }
 
+  async function handleSceneInputAi(action: SceneInputAiAction) {
+    setSelectedNodeId("scene-input");
+
+    if (isRunning) {
+      return;
+    }
+
+    const currentSceneRequest = sceneRequest.trim() || getSceneInputRawIntent(workflow).trim();
+
+    if (action === "rewrite" && !currentSceneRequest) {
+      setNotices((current) => ({
+        ...current,
+        "scene-input": "Add a scene request before asking AI to rewrite it.",
+      }));
+      return;
+    }
+
+    const runId = activeRunIdRef.current + 1;
+    activeRunIdRef.current = runId;
+    setIsRunning(true);
+    setEditingNodeId(null);
+    if (workflow) {
+      setWorkflow(markTimelineNodeRunning(workflow, "scene-input"));
+    }
+    setNotices((current) => ({
+      ...current,
+      "scene-input": action === "rewrite" ? "Rewriting the scene request." : "Suggesting a scene request.",
+    }));
+
+    try {
+      const response = await completeTimelineChatViaApi(
+        buildSceneInputAiRequest({
+          action,
+          promptProfile: selectedPromptProfile,
+          sceneRequest: currentSceneRequest,
+        }),
+      );
+
+      if (!isCurrentRun(runId)) {
+        return;
+      }
+
+      const nextSceneRequest = parseSceneInputAiResponse(response);
+
+      if (!nextSceneRequest) {
+        throw new Error("Scene input AI response did not include a usable scene request.");
+      }
+
+      const nextWorkflow = workflow
+        ? setTimelineNodeManualResult(workflow, "scene-input", {
+            rawIntent: nextSceneRequest,
+            imageCount: selectedImageCount,
+            promptProfile: selectedPromptProfile,
+          } satisfies SceneInputTimelineResult)
+        : null;
+
+      if (nextWorkflow) {
+        setWorkflow(nextWorkflow);
+      }
+      setSceneRequest(nextSceneRequest);
+      setDrafts((current) => ({
+        ...current,
+        "scene-input": nextSceneRequest,
+      }));
+      setNotices((current) => ({
+        ...current,
+        "scene-input": action === "rewrite"
+          ? workflow
+            ? "Scene request rewritten. Downstream nodes are pending regeneration."
+            : "Scene request rewritten. Run the timeline when ready."
+          : workflow
+            ? "Scene request suggested. Downstream nodes are pending regeneration."
+            : "Scene request suggested. Run the timeline when ready.",
+      }));
+    } catch (error) {
+      if (!isCurrentRun(runId)) {
+        return;
+      }
+
+      console.error("[SceneForge] [timeline] scene input AI request failed", { error });
+      if (workflow) {
+        setWorkflow(workflow);
+      }
+      setNotices((current) => ({
+        ...current,
+        "scene-input": error instanceof Error ? error.message : "Scene input AI request failed.",
+      }));
+    } finally {
+      if (isCurrentRun(runId)) {
+        setIsRunning(false);
+      }
+    }
+  }
+
+  function handleConfirmGeneration() {
+    void runConfirmGeneration(workflow);
+  }
+
   function handleRequestAi(nodeId: TimelineNodeId) {
     setSelectedNodeId(nodeId);
 
     if (!workflow) {
       startWorkflow();
+      return;
+    }
+
+    if (nodeId === "scene-input") {
+      void handleSceneInputAi("rewrite");
       return;
     }
 
@@ -1246,6 +1646,7 @@ export function TimelineShell() {
     setWorkflow(null);
     setSceneRequest("");
     setSelectedPromptProfile(defaultPromptProfileId);
+    setSelectedImageCount(DEFAULT_TIMELINE_IMAGE_COUNT);
     setSelectedNodeId("scene-input");
     setEditingNodeId(null);
     setDrafts({});
@@ -1256,6 +1657,9 @@ export function TimelineShell() {
 
   function selectNode(nodeId: TimelineNodeId) {
     setSelectedNodeId(nodeId);
+    if (nodeId === "scene-input") {
+      setSelectedImageCount(getSceneInputImageCount(workflow));
+    }
     setEditingNodeId(null);
   }
 
@@ -1319,6 +1723,7 @@ export function TimelineShell() {
               const StepIcon = display.icon;
               const selected = selectedNodeId === nodeId;
               const isParallelNode = parallelNodeIds.has(nodeId);
+              const isNodeRunning = node.status === "running";
 
               return (
                 <button
@@ -1339,7 +1744,11 @@ export function TimelineShell() {
                       getStepTone(node.status),
                     )}
                   >
-                    {index + 1}
+                    {isNodeRunning ? (
+                      <LoaderCircle className="size-4 animate-spin" />
+                    ) : (
+                      index + 1
+                    )}
                   </span>
                   <span className="min-w-0 flex-1">
                     <span className="flex items-center gap-1.5">
@@ -1439,6 +1848,25 @@ export function TimelineShell() {
                           </option>
                         ))}
                       </select>
+                      <label
+                        className="ml-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500"
+                        htmlFor="timeline-image-count"
+                      >
+                        Images
+                      </label>
+                      <select
+                        className="h-8 rounded-md border border-slate-200 bg-white px-2 text-xs text-slate-800 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+                        disabled={isRunning}
+                        id="timeline-image-count"
+                        onChange={(event) => handleImageCountChange(event.target.value)}
+                        value={selectedImageCount}
+                      >
+                        {timelineImageCountOptions.map((count) => (
+                          <option key={count} value={count}>
+                            {count}
+                          </option>
+                        ))}
+                      </select>
                     </div>
                     <textarea
                       className="min-h-28 w-full resize-none border-0 bg-white px-3 py-3 text-sm leading-relaxed text-slate-900 outline-none placeholder:text-slate-400"
@@ -1451,8 +1879,8 @@ export function TimelineShell() {
                       <div className="flex flex-wrap items-center gap-1.5">
                         <Button
                           className="h-7 px-2 text-[11px] shadow-none"
-                          disabled={!workflow || isRunning}
-                          onClick={() => handleRequestAi("scene-input")}
+                          disabled={isRunning || !sceneInputAiSource}
+                          onClick={() => void handleSceneInputAi("rewrite")}
                           type="button"
                           variant="secondary"
                         >
@@ -1460,8 +1888,8 @@ export function TimelineShell() {
                         </Button>
                         <Button
                           className="h-7 px-2 text-[11px] shadow-none"
-                          disabled={!workflow || isRunning}
-                          onClick={() => handleRequestAi("scene-input")}
+                          disabled={isRunning}
+                          onClick={() => void handleSceneInputAi("suggest")}
                           type="button"
                           variant="secondary"
                         >
@@ -1507,7 +1935,7 @@ export function TimelineShell() {
                       <LockKeyhole className="mt-0.5 size-4 shrink-0" />
                       <p>
                         ComfyUI execution requires explicit confirmation. The timeline stops here until you confirm the
-                        single-image request.
+                        render request.
                       </p>
                     </div>
                     <Button
@@ -1726,7 +2154,7 @@ export function TimelineShell() {
                     activeWorkflow.nodes["result-display"].status === "done" ? "bg-emerald-500" : "bg-slate-300",
                   )} />
                   <p className="leading-relaxed text-slate-600">
-                    Confirmed renders queue through the timeline graph and store the returned image as a standalone
+                    Confirmed renders queue through the timeline graph and store returned images as standalone
                     result.
                   </p>
                 </div>

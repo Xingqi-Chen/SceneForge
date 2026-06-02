@@ -23,6 +23,7 @@ type TimelineClock = () => string;
 
 type TimelineWorkflowOptions = {
   workflowId?: string;
+  imageCount?: number;
   promptProfile?: PromptProfileId;
   sceneRequest?: string;
   settingsSnapshot?: unknown;
@@ -35,6 +36,9 @@ type TimelineMutationOptions = {
 
 const dependencyCompleteStatuses = new Set(["done", "manual"]);
 const runnableStatuses = new Set(["ready", "stale", "error"]);
+export const MIN_TIMELINE_IMAGE_COUNT = 1;
+export const MAX_TIMELINE_IMAGE_COUNT = 4;
+export const DEFAULT_TIMELINE_IMAGE_COUNT = 1;
 
 function defaultNow() {
   return new Date().toISOString();
@@ -42,6 +46,18 @@ function defaultNow() {
 
 function createWorkflowId() {
   return `timeline-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+export function normalizeTimelineImageCount(value: unknown) {
+  const parsed = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(parsed)) {
+    return DEFAULT_TIMELINE_IMAGE_COUNT;
+  }
+
+  return Math.min(
+    MAX_TIMELINE_IMAGE_COUNT,
+    Math.max(MIN_TIMELINE_IMAGE_COUNT, Math.round(parsed)),
+  );
 }
 
 function createNode(nodeId: TimelineNodeId, updatedAt: string): TimelineNodeResult {
@@ -176,6 +192,7 @@ export function createTimelineWorkflowState(options: TimelineWorkflowOptions = {
     result: {
       rawIntent: options.sceneRequest,
       promptProfile: normalizePromptProfileId(options.promptProfile),
+      imageCount: normalizeTimelineImageCount(options.imageCount),
       settingsSnapshot: options.settingsSnapshot,
     } satisfies SceneInputTimelineResult,
     source: "manual",

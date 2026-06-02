@@ -26,11 +26,13 @@ import {
   loadProjectFromSqlite,
   loadPromptBindingsFromSqlite,
   loadPromptLibraryFromSqlite,
+  loadSceneForgeUserSettingsFromSqlite,
   openSceneForgeSqliteDatabase,
   saveCivitaiLibrarySettingsToSqlite,
   saveProjectToSqlite,
   savePromptBindingsToSqlite,
   savePromptLibraryToSqlite,
+  saveSceneForgeUserSettingsToSqlite,
   type SceneForgeSqliteDatabase,
   updateImportedImageLoraUsageWeightsFromSqlite,
   upsertArtistStringSyncToSqlite,
@@ -143,6 +145,54 @@ describe("sqlite persistence support", () => {
       checkpointDownloadPath: "",
       diffusionModelPath: "",
       controlNetModelPath: "",
+    });
+  });
+
+  it("stores SceneForge user workflow settings in SQLite", () => {
+    expect(loadSceneForgeUserSettingsFromSqlite(db)).toEqual({
+      supportsNsfw: false,
+      workflow: {
+        characterTagNewTermDefaultOption: "ask",
+        autoReview: false,
+      },
+    });
+
+    expect(
+      saveSceneForgeUserSettingsToSqlite(db, {
+        supportsNsfw: true,
+        workflow: {
+          characterTagNewTermDefaultOption: "import",
+          autoReview: true,
+        },
+      }),
+    ).toEqual({
+      supportsNsfw: true,
+      workflow: {
+        characterTagNewTermDefaultOption: "import",
+        autoReview: true,
+      },
+    });
+    expect(loadSceneForgeUserSettingsFromSqlite(db)).toEqual({
+      supportsNsfw: true,
+      workflow: {
+        characterTagNewTermDefaultOption: "import",
+        autoReview: true,
+      },
+    });
+
+    saveSceneForgeUserSettingsToSqlite(db, {
+      supportsNsfw: "yes",
+      workflow: {
+        characterTagNewTermDefaultOption: "bad",
+        autoReview: "yes",
+      },
+    });
+    expect(loadSceneForgeUserSettingsFromSqlite(db)).toEqual({
+      supportsNsfw: false,
+      workflow: {
+        characterTagNewTermDefaultOption: "ask",
+        autoReview: false,
+      },
     });
   });
 

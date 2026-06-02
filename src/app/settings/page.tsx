@@ -8,10 +8,12 @@ import {
   EyeOff,
   FolderCog,
   Loader2,
+  PlayCircle,
   RefreshCw,
   Save,
   Settings,
   ShieldCheck,
+  Tags,
   TriangleAlert,
 } from "lucide-react";
 import type { ReactNode } from "react";
@@ -19,7 +21,9 @@ import { useEffect, useMemo, useState } from "react";
 
 import type { CivitaiLibrarySettings } from "@/features/civitai-lora-library/types";
 import type {
+  CharacterTagNewTermDefaultOption,
   CentralSettingsPayload,
+  CentralSettingsUpdatePayload,
   SettingsIntegrationStatus,
   SettingsPathStatus,
   SettingsState,
@@ -56,6 +60,33 @@ const linkClassName =
 
 const actionButtonClassName =
   "inline-flex h-9 items-center justify-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 shadow-sm transition hover:border-slate-300 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60";
+
+const CHARACTER_TAG_DEFAULT_OPTIONS: Array<{
+  value: CharacterTagNewTermDefaultOption;
+  label: string;
+  description: string;
+}> = [
+  {
+    value: "existing-only",
+    label: "Existing entries only",
+    description: "Use only prompt tags that already exist in the library.",
+  },
+  {
+    value: "temporary",
+    label: "Keep for this run",
+    description: "Apply new tags to this workflow run without adding them to the library.",
+  },
+  {
+    value: "import",
+    label: "Import and select",
+    description: "Add new tags to the library and apply them to the current target.",
+  },
+  {
+    value: "ask",
+    label: "Ask every time",
+    description: "Open the review dialog whenever new character tags are detected.",
+  },
+];
 
 function emptyCivitaiPaths(): CivitaiLibrarySettings {
   return {
@@ -237,6 +268,8 @@ export default function SettingsPage() {
   const [loadError, setLoadError] = useState("");
   const [saveStatus, setSaveStatus] = useState<LoadStatus>("idle");
   const [saveError, setSaveError] = useState("");
+  const [userSettingsSaveStatus, setUserSettingsSaveStatus] = useState<LoadStatus>("idle");
+  const [userSettingsSaveError, setUserSettingsSaveError] = useState("");
   const [fieldErrors, setFieldErrors] = useState<Partial<Record<CivitaiPathKey, string>>>({});
 
   const hasChanges = useMemo(() => {
@@ -288,6 +321,24 @@ export default function SettingsPage() {
       if (error instanceof Error && "details" in error) {
         setFieldErrors((error as Error & { details?: Partial<Record<CivitaiPathKey, string>> }).details ?? {});
       }
+    }
+  }
+
+  async function saveUserSettings(update: CentralSettingsUpdatePayload) {
+    setUserSettingsSaveStatus("loading");
+    setUserSettingsSaveError("");
+
+    try {
+      const payload = await fetchSettings({
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(update),
+      });
+      setSettings(payload);
+      setUserSettingsSaveStatus("success");
+    } catch (error) {
+      setUserSettingsSaveStatus("error");
+      setUserSettingsSaveError(error instanceof Error ? error.message : "Unable to save settings.");
     }
   }
 
@@ -348,26 +399,134 @@ export default function SettingsPage() {
             <>
               <section className="rounded-md border border-slate-200 bg-white p-4 shadow-sm">
                 <SectionHeader
-                  description="Server-only flags are shown as status. Secret values and model names are not returned to the browser."
+                  description="Set the default review behavior for timeline runs and resource recommendations."
                   icon={<ShieldCheck className="size-4" />}
-                  title="General"
+                  title="Workflow Defaults"
                 />
-                <div className="mt-4 rounded-md border border-slate-200 bg-slate-50 p-3">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div>
-                      <div className="text-xs font-bold text-slate-800">NSFW UI mode</div>
-                      <p className="mt-1 text-[11px] text-slate-500">{settings.general.nsfw.detail}</p>
+
+                <div className="mt-4 grid gap-3 xl:grid-cols-3">
+                  {settings.general.nsfw.enabled ? (
+                    <div className="flex min-h-44 flex-col justify-between rounded-md border border-slate-200 bg-slate-50 p-4">
+                      <div className="flex items-start gap-3">
+                        <div className="flex size-9 shrink-0 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-600">
+                          <ShieldCheck className="size-4" />
+                        </div>
+                        <div className="min-w-0">
+                          <h3 className="text-sm font-bold text-slate-900">NSFW recommendations</h3>
+                          <p className="mt-1 text-xs leading-relaxed text-slate-500">
+                            Include NSFW-aware resource recommendations when workflow runs request them.
+                          </p>
+                        </div>
+                      </div>
+                      <button
+                        className={`mt-4 inline-flex h-10 w-full items-center justify-center gap-2 rounded-md border px-3 text-xs font-semibold shadow-sm transition disabled:cursor-not-allowed disabled:opacity-60 ${
+                          settings.general.nsfw.supportsNsfw
+                            ? "border-rose-200 bg-rose-600 text-white hover:bg-rose-700"
+                            : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+                        }`}
+                        disabled={userSettingsSaveStatus === "loading"}
+                        onClick={() =>
+                          void saveUserSettings({
+                            general: {
+                              nsfw: {
+                                supportsNsfw: !settings.general.nsfw.supportsNsfw,
+                              },
+                            },
+                          })
+                        }
+                        type="button"
+                      >
+                        <ShieldCheck className="size-3.5" />
+                        {settings.general.nsfw.supportsNsfw ? "Enabled" : "Disabled"}
+                      </button>
                     </div>
-                    <span
-                      className={`inline-flex h-7 items-center rounded-md border px-2.5 text-xs font-semibold ${
-                        settings.general.nsfw.enabled
-                          ? "border-rose-200 bg-rose-50 text-rose-700"
-                          : "border-slate-200 bg-white text-slate-600"
-                      }`}
-                    >
-                      {settings.general.nsfw.enabled ? "Enabled" : "Disabled"}
+                  ) : null}
+
+                  <label className="flex min-h-44 flex-col rounded-md border border-slate-200 bg-slate-50 p-4 text-xs font-semibold text-slate-700">
+                    <span className="flex items-start gap-3">
+                      <span className="flex size-9 shrink-0 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-600">
+                        <Tags className="size-4" />
+                      </span>
+                      <span className="min-w-0">
+                        <span className="block text-sm font-bold text-slate-900">New character tags</span>
+                        <span className="mt-1 block text-xs font-normal leading-relaxed text-slate-500">
+                          Choose how timeline review handles character tags that are not in the library.
+                        </span>
+                      </span>
                     </span>
-                  </div>
+                    <select
+                      className="mt-4 h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm font-normal text-slate-800 outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 disabled:opacity-60"
+                      disabled={userSettingsSaveStatus === "loading"}
+                      onChange={(event) =>
+                        void saveUserSettings({
+                          workflow: {
+                            characterTagNewTermDefaultOption: event.target.value as CharacterTagNewTermDefaultOption,
+                          },
+                        })
+                      }
+                      value={settings.workflow.characterTagNewTermDefaultOption}
+                    >
+                      {CHARACTER_TAG_DEFAULT_OPTIONS.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                    <p className="mt-3 text-[11px] font-normal leading-relaxed text-slate-500">
+                      {
+                        CHARACTER_TAG_DEFAULT_OPTIONS.find(
+                          (option) => option.value === settings.workflow.characterTagNewTermDefaultOption,
+                        )?.description
+                      }
+                    </p>
+                  </label>
+
+                  <label className="flex min-h-44 cursor-pointer flex-col justify-between rounded-md border border-slate-200 bg-slate-50 p-4 text-xs transition hover:border-slate-300">
+                    <span className="flex items-start gap-3">
+                      <span className="flex size-9 shrink-0 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-600">
+                        <PlayCircle className="size-4" />
+                      </span>
+                      <span className="min-w-0">
+                        <span className="block text-sm font-bold text-slate-900">Auto review</span>
+                        <span className="mt-1 block text-xs leading-relaxed text-slate-500">
+                          Automatically run Confirm and render when T9 reaches the confirmation gate.
+                        </span>
+                      </span>
+                    </span>
+                    <span className="mt-4 flex items-center justify-between gap-3 rounded-md border border-slate-200 bg-white px-3 py-2">
+                      <span className="text-xs font-semibold text-slate-700">
+                        {settings.workflow.autoReview ? "Enabled" : "Disabled"}
+                      </span>
+                      <input
+                        checked={settings.workflow.autoReview}
+                        className="size-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 disabled:opacity-60"
+                        disabled={userSettingsSaveStatus === "loading"}
+                        onChange={(event) =>
+                          void saveUserSettings({
+                            workflow: {
+                              autoReview: event.target.checked,
+                            },
+                          })
+                        }
+                        type="checkbox"
+                      />
+                    </span>
+                  </label>
+                </div>
+
+                <div className="mt-4 min-h-5 text-xs">
+                  {userSettingsSaveStatus === "success" ? (
+                    <span className="inline-flex items-center gap-1.5 text-emerald-700">
+                      <CheckCircle2 className="size-3.5" />
+                      Workflow settings saved.
+                    </span>
+                  ) : null}
+                  {userSettingsSaveStatus === "error" ? (
+                    <span className="inline-flex items-center gap-1.5 text-rose-700">
+                      <TriangleAlert className="size-3.5" />
+                      {userSettingsSaveError}
+                    </span>
+                  ) : null}
                 </div>
               </section>
 

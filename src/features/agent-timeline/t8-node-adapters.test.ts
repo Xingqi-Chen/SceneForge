@@ -7,8 +7,9 @@ import {
   setTimelineNodeManualResult,
 } from ".";
 
-function createConfirmedWorkflow() {
+function createConfirmedWorkflow(imageCount?: number) {
   let workflow = createTimelineWorkflowState({
+    imageCount,
     sceneRequest: "A pilot in a greenhouse",
     workflowId: "t8-request",
   });
@@ -48,7 +49,7 @@ describe("timeline T8 ComfyUI request conversion", () => {
     );
   });
 
-  it("converts the confirmed parameter preview to a single-image execution request", () => {
+  it("converts the confirmed parameter preview to a default single-image execution request", () => {
     const workflow = confirmTimelineGeneration(createConfirmedWorkflow());
 
     expect(createConfirmedTimelineComfyUiRequest(workflow)).toEqual({
@@ -60,6 +61,16 @@ describe("timeline T8 ComfyUI request conversion", () => {
       steps: 30,
       width: 1024,
       height: 1024,
+    });
+  });
+
+  it("uses the T1 image count as the confirmed execution batch size", () => {
+    const workflow = confirmTimelineGeneration(createConfirmedWorkflow(3));
+
+    expect(createConfirmedTimelineComfyUiRequest(workflow)).toMatchObject({
+      batchSize: 3,
+      checkpointName: "local.safetensors",
+      preview: false,
     });
   });
 });

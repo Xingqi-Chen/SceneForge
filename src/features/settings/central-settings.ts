@@ -13,11 +13,17 @@ import { getResolvedPromptBindingsFilePath } from "@/features/persistence/prompt
 import { getResolvedPromptLibraryFilePath } from "@/features/persistence/prompt-library-local-disk";
 
 import type {
+  CharacterTagNewTermDefaultOption,
   CentralSettingsPayload,
   CentralSettingsUpdatePayload,
+  SceneForgeUserSettings,
   SettingsIntegrationStatus,
   SettingsPathStatus,
   SettingsState,
+} from "./types";
+import {
+  characterTagNewTermDefaultOptions,
+  defaultSceneForgeUserSettings,
 } from "./types";
 
 const DEFAULT_COMFYUI_BASE_URL = "http://127.0.0.1:8188";
@@ -177,7 +183,10 @@ function buildTavilyStatus(): SettingsIntegrationStatus {
   };
 }
 
-export function buildCentralSettingsPayload(civitaiSettings: CivitaiLibrarySettings): CentralSettingsPayload {
+export function buildCentralSettingsPayload(
+  civitaiSettings: CivitaiLibrarySettings,
+  userSettings: SceneForgeUserSettings = defaultSceneForgeUserSettings,
+): CentralSettingsPayload {
   const nsfwEnabled = readBooleanEnvFlag(process.env.SCENEFORGE_SHOW_NSFW_BUTTON);
   const projectDirConfigured = isConfigured(process.env.SCENEFORGE_PROJECTS_DIR);
   const promptLibraryConfigured = isConfigured(process.env.SCENEFORGE_PROMPT_LIBRARY_FILE);
@@ -194,12 +203,14 @@ export function buildCentralSettingsPayload(civitaiSettings: CivitaiLibrarySetti
     general: {
       nsfw: {
         enabled: nsfwEnabled,
+        supportsNsfw: userSettings.supportsNsfw,
         source: isConfigured(process.env.SCENEFORGE_SHOW_NSFW_BUTTON) ? "env" : "default",
         detail: nsfwEnabled
           ? "NSFW UI mode is enabled by SCENEFORGE_SHOW_NSFW_BUTTON."
           : "NSFW UI mode is disabled unless SCENEFORGE_SHOW_NSFW_BUTTON=true.",
       },
     },
+    workflow: userSettings.workflow,
     storage: {
       paths: [
         getEnvPathStatus({
@@ -282,53 +293,124 @@ export type CentralSettingsUpdateResult =
 export async function readCentralSettings(): Promise<CentralSettingsPayload> {
   const {
     loadCivitaiLibrarySettingsFromSqlite,
+    loadSceneForgeUserSettingsFromSqlite,
     openSceneForgeSqliteDatabase,
   } = await import("@/features/persistence/sqlite-storage");
   const db = await openSceneForgeSqliteDatabase();
 
   try {
-    return buildCentralSettingsPayload(loadCivitaiLibrarySettingsFromSqlite(db));
+    return buildCentralSettingsPayload(
+      loadCivitaiLibrarySettingsFromSqlite(db),
+      loadSceneForgeUserSettingsFromSqlite(db),
+    );
   } finally {
     db.close();
   }
 }
 
+function validateWorkflowUpdate(
+  current: SceneForgeUserSettings,
+  update: CentralSettingsUpdatePayload["workflow"],
+): CentralSettingsUpdateResult | SceneForgeUserSettings {
+  if (!update) {
+    return current;
+  }
+
+  let characterTagNewTermDefaultOption = current.workflow.characterTagNewTermDefaultOption;
+  if (update.characterTagNewTermDefaultOption !== undefined) {
+    if (
+      !characterTagNewTermDefaultOptions.includes(
+        update.characterTagNewTermDefaultOption as CharacterTagNewTermDefaultOption,
+      )
+    ) {
+      return {
+        ok: false,
+        status: 400,
+        message: "Character tag default option is invalid.",
+      };
+    }
+
+    characterTagNewTermDefaultOption = update.characterTagNewTermDefaultOption;
+  }
+
+  return {
+    ...current,
+    workflow: {
+      characterTagNewTermDefaultOption,
+      autoReview:
+        typeof update.autoReview === "boolean"
+          ? update.autoReview
+          : current.workflow.autoReview,
+    },
+  };
+}
+
 export async function updateCentralSettings(payload: CentralSettingsUpdatePayload): Promise<CentralSettingsUpdateResult> {
   const civitaiPaths = payload.civitai?.paths;
-  if (!civitaiPaths) {
+  const supportsNsfw = payload.general?.nsfw?.supportsNsfw;
+  const workflowUpdate = payload.workflow;
+  if (!civitaiPaths && supportsNsfw === undefined && !workflowUpdate) {
     return {
       ok: false,
       status: 400,
-      message: "Request body must include civitai.paths.",
+      message: "Request body must include a supported settings update.",
     };
   }
 
   const {
     loadCivitaiLibrarySettingsFromSqlite,
+    loadSceneForgeUserSettingsFromSqlite,
     openSceneForgeSqliteDatabase,
     saveCivitaiLibrarySettingsToSqlite,
+    saveSceneForgeUserSettingsToSqlite,
   } = await import("@/features/persistence/sqlite-storage");
   const db = await openSceneForgeSqliteDatabase();
 
   try {
-    const currentSettings = loadCivitaiLibrarySettingsFromSqlite(db);
-    const validation = validateCivitaiLibrarySettingsPayload({
-      ...currentSettings,
-      ...civitaiPaths,
-    });
-    if (!validation.ok) {
-      return {
-        ok: false,
-        status: 400,
-        message: "One or more Civitai paths are invalid.",
-        details: validation.errors,
-      };
+    let civitaiSettings = loadCivitaiLibrarySettingsFromSqlite(db);
+    let userSettings = loadSceneForgeUserSettingsFromSqlite(db);
+
+    if (civitaiPaths) {
+      const validation = validateCivitaiLibrarySettingsPayload({
+        ...civitaiSettings,
+        ...civitaiPaths,
+      });
+      if (!validation.ok) {
+        return {
+          ok: false,
+          status: 400,
+          message: "One or more Civitai paths are invalid.",
+          details: validation.errors,
+        };
+      }
+
+      civitaiSettings = saveCivitaiLibrarySettingsToSqlite(db, validation.settings);
     }
 
-    const settings = saveCivitaiLibrarySettingsToSqlite(db, validation.settings);
+    if (supportsNsfw !== undefined || workflowUpdate) {
+      if (supportsNsfw !== undefined && typeof supportsNsfw !== "boolean") {
+        return {
+          ok: false,
+          status: 400,
+          message: "NSFW support setting must be a boolean.",
+        };
+      }
+
+      const nextUserSettings: SceneForgeUserSettings = {
+        ...userSettings,
+        supportsNsfw: supportsNsfw ?? userSettings.supportsNsfw,
+      };
+      const workflowValidation = validateWorkflowUpdate(nextUserSettings, workflowUpdate);
+      if ("ok" in workflowValidation && !workflowValidation.ok) {
+        return workflowValidation;
+      }
+
+      userSettings = saveSceneForgeUserSettingsToSqlite(db, workflowValidation);
+    }
+
     return {
       ok: true,
-      payload: buildCentralSettingsPayload(settings),
+      payload: buildCentralSettingsPayload(civitaiSettings, userSettings),
     };
   } finally {
     db.close();

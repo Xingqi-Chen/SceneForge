@@ -75,8 +75,8 @@ export const timelineNodeContent: Record<TimelineNodeId, TimelineNodeContent> = 
   },
   "result-display": {
     title: "Artifact result",
-    shellState: "Standalone timeline image",
-    emptyState: "Waiting for confirmed ComfyUI execution to return an image.",
+    shellState: "Standalone timeline images",
+    emptyState: "Waiting for confirmed ComfyUI execution to return images.",
     editLabel: "Result locked",
     aiLabel: "Review result",
   },
@@ -125,7 +125,7 @@ export function getTimelineNodeOutputText(node: TimelineNodeResult) {
       isRecord(node.result.image) &&
       typeof node.result.image.url === "string"
     ) {
-      return `Generated image for prompt ${node.result.promptId}.`;
+      return `Generated image results for prompt ${node.result.promptId}.`;
     }
 
     if (

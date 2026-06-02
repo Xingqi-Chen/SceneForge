@@ -131,6 +131,63 @@ function createConfirmedGenerationWorkflow(workflow: TimelineWorkflowState) {
   return confirmedWorkflow;
 }
 
+function createMultiImageConfirmedGenerationWorkflow(workflow: TimelineWorkflowState) {
+  const storedImages = [1, 2, 3, 4].map((index) => ({
+    byteLength: index * 10,
+    contentType: "image/png",
+    filename: `timeline-confirmed-${index}.png`,
+    url: `/api/comfyui/generated-images/timeline-confirmed-${index}.png`,
+  }));
+  const sourceImages = [1, 2, 3, 4].map((index) => ({
+    filename: `timeline-output-${index}.png`,
+    nodeId: "9",
+    type: "output",
+  }));
+
+  let confirmedWorkflow = confirmTimelineGeneration(workflow);
+  confirmedWorkflow = completeTimelineNode(
+    confirmedWorkflow,
+    "comfyui-execution",
+    {
+      nodeIds: {},
+      outputNodeId: "9",
+      promptId: "prompt-confirmed",
+      request: {
+        batchSize: 4,
+        checkpointName: "Cyber Checkpoint__v1__mv101.safetensors",
+        positivePrompt: "neon market alley, sunrise, courier sprinting",
+        preview: false,
+      },
+      warnings: [],
+    },
+    "system",
+  );
+  confirmedWorkflow = completeTimelineNode(
+    confirmedWorkflow,
+    "result-display",
+    {
+      completed: true,
+      image: {
+        ...sourceImages[0]!,
+        url: storedImages[0]!.url,
+      },
+      images: sourceImages.map((image, index) => ({
+        ...image,
+        url: storedImages[index]?.url ?? "",
+      })),
+      promptId: "prompt-confirmed",
+      sourceImage: sourceImages[0]!,
+      sourceImages,
+      storedImage: storedImages[0]!,
+      storedImages,
+      warnings: [],
+    },
+    "system",
+  );
+
+  return confirmedWorkflow;
+}
+
 function createObjectInfoMismatchWorkflow(workflow: TimelineWorkflowState) {
   const message = [
     "ComfyUI request does not match the current ComfyUI model/node options.",
@@ -188,6 +245,25 @@ function isStyleAdviceRequest(init?: RequestInit) {
   const systemContent = body?.messages?.[0]?.content;
 
   return typeof systemContent === "string" && systemContent.includes("style palette assistant");
+}
+
+function getSceneInputAiAction(init?: RequestInit) {
+  const body = getFetchBody(init);
+  const systemContent = body?.messages?.[0]?.content;
+
+  if (typeof systemContent !== "string" || !systemContent.includes("scene input agent")) {
+    return null;
+  }
+
+  const userContent = body?.messages?.[1]?.content;
+
+  if (typeof userContent !== "string") {
+    return null;
+  }
+
+  const payload = JSON.parse(userContent) as { action?: unknown; currentSceneRequest?: unknown };
+
+  return payload.action === "rewrite" || payload.action === "suggest" ? payload : null;
 }
 
 function makeCivitaiResource(resourceType: "lora" | "model", id: string, name: string) {
@@ -353,9 +429,45 @@ function createT5ResponseForPurpose(purpose: string | undefined) {
   });
 }
 
+function createTimelineSettingsResponse(overrides: Partial<{
+  supportsNsfw: boolean;
+  characterTagNewTermDefaultOption: "existing-only" | "temporary" | "import" | "ask";
+  autoReview: boolean;
+}> = {}) {
+  return createJsonResponse({
+    general: {
+      nsfw: {
+        enabled: true,
+        supportsNsfw: overrides.supportsNsfw ?? false,
+        source: "env",
+        detail: "NSFW UI mode is enabled by SCENEFORGE_SHOW_NSFW_BUTTON.",
+      },
+    },
+    workflow: {
+      characterTagNewTermDefaultOption: overrides.characterTagNewTermDefaultOption ?? "ask",
+      autoReview: overrides.autoReview ?? false,
+    },
+    storage: { paths: [] },
+    civitai: {
+      paths: {
+        loraDownloadPath: "",
+        checkpointDownloadPath: "",
+        diffusionModelPath: "",
+        controlNetModelPath: "",
+      },
+      pathStatuses: [],
+    },
+    integrations: [],
+  });
+}
+
 function mockT5Fetch() {
   return vi.fn<typeof fetch>(async (input, init) => {
     const url = getFetchUrl(input);
+
+    if (url === "/api/settings") {
+      return createTimelineSettingsResponse();
+    }
 
     if (url === "/api/llm/chat" && isStyleAdviceRequest(init)) {
       return createStyleAdviceResponse();
@@ -390,6 +502,10 @@ function mockT5FetchWithDeferredPose() {
 
   const fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
     const url = getFetchUrl(_input);
+    if (url === "/api/settings") {
+      return createTimelineSettingsResponse();
+    }
+
     if (url === "/api/llm/chat" && isStyleAdviceRequest(init)) {
       return createStyleAdviceResponse();
     }
@@ -433,6 +549,10 @@ function mockT5FetchWithDeferredPrompt() {
 
   const fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
     const url = getFetchUrl(_input);
+    if (url === "/api/settings") {
+      return createTimelineSettingsResponse();
+    }
+
     if (url === "/api/llm/chat" && isStyleAdviceRequest(init)) {
       return createStyleAdviceResponse();
     }
@@ -506,6 +626,16 @@ function getWorkflowStepTitles() {
     .map((button) => button.textContent?.replace(/\s+/g, " ").trim() ?? "")
     .map((text) => nodeTitles.find((title) => text.includes(title)))
     .filter((title): title is string => Boolean(title));
+}
+
+function getWorkflowStepButton(nodeId: string) {
+  const button = container.querySelector(`button[data-node-id="${nodeId}"]`) as HTMLButtonElement | null;
+
+  if (!button) {
+    throw new Error(`Unable to find workflow step "${nodeId}".`);
+  }
+
+  return button;
 }
 
 function setNativeTextAreaValue(textarea: HTMLTextAreaElement, value: string) {
@@ -611,11 +741,19 @@ describe("TimelineShell", () => {
 
     const sceneInput = container.querySelector("#scene-request") as HTMLTextAreaElement | null;
     const promptProfile = container.querySelector("#prompt-profile") as HTMLSelectElement | null;
+    const imageCount = container.querySelector("#timeline-image-count") as HTMLSelectElement | null;
     const startButton = getButtonByText("Start workflow");
     const settingsLink = container.querySelector('a[href="/settings"]');
 
     expect(sceneInput).not.toBeNull();
     expect(promptProfile?.value).toBe("illustrious");
+    expect(imageCount?.value).toBe("1");
+    expect(Array.from(imageCount?.options ?? []).map((option) => option.value)).toEqual([
+      "1",
+      "2",
+      "3",
+      "4",
+    ]);
     expect(Array.from(promptProfile?.options ?? []).map((option) => option.value)).toEqual([
       "illustrious",
       "anima",
@@ -691,7 +829,9 @@ describe("TimelineShell", () => {
         promptProfile: "anima",
         sceneRequest: "A rainy courier under station lights",
       });
-      const fetchUrls = fetchMock.mock.calls.map(([input]) => String(input));
+      const fetchUrls = fetchMock.mock.calls
+        .map(([input]) => String(input))
+        .filter((url) => url !== "/api/settings");
       expect(fetchUrls).toContain(
         "/api/civitai-lora-library/resources?resourceType=model&category=all&downloaded=ready&promptProfile=anima",
       );
@@ -871,7 +1011,7 @@ describe("TimelineShell", () => {
 
       const generationGateSection = getSectionByHeading("Review / export");
       expect(generationGateSection.textContent).toContain(
-        "ComfyUI execution requires explicit confirmation. The timeline stops here until you confirm the single-image request.",
+        "ComfyUI execution requires explicit confirmation. The timeline stops here until you confirm the render request.",
       );
       expect(generationGateSection.textContent).toContain("Confirm and render");
 
@@ -892,12 +1032,14 @@ describe("TimelineShell", () => {
 
       const resultSection = getSectionByHeading("Artifact result");
       expect(resultSection.textContent).toContain(
-        "Waiting for confirmed ComfyUI execution to return an image.",
+        "Waiting for confirmed ComfyUI execution to return images.",
       );
 
       expect(storageSpy).not.toHaveBeenCalled();
       expect(savePromptLibraryMock).not.toHaveBeenCalled();
-      const fetchUrls = fetchMock.mock.calls.map(([input]) => String(input));
+      const fetchUrls = fetchMock.mock.calls
+        .map(([input]) => String(input))
+        .filter((url) => url !== "/api/settings");
       expect(fetchUrls).toEqual([
         "/api/llm/chat",
         "/api/llm/chat",
@@ -913,6 +1055,232 @@ describe("TimelineShell", () => {
       expect(window.localStorage.length).toBe(0);
       expect(window.sessionStorage.length).toBe(0);
       expect(container.textContent).not.toMatch(/C:\\|SCENEFORGE_|API_KEY|generated-images|data\//);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("keeps the currently running workflow node in a loading state", async () => {
+    const originalFetch = globalThis.fetch;
+    const { fetchMock, promptRequests } = mockT5FetchWithDeferredPrompt();
+    globalThis.fetch = fetchMock;
+
+    try {
+      act(() => {
+        root.render(<TimelineShell />);
+      });
+
+      await submitInitialScene("A glass greenhouse control room");
+
+      const promptStepButton = getWorkflowStepButton("scene-prompt");
+
+      expect(promptRequests).toHaveLength(1);
+      expect(promptStepButton.textContent).toContain("Running");
+      expect(promptStepButton.querySelector(".animate-spin")).not.toBeNull();
+
+      await act(async () => {
+        promptRequests[0]?.resolve(createT5ResponseForPurpose("stable-diffusion-prompt-generation"));
+        await Promise.resolve();
+      });
+      await flushAsyncWork();
+
+      expect(getWorkflowStepButton("scene-prompt").textContent).toContain("Done");
+      expect(getWorkflowStepButton("scene-prompt").querySelector(".animate-spin")).toBeNull();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("allows T1 suggest and rewrite before the workflow has run", async () => {
+    const originalFetch = globalThis.fetch;
+    const t5FetchMock = mockT5Fetch();
+    const sceneInputRequests: Array<{ action?: unknown; currentSceneRequest?: unknown }> = [];
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = getFetchUrl(input);
+      const sceneInputAction = getSceneInputAiAction(init);
+
+      if (url === "/api/llm/chat" && sceneInputAction) {
+        sceneInputRequests.push(sceneInputAction);
+
+        return createJsonResponse({
+          role: "assistant",
+          content: JSON.stringify({
+            sceneRequest:
+              sceneInputAction.action === "rewrite"
+                ? "A rewritten pre-run observatory command"
+                : "A suggested pre-run moonlit observatory command",
+          }),
+        });
+      }
+
+      return t5FetchMock(input, init);
+    });
+
+    globalThis.fetch = fetchMock;
+
+    try {
+      act(() => {
+        root.render(<TimelineShell />);
+      });
+      await flushAsyncWork();
+
+      expect(getButtonByText("Suggest").hasAttribute("disabled")).toBe(false);
+      expect(getButtonByText("Rewrite").hasAttribute("disabled")).toBe(true);
+
+      act(() => {
+        getButtonByText("Suggest").click();
+      });
+      await flushAsyncWork();
+
+      expect((container.querySelector("#scene-request") as HTMLTextAreaElement | null)?.value).toBe(
+        "A suggested pre-run moonlit observatory command",
+      );
+      expect(getSectionByHeading("Scene input").textContent).toContain("Run the timeline when ready.");
+
+      act(() => {
+        getButtonByText("Rewrite").click();
+      });
+      await flushAsyncWork();
+
+      expect(sceneInputRequests).toEqual([
+        {
+          action: "suggest",
+          currentSceneRequest: "",
+          promptProfile: "illustrious",
+        },
+        {
+          action: "rewrite",
+          currentSceneRequest: "A suggested pre-run moonlit observatory command",
+          promptProfile: "illustrious",
+        },
+      ]);
+      expect((container.querySelector("#scene-request") as HTMLTextAreaElement | null)?.value).toBe(
+        "A rewritten pre-run observatory command",
+      );
+      expect(container.textContent).toContain("Draft setup");
+      expect(container.textContent).not.toContain("Downstream nodes are pending regeneration");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("rewrites the T1 scene input and marks downstream nodes pending", async () => {
+    const originalFetch = globalThis.fetch;
+    const t5FetchMock = mockT5Fetch();
+    const sceneInputRequests: Array<{ action?: unknown; currentSceneRequest?: unknown }> = [];
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = getFetchUrl(input);
+      const sceneInputAction = getSceneInputAiAction(init);
+
+      if (url === "/api/llm/chat" && sceneInputAction) {
+        sceneInputRequests.push(sceneInputAction);
+
+        return createJsonResponse({
+          role: "assistant",
+          content: JSON.stringify({
+            sceneRequest: "A rewritten glass greenhouse control room with a lone pilot checking illuminated panels",
+          }),
+        });
+      }
+
+      return t5FetchMock(input, init);
+    });
+
+    globalThis.fetch = fetchMock;
+
+    try {
+      act(() => {
+        root.render(<TimelineShell />);
+      });
+
+      await submitSceneAndChoosePromptTagReview(
+        "A glass greenhouse control room",
+        "本次保留，不入词库",
+      );
+
+      act(() => {
+        getWorkflowStepButton("scene-input").click();
+      });
+
+      act(() => {
+        getButtonByText("Rewrite").click();
+      });
+      await flushAsyncWork();
+
+      expect(sceneInputRequests).toEqual([
+        {
+          action: "rewrite",
+          currentSceneRequest: "A glass greenhouse control room",
+          promptProfile: "illustrious",
+        },
+      ]);
+      expect((container.querySelector("#scene-request") as HTMLTextAreaElement | null)?.value).toBe(
+        "A rewritten glass greenhouse control room with a lone pilot checking illuminated panels",
+      );
+      expect(getSectionByHeading("Scene input").textContent).toContain("Downstream nodes are pending regeneration");
+      expect(getWorkflowStepButton("scene-prompt").textContent).toContain("Pending");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("suggests a T1 scene input alternate and keeps the workflow paused for regeneration", async () => {
+    const originalFetch = globalThis.fetch;
+    const t5FetchMock = mockT5Fetch();
+    const sceneInputRequests: Array<{ action?: unknown; currentSceneRequest?: unknown }> = [];
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = getFetchUrl(input);
+      const sceneInputAction = getSceneInputAiAction(init);
+
+      if (url === "/api/llm/chat" && sceneInputAction) {
+        sceneInputRequests.push(sceneInputAction);
+
+        return createJsonResponse({
+          role: "assistant",
+          content: JSON.stringify({
+            sceneRequest: "A suggested moonlit archive atrium with one archivist sorting glowing glass slides",
+          }),
+        });
+      }
+
+      return t5FetchMock(input, init);
+    });
+
+    globalThis.fetch = fetchMock;
+
+    try {
+      act(() => {
+        root.render(<TimelineShell />);
+      });
+
+      await submitSceneAndChoosePromptTagReview(
+        "A quiet archive atrium",
+        "本次保留，不入词库",
+      );
+
+      act(() => {
+        getWorkflowStepButton("scene-input").click();
+      });
+
+      const nonSceneInputFetchCallCount = t5FetchMock.mock.calls.length;
+
+      act(() => {
+        getButtonByText("Suggest").click();
+      });
+      await flushAsyncWork();
+
+      expect(sceneInputRequests).toEqual([
+        {
+          action: "suggest",
+          currentSceneRequest: "A quiet archive atrium",
+          promptProfile: "illustrious",
+        },
+      ]);
+      expect((container.querySelector("#scene-request") as HTMLTextAreaElement | null)?.value).toBe(
+        "A suggested moonlit archive atrium with one archivist sorting glowing glass slides",
+      );
+      expect(getWorkflowStepButton("scene-prompt").textContent).toContain("Pending");
+      expect(t5FetchMock.mock.calls).toHaveLength(nonSceneInputFetchCallCount);
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -934,7 +1302,9 @@ describe("TimelineShell", () => {
         "本次保留，不入词库",
       );
 
-      expect(fetchMock.mock.calls.map(([input]) => String(input))).toEqual([
+      expect(fetchMock.mock.calls
+        .map(([input]) => String(input))
+        .filter((url) => url !== "/api/settings")).toEqual([
         "/api/llm/chat",
         "/api/llm/chat",
         "/api/llm/chat",
@@ -975,6 +1345,13 @@ describe("TimelineShell", () => {
         root.render(<TimelineShell />);
       });
 
+      act(() => {
+        setNativeSelectValue(
+          container.querySelector("#timeline-image-count") as HTMLSelectElement,
+          "3",
+        );
+      });
+
       await submitSceneAndChoosePromptTagReview(
         "A neon market alley with a courier at sunrise",
         "本次保留，不入词库",
@@ -999,6 +1376,9 @@ describe("TimelineShell", () => {
 
       expect(confirmPayloads).toHaveLength(1);
       expect(confirmPayloads[0]?.generationConfirmed).toBe(false);
+      expect(confirmPayloads[0]?.nodes["scene-input"].result).toMatchObject({
+        imageCount: 3,
+      });
       expect(confirmPayloads[0]?.nodes["generation-gate"].status).toBe("blocked");
       expect(confirmPayloads[0]?.nodes["generation-gate"].error?.code).toBe("confirmation_required");
 
@@ -1010,6 +1390,106 @@ describe("TimelineShell", () => {
       const resultSection = getSectionByHeading("Artifact result");
       expect(resultSection.textContent).toContain("Done");
       expect(resultSection.textContent).toContain("timeline-confirmed.png");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("renders every image returned by confirmed timeline generation", async () => {
+    const originalFetch = globalThis.fetch;
+    const t5FetchMock = mockT5Fetch();
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = getFetchUrl(input);
+
+      if (url === "/api/settings") {
+        return createTimelineSettingsResponse({
+          characterTagNewTermDefaultOption: "temporary",
+          autoReview: true,
+        });
+      }
+
+      if (url === "/api/agent-timeline/confirm-generation") {
+        const payload = typeof init?.body === "string" ? JSON.parse(init.body) : {};
+
+        return createJsonResponse({
+          workflow: createMultiImageConfirmedGenerationWorkflow(payload.workflow as TimelineWorkflowState),
+        });
+      }
+
+      return t5FetchMock(input, init);
+    });
+
+    globalThis.fetch = fetchMock;
+
+    try {
+      act(() => {
+        root.render(<TimelineShell />);
+      });
+      await flushAsyncWork();
+
+      act(() => {
+        setNativeSelectValue(
+          container.querySelector("#timeline-image-count") as HTMLSelectElement,
+          "4",
+        );
+      });
+
+      await submitInitialScene("A neon market alley with a courier at sunrise");
+      await flushAsyncWork();
+
+      const resultSection = getSectionByHeading("Artifact result");
+      expect(resultSection.textContent).toContain("Image 1 of 4");
+      expect(resultSection.textContent).toContain("Image 2 of 4");
+      expect(resultSection.textContent).toContain("Image 3 of 4");
+      expect(resultSection.textContent).toContain("Image 4 of 4");
+      expect(resultSection.textContent).toContain("4 images");
+      expect(resultSection.textContent).toContain("100");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("auto-confirms timeline generation when auto review is enabled", async () => {
+    const originalFetch = globalThis.fetch;
+    const t5FetchMock = mockT5Fetch();
+    const confirmPayloads: TimelineWorkflowState[] = [];
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = getFetchUrl(input);
+
+      if (url === "/api/settings") {
+        return createTimelineSettingsResponse({
+          characterTagNewTermDefaultOption: "temporary",
+          autoReview: true,
+        });
+      }
+
+      if (url === "/api/agent-timeline/confirm-generation") {
+        const payload = typeof init?.body === "string" ? JSON.parse(init.body) : {};
+        confirmPayloads.push(payload.workflow as TimelineWorkflowState);
+
+        return createJsonResponse({
+          workflow: createConfirmedGenerationWorkflow(payload.workflow as TimelineWorkflowState),
+        });
+      }
+
+      return t5FetchMock(input, init);
+    });
+
+    globalThis.fetch = fetchMock;
+
+    try {
+      act(() => {
+        root.render(<TimelineShell />);
+      });
+      await flushAsyncWork();
+
+      await submitInitialScene("A neon market alley with a courier at sunrise");
+      await flushAsyncWork();
+
+      expect(confirmPayloads).toHaveLength(1);
+      expect(confirmPayloads[0]?.nodes["generation-gate"].error?.code).toBe("confirmation_required");
+      expect(container.textContent).not.toContain("Review 2 new prompt tags");
+      expect(getSectionByHeading("Artifact result").textContent).toContain("timeline-confirmed.png");
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -1222,7 +1702,7 @@ describe("TimelineShell", () => {
 
       await submitInitialScene("A stale neon market courier scene");
 
-      expect(fetchMock).toHaveBeenCalledTimes(3);
+      expect(fetchMock.mock.calls.filter(([input]) => getFetchUrl(input) !== "/api/settings")).toHaveLength(3);
       expect(poseRequests).toHaveLength(1);
       expect(container.textContent).toContain("A stale neon market courier scene");
 
@@ -1242,7 +1722,7 @@ describe("TimelineShell", () => {
 
       const editorState = useEditorStore.getState();
 
-      expect(fetchMock).toHaveBeenCalledTimes(3);
+      expect(fetchMock.mock.calls.filter(([input]) => getFetchUrl(input) !== "/api/settings")).toHaveLength(3);
       expect((container.querySelector("#scene-request") as HTMLTextAreaElement | null)?.value).toBe("");
       expect(container.textContent).toContain("Waiting for scene command.");
       expect(container.textContent).not.toContain("A stale neon market courier scene");
@@ -1267,7 +1747,7 @@ describe("TimelineShell", () => {
 
       await submitInitialScene("A pending greenhouse scene");
 
-      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(fetchMock.mock.calls.filter(([input]) => getFetchUrl(input) !== "/api/settings")).toHaveLength(1);
       expect(promptRequests).toHaveLength(1);
 
       const promptStepButton = container.querySelector('button[data-node-id="scene-prompt"]') as HTMLButtonElement | null;
@@ -1314,7 +1794,7 @@ describe("TimelineShell", () => {
         'textarea[aria-label="Positive prompt"]',
       ) as HTMLTextAreaElement | null;
 
-      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(fetchMock.mock.calls.filter(([input]) => getFetchUrl(input) !== "/api/settings")).toHaveLength(1);
       expect(positivePrompt?.value).toBe("manual visual scene context");
       expect(positivePrompt?.value).not.toContain("neon market alley, sunrise, courier sprinting");
     } finally {

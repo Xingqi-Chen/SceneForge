@@ -35,6 +35,12 @@ import type {
   ImportedImageRecord,
   NormalizedCivitaiImage,
 } from "@/features/civitai-lora-library/types";
+import {
+  characterTagNewTermDefaultOptions,
+  defaultSceneForgeUserSettings,
+  type CharacterTagNewTermDefaultOption,
+  type SceneForgeUserSettings,
+} from "@/features/settings/types";
 import type { ProjectSummary, PromptBindingState, SceneForgeProject } from "@/shared/types";
 
 import {
@@ -65,6 +71,7 @@ const SCHEMA_VERSION = "2";
 const PROMPT_LIBRARY_KEY = "prompt-library";
 const PROMPT_BINDINGS_KEY = "prompt-bindings";
 const CIVITAI_LIBRARY_SETTINGS_KEY = "civitai-lora-library-settings";
+const SCENEFORGE_USER_SETTINGS_KEY = "sceneforge-user-settings";
 const CIVITAI_LOCAL_IMAGE_ROUTE_PREFIX = "/api/civitai-lora-library/images/";
 const ARTIST_STRING_LOCAL_IMAGE_ROUTE_PREFIX = "/api/artist-string-library/images/";
 
@@ -507,6 +514,31 @@ function writeAppStateJson(
   `).run(key, JSON.stringify(value), nowIso());
 }
 
+function sanitizeSceneForgeUserSettingsPayload(payload: unknown): SceneForgeUserSettings {
+  const record = isRecord(payload) ? payload : {};
+  const workflowRecord = isRecord(record.workflow) ? record.workflow : {};
+  const rawCharacterTagDefault = workflowRecord.characterTagNewTermDefaultOption;
+  const characterTagNewTermDefaultOption: CharacterTagNewTermDefaultOption =
+    typeof rawCharacterTagDefault === "string" &&
+    characterTagNewTermDefaultOptions.includes(rawCharacterTagDefault as CharacterTagNewTermDefaultOption)
+      ? (rawCharacterTagDefault as CharacterTagNewTermDefaultOption)
+      : defaultSceneForgeUserSettings.workflow.characterTagNewTermDefaultOption;
+
+  return {
+    supportsNsfw:
+      typeof record.supportsNsfw === "boolean"
+        ? record.supportsNsfw
+        : defaultSceneForgeUserSettings.supportsNsfw,
+    workflow: {
+      characterTagNewTermDefaultOption,
+      autoReview:
+        typeof workflowRecord.autoReview === "boolean"
+          ? workflowRecord.autoReview
+          : defaultSceneForgeUserSettings.workflow.autoReview,
+    },
+  };
+}
+
 export function loadPromptLibraryFromSqlite(
   db: SceneForgeSqliteDatabase,
 ): GlobalPromptLibraryState {
@@ -550,6 +582,22 @@ export function saveCivitaiLibrarySettingsToSqlite(
 ): CivitaiLibrarySettings {
   const normalized = sanitizeCivitaiLibrarySettingsPayload(settings);
   writeAppStateJson(db, CIVITAI_LIBRARY_SETTINGS_KEY, { version: 1, ...normalized });
+  return normalized;
+}
+
+export function loadSceneForgeUserSettingsFromSqlite(
+  db: SceneForgeSqliteDatabase,
+): SceneForgeUserSettings {
+  const payload = readAppStateJson(db, SCENEFORGE_USER_SETTINGS_KEY);
+  return sanitizeSceneForgeUserSettingsPayload(payload ?? {});
+}
+
+export function saveSceneForgeUserSettingsToSqlite(
+  db: SceneForgeSqliteDatabase,
+  settings: unknown,
+): SceneForgeUserSettings {
+  const normalized = sanitizeSceneForgeUserSettingsPayload(settings);
+  writeAppStateJson(db, SCENEFORGE_USER_SETTINGS_KEY, { version: 1, ...normalized });
   return normalized;
 }
 

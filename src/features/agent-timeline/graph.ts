@@ -20,7 +20,7 @@ import type {
   TimelineWorkflowState,
 } from "./types";
 
-type TimelineWorkflowUpdate = Partial<Omit<TimelineWorkflowState, "nodes">> & {
+export type TimelineWorkflowUpdate = Partial<Omit<TimelineWorkflowState, "nodes">> & {
   nodes?: Partial<TimelineNodeMap>;
 };
 
@@ -30,6 +30,7 @@ type TimelineGraphState = {
 
 type TimelineGraphOptions = {
   now?: () => string;
+  onWorkflowUpdate?: (update: TimelineWorkflowUpdate) => void;
 };
 
 function mergeTimelineWorkflowUpdate(
@@ -132,6 +133,7 @@ function createTimelineGraphNode(
     }
 
     const runningWorkflow = markTimelineNodeRunning(refreshedWorkflow, nodeId, options);
+    options.onWorkflowUpdate?.(getNodeOnlyWorkflowUpdate(runningWorkflow, nodeId));
 
     try {
       const adapterResult = normalizeAdapterResult(
@@ -148,12 +150,14 @@ function createTimelineGraphNode(
         adapterResult.source ?? "ai",
         options,
       );
+      options.onWorkflowUpdate?.(getNodeOnlyWorkflowUpdate(completedWorkflow, nodeId));
 
       return {
         workflow: getNodeOnlyWorkflowUpdate(completedWorkflow, nodeId),
       };
     } catch (error) {
       const failedWorkflow = failTimelineNode(runningWorkflow, nodeId, error, options);
+      options.onWorkflowUpdate?.(getNodeOnlyWorkflowUpdate(failedWorkflow, nodeId));
 
       return {
         workflow: getNodeOnlyWorkflowUpdate(failedWorkflow, nodeId),

@@ -110,6 +110,7 @@ export type TimelineWorkflowState = {
 export type SceneInputTimelineResult = {
   rawIntent: string;
   promptProfile: PromptProfileId;
+  imageCount: number;
   settingsSnapshot?: unknown;
 };
 
@@ -253,6 +254,13 @@ export type ResultDisplayTimelineResult = {
     type?: string;
     url: string;
   };
+  images?: Array<{
+    filename: string;
+    nodeId: string;
+    subfolder?: string;
+    type?: string;
+    url: string;
+  }>;
   promptId: string;
   sourceImage: {
     filename: string;
@@ -260,7 +268,14 @@ export type ResultDisplayTimelineResult = {
     subfolder?: string;
     type?: string;
   };
+  sourceImages?: Array<{
+    filename: string;
+    nodeId: string;
+    subfolder?: string;
+    type?: string;
+  }>;
   storedImage: TimelineStoredGeneratedImage;
+  storedImages?: TimelineStoredGeneratedImage[];
   warnings: string[];
 };
 

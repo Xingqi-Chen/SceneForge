@@ -18,6 +18,7 @@ import {
   TimelineNodeExecutionError,
   type ComfyUiExecutionTimelineResult,
   type ResultDisplayTimelineResult,
+  type TimelineStoredGeneratedImage,
   type TimelineNodeAdapters,
   type TimelineNodeExecutionContext,
 } from "./types";
@@ -139,29 +140,41 @@ async function waitForTimelineResultImage(
     const images = extractComfyUiHistoryImages(raw, execution.promptId);
 
     if (images.length > 0) {
-      const sourceImage = images[0];
-      const response = await fetch(client.buildViewUrl(sourceImage), {
-        cache: "no-store",
-        headers: {
-          accept: "image/*",
-          ...(process.env.COMFYUI_API_KEY ? { authorization: `Bearer ${process.env.COMFYUI_API_KEY}` } : {}),
-        },
-      });
+      const storedImages: TimelineStoredGeneratedImage[] = [];
 
-      if (!response.ok) {
-        const details = await response.text().catch(() => null);
-        throw new TimelineNodeExecutionError(
-          createTimelineNodeError("image_storage_failed", "ComfyUI image request failed.", {
-            details,
-            statusCode: response.status,
-          }),
-        );
+      for (const sourceImage of images) {
+        const response = await fetch(client.buildViewUrl(sourceImage), {
+          cache: "no-store",
+          headers: {
+            accept: "image/*",
+            ...(process.env.COMFYUI_API_KEY ? { authorization: `Bearer ${process.env.COMFYUI_API_KEY}` } : {}),
+          },
+        });
+
+        if (!response.ok) {
+          const details = await response.text().catch(() => null);
+          throw new TimelineNodeExecutionError(
+            createTimelineNodeError("image_storage_failed", "ComfyUI image request failed.", {
+              details,
+              sourceImage,
+              statusCode: response.status,
+            }),
+          );
+        }
+
+        storedImages.push(await storeGeneratedImage(
+          new Uint8Array(await response.arrayBuffer()),
+          response.headers.get("content-type"),
+        ));
       }
 
-      const storedImage = await storeGeneratedImage(
-        new Uint8Array(await response.arrayBuffer()),
-        response.headers.get("content-type"),
-      );
+      const sourceImage = images[0];
+      const storedImage = storedImages[0];
+      if (!sourceImage || !storedImage) {
+        throw new TimelineNodeExecutionError(
+          createTimelineNodeError("image_storage_failed", "ComfyUI image storage did not produce an image."),
+        );
+      }
 
       return {
         completed: isComfyUiPromptHistoryComplete(raw, execution.promptId),
@@ -169,9 +182,15 @@ async function waitForTimelineResultImage(
           ...sourceImage,
           url: storedImage.url,
         },
+        images: images.map((image, index) => ({
+          ...image,
+          url: storedImages[index]?.url ?? storedImage.url,
+        })),
         promptId: execution.promptId,
         sourceImage,
+        sourceImages: images,
         storedImage,
+        storedImages,
         warnings: execution.warnings,
       };
     }
