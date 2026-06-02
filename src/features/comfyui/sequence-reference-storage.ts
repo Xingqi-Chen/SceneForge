@@ -25,7 +25,7 @@ export class ComfyUiSequenceReferenceStorageError extends Error {
   }
 }
 
-function getSequenceReferenceDir() {
+export function getResolvedSequenceReferenceDir() {
   return path.resolve(/*turbopackIgnore: true*/ process.env.SCENEFORGE_SEQUENCE_REFERENCE_DIR || DEFAULT_SEQUENCE_REFERENCE_DIR);
 }
 
@@ -60,7 +60,7 @@ export function getSequenceReferencePath(filename: string) {
     return null;
   }
 
-  const root = getSequenceReferenceDir();
+  const root = getResolvedSequenceReferenceDir();
   const target = path.resolve(/*turbopackIgnore: true*/ root, filename);
   assertInsideDirectory(root, target);
   return target;
