@@ -9,8 +9,22 @@ import {
   splitPromptParts,
 } from "./illustrious-prompt";
 
-export const ANIMA_DEFAULT_QUALITY_META_TAGS = ["masterpiece", "best quality", "score_7"];
-export const ANIMA_DEFAULT_NEGATIVE_TAGS = ["low quality", "worst quality", "bad anatomy", "bad hands"];
+export const ANIMA_DEFAULT_QUALITY_META_TAGS = ["masterpiece", "best quality", "score_9", "score_8", "score_7"];
+export const ANIMA_DEFAULT_NEGATIVE_TAGS = [
+  "worst quality",
+  "low quality",
+  "lowres",
+  "score_1",
+  "score_2",
+  "score_3",
+  "blurry",
+  "jpeg artifacts",
+  "bad anatomy",
+  "watermark",
+  "artist name",
+  "nsfw",
+  "bad_hands",
+];
 
 export type AnimaPromptSectionKey =
   | "qualityMetaSafety"
@@ -500,7 +514,7 @@ export function buildAnimaAiResponseInstructions() {
     "Avoid abstract psychological narration unless it is visible through expression, pose, lighting, or atmosphere.",
     "Example style: 1girl, standing beside a rain-streaked window in an unlit room, gazing out at the rainy night with a quiet and pensive expression, faint blue-gray light coming from outside, cinematic over-shoulder composition.",
     "Use this positive order: quality/meta/year/safety, subject count, character, series/source, artist, general tags.",
-    "Default quality/meta tags will be added locally: masterpiece, best quality, score_7.",
+    "Default quality/meta tags will be added locally: masterpiece, best quality, score_9, score_8, score_7.",
     "Do not add safety or rating tags unless they are explicitly provided by the scene or user.",
     "Use selected Civitai trainedWords only when useful, and never invent trigger words.",
     "Use @artist syntax for artist names when possible.",

@@ -25,6 +25,7 @@ type Draft = {
   denoise: string;
   height: string;
   negativeAdditions: string;
+  positivePrompt: string;
   samplerName: string;
   scheduler: string;
   seed: string;
@@ -49,6 +50,7 @@ function makeDraft(result: ParameterRecommendationTimelineResult): Draft {
     denoise: String(result.denoise),
     height: String(result.height),
     negativeAdditions: result.negativeAdditions.join(", "),
+    positivePrompt: result.finalPositivePrompt ?? result.requestPreview.positivePrompt ?? "",
     samplerName: result.samplerName,
     scheduler: result.scheduler,
     seed: result.seedPolicy.mode === "fixed" ? String(result.seedPolicy.seed) : "",
@@ -85,6 +87,24 @@ function splitNegativeAdditions(value: string) {
     .split(",")
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function mergePromptTags(basePrompt: string, additions: string[]) {
+  const tags: string[] = [];
+  const seen = new Set<string>();
+
+  for (const tag of [...splitNegativeAdditions(basePrompt), ...additions]) {
+    const key = tag.toLowerCase();
+
+    if (seen.has(key)) {
+      continue;
+    }
+
+    seen.add(key);
+    tags.push(tag);
+  }
+
+  return tags.join(", ");
 }
 
 function getOptionLabel(value: string, knownOptions: readonly { label: string; value: string }[]) {
@@ -150,7 +170,11 @@ export function TimelineParameterRecommendationWorkspace({
     const seed = clampInteger(draft.seed, 0, 0, Number.MAX_SAFE_INTEGER);
     const seedPolicy = draft.seedMode === "fixed" ? { mode: "fixed" as const, seed } : { mode: "random" as const };
     const negativeAdditions = splitNegativeAdditions(draft.negativeAdditions);
-    const negativePrompt = negativeAdditions.join(", ");
+    const negativePrompt = mergePromptTags(
+      result.requestPreview.negativePrompt || result.negativePrompt,
+      negativeAdditions,
+    );
+    const positivePrompt = draft.positivePrompt.trim() || result.finalPositivePrompt || result.requestPreview.positivePrompt;
     const samplerName = pickAllowedValue(draft.samplerName, samplerOptions, result.samplerName);
     const scheduler = pickAllowedValue(draft.scheduler, schedulerOptions, result.scheduler);
 
@@ -158,6 +182,7 @@ export function TimelineParameterRecommendationWorkspace({
       ...result,
       cfg,
       denoise,
+      finalPositivePrompt: positivePrompt,
       height,
       negativeAdditions,
       negativePrompt,
@@ -172,6 +197,7 @@ export function TimelineParameterRecommendationWorkspace({
         denoise,
         height,
         negativePrompt,
+        positivePrompt,
         samplerName,
         scheduler,
         seed: seedPolicy.mode === "fixed" ? seedPolicy.seed : undefined,
@@ -184,6 +210,16 @@ export function TimelineParameterRecommendationWorkspace({
 
   return (
     <div className="flex flex-col gap-4" data-testid="timeline-parameter-workspace">
+      <label className="flex flex-col gap-1 text-xs font-medium text-slate-700">
+        Positive prompt
+        <textarea
+          className="min-h-28 rounded-md border border-slate-200 px-2 py-2 text-xs leading-relaxed outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+          disabled={!editable}
+          onChange={(event) => updateDraft({ positivePrompt: event.target.value })}
+          value={draft.positivePrompt}
+        />
+      </label>
+
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
         <label className="flex flex-col gap-1 text-xs font-medium text-slate-700">
           Width

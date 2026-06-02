@@ -666,8 +666,84 @@ describe("T7 timeline adapters", () => {
     expect(result.requestPreview.workflowProfile).toBe("anima");
     expect(result.finalPositivePrompt).toBe(result.requestPreview.positivePrompt);
     expect(result.requestPreview.positivePrompt.match(/masterpiece/g)).toHaveLength(1);
+    expect(result.requestPreview.positivePrompt.match(/score_9/g)).toHaveLength(1);
+    expect(result.requestPreview.positivePrompt.match(/score_8/g)).toHaveLength(1);
     expect(result.requestPreview.positivePrompt.match(/score_7/g)).toHaveLength(1);
     expect(result.requestPreview.positivePrompt.match(/neon_style/g)).toHaveLength(1);
+    expect(result.requestPreview.negativePrompt).toContain("worst quality");
+    expect(result.requestPreview.negativePrompt).toContain("score_1");
+    expect(result.requestPreview.negativePrompt).toContain("jpeg artifacts");
+    expect(result.requestPreview.negativePrompt).toContain("bad_hands");
+  });
+
+  it("uses AI Style Advice parameter suggestions without replacing the final positive prompt", () => {
+    const checkpoint = makeResource("model", "checkpoint-local", "Local Checkpoint", "Illustrious");
+    const lora = makeResource("lora", "lora-local", "Local LoRA", "Illustrious", {
+      trainedWords: ["neon_style"],
+    });
+    const resourceResult: ResourceRecommendationTimelineResult = {
+      checkpoint: {
+        resource: checkpoint,
+        reason: "Local checkpoint.",
+      },
+      loras: [
+        {
+          resource: lora,
+          suggestedWeight: 0.72,
+          reason: "Local LoRA.",
+        },
+      ],
+      candidates: {
+        checkpoints: [makeCandidate(checkpoint)],
+        loras: [makeCandidate(lora)],
+      },
+      recommendationReason: "Local recommendation.",
+      overallEffect: "Neon portrait.",
+      warnings: [],
+    };
+
+    const result = createTimelineParameterRecommendation({
+      aiAdvice: {
+        prompt: "style advice prompt should be ignored",
+        parameterSuggestionReason: "AI Style Advice tuned the selected resources.",
+        overallEffect: "Tuned style.",
+        parseWarning: null,
+        parameterSuggestions: {
+          cfgScale: 5.5,
+          loraWeights: [{ name: "Local LoRA", suggestedWeight: 0.64 }],
+          negativePromptAdditions: "jpeg artifacts",
+          resolution: "1216x800",
+          sampler: "euler",
+          scheduler: "normal",
+          steps: 38,
+        },
+      },
+      resourceResult,
+      scenePrompt: makeScenePrompt("illustrious"),
+      canvasBinding: null,
+      samplerOptions: {
+        samplers: ["euler", "dpmpp_2m"],
+        schedulers: ["normal", "karras"],
+      },
+    });
+
+    expect(result).toMatchObject({
+      cfg: 5.5,
+      height: 800,
+      reason: "AI Style Advice tuned the selected resources.",
+      samplerName: "euler",
+      scheduler: "normal",
+      steps: 38,
+      width: 1216,
+    });
+    expect(result.finalPositivePrompt).not.toBe("style advice prompt should be ignored");
+    expect(result.requestPreview.positivePrompt).toBe(result.finalPositivePrompt);
+    expect(result.requestPreview.negativePrompt).toContain("low quality");
+    expect(result.requestPreview.negativePrompt).toContain("jpeg artifacts");
+    expect(result.requestPreview.loras?.[0]).toMatchObject({
+      strengthModel: 0.64,
+      strengthClip: 0.64,
+    });
   });
 
   it("passes Anima checkpoint filename aliases into the request preview", () => {

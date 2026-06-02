@@ -68,10 +68,22 @@ export type TimelineSamplerOptionsProvider = (
   context: TimelineNodeExecutionContext,
 ) => Promise<TimelineSamplerOptions> | TimelineSamplerOptions;
 
+export type TimelineStyleAdviceRequest = {
+  baseNegativePrompt: string;
+  finalPositivePrompt: string;
+  selectedResources: SelectedCivitaiResourcesPreview;
+};
+
+export type TimelineStyleAdviceProvider = (
+  request: TimelineStyleAdviceRequest,
+  context: TimelineNodeExecutionContext,
+) => Promise<CivitaiAiPromptResult | null> | CivitaiAiPromptResult | null;
+
 export type TimelineT7NodeAdapterOptions = {
   recommendResources: TimelineResourceRecommendationProvider;
   loadResourceCandidates: TimelineResourceCandidateProvider;
   loadSamplerOptions?: TimelineSamplerOptionsProvider;
+  adviseStyle?: TimelineStyleAdviceProvider;
   supportsNsfw?: () => boolean;
 };
 
@@ -569,6 +581,7 @@ export function createTimelineParameterRecommendation({
   resourceResult,
   scenePrompt,
   canvasBinding,
+  aiAdvice,
   samplerOptions: rawSamplerOptions,
   supportsNsfw = false,
 }: {
@@ -576,6 +589,7 @@ export function createTimelineParameterRecommendation({
   resourceResult: ResourceRecommendationTimelineResult;
   scenePrompt: ScenePromptTimelineResult;
   canvasBinding: CanvasBindingTimelineResult | null;
+  aiAdvice?: CivitaiAiPromptResult | null;
   samplerOptions?: TimelineSamplerOptions;
   supportsNsfw?: boolean;
 }): ParameterRecommendationTimelineResult {
@@ -588,10 +602,12 @@ export function createTimelineParameterRecommendation({
     supportsNsfw,
   });
   const baseNegativePrompt = scenePrompt.negativeSuggestions.join(", ");
+  const resolvedAiAdvice =
+    aiAdvice ?? createAiAdvice(resourceResult, scenePrompt, canvasBinding, samplerOptions, finalPositivePrompt);
   const settings = resolveComfyUiGenerationSettings({
     activePrompt: finalPositivePrompt,
     activePromptAlreadyFormatted: true,
-    aiAdvice: createAiAdvice(resourceResult, scenePrompt, canvasBinding, samplerOptions, finalPositivePrompt),
+    aiAdvice: resolvedAiAdvice,
     baseNegativePrompt,
     selectedResources,
     supportsNsfw,
@@ -620,8 +636,11 @@ export function createTimelineParameterRecommendation({
     negativeAdditions: scenePrompt.negativeSuggestions,
     negativePrompt: requestPreview.negativePrompt ?? "",
     requestPreview,
-    reason: settings.parameterSource === "ai"
-      ? "Used local resource metadata and prompt context to create a ComfyUI text-to-image request preview."
+    reason: aiAdvice
+      ? (aiAdvice.parameterSuggestionReason.trim() ||
+        "Used AI Style Advice with local resource metadata to create a ComfyUI text-to-image request preview.")
+      : settings.parameterSource === "ai"
+        ? "Used local resource metadata and prompt context to create a ComfyUI text-to-image request preview."
       : "Used conservative ComfyUI defaults because no model-specific parameter metadata was available.",
     warnings: request.samplerName !== samplerName || request.scheduler !== scheduler
       ? ["Sampler or scheduler suggestion was normalized to an available option."]
@@ -630,6 +649,7 @@ export function createTimelineParameterRecommendation({
 }
 
 export function createTimelineT7NodeAdapters({
+  adviseStyle,
   loadResourceCandidates,
   loadSamplerOptions,
   recommendResources,
@@ -668,9 +688,28 @@ export function createTimelineT7NodeAdapters({
       const promptProfile = getTimelinePromptProfile(context.workflow);
       const resourceResult = getResourceRecommendationResult(context.workflow.nodes["resource-recommendation"]);
       const samplerOptions = loadSamplerOptions ? await loadSamplerOptions(context) : defaultSamplerOptions;
+      const selectedResources = getSelectedResources(resourceResult);
+      const finalPositivePrompt = buildTimelineFinalPositivePrompt({
+        promptProfile,
+        resourceResult,
+        scenePrompt,
+        supportsNsfw: supportsNsfw(),
+      });
+      const baseNegativePrompt = scenePrompt.negativeSuggestions.join(", ");
+      const aiAdvice = adviseStyle
+        ? await adviseStyle(
+            {
+              baseNegativePrompt,
+              finalPositivePrompt,
+              selectedResources,
+            },
+            context,
+          )
+        : null;
 
       return {
         value: createTimelineParameterRecommendation({
+          aiAdvice,
           canvasBinding: getCanvasBindingResult(context.workflow),
           promptProfile,
           resourceResult,

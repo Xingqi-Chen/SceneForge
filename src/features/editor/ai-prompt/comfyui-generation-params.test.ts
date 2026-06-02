@@ -153,8 +153,9 @@ describe("ComfyUI generation parameters", () => {
       workflowProfile: "anima",
       modelBaseModel: "Anima",
       modelStorageKind: "diffusion",
-      positivePrompt: "masterpiece, best quality, score_7, safe, 1girl, @Alpha, city street",
-      negativePrompt: "low quality, worst quality, bad anatomy, bad hands",
+      positivePrompt: "masterpiece, best quality, score_9, score_8, score_7, safe, 1girl, @Alpha, city street",
+      negativePrompt:
+        "worst quality, low quality, lowres, score_1, score_2, score_3, blurry, jpeg artifacts, bad anatomy, watermark, artist name, nsfw, bad_hands",
     });
   });
 
@@ -264,7 +265,7 @@ describe("ComfyUI generation parameters", () => {
       supportsNsfw: true,
     });
 
-    expect(settings.request.positivePrompt).toBe("masterpiece, best quality, score_7, 1girl, city street");
+    expect(settings.request.positivePrompt).toBe("masterpiece, best quality, score_9, score_8, score_7, 1girl, city street");
     expect(settings.request.positivePrompt).not.toContain("safe");
   });
 

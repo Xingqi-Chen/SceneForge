@@ -58,12 +58,18 @@ import type {
   CivitaiAiRecommendationResponse,
   CivitaiResourceListItem,
   SelectedCivitaiResourcePreview,
+  SelectedCivitaiResourcesPreview,
 } from "@/features/civitai-lora-library/types";
 import {
   getCivitaiModelStorageKind,
   makeCivitaiResourceFileNameAliases,
   makeCivitaiResourceTargetFileName,
 } from "@/features/civitai-lora-library/resource-files";
+import { parseCivitaiAiPromptResponse } from "@/features/editor/ai-prompt/civitai-ai-context";
+import {
+  buildStylePaletteAdviceMessages,
+  type StylePalettePromptPreset,
+} from "@/features/editor/ai-prompt/style-palette-prompts";
 import {
   bindPrimaryTimelineCharacterToEditorStore,
   createTimelinePromptTagSuggestions,
@@ -384,6 +390,42 @@ async function recommendTimelineResourcesViaApi({
   }
 
   return payload as CivitaiAiRecommendationResponse;
+}
+
+async function loadTimelineStyleAdviceViaApi({
+  baseNegativePrompt,
+  finalPositivePrompt,
+  selectedResources,
+}: {
+  baseNegativePrompt: string;
+  finalPositivePrompt: string;
+  selectedResources: SelectedCivitaiResourcesPreview;
+}) {
+  if (!selectedResources.checkpoint) {
+    return null;
+  }
+
+  const preset: StylePalettePromptPreset = {
+    id: "portrait",
+    label: "Timeline render prompt",
+    description: "Timeline prompt used for model parameter advice.",
+    positive: finalPositivePrompt,
+    negative: baseNegativePrompt,
+  };
+  const response = await completeTimelineChatViaApi({
+    purpose: "stable-diffusion-prompt-generation",
+    messages: buildStylePaletteAdviceMessages({
+      artistPrompts: [],
+      preset,
+      resources: selectedResources,
+    }),
+    temperature: 0.25,
+    maxTokens: 900,
+  });
+
+  const parsed = parseCivitaiAiPromptResponse(response.content);
+
+  return parsed.parameterSuggestions ? parsed : null;
 }
 
 async function loadTimelineSamplerOptionsViaApi() {
@@ -870,6 +912,19 @@ export function TimelineShell() {
             getCurrentPose: getPrimaryTimelineCharacterPoseFromEditorStore,
           }),
           ...createTimelineT7NodeAdapters({
+            adviseStyle: async (request) => {
+              if (!isCurrentRun(runId)) {
+                throw new Error("Timeline run was superseded.");
+              }
+
+              const response = await loadTimelineStyleAdviceViaApi(request);
+
+              if (!isCurrentRun(runId)) {
+                throw new Error("Timeline run was superseded.");
+              }
+
+              return response;
+            },
             loadResourceCandidates: async (_desiredEffect, context) => {
               if (!isCurrentRun(runId)) {
                 throw new Error("Timeline run was superseded.");

@@ -179,6 +179,17 @@ function getFetchUrl(input: RequestInfo | URL) {
   return typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
 }
 
+function getFetchBody(init?: RequestInit) {
+  return typeof init?.body === "string" ? JSON.parse(init.body) : null;
+}
+
+function isStyleAdviceRequest(init?: RequestInit) {
+  const body = getFetchBody(init);
+  const systemContent = body?.messages?.[0]?.content;
+
+  return typeof systemContent === "string" && systemContent.includes("style palette assistant");
+}
+
 function makeCivitaiResource(resourceType: "lora" | "model", id: string, name: string) {
   return {
     id,
@@ -268,6 +279,26 @@ function createTimelineRecommendationResponse() {
   });
 }
 
+function createStyleAdviceResponse() {
+  return createJsonResponse({
+    role: "assistant",
+    content: JSON.stringify({
+      prompt: "ignored style advice prompt",
+      parameterSuggestions: {
+        cfgScale: 6,
+        loraWeights: [{ name: "Neon LoRA", suggestedWeight: 0.72, reason: "Keeps the LoRA at its observed style-test weight." }],
+        negativePromptAdditions: "jpeg artifacts",
+        resolution: "1216x800",
+        sampler: "euler",
+        scheduler: "normal",
+        steps: 36,
+      },
+      parameterSuggestionReason: "AI Style Advice tuned the render parameters for the selected local resources.",
+      overallEffect: "Neon anime rendering.",
+    }),
+  });
+}
+
 function createT5ResponseForPurpose(purpose: string | undefined) {
   if (purpose === "stable-diffusion-prompt-generation") {
     return createJsonResponse({
@@ -326,6 +357,10 @@ function mockT5Fetch() {
   return vi.fn<typeof fetch>(async (input, init) => {
     const url = getFetchUrl(input);
 
+    if (url === "/api/llm/chat" && isStyleAdviceRequest(init)) {
+      return createStyleAdviceResponse();
+    }
+
     if (url.startsWith("/api/civitai-lora-library/resources")) {
       return createJsonResponse({
         items: url.includes("resourceType=model") ? [checkpointResource] : [loraResource],
@@ -355,6 +390,10 @@ function mockT5FetchWithDeferredPose() {
 
   const fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
     const url = getFetchUrl(_input);
+    if (url === "/api/llm/chat" && isStyleAdviceRequest(init)) {
+      return createStyleAdviceResponse();
+    }
+
     if (url.startsWith("/api/civitai-lora-library/resources")) {
       return createJsonResponse({
         items: url.includes("resourceType=model") ? [checkpointResource] : [loraResource],
@@ -394,6 +433,10 @@ function mockT5FetchWithDeferredPrompt() {
 
   const fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
     const url = getFetchUrl(_input);
+    if (url === "/api/llm/chat" && isStyleAdviceRequest(init)) {
+      return createStyleAdviceResponse();
+    }
+
     if (url.startsWith("/api/civitai-lora-library/resources")) {
       return createJsonResponse({
         items: url.includes("resourceType=model") ? [checkpointResource] : [loraResource],
@@ -863,6 +906,7 @@ describe("TimelineShell", () => {
         "/api/civitai-lora-library/resources?resourceType=lora&category=all&nsfw=sfw&downloaded=ready&promptProfile=illustrious",
         "/api/civitai-lora-library/ai-recommendation",
         "/api/comfyui/sampler-options",
+        "/api/llm/chat",
       ]);
       expect(fetchUrls).not.toContain("/api/comfyui/generate-image");
       expect(fetchUrls).not.toContain("/api/comfyui/generated-images");
@@ -898,6 +942,7 @@ describe("TimelineShell", () => {
         "/api/civitai-lora-library/resources?resourceType=lora&category=all&nsfw=all&downloaded=ready&promptProfile=illustrious",
         "/api/civitai-lora-library/ai-recommendation",
         "/api/comfyui/sampler-options",
+        "/api/llm/chat",
       ]);
     } finally {
       globalThis.fetch = originalFetch;
