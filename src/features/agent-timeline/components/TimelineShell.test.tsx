@@ -693,10 +693,10 @@ describe("TimelineShell", () => {
       });
       const fetchUrls = fetchMock.mock.calls.map(([input]) => String(input));
       expect(fetchUrls).toContain(
-        "/api/civitai-lora-library/resources?resourceType=model&category=all&nsfw=sfw&downloaded=ready&promptProfile=anima",
+        "/api/civitai-lora-library/resources?resourceType=model&category=all&downloaded=ready&promptProfile=anima",
       );
       expect(fetchUrls).toContain(
-        "/api/civitai-lora-library/resources?resourceType=lora&category=all&nsfw=sfw&downloaded=ready&promptProfile=anima",
+        "/api/civitai-lora-library/resources?resourceType=lora&category=all&downloaded=ready&promptProfile=anima",
       );
     } finally {
       globalThis.fetch = originalFetch;
@@ -902,8 +902,8 @@ describe("TimelineShell", () => {
         "/api/llm/chat",
         "/api/llm/chat",
         "/api/llm/chat",
-        "/api/civitai-lora-library/resources?resourceType=model&category=all&nsfw=sfw&downloaded=ready&promptProfile=illustrious",
-        "/api/civitai-lora-library/resources?resourceType=lora&category=all&nsfw=sfw&downloaded=ready&promptProfile=illustrious",
+        "/api/civitai-lora-library/resources?resourceType=model&category=all&downloaded=ready&promptProfile=illustrious",
+        "/api/civitai-lora-library/resources?resourceType=lora&category=all&downloaded=ready&promptProfile=illustrious",
         "/api/civitai-lora-library/ai-recommendation",
         "/api/comfyui/sampler-options",
         "/api/llm/chat",
@@ -918,7 +918,7 @@ describe("TimelineShell", () => {
     }
   });
 
-  it("loads local resource candidates with NSFW filtering enabled from project settings", async () => {
+  it("loads local resource candidates without NSFW filtering when project NSFW is enabled", async () => {
     const originalFetch = globalThis.fetch;
     const fetchMock = mockT5Fetch();
     setProjectSupportsNsfw(true);
@@ -938,8 +938,8 @@ describe("TimelineShell", () => {
         "/api/llm/chat",
         "/api/llm/chat",
         "/api/llm/chat",
-        "/api/civitai-lora-library/resources?resourceType=model&category=all&nsfw=all&downloaded=ready&promptProfile=illustrious",
-        "/api/civitai-lora-library/resources?resourceType=lora&category=all&nsfw=all&downloaded=ready&promptProfile=illustrious",
+        "/api/civitai-lora-library/resources?resourceType=model&category=all&downloaded=ready&promptProfile=illustrious",
+        "/api/civitai-lora-library/resources?resourceType=lora&category=all&downloaded=ready&promptProfile=illustrious",
         "/api/civitai-lora-library/ai-recommendation",
         "/api/comfyui/sampler-options",
         "/api/llm/chat",

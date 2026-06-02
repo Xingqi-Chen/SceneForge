@@ -332,12 +332,10 @@ function getTimelineWorkflowPromptProfile(workflow: TimelineWorkflowState) {
 
 async function loadCivitaiResourceItems(
   resourceType: "lora" | "model",
-  supportsNsfw: boolean,
   promptProfile: PromptProfileId,
 ) {
-  const nsfw = supportsNsfw ? "all" : "sfw";
   const response = await fetch(
-    `/api/civitai-lora-library/resources?resourceType=${resourceType}&category=all&nsfw=${nsfw}&downloaded=ready&promptProfile=${promptProfile}`,
+    `/api/civitai-lora-library/resources?resourceType=${resourceType}&category=all&downloaded=ready&promptProfile=${promptProfile}`,
   );
   const payload: unknown = await response.json();
 
@@ -353,10 +351,9 @@ async function loadCivitaiResourceItems(
 }
 
 async function loadTimelineResourceCandidatesViaApi(promptProfile: PromptProfileId) {
-  const supportsNsfw = useEditorStore.getState().project.settings.supportsNsfw;
   const [checkpoints, loras] = await Promise.all([
-    loadCivitaiResourceItems("model", supportsNsfw, promptProfile),
-    loadCivitaiResourceItems("lora", supportsNsfw, promptProfile),
+    loadCivitaiResourceItems("model", promptProfile),
+    loadCivitaiResourceItems("lora", promptProfile),
   ]);
 
   return {
