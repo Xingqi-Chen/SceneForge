@@ -513,6 +513,58 @@ describe("ComfyUI object info helpers", () => {
     });
   });
 
+  it("falls back to the only available Anima UNET when stale requests have no filename aliases", () => {
+    const animaOnlyObjectInfo: Record<string, unknown> = {
+      ...objectInfoWithAnima,
+      UNETLoader: {
+        input: {
+          required: {
+            unet_name: [["pencil-xl-diffusion.safetensors"], {}],
+            weight_dtype: [["default", "fp8_e4m3fn"], {}],
+          },
+        },
+      },
+    };
+    delete animaOnlyObjectInfo.CheckpointLoaderSimple;
+    const result = validateComfyUiRequestAgainstObjectInfo(
+      {
+        checkpointName: "Anima__base-v1.0__mv2945208__bd43b7cffe.safetensors",
+        modelBaseModel: "Anima",
+        modelStorageKind: "diffusion",
+        positivePrompt: "scene",
+        samplerName: "DPM++ 2M",
+        scheduler: "Karras",
+      },
+      animaOnlyObjectInfo,
+    );
+
+    expect(result.errors).toEqual([]);
+    expect(result.warnings).toContain(
+      "Anima UNET model Anima__base-v1.0__mv2945208__bd43b7cffe.safetensors is not listed by ComfyUI; using the only available Anima UNET model: pencil-xl-diffusion.safetensors.",
+    );
+    expect(result.request.checkpointName).toBe("pencil-xl-diffusion.safetensors");
+  });
+
+  it("does not guess an Anima UNET when multiple unmatched local options exist", () => {
+    const animaOnlyObjectInfo: Record<string, unknown> = { ...objectInfoWithAnima };
+    delete animaOnlyObjectInfo.CheckpointLoaderSimple;
+    const result = validateComfyUiRequestAgainstObjectInfo(
+      {
+        checkpointName: "Anima__base-v1.0__mv2945208__bd43b7cffe.safetensors",
+        modelBaseModel: "Anima",
+        modelStorageKind: "diffusion",
+        positivePrompt: "scene",
+        samplerName: "DPM++ 2M",
+        scheduler: "Karras",
+      },
+      animaOnlyObjectInfo,
+    );
+
+    expect(result.errors).toContain(
+      "Anima UNET model is not available in ComfyUI: Anima__base-v1.0__mv2945208__bd43b7cffe.safetensors",
+    );
+  });
+
   it("validates Anima ControlNet add-ons without falling back to CheckpointLoaderSimple", () => {
     const animaOnlyObjectInfo: Record<string, unknown> = { ...objectInfoWithAnimaControlNet };
     delete animaOnlyObjectInfo.CheckpointLoaderSimple;

@@ -219,6 +219,40 @@ function resolveRequiredOption({
   return resolved;
 }
 
+function resolveAnimaUnetOption({
+  errors,
+  objectInfo,
+  request,
+  warnings,
+}: {
+  errors: string[];
+  objectInfo: unknown;
+  request: Pick<ComfyUiTextToImageRequest | ComfyUiInpaintRequest, "checkpointName"> &
+    Partial<Pick<ComfyUiTextToImageRequest | ComfyUiInpaintRequest, "checkpointNameAliases">>;
+  warnings: string[];
+}) {
+  const options = readInputOptions(objectInfo, "UNETLoader", "unet_name");
+  const requested = request.checkpointName;
+  const requestedOption = requested ? findOption(requested, options) : null;
+  const aliasOption = (request.checkpointNameAliases ?? [])
+    .map((alias) => findOption(alias, options))
+    .find(Boolean) ?? null;
+
+  if (requestedOption ?? aliasOption) {
+    return requestedOption ?? aliasOption;
+  }
+
+  if (requested && options.length === 1) {
+    warnings.push(
+      `Anima UNET model ${requested} is not listed by ComfyUI; using the only available Anima UNET model: ${options[0]}.`,
+    );
+    return options[0];
+  }
+
+  errors.push(requested ? `Anima UNET model is not available in ComfyUI: ${requested}` : "Anima UNET model is not available in ComfyUI.");
+  return requested;
+}
+
 function findOption(value: string, options: string[]) {
   const trimmed = value.trim();
   const exact = options.find((option) => option === trimmed);
@@ -545,20 +579,19 @@ function resolveAnimaProfileObjectInfoOptions({
   errors,
   objectInfo,
   request,
+  warnings,
 }: {
   errors: string[];
   objectInfo: unknown;
   request: Pick<ComfyUiTextToImageRequest | ComfyUiInpaintRequest, "checkpointName"> &
     Partial<Pick<ComfyUiTextToImageRequest | ComfyUiInpaintRequest, "checkpointNameAliases">>;
+  warnings: string[];
 }) {
-  const unetName = resolveRequiredOption({
-    aliases: request.checkpointNameAliases,
-    classType: "UNETLoader",
+  const unetName = resolveAnimaUnetOption({
     errors,
-    inputName: "unet_name",
-    label: "Anima UNET model",
     objectInfo,
-    requested: request.checkpointName,
+    request,
+    warnings,
   });
   const unetWeightDtype = resolveRequiredOption({
     classType: "UNETLoader",
@@ -643,7 +676,7 @@ export function validateComfyUiRequestAgainstObjectInfo(
   const controlNetOptions = readInputOptions(objectInfo, "ControlNetLoader", "control_net_name");
   const checkpointName = findOption(request.checkpointName, checkpointOptions);
   const animaOptions = isAnimaProfile
-    ? resolveAnimaProfileObjectInfoOptions({ errors, objectInfo, request })
+    ? resolveAnimaProfileObjectInfoOptions({ errors, objectInfo, request, warnings })
     : undefined;
   const sampler = findSampler(request.samplerName, samplerOptions, schedulerOptions);
   const samplerName = sampler.samplerName;
@@ -851,7 +884,7 @@ export function validateComfyUiInpaintRequestAgainstObjectInfo(
   const upscaleModelOptions = readInputOptions(objectInfo, "UpscaleModelLoader", "model_name");
   const checkpointName = findOption(request.checkpointName, checkpointOptions);
   const animaOptions = isAnimaProfile
-    ? resolveAnimaProfileObjectInfoOptions({ errors, objectInfo, request })
+    ? resolveAnimaProfileObjectInfoOptions({ errors, objectInfo, request, warnings })
     : undefined;
   const sampler = findSampler(request.samplerName, samplerOptions, schedulerOptions);
   const samplerName = sampler.samplerName;
