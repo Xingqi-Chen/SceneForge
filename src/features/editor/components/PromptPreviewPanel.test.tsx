@@ -158,9 +158,13 @@ describe("PromptPreviewPanel AI prompt messages", () => {
     });
 
     expect(systemPrompt).toContain("Anima Stable Diffusion prompt sections");
-    expect(systemPrompt).toContain("anime-style natural-language visual phrases");
-    expect(systemPrompt).toContain("compact anime-style visual phrases");
-    expect(systemPrompt).toContain("compact anime-style composition phrases");
+    expect(systemPrompt).toContain("descriptive English anime-style visual clauses");
+    expect(systemPrompt).toContain("descriptive English anime-style action clauses");
+    expect(systemPrompt).toContain("descriptive English anime-style camera and composition clauses");
+    expect(systemPrompt).toContain("not terse tag-only output");
+    expect(systemPrompt).toContain("environment, lighting, atmosphere, camera, foreground/background relationship");
+    expect(systemPrompt).toContain("distinct hairstyle and a distinct pose or action");
+    expect(systemPrompt).toContain("Avoid abstract psychological narration");
     expect(systemPrompt).toContain("Anima prompt ordering");
     expect(systemPrompt).toContain("quality/meta/year/safety, subject count, character, series/source, artist, general");
     expect(systemPrompt).toContain("Use @artist syntax");
@@ -168,8 +172,32 @@ describe("PromptPreviewPanel AI prompt messages", () => {
     expect(systemPrompt).not.toContain("Danbooru/booru-style anime tags and short tag phrases; not natural language");
     expect(systemPrompt).not.toContain("Illustrious prompt ordering");
     expect(userText).toContain("Anima positive prompt sections");
-    expect(userText).toContain("anime-style natural-language visual phrases");
+    expect(userText).toContain("descriptive English anime-style visual phrases or short clauses");
     expect(userText).not.toContain("Illustrious-compatible positive prompt sections");
+  });
+
+  it("asks Anima constrained prompts for visible action, lighting, and composition clauses", () => {
+    const project = createDefaultProject();
+    project.settings.modelFormat = "stable-diffusion";
+    const userText = buildAiUserText({
+      constraints: {
+        layout: true,
+        pose: true,
+        visual: true,
+      },
+      layoutConstraints: "window left of character, rain visible outside",
+      modelFormat: "stable-diffusion",
+      promptProfile: "anima",
+      promptForAi: generatePrompt(project),
+      project,
+      structuredSummary: "character: standing pose",
+    });
+
+    expect(userText).toContain("natural composition and location clauses");
+    expect(userText).toContain("visible pose, action, and facial expression");
+    expect(userText).toContain("foreground/background relationship, lighting, and atmosphere");
+    expect(userText).toContain("your reply must be JSON sections");
+    expect(userText).not.toContain("Translate layout constraints into compact composition/location tags");
   });
 });
 
