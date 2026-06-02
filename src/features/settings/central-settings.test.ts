@@ -9,14 +9,18 @@ const sqliteMocks = vi.hoisted(() => ({
     close: vi.fn(),
   },
   loadCivitaiLibrarySettingsFromSqlite: vi.fn(),
+  loadSceneForgeUserSettingsFromSqlite: vi.fn(),
   openSceneForgeSqliteDatabase: vi.fn(),
   saveCivitaiLibrarySettingsToSqlite: vi.fn(),
+  saveSceneForgeUserSettingsToSqlite: vi.fn(),
 }));
 
 vi.mock("@/features/persistence/sqlite-storage", () => ({
   loadCivitaiLibrarySettingsFromSqlite: sqliteMocks.loadCivitaiLibrarySettingsFromSqlite,
+  loadSceneForgeUserSettingsFromSqlite: sqliteMocks.loadSceneForgeUserSettingsFromSqlite,
   openSceneForgeSqliteDatabase: sqliteMocks.openSceneForgeSqliteDatabase,
   saveCivitaiLibrarySettingsToSqlite: sqliteMocks.saveCivitaiLibrarySettingsToSqlite,
+  saveSceneForgeUserSettingsToSqlite: sqliteMocks.saveSceneForgeUserSettingsToSqlite,
 }));
 
 const ENV_KEYS = [
@@ -82,10 +86,21 @@ describe("central settings payload", () => {
     process.env.LITELLM_NSFW_MODEL = "private-nsfw-model";
     process.env.TAVILY_API_KEY = "tavily-secret";
 
-    const payload = buildCentralSettingsPayload(createCivitaiSettings());
+    const payload = buildCentralSettingsPayload(createCivitaiSettings(), {
+      supportsNsfw: true,
+      workflow: {
+        characterTagNewTermDefaultOption: "temporary",
+        autoReview: true,
+      },
+    });
     const serialized = JSON.stringify(payload);
 
     expect(payload.general.nsfw.enabled).toBe(true);
+    expect(payload.general.nsfw.supportsNsfw).toBe(true);
+    expect(payload.workflow).toEqual({
+      characterTagNewTermDefaultOption: "temporary",
+      autoReview: true,
+    });
     expect(serialized).not.toContain("comfy-secret");
     expect(serialized).not.toContain("civitai-secret");
     expect(serialized).not.toContain("litellm-secret");
@@ -128,6 +143,13 @@ describe("central settings payload", () => {
 
     sqliteMocks.openSceneForgeSqliteDatabase.mockResolvedValue(sqliteMocks.db);
     sqliteMocks.loadCivitaiLibrarySettingsFromSqlite.mockReturnValue(currentSettings);
+    sqliteMocks.loadSceneForgeUserSettingsFromSqlite.mockReturnValue({
+      supportsNsfw: false,
+      workflow: {
+        characterTagNewTermDefaultOption: "ask",
+        autoReview: false,
+      },
+    });
     sqliteMocks.saveCivitaiLibrarySettingsToSqlite.mockReturnValue(expectedSettings);
 
     const result = await updateCentralSettings({
@@ -147,5 +169,50 @@ describe("central settings payload", () => {
       expect(result.payload.civitai.paths).toEqual(expectedSettings);
     }
     expect(sqliteMocks.db.close).toHaveBeenCalled();
+  });
+
+  it("updates persisted NSFW and workflow defaults without requiring Civitai paths", async () => {
+    const civitaiSettings = createCivitaiSettings();
+    const currentUserSettings = {
+      supportsNsfw: false,
+      workflow: {
+        characterTagNewTermDefaultOption: "ask" as const,
+        autoReview: false,
+      },
+    };
+    const expectedUserSettings = {
+      supportsNsfw: true,
+      workflow: {
+        characterTagNewTermDefaultOption: "import" as const,
+        autoReview: true,
+      },
+    };
+
+    sqliteMocks.openSceneForgeSqliteDatabase.mockResolvedValue(sqliteMocks.db);
+    sqliteMocks.loadCivitaiLibrarySettingsFromSqlite.mockReturnValue(civitaiSettings);
+    sqliteMocks.loadSceneForgeUserSettingsFromSqlite.mockReturnValue(currentUserSettings);
+    sqliteMocks.saveSceneForgeUserSettingsToSqlite.mockReturnValue(expectedUserSettings);
+
+    const result = await updateCentralSettings({
+      general: {
+        nsfw: {
+          supportsNsfw: true,
+        },
+      },
+      workflow: {
+        characterTagNewTermDefaultOption: "import",
+        autoReview: true,
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(sqliteMocks.saveSceneForgeUserSettingsToSqlite).toHaveBeenCalledWith(
+      sqliteMocks.db,
+      expectedUserSettings,
+    );
+    if (result.ok) {
+      expect(result.payload.general.nsfw.supportsNsfw).toBe(true);
+      expect(result.payload.workflow).toEqual(expectedUserSettings.workflow);
+    }
   });
 });

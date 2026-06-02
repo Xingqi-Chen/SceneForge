@@ -30,14 +30,44 @@ export type SettingsIntegrationStatus = {
   }>;
 };
 
+export const characterTagNewTermDefaultOptions = [
+  "existing-only",
+  "temporary",
+  "import",
+  "ask",
+] as const;
+
+export type CharacterTagNewTermDefaultOption =
+  (typeof characterTagNewTermDefaultOptions)[number];
+
+export type SceneForgeWorkflowSettings = {
+  characterTagNewTermDefaultOption: CharacterTagNewTermDefaultOption;
+  autoReview: boolean;
+};
+
+export type SceneForgeUserSettings = {
+  supportsNsfw: boolean;
+  workflow: SceneForgeWorkflowSettings;
+};
+
+export const defaultSceneForgeUserSettings: SceneForgeUserSettings = {
+  supportsNsfw: false,
+  workflow: {
+    characterTagNewTermDefaultOption: "ask",
+    autoReview: false,
+  },
+};
+
 export type CentralSettingsPayload = {
   general: {
     nsfw: {
       enabled: boolean;
+      supportsNsfw: boolean;
       source: "env" | "default";
       detail: string;
     };
   };
+  workflow: SceneForgeWorkflowSettings;
   storage: {
     paths: SettingsPathStatus[];
   };
@@ -49,6 +79,12 @@ export type CentralSettingsPayload = {
 };
 
 export type CentralSettingsUpdatePayload = {
+  general?: {
+    nsfw?: {
+      supportsNsfw?: boolean;
+    };
+  };
+  workflow?: Partial<SceneForgeWorkflowSettings>;
   civitai?: {
     paths?: Partial<CivitaiLibrarySettings>;
   };

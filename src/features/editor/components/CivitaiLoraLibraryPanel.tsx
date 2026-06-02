@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { useEditorStore } from "@/features/editor/store/editor-store";
 import type {
   CivitaiAiRecommendationResponse,
+  CivitaiEnrichmentStatus,
   CivitaiAiNsfwLevel,
   CivitaiImportResult,
   CivitaiLibrarySettings,
@@ -39,6 +40,18 @@ type CacheRepairResult = {
   repaired: number;
   failed: number;
   skipped: number;
+};
+type CivitaiResourceReanalysisProposal = {
+  enrichmentError: string | null;
+  enrichmentStatus: CivitaiEnrichmentStatus;
+  recommendations: CivitaiResourceRecommendation[];
+  resourceId: string;
+  resourceName: string;
+  usageGuide: string | null;
+};
+type CivitaiResourceReanalysisApplyResult = {
+  proposal: CivitaiResourceReanalysisProposal;
+  resource: CivitaiResourceDetail | null;
 };
 
 const EMPTY_CIVITAI_LIBRARY_SETTINGS: CivitaiLibrarySettings = {
@@ -441,6 +454,10 @@ export function CivitaiLoraLibraryPanel() {
   const [downloadActionStatus, setDownloadActionStatus] = useState<LoadStatus>("idle");
   const [downloadActionMessage, setDownloadActionMessage] = useState("");
   const [downloadActionError, setDownloadActionError] = useState("");
+  const [reanalysisStatus, setReanalysisStatus] = useState<LoadStatus>("idle");
+  const [reanalysisApplyStatus, setReanalysisApplyStatus] = useState<LoadStatus>("idle");
+  const [reanalysisError, setReanalysisError] = useState("");
+  const [reanalysisProposal, setReanalysisProposal] = useState<CivitaiResourceReanalysisProposal | null>(null);
   const [aiRecommendationInput, setAiRecommendationInput] = useState("");
   const [aiRecommendationStatus, setAiRecommendationStatus] = useState<LoadStatus>("idle");
   const [aiRecommendationError, setAiRecommendationError] = useState("");
@@ -551,6 +568,13 @@ export function CivitaiLoraLibraryPanel() {
     }
   }
 
+  function resetReanalysisState() {
+    setReanalysisStatus("idle");
+    setReanalysisApplyStatus("idle");
+    setReanalysisError("");
+    setReanalysisProposal(null);
+  }
+
   async function loadDownloadStatus(resourceId: string, options: { verifyChecksum?: boolean } = {}) {
     setDownloadStatusLoadStatus("loading");
     setDownloadActionError("");
@@ -580,6 +604,7 @@ export function CivitaiLoraLibraryPanel() {
     setLoraWeightSaveStatus("idle");
     setLoraWeightSaveError("");
     resetDownloadState();
+    resetReanalysisState();
 
     try {
       const payload = await fetchJson<CivitaiResourceDetail>(
@@ -607,6 +632,7 @@ export function CivitaiLoraLibraryPanel() {
     setLoraWeightSaveStatus("idle");
     setLoraWeightSaveError("");
     resetDownloadState();
+    resetReanalysisState();
 
     try {
       const payload = await fetchJson<ImportedImageDetail>(
@@ -786,6 +812,69 @@ export function CivitaiLoraLibraryPanel() {
     } catch (error) {
       setRepairStatus("error");
       setRepairError(error instanceof Error ? error.message : "修复缓存失败。");
+    }
+  }
+
+  async function handleReanalyzeResource() {
+    if (!detail || (detail.resourceType !== "lora" && detail.resourceType !== "model")) {
+      return;
+    }
+
+    setReanalysisStatus("loading");
+    setReanalysisApplyStatus("idle");
+    setReanalysisError("");
+    setReanalysisProposal(null);
+
+    try {
+      const proposal = await fetchJson<CivitaiResourceReanalysisProposal>(
+        `/api/civitai-lora-library/resources/${encodeURIComponent(detail.id)}/reanalyze`,
+        {
+          method: "POST",
+        },
+      );
+      setReanalysisProposal(proposal);
+      setReanalysisStatus("success");
+    } catch (error) {
+      setReanalysisStatus("error");
+      setReanalysisError(error instanceof Error ? error.message : "Unable to reanalyze this Civitai resource.");
+    }
+  }
+
+  async function handleApplyReanalysis() {
+    if (!detail || !reanalysisProposal || reanalysisProposal.resourceId !== detail.id) {
+      return;
+    }
+
+    setReanalysisApplyStatus("loading");
+    setReanalysisError("");
+
+    try {
+      const result = await fetchJson<CivitaiResourceReanalysisApplyResult>(
+        `/api/civitai-lora-library/resources/${encodeURIComponent(detail.id)}/reanalyze`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            confirm: true,
+            usageGuide: reanalysisProposal.usageGuide,
+            recommendations: reanalysisProposal.recommendations,
+            enrichmentStatus: reanalysisProposal.enrichmentStatus,
+            enrichmentError: reanalysisProposal.enrichmentError,
+          }),
+        },
+      );
+      if (result.resource) {
+        setDetail(result.resource);
+      } else {
+        await loadDetail(detail.id);
+      }
+      setReanalysisProposal(null);
+      setReanalysisStatus("idle");
+      setReanalysisApplyStatus("success");
+      await loadResources();
+    } catch (error) {
+      setReanalysisApplyStatus("error");
+      setReanalysisError(error instanceof Error ? error.message : "Unable to apply this reanalysis.");
     }
   }
 
@@ -1228,14 +1317,25 @@ export function CivitaiLoraLibraryPanel() {
                   <div className="min-w-0 flex-1">
                     <h3 className="text-lg font-bold text-slate-950">Civitai LoRA 收藏库</h3>
                     <p className="mt-1 text-xs leading-relaxed text-slate-500">{METADATA_NOTICE}</p>
+                    <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px]">
+                      <span className="inline-flex h-6 items-center rounded-md border border-indigo-100 bg-indigo-50 px-2 font-medium text-indigo-700">
+                        Paths: {settingsLoadStatus === "loading" ? "loading..." : `${configuredCivitaiPathCount}/4 configured`}
+                      </span>
+                      {settingsLoadStatus === "error" ? (
+                        <span className="inline-flex min-h-6 items-center rounded-md border border-rose-100 bg-rose-50 px-2 font-medium text-rose-700">
+                          {settingsLoadError}
+                        </span>
+                      ) : null}
+                    </div>
                   </div>
                   <Link
                     aria-label="Open centralized settings"
-                    className="rounded-full p-2 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
+                    className="inline-flex h-9 items-center justify-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 shadow-sm transition hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-700"
                     href="/settings"
                     title="Central settings"
                   >
-                    <ExternalLink className="size-5" />
+                    <ExternalLink className="size-3.5" />
+                    Central settings
                   </Link>
                   <button
                     aria-label="关闭 Civitai LoRA Library"
@@ -1246,28 +1346,6 @@ export function CivitaiLoraLibraryPanel() {
                     <X className="size-5" />
                   </button>
                 </header>
-
-                <div className="shrink-0 border-b border-slate-100 bg-slate-50 p-5">
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div className="min-w-0">
-                      <h4 className="text-sm font-bold text-slate-900">Resource path settings</h4>
-                      <p className="mt-1 text-xs leading-relaxed text-slate-500">
-                        Civitai download and model scan paths are managed in centralized settings.
-                        {settingsLoadStatus === "loading" ? " Loading current status..." : ` ${configuredCivitaiPathCount}/4 paths configured.`}
-                      </p>
-                      {settingsLoadStatus === "error" ? (
-                        <p className="mt-1 text-xs leading-relaxed text-rose-600">{settingsLoadError}</p>
-                      ) : null}
-                    </div>
-                    <Link
-                      className="inline-flex h-9 items-center justify-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 shadow-sm transition hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-700"
-                      href="/settings"
-                    >
-                      <ExternalLink className="size-3.5" />
-                      Open settings
-                    </Link>
-                  </div>
-                </div>
 
                 <div className="grid min-h-0 flex-1 grid-rows-[auto_1fr] overflow-hidden">
                   <div className="border-b border-slate-100 bg-slate-50 p-4">
@@ -2287,6 +2365,22 @@ export function CivitaiLoraLibraryPanel() {
                                       <Check className="size-4" />
                                       {detailIsSelected ? "已选中" : `选中 ${detailResourceLabel}`}
                                     </Button>
+                                    <Button
+                                      className="h-9 rounded-md border-slate-200 bg-white px-3 text-xs text-slate-700 hover:bg-slate-50"
+                                      disabled={
+                                        reanalysisStatus === "loading" ||
+                                        reanalysisApplyStatus === "loading" ||
+                                        !detail.description
+                                      }
+                                      onClick={() => void handleReanalyzeResource()}
+                                      size="sm"
+                                      title={detail.description ? "Reanalyze description" : "This resource has no description to analyze."}
+                                      type="button"
+                                      variant="secondary"
+                                    >
+                                      {reanalysisStatus === "loading" ? <Loader2 className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
+                                      重新解析
+                                    </Button>
                                     {downloadStatus?.fileExists && downloadStatus.checksumType === "SHA256" ? (
                                       <Button
                                         className="h-9 rounded-md border-slate-200 bg-white px-3 text-xs text-slate-700 hover:bg-slate-50"
@@ -2351,6 +2445,14 @@ export function CivitaiLoraLibraryPanel() {
                                   {selectionError ? (
                                     <p className="max-w-[360px] text-right text-[11px] leading-relaxed text-rose-600">{selectionError}</p>
                                   ) : null}
+                                  {reanalysisApplyStatus === "success" ? (
+                                    <p className="max-w-[360px] text-right text-[11px] leading-relaxed text-emerald-700">
+                                      Reanalysis applied.
+                                    </p>
+                                  ) : null}
+                                  {reanalysisStatus === "error" || reanalysisApplyStatus === "error" ? (
+                                    <p className="max-w-[360px] text-right text-[11px] leading-relaxed text-rose-600">{reanalysisError}</p>
+                                  ) : null}
                                   {downloadActionStatus === "success" && downloadActionMessage ? (
                                     <p className="max-w-[360px] text-right text-[11px] leading-relaxed text-emerald-700">{downloadActionMessage}</p>
                                   ) : null}
@@ -2410,6 +2512,96 @@ export function CivitaiLoraLibraryPanel() {
 
                           <div className="grid gap-5 xl:grid-cols-[1fr_280px]">
                             <div className="space-y-5">
+                              {reanalysisProposal?.resourceId === detail.id ? (
+                                <div className="rounded-md border border-indigo-200 bg-indigo-50/70 p-3">
+                                  <div className="flex flex-wrap items-start justify-between gap-3">
+                                    <div className="min-w-0">
+                                      <p className="text-[11px] font-bold uppercase tracking-wider text-indigo-700">
+                                        Reanalysis preview
+                                      </p>
+                                      <p className="mt-1 text-xs leading-relaxed text-slate-600">
+                                        Review the new description analysis. Confirming will overwrite the current usage guide and model recommendations.
+                                      </p>
+                                      {reanalysisProposal.enrichmentStatus === "ai_failed" && reanalysisProposal.enrichmentError ? (
+                                        <p className="mt-2 rounded-md border border-amber-100 bg-amber-50 px-2 py-1.5 text-xs leading-relaxed text-amber-700">
+                                          AI analysis failed: {reanalysisProposal.enrichmentError}
+                                        </p>
+                                      ) : null}
+                                    </div>
+                                    <div className="flex shrink-0 flex-wrap gap-2">
+                                      <Button
+                                        className="h-8 rounded-md border-slate-200 bg-white px-3 text-xs text-slate-700 hover:bg-slate-50"
+                                        disabled={reanalysisApplyStatus === "loading"}
+                                        onClick={() => setReanalysisProposal(null)}
+                                        size="sm"
+                                        type="button"
+                                        variant="secondary"
+                                      >
+                                        取消
+                                      </Button>
+                                      <Button
+                                        className="h-8 rounded-md bg-indigo-600 px-3 text-xs text-white hover:bg-indigo-700"
+                                        disabled={reanalysisApplyStatus === "loading"}
+                                        onClick={() => void handleApplyReanalysis()}
+                                        size="sm"
+                                        type="button"
+                                      >
+                                        {reanalysisApplyStatus === "loading" ? <Loader2 className="size-3.5 animate-spin" /> : <Save className="size-3.5" />}
+                                        确认覆盖
+                                      </Button>
+                                    </div>
+                                  </div>
+                                  <div className="mt-3 grid gap-3 lg:grid-cols-2">
+                                    <div>
+                                      <p className="mb-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-500">New usage guide</p>
+                                      <p className="min-h-16 rounded-md bg-white p-3 text-sm leading-relaxed text-slate-700">
+                                        {reanalysisProposal.usageGuide ?? "No usage guide was extracted."}
+                                      </p>
+                                    </div>
+                                    <div>
+                                      <p className="mb-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-500">New recommendations</p>
+                                      {reanalysisProposal.recommendations.length > 0 ? (
+                                        <div className="space-y-2">
+                                          {reanalysisProposal.recommendations.map((recommendation, recommendationIndex) => (
+                                            <div
+                                              className="rounded-md border border-emerald-100 bg-white p-2 text-xs leading-relaxed text-slate-700"
+                                              key={`${formatRecommendationTitle(recommendation)}:${recommendationIndex}`}
+                                            >
+                                              <p className="font-semibold text-slate-900">{formatRecommendationTitle(recommendation)}</p>
+                                              <div className="mt-1.5 flex flex-wrap gap-1.5">
+                                                {recommendation.baseModel ? (
+                                                  <span className="rounded-full bg-emerald-50 px-2 py-0.5">base {recommendation.baseModel}</span>
+                                                ) : null}
+                                                {recommendation.checkpoint ? (
+                                                  <span className="rounded-full bg-emerald-50 px-2 py-0.5">checkpoint {recommendation.checkpoint}</span>
+                                                ) : null}
+                                                {recommendation.sampler ? (
+                                                  <span className="rounded-full bg-emerald-50 px-2 py-0.5">sampler {recommendation.sampler}</span>
+                                                ) : null}
+                                                {formatRecommendationWeight(recommendation) ? (
+                                                  <span className="rounded-full bg-emerald-50 px-2 py-0.5">
+                                                    LoRA weight {formatRecommendationWeight(recommendation)}
+                                                  </span>
+                                                ) : null}
+                                                {recommendation.hdRedrawRate !== null ? (
+                                                  <span className="rounded-full bg-emerald-50 px-2 py-0.5">
+                                                    HD redraw {formatWeight(recommendation.hdRedrawRate)}
+                                                  </span>
+                                                ) : null}
+                                              </div>
+                                              {recommendation.notes ? <p className="mt-1.5 text-slate-600">{recommendation.notes}</p> : null}
+                                            </div>
+                                          ))}
+                                        </div>
+                                      ) : (
+                                        <p className="min-h-16 rounded-md bg-white p-3 text-sm leading-relaxed text-slate-500">
+                                          No model recommendations were extracted.
+                                        </p>
+                                      )}
+                                    </div>
+                                  </div>
+                                </div>
+                              ) : null}
                               {detail.usageGuide ? (
                                 <div>
                                   <p className="mb-2 text-[11px] font-bold uppercase tracking-wider text-slate-500">适用场景</p>

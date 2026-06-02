@@ -1,6 +1,6 @@
 import type { ComfyUiTextToImageRequest } from "@/features/comfyui";
 
-import { createTimelineNodeError } from "./state";
+import { createTimelineNodeError, normalizeTimelineImageCount } from "./state";
 import {
   TimelineNodeExecutionError,
   type ComfyUiExecutionTimelineResult,
@@ -51,6 +51,15 @@ function getParameterRecommendationResult(workflow: TimelineWorkflowState): Para
   });
 }
 
+function getTimelineImageCount(workflow: TimelineWorkflowState) {
+  const result = workflow.nodes["scene-input"].result;
+  if (isRecord(result)) {
+    return normalizeTimelineImageCount(result.imageCount);
+  }
+
+  return normalizeTimelineImageCount(undefined);
+}
+
 function assertGenerationConfirmed(workflow: TimelineWorkflowState) {
   const gateResult = workflow.nodes["generation-gate"].result;
   const gateConfirmed = isRecord(gateResult) && gateResult.confirmed === true;
@@ -74,7 +83,7 @@ export function createConfirmedTimelineComfyUiRequest(
 
   return {
     ...parameterResult.requestPreview,
-    batchSize: 1,
+    batchSize: getTimelineImageCount(workflow),
     preview: false,
   };
 }

@@ -51,8 +51,9 @@ function createClock() {
   };
 }
 
-function createGateReadyWorkflow(clock = createClock()) {
+function createGateReadyWorkflow(clock = createClock(), imageCount = 1) {
   let workflow = createTimelineWorkflowState({
+    imageCount,
     sceneRequest: "A pilot in a greenhouse",
     workflowId: "timeline-t8-server",
     now: clock,
@@ -263,6 +264,117 @@ describe("timeline T8 server adapters", () => {
             url: "/api/comfyui/generated-images/stored.png",
           },
           warnings: ["using default VAE"],
+        },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("stores every image returned for a multi-image confirmed render", async () => {
+    const getObjectInfo = vi.fn().mockResolvedValue({ CheckpointLoaderSimple: {} });
+    const generateImage = vi.fn().mockResolvedValue({
+      nodeErrors: {},
+      nodeIds: { sampler: "3" },
+      outputNodeId: "9",
+      promptId: "prompt-four-images",
+      request: {
+        batchSize: 4,
+        checkpointName: "local.safetensors",
+        negativePrompt: "low detail",
+        positivePrompt: "glass greenhouse pilot",
+        preview: false,
+      },
+    });
+    const getHistory = vi.fn().mockResolvedValue({ prompt: "history" });
+    const buildViewUrl = vi.fn((image: { filename: string }) =>
+      `http://127.0.0.1:8188/view?filename=${image.filename}&type=output`,
+    );
+    comfyUiMocks.createComfyUiClient.mockReturnValue({
+      buildViewUrl,
+      generateImage,
+      getHistory,
+      getObjectInfo,
+    });
+    comfyUiMocks.validateComfyUiTextToImageRequest.mockReturnValue({
+      ok: true,
+      request: {
+        batchSize: 4,
+        checkpointName: "local.safetensors",
+        negativePrompt: "low detail",
+        positivePrompt: "glass greenhouse pilot",
+        preview: false,
+      },
+    });
+    comfyUiMocks.validateComfyUiRequestAgainstObjectInfo.mockReturnValue({
+      errors: [],
+      request: {
+        batchSize: 4,
+        checkpointName: "local.safetensors",
+        negativePrompt: "low detail",
+        positivePrompt: "glass greenhouse pilot",
+        preview: false,
+      },
+      warnings: [],
+    });
+    comfyUiMocks.extractComfyUiHistoryImages.mockReturnValue([1, 2, 3, 4].map((index) => ({
+      filename: `output-${index}.png`,
+      nodeId: "9",
+      type: "output",
+    })));
+    comfyUiMocks.isComfyUiPromptHistoryComplete.mockReturnValue(true);
+    [1, 2, 3, 4].forEach((index) => {
+      storeGeneratedImageMock.mockResolvedValueOnce({
+        byteLength: index,
+        contentType: "image/png",
+        filename: `stored-${index}.png`,
+        url: `/api/comfyui/generated-images/stored-${index}.png`,
+      });
+    });
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn<typeof fetch>(async () => new Response(new Uint8Array([1]), {
+      headers: {
+        "content-type": "image/png",
+      },
+      status: 200,
+    }));
+
+    try {
+      const workflow = confirmWorkflow(createGateReadyWorkflow(createClock(), 4));
+      const result = await executeTimelineGraph(workflow, createTimelineT8ServerNodeAdapters());
+
+      expect(generateImage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          batchSize: 4,
+          preview: false,
+        }),
+        { clientId: "timeline-timeline-t8-server" },
+      );
+      expect(buildViewUrl).toHaveBeenCalledTimes(4);
+      expect(globalThis.fetch).toHaveBeenCalledTimes(4);
+      expect(storeGeneratedImageMock).toHaveBeenCalledTimes(4);
+      expect(result.nodes["result-display"]).toMatchObject({
+        status: "done",
+        result: {
+          image: {
+            filename: "output-1.png",
+            url: "/api/comfyui/generated-images/stored-1.png",
+          },
+          images: [
+            { filename: "output-1.png", url: "/api/comfyui/generated-images/stored-1.png" },
+            { filename: "output-2.png", url: "/api/comfyui/generated-images/stored-2.png" },
+            { filename: "output-3.png", url: "/api/comfyui/generated-images/stored-3.png" },
+            { filename: "output-4.png", url: "/api/comfyui/generated-images/stored-4.png" },
+          ],
+          storedImage: {
+            filename: "stored-1.png",
+          },
+          storedImages: [
+            { filename: "stored-1.png" },
+            { filename: "stored-2.png" },
+            { filename: "stored-3.png" },
+            { filename: "stored-4.png" },
+          ],
         },
       });
     } finally {
