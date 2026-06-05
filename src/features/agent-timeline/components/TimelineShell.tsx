@@ -2407,7 +2407,7 @@ export function TimelineShell() {
   return (
     <main className="sf-app-shell flex min-h-0 flex-col overflow-hidden bg-slate-100 font-sans text-slate-950 selection:bg-blue-100 selection:text-blue-900">
       <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-slate-200 bg-white px-4">
-        <div className="flex min-w-0 items-center gap-3">
+        <div className="flex min-w-0 flex-1 items-center gap-3">
           <div className="flex size-8 shrink-0 items-center justify-center rounded-md border border-slate-200 bg-slate-50 text-slate-700">
             <Workflow className="size-4" />
           </div>
@@ -2417,8 +2417,8 @@ export function TimelineShell() {
           </div>
         </div>
 
-        <div className="hidden min-w-0 flex-1 justify-center px-4 md:flex">
-          <div className="flex min-w-0 items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs text-slate-600">
+        <div className="hidden min-w-0 flex-1 justify-center px-4 xl:flex">
+          <div className="flex max-w-full min-w-0 items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs text-slate-600">
             <CircleDot className="size-3.5 text-blue-600" />
             <span className="truncate">{workflowMode}</span>
             <span className="text-slate-300">/</span>
