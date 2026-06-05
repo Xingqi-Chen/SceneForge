@@ -61,7 +61,7 @@ SCENEFORGE_SHOW_NSFW_BUTTON=false
 LITELLM_CIVITAI_RECOMMENDATION_MODEL=optional-civitai-recommendation-model
 ```
 
-The endpoint accepts `model`, `messages`, `temperature`, `maxTokens`, and optional `nsfw`. Supported AI operations use `LITELLM_NSFW_MODEL` by default when NSFW is enabled and that model is configured, then forward the request to LiteLLM's OpenAI-compatible `/v1/chat/completions` API.
+The endpoint accepts `model`, `messages`, `temperature`, `maxTokens`, and optional `nsfw`. Requests marked `nsfw` use `LITELLM_NSFW_MODEL` when it is configured before forwarding to LiteLLM's OpenAI-compatible `/v1/chat/completions` API. Timeline model-resource and render-parameter recommendation nodes keep their purpose-specific models.
 
 ## Settings
 

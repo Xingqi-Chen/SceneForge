@@ -33,6 +33,10 @@ function normalizePromptProfile(value: unknown) {
   return isPromptProfileId(value) ? value : undefined;
 }
 
+function normalizeNsfw(value: unknown) {
+  return typeof value === "boolean" ? value : undefined;
+}
+
 export async function POST(request: Request) {
   let payload: unknown;
 
@@ -52,6 +56,7 @@ export async function POST(request: Request) {
       db,
       desiredEffect: payload.desiredEffect,
       maxLoras: normalizeMaxLoras(payload.maxLoras),
+      nsfw: normalizeNsfw(payload.nsfw),
       promptProfile: normalizePromptProfile(payload.promptProfile),
     });
 

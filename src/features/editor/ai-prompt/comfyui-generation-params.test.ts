@@ -267,6 +267,10 @@ describe("ComfyUI generation parameters", () => {
 
     expect(settings.request.positivePrompt).toBe("masterpiece, best quality, score_9, score_8, score_7, 1girl, city street");
     expect(settings.request.positivePrompt).not.toContain("safe");
+    expect(settings.request.negativePrompt).toBe(
+      "worst quality, low quality, lowres, score_1, score_2, score_3, blurry, jpeg artifacts, bad anatomy, watermark, artist name, bad_hands",
+    );
+    expect(settings.request.negativePrompt).not.toContain("nsfw");
   });
 
   it("ignores legacy saved Anima CLIP and VAE overrides because the profile uses fixed settings", () => {

@@ -92,11 +92,13 @@ describe("Civitai AI recommendation route", () => {
   let db: SceneForgeSqliteDatabase;
   let settings: CivitaiLibrarySettings;
   let previousSqliteFile: string | undefined;
+  let previousNsfwModel: string | undefined;
 
   beforeEach(async () => {
     mockCompleteChat.mockReset();
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "sceneforge-civitai-ai-rec-"));
     previousSqliteFile = process.env.SCENEFORGE_SQLITE_FILE;
+    previousNsfwModel = process.env.LITELLM_NSFW_MODEL;
     process.env.SCENEFORGE_SQLITE_FILE = path.join(tempDir, "sceneforge.sqlite");
     db = await openSceneForgeSqliteDatabase();
     settings = {
@@ -115,6 +117,11 @@ describe("Civitai AI recommendation route", () => {
       delete process.env.SCENEFORGE_SQLITE_FILE;
     } else {
       process.env.SCENEFORGE_SQLITE_FILE = previousSqliteFile;
+    }
+    if (previousNsfwModel === undefined) {
+      delete process.env.LITELLM_NSFW_MODEL;
+    } else {
+      process.env.LITELLM_NSFW_MODEL = previousNsfwModel;
     }
     await fs.rm(tempDir, { recursive: true, force: true });
   });
@@ -136,6 +143,39 @@ describe("Civitai AI recommendation route", () => {
     expect(response.status).toBe(400);
     expect(payload.error.message).toContain("checkpoint");
     expect(mockCompleteChat).not.toHaveBeenCalled();
+  });
+
+  it("uses the NSFW model for NSFW recommendation requests", async () => {
+    const checkpoint = upsertCivitaiResourceToSqlite(
+      db,
+      makeResourceInput("model", "NSFW Checkpoint"),
+    ).resource;
+    await markDownloaded(checkpoint);
+    process.env.LITELLM_NSFW_MODEL = "nsfw-model";
+
+    mockCompleteChat.mockResolvedValue({
+      content: JSON.stringify({
+        checkpointId: checkpoint.id,
+        checkpointReason: "Matches the requested effect.",
+        loras: [],
+        recommendationReason: "Selected the available local checkpoint.",
+        overallEffect: "Cinematic portrait.",
+      }),
+      role: "assistant",
+    });
+
+    const response = await POST(
+      new Request("http://localhost/api/civitai-lora-library/ai-recommendation", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ desiredEffect: "cinematic portrait", maxLoras: 3, nsfw: true }),
+      }),
+    );
+    const request = mockCompleteChat.mock.calls[0]?.[0];
+
+    expect(response.status).toBe(200);
+    expect(request.nsfw).toBe(true);
+    expect(request.model).toBe("nsfw-model");
   });
 
   it("recommends a downloaded checkpoint and LoRA selection from local candidates", async () => {

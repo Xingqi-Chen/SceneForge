@@ -8,7 +8,7 @@ Tracks are planning units. Implementation work must be split into issue-ready ta
 
 ## Immediate Next Step
 
-Prioritize `T9`, the resource-aware final prompt formatting and local-only model selection track. `T-AN1` through `T-AN6`, `T6`, `T7`, and `T8` are complete and together define the first usable Anima release plus the centralized settings entry point, pre-generation recommendation flow, and confirmed single-image ComfyUI execution.
+Prioritize the next scoped Agent Timeline MVP track. `T-AN1` through `T-AN6`, `T6`, `T7`, `T8`, and `T9` are complete and together define the first usable Anima release plus the centralized settings entry point, pre-generation recommendation flow, confirmed single-image ComfyUI execution, and resource-aware final prompt formatting.
 
 The new MVP is a single-image, top-to-bottom visual timeline. The first screen is only a user scene request input plus a settings entry point. LangGraph owns workflow orchestration, dependency tracking, stale downstream regeneration, and the stop-at-generation confirmation gate.
 

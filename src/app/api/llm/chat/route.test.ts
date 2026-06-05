@@ -2,7 +2,7 @@
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { resolveDefaultModel } from "./route";
+import { resolveDefaultModel, resolveRequestModel } from "./route";
 
 const ENV_KEYS = [
   "LITELLM_DEFAULT_MODEL",
@@ -35,7 +35,7 @@ describe("LLM chat route model selection", () => {
     }
   });
 
-  it("uses the NSFW model for reverse and storyboard AI requests when enabled", () => {
+  it("uses the NSFW model for all AI request purposes when enabled", () => {
     expect(
       resolveDefaultModel({
         purpose: "scene-prompt-reverse",
@@ -67,6 +67,22 @@ describe("LLM chat route model selection", () => {
         messages: [{ role: "user", content: "Split this action paragraph into shots" }],
       }),
     ).toBe("nsfw-model");
+
+    expect(
+      resolveDefaultModel({
+        purpose: "comfyui-generation-diagnosis",
+        nsfw: true,
+        messages: [{ role: "user", content: "Diagnose this" }],
+      }),
+    ).toBe("nsfw-model");
+
+    expect(
+      resolveDefaultModel({
+        purpose: "prompt-library-classification",
+        nsfw: true,
+        messages: [{ role: "user", content: "Classify this" }],
+      }),
+    ).toBe("nsfw-model");
   });
 
   it("falls back to the purpose-specific model when the NSFW model is not configured", () => {
@@ -89,21 +105,22 @@ describe("LLM chat route model selection", () => {
     ).toBe("default-model");
   });
 
-  it("does not switch non-reverse AI requests to the NSFW model", () => {
+  it("overrides an explicit request model when NSFW is enabled", () => {
     expect(
-      resolveDefaultModel({
-        purpose: "comfyui-generation-diagnosis",
+      resolveRequestModel({
+        model: "explicit-model",
+        purpose: "stable-diffusion-prompt-generation",
         nsfw: true,
-        messages: [{ role: "user", content: "Diagnose this" }],
+        messages: [{ role: "user", content: "Generate a prompt" }],
       }),
-    ).toBe("diagnosis-model");
+    ).toBe("nsfw-model");
 
     expect(
-      resolveDefaultModel({
-        purpose: "prompt-library-classification",
-        nsfw: true,
-        messages: [{ role: "user", content: "Classify this" }],
+      resolveRequestModel({
+        model: "explicit-model",
+        purpose: "stable-diffusion-prompt-generation",
+        messages: [{ role: "user", content: "Generate a prompt" }],
       }),
-    ).toBe("classification-model");
+    ).toBe("explicit-model");
   });
 });

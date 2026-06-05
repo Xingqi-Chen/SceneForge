@@ -30,13 +30,6 @@ function errorResponse(message: string, status: number, details?: unknown) {
   );
 }
 
-const NSFW_MODEL_PURPOSES = new Set<LlmChatRequest["purpose"]>([
-  "scene-prompt-reverse",
-  "prompt-tag-reverse",
-  "stick-figure-pose-generation",
-  "comic-sequence-storyboard",
-]);
-
 function resolvePurposeDefaultModel(payload: LlmChatRequest) {
   if (payload.purpose === "prompt-library-classification") {
     return process.env.LITELLM_CLASSIFICATION_MODEL || process.env.LITELLM_DEFAULT_MODEL;
@@ -78,11 +71,21 @@ function resolvePurposeDefaultModel(payload: LlmChatRequest) {
 }
 
 export function resolveDefaultModel(payload: LlmChatRequest) {
-  if (payload.nsfw === true && NSFW_MODEL_PURPOSES.has(payload.purpose)) {
+  if (payload.nsfw === true) {
     return process.env.LITELLM_NSFW_MODEL || resolvePurposeDefaultModel(payload);
   }
 
   return resolvePurposeDefaultModel(payload);
+}
+
+export function resolveRequestModel(payload: LlmChatRequest) {
+  const defaultModel = resolveDefaultModel(payload);
+
+  if (payload.nsfw === true && process.env.LITELLM_NSFW_MODEL) {
+    return process.env.LITELLM_NSFW_MODEL;
+  }
+
+  return payload.model ?? defaultModel;
 }
 
 export async function POST(request: Request) {
@@ -103,7 +106,7 @@ export async function POST(request: Request) {
   const defaultModel = resolveDefaultModel(chatRequest);
   const resolvedRequest: LlmChatRequest = {
     ...chatRequest,
-    model: chatRequest.model ?? defaultModel,
+    model: resolveRequestModel(chatRequest),
   };
 
   await appendLlmLocalLog({

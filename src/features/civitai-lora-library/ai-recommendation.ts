@@ -672,6 +672,7 @@ async function completeRecommendationChat(chatRequest: LlmChatRequest): Promise<
     route: "civitai-lora-library/ai-recommendation",
     payload: {
       purpose: chatRequest.purpose,
+      nsfw: chatRequest.nsfw,
       model: chatRequest.model,
       temperature: chatRequest.temperature,
       maxTokens: chatRequest.maxTokens,
@@ -683,7 +684,9 @@ async function completeRecommendationChat(chatRequest: LlmChatRequest): Promise<
     const client = createLiteLlmClient({
       baseUrl: process.env.LITELLM_BASE_URL ?? "",
       apiKey: process.env.LITELLM_API_KEY,
-      defaultModel: process.env.LITELLM_CIVITAI_RECOMMENDATION_MODEL || process.env.LITELLM_DEFAULT_MODEL,
+      defaultModel: chatRequest.nsfw === true && process.env.LITELLM_NSFW_MODEL
+        ? process.env.LITELLM_NSFW_MODEL
+        : process.env.LITELLM_CIVITAI_RECOMMENDATION_MODEL || process.env.LITELLM_DEFAULT_MODEL,
     });
     const completion = await client.completeChat(chatRequest);
 
@@ -724,12 +727,14 @@ export async function recommendCivitaiResourceCombination({
   db,
   desiredEffect,
   maxLoras: rawMaxLoras,
+  nsfw = false,
   promptProfile: rawPromptProfile,
 }: {
   completeChat?: (request: LlmChatRequest) => Promise<LlmChatResponse>;
   db: SceneForgeSqliteDatabase;
   desiredEffect: string;
   maxLoras?: number;
+  nsfw?: boolean;
   promptProfile?: PromptProfileId;
 }): Promise<CivitaiAiRecommendationResponse> {
   const trimmedEffect = desiredEffect.trim();
@@ -752,7 +757,10 @@ export async function recommendCivitaiResourceCombination({
 
   const chatRequest: LlmChatRequest = {
     purpose: "civitai-combination-recommendation",
-    model: process.env.LITELLM_CIVITAI_RECOMMENDATION_MODEL || process.env.LITELLM_DEFAULT_MODEL,
+    nsfw,
+    model: nsfw && process.env.LITELLM_NSFW_MODEL
+      ? process.env.LITELLM_NSFW_MODEL
+      : process.env.LITELLM_CIVITAI_RECOMMENDATION_MODEL || process.env.LITELLM_DEFAULT_MODEL,
     messages: buildCivitaiCombinationRecommendationMessages({
       checkpointCandidates: checkpoints,
       desiredEffect: trimmedEffect,

@@ -262,7 +262,7 @@ type GenerationResult = {
   source: SavedComfyUiGeneratedImageSource;
 };
 
-type GeneratedImageItem = {
+export type GeneratedImageItem = {
   createdAt?: string;
   favorited: boolean;
   historyId?: string;
@@ -328,7 +328,7 @@ type GenerationDraftInpaint = {
   mode: ComfyUiInpaintMode;
 };
 
-type GenerationDraft = Required<Omit<
+export type GenerationDraft = Required<Omit<
   ComfyUiTextToImageRequest,
   | "loras"
   | "checkpointNameAliases"
@@ -942,7 +942,7 @@ function createDraftDetailer(
   };
 }
 
-function toDraft(
+export function toDraft(
   request: ComfyUiTextToImageRequest,
   loraSettings?: ComfyUiGenerationLoraSetting[],
   savedSeedMode?: ComfyUiGenerationSeedMode,
@@ -1242,7 +1242,7 @@ function toRequestPayload(
   };
 }
 
-type InpaintSubmitInput = {
+export type InpaintSubmitInput = {
   denoise: number;
   faceDetailer: GenerationDraft["faceDetailer"];
   growMaskBy: number;
@@ -1264,7 +1264,7 @@ type InpaintSubmitInput = {
   };
 };
 
-function toInpaintRequestPayload(draft: GenerationDraft, input: InpaintSubmitInput): ComfyUiInpaintRequest {
+export function toInpaintRequestPayload(draft: GenerationDraft, input: InpaintSubmitInput): ComfyUiInpaintRequest {
   const workflowProfile = resolveComfyUiTextToImageWorkflowProfile(draft).id;
   const isAnimaProfile = workflowProfile === "anima";
 
@@ -2428,7 +2428,7 @@ function GeneratedImageResults({
   );
 }
 
-function InpaintMaskDialog({
+export function InpaintMaskDialog({
   busy,
   draft,
   imageItem,
@@ -7006,7 +7006,7 @@ function buildComicSequenceNegativePrompt({
   const parts = [baseNegativePrompt, shotNegativePrompt];
 
   return isAnimaPromptContext({ baseModel: modelBaseModel, resources, supportsNsfw, workflowProfile })
-    ? mergeAnimaNegativePrompts(parts)
+    ? mergeAnimaNegativePrompts(parts, { supportsNsfw })
     : mergeNegativePrompts(parts);
 }
 

@@ -449,7 +449,9 @@ export function formatGeneratedPromptForAnimaContext(
     sourcePrompt: generated.prompt,
     supportsNsfw: context.supportsNsfw,
   });
-  const negativePrompt = mergeAnimaNegativePrompts([generated.negativePrompt]);
+  const negativePrompt = mergeAnimaNegativePrompts([generated.negativePrompt], {
+    supportsNsfw: context.supportsNsfw,
+  });
 
   return {
     prompt,
@@ -496,8 +498,22 @@ export function buildAnimaComicSequencePrompt({
   return renderAnimaPrompt({ resources, sections, supportsNsfw });
 }
 
-export function mergeAnimaNegativePrompts(parts: Array<string | undefined>) {
-  return mergePromptParts([ANIMA_DEFAULT_NEGATIVE_TAGS.join(", "), ...parts]);
+function omitNsfwNegativeTags(part: string | undefined) {
+  return splitPromptParts(part ?? "")
+    .filter((promptPart) => normalizePromptKey(promptPart) !== "nsfw")
+    .join(", ");
+}
+
+export function mergeAnimaNegativePrompts(
+  parts: Array<string | undefined>,
+  options: { supportsNsfw?: boolean } = {},
+) {
+  const defaultTags = options.supportsNsfw
+    ? ANIMA_DEFAULT_NEGATIVE_TAGS.filter((tag) => normalizePromptKey(tag) !== "nsfw")
+    : ANIMA_DEFAULT_NEGATIVE_TAGS;
+  const promptParts = options.supportsNsfw ? parts.map(omitNsfwNegativeTags) : parts;
+
+  return mergePromptParts([defaultTags.join(", "), ...promptParts]);
 }
 
 export function buildAnimaAiResponseInstructions() {
