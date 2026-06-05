@@ -46,7 +46,7 @@ The MVP starts with only a scene input, a start button, and a settings entry poi
 
 Every node exposes manual controls and an AI retry/suggestion action. User edits mark dependent downstream nodes stale and LangGraph regenerates only those dependent nodes. The timeline must stop before ComfyUI execution until the user explicitly clicks start image generation.
 
-The active timeline workflow is autosaved locally. After a workflow has started, SceneForge restores the active workflow when you visit Settings and return, or when you reload the Run page and the active record is still available. Interrupted running nodes restore as visible retryable errors rather than pretending background work continued while the page was away. Full workflow project list/open/save/rename/delete UI is planned separately.
+The active timeline workflow is autosaved locally. After a workflow has started, SceneForge restores the active workflow when you visit Settings and return, or when you reload the Run page and the active record is still available. Interrupted running nodes restore as visible retryable errors rather than pretending background work continued while the page was away. The Run header also includes a workflow project menu for saved timeline workflows: save the current active draft as a named workflow, open a saved workflow, rename it, refresh the list, or delete saved workflow records.
 
 ## LLM API
 
@@ -84,7 +84,7 @@ Secrets should remain server-only in `.env.local` unless a later scoped issue ad
 
 Runtime data is stored under `data/` by default or in configured absolute paths. Do not commit generated projects, logs, caches, databases, downloaded assets, or generated images.
 
-The active timeline workflow autosave record is stored under `data/timeline-workflows/active-workflow.json` by default. It contains local workflow state and references needed to restore progress; it must not contain API keys or `.env.local` secret values.
+Timeline workflow records are stored under `data/timeline-workflows/` by default. The active autosave record remains `active-workflow.json`; named workflow records are separate JSON files in the same directory. They contain local workflow state and references needed to restore progress; they must not contain API keys or `.env.local` secret values. Deleting a named workflow removes only that workflow JSON record and does not delete generated images or external assets referenced by the workflow.
 
 Important environment variables are documented in `.env.example`.
 

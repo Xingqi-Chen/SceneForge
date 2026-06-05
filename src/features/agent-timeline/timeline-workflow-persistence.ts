@@ -24,6 +24,8 @@ export type TimelineOutputDisplayModeMap = Partial<Record<TimelineNodeId, Timeli
 export type TimelineWorkflowRecord = {
   kind: typeof TIMELINE_WORKFLOW_RECORD_KIND;
   version: typeof TIMELINE_WORKFLOW_RECORD_VERSION;
+  projectId?: string;
+  name?: string;
   workflow: TimelineWorkflowState;
   sceneRequest: string;
   selectedPromptProfile: PromptProfileId;
@@ -34,7 +36,16 @@ export type TimelineWorkflowRecord = {
   updatedAt: string;
 };
 
+export type TimelineWorkflowSummary = {
+  id: string;
+  name: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type TimelineWorkflowRecordInput = {
+  projectId?: string | null;
+  name?: string | null;
   workflow: TimelineWorkflowState;
   sceneRequest: string;
   selectedPromptProfile: PromptProfileId;
@@ -57,6 +68,10 @@ function isTimelineNodeId(value: unknown): value is TimelineNodeId {
 
 function sanitizeDateString(value: unknown, fallback: string) {
   return typeof value === "string" && value.trim() ? value : fallback;
+}
+
+export function sanitizeTimelineWorkflowProjectName(value: unknown): string {
+  return typeof value === "string" ? value.replace(/\s+/g, " ").trim().slice(0, 120) : "";
 }
 
 function sanitizeJsonValue(value: unknown, depth = 0): unknown {
@@ -199,6 +214,12 @@ export function createTimelineWorkflowRecord(
   return {
     kind: TIMELINE_WORKFLOW_RECORD_KIND,
     version: TIMELINE_WORKFLOW_RECORD_VERSION,
+    ...(typeof input.projectId === "string" && input.projectId.trim()
+      ? { projectId: input.projectId.trim() }
+      : {}),
+    ...(sanitizeTimelineWorkflowProjectName(input.name)
+      ? { name: sanitizeTimelineWorkflowProjectName(input.name) }
+      : {}),
     workflow,
     sceneRequest: input.sceneRequest.trim(),
     selectedPromptProfile: normalizePromptProfileId(input.selectedPromptProfile),
@@ -235,6 +256,12 @@ export function sanitizeTimelineWorkflowRecord(raw: unknown): TimelineWorkflowRe
   return {
     kind: TIMELINE_WORKFLOW_RECORD_KIND,
     version: TIMELINE_WORKFLOW_RECORD_VERSION,
+    ...(typeof raw.projectId === "string" && raw.projectId.trim()
+      ? { projectId: raw.projectId.trim() }
+      : {}),
+    ...(sanitizeTimelineWorkflowProjectName(raw.name)
+      ? { name: sanitizeTimelineWorkflowProjectName(raw.name) }
+      : {}),
     workflow,
     sceneRequest,
     selectedPromptProfile: normalizePromptProfileId(raw.selectedPromptProfile),

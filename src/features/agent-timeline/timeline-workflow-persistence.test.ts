@@ -40,6 +40,8 @@ describe("timeline workflow persistence", () => {
     );
 
     const record = createTimelineWorkflowRecord({
+      projectId: "workflow-round-trip",
+      name: "  Glass greenhouse project  ",
       workflow,
       sceneRequest: "A glass greenhouse command deck",
       selectedPromptProfile: "anima",
@@ -59,6 +61,8 @@ describe("timeline workflow persistence", () => {
     expect(parsed).toMatchObject({
       kind: "sceneforge-timeline-workflow",
       version: 1,
+      projectId: "workflow-round-trip",
+      name: "Glass greenhouse project",
       sceneRequest: "A glass greenhouse command deck",
       selectedPromptProfile: "anima",
       selectedImageCount: 3,
@@ -121,5 +125,35 @@ describe("timeline workflow persistence", () => {
         workflow: { workflowId: "" },
       }),
     ).toBeNull();
+  });
+
+  it("keeps T10 active workflow records without project metadata backward compatible", () => {
+    const workflow = createTimelineWorkflowState({
+      workflowId: "timeline-no-project-metadata",
+      sceneRequest: "A backward compatible active draft",
+      now: () => "2026-06-05T00:00:00.000Z",
+    });
+
+    const parsed = sanitizeTimelineWorkflowRecord({
+      kind: "sceneforge-timeline-workflow",
+      version: 1,
+      workflow,
+      sceneRequest: "A backward compatible active draft",
+      selectedPromptProfile: "illustrious",
+      selectedImageCount: 1,
+      selectedNodeId: "scene-input",
+      outputDisplayModes: {},
+      createdAt: "2026-06-05T00:00:00.000Z",
+      updatedAt: "2026-06-05T00:00:00.000Z",
+    });
+
+    expect(parsed).toMatchObject({
+      workflow: {
+        workflowId: "timeline-no-project-metadata",
+      },
+      sceneRequest: "A backward compatible active draft",
+    });
+    expect(parsed?.projectId).toBeUndefined();
+    expect(parsed?.name).toBeUndefined();
   });
 });

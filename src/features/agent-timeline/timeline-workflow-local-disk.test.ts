@@ -7,6 +7,7 @@ import { createTimelineWorkflowRecord } from "./timeline-workflow-persistence";
 
 const fsMocks = vi.hoisted(() => ({
   mkdir: vi.fn(),
+  readdir: vi.fn(),
   readFile: vi.fn(),
   unlink: vi.fn(),
   writeFile: vi.fn(),
@@ -21,9 +22,14 @@ vi.mock("node:fs", () => ({
 
 import {
   deleteActiveTimelineWorkflowFromDisk,
+  deleteNamedTimelineWorkflowFromDisk,
   getResolvedTimelineWorkflowsDir,
+  listNamedTimelineWorkflowSummariesFromDisk,
   loadActiveTimelineWorkflowFromDisk,
+  loadNamedTimelineWorkflowFromDisk,
   saveActiveTimelineWorkflowToDisk,
+  saveNamedTimelineWorkflowToDisk,
+  TimelineWorkflowStorageValidationError,
 } from "./timeline-workflow-local-disk";
 
 function createRecord() {
@@ -118,5 +124,85 @@ describe("timeline workflow local disk storage", () => {
 
     await expect(loadActiveTimelineWorkflowFromDisk()).resolves.toBeUndefined();
     await expect(deleteActiveTimelineWorkflowFromDisk()).resolves.toBe(false);
+  });
+
+  it("saves named workflow records beside the active autosave record", async () => {
+    const record = createRecord();
+    fsMocks.mkdir.mockResolvedValue(undefined);
+    fsMocks.readFile.mockRejectedValue(Object.assign(new Error("missing"), { code: "ENOENT" }));
+    fsMocks.writeFile.mockResolvedValue(undefined);
+
+    const saved = await saveNamedTimelineWorkflowToDisk({
+      id: "workflow-local-safe",
+      name: "  Saved workflow  ",
+      record,
+    });
+
+    expect(saved).toMatchObject({
+      projectId: "workflow-local-safe",
+      name: "Saved workflow",
+    });
+    expect(fsMocks.writeFile.mock.calls[0]?.[0]).toBe(
+      path.join(process.cwd(), "data", "timeline-workflows", "workflow-local-safe.json"),
+    );
+    expect(String(fsMocks.writeFile.mock.calls[0]?.[1])).toContain('"projectId": "workflow-local-safe"');
+    expect(String(fsMocks.writeFile.mock.calls[0]?.[1])).toContain('"name": "Saved workflow"');
+  });
+
+  it("lists named workflow summaries by newest update and skips the active autosave", async () => {
+    const first = {
+      ...createRecord(),
+      projectId: "workflow-first",
+      name: "First workflow",
+      updatedAt: "2026-06-05T00:01:00.000Z",
+    };
+    const second = {
+      ...createRecord(),
+      projectId: "workflow-second",
+      name: "Second workflow",
+      updatedAt: "2026-06-05T00:02:00.000Z",
+    };
+    fsMocks.mkdir.mockResolvedValue(undefined);
+    fsMocks.readdir.mockResolvedValue([
+      "active-workflow.json",
+      "workflow-first.json",
+      "workflow-second.json",
+      "../bad.json",
+    ]);
+    fsMocks.readFile.mockImplementation(async (filePath: string) => {
+      if (filePath.endsWith("workflow-first.json")) {
+        return JSON.stringify(first);
+      }
+
+      if (filePath.endsWith("workflow-second.json")) {
+        return JSON.stringify(second);
+      }
+
+      throw Object.assign(new Error("missing"), { code: "ENOENT" });
+    });
+
+    const summaries = await listNamedTimelineWorkflowSummariesFromDisk();
+
+    expect(summaries.map((summary) => summary.id)).toEqual(["workflow-second", "workflow-first"]);
+    expect(summaries[0]).toMatchObject({
+      name: "Second workflow",
+      updatedAt: "2026-06-05T00:02:00.000Z",
+    });
+    expect(fsMocks.readFile).not.toHaveBeenCalledWith(
+      path.join(process.cwd(), "data", "timeline-workflows", "active-workflow.json"),
+      "utf8",
+    );
+  });
+
+  it("rejects malformed named workflow ids before disk access", async () => {
+    await expect(loadNamedTimelineWorkflowFromDisk("../escape")).rejects.toBeInstanceOf(
+      TimelineWorkflowStorageValidationError,
+    );
+    await expect(deleteNamedTimelineWorkflowFromDisk("active-workflow")).rejects.toBeInstanceOf(
+      TimelineWorkflowStorageValidationError,
+    );
+
+    expect(fsMocks.readFile).not.toHaveBeenCalled();
+    expect(fsMocks.unlink).not.toHaveBeenCalled();
   });
 });

@@ -4,6 +4,43 @@ This log records dated implementation and documentation work. Keep entries conci
 
 ## 2026-06-05
 
+### T11 / Issue #49 Named Timeline Workflow Project Management
+
+Summary:
+
+- Added optional timeline workflow project metadata for named records while preserving T10 active autosave record compatibility.
+- Added local disk storage and API routes for named timeline workflow list, save, open, rename, and delete operations under `data/timeline-workflows/`.
+- Added a Run-header timeline workflow project menu for saving unnamed drafts, updating/opening/renaming saved workflows, refreshing the list, and deleting saved records.
+- Preserved active autosave behavior: named workflows remain explicit-save records, while active workflow autosave continues to track the current in-memory workflow and its current named/unnamed status.
+
+Files changed:
+
+- `src/features/agent-timeline/timeline-workflow-persistence.ts`
+- `src/features/agent-timeline/timeline-workflow-persistence.test.ts`
+- `src/features/agent-timeline/timeline-workflow-local-disk.ts`
+- `src/features/agent-timeline/timeline-workflow-local-disk.test.ts`
+- `src/features/agent-timeline/timeline-workflow-storage.ts`
+- `src/features/agent-timeline/components/TimelineShell.tsx`
+- `src/features/agent-timeline/components/TimelineShell.test.tsx`
+- `src/features/agent-timeline/components/TimelineWorkflowProjectMenu.tsx`
+- `src/features/agent-timeline/components/index.ts`
+- `src/app/api/agent-timeline/workflows/route.ts`
+- `src/app/api/agent-timeline/workflows/route.test.ts`
+- `src/app/api/agent-timeline/workflows/item/route.ts`
+- `src/app/api/agent-timeline/workflows/item/route.test.ts`
+- `README.md`
+- `docs/tech-spec.md`
+- `docs/dev-log.md`
+
+Validation:
+
+- `npm test -- src/features/agent-timeline/components/TimelineWorkflowProjectMenu.test.tsx src/features/agent-timeline/components/TimelineShell.test.tsx src/features/agent-timeline/timeline-workflow-local-disk.test.ts src/features/agent-timeline/timeline-workflow-persistence.test.ts src/app/api/agent-timeline/workflows/route.test.ts src/app/api/agent-timeline/workflows/item/route.test.ts` passed with 52 tests.
+- `npm test` passed with 738 tests.
+- `npm run typecheck` passed.
+- `npm run lint` passed with existing warnings in unrelated files.
+- `npm run build` passed and listed `/api/agent-timeline/workflows` and `/api/agent-timeline/workflows/item` as dynamic routes.
+- After reviewer follow-up fixes, `npm test -- src/features/agent-timeline/components/TimelineWorkflowProjectMenu.test.tsx src/features/agent-timeline/components/TimelineShell.test.tsx` passed with 30 tests; `npm run lint`, `npm run typecheck`, and `npm run build` passed again.
+
 ### T10 / Issue #47 Active Timeline Workflow Persistence
 
 Summary:

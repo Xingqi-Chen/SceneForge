@@ -119,6 +119,7 @@ import {
 import type {
   TimelineOutputDisplayMode,
   TimelineOutputDisplayModeMap,
+  TimelineWorkflowRecord,
   TimelineWorkflowRecordInput,
 } from "@/features/agent-timeline/timeline-workflow-persistence";
 import type { CharacterPromptTagTarget } from "@/features/prompt-engine/prompt-library/character-image-prompt-tags";
@@ -145,6 +146,7 @@ import {
 import { TimelineParameterRecommendationWorkspace } from "./TimelineParameterRecommendationWorkspace";
 import { TimelineResourceRecommendationWorkspace } from "./TimelineResourceRecommendationWorkspace";
 import { TimelineScenePromptWorkspace } from "./TimelineScenePromptWorkspace";
+import { TimelineWorkflowProjectMenu } from "./TimelineWorkflowProjectMenu";
 import { getTimelineNodeOutputText, timelineNodeContent } from "./timeline-node-content";
 
 type DraftMap = Partial<Record<TimelineNodeId, string>>;
@@ -1233,6 +1235,8 @@ export function TimelineShell() {
     useState<PromptProfileId>(defaultPromptProfileId);
   const [selectedImageCount, setSelectedImageCount] = useState(DEFAULT_TIMELINE_IMAGE_COUNT);
   const [workflow, setWorkflow] = useState<TimelineWorkflowState | null>(null);
+  const [workflowProjectId, setWorkflowProjectId] = useState<string | null>(null);
+  const [workflowProjectName, setWorkflowProjectName] = useState("");
   const [selectedNodeId, setSelectedNodeId] = useState<TimelineNodeId>("scene-input");
   const [editingNodeId, setEditingNodeId] = useState<TimelineNodeId | null>(null);
   const [drafts, setDrafts] = useState<DraftMap>({});
@@ -1280,7 +1284,7 @@ export function TimelineShell() {
     selectedNode.status === "blocked" ||
     selectedNode.status === "running";
   const generationCanBeConfirmed = canConfirmTimelineWorkflow(workflow);
-  const workflowTitle = workflow ? sceneRequest : "Untitled workflow";
+  const workflowTitle = workflow ? workflowProjectName.trim() || sceneRequest || "Unnamed workflow" : "Untitled workflow";
   const workflowMode = workflow ? "Run shell" : "Draft setup";
   const sceneInputAiSource = sceneRequest.trim() || getSceneInputRawIntent(workflow).trim();
   const autosaveLabel =
@@ -1306,6 +1310,71 @@ export function TimelineShell() {
 
     pending.reject(new Error(message));
     clearPendingPromptTagReview();
+  }
+
+  function getCurrentTimelineWorkflowRecordInput(
+    overrides: Partial<Omit<TimelineWorkflowRecordInput, "workflow">> = {},
+  ): TimelineWorkflowRecordInput | null {
+    if (!workflow) {
+      return null;
+    }
+
+    const nextProjectId = "projectId" in overrides ? overrides.projectId : workflowProjectId;
+    const nextProjectName = "name" in overrides ? overrides.name : workflowProjectName;
+
+    return {
+      ...(nextProjectId ? { projectId: nextProjectId } : {}),
+      ...(nextProjectName ? { name: nextProjectName } : {}),
+      workflow,
+      sceneRequest: overrides.sceneRequest ?? sceneRequest,
+      selectedPromptProfile: overrides.selectedPromptProfile ?? selectedPromptProfile,
+      selectedImageCount: overrides.selectedImageCount ?? selectedImageCount,
+      selectedNodeId: overrides.selectedNodeId ?? selectedNodeId,
+      outputDisplayModes: overrides.outputDisplayModes ?? outputDisplayModes,
+    };
+  }
+
+  function applyTimelineWorkflowRecord(record: TimelineWorkflowRecord, message: string, options: { saveActive?: boolean } = {}) {
+    const restoredImageCount = normalizeTimelineImageCount(record.selectedImageCount);
+    const projectId = record.projectId ?? null;
+    const projectName = record.name ?? "";
+    const autosaveInput: TimelineWorkflowRecordInput = {
+      ...(projectId ? { projectId } : {}),
+      ...(projectName ? { name: projectName } : {}),
+      workflow: record.workflow,
+      sceneRequest: record.sceneRequest,
+      selectedPromptProfile: record.selectedPromptProfile,
+      selectedImageCount: restoredImageCount,
+      selectedNodeId: record.selectedNodeId,
+      outputDisplayModes: record.outputDisplayModes,
+    };
+
+    latestAutosaveInputRef.current = autosaveInput;
+    shouldClearActiveWorkflowRef.current = false;
+    setWorkflow(record.workflow);
+    setWorkflowProjectId(projectId);
+    setWorkflowProjectName(projectName);
+    setSceneRequest(record.sceneRequest);
+    setSelectedPromptProfile(record.selectedPromptProfile);
+    setSelectedImageCount(restoredImageCount);
+    setSelectedNodeId(record.selectedNodeId);
+    setEditingNodeId(null);
+    setDrafts({});
+    setOutputDisplayModes(record.outputDisplayModes);
+    setNotices((current) => ({
+      ...current,
+      [record.selectedNodeId]: message,
+    }));
+    setAutosaveStatus("saved");
+    setAutosaveMessage(projectName ? `Restored ${projectName}.` : `Restored ${record.workflow.workflowId}.`);
+
+    if (options.saveActive) {
+      void saveActiveTimelineWorkflowRecord(autosaveInput).catch((error) => {
+        console.error("[SceneForge] [timeline] failed to update active workflow after opening named workflow", { error });
+        setAutosaveStatus("error");
+        setAutosaveMessage(error instanceof Error ? error.message : "Unable to save the active timeline workflow.");
+      });
+    }
   }
 
   useEffect(() => {
@@ -1334,28 +1403,7 @@ export function TimelineShell() {
           return;
         }
 
-        const restoredImageCount = normalizeTimelineImageCount(record.selectedImageCount);
-        latestAutosaveInputRef.current = {
-          workflow: record.workflow,
-          sceneRequest: record.sceneRequest,
-          selectedPromptProfile: record.selectedPromptProfile,
-          selectedImageCount: restoredImageCount,
-          selectedNodeId: record.selectedNodeId,
-          outputDisplayModes: record.outputDisplayModes,
-        };
-        setWorkflow(record.workflow);
-        shouldClearActiveWorkflowRef.current = false;
-        setSceneRequest(record.sceneRequest);
-        setSelectedPromptProfile(record.selectedPromptProfile);
-        setSelectedImageCount(restoredImageCount);
-        setSelectedNodeId(record.selectedNodeId);
-        setOutputDisplayModes(record.outputDisplayModes);
-        setNotices((current) => ({
-          ...current,
-          [record.selectedNodeId]: "Restored the autosaved timeline workflow.",
-        }));
-        setAutosaveStatus("saved");
-        setAutosaveMessage(`Restored ${record.workflow.workflowId}.`);
+        applyTimelineWorkflowRecord(record, "Restored the autosaved timeline workflow.");
       })
       .catch((error) => {
         if (canceled || restoreVersionRef.current !== restoreVersion) {
@@ -1405,6 +1453,8 @@ export function TimelineShell() {
     }
 
     const autosaveInput: TimelineWorkflowRecordInput = {
+      ...(workflowProjectId ? { projectId: workflowProjectId } : {}),
+      ...(workflowProjectName ? { name: workflowProjectName } : {}),
       workflow,
       sceneRequest,
       selectedPromptProfile,
@@ -1472,6 +1522,8 @@ export function TimelineShell() {
     selectedImageCount,
     selectedNodeId,
     outputDisplayModes,
+    workflowProjectId,
+    workflowProjectName,
   ]);
 
   function isCurrentRun(runId: number) {
@@ -1502,11 +1554,24 @@ export function TimelineShell() {
     });
   }
 
+  function cancelPendingTimelineAutosave() {
+    autosaveVersionRef.current += 1;
+    if (autosaveTimeoutRef.current) {
+      window.clearTimeout(autosaveTimeoutRef.current);
+      autosaveTimeoutRef.current = null;
+    }
+  }
+
   function rememberLatestTimelineAutosaveInput(
     nextWorkflow: TimelineWorkflowState,
     overrides: Partial<Omit<TimelineWorkflowRecordInput, "workflow">> = {},
   ) {
+    const nextProjectId = "projectId" in overrides ? overrides.projectId : workflowProjectId;
+    const nextProjectName = "name" in overrides ? overrides.name : workflowProjectName;
+
     latestAutosaveInputRef.current = {
+      ...(nextProjectId ? { projectId: nextProjectId } : {}),
+      ...(nextProjectName ? { name: nextProjectName } : {}),
       workflow: nextWorkflow,
       sceneRequest: overrides.sceneRequest ?? sceneRequest,
       selectedPromptProfile: overrides.selectedPromptProfile ?? selectedPromptProfile,
@@ -1871,6 +1936,8 @@ export function TimelineShell() {
     }
 
     restoreVersionRef.current += 1;
+    setWorkflowProjectId(null);
+    setWorkflowProjectName("");
     const nextWorkflow = createTimelineWorkflowState({
       imageCount: selectedImageCount,
       promptProfile: selectedPromptProfile,
@@ -2242,6 +2309,8 @@ export function TimelineShell() {
       window.clearTimeout(autosaveTimeoutRef.current);
     }
     setWorkflow(null);
+    setWorkflowProjectId(null);
+    setWorkflowProjectName("");
     setSceneRequest("");
     setSelectedPromptProfile(defaultPromptProfileId);
     setSelectedImageCount(DEFAULT_TIMELINE_IMAGE_COUNT);
@@ -2258,6 +2327,73 @@ export function TimelineShell() {
       setAutosaveStatus("error");
       setAutosaveMessage(error instanceof Error ? error.message : "Unable to clear the autosaved workflow.");
     });
+  }
+
+  function handleNamedWorkflowOpened(record: TimelineWorkflowRecord) {
+    invalidateTimelineRun();
+    restoreVersionRef.current += 1;
+    autosaveVersionRef.current += 1;
+    if (autosaveTimeoutRef.current) {
+      window.clearTimeout(autosaveTimeoutRef.current);
+    }
+    setIsRunning(false);
+    applyTimelineWorkflowRecord(record, "Opened the saved timeline workflow.", { saveActive: true });
+  }
+
+  function handleNamedWorkflowSaved(record: TimelineWorkflowRecord) {
+    const projectId = record.projectId ?? null;
+    const projectName = record.name ?? "";
+    const autosaveInput = getCurrentTimelineWorkflowRecordInput({
+      projectId,
+      name: projectName,
+    });
+
+    setWorkflowProjectId(projectId);
+    setWorkflowProjectName(projectName);
+    setAutosaveStatus("saved");
+    setAutosaveMessage(projectName ? `Saved ${projectName}.` : "Saved timeline workflow.");
+    setNotices((current) => ({
+      ...current,
+      [selectedNodeId]: projectName ? `Saved workflow "${projectName}".` : "Saved workflow.",
+    }));
+
+    if (autosaveInput) {
+      latestAutosaveInputRef.current = autosaveInput;
+      shouldClearActiveWorkflowRef.current = false;
+      cancelPendingTimelineAutosave();
+      void saveActiveTimelineWorkflowRecord(autosaveInput).catch((error) => {
+        console.error("[SceneForge] [timeline] failed to sync active workflow metadata after named save", { error });
+        setAutosaveStatus("error");
+        setAutosaveMessage(error instanceof Error ? error.message : "Unable to save the active timeline workflow.");
+      });
+    }
+  }
+
+  function handleCurrentNamedWorkflowDeleted() {
+    const autosaveInput = getCurrentTimelineWorkflowRecordInput({
+      projectId: null,
+      name: null,
+    });
+
+    setWorkflowProjectId(null);
+    setWorkflowProjectName("");
+    setAutosaveStatus("saved");
+    setAutosaveMessage("Current workflow is now an unnamed autosaved draft.");
+    setNotices((current) => ({
+      ...current,
+      [selectedNodeId]: "Deleted the saved workflow. The current timeline remains open as an unnamed draft.",
+    }));
+
+    if (autosaveInput) {
+      latestAutosaveInputRef.current = autosaveInput;
+      shouldClearActiveWorkflowRef.current = false;
+      cancelPendingTimelineAutosave();
+      void saveActiveTimelineWorkflowRecord(autosaveInput).catch((error) => {
+        console.error("[SceneForge] [timeline] failed to save unnamed active workflow after named delete", { error });
+        setAutosaveStatus("error");
+        setAutosaveMessage(error instanceof Error ? error.message : "Unable to save the active timeline workflow.");
+      });
+    }
   }
 
   function selectNode(nodeId: TimelineNodeId) {
@@ -2291,6 +2427,15 @@ export function TimelineShell() {
         </div>
 
         <div className="flex shrink-0 items-center gap-2">
+          <TimelineWorkflowProjectMenu
+            currentProjectId={workflowProjectId}
+            currentProjectName={workflowProjectName}
+            disabled={isRunning}
+            getCurrentRecordInput={getCurrentTimelineWorkflowRecordInput}
+            onDeleteCurrentProject={handleCurrentNamedWorkflowDeleted}
+            onRecordOpened={handleNamedWorkflowOpened}
+            onRecordSaved={handleNamedWorkflowSaved}
+          />
           {autosaveLabel ? (
             <span
               className={cn(
