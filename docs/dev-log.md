@@ -2,6 +2,29 @@
 
 This log records dated implementation and documentation work. Keep entries concise and evidence-oriented.
 
+## 2026-06-05
+
+### T10 / Issue #47 Active Timeline Workflow Persistence
+
+Summary:
+
+- Reviewed the active timeline workflow persistence implementation for Issue #47.
+- Added a stale-autosave reconciliation guard so `New scene` cannot leave an old active workflow record behind when an earlier autosave finishes after the clear request.
+- Added regression coverage for late autosave completion after clearing the active timeline workflow.
+
+Files changed:
+
+- `src/features/agent-timeline/components/TimelineShell.tsx`
+- `src/features/agent-timeline/components/TimelineShell.test.tsx`
+- `docs/dev-log.md`
+
+Validation:
+
+- `npm test -- src/features/agent-timeline/components/TimelineShell.test.tsx` passed with 24 tests.
+- `npx vitest run src/features/agent-timeline/components/TimelineShell.test.tsx src/features/agent-timeline/timeline-workflow-persistence.test.ts src/features/agent-timeline/timeline-workflow-local-disk.test.ts src/app/api/agent-timeline/active-workflow/route.test.ts` passed with 38 tests after race-condition and API-error regression coverage.
+- `npm run typecheck` passed.
+- `npm run lint` passed with existing warnings in unrelated files.
+
 ## 2026-06-02
 
 ### T9 / Issue #42 Resource-Aware Final Prompt Formatting

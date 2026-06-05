@@ -7,6 +7,8 @@ import { useEditorStore } from "@/features/editor/store/editor-store";
 import {
   completeTimelineNode,
   confirmTimelineGeneration,
+  createTimelineWorkflowRecord,
+  createTimelineWorkflowState,
   failTimelineNode,
   type TimelineWorkflowState,
 } from "@/features/agent-timeline";
@@ -71,6 +73,7 @@ const nodeTitles = [
 
 let container: HTMLDivElement;
 let root: Root;
+let rootIsMounted = false;
 
 function createJsonResponse(payload: unknown, status = 200) {
   return new Response(JSON.stringify(payload), {
@@ -234,6 +237,10 @@ function getFetchPurpose(init: RequestInit | undefined) {
 
 function getFetchUrl(input: RequestInfo | URL) {
   return typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+}
+
+function isTimelineExecutionFetchUrl(url: string) {
+  return url !== "/api/settings" && url !== "/api/agent-timeline/active-workflow";
 }
 
 function getFetchBody(init?: RequestInit) {
@@ -723,17 +730,410 @@ beforeEach(() => {
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
+  rootIsMounted = true;
 });
 
 afterEach(() => {
-  act(() => {
-    root.unmount();
-  });
+  if (rootIsMounted) {
+    act(() => {
+      root.unmount();
+    });
+    rootIsMounted = false;
+  }
   container.remove();
   vi.restoreAllMocks();
 });
 
 describe("TimelineShell", () => {
+  it("restores and autosaves the active workflow record", async () => {
+    vi.useFakeTimers();
+    const originalFetch = globalThis.fetch;
+    let workflow = createTimelineWorkflowState({
+      workflowId: "timeline-restored-active",
+      sceneRequest: "A restored greenhouse command deck",
+      promptProfile: "anima",
+      imageCount: 2,
+      now: () => "2026-06-05T00:00:00.000Z",
+    });
+    workflow = completeTimelineNode(
+      workflow,
+      "scene-prompt",
+      {
+        promptProfile: "anima",
+        primaryCharacter: {
+          name: "Operator",
+          identity: "A restored operator",
+          publicFacts: [],
+        },
+        sceneIntent: "Restored command deck",
+        styleTone: "clean sci-fi",
+        setting: "greenhouse command deck",
+        sharedFacts: [],
+        positivePrompt: "restored greenhouse command deck",
+        negativeSuggestions: [],
+        style: [],
+        camera: [],
+        lighting: [],
+      },
+      "ai",
+    );
+    const restoredRecord = createTimelineWorkflowRecord({
+      workflow,
+      sceneRequest: "A restored greenhouse command deck",
+      selectedPromptProfile: "anima",
+      selectedImageCount: 2,
+      selectedNodeId: "scene-prompt",
+      outputDisplayModes: {
+        "scene-prompt": "visual",
+      },
+    });
+    const savedRecords: unknown[] = [];
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = getFetchUrl(input);
+
+      if (url === "/api/settings") {
+        return createTimelineSettingsResponse();
+      }
+
+      if (url === "/api/agent-timeline/active-workflow") {
+        if (init?.method === "PUT") {
+          savedRecords.push(typeof init.body === "string" ? JSON.parse(init.body) : null);
+          return createJsonResponse({ ok: true, record: savedRecords.at(-1) });
+        }
+
+        return createJsonResponse(restoredRecord);
+      }
+
+      return createJsonResponse({ role: "assistant", content: "{}" });
+    });
+    globalThis.fetch = fetchMock;
+
+    try {
+      act(() => {
+        root.render(<TimelineShell />);
+      });
+      await flushAsyncWork();
+
+      expect(container.textContent).toContain("timeline-restored-active");
+      expect(getSectionByHeading("Prompt generation").textContent).toContain("restored greenhouse command deck");
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(300);
+      });
+      await flushAsyncWork();
+
+      expect(savedRecords).toHaveLength(1);
+      expect(savedRecords[0]).toMatchObject({
+        kind: "sceneforge-timeline-workflow",
+        sceneRequest: "A restored greenhouse command deck",
+        selectedPromptProfile: "anima",
+        selectedImageCount: 2,
+        selectedNodeId: "scene-prompt",
+        workflow: {
+          workflowId: "timeline-restored-active",
+        },
+      });
+
+      act(() => {
+        getWorkflowStepButton("scene-input").click();
+      });
+
+      expect((container.querySelector("#scene-request") as HTMLTextAreaElement | null)?.value).toBe(
+        "A restored greenhouse command deck",
+      );
+      expect((container.querySelector("#prompt-profile") as HTMLSelectElement | null)?.value).toBe("anima");
+      expect((container.querySelector("#timeline-image-count") as HTMLSelectElement | null)?.value).toBe("2");
+      expect(window.localStorage.length).toBe(0);
+      expect(window.sessionStorage.length).toBe(0);
+    } finally {
+      vi.useRealTimers();
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("keeps New scene clear when an older autosave finishes late", async () => {
+    vi.useFakeTimers();
+    const originalFetch = globalThis.fetch;
+    let resolvePendingAutosave: ((response: Response) => void) | null = null;
+    const pendingAutosave = new Promise<Response>((resolve) => {
+      resolvePendingAutosave = resolve;
+    });
+    const workflow = createTimelineWorkflowState({
+      workflowId: "timeline-stale-autosave",
+      sceneRequest: "A stale autosave scene",
+      now: () => "2026-06-05T00:00:00.000Z",
+    });
+    const restoredRecord = createTimelineWorkflowRecord({
+      workflow,
+      sceneRequest: "A stale autosave scene",
+      selectedPromptProfile: "illustrious",
+      selectedImageCount: 1,
+      selectedNodeId: "scene-input",
+    });
+    let deleteRequests = 0;
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = getFetchUrl(input);
+
+      if (url === "/api/settings") {
+        return createTimelineSettingsResponse();
+      }
+
+      if (url === "/api/agent-timeline/active-workflow") {
+        if (init?.method === "PUT") {
+          return pendingAutosave;
+        }
+
+        if (init?.method === "DELETE") {
+          deleteRequests += 1;
+          return createJsonResponse({ ok: true });
+        }
+
+        return createJsonResponse(restoredRecord);
+      }
+
+      return createJsonResponse({ role: "assistant", content: "{}" });
+    });
+    globalThis.fetch = fetchMock;
+
+    try {
+      act(() => {
+        root.render(<TimelineShell />);
+      });
+      await flushAsyncWork();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(300);
+      });
+      await flushAsyncWork();
+
+      act(() => {
+        getButtonByText("New scene").click();
+      });
+      await flushAsyncWork();
+
+      expect(deleteRequests).toBe(1);
+      expect(container.textContent).toContain("Waiting for scene command.");
+
+      await act(async () => {
+        resolvePendingAutosave?.(createJsonResponse({ ok: true, record: restoredRecord }));
+        await Promise.resolve();
+      });
+      await flushAsyncWork();
+
+      expect(deleteRequests).toBe(2);
+      expect((container.querySelector("#scene-request") as HTMLTextAreaElement | null)?.value).toBe("");
+      expect(container.textContent).not.toContain("A stale autosave scene");
+    } finally {
+      vi.useRealTimers();
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("ignores delayed active workflow restore after New scene clears the draft", async () => {
+    vi.useFakeTimers();
+    const originalFetch = globalThis.fetch;
+    let resolveRestore: ((response: Response) => void) | null = null;
+    const delayedRestore = new Promise<Response>((resolve) => {
+      resolveRestore = resolve;
+    });
+    const workflow = createTimelineWorkflowState({
+      workflowId: "timeline-delayed-restore",
+      sceneRequest: "A delayed restore scene",
+      now: () => "2026-06-05T00:00:00.000Z",
+    });
+    const restoredRecord = createTimelineWorkflowRecord({
+      workflow,
+      sceneRequest: "A delayed restore scene",
+      selectedPromptProfile: "illustrious",
+      selectedImageCount: 1,
+      selectedNodeId: "scene-input",
+    });
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = getFetchUrl(input);
+
+      if (url === "/api/settings") {
+        return createTimelineSettingsResponse();
+      }
+
+      if (url === "/api/agent-timeline/active-workflow") {
+        if (init?.method === "DELETE") {
+          return createJsonResponse({ ok: true });
+        }
+
+        return delayedRestore;
+      }
+
+      return createJsonResponse({ role: "assistant", content: "{}" });
+    });
+    globalThis.fetch = fetchMock;
+
+    try {
+      act(() => {
+        root.render(<TimelineShell />);
+      });
+      await flushAsyncWork();
+
+      act(() => {
+        getButtonByText("New scene").click();
+      });
+      await flushAsyncWork();
+
+      await act(async () => {
+        resolveRestore?.(createJsonResponse(restoredRecord));
+        await Promise.resolve();
+      });
+      await flushAsyncWork();
+
+      expect((container.querySelector("#scene-request") as HTMLTextAreaElement | null)?.value).toBe("");
+      expect(container.textContent).toContain("Waiting for scene command.");
+      expect(container.textContent).not.toContain("A delayed restore scene");
+    } finally {
+      vi.useRealTimers();
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("ignores delayed active workflow restore after starting a fresh workflow", async () => {
+    vi.useFakeTimers();
+    const originalFetch = globalThis.fetch;
+    let resolveRestore: ((response: Response) => void) | null = null;
+    const delayedRestore = new Promise<Response>((resolve) => {
+      resolveRestore = resolve;
+    });
+    const staleWorkflow = createTimelineWorkflowState({
+      workflowId: "timeline-stale-delayed-restore",
+      sceneRequest: "A stale delayed restore scene",
+      now: () => "2026-06-05T00:00:00.000Z",
+    });
+    const restoredRecord = createTimelineWorkflowRecord({
+      workflow: staleWorkflow,
+      sceneRequest: "A stale delayed restore scene",
+      selectedPromptProfile: "illustrious",
+      selectedImageCount: 1,
+      selectedNodeId: "scene-input",
+    });
+    const { fetchMock: t5FetchMock, promptRequests } = mockT5FetchWithDeferredPrompt();
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = getFetchUrl(input);
+
+      if (url === "/api/agent-timeline/active-workflow") {
+        if (init?.method === "PUT") {
+          return createJsonResponse({ ok: true, record: typeof init.body === "string" ? JSON.parse(init.body) : null });
+        }
+
+        return delayedRestore;
+      }
+
+      return t5FetchMock(input, init);
+    });
+    globalThis.fetch = fetchMock;
+
+    try {
+      act(() => {
+        root.render(<TimelineShell />);
+      });
+      await flushAsyncWork();
+
+      await submitInitialScene("A fresh workflow scene");
+      expect(promptRequests).toHaveLength(1);
+      expect(container.textContent).toContain("A fresh workflow scene");
+
+      await act(async () => {
+        resolveRestore?.(createJsonResponse(restoredRecord));
+        await Promise.resolve();
+      });
+      await flushAsyncWork();
+
+      expect(container.textContent).toContain("A fresh workflow scene");
+      expect(container.textContent).not.toContain("A stale delayed restore scene");
+      expect((container.querySelector("#scene-request") as HTMLTextAreaElement | null)?.value).toBe(
+        "A fresh workflow scene",
+      );
+    } finally {
+      vi.useRealTimers();
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("flushes the latest workflow autosave on unmount before the debounce fires", async () => {
+    vi.useFakeTimers();
+    const originalFetch = globalThis.fetch;
+    const workflow = createTimelineWorkflowState({
+      workflowId: "timeline-flush-before-settings",
+      sceneRequest: "Original scene before navigation",
+      now: () => "2026-06-05T00:00:00.000Z",
+    });
+    const restoredRecord = createTimelineWorkflowRecord({
+      workflow,
+      sceneRequest: "Original scene before navigation",
+      selectedPromptProfile: "illustrious",
+      selectedImageCount: 1,
+      selectedNodeId: "scene-input",
+    });
+    const savedRecords: unknown[] = [];
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = getFetchUrl(input);
+
+      if (url === "/api/settings") {
+        return createTimelineSettingsResponse();
+      }
+
+      if (url === "/api/agent-timeline/active-workflow") {
+        if (init?.method === "PUT") {
+          savedRecords.push(typeof init.body === "string" ? JSON.parse(init.body) : null);
+          return createJsonResponse({ ok: true, record: savedRecords.at(-1) });
+        }
+
+        return createJsonResponse(restoredRecord);
+      }
+
+      return createJsonResponse({ role: "assistant", content: "{}" });
+    });
+    globalThis.fetch = fetchMock;
+
+    try {
+      act(() => {
+        root.render(<TimelineShell />);
+      });
+      await flushAsyncWork();
+
+      const textarea = container.querySelector("#scene-request") as HTMLTextAreaElement | null;
+      expect(textarea?.value).toBe("Original scene before navigation");
+
+      act(() => {
+        setNativeTextAreaValue(textarea as HTMLTextAreaElement, "Manual scene saved right before settings");
+      });
+
+      act(() => {
+        setNativeSelectValue(container.querySelector("#prompt-profile") as HTMLSelectElement, "generic");
+      });
+
+      act(() => {
+        root.unmount();
+        rootIsMounted = false;
+      });
+      await flushAsyncWork();
+
+      expect(savedRecords.at(-1)).toMatchObject({
+        sceneRequest: "Manual scene saved right before settings",
+        selectedPromptProfile: "generic",
+        workflow: {
+          workflowId: "timeline-flush-before-settings",
+          nodes: {
+            "scene-input": {
+              result: {
+                rawIntent: "Manual scene saved right before settings",
+              },
+            },
+          },
+        },
+      });
+    } finally {
+      vi.useRealTimers();
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("starts with the workbench, workflow steps, scene composer, and disabled run actions for blank input", () => {
     act(() => {
       root.render(<TimelineShell />);
@@ -831,7 +1231,7 @@ describe("TimelineShell", () => {
       });
       const fetchUrls = fetchMock.mock.calls
         .map(([input]) => String(input))
-        .filter((url) => url !== "/api/settings");
+        .filter(isTimelineExecutionFetchUrl);
       expect(fetchUrls).toContain(
         "/api/civitai-lora-library/resources?resourceType=model&category=all&downloaded=ready&promptProfile=anima",
       );
@@ -1039,7 +1439,7 @@ describe("TimelineShell", () => {
       expect(savePromptLibraryMock).not.toHaveBeenCalled();
       const fetchUrls = fetchMock.mock.calls
         .map(([input]) => String(input))
-        .filter((url) => url !== "/api/settings");
+        .filter(isTimelineExecutionFetchUrl);
       expect(fetchUrls).toEqual([
         "/api/llm/chat",
         "/api/llm/chat",
@@ -1313,7 +1713,7 @@ describe("TimelineShell", () => {
 
       expect(fetchMock.mock.calls
         .map(([input]) => String(input))
-        .filter((url) => url !== "/api/settings")).toEqual([
+        .filter(isTimelineExecutionFetchUrl)).toEqual([
         "/api/llm/chat",
         "/api/llm/chat",
         "/api/llm/chat",
@@ -1727,7 +2127,7 @@ describe("TimelineShell", () => {
 
       await submitInitialScene("A stale neon market courier scene");
 
-      expect(fetchMock.mock.calls.filter(([input]) => getFetchUrl(input) !== "/api/settings")).toHaveLength(3);
+      expect(fetchMock.mock.calls.filter(([input]) => isTimelineExecutionFetchUrl(getFetchUrl(input)))).toHaveLength(3);
       expect(poseRequests).toHaveLength(1);
       expect(container.textContent).toContain("A stale neon market courier scene");
 
@@ -1747,7 +2147,7 @@ describe("TimelineShell", () => {
 
       const editorState = useEditorStore.getState();
 
-      expect(fetchMock.mock.calls.filter(([input]) => getFetchUrl(input) !== "/api/settings")).toHaveLength(3);
+      expect(fetchMock.mock.calls.filter(([input]) => isTimelineExecutionFetchUrl(getFetchUrl(input)))).toHaveLength(3);
       expect((container.querySelector("#scene-request") as HTMLTextAreaElement | null)?.value).toBe("");
       expect(container.textContent).toContain("Waiting for scene command.");
       expect(container.textContent).not.toContain("A stale neon market courier scene");
@@ -1772,7 +2172,7 @@ describe("TimelineShell", () => {
 
       await submitInitialScene("A pending greenhouse scene");
 
-      expect(fetchMock.mock.calls.filter(([input]) => getFetchUrl(input) !== "/api/settings")).toHaveLength(1);
+      expect(fetchMock.mock.calls.filter(([input]) => isTimelineExecutionFetchUrl(getFetchUrl(input)))).toHaveLength(1);
       expect(promptRequests).toHaveLength(1);
 
       const promptStepButton = container.querySelector('button[data-node-id="scene-prompt"]') as HTMLButtonElement | null;
@@ -1819,7 +2219,7 @@ describe("TimelineShell", () => {
         'textarea[aria-label="Positive prompt"]',
       ) as HTMLTextAreaElement | null;
 
-      expect(fetchMock.mock.calls.filter(([input]) => getFetchUrl(input) !== "/api/settings")).toHaveLength(1);
+      expect(fetchMock.mock.calls.filter(([input]) => isTimelineExecutionFetchUrl(getFetchUrl(input)))).toHaveLength(1);
       expect(positivePrompt?.value).toBe("manual visual scene context");
       expect(positivePrompt?.value).not.toContain("neon market alley, sunrise, courier sprinting");
     } finally {
