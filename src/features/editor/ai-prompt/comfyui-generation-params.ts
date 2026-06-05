@@ -477,7 +477,9 @@ export function resolveComfyUiGenerationSettings(input: {
         workflowProfile: request.workflowProfile,
       });
     }
-    request.negativePrompt = mergeAnimaNegativePrompts([request.negativePrompt]);
+    request.negativePrompt = mergeAnimaNegativePrompts([request.negativePrompt], {
+      supportsNsfw: input.supportsNsfw,
+    });
   }
 
   return {

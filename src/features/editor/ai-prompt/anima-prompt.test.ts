@@ -235,7 +235,7 @@ describe("Anima prompt renderer", () => {
     expect(previewPrompt).toMatchObject({
       prompt: "masterpiece, best quality, score_9, score_8, score_7, questionable, 1girl, @Alpha, city",
       negativePrompt:
-        "worst quality, low quality, lowres, score_1, score_2, score_3, blurry, jpeg artifacts, bad anatomy, watermark, artist name, nsfw, bad_hands",
+        "worst quality, low quality, lowres, score_1, score_2, score_3, blurry, jpeg artifacts, bad anatomy, watermark, artist name, bad_hands",
     });
     expect(previewPrompt.prompt).not.toContain("safe");
     expect(payloadPrompt).toEqual(previewPrompt);
@@ -286,6 +286,12 @@ describe("Anima prompt renderer", () => {
   it("merges Anima negative defaults without duplicate prompt parts", () => {
     expect(mergeAnimaNegativePrompts(["low quality, blurry", "bad hands, blurry"])).toBe(
       "worst quality, low quality, lowres, score_1, score_2, score_3, blurry, jpeg artifacts, bad anatomy, watermark, artist name, nsfw, bad_hands, bad hands",
+    );
+  });
+
+  it("omits NSFW negative tags when NSFW is enabled", () => {
+    expect(mergeAnimaNegativePrompts(["low quality, nsfw, bad hands"], { supportsNsfw: true })).toBe(
+      "worst quality, low quality, lowres, score_1, score_2, score_3, blurry, jpeg artifacts, bad anatomy, watermark, artist name, bad_hands, bad hands",
     );
   });
 });

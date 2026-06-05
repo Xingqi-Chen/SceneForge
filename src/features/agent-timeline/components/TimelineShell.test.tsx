@@ -1288,7 +1288,16 @@ describe("TimelineShell", () => {
 
   it("loads local resource candidates without NSFW filtering when project NSFW is enabled", async () => {
     const originalFetch = globalThis.fetch;
-    const fetchMock = mockT5Fetch();
+    const t5FetchMock = mockT5Fetch();
+    const fetchMock = vi.fn<typeof fetch>((input, init) => {
+      const url = getFetchUrl(input);
+
+      if (url === "/api/settings") {
+        return Promise.resolve(createTimelineSettingsResponse({ supportsNsfw: true }));
+      }
+
+      return t5FetchMock(input, init);
+    });
     setProjectSupportsNsfw(true);
     globalThis.fetch = fetchMock;
 
@@ -1314,6 +1323,21 @@ describe("TimelineShell", () => {
         "/api/comfyui/sampler-options",
         "/api/llm/chat",
       ]);
+
+      const llmBodies = fetchMock.mock.calls
+        .filter(([input]) => String(input) === "/api/llm/chat")
+        .map(([, init]) => typeof init?.body === "string" ? JSON.parse(init.body) : null);
+      const recommendationBody = fetchMock.mock.calls
+        .find(([input]) => String(input) === "/api/civitai-lora-library/ai-recommendation")?.[1]?.body;
+      const styleAdviceBody = llmBodies.find((body) =>
+        String(body?.messages?.[0]?.content ?? "").includes("style palette assistant"),
+      );
+      const upstreamLlmBodies = llmBodies.filter((body) => body !== styleAdviceBody);
+
+      expect(llmBodies).toHaveLength(4);
+      expect(upstreamLlmBodies.every((body) => body?.nsfw === true)).toBe(true);
+      expect(styleAdviceBody?.nsfw).toBeUndefined();
+      expect(JSON.parse(String(recommendationBody))).not.toHaveProperty("nsfw");
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -1444,6 +1468,7 @@ describe("TimelineShell", () => {
       expect(resultSection.textContent).toContain("Image 4 of 4");
       expect(resultSection.textContent).toContain("4 images");
       expect(resultSection.textContent).toContain("100");
+      expect(Array.from(resultSection.querySelectorAll("button")).filter((button) => button.textContent?.includes("Inpaint"))).toHaveLength(4);
     } finally {
       globalThis.fetch = originalFetch;
     }
