@@ -28,7 +28,11 @@ import {
   type PromptProfileId,
 } from "@/shared/prompt-profile";
 
-import { createTimelineNodeError } from "./state";
+import {
+  createTimelineNodeError,
+  DEFAULT_TIMELINE_SOURCE_DENOISE,
+  normalizeTimelineSourceDenoise,
+} from "./state";
 import {
   TimelineNodeExecutionError,
   type CanvasBindingTimelineResult,
@@ -36,6 +40,7 @@ import {
   type CharacterTagsTimelineResult,
   type ParameterRecommendationTimelineResult,
   type ResourceRecommendationTimelineResult,
+  type SceneInputTimelineResult,
   type ScenePromptTimelineResult,
   type TimelineNodeAdapters,
   type TimelineNodeExecutionContext,
@@ -71,6 +76,10 @@ export type TimelineSamplerOptionsProvider = (
 export type TimelineStyleAdviceRequest = {
   baseNegativePrompt: string;
   finalPositivePrompt: string;
+  referenceResolution?: {
+    height: number;
+    width: number;
+  };
   selectedResources: SelectedCivitaiResourcesPreview;
 };
 
@@ -137,6 +146,26 @@ function getTimelinePromptProfile(workflow: TimelineNodeExecutionContext["workfl
   }
 
   return normalizePromptProfileId(undefined);
+}
+
+function getSceneInputSourceImage(workflow: TimelineNodeExecutionContext["workflow"]) {
+  const sceneInput = workflow.nodes["scene-input"].result;
+
+  if (!isRecord(sceneInput)) {
+    return undefined;
+  }
+
+  return (sceneInput as Partial<SceneInputTimelineResult>).sourceImage;
+}
+
+function getSceneInputSourceDenoise(workflow: TimelineNodeExecutionContext["workflow"]) {
+  const sceneInput = workflow.nodes["scene-input"].result;
+
+  if (!isRecord(sceneInput)) {
+    return undefined;
+  }
+
+  return (sceneInput as Partial<SceneInputTimelineResult>).sourceDenoise;
 }
 
 function getScenePromptResult(workflow: TimelineNodeExecutionContext["workflow"]): ScenePromptTimelineResult {
@@ -533,6 +562,15 @@ function pickSupportedValue(value: string | undefined, options: string[], fallba
   return options.includes(fallback) ? fallback : options[0] ?? fallback;
 }
 
+function normalizeRenderDimension(value: unknown, fallback: number) {
+  const parsed = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+
+  return Math.max(8, Math.round(parsed / 8) * 8);
+}
+
 function makeSeedPolicy(requestSeed: number | undefined): TimelineSeedPolicy {
   return typeof requestSeed === "number" && Number.isSafeInteger(requestSeed) && requestSeed >= 0
     ? { mode: "fixed", seed: requestSeed }
@@ -545,6 +583,7 @@ function createAiAdvice(
   canvasBinding: CanvasBindingTimelineResult | null,
   samplerOptions: TimelineSamplerOptions,
   finalPositivePrompt: string,
+  sourceImage?: SceneInputTimelineResult["sourceImage"],
 ): CivitaiAiPromptResult {
   const checkpoint = resourceResult.checkpoint.resource;
   const referenceSampler = getReferenceSampler(checkpoint)
@@ -555,20 +594,26 @@ function createAiAdvice(
   const samplerName = pickSupportedValue(parsedSampler?.samplerName, samplerOptions.samplers, "euler");
   const scheduler = pickSupportedValue(parsedSampler?.scheduler, samplerOptions.schedulers, "normal");
 
+  const referenceResolution = sourceImage
+    ? `${sourceImage.width}x${sourceImage.height}`
+    : inferResolution(scenePrompt, canvasBinding);
+
   return {
     prompt: finalPositivePrompt,
-    parameterSuggestionReason: "SceneForge selected conservative text-to-image parameters from local resource metadata.",
+    parameterSuggestionReason: sourceImage
+      ? "SceneForge selected conservative img2img parameters from the uploaded source image and local resource metadata."
+      : "SceneForge selected conservative text-to-image parameters from local resource metadata.",
     overallEffect: resourceResult.overallEffect,
     parseWarning: null,
     parameterSuggestions: {
       cfg: inferCfg(checkpoint),
-      denoise: 1,
+      denoise: sourceImage ? DEFAULT_TIMELINE_SOURCE_DENOISE : 1,
       loraWeights: resourceResult.loras.map((lora) => ({
         name: lora.resource.name,
         suggestedWeight: lora.suggestedWeight,
       })),
       negativePromptAdditions: scenePrompt.negativeSuggestions.join(", "),
-      resolution: inferResolution(scenePrompt, canvasBinding),
+      resolution: referenceResolution,
       sampler: samplerName,
       scheduler,
       steps: inferSteps(checkpoint),
@@ -584,6 +629,8 @@ export function createTimelineParameterRecommendation({
   aiAdvice,
   samplerOptions: rawSamplerOptions,
   supportsNsfw = false,
+  sourceDenoise,
+  sourceImage,
 }: {
   promptProfile?: PromptProfileId;
   resourceResult: ResourceRecommendationTimelineResult;
@@ -592,6 +639,8 @@ export function createTimelineParameterRecommendation({
   aiAdvice?: CivitaiAiPromptResult | null;
   samplerOptions?: TimelineSamplerOptions;
   supportsNsfw?: boolean;
+  sourceDenoise?: number;
+  sourceImage?: SceneInputTimelineResult["sourceImage"];
 }): ParameterRecommendationTimelineResult {
   const samplerOptions = normalizeOptions(rawSamplerOptions);
   const selectedResources = getSelectedResources(resourceResult);
@@ -603,7 +652,7 @@ export function createTimelineParameterRecommendation({
   });
   const baseNegativePrompt = scenePrompt.negativeSuggestions.join(", ");
   const resolvedAiAdvice =
-    aiAdvice ?? createAiAdvice(resourceResult, scenePrompt, canvasBinding, samplerOptions, finalPositivePrompt);
+    aiAdvice ?? createAiAdvice(resourceResult, scenePrompt, canvasBinding, samplerOptions, finalPositivePrompt, sourceImage);
   const settings = resolveComfyUiGenerationSettings({
     activePrompt: finalPositivePrompt,
     activePromptAlreadyFormatted: true,
@@ -615,22 +664,40 @@ export function createTimelineParameterRecommendation({
   const request = settings.request;
   const samplerName = pickSupportedValue(request.samplerName, samplerOptions.samplers, "euler");
   const scheduler = pickSupportedValue(request.scheduler, samplerOptions.schedulers, "normal");
-  const requestPreview = {
+  const denoise = sourceImage ? normalizeTimelineSourceDenoise(sourceDenoise) : request.denoise ?? 1;
+  const rawRequestPreview = {
     ...request,
+    denoise,
+    ...(sourceImage
+      ? {
+          width: sourceImage.width,
+          height: sourceImage.height,
+          imageWidth: sourceImage.width,
+          imageHeight: sourceImage.height,
+          batchSize: 1,
+        }
+      : {}),
     samplerName,
     scheduler,
+  };
+  const width = normalizeRenderDimension(rawRequestPreview.width, 1024);
+  const height = normalizeRenderDimension(rawRequestPreview.height, 1024);
+  const requestPreview = {
+    ...rawRequestPreview,
+    width,
+    height,
   };
 
   return {
     availableSamplers: samplerOptions.samplers,
     availableSchedulers: samplerOptions.schedulers,
-    width: requestPreview.width ?? 1024,
-    height: requestPreview.height ?? 1024,
+    width,
+    height,
     steps: requestPreview.steps ?? 30,
     cfg: requestPreview.cfg ?? 7,
     samplerName,
     scheduler,
-    denoise: requestPreview.denoise ?? 1,
+    denoise,
     seedPolicy: makeSeedPolicy(requestPreview.seed),
     finalPositivePrompt: requestPreview.positivePrompt,
     negativeAdditions: scenePrompt.negativeSuggestions,
@@ -696,11 +763,20 @@ export function createTimelineT7NodeAdapters({
         supportsNsfw: supportsNsfw(),
       });
       const baseNegativePrompt = scenePrompt.negativeSuggestions.join(", ");
+      const sourceImage = getSceneInputSourceImage(context.workflow);
       const aiAdvice = adviseStyle
         ? await adviseStyle(
             {
               baseNegativePrompt,
               finalPositivePrompt,
+              ...(sourceImage
+                ? {
+                    referenceResolution: {
+                      height: sourceImage.height,
+                      width: sourceImage.width,
+                    },
+                  }
+                : {}),
               selectedResources,
             },
             context,
@@ -715,6 +791,8 @@ export function createTimelineT7NodeAdapters({
           resourceResult,
           samplerOptions,
           scenePrompt,
+          sourceDenoise: sourceImage ? getSceneInputSourceDenoise(context.workflow) : undefined,
+          sourceImage,
           supportsNsfw: supportsNsfw(),
         }),
         source: "system",

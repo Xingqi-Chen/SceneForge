@@ -76,6 +76,14 @@ const objectInfoWithFaceDetailer = {
 const objectInfoWithControlNet = {
   ...objectInfo,
   LoadImage: {},
+  ImageScale: {
+    input: {
+      required: {
+        upscale_method: [["lanczos", "nearest-exact"], {}],
+      },
+    },
+  },
+  VAEEncode: {},
   ControlNetApplyAdvanced: {},
   ControlNetLoader: {
     input: {
@@ -91,6 +99,19 @@ const objectInfoWithControlNet = {
       },
     },
   },
+};
+
+const objectInfoWithImg2Img = {
+  ...objectInfo,
+  LoadImage: {},
+  ImageScale: {
+    input: {
+      required: {
+        upscale_method: [["lanczos"], {}],
+      },
+    },
+  },
+  VAEEncode: {},
 };
 
 const objectInfoWithAnimaAddons = {
@@ -236,6 +257,79 @@ describe("ComfyUI generate image route", () => {
       request: {
         seed: 123,
       },
+    });
+  });
+
+  it("uploads an img2img source image before queueing and redacts it from the response", async () => {
+    process.env.COMFYUI_BASE_URL = "http://comfyui.test";
+    const calls: string[] = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = String(input);
+      calls.push(url);
+
+      if (url === "http://comfyui.test/object_info") {
+        return Response.json(objectInfoWithImg2Img);
+      }
+
+      if (url === "http://comfyui.test/upload/image") {
+        expect(init?.method).toBe("POST");
+        expect(init?.body).toBeInstanceOf(FormData);
+        return Response.json({
+          name: "uploaded-source.png",
+          subfolder: "SceneForge",
+          type: "input",
+        });
+      }
+
+      expect(url).toBe("http://comfyui.test/prompt");
+      const body = JSON.parse(String(init?.body));
+      expect(body.prompt["4"]).toMatchObject({
+        class_type: "LoadImage",
+        inputs: {
+          image: "SceneForge/uploaded-source.png",
+        },
+      });
+      expect(body.prompt["5"].class_type).toBe("ImageScale");
+      expect(body.prompt["6"].class_type).toBe("VAEEncode");
+      expect(body.prompt["7"].inputs).toMatchObject({
+        denoise: 0.6,
+        latent_image: ["6", 0],
+      });
+
+      return Response.json({
+        prompt_id: "prompt-img2img",
+      });
+    });
+
+    const response = await POST(
+      new Request("http://localhost/api/comfyui/generate-image", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          checkpointName: "model.safetensors",
+          positivePrompt: "a scene",
+          sourceImageDataUrl: "data:image/png;base64,aGVsbG8=",
+          imageWidth: 64,
+          imageHeight: 64,
+          denoise: 0.6,
+          seed: 123,
+        }),
+      }),
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(calls).toEqual([
+      "http://comfyui.test/object_info",
+      "http://comfyui.test/upload/image",
+      "http://comfyui.test/prompt",
+    ]);
+    expect(payload.promptId).toBe("prompt-img2img");
+    expect(payload.request).toMatchObject({
+      imageName: "SceneForge/uploaded-source.png",
+      sourceImageDataUrl: "",
+      batchSize: 1,
+      denoise: 0.6,
     });
   });
 

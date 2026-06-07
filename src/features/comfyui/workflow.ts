@@ -474,15 +474,54 @@ function buildDefaultTextToImageWorkflow(
   });
   modelConnection = characterReferenceNodes.modelConnection;
 
-  const latentImage = builder.addNode(
-    resolvedRequest.latentImageNode,
-    {
-      width: resolvedRequest.width,
-      height: resolvedRequest.height,
-      batch_size: resolvedRequest.batchSize,
-    },
-    getComfyUiLatentImageNodeTitle(resolvedRequest.latentImageNode),
-  );
+  let sourceImage: string | undefined;
+  let sourceImageScale: string | undefined;
+  let vaeEncode: string | undefined;
+  let latentImage: string;
+  let latentImageConnection: ComfyUiNodeConnection;
+  const vaeConnection = modelContext.vaeConnection;
+
+  if (resolvedRequest.imageName) {
+    sourceImage = builder.addNode(
+      "LoadImage",
+      {
+        image: resolvedRequest.imageName,
+      },
+      "Load Img2Img Source",
+    );
+    sourceImageScale = builder.addNode(
+      "ImageScale",
+      {
+        image: builder.connect(sourceImage, 0),
+        upscale_method: "lanczos",
+        width: resolvedRequest.width,
+        height: resolvedRequest.height,
+        crop: "disabled",
+      },
+      "Resize Img2Img Source",
+    );
+    vaeEncode = builder.addNode(
+      "VAEEncode",
+      {
+        pixels: builder.connect(sourceImageScale, 0),
+        vae: vaeConnection,
+      },
+      "Encode Img2Img Source",
+    );
+    latentImage = vaeEncode;
+    latentImageConnection = builder.connect(vaeEncode, 0);
+  } else {
+    latentImage = builder.addNode(
+      resolvedRequest.latentImageNode,
+      {
+        width: resolvedRequest.width,
+        height: resolvedRequest.height,
+        batch_size: resolvedRequest.batchSize,
+      },
+      getComfyUiLatentImageNodeTitle(resolvedRequest.latentImageNode),
+    );
+    latentImageConnection = builder.connect(latentImage, 0);
+  }
   const sampler = builder.addNode(
     "KSampler",
     {
@@ -495,11 +534,10 @@ function buildDefaultTextToImageWorkflow(
       model: modelConnection,
       positive: positiveConditioningConnection,
       negative: negativeConditioningConnection,
-      latent_image: builder.connect(latentImage, 0),
+      latent_image: latentImageConnection,
     },
     "KSampler",
   );
-  const vaeConnection = modelContext.vaeConnection;
   const vaeDecode = builder.addNode(
     "VAEDecode",
     {
@@ -570,6 +608,9 @@ function buildDefaultTextToImageWorkflow(
       ...(controlNetNodeIds[0] ? { controlNetLoader: controlNetNodeIds[0].loader } : {}),
       ...(controlNetNodeIds[0] ? { controlNetApply: controlNetNodeIds[0].apply } : {}),
       ...(characterReferenceNodes.nodeIds.length > 0 ? { characterReferences: characterReferenceNodes.nodeIds } : {}),
+      ...(sourceImage ? { sourceImage } : {}),
+      ...(sourceImageScale ? { sourceImageScale } : {}),
+      ...(vaeEncode ? { vaeEncode } : {}),
       latentImage,
       sampler,
       vaeDecode,

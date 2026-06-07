@@ -26,6 +26,8 @@ type TimelineWorkflowOptions = {
   imageCount?: number;
   promptProfile?: PromptProfileId;
   sceneRequest?: string;
+  sourceDenoise?: number;
+  sourceImage?: SceneInputTimelineResult["sourceImage"];
   settingsSnapshot?: unknown;
   now?: TimelineClock;
 };
@@ -39,6 +41,7 @@ const runnableStatuses = new Set(["ready", "stale", "error"]);
 export const MIN_TIMELINE_IMAGE_COUNT = 1;
 export const MAX_TIMELINE_IMAGE_COUNT = 4;
 export const DEFAULT_TIMELINE_IMAGE_COUNT = 1;
+export const DEFAULT_TIMELINE_SOURCE_DENOISE = 0.6;
 
 function defaultNow() {
   return new Date().toISOString();
@@ -58,6 +61,15 @@ export function normalizeTimelineImageCount(value: unknown) {
     MAX_TIMELINE_IMAGE_COUNT,
     Math.max(MIN_TIMELINE_IMAGE_COUNT, Math.round(parsed)),
   );
+}
+
+export function normalizeTimelineSourceDenoise(value: unknown) {
+  const parsed = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(parsed)) {
+    return DEFAULT_TIMELINE_SOURCE_DENOISE;
+  }
+
+  return Math.min(1, Math.max(0, Number(parsed.toFixed(2))));
 }
 
 function createNode(nodeId: TimelineNodeId, updatedAt: string): TimelineNodeResult {
@@ -192,7 +204,9 @@ export function createTimelineWorkflowState(options: TimelineWorkflowOptions = {
     result: {
       rawIntent: options.sceneRequest,
       promptProfile: normalizePromptProfileId(options.promptProfile),
-      imageCount: normalizeTimelineImageCount(options.imageCount),
+      imageCount: options.sourceImage ? 1 : normalizeTimelineImageCount(options.imageCount),
+      ...(options.sourceImage ? { sourceDenoise: normalizeTimelineSourceDenoise(options.sourceDenoise) } : {}),
+      ...(options.sourceImage ? { sourceImage: options.sourceImage } : {}),
       settingsSnapshot: options.settingsSnapshot,
     } satisfies SceneInputTimelineResult,
     source: "manual",

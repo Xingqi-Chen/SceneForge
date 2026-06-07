@@ -346,6 +346,10 @@ export type GenerationDraft = Required<Omit<
   | "clipDevice"
   | "vaeName"
   | "unetWeightDtype"
+  | "sourceImageDataUrl"
+  | "imageName"
+  | "imageWidth"
+  | "imageHeight"
 >> & {
   checkpointNameAliases?: ComfyUiTextToImageRequest["checkpointNameAliases"];
   workflowProfile?: ComfyUiTextToImageRequest["workflowProfile"];

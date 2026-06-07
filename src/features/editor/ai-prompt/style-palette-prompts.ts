@@ -225,6 +225,7 @@ export function buildStylePaletteAdviceMessages(input: {
           preset: {
             id: input.preset.id,
             label: input.preset.label,
+            description: input.preset.description,
             positive: input.preset.positive,
             negative: input.preset.negative,
           },

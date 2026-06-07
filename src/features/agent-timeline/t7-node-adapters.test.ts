@@ -8,10 +8,17 @@ import type {
 import {
   buildTimelineFinalPositivePrompt,
   createTimelineParameterRecommendation,
+  createTimelineT7NodeAdapters,
   filterTimelineResourceCandidatesForPromptProfile,
+  type TimelineStyleAdviceRequest,
   validateTimelineResourceRecommendation,
 } from "./t7-node-adapters";
+import {
+  completeTimelineNode,
+  createTimelineWorkflowState,
+} from "./state";
 import type {
+  ParameterRecommendationTimelineResult,
   ResourceRecommendationTimelineResult,
   ScenePromptTimelineResult,
 } from "./types";
@@ -483,6 +490,161 @@ describe("T7 timeline adapters", () => {
     });
   });
 
+  it("defaults img2img parameter recommendations to denoise 0.6 with source image metadata", () => {
+    const checkpoint = makeResource("model", "checkpoint-local", "Local Checkpoint");
+    const resourceResult: ResourceRecommendationTimelineResult = {
+      checkpoint: {
+        resource: checkpoint,
+        reason: "Local checkpoint.",
+      },
+      loras: [],
+      candidates: {
+        checkpoints: [makeCandidate(checkpoint)],
+        loras: [],
+      },
+      recommendationReason: "Local recommendation.",
+      overallEffect: "Neon portrait.",
+      warnings: [],
+    };
+
+    const result = createTimelineParameterRecommendation({
+      resourceResult,
+      scenePrompt: makeScenePrompt(),
+      canvasBinding: null,
+      samplerOptions: {
+        samplers: ["euler"],
+        schedulers: ["normal"],
+      },
+      sourceImage: {
+        dataUrl: "data:image/webp;base64,aGVsbG8=",
+        filename: "source.webp",
+        height: 770,
+        mimeType: "image/webp",
+        uploadedAt: "2026-06-07T00:00:00.000Z",
+        width: 1025,
+      },
+    });
+
+    expect(result.denoise).toBe(0.6);
+    expect(result.width).toBe(1024);
+    expect(result.height).toBe(768);
+    expect(result.requestPreview).toMatchObject({
+      batchSize: 1,
+      denoise: 0.6,
+      width: 1024,
+      height: 768,
+      imageWidth: 1025,
+      imageHeight: 770,
+    });
+    expect(result.requestPreview).not.toHaveProperty("sourceImageDataUrl");
+  });
+
+  it("passes uploaded image dimensions to style advice and uses manual img2img denoise", async () => {
+    const checkpoint = makeResource("model", "checkpoint-local", "Local Checkpoint");
+    const resourceResult: ResourceRecommendationTimelineResult = {
+      checkpoint: {
+        resource: checkpoint,
+        reason: "Local checkpoint.",
+      },
+      loras: [],
+      candidates: {
+        checkpoints: [makeCandidate(checkpoint)],
+        loras: [],
+      },
+      recommendationReason: "Local recommendation.",
+      overallEffect: "Neon portrait.",
+      warnings: [],
+    };
+    const scenePrompt = makeScenePrompt("illustrious");
+    let workflow = createTimelineWorkflowState({
+      promptProfile: "illustrious",
+      sceneRequest: "A source-guided courier portrait",
+      sourceDenoise: 0.35,
+      sourceImage: {
+        dataUrl: "data:image/png;base64,c291cmNl",
+        filename: "reference.png",
+        height: 1024,
+        mimeType: "image/png",
+        uploadedAt: "2026-06-07T00:00:00.000Z",
+        width: 1536,
+      },
+    });
+    workflow = completeTimelineNode(workflow, "scene-prompt", scenePrompt, "ai");
+    workflow = completeTimelineNode(workflow, "resource-recommendation", resourceResult, "ai");
+
+    let styleAdviceRequest: TimelineStyleAdviceRequest | null = null;
+    const adapters = createTimelineT7NodeAdapters({
+      adviseStyle: (request) => {
+        styleAdviceRequest = request;
+        return {
+          prompt: "style advice prompt should be ignored",
+          parameterSuggestionReason: "AI Style Advice suggested a conflicting square resolution.",
+          overallEffect: "Tuned style.",
+          parseWarning: null,
+          parameterSuggestions: {
+            cfgScale: 5,
+            loraWeights: [],
+            negativePromptAdditions: "jpeg artifacts",
+            resolution: "512x512",
+            sampler: "euler",
+            scheduler: "normal",
+            steps: 28,
+          },
+        };
+      },
+      loadResourceCandidates: () => resourceResult.candidates,
+      loadSamplerOptions: () => ({
+        samplers: ["euler"],
+        schedulers: ["normal"],
+      }),
+      recommendResources: () => ({
+        checkpoint: resourceResult.checkpoint,
+        loras: resourceResult.loras,
+        recommendationReason: resourceResult.recommendationReason,
+        overallEffect: resourceResult.overallEffect,
+        warnings: resourceResult.warnings,
+      }),
+    });
+    const adapter = adapters["parameter-recommendation"];
+
+    expect(adapter).toBeDefined();
+    const adapterResult = await adapter?.({
+      dependencies: [
+        workflow.nodes["scene-prompt"],
+        workflow.nodes["resource-recommendation"],
+      ],
+      nodeId: "parameter-recommendation",
+      workflow,
+    });
+    const result = (
+      adapterResult && typeof adapterResult === "object" && "value" in adapterResult
+        ? adapterResult.value
+        : adapterResult
+    ) as ParameterRecommendationTimelineResult;
+
+    expect(styleAdviceRequest).toMatchObject({
+      referenceResolution: {
+        height: 1024,
+        width: 1536,
+      },
+    });
+    expect(result.denoise).toBe(0.35);
+    expect(result.width).toBe(1536);
+    expect(result.height).toBe(1024);
+    expect(result.reason).toBe("AI Style Advice suggested a conflicting square resolution.");
+    expect(result.requestPreview).toMatchObject({
+      batchSize: 1,
+      cfg: 5,
+      denoise: 0.35,
+      height: 1024,
+      imageHeight: 1024,
+      imageWidth: 1536,
+      steps: 28,
+      width: 1536,
+    });
+    expect(result.requestPreview).not.toHaveProperty("sourceImageDataUrl");
+  });
+
   it("succeeds when a selected LoRA has no trained words", () => {
     const checkpoint = makeResource("model", "checkpoint-local", "Local Checkpoint", "SDXL");
     const lora = makeResource("lora", "lora-local", "Local LoRA", "SDXL", {
@@ -676,7 +838,7 @@ describe("T7 timeline adapters", () => {
     expect(result.requestPreview.negativePrompt).toContain("bad_hands");
   });
 
-  it("uses AI Style Advice parameter suggestions without replacing the final positive prompt", () => {
+  it("uses AI Style Advice parameter suggestions and rounds render dimensions to multiples of 8", () => {
     const checkpoint = makeResource("model", "checkpoint-local", "Local Checkpoint", "Illustrious");
     const lora = makeResource("lora", "lora-local", "Local LoRA", "Illustrious", {
       trainedWords: ["neon_style"],
@@ -712,7 +874,7 @@ describe("T7 timeline adapters", () => {
           cfgScale: 5.5,
           loraWeights: [{ name: "Local LoRA", suggestedWeight: 0.64 }],
           negativePromptAdditions: "jpeg artifacts",
-          resolution: "1216x800",
+          resolution: "1219x801",
           sampler: "euler",
           scheduler: "normal",
           steps: 38,
@@ -738,6 +900,8 @@ describe("T7 timeline adapters", () => {
     });
     expect(result.finalPositivePrompt).not.toBe("style advice prompt should be ignored");
     expect(result.requestPreview.positivePrompt).toBe(result.finalPositivePrompt);
+    expect(result.requestPreview.width).toBe(1216);
+    expect(result.requestPreview.height).toBe(800);
     expect(result.requestPreview.negativePrompt).toContain("low quality");
     expect(result.requestPreview.negativePrompt).toContain("jpeg artifacts");
     expect(result.requestPreview.loras?.[0]).toMatchObject({

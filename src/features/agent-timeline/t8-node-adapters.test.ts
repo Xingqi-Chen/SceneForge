@@ -5,12 +5,14 @@ import {
   createConfirmedTimelineComfyUiRequest,
   createTimelineWorkflowState,
   setTimelineNodeManualResult,
+  type SceneInputTimelineResult,
 } from ".";
 
-function createConfirmedWorkflow(imageCount?: number) {
+function createConfirmedWorkflow(imageCount?: number, sourceImage?: SceneInputTimelineResult["sourceImage"]) {
   let workflow = createTimelineWorkflowState({
     imageCount,
     sceneRequest: "A pilot in a greenhouse",
+    sourceImage,
     workflowId: "t8-request",
   });
 
@@ -70,6 +72,25 @@ describe("timeline T8 ComfyUI request conversion", () => {
     expect(createConfirmedTimelineComfyUiRequest(workflow)).toMatchObject({
       batchSize: 3,
       checkpointName: "local.safetensors",
+      preview: false,
+    });
+  });
+
+  it("forces confirmed img2img requests to a single image with source metadata", () => {
+    const workflow = confirmTimelineGeneration(createConfirmedWorkflow(3, {
+      dataUrl: "data:image/png;base64,aGVsbG8=",
+      filename: "source.png",
+      height: 768,
+      mimeType: "image/png",
+      uploadedAt: "2026-06-07T00:00:00.000Z",
+      width: 1024,
+    }));
+
+    expect(createConfirmedTimelineComfyUiRequest(workflow)).toMatchObject({
+      batchSize: 1,
+      sourceImageDataUrl: "data:image/png;base64,aGVsbG8=",
+      imageWidth: 1024,
+      imageHeight: 768,
       preview: false,
     });
   });

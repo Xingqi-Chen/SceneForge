@@ -667,6 +667,17 @@ function setNativeSelectValue(select: HTMLSelectElement, value: string) {
   select.dispatchEvent(new Event("change", { bubbles: true }));
 }
 
+function setNativeInputValue(input: HTMLInputElement, value: string) {
+  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+
+  if (!setter) {
+    throw new Error("Unable to set input value.");
+  }
+
+  setter.call(input, value);
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
 async function submitInitialScene(sceneRequest: string) {
   const textarea = container.querySelector("#scene-request") as HTMLTextAreaElement | null;
   const form = container.querySelector("form");
@@ -1476,6 +1487,150 @@ describe("TimelineShell", () => {
     });
 
     expect(getButtonByText("Start workflow").disabled).toBe(true);
+  });
+
+  it("uploads and removes a scene input source image without sending it to LLM prompt requests", async () => {
+    const originalFetch = globalThis.fetch;
+    const OriginalImage = window.Image;
+    const t5FetchMock = mockT5Fetch();
+    const activeSaveBodies: unknown[] = [];
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = getFetchUrl(input);
+
+      if (url === "/api/agent-timeline/active-workflow") {
+        if (init?.method === "PUT") {
+          activeSaveBodies.push(typeof init.body === "string" ? JSON.parse(init.body) : null);
+          return createJsonResponse({ ok: true, record: activeSaveBodies.at(-1) });
+        }
+
+        return createJsonResponse(null);
+      }
+
+      return t5FetchMock(input, init);
+    });
+    const imageDataUrl = "data:image/webp;base64,aGVsbG8=";
+
+    class MockImage {
+      naturalHeight = 480;
+      naturalWidth = 640;
+      onerror: (() => void) | null = null;
+      onload: (() => void) | null = null;
+
+      set src(value: string) {
+        void value;
+        queueMicrotask(() => this.onload?.());
+      }
+    }
+
+    Object.defineProperty(window, "Image", {
+      configurable: true,
+      value: MockImage,
+    });
+    globalThis.fetch = fetchMock;
+
+    try {
+      act(() => {
+        root.render(<TimelineShell />);
+      });
+
+      await flushAsyncWork();
+
+      const imageCount = container.querySelector("#timeline-image-count") as HTMLSelectElement | null;
+      const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement | null;
+      expect(imageCount).not.toBeNull();
+      expect(fileInput).not.toBeNull();
+
+      act(() => {
+        setNativeSelectValue(imageCount as HTMLSelectElement, "4");
+      });
+      expect(imageCount?.value).toBe("4");
+
+      const file = new File(["hello"], "source.webp", { type: "image/webp" });
+
+      async function uploadSourceImage() {
+        await act(async () => {
+          Object.defineProperty(fileInput, "files", {
+            configurable: true,
+            value: [file],
+          });
+          fileInput?.dispatchEvent(new Event("change", { bubbles: true }));
+          await Promise.resolve();
+        });
+        await flushAsyncWork();
+      }
+
+      await uploadSourceImage();
+
+      expect(imageCount?.value).toBe("1");
+      expect(imageCount?.disabled).toBe(true);
+      expect(container.textContent).toContain("source.webp");
+      expect(container.textContent).toContain("640x480 source image");
+      expect(container.textContent).toContain("Denoise");
+      const denoiseInput = container.querySelector('input[type="number"]') as HTMLInputElement | null;
+      expect(denoiseInput).not.toBeNull();
+      expect(denoiseInput?.value).toBe("0.6");
+
+      act(() => {
+        setNativeInputValue(denoiseInput as HTMLInputElement, "0.35");
+      });
+      expect(denoiseInput?.value).toBe("0.35");
+
+      act(() => {
+        getButtonByText("Remove").click();
+      });
+      await flushAsyncWork();
+
+      expect(container.textContent).not.toContain("source.webp");
+      expect(imageCount?.disabled).toBe(false);
+      expect(container.querySelector('input[type="number"]')).toBeNull();
+
+      await uploadSourceImage();
+
+      expect(imageCount?.value).toBe("1");
+      expect(imageCount?.disabled).toBe(true);
+      expect(container.textContent).toContain("source.webp");
+      expect((container.querySelector('input[type="number"]') as HTMLInputElement | null)?.value).toBe("0.35");
+
+      await submitInitialScene("A source-guided courier portrait");
+
+      const promptRequest = fetchMock.mock.calls
+        .map(([, init]) => (typeof init?.body === "string" ? JSON.parse(init.body) : null))
+        .find((body) => body?.purpose === "stable-diffusion-prompt-generation");
+
+      expect(promptRequest).toBeDefined();
+      expect(JSON.stringify(promptRequest)).not.toContain(imageDataUrl);
+      expect(JSON.stringify(promptRequest)).not.toContain("source.webp");
+      expect(JSON.parse(promptRequest.messages[1].content)).toMatchObject({
+        promptProfile: "illustrious",
+        sceneRequest: "A source-guided courier portrait",
+      });
+      expect(activeSaveBodies.at(-1)).toMatchObject({
+        selectedImageCount: 1,
+        workflow: {
+          nodes: {
+            "scene-input": {
+              result: {
+                imageCount: 1,
+                sourceDenoise: 0.35,
+                sourceImage: {
+                  dataUrl: imageDataUrl,
+                  filename: "source.webp",
+                  height: 480,
+                  mimeType: "image/webp",
+                  width: 640,
+                },
+              },
+            },
+          },
+        },
+      });
+    } finally {
+      Object.defineProperty(window, "Image", {
+        configurable: true,
+        value: OriginalImage,
+      });
+      globalThis.fetch = originalFetch;
+    }
   });
 
   it("persists the selected prompt profile in scene input before prompt generation", async () => {

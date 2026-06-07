@@ -83,6 +83,73 @@ describe("timeline workflow persistence", () => {
     });
   });
 
+  it("preserves scene input source image data through workflow sanitization", () => {
+    const sourceImageDataUrl = "data:image/png;base64,aGVsbG8=";
+    let workflow = createTimelineWorkflowState({
+      workflowId: "timeline-source-image",
+      sceneRequest: "A source-guided portrait",
+      imageCount: 4,
+      sourceImage: {
+        dataUrl: sourceImageDataUrl,
+        filename: "source.png",
+        height: 768,
+        mimeType: "image/png",
+        uploadedAt: "2026-06-07T00:00:00.000Z",
+        width: 1024,
+      },
+      now: () => "2026-06-07T00:00:00.000Z",
+    });
+    workflow = completeTimelineNode(
+      workflow,
+      "parameter-recommendation",
+      {
+        requestPreview: {
+          batchSize: 1,
+          denoise: 0.6,
+          height: 768,
+          imageHeight: 768,
+          imageWidth: 1024,
+          width: 1024,
+        },
+      },
+      "ai",
+    );
+
+    const record = createTimelineWorkflowRecord({
+      workflow,
+      sceneRequest: "A source-guided portrait",
+      selectedPromptProfile: "illustrious",
+      selectedImageCount: 1,
+      selectedNodeId: "scene-input",
+    });
+    const serialized = serializeTimelineWorkflowRecord(record);
+    const parsed = parseTimelineWorkflowRecordJson(serialized);
+
+    expect(serialized.match(/data:image\/png;base64,aGVsbG8=/g) ?? []).toHaveLength(1);
+    expect(parsed?.workflow.nodes["scene-input"].result).toMatchObject({
+      imageCount: 1,
+      sourceImage: {
+        dataUrl: sourceImageDataUrl,
+        filename: "source.png",
+        height: 768,
+        mimeType: "image/png",
+        width: 1024,
+      },
+    });
+    expect(parsed?.workflow.nodes["parameter-recommendation"].result).toMatchObject({
+      requestPreview: {
+        batchSize: 1,
+        height: 768,
+        imageHeight: 768,
+        imageWidth: 1024,
+        width: 1024,
+      },
+    });
+    expect(parsed?.workflow.nodes["parameter-recommendation"].result).not.toHaveProperty(
+      "requestPreview.sourceImageDataUrl",
+    );
+  });
+
   it("restores interrupted running nodes as visible errors", () => {
     const workflow = markTimelineNodeRunning(
       createTimelineWorkflowState({

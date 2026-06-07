@@ -54,6 +54,10 @@ export type ComfyUiTextToImageRequest = {
   denoise?: number;
   batchSize?: number;
   latentImageNode?: ComfyUiLatentImageNode;
+  sourceImageDataUrl?: string;
+  imageName?: string;
+  imageWidth?: number;
+  imageHeight?: number;
   promptWrapper?: ComfyUiPromptWrapper;
   outputPrefix?: string;
   faceDetailer?: ComfyUiFaceDetailerConfig;
@@ -297,6 +301,10 @@ export type ResolvedComfyUiTextToImageRequest = {
   denoise: number;
   batchSize: number;
   latentImageNode: ComfyUiLatentImageNode;
+  sourceImageDataUrl: string;
+  imageName: string;
+  imageWidth?: number;
+  imageHeight?: number;
   promptWrapper: ResolvedComfyUiPromptWrapper;
   outputPrefix: string;
   faceDetailer: ResolvedComfyUiFaceDetailerConfig;
@@ -477,6 +485,9 @@ export type BasicTextToImageNodeIds = {
   controlNetLoader?: string;
   controlNetApply?: string;
   characterReferences?: BasicTextToImageCharacterReferenceNodeIds[];
+  sourceImage?: string;
+  sourceImageScale?: string;
+  vaeEncode?: string;
   latentImage: string;
   sampler: string;
   vaeDecode: string;
