@@ -113,6 +113,12 @@ Security expectations:
 - The settings page may display whether required environment variables are configured, but must not echo secret values.
 - Path updates must validate absolute paths, reject traversal, and avoid writing outside configured roots.
 
+## Timeline Persistence and Project Management
+
+Timeline runtime state is durable for the active workflow once the persistence/autosave track is implemented. The active workflow record saves and restores a timeline workflow across expected Run and Settings navigation, including node outputs, manual edits, stale/error statuses, selected resources and parameters, generation gate state, execution metadata, result references, selected node, and display mode. Interrupted `running` nodes must restore as visible recoverable errors rather than pretending that background work continued reliably.
+
+Workflow project management UI is a separate follow-up track. It should provide project list/open/save/rename/delete affordances comparable to the editor only after timeline workflow persistence exists. The persistence track owns the durable data contract; the project management UI track owns user-facing organization and navigation around saved workflow projects.
+
 ## Non-goals for MVP
 
 - Multi-image batch generation.
@@ -139,6 +145,8 @@ Security expectations:
 - Timeline stops before ComfyUI execution until explicit user confirmation.
 - Clicking start image generation advances to single-image ComfyUI execution and result display.
 - Settings are outside the main workflow and include NSFW plus required path/integration configuration.
+- After the scoped persistence/autosave track lands, timeline workflow state survives expected Run and Settings navigation according to its durable storage contract.
+- After the follow-up project management track lands, saved timeline workflow projects can be found and managed through visible project management UI comparable to the editor.
 
 ## Product Constraints for Agents
 
@@ -153,5 +161,5 @@ Security expectations:
 
 - Should MVP strictly limit to one primary character, or allow multiple characters as separate later timeline branches?
 - Should settings allow editing LiteLLM and ComfyUI API keys, or only show server-side configuration status?
-- Should generated results bind to the current project history in MVP, or remain standalone generated-image records?
+- Should persisted timeline result references also bind to the legacy editor project generated-image history, or stay in workflow-project history only?
 - Should the legacy full editor remain the default route while the timeline MVP is built under a new route, or should timeline become the default entry after T4?

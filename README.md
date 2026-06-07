@@ -46,6 +46,8 @@ The MVP starts with only a scene input, a start button, and a settings entry poi
 
 Every node exposes manual controls and an AI retry/suggestion action. User edits mark dependent downstream nodes stale and LangGraph regenerates only those dependent nodes. The timeline must stop before ComfyUI execution until the user explicitly clicks start image generation.
 
+The active timeline workflow is autosaved locally. After a workflow has started, SceneForge restores the active workflow when you visit Settings and return, or when you reload the Run page and the active record is still available. Interrupted running nodes restore as visible retryable errors rather than pretending background work continued while the page was away. Full workflow project list/open/save/rename/delete UI is planned separately.
+
 ## LLM API
 
 SceneForge exposes a server-side LiteLLM chat endpoint at `POST /api/llm/chat`. Existing AI features use this endpoint for prompt, tag, pose, diagnosis, enrichment, and recommendation flows. Timeline work should reuse these interfaces through graph-friendly adapters before adding any new LLM route.
@@ -81,6 +83,8 @@ Secrets should remain server-only in `.env.local` unless a later scoped issue ad
 ## Local Data
 
 Runtime data is stored under `data/` by default or in configured absolute paths. Do not commit generated projects, logs, caches, databases, downloaded assets, or generated images.
+
+The active timeline workflow autosave record is stored under `data/timeline-workflows/active-workflow.json` by default. It contains local workflow state and references needed to restore progress; it must not contain API keys or `.env.local` secret values.
 
 Important environment variables are documented in `.env.example`.
 

@@ -111,6 +111,16 @@ import {
   type LlmChatResponse,
 } from "@/features/llm";
 import { savePromptLibrary } from "@/features/persistence";
+import {
+  deleteActiveTimelineWorkflowRecord,
+  loadActiveTimelineWorkflowRecord,
+  saveActiveTimelineWorkflowRecord,
+} from "@/features/agent-timeline/timeline-workflow-storage";
+import type {
+  TimelineOutputDisplayMode,
+  TimelineOutputDisplayModeMap,
+  TimelineWorkflowRecordInput,
+} from "@/features/agent-timeline/timeline-workflow-persistence";
 import type { CharacterPromptTagTarget } from "@/features/prompt-engine/prompt-library/character-image-prompt-tags";
 import {
   defaultSceneForgeUserSettings,
@@ -139,9 +149,10 @@ import { getTimelineNodeOutputText, timelineNodeContent } from "./timeline-node-
 
 type DraftMap = Partial<Record<TimelineNodeId, string>>;
 type NoticeMap = Partial<Record<TimelineNodeId, string>>;
-type OutputDisplayMode = "json" | "visual";
-type OutputDisplayModeMap = Partial<Record<TimelineNodeId, OutputDisplayMode>>;
+type OutputDisplayMode = TimelineOutputDisplayMode;
+type OutputDisplayModeMap = TimelineOutputDisplayModeMap;
 type SceneInputAiAction = "rewrite" | "suggest";
+type TimelineAutosaveStatus = "idle" | "loading" | "saved" | "error";
 
 type PendingTimelinePromptTagReview = {
   input: TimelineCanvasBindingInput;
@@ -1236,6 +1247,14 @@ export function TimelineShell() {
     defaultSceneForgeUserSettings.workflow,
   );
   const pendingPromptTagReviewRef = useRef<PendingTimelinePromptTagReview | null>(null);
+  const autosaveTimeoutRef = useRef<number | null>(null);
+  const autosaveVersionRef = useRef(0);
+  const latestAutosaveInputRef = useRef<TimelineWorkflowRecordInput | null>(null);
+  const restoreVersionRef = useRef(0);
+  const shouldClearActiveWorkflowRef = useRef(false);
+  const isMountedRef = useRef(true);
+  const [autosaveStatus, setAutosaveStatus] = useState<TimelineAutosaveStatus>("idle");
+  const [autosaveMessage, setAutosaveMessage] = useState("");
 
   const previewWorkflow = useMemo(() => createTimelineWorkflowState({ workflowId: "draft-workflow" }), []);
   const activeWorkflow = workflow ?? previewWorkflow;
@@ -1264,6 +1283,14 @@ export function TimelineShell() {
   const workflowTitle = workflow ? sceneRequest : "Untitled workflow";
   const workflowMode = workflow ? "Run shell" : "Draft setup";
   const sceneInputAiSource = sceneRequest.trim() || getSceneInputRawIntent(workflow).trim();
+  const autosaveLabel =
+    autosaveStatus === "loading"
+      ? "Saving"
+      : autosaveStatus === "saved"
+        ? "Autosaved"
+        : autosaveStatus === "error"
+          ? "Save failed"
+          : "";
 
   function clearPendingPromptTagReview() {
     pendingPromptTagReviewRef.current = null;
@@ -1283,12 +1310,65 @@ export function TimelineShell() {
 
   useEffect(() => {
     return () => {
+      isMountedRef.current = false;
       activeRunIdRef.current += 1;
+      if (autosaveTimeoutRef.current) {
+        window.clearTimeout(autosaveTimeoutRef.current);
+      }
+      flushLatestTimelineAutosave();
       const pending = pendingPromptTagReviewRef.current;
       if (pending) {
         pending.reject(new Error("Timeline run was superseded."));
         pendingPromptTagReviewRef.current = null;
       }
+    };
+  }, []);
+
+  useEffect(() => {
+    let canceled = false;
+    const restoreVersion = restoreVersionRef.current;
+
+    void loadActiveTimelineWorkflowRecord()
+      .then((record) => {
+        if (canceled || restoreVersionRef.current !== restoreVersion || !record) {
+          return;
+        }
+
+        const restoredImageCount = normalizeTimelineImageCount(record.selectedImageCount);
+        latestAutosaveInputRef.current = {
+          workflow: record.workflow,
+          sceneRequest: record.sceneRequest,
+          selectedPromptProfile: record.selectedPromptProfile,
+          selectedImageCount: restoredImageCount,
+          selectedNodeId: record.selectedNodeId,
+          outputDisplayModes: record.outputDisplayModes,
+        };
+        setWorkflow(record.workflow);
+        shouldClearActiveWorkflowRef.current = false;
+        setSceneRequest(record.sceneRequest);
+        setSelectedPromptProfile(record.selectedPromptProfile);
+        setSelectedImageCount(restoredImageCount);
+        setSelectedNodeId(record.selectedNodeId);
+        setOutputDisplayModes(record.outputDisplayModes);
+        setNotices((current) => ({
+          ...current,
+          [record.selectedNodeId]: "Restored the autosaved timeline workflow.",
+        }));
+        setAutosaveStatus("saved");
+        setAutosaveMessage(`Restored ${record.workflow.workflowId}.`);
+      })
+      .catch((error) => {
+        if (canceled || restoreVersionRef.current !== restoreVersion) {
+          return;
+        }
+
+        console.error("[SceneForge] [timeline] failed to restore active workflow", { error });
+        setAutosaveStatus("error");
+        setAutosaveMessage(error instanceof Error ? error.message : "Unable to restore the autosaved workflow.");
+      });
+
+    return () => {
+      canceled = true;
     };
   }, []);
 
@@ -1315,6 +1395,85 @@ export function TimelineShell() {
     };
   }, []);
 
+  useEffect(() => {
+    if (!workflow) {
+      return;
+    }
+
+    if (autosaveTimeoutRef.current) {
+      window.clearTimeout(autosaveTimeoutRef.current);
+    }
+
+    const autosaveInput: TimelineWorkflowRecordInput = {
+      workflow,
+      sceneRequest,
+      selectedPromptProfile,
+      selectedImageCount,
+      selectedNodeId,
+      outputDisplayModes,
+    };
+    const autosaveVersion = autosaveVersionRef.current + 1;
+    autosaveVersionRef.current = autosaveVersion;
+    latestAutosaveInputRef.current = autosaveInput;
+
+    autosaveTimeoutRef.current = window.setTimeout(() => {
+      setAutosaveStatus("loading");
+      setAutosaveMessage("Saving timeline workflow...");
+
+      void saveActiveTimelineWorkflowRecord(autosaveInput)
+        .then((record) => {
+          if (autosaveVersionRef.current !== autosaveVersion) {
+            const latestInput = latestAutosaveInputRef.current;
+
+            void (latestInput
+              ? saveActiveTimelineWorkflowRecord(latestInput)
+              : deleteActiveTimelineWorkflowRecord()
+            ).catch((error) => {
+              console.error("[SceneForge] [timeline] failed to reconcile stale autosave", { error });
+            });
+            return;
+          }
+
+          if (!isMountedRef.current) {
+            return;
+          }
+
+          setAutosaveStatus("saved");
+          setAutosaveMessage(`Autosaved ${record.workflow.workflowId}.`);
+        })
+        .catch((error) => {
+          if (autosaveVersionRef.current !== autosaveVersion) {
+            return;
+          }
+
+          if (!isMountedRef.current) {
+            return;
+          }
+
+          console.error("[SceneForge] [timeline] autosave failed", { error });
+          setAutosaveStatus("error");
+          setAutosaveMessage(error instanceof Error ? error.message : "Unable to autosave the timeline workflow.");
+          setNotices((current) => ({
+            ...current,
+            [selectedNodeId]: error instanceof Error ? error.message : "Unable to autosave the timeline workflow.",
+          }));
+        });
+    }, 250);
+
+    return () => {
+      if (autosaveTimeoutRef.current) {
+        window.clearTimeout(autosaveTimeoutRef.current);
+      }
+    };
+  }, [
+    workflow,
+    sceneRequest,
+    selectedPromptProfile,
+    selectedImageCount,
+    selectedNodeId,
+    outputDisplayModes,
+  ]);
+
   function isCurrentRun(runId: number) {
     return activeRunIdRef.current === runId;
   }
@@ -1322,6 +1481,48 @@ export function TimelineShell() {
   function invalidateTimelineRun() {
     activeRunIdRef.current += 1;
     cancelPendingPromptTagReview("Timeline run was superseded.");
+  }
+
+  function flushLatestTimelineAutosave() {
+    const latestInput = latestAutosaveInputRef.current;
+
+    if (latestInput) {
+      void saveActiveTimelineWorkflowRecord(latestInput).catch((error) => {
+        console.error("[SceneForge] [timeline] failed to flush active workflow autosave", { error });
+      });
+      return;
+    }
+
+    if (!shouldClearActiveWorkflowRef.current) {
+      return;
+    }
+
+    void deleteActiveTimelineWorkflowRecord().catch((error) => {
+      console.error("[SceneForge] [timeline] failed to flush active workflow autosave", { error });
+    });
+  }
+
+  function rememberLatestTimelineAutosaveInput(
+    nextWorkflow: TimelineWorkflowState,
+    overrides: Partial<Omit<TimelineWorkflowRecordInput, "workflow">> = {},
+  ) {
+    latestAutosaveInputRef.current = {
+      workflow: nextWorkflow,
+      sceneRequest: overrides.sceneRequest ?? sceneRequest,
+      selectedPromptProfile: overrides.selectedPromptProfile ?? selectedPromptProfile,
+      selectedImageCount: overrides.selectedImageCount ?? selectedImageCount,
+      selectedNodeId: overrides.selectedNodeId ?? selectedNodeId,
+      outputDisplayModes: overrides.outputDisplayModes ?? outputDisplayModes,
+    };
+    shouldClearActiveWorkflowRef.current = false;
+  }
+
+  function commitWorkflow(
+    nextWorkflow: TimelineWorkflowState,
+    overrides: Partial<Omit<TimelineWorkflowRecordInput, "workflow">> = {},
+  ) {
+    rememberLatestTimelineAutosaveInput(nextWorkflow, overrides);
+    setWorkflow(nextWorkflow);
   }
 
   function getCurrentPromptLibraryTags() {
@@ -1466,7 +1667,9 @@ export function TimelineShell() {
           return currentWorkflow;
         }
 
-        return mergeTimelineWorkflowUpdate(currentWorkflow, update);
+        const mergedWorkflow = mergeTimelineWorkflowUpdate(currentWorkflow, update);
+        rememberLatestTimelineAutosaveInput(mergedWorkflow);
+        return mergedWorkflow;
       });
     };
 
@@ -1568,7 +1771,7 @@ export function TimelineShell() {
         });
       }
 
-      setWorkflow(result);
+      commitWorkflow(result);
       if (timelineSettings.autoReview && canConfirmTimelineWorkflow(result)) {
         void runConfirmGeneration(result, { allowWhileRunning: true });
       }
@@ -1606,7 +1809,11 @@ export function TimelineShell() {
         return currentWorkflow;
       }
 
-      return markTimelineNodeRunning(currentWorkflow, "comfyui-execution");
+      const runningWorkflow = markTimelineNodeRunning(currentWorkflow, "comfyui-execution");
+      rememberLatestTimelineAutosaveInput(runningWorkflow, {
+        selectedNodeId: "comfyui-execution",
+      });
+      return runningWorkflow;
     });
     setNotices((current) => ({
       ...current,
@@ -1620,7 +1827,13 @@ export function TimelineShell() {
         return;
       }
 
-      setWorkflow(result);
+      commitWorkflow(result, {
+        selectedNodeId: result.nodes["result-display"].status === "done" ? "result-display" : "comfyui-execution",
+        outputDisplayModes: {
+          ...outputDisplayModes,
+          "result-display": "visual",
+        },
+      });
       const executionNode = result.nodes["comfyui-execution"];
       const executionErrorMessage = executionNode.status === "error" ? executionNode.error?.message : null;
       setSelectedNodeId(result.nodes["result-display"].status === "done" ? "result-display" : "comfyui-execution");
@@ -1657,13 +1870,42 @@ export function TimelineShell() {
       return;
     }
 
+    restoreVersionRef.current += 1;
     const nextWorkflow = createTimelineWorkflowState({
       imageCount: selectedImageCount,
       promptProfile: selectedPromptProfile,
       sceneRequest: trimmedSceneRequest,
     });
+    const initialAutosaveInput: TimelineWorkflowRecordInput = {
+      workflow: nextWorkflow,
+      sceneRequest: trimmedSceneRequest,
+      selectedPromptProfile,
+      selectedImageCount,
+      selectedNodeId: "scene-input",
+      outputDisplayModes: {},
+    };
 
-    setWorkflow(nextWorkflow);
+    latestAutosaveInputRef.current = initialAutosaveInput;
+    shouldClearActiveWorkflowRef.current = false;
+    void saveActiveTimelineWorkflowRecord(initialAutosaveInput)
+      .then((record) => {
+        if (!isMountedRef.current) {
+          return;
+        }
+
+        setAutosaveStatus("saved");
+        setAutosaveMessage(`Autosaved ${record.workflow.workflowId}.`);
+      })
+      .catch((error) => {
+        if (!isMountedRef.current) {
+          return;
+        }
+
+        console.error("[SceneForge] [timeline] initial autosave failed", { error });
+        setAutosaveStatus("error");
+        setAutosaveMessage(error instanceof Error ? error.message : "Unable to autosave the timeline workflow.");
+      });
+    commitWorkflow(nextWorkflow, initialAutosaveInput);
     setSceneRequest(trimmedSceneRequest);
     setSelectedNodeId("scene-input");
     setEditingNodeId(null);
@@ -1693,11 +1935,14 @@ export function TimelineShell() {
     }
 
     invalidateTimelineRun();
-    setWorkflow(setTimelineNodeManualResult(workflow, "scene-input", {
+    commitWorkflow(setTimelineNodeManualResult(workflow, "scene-input", {
       rawIntent,
       imageCount: selectedImageCount,
       promptProfile,
-    } satisfies SceneInputTimelineResult));
+    } satisfies SceneInputTimelineResult), {
+      sceneRequest: rawIntent,
+      selectedPromptProfile: promptProfile,
+    });
   }
 
   function handleImageCountChange(value: string) {
@@ -1714,11 +1959,14 @@ export function TimelineShell() {
     }
 
     invalidateTimelineRun();
-    setWorkflow(setTimelineNodeManualResult(workflow, "scene-input", {
+    commitWorkflow(setTimelineNodeManualResult(workflow, "scene-input", {
       rawIntent,
       imageCount,
       promptProfile: selectedPromptProfile,
-    } satisfies SceneInputTimelineResult));
+    } satisfies SceneInputTimelineResult), {
+      sceneRequest: rawIntent,
+      selectedImageCount: imageCount,
+    });
     setNotices((current) => ({
       ...current,
       "scene-input": "Image count updated. Downstream nodes are pending regeneration.",
@@ -1778,11 +2026,13 @@ export function TimelineShell() {
 
     invalidateTimelineRun();
     setIsRunning(false);
-    setWorkflow(setTimelineNodeManualResult(
+    commitWorkflow(setTimelineNodeManualResult(
       workflow,
       nodeId,
       createManualResult(nodeId, draft, selectedPromptProfile, selectedImageCount),
-    ));
+    ), {
+      sceneRequest: nodeId === "scene-input" ? draft : sceneRequest,
+    });
     setEditingNodeId(null);
     setDrafts((current) => ({
       ...current,
@@ -1804,7 +2054,7 @@ export function TimelineShell() {
     const nextWorkflow = setTimelineNodeManualResult(workflow, "scene-prompt", result);
     const nextDraft = JSON.stringify(result, null, 2);
 
-    setWorkflow(nextWorkflow);
+    commitWorkflow(nextWorkflow);
     setDrafts((current) => ({
       ...current,
       "scene-prompt": nextDraft,
@@ -1825,7 +2075,7 @@ export function TimelineShell() {
     setIsRunning(false);
     const nextWorkflow = setTimelineNodeManualResult(workflow, "resource-recommendation", result);
 
-    setWorkflow(nextWorkflow);
+    commitWorkflow(nextWorkflow);
     setDrafts((current) => ({
       ...current,
       "resource-recommendation": JSON.stringify(result, null, 2),
@@ -1846,7 +2096,7 @@ export function TimelineShell() {
     setIsRunning(false);
     const nextWorkflow = setTimelineNodeManualResult(workflow, "parameter-recommendation", result);
 
-    setWorkflow(nextWorkflow);
+    commitWorkflow(nextWorkflow);
     setDrafts((current) => ({
       ...current,
       "parameter-recommendation": JSON.stringify(result, null, 2),
@@ -1880,7 +2130,7 @@ export function TimelineShell() {
     setIsRunning(true);
     setEditingNodeId(null);
     if (workflow) {
-      setWorkflow(markTimelineNodeRunning(workflow, "scene-input"));
+      commitWorkflow(markTimelineNodeRunning(workflow, "scene-input"));
     }
     setNotices((current) => ({
       ...current,
@@ -1915,7 +2165,9 @@ export function TimelineShell() {
         : null;
 
       if (nextWorkflow) {
-        setWorkflow(nextWorkflow);
+        commitWorkflow(nextWorkflow, {
+          sceneRequest: nextSceneRequest,
+        });
       }
       setSceneRequest(nextSceneRequest);
       setDrafts((current) => ({
@@ -1939,7 +2191,7 @@ export function TimelineShell() {
 
       console.error("[SceneForge] [timeline] scene input AI request failed", { error });
       if (workflow) {
-        setWorkflow(workflow);
+        commitWorkflow(workflow);
       }
       setNotices((current) => ({
         ...current,
@@ -1982,6 +2234,13 @@ export function TimelineShell() {
 
   function handleNewScene() {
     invalidateTimelineRun();
+    restoreVersionRef.current += 1;
+    autosaveVersionRef.current += 1;
+    latestAutosaveInputRef.current = null;
+    shouldClearActiveWorkflowRef.current = true;
+    if (autosaveTimeoutRef.current) {
+      window.clearTimeout(autosaveTimeoutRef.current);
+    }
     setWorkflow(null);
     setSceneRequest("");
     setSelectedPromptProfile(defaultPromptProfileId);
@@ -1992,6 +2251,13 @@ export function TimelineShell() {
     setOutputDisplayModes({});
     setNotices({});
     setIsRunning(false);
+    setAutosaveStatus("idle");
+    setAutosaveMessage("");
+    void deleteActiveTimelineWorkflowRecord().catch((error) => {
+      console.error("[SceneForge] [timeline] failed to clear active workflow", { error });
+      setAutosaveStatus("error");
+      setAutosaveMessage(error instanceof Error ? error.message : "Unable to clear the autosaved workflow.");
+    });
   }
 
   function selectNode(nodeId: TimelineNodeId) {
@@ -2025,6 +2291,21 @@ export function TimelineShell() {
         </div>
 
         <div className="flex shrink-0 items-center gap-2">
+          {autosaveLabel ? (
+            <span
+              className={cn(
+                "hidden max-w-40 truncate rounded-md border px-2 py-1 text-[11px] font-medium md:inline-flex",
+                autosaveStatus === "error"
+                  ? "border-rose-200 bg-rose-50 text-rose-700"
+                  : autosaveStatus === "loading"
+                    ? "border-blue-200 bg-blue-50 text-blue-700"
+                    : "border-emerald-200 bg-emerald-50 text-emerald-700",
+              )}
+              title={autosaveMessage || autosaveLabel}
+            >
+              {autosaveLabel}
+            </span>
+          ) : null}
           <Button className="h-9 px-3 text-xs shadow-none" onClick={handleNewScene} type="button" variant="secondary">
             New scene
           </Button>

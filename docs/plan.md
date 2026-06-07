@@ -8,9 +8,9 @@ Tracks are planning units. Implementation work must be split into issue-ready ta
 
 ## Immediate Next Step
 
-Prioritize the next scoped Agent Timeline MVP track. `T-AN1` through `T-AN6`, `T6`, `T7`, `T8`, and `T9` are complete and together define the first usable Anima release plus the centralized settings entry point, pre-generation recommendation flow, confirmed single-image ComfyUI execution, and resource-aware final prompt formatting.
+Prioritize `T10`: persist Agent timeline project state across Run and Settings navigation. `T-AN1` through `T-AN6`, `T6`, `T7`, `T8`, and `T9` are complete and together define the first usable Anima release plus the centralized settings entry point, pre-generation recommendation flow, confirmed single-image ComfyUI execution, and resource-aware final prompt formatting.
 
-The new MVP is a single-image, top-to-bottom visual timeline. The first screen is only a user scene request input plus a settings entry point. LangGraph owns workflow orchestration, dependency tracking, stale downstream regeneration, and the stop-at-generation confirmation gate.
+The new MVP is a single-image, top-to-bottom visual timeline. The first screen is only a user scene request input plus a settings entry point. LangGraph owns workflow orchestration, dependency tracking, stale downstream regeneration, and the stop-at-generation confirmation gate. `T10` should create the durable timeline project/autosave contract before `T11` adds workflow project management UI comparable to the editor.
 
 ## Status Values
 
@@ -42,6 +42,8 @@ The new MVP is a single-image, top-to-bottom visual timeline. The first screen i
 | T7 | #38 | Add checkpoint, LoRA, and parameter recommendation nodes | Agent Timeline MVP | Done | PASS | APPROVE | Depends on T5 and T6. Reuse Civitai recommendation, selected-resource UI, and ComfyUI parameter controls. LLM must choose from local candidates, not invent unavailable resource names. Merged PR #39; Issue #38 closed. |
 | T8 | #40 | Add confirmed single-image ComfyUI execution timeline nodes | Agent Timeline MVP | Done | PASS | APPROVE | Depends on T7. Timeline stops before generation. Only the user clicking start image generation can advance to ComfyUI execution and result display. MVP remains single-image only. Merged PR #41; Issue #40 closed. |
 | T9 | #42 | Add resource-aware final prompt formatting and local-only model selection | Agent Timeline MVP | Done | PASS | APPROVE | Depends on T7 and T8. Treat scene prompt as upstream semantic prompt draft, assemble the final ComfyUI prompt after selected local checkpoint and LoRAs are known, insert selected LoRA trainedWords from local metadata, format by checkpoint baseModel/profile, and prevent completed resource outputs from referencing checkpoint or LoRA resources outside the local candidate set. Follow-up preserves detailed ComfyUI object_info mismatch messages in step 9 when selected local Civitai resources are not available to the current ComfyUI instance. Merged PR #43, PR #44, and follow-up PR #46; Issue #42 closed. |
+| T10 | #47 | Persist Agent timeline project state across Run and Settings navigation | Agent Timeline MVP | In Progress | PASS | APPROVE | Priority first. Defines durable active timeline workflow autosave so node outputs, manual edits, stale/error statuses, selected resources/parameters, generation gate state, and result references survive expected Run/Settings navigation. PR #48: https://github.com/Xingqi-Chen/SceneForge/pull/48 |
+| T11 | TBD | Add workflow project management UI comparable to editor | Agent Timeline MVP | Ready | Not run | Not requested | Depends on T10. Add timeline workflow project list/open/save/rename/delete affordances comparable to editor project management after durable timeline storage exists. Must create GitHub Issue after or alongside the T10 issue, but implementation follows persistence/autosave. |
 
 ## MVP Timeline Nodes
 

@@ -45,6 +45,10 @@ next-env.d.ts
 /data/projects/*
 !/data/projects/.gitkeep
 
+# Active timeline workflow autosave records (server-side persistence)
+/data/timeline-workflows/*
+!/data/timeline-workflows/.gitkeep
+
 # Shared prompt library (server-side persistence)
 /data/prompt-library.json
 

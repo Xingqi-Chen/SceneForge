@@ -80,6 +80,7 @@ Key route groups:
 - `/api/comfyui/*`: workflow generation, queue/history/view helpers, image generation, inpainting, control models, upscale models, generated images, sequence references, events, and diagnosis.
 - `/api/civitai-lora-library/*`: resources, selected resources, settings, import image parsing, imported images, downloads, cache repair, and AI recommendation.
 - `/api/artist-string-library/*`: sync, selected resources, items, and images.
+- `/api/agent-timeline/active-workflow`: active timeline workflow autosave record for Run/Settings navigation and page reload restoration.
 - Future `/api/settings/*` or equivalent settings routes: path, NSFW, and integration status updates, only where a scoped issue adds them.
 - Future Agent timeline API routes should expose graph actions, not individual hand-written LLM waterfalls.
 
@@ -182,6 +183,21 @@ Implementation expectations:
 - Extract shared timeline primitives before duplicating UI: `TimelineNodeCard`, `TimelineNodeStatus`, `TimelineNodeEditor`, `TimelineAiRetry`, and resource/parameter selectors where useful.
 - Every node must show current status, generated output, user edit controls, and an AI suggestion or retry affordance.
 - The 3D canvas node should reuse existing 3D canvas and skeleton controls rather than adding a separate custom canvas.
+
+## Timeline Persistence Contract
+
+The active timeline workflow is autosaved separately from the editor project-management UI. The persistence record is a versioned `sceneforge-timeline-workflow` JSON document stored under `data/timeline-workflows/active-workflow.json` by default. It is exposed through `/api/agent-timeline/active-workflow` for load, save, and clear operations.
+
+The active record includes workflow id, created/updated timestamps, selected node, display mode, scene request, prompt profile, image count, timeline node statuses, node outputs, node errors, manual/stale state, selected resources, generation parameters, generation gate state, ComfyUI execution metadata when present, result references, and canvas binding state needed to restore the current timeline view.
+
+Restore rules:
+
+- Route changes to Settings and back should restore the same active workflow.
+- Page reload should restore the active workflow when the record exists.
+- Autosave should run after meaningful workflow state changes without requiring project list/open/save UI.
+- Persisted `running` nodes must restore as visible recoverable errors so the UI does not imply that interrupted background work continued reliably.
+- Restored generation gate state must not trigger ComfyUI execution without explicit user confirmation unless the record already represents a completed confirmed execution.
+- Persistence must redact secret-like fields and must not store `.env.local` values, API keys, generated cache payloads, downloaded model files, or local logs.
 
 ## Settings Contract
 
