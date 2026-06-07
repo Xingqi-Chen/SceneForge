@@ -533,10 +533,10 @@ describe("T7 timeline adapters", () => {
       denoise: 0.6,
       width: 1024,
       height: 768,
-      sourceImageDataUrl: "data:image/webp;base64,aGVsbG8=",
       imageWidth: 1025,
       imageHeight: 770,
     });
+    expect(result.requestPreview).not.toHaveProperty("sourceImageDataUrl");
   });
 
   it("passes uploaded image dimensions to style advice and uses manual img2img denoise", async () => {
@@ -640,9 +640,9 @@ describe("T7 timeline adapters", () => {
       imageHeight: 1024,
       imageWidth: 1536,
       steps: 28,
-      sourceImageDataUrl: "data:image/png;base64,c291cmNl",
       width: 1536,
     });
+    expect(result.requestPreview).not.toHaveProperty("sourceImageDataUrl");
   });
 
   it("succeeds when a selected LoRA has no trained words", () => {

@@ -672,7 +672,6 @@ export function createTimelineParameterRecommendation({
       ? {
           width: sourceImage.width,
           height: sourceImage.height,
-          sourceImageDataUrl: sourceImage.dataUrl,
           imageWidth: sourceImage.width,
           imageHeight: sourceImage.height,
           batchSize: 1,

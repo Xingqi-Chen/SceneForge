@@ -84,12 +84,13 @@ describe("timeline workflow persistence", () => {
   });
 
   it("preserves scene input source image data through workflow sanitization", () => {
-    const workflow = createTimelineWorkflowState({
+    const sourceImageDataUrl = "data:image/png;base64,aGVsbG8=";
+    let workflow = createTimelineWorkflowState({
       workflowId: "timeline-source-image",
       sceneRequest: "A source-guided portrait",
       imageCount: 4,
       sourceImage: {
-        dataUrl: "data:image/png;base64,aGVsbG8=",
+        dataUrl: sourceImageDataUrl,
         filename: "source.png",
         height: 768,
         mimeType: "image/png",
@@ -98,6 +99,21 @@ describe("timeline workflow persistence", () => {
       },
       now: () => "2026-06-07T00:00:00.000Z",
     });
+    workflow = completeTimelineNode(
+      workflow,
+      "parameter-recommendation",
+      {
+        requestPreview: {
+          batchSize: 1,
+          denoise: 0.6,
+          height: 768,
+          imageHeight: 768,
+          imageWidth: 1024,
+          width: 1024,
+        },
+      },
+      "ai",
+    );
 
     const record = createTimelineWorkflowRecord({
       workflow,
@@ -106,18 +122,32 @@ describe("timeline workflow persistence", () => {
       selectedImageCount: 1,
       selectedNodeId: "scene-input",
     });
-    const parsed = parseTimelineWorkflowRecordJson(serializeTimelineWorkflowRecord(record));
+    const serialized = serializeTimelineWorkflowRecord(record);
+    const parsed = parseTimelineWorkflowRecordJson(serialized);
 
+    expect(serialized.match(/data:image\/png;base64,aGVsbG8=/g) ?? []).toHaveLength(1);
     expect(parsed?.workflow.nodes["scene-input"].result).toMatchObject({
       imageCount: 1,
       sourceImage: {
-        dataUrl: "data:image/png;base64,aGVsbG8=",
+        dataUrl: sourceImageDataUrl,
         filename: "source.png",
         height: 768,
         mimeType: "image/png",
         width: 1024,
       },
     });
+    expect(parsed?.workflow.nodes["parameter-recommendation"].result).toMatchObject({
+      requestPreview: {
+        batchSize: 1,
+        height: 768,
+        imageHeight: 768,
+        imageWidth: 1024,
+        width: 1024,
+      },
+    });
+    expect(parsed?.workflow.nodes["parameter-recommendation"].result).not.toHaveProperty(
+      "requestPreview.sourceImageDataUrl",
+    );
   });
 
   it("restores interrupted running nodes as visible errors", () => {
