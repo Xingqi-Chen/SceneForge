@@ -667,6 +667,17 @@ function setNativeSelectValue(select: HTMLSelectElement, value: string) {
   select.dispatchEvent(new Event("change", { bubbles: true }));
 }
 
+function setNativeInputValue(input: HTMLInputElement, value: string) {
+  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+
+  if (!setter) {
+    throw new Error("Unable to set input value.");
+  }
+
+  setter.call(input, value);
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
 async function submitInitialScene(sceneRequest: string) {
   const textarea = container.querySelector("#scene-request") as HTMLTextAreaElement | null;
   const form = container.querySelector("form");
@@ -1554,7 +1565,15 @@ describe("TimelineShell", () => {
       expect(imageCount?.disabled).toBe(true);
       expect(container.textContent).toContain("source.webp");
       expect(container.textContent).toContain("640x480 source image");
-      expect(container.textContent).toContain("defaults denoise to 0.6");
+      expect(container.textContent).toContain("Denoise");
+      const denoiseInput = container.querySelector('input[type="number"]') as HTMLInputElement | null;
+      expect(denoiseInput).not.toBeNull();
+      expect(denoiseInput?.value).toBe("0.6");
+
+      act(() => {
+        setNativeInputValue(denoiseInput as HTMLInputElement, "0.35");
+      });
+      expect(denoiseInput?.value).toBe("0.35");
 
       act(() => {
         getButtonByText("Remove").click();
@@ -1563,12 +1582,14 @@ describe("TimelineShell", () => {
 
       expect(container.textContent).not.toContain("source.webp");
       expect(imageCount?.disabled).toBe(false);
+      expect(container.querySelector('input[type="number"]')).toBeNull();
 
       await uploadSourceImage();
 
       expect(imageCount?.value).toBe("1");
       expect(imageCount?.disabled).toBe(true);
       expect(container.textContent).toContain("source.webp");
+      expect((container.querySelector('input[type="number"]') as HTMLInputElement | null)?.value).toBe("0.35");
 
       await submitInitialScene("A source-guided courier portrait");
 
@@ -1590,6 +1611,7 @@ describe("TimelineShell", () => {
             "scene-input": {
               result: {
                 imageCount: 1,
+                sourceDenoise: 0.35,
                 sourceImage: {
                   dataUrl: imageDataUrl,
                   filename: "source.webp",

@@ -34,8 +34,10 @@ import { executeTimelineGraph, type TimelineWorkflowUpdate } from "@/features/ag
 import {
   createTimelineWorkflowState,
   DEFAULT_TIMELINE_IMAGE_COUNT,
+  DEFAULT_TIMELINE_SOURCE_DENOISE,
   markTimelineNodeRunning,
   normalizeTimelineImageCount,
+  normalizeTimelineSourceDenoise,
   setTimelineNodeManualResult,
 } from "@/features/agent-timeline/state";
 import {
@@ -443,10 +445,15 @@ async function recommendTimelineResourcesViaApi({
 async function loadTimelineStyleAdviceViaApi({
   baseNegativePrompt,
   finalPositivePrompt,
+  referenceResolution,
   selectedResources,
 }: {
   baseNegativePrompt: string;
   finalPositivePrompt: string;
+  referenceResolution?: {
+    height: number;
+    width: number;
+  };
   selectedResources: SelectedCivitaiResourcesPreview;
 }) {
   if (!selectedResources.checkpoint) {
@@ -456,7 +463,9 @@ async function loadTimelineStyleAdviceViaApi({
   const preset: StylePalettePromptPreset = {
     id: "portrait",
     label: "Timeline render prompt",
-    description: "Timeline prompt used for model parameter advice.",
+    description: referenceResolution
+      ? `Timeline prompt used for img2img model parameter advice. Use the uploaded source image dimensions ${referenceResolution.width}x${referenceResolution.height} as the reference resolution.`
+      : "Timeline prompt used for model parameter advice.",
     positive: finalPositivePrompt,
     negative: baseNegativePrompt,
   };
@@ -567,6 +576,14 @@ function getSceneInputSourceImage(workflow: TimelineWorkflowState | null): Timel
     : null;
 }
 
+function getSceneInputSourceDenoise(workflow: TimelineWorkflowState | null) {
+  const result = workflow?.nodes["scene-input"].result;
+
+  return isRecord(result) && typeof result.sourceDenoise === "number"
+    ? normalizeTimelineSourceDenoise(result.sourceDenoise)
+    : DEFAULT_TIMELINE_SOURCE_DENOISE;
+}
+
 function parseSceneInputAiResponse(response: LlmChatResponse) {
   return normalizeSceneInputAiText(parseSceneInputAiJson(response.content));
 }
@@ -633,12 +650,14 @@ function createManualResult(
   promptProfile: PromptProfileId,
   imageCount = DEFAULT_TIMELINE_IMAGE_COUNT,
   sourceImage?: TimelineSourceImage | null,
+  sourceDenoise = DEFAULT_TIMELINE_SOURCE_DENOISE,
 ) {
   if (nodeId === "scene-input") {
     return {
       rawIntent: value,
       promptProfile,
       imageCount: sourceImage ? 1 : normalizeTimelineImageCount(imageCount),
+      ...(sourceImage ? { sourceDenoise: normalizeTimelineSourceDenoise(sourceDenoise) } : {}),
       ...(sourceImage ? { sourceImage } : {}),
     } satisfies SceneInputTimelineResult;
   }
@@ -1245,6 +1264,7 @@ export function TimelineShell() {
   const [selectedPromptProfile, setSelectedPromptProfile] =
     useState<PromptProfileId>(defaultPromptProfileId);
   const [selectedImageCount, setSelectedImageCount] = useState(DEFAULT_TIMELINE_IMAGE_COUNT);
+  const [selectedSourceDenoise, setSelectedSourceDenoise] = useState(DEFAULT_TIMELINE_SOURCE_DENOISE);
   const [selectedSourceImage, setSelectedSourceImage] = useState<TimelineSourceImage | null>(null);
   const [workflow, setWorkflow] = useState<TimelineWorkflowState | null>(null);
   const [workflowProjectId, setWorkflowProjectId] = useState<string | null>(null);
@@ -1370,6 +1390,7 @@ export function TimelineShell() {
     setSceneRequest(record.sceneRequest);
     setSelectedPromptProfile(record.selectedPromptProfile);
     setSelectedImageCount(restoredImageCount);
+    setSelectedSourceDenoise(getSceneInputSourceDenoise(record.workflow));
     setSelectedSourceImage(getSceneInputSourceImage(record.workflow));
     setSelectedNodeId(record.selectedNodeId);
     setEditingNodeId(null);
@@ -1956,6 +1977,7 @@ export function TimelineShell() {
       imageCount: selectedSourceImage ? 1 : selectedImageCount,
       promptProfile: selectedPromptProfile,
       sceneRequest: trimmedSceneRequest,
+      sourceDenoise: selectedSourceDenoise,
       sourceImage: selectedSourceImage ?? undefined,
     });
     const initialAutosaveInput: TimelineWorkflowRecordInput = {
@@ -2024,6 +2046,7 @@ export function TimelineShell() {
       rawIntent,
       imageCount: selectedSourceImage ? 1 : selectedImageCount,
       promptProfile,
+      ...(selectedSourceImage ? { sourceDenoise: selectedSourceDenoise } : {}),
       ...(selectedSourceImage ? { sourceImage: selectedSourceImage } : {}),
     } satisfies SceneInputTimelineResult), {
       sceneRequest: rawIntent,
@@ -2066,9 +2089,11 @@ export function TimelineShell() {
   }
 
   function commitSceneInputSourceImage(sourceImage: TimelineSourceImage | null) {
+    const sourceDenoise = normalizeTimelineSourceDenoise(selectedSourceDenoise);
     setSelectedSourceImage(sourceImage);
     if (sourceImage) {
       setSelectedImageCount(1);
+      setSelectedSourceDenoise(sourceDenoise);
     }
 
     if (!workflow || isRunning) {
@@ -2086,6 +2111,7 @@ export function TimelineShell() {
       rawIntent,
       imageCount,
       promptProfile: selectedPromptProfile,
+      ...(sourceImage ? { sourceDenoise } : {}),
       ...(sourceImage ? { sourceImage } : {}),
     } satisfies SceneInputTimelineResult), {
       sceneRequest: rawIntent,
@@ -2096,6 +2122,36 @@ export function TimelineShell() {
       "scene-input": sourceImage
         ? "Source image attached. Downstream generation will use img2img with one output."
         : "Source image removed. Downstream generation will return to text-to-image.",
+    }));
+  }
+
+  function handleSourceDenoiseChange(value: string) {
+    const denoise = normalizeTimelineSourceDenoise(value);
+    setSelectedSourceDenoise(denoise);
+
+    if (!workflow || isRunning || !selectedSourceImage) {
+      return;
+    }
+
+    const rawIntent = sceneRequest.trim() || getSceneInputRawIntent(workflow).trim();
+    if (!rawIntent) {
+      return;
+    }
+
+    invalidateTimelineRun();
+    commitWorkflow(setTimelineNodeManualResult(workflow, "scene-input", {
+      rawIntent,
+      imageCount: 1,
+      promptProfile: selectedPromptProfile,
+      sourceDenoise: denoise,
+      sourceImage: selectedSourceImage,
+    } satisfies SceneInputTimelineResult), {
+      sceneRequest: rawIntent,
+      selectedImageCount: 1,
+    });
+    setNotices((current) => ({
+      ...current,
+      "scene-input": `Img2img denoise set to ${denoise.toFixed(2)}. Downstream parameters are pending regeneration.`,
     }));
   }
 
@@ -2201,7 +2257,14 @@ export function TimelineShell() {
     commitWorkflow(setTimelineNodeManualResult(
       workflow,
       nodeId,
-      createManualResult(nodeId, draft, selectedPromptProfile, selectedImageCount, selectedSourceImage),
+      createManualResult(
+        nodeId,
+        draft,
+        selectedPromptProfile,
+        selectedImageCount,
+        selectedSourceImage,
+        selectedSourceDenoise,
+      ),
     ), {
       sceneRequest: nodeId === "scene-input" ? draft : sceneRequest,
     });
@@ -2333,6 +2396,7 @@ export function TimelineShell() {
             rawIntent: nextSceneRequest,
             imageCount: selectedSourceImage ? 1 : selectedImageCount,
             promptProfile: selectedPromptProfile,
+            ...(selectedSourceImage ? { sourceDenoise: selectedSourceDenoise } : {}),
             ...(selectedSourceImage ? { sourceImage: selectedSourceImage } : {}),
           } satisfies SceneInputTimelineResult)
         : null;
@@ -2421,6 +2485,7 @@ export function TimelineShell() {
     setSceneRequest("");
     setSelectedPromptProfile(defaultPromptProfileId);
     setSelectedImageCount(DEFAULT_TIMELINE_IMAGE_COUNT);
+    setSelectedSourceDenoise(DEFAULT_TIMELINE_SOURCE_DENOISE);
     setSelectedSourceImage(null);
     setSelectedNodeId("scene-input");
     setEditingNodeId(null);
@@ -2508,6 +2573,7 @@ export function TimelineShell() {
     setSelectedNodeId(nodeId);
     if (nodeId === "scene-input") {
       setSelectedImageCount(getSceneInputImageCount(workflow));
+      setSelectedSourceDenoise(getSceneInputSourceDenoise(workflow));
       setSelectedSourceImage(getSceneInputSourceImage(workflow));
     }
     setEditingNodeId(null);
@@ -2780,8 +2846,21 @@ export function TimelineShell() {
                           <p className="truncate font-medium text-slate-800">{selectedSourceImage.filename}</p>
                           <p>
                             {selectedSourceImage.width}x{selectedSourceImage.height} source image. Img2img uses one
-                            output and defaults denoise to 0.6.
+                            output.
                           </p>
+                          <label className="mt-2 flex max-w-48 flex-col gap-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                            Denoise
+                            <input
+                              className="h-8 rounded-md border border-slate-200 bg-white px-2 text-xs font-normal normal-case tracking-normal text-slate-800 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+                              disabled={isRunning}
+                              max={1}
+                              min={0}
+                              onChange={(event) => handleSourceDenoiseChange(event.target.value)}
+                              step={0.05}
+                              type="number"
+                              value={selectedSourceDenoise}
+                            />
+                          </label>
                         </div>
                         <Button
                           className="h-8 px-2 text-xs shadow-none"

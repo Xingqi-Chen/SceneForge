@@ -8,10 +8,17 @@ import type {
 import {
   buildTimelineFinalPositivePrompt,
   createTimelineParameterRecommendation,
+  createTimelineT7NodeAdapters,
   filterTimelineResourceCandidatesForPromptProfile,
+  type TimelineStyleAdviceRequest,
   validateTimelineResourceRecommendation,
 } from "./t7-node-adapters";
+import {
+  completeTimelineNode,
+  createTimelineWorkflowState,
+} from "./state";
 import type {
+  ParameterRecommendationTimelineResult,
   ResourceRecommendationTimelineResult,
   ScenePromptTimelineResult,
 } from "./types";
@@ -519,12 +526,120 @@ describe("T7 timeline adapters", () => {
     });
 
     expect(result.denoise).toBe(0.6);
+    expect(result.width).toBe(1024);
+    expect(result.height).toBe(768);
     expect(result.requestPreview).toMatchObject({
       batchSize: 1,
       denoise: 0.6,
       sourceImageDataUrl: "data:image/webp;base64,aGVsbG8=",
       imageWidth: 1024,
       imageHeight: 768,
+    });
+  });
+
+  it("passes uploaded image dimensions to style advice and uses manual img2img denoise", async () => {
+    const checkpoint = makeResource("model", "checkpoint-local", "Local Checkpoint");
+    const resourceResult: ResourceRecommendationTimelineResult = {
+      checkpoint: {
+        resource: checkpoint,
+        reason: "Local checkpoint.",
+      },
+      loras: [],
+      candidates: {
+        checkpoints: [makeCandidate(checkpoint)],
+        loras: [],
+      },
+      recommendationReason: "Local recommendation.",
+      overallEffect: "Neon portrait.",
+      warnings: [],
+    };
+    const scenePrompt = makeScenePrompt("illustrious");
+    let workflow = createTimelineWorkflowState({
+      promptProfile: "illustrious",
+      sceneRequest: "A source-guided courier portrait",
+      sourceDenoise: 0.35,
+      sourceImage: {
+        dataUrl: "data:image/png;base64,c291cmNl",
+        filename: "reference.png",
+        height: 1024,
+        mimeType: "image/png",
+        uploadedAt: "2026-06-07T00:00:00.000Z",
+        width: 1536,
+      },
+    });
+    workflow = completeTimelineNode(workflow, "scene-prompt", scenePrompt, "ai");
+    workflow = completeTimelineNode(workflow, "resource-recommendation", resourceResult, "ai");
+
+    let styleAdviceRequest: TimelineStyleAdviceRequest | null = null;
+    const adapters = createTimelineT7NodeAdapters({
+      adviseStyle: (request) => {
+        styleAdviceRequest = request;
+        return {
+          prompt: "style advice prompt should be ignored",
+          parameterSuggestionReason: "AI Style Advice suggested a conflicting square resolution.",
+          overallEffect: "Tuned style.",
+          parseWarning: null,
+          parameterSuggestions: {
+            cfgScale: 5,
+            loraWeights: [],
+            negativePromptAdditions: "jpeg artifacts",
+            resolution: "512x512",
+            sampler: "euler",
+            scheduler: "normal",
+            steps: 28,
+          },
+        };
+      },
+      loadResourceCandidates: () => resourceResult.candidates,
+      loadSamplerOptions: () => ({
+        samplers: ["euler"],
+        schedulers: ["normal"],
+      }),
+      recommendResources: () => ({
+        checkpoint: resourceResult.checkpoint,
+        loras: resourceResult.loras,
+        recommendationReason: resourceResult.recommendationReason,
+        overallEffect: resourceResult.overallEffect,
+        warnings: resourceResult.warnings,
+      }),
+    });
+    const adapter = adapters["parameter-recommendation"];
+
+    expect(adapter).toBeDefined();
+    const adapterResult = await adapter?.({
+      dependencies: [
+        workflow.nodes["scene-prompt"],
+        workflow.nodes["resource-recommendation"],
+      ],
+      nodeId: "parameter-recommendation",
+      workflow,
+    });
+    const result = (
+      adapterResult && typeof adapterResult === "object" && "value" in adapterResult
+        ? adapterResult.value
+        : adapterResult
+    ) as ParameterRecommendationTimelineResult;
+
+    expect(styleAdviceRequest).toMatchObject({
+      referenceResolution: {
+        height: 1024,
+        width: 1536,
+      },
+    });
+    expect(result.denoise).toBe(0.35);
+    expect(result.width).toBe(1536);
+    expect(result.height).toBe(1024);
+    expect(result.reason).toBe("AI Style Advice suggested a conflicting square resolution.");
+    expect(result.requestPreview).toMatchObject({
+      batchSize: 1,
+      cfg: 5,
+      denoise: 0.35,
+      height: 1024,
+      imageHeight: 1024,
+      imageWidth: 1536,
+      steps: 28,
+      sourceImageDataUrl: "data:image/png;base64,c291cmNl",
+      width: 1536,
     });
   });
 
