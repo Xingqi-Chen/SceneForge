@@ -2125,7 +2125,7 @@ export function TimelineShell() {
     }));
   }
 
-  function handleSourceDenoiseChange(value: string) {
+  function commitSourceDenoise(value: unknown = selectedSourceDenoise) {
     const denoise = normalizeTimelineSourceDenoise(value);
     setSelectedSourceDenoise(denoise);
 
@@ -2153,6 +2153,10 @@ export function TimelineShell() {
       ...current,
       "scene-input": `Img2img denoise set to ${denoise.toFixed(2)}. Downstream parameters are pending regeneration.`,
     }));
+  }
+
+  function handleSourceDenoiseChange(value: string) {
+    setSelectedSourceDenoise(normalizeTimelineSourceDenoise(value));
   }
 
   function handleSourceImageChange(event: ChangeEvent<HTMLInputElement>) {
@@ -2593,9 +2597,9 @@ export function TimelineShell() {
         </div>
 
         <div className="hidden min-w-0 flex-1 justify-center px-4 xl:flex">
-          <div className="flex max-w-full min-w-0 items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs text-slate-600">
+          <div className="grid h-8 w-80 max-w-full grid-cols-[auto_minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 text-xs text-slate-600">
             <CircleDot className="size-3.5 text-blue-600" />
-            <span className="truncate">{workflowMode}</span>
+            <span className="truncate text-right">{workflowMode}</span>
             <span className="text-slate-300">/</span>
             <span className="truncate">{selectedContent.title}</span>
           </div>
@@ -2611,21 +2615,21 @@ export function TimelineShell() {
             onRecordOpened={handleNamedWorkflowOpened}
             onRecordSaved={handleNamedWorkflowSaved}
           />
-          {autosaveLabel ? (
-            <span
-              className={cn(
-                "hidden max-w-40 truncate rounded-md border px-2 py-1 text-[11px] font-medium md:inline-flex",
-                autosaveStatus === "error"
+          <span
+            className={cn(
+              "hidden h-7 w-28 items-center justify-center truncate rounded-md border px-2 text-[11px] font-medium md:inline-flex",
+              autosaveStatus === "idle"
+                ? "invisible border-transparent bg-transparent text-transparent"
+                : autosaveStatus === "error"
                   ? "border-rose-200 bg-rose-50 text-rose-700"
                   : autosaveStatus === "loading"
                     ? "border-blue-200 bg-blue-50 text-blue-700"
                     : "border-emerald-200 bg-emerald-50 text-emerald-700",
-              )}
-              title={autosaveMessage || autosaveLabel}
-            >
-              {autosaveLabel}
-            </span>
-          ) : null}
+            )}
+            title={autosaveMessage || autosaveLabel}
+          >
+            {autosaveLabel || "Autosaved"}
+          </span>
           <Button className="h-9 px-3 text-xs shadow-none" onClick={handleNewScene} type="button" variant="secondary">
             New scene
           </Button>
@@ -2856,6 +2860,12 @@ export function TimelineShell() {
                               max={1}
                               min={0}
                               onChange={(event) => handleSourceDenoiseChange(event.target.value)}
+                              onBlur={(event) => commitSourceDenoise(event.target.value)}
+                              onKeyDown={(event) => {
+                                if (event.key === "Enter") {
+                                  event.currentTarget.blur();
+                                }
+                              }}
                               step={0.05}
                               type="number"
                               value={selectedSourceDenoise}
