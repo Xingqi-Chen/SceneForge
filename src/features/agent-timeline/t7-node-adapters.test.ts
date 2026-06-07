@@ -483,6 +483,51 @@ describe("T7 timeline adapters", () => {
     });
   });
 
+  it("defaults img2img parameter recommendations to denoise 0.6 with source image metadata", () => {
+    const checkpoint = makeResource("model", "checkpoint-local", "Local Checkpoint");
+    const resourceResult: ResourceRecommendationTimelineResult = {
+      checkpoint: {
+        resource: checkpoint,
+        reason: "Local checkpoint.",
+      },
+      loras: [],
+      candidates: {
+        checkpoints: [makeCandidate(checkpoint)],
+        loras: [],
+      },
+      recommendationReason: "Local recommendation.",
+      overallEffect: "Neon portrait.",
+      warnings: [],
+    };
+
+    const result = createTimelineParameterRecommendation({
+      resourceResult,
+      scenePrompt: makeScenePrompt(),
+      canvasBinding: null,
+      samplerOptions: {
+        samplers: ["euler"],
+        schedulers: ["normal"],
+      },
+      sourceImage: {
+        dataUrl: "data:image/webp;base64,aGVsbG8=",
+        filename: "source.webp",
+        height: 768,
+        mimeType: "image/webp",
+        uploadedAt: "2026-06-07T00:00:00.000Z",
+        width: 1024,
+      },
+    });
+
+    expect(result.denoise).toBe(0.6);
+    expect(result.requestPreview).toMatchObject({
+      batchSize: 1,
+      denoise: 0.6,
+      sourceImageDataUrl: "data:image/webp;base64,aGVsbG8=",
+      imageWidth: 1024,
+      imageHeight: 768,
+    });
+  });
+
   it("succeeds when a selected LoRA has no trained words", () => {
     const checkpoint = makeResource("model", "checkpoint-local", "Local Checkpoint", "SDXL");
     const lora = makeResource("lora", "lora-local", "Local LoRA", "SDXL", {

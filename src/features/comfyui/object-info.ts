@@ -624,7 +624,11 @@ export function validateComfyUiRequestAgainstObjectInfo(
   const warnings: string[] = [];
   const profile = resolveComfyUiTextToImageWorkflowProfile(request);
   const isAnimaProfile = profile.id === "anima";
-  validateRequiredNodeClasses(objectInfo, profile.requiredNodeClasses, errors);
+  const usesImg2ImgSource = Boolean(request.imageName || request.sourceImageDataUrl);
+  const requiredNodeClasses = usesImg2ImgSource
+    ? profile.requiredNodeClasses.filter((classType) => classType !== "EmptyLatentImage")
+    : profile.requiredNodeClasses;
+  validateRequiredNodeClasses(objectInfo, requiredNodeClasses, errors);
   validateRequiredInputs(objectInfo, "KSampler", ["sampler_name", "scheduler"], errors);
 
   if (isAnimaProfile) {
@@ -685,8 +689,27 @@ export function validateComfyUiRequestAgainstObjectInfo(
     errors.push(`Latent image node is not supported by SceneForge: ${request.latentImageNode}`);
   }
 
-  if (latentImageNode && !hasNodeInfo(objectInfo, latentImageNode)) {
+  if (!usesImg2ImgSource && latentImageNode && !hasNodeInfo(objectInfo, latentImageNode)) {
     errors.push(`Latent image node is not available in ComfyUI: ${latentImageNode}`);
+  }
+
+  if (usesImg2ImgSource) {
+    if (!hasNodeInfo(objectInfo, "LoadImage")) {
+      errors.push("LoadImage node is not available in ComfyUI. It is required for img2img source images.");
+    }
+
+    if (!hasNodeInfo(objectInfo, "ImageScale")) {
+      errors.push("ImageScale node is not available in ComfyUI. It is required to resize img2img source images.");
+    }
+
+    if (!hasNodeInfo(objectInfo, "VAEEncode")) {
+      errors.push("VAEEncode node is not available in ComfyUI. It is required to encode img2img source images.");
+    }
+
+    const imageScaleMethodOptions = readInputOptions(objectInfo, "ImageScale", "upscale_method");
+    if (imageScaleMethodOptions.length > 0 && !findOption("lanczos", imageScaleMethodOptions)) {
+      errors.push("ImageScale lanczos upscale method is not available in ComfyUI. It is required for img2img source images.");
+    }
   }
 
   faceDetailer = validateDetailerAgainstObjectInfo({

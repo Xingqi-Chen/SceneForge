@@ -8,6 +8,7 @@ import {
   validateComfyUiTextToImageRequest,
   type ComfyUiTextToImageRequest,
 } from "@/features/comfyui";
+import { uploadComfyUiTextToImageSourceImage } from "@/features/comfyui/source-image-upload";
 import {
   storeGeneratedImage,
 } from "@/features/comfyui/generated-image-storage";
@@ -81,7 +82,8 @@ async function executeTimelineTextToImage(
   try {
     const client = makeClient();
     const objectInfo = await client.getObjectInfo();
-    const objectValidation = validateComfyUiRequestAgainstObjectInfo(validation.request, objectInfo);
+    const requestWithSourceImage = await uploadComfyUiTextToImageSourceImage(client, validation.request);
+    const objectValidation = validateComfyUiRequestAgainstObjectInfo(requestWithSourceImage, objectInfo);
 
     if (objectValidation.errors.length > 0) {
       throw new TimelineNodeExecutionError(
@@ -106,7 +108,10 @@ async function executeTimelineTextToImage(
       number: result.number,
       outputNodeId: result.outputNodeId,
       promptId: result.promptId,
-      request: result.request,
+      request: {
+        ...result.request,
+        sourceImageDataUrl: "",
+      },
       warnings: objectValidation.warnings,
       workflow: result.workflow,
     };

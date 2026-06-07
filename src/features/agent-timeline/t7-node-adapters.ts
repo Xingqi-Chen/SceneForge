@@ -36,6 +36,7 @@ import {
   type CharacterTagsTimelineResult,
   type ParameterRecommendationTimelineResult,
   type ResourceRecommendationTimelineResult,
+  type SceneInputTimelineResult,
   type ScenePromptTimelineResult,
   type TimelineNodeAdapters,
   type TimelineNodeExecutionContext,
@@ -137,6 +138,16 @@ function getTimelinePromptProfile(workflow: TimelineNodeExecutionContext["workfl
   }
 
   return normalizePromptProfileId(undefined);
+}
+
+function getSceneInputSourceImage(workflow: TimelineNodeExecutionContext["workflow"]) {
+  const sceneInput = workflow.nodes["scene-input"].result;
+
+  if (!isRecord(sceneInput)) {
+    return undefined;
+  }
+
+  return (sceneInput as Partial<SceneInputTimelineResult>).sourceImage;
 }
 
 function getScenePromptResult(workflow: TimelineNodeExecutionContext["workflow"]): ScenePromptTimelineResult {
@@ -584,6 +595,7 @@ export function createTimelineParameterRecommendation({
   aiAdvice,
   samplerOptions: rawSamplerOptions,
   supportsNsfw = false,
+  sourceImage,
 }: {
   promptProfile?: PromptProfileId;
   resourceResult: ResourceRecommendationTimelineResult;
@@ -592,6 +604,7 @@ export function createTimelineParameterRecommendation({
   aiAdvice?: CivitaiAiPromptResult | null;
   samplerOptions?: TimelineSamplerOptions;
   supportsNsfw?: boolean;
+  sourceImage?: SceneInputTimelineResult["sourceImage"];
 }): ParameterRecommendationTimelineResult {
   const samplerOptions = normalizeOptions(rawSamplerOptions);
   const selectedResources = getSelectedResources(resourceResult);
@@ -615,8 +628,18 @@ export function createTimelineParameterRecommendation({
   const request = settings.request;
   const samplerName = pickSupportedValue(request.samplerName, samplerOptions.samplers, "euler");
   const scheduler = pickSupportedValue(request.scheduler, samplerOptions.schedulers, "normal");
+  const denoise = sourceImage ? 0.6 : request.denoise ?? 1;
   const requestPreview = {
     ...request,
+    denoise,
+    ...(sourceImage
+      ? {
+          sourceImageDataUrl: sourceImage.dataUrl,
+          imageWidth: sourceImage.width,
+          imageHeight: sourceImage.height,
+          batchSize: 1,
+        }
+      : {}),
     samplerName,
     scheduler,
   };
@@ -630,7 +653,7 @@ export function createTimelineParameterRecommendation({
     cfg: requestPreview.cfg ?? 7,
     samplerName,
     scheduler,
-    denoise: requestPreview.denoise ?? 1,
+    denoise,
     seedPolicy: makeSeedPolicy(requestPreview.seed),
     finalPositivePrompt: requestPreview.positivePrompt,
     negativeAdditions: scenePrompt.negativeSuggestions,
@@ -715,6 +738,7 @@ export function createTimelineT7NodeAdapters({
           resourceResult,
           samplerOptions,
           scenePrompt,
+          sourceImage: getSceneInputSourceImage(context.workflow),
           supportsNsfw: supportsNsfw(),
         }),
         source: "system",

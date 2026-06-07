@@ -75,6 +75,58 @@ describe("ComfyUI workflow builder", () => {
     });
   });
 
+  it("builds the default img2img workflow from a source image latent", () => {
+    const result = buildBasicTextToImageWorkflow({
+      checkpointName: "dream.safetensors",
+      positivePrompt: "a brighter forest",
+      imageName: "SceneForge/source.png",
+      width: 768,
+      height: 1024,
+      denoise: 0.6,
+      seed: 123,
+    });
+
+    expect(result.nodeIds).toEqual({
+      checkpoint: "1",
+      loraLoaders: [],
+      positivePrompt: "2",
+      negativePrompt: "3",
+      sourceImage: "4",
+      sourceImageScale: "5",
+      vaeEncode: "6",
+      latentImage: "6",
+      sampler: "7",
+      vaeDecode: "8",
+      previewImage: "9",
+    });
+    expect(result.workflow["4"]).toMatchObject({
+      class_type: "LoadImage",
+      inputs: { image: "SceneForge/source.png" },
+    });
+    expect(result.workflow["5"]).toMatchObject({
+      class_type: "ImageScale",
+      inputs: {
+        image: ["4", 0],
+        upscale_method: "lanczos",
+        width: 768,
+        height: 1024,
+        crop: "disabled",
+      },
+    });
+    expect(result.workflow["6"]).toMatchObject({
+      class_type: "VAEEncode",
+      inputs: {
+        pixels: ["5", 0],
+        vae: ["1", 2],
+      },
+    });
+    expect(result.workflow["7"].inputs).toMatchObject({
+      denoise: 0.6,
+      latent_image: ["6", 0],
+    });
+    expect(Object.values(result.workflow).some((node) => node.class_type === "EmptyLatentImage")).toBe(false);
+  });
+
   it("builds the Anima text-to-image workflow without CheckpointLoaderSimple", () => {
     const result = buildBasicTextToImageWorkflow({
       checkpointName: "pencil-xl-diffusion.safetensors",
@@ -159,6 +211,44 @@ describe("ComfyUI workflow builder", () => {
     expect(result.workflow["10"].inputs).toEqual({
       images: ["9", 0],
     });
+  });
+
+  it("builds the Anima img2img workflow from the Anima VAE", () => {
+    const result = buildBasicTextToImageWorkflow({
+      checkpointName: "pencil-xl-diffusion.safetensors",
+      modelBaseModel: "Anima",
+      modelStorageKind: "diffusion",
+      positivePrompt: "a brighter forest",
+      imageName: "SceneForge/source.webp",
+      denoise: 0.6,
+      seed: 123,
+    });
+
+    expect(Object.values(result.workflow).some((node) => node.class_type === "CheckpointLoaderSimple")).toBe(false);
+    expect(result.nodeIds).toMatchObject({
+      unetLoader: "1",
+      clipLoader: "2",
+      vaeLoader: "3",
+      sourceImage: "6",
+      sourceImageScale: "7",
+      vaeEncode: "8",
+      latentImage: "8",
+      sampler: "9",
+      vaeDecode: "10",
+    });
+    expect(result.workflow["8"]).toMatchObject({
+      class_type: "VAEEncode",
+      inputs: {
+        pixels: ["7", 0],
+        vae: ["3", 0],
+      },
+    });
+    expect(result.workflow["9"].inputs).toMatchObject({
+      model: ["1", 0],
+      latent_image: ["8", 0],
+      denoise: 0.6,
+    });
+    expect(result.workflow["10"].inputs.vae).toEqual(["3", 0]);
   });
 
   it("builds Anima ControlNet text-to-image workflows from Anima model context", () => {

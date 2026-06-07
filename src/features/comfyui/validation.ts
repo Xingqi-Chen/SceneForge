@@ -94,6 +94,8 @@ const DEFAULT_TEXT_TO_IMAGE_REQUEST = {
   denoise: 1,
   batchSize: 1,
   latentImageNode: DEFAULT_COMFYUI_LATENT_IMAGE_NODE,
+  sourceImageDataUrl: "",
+  imageName: "",
   promptWrapper: {
     positivePrefix: "",
     negativePrefix: "",
@@ -186,6 +188,7 @@ const RANDOM_SEED_UPPER_BOUND = 2 ** 50;
 const RANDOM_SEED_RANGE = RANDOM_SEED_UPPER_BOUND + 1;
 const MAX_CONTROLNET_SVG_LENGTH = 2_000_000;
 const MAX_CONTROLNET_IMAGE_DATA_URL_LENGTH = 12_000_000;
+const MAX_TEXT_TO_IMAGE_SOURCE_IMAGE_DATA_URL_LENGTH = 32_000_000;
 const MAX_INPAINT_MASK_DATA_URL_LENGTH = 24_000_000;
 const MAX_INPAINT_SOURCE_IMAGE_DATA_URL_LENGTH = 32_000_000;
 const MAX_CHARACTER_REFERENCE_COUNT = 8;
@@ -1161,6 +1164,39 @@ export function validateComfyUiTextToImageRequest(value: unknown): ComfyUiTextTo
     };
   }
 
+  if (value.sourceImageDataUrl !== undefined) {
+    if (
+      typeof value.sourceImageDataUrl !== "string" ||
+      value.sourceImageDataUrl.length > MAX_TEXT_TO_IMAGE_SOURCE_IMAGE_DATA_URL_LENGTH
+    ) {
+      return {
+        ok: false,
+        message: "sourceImageDataUrl must be an image data URL within the size limit.",
+      };
+    }
+
+    if (!isImageDataUrl(value.sourceImageDataUrl)) {
+      return {
+        ok: false,
+        message: "sourceImageDataUrl must be a PNG, JPEG, or WEBP data URL.",
+      };
+    }
+  }
+
+  if (value.imageName !== undefined && !isOptionalString(value.imageName)) {
+    return {
+      ok: false,
+      message: "imageName must be a non-empty string when provided.",
+    };
+  }
+
+  if (!isOptionalPositiveInteger(value.imageWidth) || !isOptionalPositiveInteger(value.imageHeight)) {
+    return {
+      ok: false,
+      message: "imageWidth and imageHeight must be positive integers when provided.",
+    };
+  }
+
   if (!isOptionalBoolean(value.preview)) {
     return {
       ok: false,
@@ -1225,6 +1261,10 @@ export function validateComfyUiTextToImageRequest(value: unknown): ComfyUiTextTo
       denoise: getOptionalNumber(value.denoise),
       batchSize: getOptionalNumber(value.batchSize),
       latentImageNode: normalizeComfyUiLatentImageNode(value.latentImageNode),
+      sourceImageDataUrl: typeof value.sourceImageDataUrl === "string" ? value.sourceImageDataUrl.trim() : undefined,
+      imageName: value.imageName?.trim(),
+      imageWidth: getOptionalNumber(value.imageWidth),
+      imageHeight: getOptionalNumber(value.imageHeight),
       promptWrapper,
       outputPrefix: value.outputPrefix?.trim(),
       faceDetailer,
@@ -1835,8 +1875,12 @@ export function resolveComfyUiTextToImageRequest(
     samplerName: getString(request.samplerName, DEFAULT_TEXT_TO_IMAGE_REQUEST.samplerName),
     scheduler: getString(request.scheduler, DEFAULT_TEXT_TO_IMAGE_REQUEST.scheduler),
     denoise: request.denoise ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.denoise,
-    batchSize: request.batchSize ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.batchSize,
+    batchSize: request.imageName || request.sourceImageDataUrl ? 1 : request.batchSize ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.batchSize,
     latentImageNode: isAnimaProfile ? "EmptyLatentImage" : request.latentImageNode ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.latentImageNode,
+    sourceImageDataUrl: request.sourceImageDataUrl ?? "",
+    imageName: getString(request.imageName, ""),
+    ...(request.imageWidth ? { imageWidth: request.imageWidth } : {}),
+    ...(request.imageHeight ? { imageHeight: request.imageHeight } : {}),
     promptWrapper: {
       positivePrefix: request.promptWrapper?.positivePrefix ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.promptWrapper.positivePrefix,
       negativePrefix: request.promptWrapper?.negativePrefix ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.promptWrapper.negativePrefix,

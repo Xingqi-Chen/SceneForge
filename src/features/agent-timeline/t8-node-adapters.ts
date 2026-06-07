@@ -6,6 +6,7 @@ import {
   type ComfyUiExecutionTimelineResult,
   type ParameterRecommendationTimelineResult,
   type ResultDisplayTimelineResult,
+  type SceneInputTimelineResult,
   type TimelineNodeAdapters,
   type TimelineNodeExecutionContext,
   type TimelineWorkflowState,
@@ -54,10 +55,22 @@ function getParameterRecommendationResult(workflow: TimelineWorkflowState): Para
 function getTimelineImageCount(workflow: TimelineWorkflowState) {
   const result = workflow.nodes["scene-input"].result;
   if (isRecord(result)) {
-    return normalizeTimelineImageCount(result.imageCount);
+    const sceneInput = result as Partial<SceneInputTimelineResult>;
+    return sceneInput.sourceImage ? 1 : normalizeTimelineImageCount(result.imageCount);
   }
 
   return normalizeTimelineImageCount(undefined);
+}
+
+function getTimelineSourceImage(workflow: TimelineWorkflowState) {
+  const result = workflow.nodes["scene-input"].result;
+
+  if (!isRecord(result)) {
+    return undefined;
+  }
+
+  const sceneInput = result as Partial<SceneInputTimelineResult>;
+  return sceneInput.sourceImage;
 }
 
 function assertGenerationConfirmed(workflow: TimelineWorkflowState) {
@@ -80,9 +93,17 @@ export function createConfirmedTimelineComfyUiRequest(
   assertGenerationConfirmed(workflow);
 
   const parameterResult = getParameterRecommendationResult(workflow);
+  const sourceImage = getTimelineSourceImage(workflow);
 
   return {
     ...parameterResult.requestPreview,
+    ...(sourceImage
+      ? {
+          sourceImageDataUrl: sourceImage.dataUrl,
+          imageWidth: sourceImage.width,
+          imageHeight: sourceImage.height,
+        }
+      : {}),
     batchSize: getTimelineImageCount(workflow),
     preview: false,
   };

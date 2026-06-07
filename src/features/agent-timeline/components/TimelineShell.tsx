@@ -1,6 +1,6 @@
 "use client";
 
-import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { type ChangeEvent, type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import {
@@ -155,6 +155,7 @@ type OutputDisplayMode = TimelineOutputDisplayMode;
 type OutputDisplayModeMap = TimelineOutputDisplayModeMap;
 type SceneInputAiAction = "rewrite" | "suggest";
 type TimelineAutosaveStatus = "idle" | "loading" | "saved" | "error";
+type TimelineSourceImage = NonNullable<SceneInputTimelineResult["sourceImage"]>;
 
 type PendingTimelinePromptTagReview = {
   input: TimelineCanvasBindingInput;
@@ -554,8 +555,16 @@ function getSceneInputImageCount(workflow: TimelineWorkflowState | null) {
   const result = workflow?.nodes["scene-input"].result;
 
   return isRecord(result)
-    ? normalizeTimelineImageCount(result.imageCount)
+    ? (result.sourceImage ? 1 : normalizeTimelineImageCount(result.imageCount))
     : DEFAULT_TIMELINE_IMAGE_COUNT;
+}
+
+function getSceneInputSourceImage(workflow: TimelineWorkflowState | null): TimelineSourceImage | null {
+  const result = workflow?.nodes["scene-input"].result;
+
+  return isRecord(result) && isRecord(result.sourceImage)
+    ? result.sourceImage as TimelineSourceImage
+    : null;
 }
 
 function parseSceneInputAiResponse(response: LlmChatResponse) {
@@ -623,12 +632,14 @@ function createManualResult(
   value: string,
   promptProfile: PromptProfileId,
   imageCount = DEFAULT_TIMELINE_IMAGE_COUNT,
+  sourceImage?: TimelineSourceImage | null,
 ) {
   if (nodeId === "scene-input") {
     return {
       rawIntent: value,
       promptProfile,
-      imageCount: normalizeTimelineImageCount(imageCount),
+      imageCount: sourceImage ? 1 : normalizeTimelineImageCount(imageCount),
+      ...(sourceImage ? { sourceImage } : {}),
     } satisfies SceneInputTimelineResult;
   }
 
@@ -1234,6 +1245,7 @@ export function TimelineShell() {
   const [selectedPromptProfile, setSelectedPromptProfile] =
     useState<PromptProfileId>(defaultPromptProfileId);
   const [selectedImageCount, setSelectedImageCount] = useState(DEFAULT_TIMELINE_IMAGE_COUNT);
+  const [selectedSourceImage, setSelectedSourceImage] = useState<TimelineSourceImage | null>(null);
   const [workflow, setWorkflow] = useState<TimelineWorkflowState | null>(null);
   const [workflowProjectId, setWorkflowProjectId] = useState<string | null>(null);
   const [workflowProjectName, setWorkflowProjectName] = useState("");
@@ -1244,6 +1256,7 @@ export function TimelineShell() {
   const [notices, setNotices] = useState<NoticeMap>({});
   const [isRunning, setIsRunning] = useState(false);
   const activeRunIdRef = useRef(0);
+  const sourceImageInputRef = useRef<HTMLInputElement | null>(null);
   const [pendingPromptTagReview, setPendingPromptTagReview] =
     useState<PendingTimelinePromptTagReview | null>(null);
   const [isSavingPromptTagReview, setIsSavingPromptTagReview] = useState(false);
@@ -1357,6 +1370,7 @@ export function TimelineShell() {
     setSceneRequest(record.sceneRequest);
     setSelectedPromptProfile(record.selectedPromptProfile);
     setSelectedImageCount(restoredImageCount);
+    setSelectedSourceImage(getSceneInputSourceImage(record.workflow));
     setSelectedNodeId(record.selectedNodeId);
     setEditingNodeId(null);
     setDrafts({});
@@ -1939,15 +1953,16 @@ export function TimelineShell() {
     setWorkflowProjectId(null);
     setWorkflowProjectName("");
     const nextWorkflow = createTimelineWorkflowState({
-      imageCount: selectedImageCount,
+      imageCount: selectedSourceImage ? 1 : selectedImageCount,
       promptProfile: selectedPromptProfile,
       sceneRequest: trimmedSceneRequest,
+      sourceImage: selectedSourceImage ?? undefined,
     });
     const initialAutosaveInput: TimelineWorkflowRecordInput = {
       workflow: nextWorkflow,
       sceneRequest: trimmedSceneRequest,
       selectedPromptProfile,
-      selectedImageCount,
+      selectedImageCount: selectedSourceImage ? 1 : selectedImageCount,
       selectedNodeId: "scene-input",
       outputDisplayModes: {},
     };
@@ -1974,6 +1989,9 @@ export function TimelineShell() {
       });
     commitWorkflow(nextWorkflow, initialAutosaveInput);
     setSceneRequest(trimmedSceneRequest);
+    if (selectedSourceImage) {
+      setSelectedImageCount(1);
+    }
     setSelectedNodeId("scene-input");
     setEditingNodeId(null);
     setDrafts({});
@@ -2004,15 +2022,22 @@ export function TimelineShell() {
     invalidateTimelineRun();
     commitWorkflow(setTimelineNodeManualResult(workflow, "scene-input", {
       rawIntent,
-      imageCount: selectedImageCount,
+      imageCount: selectedSourceImage ? 1 : selectedImageCount,
       promptProfile,
+      ...(selectedSourceImage ? { sourceImage: selectedSourceImage } : {}),
     } satisfies SceneInputTimelineResult), {
       sceneRequest: rawIntent,
       selectedPromptProfile: promptProfile,
+      selectedImageCount: selectedSourceImage ? 1 : selectedImageCount,
     });
   }
 
   function handleImageCountChange(value: string) {
+    if (selectedSourceImage) {
+      setSelectedImageCount(1);
+      return;
+    }
+
     const imageCount = normalizeTimelineImageCount(value);
     setSelectedImageCount(imageCount);
 
@@ -2038,6 +2063,86 @@ export function TimelineShell() {
       ...current,
       "scene-input": "Image count updated. Downstream nodes are pending regeneration.",
     }));
+  }
+
+  function commitSceneInputSourceImage(sourceImage: TimelineSourceImage | null) {
+    setSelectedSourceImage(sourceImage);
+    if (sourceImage) {
+      setSelectedImageCount(1);
+    }
+
+    if (!workflow || isRunning) {
+      return;
+    }
+
+    const rawIntent = sceneRequest.trim() || getSceneInputRawIntent(workflow).trim();
+    if (!rawIntent) {
+      return;
+    }
+
+    invalidateTimelineRun();
+    const imageCount = sourceImage ? 1 : selectedImageCount;
+    commitWorkflow(setTimelineNodeManualResult(workflow, "scene-input", {
+      rawIntent,
+      imageCount,
+      promptProfile: selectedPromptProfile,
+      ...(sourceImage ? { sourceImage } : {}),
+    } satisfies SceneInputTimelineResult), {
+      sceneRequest: rawIntent,
+      selectedImageCount: imageCount,
+    });
+    setNotices((current) => ({
+      ...current,
+      "scene-input": sourceImage
+        ? "Source image attached. Downstream generation will use img2img with one output."
+        : "Source image removed. Downstream generation will return to text-to-image.",
+    }));
+  }
+
+  function handleSourceImageChange(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+
+    if (!file) {
+      return;
+    }
+
+    const allowedTypes = new Set(["image/png", "image/jpeg", "image/webp"]);
+    if (!allowedTypes.has(file.type)) {
+      setNotices((current) => ({
+        ...current,
+        "scene-input": "Source image must be a PNG, JPEG, or WEBP file.",
+      }));
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = typeof reader.result === "string" ? reader.result : "";
+      if (!dataUrl) {
+        return;
+      }
+
+      const image = new window.Image();
+      image.onload = () => {
+        commitSceneInputSourceImage({
+          dataUrl,
+          filename: file.name,
+          height: image.naturalHeight,
+          mimeType: file.type as TimelineSourceImage["mimeType"],
+          uploadedAt: new Date().toISOString(),
+          width: image.naturalWidth,
+        });
+      };
+      image.onerror = () => {
+        setNotices((current) => ({
+          ...current,
+          "scene-input": "Unable to read source image dimensions.",
+        }));
+      };
+      image.src = dataUrl;
+    };
+    reader.readAsDataURL(file);
   }
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -2096,7 +2201,7 @@ export function TimelineShell() {
     commitWorkflow(setTimelineNodeManualResult(
       workflow,
       nodeId,
-      createManualResult(nodeId, draft, selectedPromptProfile, selectedImageCount),
+      createManualResult(nodeId, draft, selectedPromptProfile, selectedImageCount, selectedSourceImage),
     ), {
       sceneRequest: nodeId === "scene-input" ? draft : sceneRequest,
     });
@@ -2226,14 +2331,16 @@ export function TimelineShell() {
       const nextWorkflow = workflow
         ? setTimelineNodeManualResult(workflow, "scene-input", {
             rawIntent: nextSceneRequest,
-            imageCount: selectedImageCount,
+            imageCount: selectedSourceImage ? 1 : selectedImageCount,
             promptProfile: selectedPromptProfile,
+            ...(selectedSourceImage ? { sourceImage: selectedSourceImage } : {}),
           } satisfies SceneInputTimelineResult)
         : null;
 
       if (nextWorkflow) {
         commitWorkflow(nextWorkflow, {
           sceneRequest: nextSceneRequest,
+          selectedImageCount: selectedSourceImage ? 1 : selectedImageCount,
         });
       }
       setSceneRequest(nextSceneRequest);
@@ -2314,6 +2421,7 @@ export function TimelineShell() {
     setSceneRequest("");
     setSelectedPromptProfile(defaultPromptProfileId);
     setSelectedImageCount(DEFAULT_TIMELINE_IMAGE_COUNT);
+    setSelectedSourceImage(null);
     setSelectedNodeId("scene-input");
     setEditingNodeId(null);
     setDrafts({});
@@ -2400,6 +2508,7 @@ export function TimelineShell() {
     setSelectedNodeId(nodeId);
     if (nodeId === "scene-input") {
       setSelectedImageCount(getSceneInputImageCount(workflow));
+      setSelectedSourceImage(getSceneInputSourceImage(workflow));
     }
     setEditingNodeId(null);
   }
@@ -2621,10 +2730,10 @@ export function TimelineShell() {
                       </label>
                       <select
                         className="h-8 rounded-md border border-slate-200 bg-white px-2 text-xs text-slate-800 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
-                        disabled={isRunning}
+                        disabled={isRunning || Boolean(selectedSourceImage)}
                         id="timeline-image-count"
                         onChange={(event) => handleImageCountChange(event.target.value)}
-                        value={selectedImageCount}
+                        value={selectedSourceImage ? 1 : selectedImageCount}
                       >
                         {timelineImageCountOptions.map((count) => (
                           <option key={count} value={count}>
@@ -2632,6 +2741,23 @@ export function TimelineShell() {
                           </option>
                         ))}
                       </select>
+                      <input
+                        accept="image/png,image/jpeg,image/webp"
+                        className="sr-only"
+                        onChange={handleSourceImageChange}
+                        ref={sourceImageInputRef}
+                        type="file"
+                      />
+                      <Button
+                        className="ml-2 h-8 px-2 text-xs shadow-none"
+                        disabled={isRunning}
+                        onClick={() => sourceImageInputRef.current?.click()}
+                        type="button"
+                        variant="secondary"
+                      >
+                        <ImageIcon className="size-3.5" />
+                        Upload source
+                      </Button>
                     </div>
                     <textarea
                       className="min-h-28 w-full resize-none border-0 bg-white px-3 py-3 text-sm leading-relaxed text-slate-900 outline-none placeholder:text-slate-400"
@@ -2640,6 +2766,34 @@ export function TimelineShell() {
                       placeholder="Describe the scene, characters, mood, camera, and constraints..."
                       value={sceneRequest}
                     />
+                    {selectedSourceImage ? (
+                      <div className="flex flex-wrap items-center gap-3 border-t border-slate-200 bg-white px-3 py-2">
+                        <Image
+                          alt="Uploaded img2img source"
+                          className="size-16 rounded-md border border-slate-200 object-cover"
+                          height={64}
+                          src={selectedSourceImage.dataUrl}
+                          unoptimized
+                          width={64}
+                        />
+                        <div className="min-w-0 flex-1 text-xs leading-relaxed text-slate-600">
+                          <p className="truncate font-medium text-slate-800">{selectedSourceImage.filename}</p>
+                          <p>
+                            {selectedSourceImage.width}x{selectedSourceImage.height} source image. Img2img uses one
+                            output and defaults denoise to 0.6.
+                          </p>
+                        </div>
+                        <Button
+                          className="h-8 px-2 text-xs shadow-none"
+                          disabled={isRunning}
+                          onClick={() => commitSceneInputSourceImage(null)}
+                          type="button"
+                          variant="secondary"
+                        >
+                          Remove
+                        </Button>
+                      </div>
+                    ) : null}
                     <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-200 px-3 py-2">
                       <div className="flex flex-wrap items-center gap-1.5">
                         <Button

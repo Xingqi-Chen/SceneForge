@@ -111,6 +111,14 @@ export type SceneInputTimelineResult = {
   rawIntent: string;
   promptProfile: PromptProfileId;
   imageCount: number;
+  sourceImage?: {
+    dataUrl: string;
+    filename: string;
+    height: number;
+    mimeType: "image/png" | "image/jpeg" | "image/webp";
+    uploadedAt: string;
+    width: number;
+  };
   settingsSnapshot?: unknown;
 };
 

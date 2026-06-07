@@ -26,6 +26,7 @@ type TimelineWorkflowOptions = {
   imageCount?: number;
   promptProfile?: PromptProfileId;
   sceneRequest?: string;
+  sourceImage?: SceneInputTimelineResult["sourceImage"];
   settingsSnapshot?: unknown;
   now?: TimelineClock;
 };
@@ -192,7 +193,8 @@ export function createTimelineWorkflowState(options: TimelineWorkflowOptions = {
     result: {
       rawIntent: options.sceneRequest,
       promptProfile: normalizePromptProfileId(options.promptProfile),
-      imageCount: normalizeTimelineImageCount(options.imageCount),
+      imageCount: options.sourceImage ? 1 : normalizeTimelineImageCount(options.imageCount),
+      ...(options.sourceImage ? { sourceImage: options.sourceImage } : {}),
       settingsSnapshot: options.settingsSnapshot,
     } satisfies SceneInputTimelineResult,
     source: "manual",

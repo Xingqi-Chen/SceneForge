@@ -10,6 +10,7 @@ import {
   validateComfyUiRequestAgainstObjectInfo,
 } from "@/features/comfyui";
 import type { ComfyUiTextToImageRequest } from "@/features/comfyui";
+import { uploadComfyUiTextToImageSourceImage } from "@/features/comfyui/source-image-upload";
 
 export const runtime = "nodejs";
 
@@ -48,6 +49,7 @@ function readClientId(value: unknown) {
 function sanitizeReturnedRequest(request: ComfyUiTextToImageRequest) {
   return {
     ...request,
+    sourceImageDataUrl: "",
     ...(request.controlNet
       ? {
           controlNet: {
@@ -141,7 +143,8 @@ export async function POST(request: Request) {
     const generationRequest = validation.request.preview
       ? createComfyUiTextToImagePreviewRequest(validation.request)
       : validation.request;
-    const objectValidation = validateComfyUiRequestAgainstObjectInfo(generationRequest, objectInfo);
+    const requestWithSourceImage = await uploadComfyUiTextToImageSourceImage(client, generationRequest);
+    const objectValidation = validateComfyUiRequestAgainstObjectInfo(requestWithSourceImage, objectInfo);
 
     if (objectValidation.errors.length > 0) {
       return errorResponse("ComfyUI request does not match the current ComfyUI model/node options.", 400, {
