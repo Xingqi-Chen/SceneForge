@@ -562,6 +562,15 @@ function pickSupportedValue(value: string | undefined, options: string[], fallba
   return options.includes(fallback) ? fallback : options[0] ?? fallback;
 }
 
+function normalizeRenderDimension(value: unknown, fallback: number) {
+  const parsed = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+
+  return Math.max(8, Math.round(parsed / 8) * 8);
+}
+
 function makeSeedPolicy(requestSeed: number | undefined): TimelineSeedPolicy {
   return typeof requestSeed === "number" && Number.isSafeInteger(requestSeed) && requestSeed >= 0
     ? { mode: "fixed", seed: requestSeed }
@@ -656,7 +665,7 @@ export function createTimelineParameterRecommendation({
   const samplerName = pickSupportedValue(request.samplerName, samplerOptions.samplers, "euler");
   const scheduler = pickSupportedValue(request.scheduler, samplerOptions.schedulers, "normal");
   const denoise = sourceImage ? normalizeTimelineSourceDenoise(sourceDenoise) : request.denoise ?? 1;
-  const requestPreview = {
+  const rawRequestPreview = {
     ...request,
     denoise,
     ...(sourceImage
@@ -672,12 +681,19 @@ export function createTimelineParameterRecommendation({
     samplerName,
     scheduler,
   };
+  const width = normalizeRenderDimension(rawRequestPreview.width, 1024);
+  const height = normalizeRenderDimension(rawRequestPreview.height, 1024);
+  const requestPreview = {
+    ...rawRequestPreview,
+    width,
+    height,
+  };
 
   return {
     availableSamplers: samplerOptions.samplers,
     availableSchedulers: samplerOptions.schedulers,
-    width: requestPreview.width ?? 1024,
-    height: requestPreview.height ?? 1024,
+    width,
+    height,
     steps: requestPreview.steps ?? 30,
     cfg: requestPreview.cfg ?? 7,
     samplerName,

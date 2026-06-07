@@ -518,10 +518,10 @@ describe("T7 timeline adapters", () => {
       sourceImage: {
         dataUrl: "data:image/webp;base64,aGVsbG8=",
         filename: "source.webp",
-        height: 768,
+        height: 770,
         mimeType: "image/webp",
         uploadedAt: "2026-06-07T00:00:00.000Z",
-        width: 1024,
+        width: 1025,
       },
     });
 
@@ -531,9 +531,11 @@ describe("T7 timeline adapters", () => {
     expect(result.requestPreview).toMatchObject({
       batchSize: 1,
       denoise: 0.6,
+      width: 1024,
+      height: 768,
       sourceImageDataUrl: "data:image/webp;base64,aGVsbG8=",
-      imageWidth: 1024,
-      imageHeight: 768,
+      imageWidth: 1025,
+      imageHeight: 770,
     });
   });
 
@@ -836,7 +838,7 @@ describe("T7 timeline adapters", () => {
     expect(result.requestPreview.negativePrompt).toContain("bad_hands");
   });
 
-  it("uses AI Style Advice parameter suggestions without replacing the final positive prompt", () => {
+  it("uses AI Style Advice parameter suggestions and rounds render dimensions to multiples of 8", () => {
     const checkpoint = makeResource("model", "checkpoint-local", "Local Checkpoint", "Illustrious");
     const lora = makeResource("lora", "lora-local", "Local LoRA", "Illustrious", {
       trainedWords: ["neon_style"],
@@ -872,7 +874,7 @@ describe("T7 timeline adapters", () => {
           cfgScale: 5.5,
           loraWeights: [{ name: "Local LoRA", suggestedWeight: 0.64 }],
           negativePromptAdditions: "jpeg artifacts",
-          resolution: "1216x800",
+          resolution: "1219x801",
           sampler: "euler",
           scheduler: "normal",
           steps: 38,
@@ -898,6 +900,8 @@ describe("T7 timeline adapters", () => {
     });
     expect(result.finalPositivePrompt).not.toBe("style advice prompt should be ignored");
     expect(result.requestPreview.positivePrompt).toBe(result.finalPositivePrompt);
+    expect(result.requestPreview.width).toBe(1216);
+    expect(result.requestPreview.height).toBe(800);
     expect(result.requestPreview.negativePrompt).toContain("low quality");
     expect(result.requestPreview.negativePrompt).toContain("jpeg artifacts");
     expect(result.requestPreview.loras?.[0]).toMatchObject({
