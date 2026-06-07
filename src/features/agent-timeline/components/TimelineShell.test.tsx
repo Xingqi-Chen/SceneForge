@@ -851,6 +851,284 @@ describe("TimelineShell", () => {
     }
   });
 
+  it("saves an unnamed active workflow as a named timeline workflow", async () => {
+    const originalFetch = globalThis.fetch;
+    const workflow = createTimelineWorkflowState({
+      workflowId: "timeline-save-active",
+      sceneRequest: "A saved greenhouse command deck",
+      now: () => "2026-06-05T00:00:00.000Z",
+    });
+    const activeRecord = createTimelineWorkflowRecord({
+      workflow,
+      sceneRequest: "A saved greenhouse command deck",
+      selectedPromptProfile: "illustrious",
+      selectedImageCount: 1,
+      selectedNodeId: "scene-input",
+    });
+    const savedNamedRecord = {
+      ...activeRecord,
+      projectId: "workflow-saved-active",
+      name: "A saved greenhouse command deck",
+      updatedAt: "2026-06-05T00:03:00.000Z",
+    };
+    const namedSaveBodies: unknown[] = [];
+    const activeSaveBodies: unknown[] = [];
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = getFetchUrl(input);
+
+      if (url === "/api/settings") {
+        return createTimelineSettingsResponse();
+      }
+
+      if (url === "/api/agent-timeline/active-workflow") {
+        if (init?.method === "PUT") {
+          activeSaveBodies.push(typeof init.body === "string" ? JSON.parse(init.body) : null);
+          return createJsonResponse({ ok: true, record: activeSaveBodies.at(-1) });
+        }
+
+        return createJsonResponse(activeRecord);
+      }
+
+      if (url === "/api/agent-timeline/workflows") {
+        if (init?.method === "PUT") {
+          namedSaveBodies.push(typeof init.body === "string" ? JSON.parse(init.body) : null);
+          return createJsonResponse({ ok: true, record: savedNamedRecord });
+        }
+
+        return createJsonResponse({ workflows: [] });
+      }
+
+      return createJsonResponse({ role: "assistant", content: "{}" });
+    });
+    globalThis.fetch = fetchMock;
+
+    try {
+      act(() => {
+        root.render(<TimelineShell />);
+      });
+      await flushAsyncWork();
+
+      act(() => {
+        getButtonByText("Unnamed draft").click();
+      });
+      await act(async () => {
+        await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+      });
+      await flushAsyncWork();
+
+      expect(container.textContent).toContain("No saved workflows yet.");
+
+      act(() => {
+        getButtonByText("Save").click();
+      });
+      await flushAsyncWork();
+
+      expect(namedSaveBodies).toHaveLength(1);
+      expect(namedSaveBodies[0]).toMatchObject({
+        id: null,
+        name: "",
+        record: {
+          sceneRequest: "A saved greenhouse command deck",
+        },
+      });
+      expect(activeSaveBodies.at(-1)).toMatchObject({
+        projectId: "workflow-saved-active",
+        name: "A saved greenhouse command deck",
+      });
+      expect(container.textContent).toContain("A saved greenhouse command deck");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("opens a saved timeline workflow and syncs it to the active autosave record", async () => {
+    const originalFetch = globalThis.fetch;
+    const savedRecord = createTimelineWorkflowRecord({
+      projectId: "workflow-opened",
+      name: "Opened workflow",
+      workflow: createTimelineWorkflowState({
+        workflowId: "timeline-opened",
+        sceneRequest: "An opened crystal observatory",
+        now: () => "2026-06-05T00:00:00.000Z",
+      }),
+      sceneRequest: "An opened crystal observatory",
+      selectedPromptProfile: "anima",
+      selectedImageCount: 2,
+      selectedNodeId: "scene-input",
+    });
+    const activeSaveBodies: unknown[] = [];
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = getFetchUrl(input);
+
+      if (url === "/api/settings") {
+        return createTimelineSettingsResponse();
+      }
+
+      if (url === "/api/agent-timeline/active-workflow") {
+        if (init?.method === "PUT") {
+          activeSaveBodies.push(typeof init.body === "string" ? JSON.parse(init.body) : null);
+          return createJsonResponse({ ok: true, record: activeSaveBodies.at(-1) });
+        }
+
+        return createJsonResponse({ error: { message: "missing" } }, 404);
+      }
+
+      if (url === "/api/agent-timeline/workflows") {
+        return createJsonResponse({
+          workflows: [
+            {
+              id: "workflow-opened",
+              name: "Opened workflow",
+              createdAt: "2026-06-05T00:00:00.000Z",
+              updatedAt: "2026-06-05T00:01:00.000Z",
+            },
+          ],
+        });
+      }
+
+      if (url === "/api/agent-timeline/workflows/item?id=workflow-opened") {
+        return createJsonResponse(savedRecord);
+      }
+
+      return createJsonResponse({ role: "assistant", content: "{}" });
+    });
+    globalThis.fetch = fetchMock;
+
+    try {
+      act(() => {
+        root.render(<TimelineShell />);
+      });
+      await flushAsyncWork();
+
+      act(() => {
+        getButtonByText("Unnamed draft").click();
+      });
+      await act(async () => {
+        await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+      });
+      await flushAsyncWork();
+
+      const openedWorkflowButton = Array.from(container.querySelectorAll("button")).find((button) =>
+        button.textContent?.includes("Opened workflow"),
+      ) as HTMLButtonElement | undefined;
+      expect(openedWorkflowButton).not.toBeUndefined();
+
+      act(() => {
+        openedWorkflowButton?.click();
+      });
+      await flushAsyncWork();
+
+      expect(container.textContent).toContain("Opened workflow");
+      expect((container.querySelector("#scene-request") as HTMLTextAreaElement | null)?.value).toBe(
+        "An opened crystal observatory",
+      );
+      expect((container.querySelector("#prompt-profile") as HTMLSelectElement | null)?.value).toBe("anima");
+      expect(activeSaveBodies.at(-1)).toMatchObject({
+        projectId: "workflow-opened",
+        name: "Opened workflow",
+        workflow: {
+          workflowId: "timeline-opened",
+        },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("deletes the current named workflow while keeping the active timeline as an unnamed draft", async () => {
+    const originalFetch = globalThis.fetch;
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const workflow = createTimelineWorkflowState({
+      workflowId: "timeline-delete-current",
+      sceneRequest: "A current named workflow scene",
+      now: () => "2026-06-05T00:00:00.000Z",
+    });
+    const activeRecord = createTimelineWorkflowRecord({
+      projectId: "workflow-delete-current",
+      name: "Current named workflow",
+      workflow,
+      sceneRequest: "A current named workflow scene",
+      selectedPromptProfile: "illustrious",
+      selectedImageCount: 1,
+      selectedNodeId: "scene-input",
+    });
+    const activeSaveBodies: unknown[] = [];
+    const deleteUrls: string[] = [];
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = getFetchUrl(input);
+
+      if (url === "/api/settings") {
+        return createTimelineSettingsResponse();
+      }
+
+      if (url === "/api/agent-timeline/active-workflow") {
+        if (init?.method === "PUT") {
+          activeSaveBodies.push(typeof init.body === "string" ? JSON.parse(init.body) : null);
+          return createJsonResponse({ ok: true, record: activeSaveBodies.at(-1) });
+        }
+
+        return createJsonResponse(activeRecord);
+      }
+
+      if (url === "/api/agent-timeline/workflows") {
+        return createJsonResponse({
+          workflows: [
+            {
+              id: "workflow-delete-current",
+              name: "Current named workflow",
+              createdAt: "2026-06-05T00:00:00.000Z",
+              updatedAt: "2026-06-05T00:01:00.000Z",
+            },
+          ],
+        });
+      }
+
+      if (url === "/api/agent-timeline/workflows/item?id=workflow-delete-current" && init?.method === "DELETE") {
+        deleteUrls.push(url);
+        return createJsonResponse({ ok: true });
+      }
+
+      return createJsonResponse({ role: "assistant", content: "{}" });
+    });
+    globalThis.fetch = fetchMock;
+
+    try {
+      act(() => {
+        root.render(<TimelineShell />);
+      });
+      await flushAsyncWork();
+
+      act(() => {
+        getButtonByText("Current named workflow").click();
+      });
+      await act(async () => {
+        await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+      });
+      await flushAsyncWork();
+
+      const deleteButton = Array.from(container.querySelectorAll("button")).find(
+        (button) => button.getAttribute("aria-label") === "Delete workflow Current named workflow",
+      ) as HTMLButtonElement | undefined;
+      expect(deleteButton).not.toBeUndefined();
+
+      act(() => {
+        deleteButton?.click();
+      });
+      await flushAsyncWork();
+
+      expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining("unnamed autosaved draft"));
+      expect(deleteUrls).toEqual(["/api/agent-timeline/workflows/item?id=workflow-delete-current"]);
+      expect((container.querySelector("#scene-request") as HTMLTextAreaElement | null)?.value).toBe(
+        "A current named workflow scene",
+      );
+      expect(container.textContent).toContain("Unnamed draft");
+      expect(activeSaveBodies.at(-1)).not.toHaveProperty("projectId");
+      expect(activeSaveBodies.at(-1)).not.toHaveProperty("name");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("keeps New scene clear when an older autosave finishes late", async () => {
     vi.useFakeTimers();
     const originalFetch = globalThis.fetch;

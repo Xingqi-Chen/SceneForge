@@ -4,3 +4,4 @@ export * from "./TimelineNodeEditor";
 export * from "./TimelineNodeStatus";
 export * from "./TimelineScenePromptWorkspace";
 export * from "./TimelineShell";
+export * from "./TimelineWorkflowProjectMenu";
