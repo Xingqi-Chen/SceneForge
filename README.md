@@ -4,6 +4,16 @@ SceneForge is a local-first visual prompt workspace for AI image generation.
 
 The current MVP direction is a single-image, top-to-bottom timeline driven by LangGraph. Users enter one scene request, then review and edit scene prompt, character tags, 3D pose/canvas binding, checkpoint/LoRA selection, generation parameters, and the final ComfyUI generation gate.
 
+## Screenshots
+
+Timeline workflow:
+
+![SceneForge timeline workflow](docs/assets/sceneforge-timeline.png)
+
+Visual editor:
+
+![SceneForge visual editor](docs/assets/sceneforge-editor.png)
+
 ## Getting Started
 
 Install dependencies and start the development server:
