@@ -1500,7 +1500,7 @@ describe("TimelineShell", () => {
     }
   });
 
-  it("defaults legacy settings to simple mode and requires explicit confirmation before rendering", async () => {
+  it("defaults legacy settings to simple mode and auto-renders when auto review is enabled", async () => {
     const originalFetch = globalThis.fetch;
     const t5FetchMock = mockT5Fetch();
     const confirmPayloads: TimelineWorkflowState[] = [];
@@ -1555,18 +1555,6 @@ describe("TimelineShell", () => {
       await flushAsyncWork();
 
       expect(container.textContent).toContain("Workflow progress");
-      expect(container.textContent).toContain("Review the render request before ComfyUI execution.");
-      expect(getButtonByText("Confirm and render").disabled).toBe(false);
-      expect(confirmPayloads).toHaveLength(0);
-      expect(fetchMock.mock.calls.map(([input]) => getFetchUrl(input))).not.toContain(
-        "/api/agent-timeline/confirm-generation",
-      );
-
-      act(() => {
-        getButtonByText("Confirm and render").click();
-      });
-      await flushAsyncWork();
-
       expect(confirmPayloads).toHaveLength(1);
       expect(container.textContent).toContain("Generated result ready.");
       expect(container.textContent).toContain("100%");
@@ -2404,7 +2392,7 @@ describe("TimelineShell", () => {
       if (url === "/api/settings") {
         return createTimelineSettingsResponse({
           characterTagNewTermDefaultOption: "temporary",
-          autoReview: true,
+          autoReview: false,
         });
       }
 
@@ -2458,7 +2446,7 @@ describe("TimelineShell", () => {
     }
   });
 
-  it("requires explicit generation confirmation when auto review is enabled", async () => {
+  it("auto-confirms timeline generation when auto review is enabled", async () => {
     const originalFetch = globalThis.fetch;
     const t5FetchMock = mockT5Fetch();
     const confirmPayloads: TimelineWorkflowState[] = [];
@@ -2495,20 +2483,8 @@ describe("TimelineShell", () => {
       await submitInitialScene("A neon market alley with a courier at sunrise");
       await flushAsyncWork();
 
-      expect(confirmPayloads).toHaveLength(0);
-      expect(container.textContent).not.toContain("Review 2 new prompt tags");
-
-      act(() => {
-        getWorkflowStepButton("generation-gate").click();
-      });
-      expect(getSectionByHeading("Review / export").textContent).toContain("Confirm and render");
-
-      act(() => {
-        getButtonByText("Confirm and render").click();
-      });
-      await flushAsyncWork();
-
       expect(confirmPayloads).toHaveLength(1);
+      expect(container.textContent).not.toContain("Review 2 new prompt tags");
       expect(confirmPayloads[0]?.nodes["generation-gate"].error?.code).toBe("confirmation_required");
       expect(getSectionByHeading("Artifact result").textContent).toContain("timeline-confirmed.png");
     } finally {

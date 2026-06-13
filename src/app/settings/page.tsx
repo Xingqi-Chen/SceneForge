@@ -547,7 +547,7 @@ export default function SettingsPage() {
                       <span className="min-w-0">
                         <span className="block text-sm font-bold text-slate-900">Auto review</span>
                         <span className="mt-1 block text-xs leading-relaxed text-slate-500">
-                          Keep review defaults for workflow runs. ComfyUI still requires explicit Confirm and render.
+                          Automatically confirm and render when the workflow reaches the generation gate.
                         </span>
                       </span>
                     </span>

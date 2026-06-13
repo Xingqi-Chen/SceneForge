@@ -1959,6 +1959,9 @@ export function TimelineShell() {
       }
 
       commitWorkflow(result);
+      if (timelineSettings.autoReview && canConfirmTimelineWorkflow(result)) {
+        void runConfirmGeneration(result, { allowWhileRunning: true });
+      }
     } catch (error) {
       if (!isCurrentRun(runId)) {
         return;

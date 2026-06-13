@@ -9,8 +9,8 @@ This log records dated implementation and documentation work. Keep entries conci
 Summary:
 
 - Added a persisted global workflow display mode setting with `simple` and `detailed` options, defaulting missing or legacy settings to `simple`.
-- Added the Settings page Run display mode selector and kept ComfyUI rendering behind explicit `Confirm and render` even when legacy auto-review is enabled.
-- Added simple Run mode with the existing command composer controls, compact progress state, explicit generation confirmation, and result display while preserving the detailed timeline workbench.
+- Added the Settings page Run display mode selector and restored auto-review behavior so enabled workflows automatically confirm and render at the ComfyUI generation gate.
+- Added simple Run mode with the existing command composer controls, compact progress state, generation confirmation or auto-review rendering, and result display while preserving the detailed timeline workbench.
 - Reused active timeline workflow autosave for both display modes without adding a second workflow persistence model.
 
 Files changed:
@@ -24,7 +24,7 @@ Files changed:
 
 Validation:
 
-- Focused settings and TimelineShell Vitest runs passed, including explicit confirmation-gate coverage.
+- Focused settings and TimelineShell Vitest runs passed, including manual confirmation and auto-review generation-gate coverage.
 - `npm test` passed with 102 files and 752 tests.
 - `npm run lint` passed with existing unrelated warnings.
 - `npm run typecheck` passed.
