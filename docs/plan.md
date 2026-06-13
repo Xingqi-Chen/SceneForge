@@ -8,7 +8,7 @@ Tracks are planning units. Implementation work must be split into issue-ready ta
 
 ## Immediate Next Step
 
-`T14` is complete and validated with PR `#56` open. It adds simple and detailed Run workflow display modes while preserving the existing active workflow and configurable ComfyUI generation gate behavior.
+`T14` is complete and validated in PR `#56`. It adds simple and detailed Run workflow display modes while preserving the existing active workflow and configurable ComfyUI generation gate behavior.
 
 Choose the next Agent Timeline MVP track or create a new GitHub Issue for the next scoped implementation unit before starting additional code work.
 
