@@ -17,6 +17,7 @@ import {
   upsertCivitaiResourceToSqlite,
   type SceneForgeSqliteDatabase,
 } from "@/features/persistence/sqlite-storage";
+import { rebuildCivitaiSearchIndex } from "@/features/persistence/civitai-search-index";
 
 const mockCompleteChat = vi.hoisted(() => vi.fn());
 
@@ -131,7 +132,23 @@ describe("Civitai AI recommendation route", () => {
     await fs.writeFile(path.join(downloadPath, makeCivitaiResourceTargetFileName(resource)), "downloaded");
   }
 
+  it("returns an actionable error when the Civitai FTS index is missing", async () => {
+    const response = await POST(
+      new Request("http://localhost/api/civitai-lora-library/ai-recommendation", {
+        method: "POST",
+        body: JSON.stringify({ desiredEffect: "cyber neon" }),
+      }),
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(409);
+    expect(payload.error.message).toContain("npm run civitai:reindex");
+    expect(mockCompleteChat).not.toHaveBeenCalled();
+  });
+
   it("returns an error before calling the LLM when no checkpoint exists", async () => {
+    rebuildCivitaiSearchIndex(db);
+
     const response = await POST(
       new Request("http://localhost/api/civitai-lora-library/ai-recommendation", {
         method: "POST",
@@ -151,6 +168,7 @@ describe("Civitai AI recommendation route", () => {
       makeResourceInput("model", "NSFW Checkpoint"),
     ).resource;
     await markDownloaded(checkpoint);
+    rebuildCivitaiSearchIndex(db);
     process.env.LITELLM_NSFW_MODEL = "nsfw-model";
 
     mockCompleteChat.mockResolvedValue({
@@ -190,6 +208,7 @@ describe("Civitai AI recommendation route", () => {
       makeResourceInput("lora", "Not Downloaded"),
     ).resource;
     await Promise.all([markDownloaded(checkpoint), markDownloaded(loraA), markDownloaded(loraB)]);
+    rebuildCivitaiSearchIndex(db);
 
     mockCompleteChat.mockResolvedValue({
       content: JSON.stringify({
@@ -230,6 +249,65 @@ describe("Civitai AI recommendation route", () => {
     );
     expect(JSON.stringify(userContent)).not.toContain("model.safetensors");
     expect(JSON.stringify(userContent)).not.toContain(`${loraA.name}-hash`);
+  });
+
+  it("sends BM25-ranked local candidates to the LLM before recommendation parsing", async () => {
+    const checkpoint = upsertCivitaiResourceToSqlite(
+      db,
+      makeResourceInput("model", "Cyber Neon Checkpoint", {
+        tags: ["cyberpunk", "neon", "cinematic"],
+        usageGuide: "Use for cyberpunk neon rain scenes.",
+      }),
+    ).resource;
+    const exactLora = upsertCivitaiResourceToSqlite(
+      db,
+      makeResourceInput("lora", "Neon Rain Reflections", {
+        trainedWords: ["neon rain reflections"],
+        tags: ["cyberpunk", "neon", "rain"],
+        usageGuide: "Adds cyberpunk neon rain reflections.",
+      }),
+    ).resource;
+    const fallbackLora = upsertCivitaiResourceToSqlite(
+      db,
+      makeResourceInput("lora", "Soft Portrait Utility", {
+        trainedWords: ["soft portrait"],
+        tags: ["portrait", "skin"],
+        usageGuide: "Use for gentle portrait cleanup.",
+      }),
+    ).resource;
+    await Promise.all([markDownloaded(checkpoint), markDownloaded(exactLora), markDownloaded(fallbackLora)]);
+    rebuildCivitaiSearchIndex(db);
+
+    mockCompleteChat.mockResolvedValue({
+      content: JSON.stringify({
+        checkpointId: checkpoint.id,
+        checkpointReason: "Best BM25 checkpoint match.",
+        loras: [{ id: exactLora.id, suggestedWeight: 0.65, reason: "Best BM25 LoRA match." }],
+        recommendationReason: "Selected the first ranked candidates.",
+        overallEffect: "Cyberpunk neon rain reflections.",
+      }),
+      role: "assistant",
+    });
+
+    const response = await POST(
+      new Request("http://localhost/api/civitai-lora-library/ai-recommendation", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ desiredEffect: "cyberpunk neon rain reflections", maxLoras: 3 }),
+      }),
+    );
+    const request = mockCompleteChat.mock.calls[0]?.[0];
+    const userContent = JSON.parse(request.messages[1].content);
+
+    expect(response.status).toBe(200);
+    expect(userContent.loraCandidates.map((candidate: { id: string }) => candidate.id)).toEqual([
+      exactLora.id,
+      fallbackLora.id,
+    ]);
+    expect(userContent.checkpointCandidates.map((candidate: { id: string }) => candidate.id)).toEqual([
+      checkpoint.id,
+    ]);
+    expect(userContent.loraCandidates[0].score).toBeGreaterThan(userContent.loraCandidates[1].score);
   });
 
   it("passes promptProfile through and only sends matching profile candidates to the LLM", async () => {
@@ -274,6 +352,7 @@ describe("Civitai AI recommendation route", () => {
       }),
     ).resource;
     await Promise.all([markDownloaded(animaCheckpoint), markDownloaded(animaLora)]);
+    rebuildCivitaiSearchIndex(db);
 
     mockCompleteChat.mockResolvedValue({
       content: JSON.stringify({
@@ -343,6 +422,7 @@ describe("Civitai AI recommendation route", () => {
       }),
     ).resource;
     await Promise.all([markDownloaded(illustriousCheckpoint), markDownloaded(sdxlCheckpoint)]);
+    rebuildCivitaiSearchIndex(db);
 
     mockCompleteChat.mockResolvedValue({
       content: JSON.stringify({

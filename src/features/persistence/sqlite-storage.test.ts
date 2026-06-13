@@ -11,6 +11,12 @@ import { formatArtistStringForPlatform, parseNovelAiArtistString } from "@/featu
 
 import { stripSharedPromptStateFromProject } from "./project-serialization";
 import {
+  isCivitaiSearchIndexAvailable,
+  rankCivitaiResourceIdsBySearchIndex,
+  rebuildCivitaiSearchIndex,
+  tokenizeCivitaiSearchText,
+} from "./civitai-search-index";
+import {
   deleteProjectFromSqlite,
   getCivitaiResourceDetailFromSqlite,
   getImportedImageDetailFromSqlite,
@@ -260,6 +266,116 @@ describe("sqlite persistence support", () => {
       width: 512,
       height: 512,
     });
+  });
+
+  it("rebuilds a derived Civitai FTS index and ranks resource ids with BM25", () => {
+    const makeResource = (
+      resourceType: "lora" | "model",
+      name: string,
+      overrides: Partial<Parameters<typeof upsertCivitaiResourceToSqlite>[1]> = {},
+    ) => ({
+      resourceType,
+      civitaiModelId: Math.floor(Math.random() * 1000000),
+      civitaiModelVersionId: Math.floor(Math.random() * 1000000),
+      name,
+      versionName: "v1",
+      hash: `${name}-hash`,
+      baseModel: "Illustrious",
+      trainedWords: resourceType === "lora" ? [`${name} trigger`] : [],
+      tags: ["portrait"],
+      description: `${name} description.`,
+      creator: "maker",
+      downloadUrl: "https://civitai.com/download/models/1",
+      filesJson: [],
+      officialImagesJson: [],
+      category: resourceType === "lora" ? "style" : null,
+      categories: resourceType === "lora" ? ["style"] : [],
+      usageGuide: "",
+      recommendations: [],
+      enrichmentStatus: "fallback",
+      enrichmentError: null,
+      nsfw: false,
+      aiNsfwLevel: "unknown",
+      aiNsfwConfidence: null,
+      aiNsfwReason: null,
+      rawVersionJson: null,
+      ...overrides,
+    } satisfies Parameters<typeof upsertCivitaiResourceToSqlite>[1]);
+
+    const cyberCheckpoint = upsertCivitaiResourceToSqlite(
+      db,
+      makeResource("model", "Cyber Neon Checkpoint", {
+        tags: ["cyberpunk", "neon"],
+        usageGuide: "赛博霓虹写实电影感",
+      }),
+    ).resource;
+    const portraitCheckpoint = upsertCivitaiResourceToSqlite(
+      db,
+      makeResource("model", "Soft Portrait Checkpoint", {
+        tags: ["portrait"],
+        usageGuide: "soft portrait",
+      }),
+    ).resource;
+    const neonLora = upsertCivitaiResourceToSqlite(
+      db,
+      makeResource("lora", "Neon Rain LoRA", {
+        tags: ["lighting"],
+        trainedWords: ["neon rain"],
+      }),
+    ).resource;
+    const embedding = upsertCivitaiResourceToSqlite(db, {
+      ...makeResource("lora", "Cyber Textual Embedding", {
+        tags: ["cyberpunk", "neon"],
+        trainedWords: ["cyber embedding"],
+      }),
+      resourceType: "embedding",
+    }).resource;
+    const vae = upsertCivitaiResourceToSqlite(db, {
+      ...makeResource("model", "Cinematic VAE", {
+        tags: ["cinematic", "realistic"],
+      }),
+      resourceType: "vae",
+    }).resource;
+    const before = getCivitaiResourceDetailFromSqlite(db, cyberCheckpoint.id);
+
+    expect(isCivitaiSearchIndexAvailable(db)).toBe(false);
+    expect(tokenizeCivitaiSearchText("赛博霓虹 LoRA")).toEqual(
+      expect.arrayContaining(["赛博", "霓虹", "cyberpunk", "neon", "lora"]),
+    );
+    expect(tokenizeCivitaiSearchText("写实电影灯光")).toEqual(
+      expect.arrayContaining(["写实", "电影", "灯光", "realistic", "cinematic", "lighting"]),
+    );
+    expect(tokenizeCivitaiSearchText("二次元插画触发词")).toEqual(
+      expect.arrayContaining(["二次元", "插画", "触发词", "anime", "illustration", "trigger"]),
+    );
+
+    expect(rebuildCivitaiSearchIndex(db)).toEqual({ indexedCount: 3 });
+    expect(isCivitaiSearchIndexAvailable(db)).toBe(true);
+    expect(getCivitaiResourceDetailFromSqlite(db, cyberCheckpoint.id)).toEqual(before);
+    const indexedRows = db.prepare(`
+      SELECT resource_id, resource_type
+      FROM civitai_resource_search_fts
+      ORDER BY resource_type, resource_id
+    `).all() as Array<{ resource_id: string; resource_type: string }>;
+    expect(indexedRows).toHaveLength(3);
+    expect(indexedRows).toEqual(
+      expect.arrayContaining([
+        { resource_id: neonLora.id, resource_type: "lora" },
+        { resource_id: cyberCheckpoint.id, resource_type: "model" },
+        { resource_id: portraitCheckpoint.id, resource_type: "model" },
+      ]),
+    );
+    expect(indexedRows.map((row) => row.resource_id)).not.toEqual(
+      expect.arrayContaining([embedding.id, vae.id]),
+    );
+
+    const rankedCheckpoints = rankCivitaiResourceIdsBySearchIndex(db, {
+      desiredEffect: "赛博霓虹电影感",
+      resourceIds: [portraitCheckpoint.id, cyberCheckpoint.id, neonLora.id],
+      resourceType: "model",
+    });
+
+    expect(Array.from(rankedCheckpoints.keys())).toEqual([cyberCheckpoint.id]);
   });
 
   it("stores Civitai image resource usages and deduplicates resources", () => {

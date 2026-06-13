@@ -12,6 +12,12 @@ import {
   type SceneForgeSqliteDatabase,
 } from "@/features/persistence/sqlite-storage";
 import {
+  CIVITAI_SEARCH_INDEX_MISSING_MESSAGE,
+  isCivitaiSearchIndexAvailable,
+  rankCivitaiResourceIdsBySearchIndex,
+  tokenizeCivitaiSearchText,
+} from "@/features/persistence/civitai-search-index";
+import {
   formatPromptProfileLabel,
   isPromptProfileId,
   type PromptProfileId,
@@ -215,24 +221,7 @@ function collectKeywordSynonyms(text: string) {
 
 export function tokenizeCivitaiRecommendationQuery(desiredEffect: string) {
   const normalized = normalizeSearchText(desiredEffect);
-  const tokens = new Set<string>();
-  const latinMatches = normalized.match(/[a-z0-9][a-z0-9+._-]*/gi) ?? [];
-  for (const token of latinMatches) {
-    if (token.length >= 2) {
-      tokens.add(token);
-    }
-  }
-
-  const cjkMatches = normalized.match(/[\u3400-\u9fff]{2,}/g) ?? [];
-  for (const token of cjkMatches) {
-    tokens.add(token);
-  }
-
-  for (const token of collectKeywordSynonyms(normalized)) {
-    tokens.add(token);
-  }
-
-  return Array.from(tokens);
+  return Array.from(new Set([...tokenizeCivitaiSearchText(normalized), ...collectKeywordSynonyms(normalized)]));
 }
 
 function scoreText(text: string | null | undefined, tokens: string[], weight: number) {
@@ -344,6 +333,45 @@ export function rankCivitaiRecommendationCandidates(
   return resources.map((resource) => toCandidate(resource, tokens)).sort(byRecommendationRank);
 }
 
+function rankCivitaiRecommendationCandidatesWithFts(
+  db: SceneForgeSqliteDatabase,
+  resources: CivitaiResourceDetail[],
+  resourceType: "model" | "lora",
+  desiredEffect: string,
+): CivitaiRecommendationCandidate[] {
+  const tokens = tokenizeCivitaiRecommendationQuery(desiredEffect);
+  const candidates = resources.map((resource) => toCandidate(resource, tokens));
+  const candidateById = new Map(candidates.map((candidate) => [candidate.resource.id, candidate]));
+  const ftsRanks = rankCivitaiResourceIdsBySearchIndex(db, {
+    desiredEffect,
+    resourceIds: resources.map((resource) => resource.id),
+    resourceType,
+  });
+  const matched = Array.from(ftsRanks.entries())
+    .map(([resourceId, rank]) => {
+      const candidate = candidateById.get(resourceId);
+      return candidate ? { candidate, rank } : null;
+    })
+    .filter((entry): entry is { candidate: CivitaiRecommendationCandidate; rank: number } => Boolean(entry))
+    .sort((left, right) => {
+      if (left.rank !== right.rank) {
+        return left.rank - right.rank;
+      }
+
+      return byRecommendationRank(left.candidate, right.candidate);
+    })
+    .map(({ candidate, rank }) => ({
+      ...candidate,
+      score: Number((-rank).toFixed(4)),
+    }));
+  const matchedIds = new Set(matched.map((candidate) => candidate.resource.id));
+  const unmatched = candidates
+    .filter((candidate) => !matchedIds.has(candidate.resource.id))
+    .sort(byRecommendationRank);
+
+  return [...matched, ...unmatched];
+}
+
 function filterCivitaiRecommendationCandidatesForPromptProfile(
   candidates: CivitaiRecommendationCandidate[],
   promptProfile: PromptProfileId,
@@ -382,13 +410,22 @@ export async function loadCivitaiRecommendationCandidates(
   desiredEffect: string,
   options: { promptProfile?: PromptProfileId } = {},
 ) {
+  if (!isCivitaiSearchIndexAvailable(db)) {
+    throw new CivitaiAiRecommendationError(CIVITAI_SEARCH_INDEX_MISSING_MESSAGE, 409);
+  }
+
   const promptProfile = isPromptProfileId(options.promptProfile) ? options.promptProfile : null;
   const [downloadedCheckpoints, downloadedLoras] = await Promise.all([
     filterDownloadedResourceDetails(db, loadResourceDetails(db, "model")),
     filterDownloadedResourceDetails(db, loadResourceDetails(db, "lora")),
   ]);
-  const rankedCheckpoints = rankCivitaiRecommendationCandidates(downloadedCheckpoints, desiredEffect);
-  const rankedLoras = rankCivitaiRecommendationCandidates(downloadedLoras, desiredEffect);
+  const rankedCheckpoints = rankCivitaiRecommendationCandidatesWithFts(
+    db,
+    downloadedCheckpoints,
+    "model",
+    desiredEffect,
+  );
+  const rankedLoras = rankCivitaiRecommendationCandidatesWithFts(db, downloadedLoras, "lora", desiredEffect);
 
   return {
     checkpoints: (promptProfile
