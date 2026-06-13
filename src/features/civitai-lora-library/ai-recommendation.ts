@@ -41,7 +41,7 @@ import {
 import { isSameCivitaiBaseModel } from "./base-model";
 
 export const CIVITAI_RECOMMENDATION_CHECKPOINT_LIMIT = 8;
-export const CIVITAI_RECOMMENDATION_LORA_LIMIT = 24;
+export const CIVITAI_RECOMMENDATION_LORA_LIMIT = 10;
 export const CIVITAI_RECOMMENDATION_MAX_LORAS = 3;
 
 const DESCRIPTION_SNIPPET_MAX_LENGTH = 800;
