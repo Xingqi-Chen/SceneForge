@@ -8,7 +8,7 @@ Tracks are planning units. Implementation work must be split into issue-ready ta
 
 ## Immediate Next Step
 
-`T14` is complete and validated. It adds simple and detailed Run workflow display modes while preserving the existing active workflow and explicit ComfyUI generation confirmation gate.
+`T14` is complete and validated with PR `#56` open. It adds simple and detailed Run workflow display modes while preserving the existing active workflow and explicit ComfyUI generation confirmation gate.
 
 Choose the next Agent Timeline MVP track or create a new GitHub Issue for the next scoped implementation unit before starting additional code work.
 
@@ -46,7 +46,7 @@ Choose the next Agent Timeline MVP track or create a new GitHub Issue for the ne
 | T11 | #49 | Add workflow project management UI comparable to editor | Agent Timeline MVP | Done | PASS | APPROVE | Depends on T10. Adds timeline workflow project list/open/save/rename/delete affordances comparable to editor project management after durable timeline storage exists. Merged PR #50; Issue #49 closed. |
 | T12 | #51 | Add Timeline Scene input img2img source image support | Agent Timeline MVP | Done | PASS | APPROVE | Adds root Timeline source-image upload, img2img denoise default/editing, forced single-image generation, and shared ComfyUI txt2img workflow support for default/Illustrious plus Anima VAEEncode. Merged PR #52; Issue #51 closed. |
 | T13 | #53 | Add SQLite FTS5 BM25 ranking for Civitai recommendation candidates | Civitai Recommendation | Done | PASS | APPROVE | Replace hand keyword/includes candidate ordering with a rebuildable SQLite FTS5 derived index. BM25 ranks local checkpoint/LoRA candidates before the existing LLM recommendation step. No LanceDB, no API shape change, no automatic full reindex in request handlers, and no settings-page index status in this issue. Depends on existing Civitai SQLite storage and T7/T9 recommendation flow. Merged PR #54; Issue #53 closed. |
-| T14 | #55 | Add simple and detailed Run workflow display modes | Agent Timeline MVP | Done | PASS | APPROVE | Default Run display to simple mode using the existing Scene input command composer content, add a Settings-controlled `simple`/`detailed` workflow display preference, preserve detailed workbench behavior, and reuse active workflow autosave so the same scene/workflow appears in the selected interface. Explicit generation confirmation remains required before ComfyUI execution. |
+| T14 | #55 | Add simple and detailed Run workflow display modes | Agent Timeline MVP | Done | PASS | APPROVE | Default Run display to simple mode using the existing Scene input command composer content, add a Settings-controlled `simple`/`detailed` workflow display preference, preserve detailed workbench behavior, and reuse active workflow autosave so the same scene/workflow appears in the selected interface. Explicit generation confirmation remains required before ComfyUI execution. PR #56. |
 
 ## MVP Timeline Nodes
 
