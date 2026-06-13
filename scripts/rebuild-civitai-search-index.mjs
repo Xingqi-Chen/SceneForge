@@ -3,6 +3,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 const INDEX_TABLE = "civitai_resource_search_fts";
+const SQLITE_ENV_KEY = "SCENEFORGE_SQLITE_FILE";
 
 const DOMAIN_SYNONYM_RULES = [
   { tests: ["赛博", "赛博朋克", "霓虹", "cyber", "neon"], tokens: ["cyberpunk", "neon", "techwear", "futuristic"] },
@@ -18,8 +19,43 @@ const DOMAIN_SYNONYM_RULES = [
   { tests: ["lora", "罗拉", "触发词"], tokens: ["lora", "trigger", "trainedword"] },
 ];
 
+function parseEnvValue(rawValue) {
+  let value = rawValue.trim();
+  const quote = value[0];
+  if ((quote === "\"" || quote === "'") && value.endsWith(quote)) {
+    value = value.slice(1, -1);
+  }
+  return value;
+}
+
+function loadSqliteEnvFromFile(filePath) {
+  if (process.env[SQLITE_ENV_KEY] !== undefined || !fs.existsSync(filePath)) {
+    return;
+  }
+
+  for (const line of fs.readFileSync(filePath, "utf8").split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) {
+      continue;
+    }
+
+    const match = /^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/.exec(trimmed);
+    if (!match || match[1] !== SQLITE_ENV_KEY) {
+      continue;
+    }
+
+    process.env[SQLITE_ENV_KEY] = parseEnvValue(match[2]);
+    return;
+  }
+}
+
+function loadSqliteEnv() {
+  loadSqliteEnvFromFile(path.join(process.cwd(), ".env.local"));
+  loadSqliteEnvFromFile(path.join(process.cwd(), ".env"));
+}
+
 function sqlitePath() {
-  const override = process.env.SCENEFORGE_SQLITE_FILE?.trim();
+  const override = process.env[SQLITE_ENV_KEY]?.trim();
   return path.resolve(override || path.join(process.cwd(), "data", "sceneforge.sqlite"));
 }
 
@@ -126,6 +162,8 @@ function buildSearchText(row) {
 
   return [rawText, ...tokenizeSearchText(rawText)].join(" ");
 }
+
+loadSqliteEnv();
 
 const filePath = sqlitePath();
 fs.mkdirSync(path.dirname(filePath), { recursive: true });

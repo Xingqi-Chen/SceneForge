@@ -34,6 +34,8 @@ Validation:
 - `npm run lint` passed with existing unrelated warnings.
 - `npm test` passed with 748 tests.
 - Review follow-up: `npm test -- --run src/features/persistence/sqlite-storage.test.ts src/app/api/civitai-lora-library/ai-recommendation/route.test.ts` passed with 13 tests after readable Chinese synonym regression coverage; `npm run civitai:reindex` passed again against `data/sceneforge.sqlite`.
+- Review follow-up: `scripts/rebuild-civitai-search-index.mjs` now loads `SCENEFORGE_SQLITE_FILE` from `.env.local` or `.env` without overriding a shell-provided value, and README / `.env.example` document that Civitai imports or metadata changes require manual reindexing.
+- Review follow-up validation: `npm run civitai:reindex` passed against `data/sceneforge.sqlite` with 93 indexed resources; `npm test -- --run src/features/persistence/sqlite-storage.test.ts src/app/api/civitai-lora-library/ai-recommendation/route.test.ts` passed with 14 tests; `npm run typecheck` passed.
 
 ## 2026-06-05
 
