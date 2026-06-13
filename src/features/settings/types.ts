@@ -40,9 +40,14 @@ export const characterTagNewTermDefaultOptions = [
 export type CharacterTagNewTermDefaultOption =
   (typeof characterTagNewTermDefaultOptions)[number];
 
+export const workflowDisplayModeOptions = ["simple", "detailed"] as const;
+
+export type WorkflowDisplayMode = (typeof workflowDisplayModeOptions)[number];
+
 export type SceneForgeWorkflowSettings = {
   characterTagNewTermDefaultOption: CharacterTagNewTermDefaultOption;
   autoReview: boolean;
+  displayMode: WorkflowDisplayMode;
 };
 
 export type SceneForgeUserSettings = {
@@ -55,6 +60,7 @@ export const defaultSceneForgeUserSettings: SceneForgeUserSettings = {
   workflow: {
     characterTagNewTermDefaultOption: "ask",
     autoReview: false,
+    displayMode: "simple",
   },
 };
 

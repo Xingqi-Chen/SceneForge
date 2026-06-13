@@ -4,6 +4,32 @@ This log records dated implementation and documentation work. Keep entries conci
 
 ## 2026-06-13
 
+### T14 / Issue #55 Simple and Detailed Run Display Modes
+
+Summary:
+
+- Added a persisted global workflow display mode setting with `simple` and `detailed` options, defaulting missing or legacy settings to `simple`.
+- Added the Settings page Run display mode selector and kept ComfyUI rendering behind explicit `Confirm and render` even when legacy auto-review is enabled.
+- Added simple Run mode with the existing command composer controls, compact progress state, explicit generation confirmation, and result display while preserving the detailed timeline workbench.
+- Reused active timeline workflow autosave for both display modes without adding a second workflow persistence model.
+
+Files changed:
+
+- `src/features/settings/types.ts`
+- `src/features/settings/central-settings.ts`
+- `src/features/persistence/sqlite-storage.ts`
+- `src/app/settings/page.tsx`
+- `src/features/agent-timeline/components/TimelineShell.tsx`
+- Focused tests for settings, SQLite settings persistence, Settings UI, and TimelineShell.
+
+Validation:
+
+- Focused settings and TimelineShell Vitest runs passed, including explicit confirmation-gate coverage.
+- `npm test` passed with 102 files and 752 tests.
+- `npm run lint` passed with existing unrelated warnings.
+- `npm run typecheck` passed.
+- `npm run build` passed.
+
 ### T13 / Issue #53 Civitai BM25 Recommendation Ranking
 
 Summary:

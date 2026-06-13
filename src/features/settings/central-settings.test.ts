@@ -91,6 +91,7 @@ describe("central settings payload", () => {
       workflow: {
         characterTagNewTermDefaultOption: "temporary",
         autoReview: true,
+        displayMode: "detailed",
       },
     });
     const serialized = JSON.stringify(payload);
@@ -100,6 +101,7 @@ describe("central settings payload", () => {
     expect(payload.workflow).toEqual({
       characterTagNewTermDefaultOption: "temporary",
       autoReview: true,
+      displayMode: "detailed",
     });
     expect(serialized).not.toContain("comfy-secret");
     expect(serialized).not.toContain("civitai-secret");
@@ -148,6 +150,7 @@ describe("central settings payload", () => {
       workflow: {
         characterTagNewTermDefaultOption: "ask",
         autoReview: false,
+        displayMode: "simple",
       },
     });
     sqliteMocks.saveCivitaiLibrarySettingsToSqlite.mockReturnValue(expectedSettings);
@@ -178,6 +181,7 @@ describe("central settings payload", () => {
       workflow: {
         characterTagNewTermDefaultOption: "ask" as const,
         autoReview: false,
+        displayMode: "simple" as const,
       },
     };
     const expectedUserSettings = {
@@ -185,6 +189,7 @@ describe("central settings payload", () => {
       workflow: {
         characterTagNewTermDefaultOption: "import" as const,
         autoReview: true,
+        displayMode: "detailed" as const,
       },
     };
 
@@ -202,6 +207,7 @@ describe("central settings payload", () => {
       workflow: {
         characterTagNewTermDefaultOption: "import",
         autoReview: true,
+        displayMode: "detailed",
       },
     });
 
@@ -214,5 +220,34 @@ describe("central settings payload", () => {
       expect(result.payload.general.nsfw.supportsNsfw).toBe(true);
       expect(result.payload.workflow).toEqual(expectedUserSettings.workflow);
     }
+  });
+
+  it("rejects invalid workflow display mode updates", async () => {
+    const civitaiSettings = createCivitaiSettings();
+    const currentUserSettings = {
+      supportsNsfw: false,
+      workflow: {
+        characterTagNewTermDefaultOption: "ask" as const,
+        autoReview: false,
+        displayMode: "simple" as const,
+      },
+    };
+
+    sqliteMocks.openSceneForgeSqliteDatabase.mockResolvedValue(sqliteMocks.db);
+    sqliteMocks.loadCivitaiLibrarySettingsFromSqlite.mockReturnValue(civitaiSettings);
+    sqliteMocks.loadSceneForgeUserSettingsFromSqlite.mockReturnValue(currentUserSettings);
+
+    const result = await updateCentralSettings({
+      workflow: {
+        displayMode: "expanded" as "simple",
+      },
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      status: 400,
+      message: "Workflow display mode is invalid.",
+    });
+    expect(sqliteMocks.saveSceneForgeUserSettingsToSqlite).not.toHaveBeenCalled();
   });
 });

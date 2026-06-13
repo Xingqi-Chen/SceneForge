@@ -160,6 +160,7 @@ describe("sqlite persistence support", () => {
       workflow: {
         characterTagNewTermDefaultOption: "ask",
         autoReview: false,
+        displayMode: "simple",
       },
     });
 
@@ -169,6 +170,7 @@ describe("sqlite persistence support", () => {
         workflow: {
           characterTagNewTermDefaultOption: "import",
           autoReview: true,
+          displayMode: "detailed",
         },
       }),
     ).toEqual({
@@ -176,6 +178,7 @@ describe("sqlite persistence support", () => {
       workflow: {
         characterTagNewTermDefaultOption: "import",
         autoReview: true,
+        displayMode: "detailed",
       },
     });
     expect(loadSceneForgeUserSettingsFromSqlite(db)).toEqual({
@@ -183,6 +186,7 @@ describe("sqlite persistence support", () => {
       workflow: {
         characterTagNewTermDefaultOption: "import",
         autoReview: true,
+        displayMode: "detailed",
       },
     });
 
@@ -191,6 +195,7 @@ describe("sqlite persistence support", () => {
       workflow: {
         characterTagNewTermDefaultOption: "bad",
         autoReview: "yes",
+        displayMode: "expanded",
       },
     });
     expect(loadSceneForgeUserSettingsFromSqlite(db)).toEqual({
@@ -198,6 +203,7 @@ describe("sqlite persistence support", () => {
       workflow: {
         characterTagNewTermDefaultOption: "ask",
         autoReview: false,
+        displayMode: "simple",
       },
     });
   });

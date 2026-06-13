@@ -40,6 +40,8 @@ import {
   defaultSceneForgeUserSettings,
   type CharacterTagNewTermDefaultOption,
   type SceneForgeUserSettings,
+  type WorkflowDisplayMode,
+  workflowDisplayModeOptions,
 } from "@/features/settings/types";
 import type { ProjectSummary, PromptBindingState, SceneForgeProject } from "@/shared/types";
 
@@ -523,6 +525,12 @@ function sanitizeSceneForgeUserSettingsPayload(payload: unknown): SceneForgeUser
     characterTagNewTermDefaultOptions.includes(rawCharacterTagDefault as CharacterTagNewTermDefaultOption)
       ? (rawCharacterTagDefault as CharacterTagNewTermDefaultOption)
       : defaultSceneForgeUserSettings.workflow.characterTagNewTermDefaultOption;
+  const rawDisplayMode = workflowRecord.displayMode;
+  const displayMode: WorkflowDisplayMode =
+    typeof rawDisplayMode === "string" &&
+    workflowDisplayModeOptions.includes(rawDisplayMode as WorkflowDisplayMode)
+      ? (rawDisplayMode as WorkflowDisplayMode)
+      : defaultSceneForgeUserSettings.workflow.displayMode;
 
   return {
     supportsNsfw:
@@ -535,6 +543,7 @@ function sanitizeSceneForgeUserSettingsPayload(payload: unknown): SceneForgeUser
         typeof workflowRecord.autoReview === "boolean"
           ? workflowRecord.autoReview
           : defaultSceneForgeUserSettings.workflow.autoReview,
+      displayMode,
     },
   };
 }

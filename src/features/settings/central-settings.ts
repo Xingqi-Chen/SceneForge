@@ -17,6 +17,7 @@ import type {
   CentralSettingsPayload,
   CentralSettingsUpdatePayload,
   SceneForgeUserSettings,
+  WorkflowDisplayMode,
   SettingsIntegrationStatus,
   SettingsPathStatus,
   SettingsState,
@@ -24,6 +25,7 @@ import type {
 import {
   characterTagNewTermDefaultOptions,
   defaultSceneForgeUserSettings,
+  workflowDisplayModeOptions,
 } from "./types";
 
 const DEFAULT_COMFYUI_BASE_URL = "http://127.0.0.1:8188";
@@ -317,6 +319,7 @@ function validateWorkflowUpdate(
   }
 
   let characterTagNewTermDefaultOption = current.workflow.characterTagNewTermDefaultOption;
+  let displayMode = current.workflow.displayMode;
   if (update.characterTagNewTermDefaultOption !== undefined) {
     if (
       !characterTagNewTermDefaultOptions.includes(
@@ -333,6 +336,18 @@ function validateWorkflowUpdate(
     characterTagNewTermDefaultOption = update.characterTagNewTermDefaultOption;
   }
 
+  if (update.displayMode !== undefined) {
+    if (!workflowDisplayModeOptions.includes(update.displayMode as WorkflowDisplayMode)) {
+      return {
+        ok: false,
+        status: 400,
+        message: "Workflow display mode is invalid.",
+      };
+    }
+
+    displayMode = update.displayMode;
+  }
+
   return {
     ...current,
     workflow: {
@@ -341,6 +356,7 @@ function validateWorkflowUpdate(
         typeof update.autoReview === "boolean"
           ? update.autoReview
           : current.workflow.autoReview,
+      displayMode,
     },
   };
 }

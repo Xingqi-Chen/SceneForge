@@ -7,6 +7,7 @@ import {
   Database,
   EyeOff,
   FolderCog,
+  LayoutDashboard,
   Loader2,
   PlayCircle,
   RefreshCw,
@@ -27,6 +28,7 @@ import type {
   SettingsIntegrationStatus,
   SettingsPathStatus,
   SettingsState,
+  WorkflowDisplayMode,
 } from "@/features/settings/types";
 
 type LoadStatus = "idle" | "loading" | "success" | "error";
@@ -85,6 +87,23 @@ const CHARACTER_TAG_DEFAULT_OPTIONS: Array<{
     value: "ask",
     label: "Ask every time",
     description: "Open the review dialog whenever new character tags are detected.",
+  },
+];
+
+const WORKFLOW_DISPLAY_MODE_OPTIONS: Array<{
+  value: WorkflowDisplayMode;
+  label: string;
+  description: string;
+}> = [
+  {
+    value: "simple",
+    label: "Simple",
+    description: "Use the compact Run composer, progress bar, confirmation gate, and result view.",
+  },
+  {
+    value: "detailed",
+    label: "Detailed",
+    description: "Use the full timeline workbench with node navigation, inspector, and editable outputs.",
   },
 ];
 
@@ -404,7 +423,7 @@ export default function SettingsPage() {
                   title="Workflow Defaults"
                 />
 
-                <div className="mt-4 grid gap-3 xl:grid-cols-3">
+                <div className="mt-4 grid gap-3 xl:grid-cols-4">
                   {settings.general.nsfw.enabled ? (
                     <div className="flex min-h-44 flex-col justify-between rounded-md border border-slate-200 bg-slate-50 p-4">
                       <div className="flex items-start gap-3">
@@ -481,6 +500,45 @@ export default function SettingsPage() {
                     </p>
                   </label>
 
+                  <label className="flex min-h-44 flex-col rounded-md border border-slate-200 bg-slate-50 p-4 text-xs font-semibold text-slate-700">
+                    <span className="flex items-start gap-3">
+                      <span className="flex size-9 shrink-0 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-600">
+                        <LayoutDashboard className="size-4" />
+                      </span>
+                      <span className="min-w-0">
+                        <span className="block text-sm font-bold text-slate-900">Run display mode</span>
+                        <span className="mt-1 block text-xs font-normal leading-relaxed text-slate-500">
+                          Choose between the compact Run flow and the full timeline workbench.
+                        </span>
+                      </span>
+                    </span>
+                    <select
+                      className="mt-4 h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm font-normal text-slate-800 outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 disabled:opacity-60"
+                      disabled={userSettingsSaveStatus === "loading"}
+                      onChange={(event) =>
+                        void saveUserSettings({
+                          workflow: {
+                            displayMode: event.target.value as WorkflowDisplayMode,
+                          },
+                        })
+                      }
+                      value={settings.workflow.displayMode}
+                    >
+                      {WORKFLOW_DISPLAY_MODE_OPTIONS.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                    <p className="mt-3 text-[11px] font-normal leading-relaxed text-slate-500">
+                      {
+                        WORKFLOW_DISPLAY_MODE_OPTIONS.find(
+                          (option) => option.value === settings.workflow.displayMode,
+                        )?.description
+                      }
+                    </p>
+                  </label>
+
                   <label className="flex min-h-44 cursor-pointer flex-col justify-between rounded-md border border-slate-200 bg-slate-50 p-4 text-xs transition hover:border-slate-300">
                     <span className="flex items-start gap-3">
                       <span className="flex size-9 shrink-0 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-600">
@@ -489,7 +547,7 @@ export default function SettingsPage() {
                       <span className="min-w-0">
                         <span className="block text-sm font-bold text-slate-900">Auto review</span>
                         <span className="mt-1 block text-xs leading-relaxed text-slate-500">
-                          Automatically run Confirm and render when T9 reaches the confirmation gate.
+                          Keep review defaults for workflow runs. ComfyUI still requires explicit Confirm and render.
                         </span>
                       </span>
                     </span>
