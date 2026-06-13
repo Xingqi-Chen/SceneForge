@@ -130,6 +130,8 @@ import {
   type CharacterTagNewTermDefaultOption,
   type CentralSettingsPayload,
   type SceneForgeWorkflowSettings,
+  type WorkflowDisplayMode,
+  workflowDisplayModeOptions,
 } from "@/features/settings/types";
 import { cn } from "@/shared/utils/cn";
 import {
@@ -749,6 +751,91 @@ function getStepTone(status: TimelineNodeStatus) {
   }
 
   return "border-slate-200 bg-white text-slate-500";
+}
+
+function normalizeWorkflowDisplayMode(value: unknown): WorkflowDisplayMode {
+  return typeof value === "string" && workflowDisplayModeOptions.includes(value as WorkflowDisplayMode)
+    ? (value as WorkflowDisplayMode)
+    : defaultSceneForgeUserSettings.workflow.displayMode;
+}
+
+function normalizeTimelineWorkflowSettings(value: unknown): SceneForgeWorkflowSettings {
+  const record = isRecord(value) ? value : {};
+  const defaultWorkflowSettings = defaultSceneForgeUserSettings.workflow;
+
+  return {
+    characterTagNewTermDefaultOption:
+      typeof record.characterTagNewTermDefaultOption === "string"
+        ? (record.characterTagNewTermDefaultOption as CharacterTagNewTermDefaultOption)
+        : defaultWorkflowSettings.characterTagNewTermDefaultOption,
+    autoReview: typeof record.autoReview === "boolean" ? record.autoReview : defaultWorkflowSettings.autoReview,
+    displayMode: normalizeWorkflowDisplayMode(record.displayMode),
+  };
+}
+
+function getSimpleTimelineProgress(workflow: TimelineWorkflowState | null) {
+  if (!workflow) {
+    return {
+      currentTask: "Waiting for a scene command.",
+      percent: 0,
+    };
+  }
+
+  const completedCount = timelineNodeIds.filter((nodeId) => {
+    const status = workflow.nodes[nodeId].status;
+
+    return status === "done" || status === "manual";
+  }).length;
+  const runningNodeId = timelineNodeIds.find((nodeId) => workflow.nodes[nodeId].status === "running");
+  const errorNodeId = timelineNodeIds.find((nodeId) => workflow.nodes[nodeId].status === "error");
+  const confirmationNode = workflow.nodes["generation-gate"];
+  const confirmationRequired =
+    confirmationNode.status === "blocked" && confirmationNode.error?.code === "confirmation_required";
+  const nextNodeId = runningNodeId ??
+    errorNodeId ??
+    (confirmationRequired ? "generation-gate" : undefined) ??
+    timelineNodeIds.find((nodeId) => {
+      const status = workflow.nodes[nodeId].status;
+
+      return status !== "done" && status !== "manual";
+    }) ??
+    "result-display";
+  const nextNode = workflow.nodes[nextNodeId];
+  const content = timelineNodeContent[nextNodeId];
+  const progress = Math.round((completedCount / timelineNodeIds.length) * 100);
+
+  if (workflow.nodes["result-display"].status === "done") {
+    return {
+      currentTask: "Generated result ready.",
+      percent: 100,
+    };
+  }
+
+  if (runningNodeId) {
+    return {
+      currentTask: `${content.title} is running.`,
+      percent: Math.min(98, Math.round(((completedCount + 0.5) / timelineNodeIds.length) * 100)),
+    };
+  }
+
+  if (confirmationRequired) {
+    return {
+      currentTask: "Review the render request before ComfyUI execution.",
+      percent: progress,
+    };
+  }
+
+  if (errorNodeId) {
+    return {
+      currentTask: nextNode.error?.message ?? `${content.title} needs attention.`,
+      percent: progress,
+    };
+  }
+
+  return {
+    currentTask: `${content.title} is ${getCompactStatusLabel(nextNode.status).toLowerCase()}.`,
+    percent: progress,
+  };
 }
 
 function formatTime(value: string) {
@@ -1464,7 +1551,7 @@ export function TimelineShell() {
           return;
         }
 
-        setTimelineSettings(payload.workflow);
+        setTimelineSettings(normalizeTimelineWorkflowSettings(payload.workflow));
         useEditorStore.getState().updateProjectSettings({
           supportsNsfw: payload.general.nsfw.supportsNsfw,
         });
@@ -2583,6 +2670,316 @@ export function TimelineShell() {
     setEditingNodeId(null);
   }
 
+  function renderPromptTagReviewDialog() {
+    return pendingPromptTagReview ? (
+      <PromptTagImportReviewDialog
+        getSuggestionTargetLabel={getTimelinePromptTagTargetLabel}
+        isSaving={isSavingPromptTagReview}
+        onApply={handleApplyPromptTagReview}
+        onCancel={handleCancelPromptTagReview}
+        review={pendingPromptTagReview.review}
+        title="导入新的部位提示词"
+      />
+    ) : null;
+  }
+
+  function renderSceneComposer(className = "rounded-md border border-slate-200 bg-slate-50") {
+    return (
+      <form className={className} id="scene-composer-form" onSubmit={handleSubmit}>
+        <div className="border-b border-slate-200 px-3 py-2">
+          <label className="text-[11px] font-semibold uppercase tracking-wide text-slate-500" htmlFor="scene-request">
+            Command composer
+          </label>
+        </div>
+        <div className="flex flex-wrap items-center gap-2 border-b border-slate-200 bg-white px-3 py-2">
+          <label
+            className="text-[11px] font-semibold uppercase tracking-wide text-slate-500"
+            htmlFor="prompt-profile"
+          >
+            Prompt profile
+          </label>
+          <select
+            className="h-8 rounded-md border border-slate-200 bg-white px-2 text-xs text-slate-800 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+            disabled={isRunning}
+            id="prompt-profile"
+            onChange={(event) => handlePromptProfileChange(event.target.value)}
+            value={selectedPromptProfile}
+          >
+            {promptProfileIds.map((profile) => (
+              <option key={profile} value={profile}>
+                {formatPromptProfileLabel(profile)}
+              </option>
+            ))}
+          </select>
+          <label
+            className="ml-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500"
+            htmlFor="timeline-image-count"
+          >
+            Images
+          </label>
+          <select
+            className="h-8 rounded-md border border-slate-200 bg-white px-2 text-xs text-slate-800 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+            disabled={isRunning || Boolean(selectedSourceImage)}
+            id="timeline-image-count"
+            onChange={(event) => handleImageCountChange(event.target.value)}
+            value={selectedSourceImage ? 1 : selectedImageCount}
+          >
+            {timelineImageCountOptions.map((count) => (
+              <option key={count} value={count}>
+                {count}
+              </option>
+            ))}
+          </select>
+          <input
+            accept="image/png,image/jpeg,image/webp"
+            className="sr-only"
+            onChange={handleSourceImageChange}
+            ref={sourceImageInputRef}
+            type="file"
+          />
+          <Button
+            className="ml-2 h-8 px-2 text-xs shadow-none"
+            disabled={isRunning}
+            onClick={() => sourceImageInputRef.current?.click()}
+            type="button"
+            variant="secondary"
+          >
+            <ImageIcon className="size-3.5" />
+            Upload source
+          </Button>
+        </div>
+        <textarea
+          className="min-h-28 w-full resize-none border-0 bg-white px-3 py-3 text-sm leading-relaxed text-slate-900 outline-none placeholder:text-slate-400"
+          id="scene-request"
+          onChange={(event) => setSceneRequest(event.target.value)}
+          placeholder="Describe the scene, characters, mood, camera, and constraints..."
+          value={sceneRequest}
+        />
+        {selectedSourceImage ? (
+          <div className="flex flex-wrap items-center gap-3 border-t border-slate-200 bg-white px-3 py-2">
+            <Image
+              alt="Uploaded img2img source"
+              className="size-16 rounded-md border border-slate-200 object-cover"
+              height={64}
+              src={selectedSourceImage.dataUrl}
+              unoptimized
+              width={64}
+            />
+            <div className="min-w-0 flex-1 text-xs leading-relaxed text-slate-600">
+              <p className="truncate font-medium text-slate-800">{selectedSourceImage.filename}</p>
+              <p>
+                {selectedSourceImage.width}x{selectedSourceImage.height} source image. Img2img uses one
+                output.
+              </p>
+              <label className="mt-2 flex max-w-48 flex-col gap-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                Denoise
+                <input
+                  className="h-8 rounded-md border border-slate-200 bg-white px-2 text-xs font-normal normal-case tracking-normal text-slate-800 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+                  disabled={isRunning}
+                  max={1}
+                  min={0}
+                  onChange={(event) => handleSourceDenoiseChange(event.target.value)}
+                  onBlur={(event) => commitSourceDenoise(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.currentTarget.blur();
+                    }
+                  }}
+                  step={0.05}
+                  type="number"
+                  value={selectedSourceDenoise}
+                />
+              </label>
+            </div>
+            <Button
+              className="h-8 px-2 text-xs shadow-none"
+              disabled={isRunning}
+              onClick={() => commitSceneInputSourceImage(null)}
+              type="button"
+              variant="secondary"
+            >
+              Remove
+            </Button>
+          </div>
+        ) : null}
+        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-200 px-3 py-2">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <Button
+              className="h-7 px-2 text-[11px] shadow-none"
+              disabled={isRunning || !sceneInputAiSource}
+              onClick={() => void handleSceneInputAi("rewrite")}
+              type="button"
+              variant="secondary"
+            >
+              Rewrite
+            </Button>
+            <Button
+              className="h-7 px-2 text-[11px] shadow-none"
+              disabled={isRunning}
+              onClick={() => void handleSceneInputAi("suggest")}
+              type="button"
+              variant="secondary"
+            >
+              Suggest
+            </Button>
+            <Button className="h-7 px-2 text-[11px] shadow-none" disabled type="button" variant="secondary">
+              <LockKeyhole className="size-3" />
+              Lock
+            </Button>
+          </div>
+          <Button className="h-8 px-3 text-xs shadow-none" disabled={!sceneRequestIsUsable || isRunning} type="submit">
+            <Play className="size-3.5" />
+            Start workflow
+          </Button>
+        </div>
+      </form>
+    );
+  }
+
+  if (timelineSettings.displayMode === "simple") {
+    const simpleProgress = getSimpleTimelineProgress(workflow);
+    const simpleNotice = notices["generation-gate"] ?? notices["scene-input"] ?? notices[selectedNodeId];
+    const resultNode = activeWorkflow.nodes["result-display"];
+
+    return (
+      <main className="sf-app-shell flex min-h-0 flex-col overflow-hidden bg-slate-100 font-sans text-slate-950 selection:bg-blue-100 selection:text-blue-900">
+        <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-slate-200 bg-white px-4">
+          <div className="flex min-w-0 flex-1 items-center gap-3">
+            <div className="flex size-8 shrink-0 items-center justify-center rounded-md border border-slate-200 bg-slate-50 text-slate-700">
+              <Workflow className="size-4" />
+            </div>
+            <div className="min-w-0">
+              <h1 className="text-sm font-bold text-slate-900">SceneForge</h1>
+              <p className="truncate text-[11px] text-slate-500">{workflowTitle}</p>
+            </div>
+          </div>
+
+          <div className="flex shrink-0 items-center gap-2">
+            <TimelineWorkflowProjectMenu
+              currentProjectId={workflowProjectId}
+              currentProjectName={workflowProjectName}
+              disabled={isRunning}
+              getCurrentRecordInput={getCurrentTimelineWorkflowRecordInput}
+              onDeleteCurrentProject={handleCurrentNamedWorkflowDeleted}
+              onRecordOpened={handleNamedWorkflowOpened}
+              onRecordSaved={handleNamedWorkflowSaved}
+            />
+            <span
+              className={cn(
+                "hidden h-7 w-28 items-center justify-center truncate rounded-md border px-2 text-[11px] font-medium md:inline-flex",
+                autosaveStatus === "idle"
+                  ? "invisible border-transparent bg-transparent text-transparent"
+                  : autosaveStatus === "error"
+                    ? "border-rose-200 bg-rose-50 text-rose-700"
+                    : autosaveStatus === "loading"
+                      ? "border-blue-200 bg-blue-50 text-blue-700"
+                      : "border-emerald-200 bg-emerald-50 text-emerald-700",
+              )}
+              title={autosaveMessage || autosaveLabel}
+            >
+              {autosaveLabel || "Autosaved"}
+            </span>
+            <Button className="h-9 px-3 text-xs shadow-none" onClick={handleNewScene} type="button" variant="secondary">
+              New scene
+            </Button>
+            <Link aria-label="Open settings" className={settingsLinkClassName} href="/settings" title="Open settings">
+              <Settings className="size-3.5" />
+              Settings
+            </Link>
+          </div>
+        </header>
+
+        <section className="custom-scrollbar touch-scroll-region min-h-0 flex-1 overflow-y-auto p-4">
+          <div className="mx-auto flex w-full max-w-4xl flex-col gap-4">
+            {renderSceneComposer("rounded-md border border-slate-200 bg-slate-50 shadow-sm")}
+
+            {workflow ? (
+              <section className="rounded-md border border-slate-200 bg-white p-4 shadow-sm">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <h2 className="text-sm font-bold text-slate-900">Workflow progress</h2>
+                    <p className="mt-1 text-xs leading-relaxed text-slate-500">{simpleProgress.currentTask}</p>
+                  </div>
+                  <span className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] font-semibold text-slate-600">
+                    {simpleProgress.percent}%
+                  </span>
+                </div>
+                <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-100">
+                  <div
+                    aria-label="Workflow progress"
+                    aria-valuemax={100}
+                    aria-valuemin={0}
+                    aria-valuenow={simpleProgress.percent}
+                    className="h-full rounded-full bg-blue-600 transition-all"
+                    role="progressbar"
+                    style={{ width: `${simpleProgress.percent}%` }}
+                  />
+                </div>
+                <div className="mt-3 grid gap-2 text-xs sm:grid-cols-3">
+                  <div className="rounded-md border border-slate-200 bg-slate-50 p-2">
+                    <span className="font-semibold text-slate-700">Scene</span>
+                    <p className="mt-1 line-clamp-2 text-slate-500">{sceneRequest}</p>
+                  </div>
+                  <div className="rounded-md border border-slate-200 bg-slate-50 p-2">
+                    <span className="font-semibold text-slate-700">Current task</span>
+                    <p className="mt-1 text-slate-500">{simpleProgress.currentTask}</p>
+                  </div>
+                  <div className="rounded-md border border-slate-200 bg-slate-50 p-2">
+                    <span className="font-semibold text-slate-700">Result</span>
+                    <p className="mt-1 text-slate-500">
+                      {resultNode.status === "done" ? "Ready" : getCompactStatusLabel(resultNode.status)}
+                    </p>
+                  </div>
+                </div>
+              </section>
+            ) : null}
+
+            {generationCanBeConfirmed ? (
+              <section className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-amber-200 bg-amber-50 p-4 text-xs leading-relaxed text-amber-800 shadow-sm">
+                <div className="flex min-w-0 gap-2">
+                  <LockKeyhole className="mt-0.5 size-4 shrink-0" />
+                  <p>Review is complete. Confirm before SceneForge queues ComfyUI for rendering.</p>
+                </div>
+                <Button
+                  className="h-9 shrink-0 px-3 text-xs shadow-none"
+                  disabled={isRunning}
+                  onClick={handleConfirmGeneration}
+                  type="button"
+                >
+                  <Play className="size-3.5" />
+                  Confirm and render
+                </Button>
+              </section>
+            ) : null}
+
+            {simpleNotice ? (
+              <section className="flex gap-2 rounded-md border border-blue-200 bg-blue-50 p-3 text-xs leading-relaxed text-blue-700">
+                <Bot className="mt-0.5 size-4 shrink-0" />
+                <p>{simpleNotice}</p>
+              </section>
+            ) : null}
+
+            {workflow && (resultNode.status === "done" || resultNode.status === "error") ? (
+              <section className="rounded-md border border-slate-200 bg-white p-4 shadow-sm">
+                <h2 className="text-sm font-bold text-slate-900">Artifact result</h2>
+                <div className="mt-3">
+                  <TimelineResultDisplayWorkspace
+                    emptyState={timelineNodeContent["result-display"].emptyState}
+                    key={resultNode.updatedAt}
+                    node={resultNode}
+                    workflow={activeWorkflow}
+                  />
+                </div>
+              </section>
+            ) : null}
+          </div>
+        </section>
+
+        {renderPromptTagReviewDialog()}
+      </main>
+    );
+  }
+
   return (
     <main className="sf-app-shell flex min-h-0 flex-col overflow-hidden bg-slate-100 font-sans text-slate-950 selection:bg-blue-100 selection:text-blue-900">
       <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-slate-200 bg-white px-4">
@@ -3206,16 +3603,7 @@ export function TimelineShell() {
         </aside>
       </div>
 
-      {pendingPromptTagReview ? (
-        <PromptTagImportReviewDialog
-          getSuggestionTargetLabel={getTimelinePromptTagTargetLabel}
-          isSaving={isSavingPromptTagReview}
-          onApply={handleApplyPromptTagReview}
-          onCancel={handleCancelPromptTagReview}
-          review={pendingPromptTagReview.review}
-          title="导入新的部位提示词"
-        />
-      ) : null}
+      {renderPromptTagReviewDialog()}
     </main>
   );
 }

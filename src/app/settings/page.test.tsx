@@ -57,6 +57,7 @@ function createSettingsPayload(paths: CentralSettingsPayload["civitai"]["paths"]
     workflow: {
       characterTagNewTermDefaultOption: "ask",
       autoReview: false,
+      displayMode: "simple",
     },
     storage: {
       paths: [
@@ -290,13 +291,23 @@ describe("SettingsPage", () => {
       workflow: {
         characterTagNewTermDefaultOption: "import",
         autoReview: false,
+        displayMode: "simple",
       },
     };
     const savedWorkflowPayload: CentralSettingsPayload = {
       ...savedTagDefaultPayload,
       workflow: {
         characterTagNewTermDefaultOption: "import",
+        autoReview: false,
+        displayMode: "detailed",
+      },
+    };
+    const savedAutoReviewPayload: CentralSettingsPayload = {
+      ...savedWorkflowPayload,
+      workflow: {
+        characterTagNewTermDefaultOption: "import",
         autoReview: true,
+        displayMode: "detailed",
       },
     };
 
@@ -306,6 +317,7 @@ describe("SettingsPage", () => {
       .mockResolvedValueOnce(jsonResponse(savedNsfwPayload))
       .mockResolvedValueOnce(jsonResponse(savedTagDefaultPayload))
       .mockResolvedValueOnce(jsonResponse(savedWorkflowPayload))
+      .mockResolvedValueOnce(jsonResponse(savedAutoReviewPayload))
 
     act(() => {
       root.render(<SettingsPage />);
@@ -364,6 +376,29 @@ describe("SettingsPage", () => {
         body: JSON.stringify({
           workflow: {
             characterTagNewTermDefaultOption: "import",
+          },
+        }),
+      }),
+    );
+
+    const displayModeSelect = Array.from(container.querySelectorAll("select")).find(
+      (candidate) => Array.from(candidate.options).some((option) => option.value === "detailed"),
+    ) as HTMLSelectElement | undefined;
+    expect(displayModeSelect).toBeDefined();
+    await act(async () => {
+      const valueSetter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")?.set;
+      valueSetter?.call(displayModeSelect, "detailed");
+      displayModeSelect?.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await flushPromises();
+
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      "/api/settings",
+      expect.objectContaining({
+        method: "PUT",
+        body: JSON.stringify({
+          workflow: {
+            displayMode: "detailed",
           },
         }),
       }),

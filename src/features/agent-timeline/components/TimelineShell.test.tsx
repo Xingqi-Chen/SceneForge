@@ -13,6 +13,7 @@ import {
   type TimelineWorkflowState,
 } from "@/features/agent-timeline";
 import type { PromptTag } from "@/shared/types";
+import type { CentralSettingsPayload } from "@/features/settings/types";
 
 const savePromptLibraryMock = vi.hoisted(() =>
   vi.fn((state: unknown) => {
@@ -440,6 +441,7 @@ function createTimelineSettingsResponse(overrides: Partial<{
   supportsNsfw: boolean;
   characterTagNewTermDefaultOption: "existing-only" | "temporary" | "import" | "ask";
   autoReview: boolean;
+  displayMode: "simple" | "detailed";
 }> = {}) {
   return createJsonResponse({
     general: {
@@ -453,6 +455,7 @@ function createTimelineSettingsResponse(overrides: Partial<{
     workflow: {
       characterTagNewTermDefaultOption: overrides.characterTagNewTermDefaultOption ?? "ask",
       autoReview: overrides.autoReview ?? false,
+      displayMode: overrides.displayMode ?? "detailed",
     },
     storage: { paths: [] },
     civitai: {
@@ -1423,70 +1426,198 @@ describe("TimelineShell", () => {
     }
   });
 
-  it("starts with the workbench, workflow steps, scene composer, and disabled run actions for blank input", () => {
-    act(() => {
-      root.render(<TimelineShell />);
+  it("starts in detailed mode with the workbench, workflow steps, scene composer, and disabled run actions for blank input", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mockT5Fetch();
+
+    try {
+      act(() => {
+        root.render(<TimelineShell />);
+      });
+      await flushAsyncWork();
+
+      const sceneInput = container.querySelector("#scene-request") as HTMLTextAreaElement | null;
+      const promptProfile = container.querySelector("#prompt-profile") as HTMLSelectElement | null;
+      const imageCount = container.querySelector("#timeline-image-count") as HTMLSelectElement | null;
+      const startButton = getButtonByText("Start workflow");
+      const settingsLink = container.querySelector('a[href="/settings"]');
+
+      expect(sceneInput).not.toBeNull();
+      expect(promptProfile?.value).toBe("illustrious");
+      expect(imageCount?.value).toBe("1");
+      expect(Array.from(imageCount?.options ?? []).map((option) => option.value)).toEqual([
+        "1",
+        "2",
+        "3",
+        "4",
+      ]);
+      expect(Array.from(promptProfile?.options ?? []).map((option) => option.value)).toEqual([
+        "illustrious",
+        "anima",
+        "generic",
+      ]);
+      expect(startButton.disabled).toBe(true);
+      expect(settingsLink?.textContent).toContain("Settings");
+      expect(getWorkflowStepTitles()).toEqual(nodeTitles);
+      expect(container.textContent?.match(/Parallel/g)?.length ?? 0).toBeGreaterThanOrEqual(2);
+      expect(container.textContent).toContain("Inspector");
+      expect(container.textContent).toContain("Agent activity");
+      expect(container.textContent).toContain("Tool calls");
+      expect(container.textContent).toContain("Generated artifacts");
+
+      const workbench = container.querySelector(".sf-agent-workbench");
+      const nav = container.querySelector(".sf-agent-workbench__nav");
+      const main = container.querySelector(".sf-agent-workbench__main");
+      const inspector = container.querySelector(".sf-agent-workbench__inspector");
+      const middleWorkspace = main?.querySelector(".mx-auto");
+      const selectedStepCard = main?.querySelector("article");
+
+      expect(workbench?.className).toContain("lg:flex-row");
+      expect(nav?.className).toContain("order-2");
+      expect(nav?.className).toContain("lg:order-1");
+      expect(main?.className).toContain("order-1");
+      expect(main?.className).toContain("lg:order-2");
+      expect(middleWorkspace?.className).toContain("max-w-7xl");
+      expect(selectedStepCard?.className).toContain("min-h-[50rem]");
+      expect(inspector?.className).toContain("order-3");
+
+      const form = container.querySelector("form");
+      expect(form).not.toBeNull();
+
+      act(() => {
+        form?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+      });
+
+      expect(container.textContent).toContain("Waiting for scene command.");
+
+      act(() => {
+        setNativeTextAreaValue(sceneInput as HTMLTextAreaElement, "   ");
+      });
+
+      expect(getButtonByText("Start workflow").disabled).toBe(true);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("defaults legacy settings to simple mode and auto-renders when auto review is enabled", async () => {
+    const originalFetch = globalThis.fetch;
+    const t5FetchMock = mockT5Fetch();
+    const confirmPayloads: TimelineWorkflowState[] = [];
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = getFetchUrl(input);
+
+      if (url === "/api/settings") {
+        const response = await createTimelineSettingsResponse({
+          characterTagNewTermDefaultOption: "temporary",
+          displayMode: "simple",
+        }).json() as CentralSettingsPayload;
+
+        return createJsonResponse({
+          ...response,
+          workflow: {
+            characterTagNewTermDefaultOption: "temporary",
+            autoReview: true,
+          },
+        });
+      }
+
+      if (url === "/api/agent-timeline/confirm-generation") {
+        const payload = typeof init?.body === "string" ? JSON.parse(init.body) : {};
+        confirmPayloads.push(payload.workflow as TimelineWorkflowState);
+
+        return createJsonResponse({
+          workflow: createConfirmedGenerationWorkflow(payload.workflow as TimelineWorkflowState),
+        });
+      }
+
+      return t5FetchMock(input, init);
     });
 
-    const sceneInput = container.querySelector("#scene-request") as HTMLTextAreaElement | null;
-    const promptProfile = container.querySelector("#prompt-profile") as HTMLSelectElement | null;
-    const imageCount = container.querySelector("#timeline-image-count") as HTMLSelectElement | null;
-    const startButton = getButtonByText("Start workflow");
-    const settingsLink = container.querySelector('a[href="/settings"]');
+    globalThis.fetch = fetchMock;
 
-    expect(sceneInput).not.toBeNull();
-    expect(promptProfile?.value).toBe("illustrious");
-    expect(imageCount?.value).toBe("1");
-    expect(Array.from(imageCount?.options ?? []).map((option) => option.value)).toEqual([
-      "1",
-      "2",
-      "3",
-      "4",
-    ]);
-    expect(Array.from(promptProfile?.options ?? []).map((option) => option.value)).toEqual([
-      "illustrious",
-      "anima",
-      "generic",
-    ]);
-    expect(startButton.disabled).toBe(true);
-    expect(settingsLink?.textContent).toContain("Settings");
-    expect(getWorkflowStepTitles()).toEqual(nodeTitles);
-    expect(container.textContent?.match(/Parallel/g)?.length ?? 0).toBeGreaterThanOrEqual(2);
-    expect(container.textContent).toContain("Inspector");
-    expect(container.textContent).toContain("Agent activity");
-    expect(container.textContent).toContain("Tool calls");
-    expect(container.textContent).toContain("Generated artifacts");
+    try {
+      act(() => {
+        root.render(<TimelineShell />);
+      });
+      await flushAsyncWork();
 
-    const workbench = container.querySelector(".sf-agent-workbench");
-    const nav = container.querySelector(".sf-agent-workbench__nav");
-    const main = container.querySelector(".sf-agent-workbench__main");
-    const inspector = container.querySelector(".sf-agent-workbench__inspector");
-    const middleWorkspace = main?.querySelector(".mx-auto");
-    const selectedStepCard = main?.querySelector("article");
+      expect(container.querySelector("#scene-request")).not.toBeNull();
+      expect(container.querySelector("#prompt-profile")).not.toBeNull();
+      expect(container.querySelector("#timeline-image-count")).not.toBeNull();
+      expect(getButtonByText("Start workflow").disabled).toBe(true);
+      expect(container.querySelector(".sf-agent-workbench__nav")).toBeNull();
+      expect(container.querySelector(".sf-agent-workbench__inspector")).toBeNull();
+      expect(container.textContent).not.toContain("Step output");
+      expect(container.textContent).not.toContain("Inspector");
 
-    expect(workbench?.className).toContain("lg:flex-row");
-    expect(nav?.className).toContain("order-2");
-    expect(nav?.className).toContain("lg:order-1");
-    expect(main?.className).toContain("order-1");
-    expect(main?.className).toContain("lg:order-2");
-    expect(middleWorkspace?.className).toContain("max-w-7xl");
-    expect(selectedStepCard?.className).toContain("min-h-[50rem]");
-    expect(inspector?.className).toContain("order-3");
+      await submitInitialScene("A simple neon courier render");
+      await flushAsyncWork();
 
-    const form = container.querySelector("form");
-    expect(form).not.toBeNull();
+      expect(container.textContent).toContain("Workflow progress");
+      expect(confirmPayloads).toHaveLength(1);
+      expect(container.textContent).toContain("Generated result ready.");
+      expect(container.textContent).toContain("100%");
+      expect(container.textContent).toContain("timeline-confirmed.png");
+      expect(container.querySelector('[data-testid="timeline-result-workspace"]')).not.toBeNull();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
 
-    act(() => {
-      form?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+  it("restores the active workflow scene in simple mode after the display setting changes", async () => {
+    const originalFetch = globalThis.fetch;
+    const workflow = createTimelineWorkflowState({
+      workflowId: "timeline-simple-restored",
+      sceneRequest: "A restored simple mode observatory",
+      promptProfile: "generic",
+      imageCount: 3,
+      now: () => "2026-06-05T00:00:00.000Z",
     });
-
-    expect(container.textContent).toContain("Waiting for scene command.");
-
-    act(() => {
-      setNativeTextAreaValue(sceneInput as HTMLTextAreaElement, "   ");
+    const restoredRecord = createTimelineWorkflowRecord({
+      workflow,
+      sceneRequest: "A restored simple mode observatory",
+      selectedPromptProfile: "generic",
+      selectedImageCount: 3,
+      selectedNodeId: "scene-input",
     });
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = getFetchUrl(input);
 
-    expect(getButtonByText("Start workflow").disabled).toBe(true);
+      if (url === "/api/settings") {
+        return createTimelineSettingsResponse({ displayMode: "simple" });
+      }
+
+      if (url === "/api/agent-timeline/active-workflow") {
+        if (init?.method === "PUT") {
+          return createJsonResponse({ ok: true, record: restoredRecord });
+        }
+
+        return createJsonResponse(restoredRecord);
+      }
+
+      return createJsonResponse({ role: "assistant", content: "{}" });
+    });
+    globalThis.fetch = fetchMock;
+
+    try {
+      act(() => {
+        root.render(<TimelineShell />);
+      });
+      await flushAsyncWork();
+
+      expect(container.querySelector(".sf-agent-workbench__nav")).toBeNull();
+      expect(container.querySelector(".sf-agent-workbench__inspector")).toBeNull();
+      expect(container.textContent).toContain("Workflow progress");
+      expect(container.textContent).toContain("A restored simple mode observatory");
+      expect((container.querySelector("#scene-request") as HTMLTextAreaElement | null)?.value).toBe(
+        "A restored simple mode observatory",
+      );
+      expect((container.querySelector("#prompt-profile") as HTMLSelectElement | null)?.value).toBe("generic");
+      expect((container.querySelector("#timeline-image-count") as HTMLSelectElement | null)?.value).toBe("3");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 
   it("uploads and removes a scene input source image without sending it to LLM prompt requests", async () => {
@@ -2261,7 +2392,7 @@ describe("TimelineShell", () => {
       if (url === "/api/settings") {
         return createTimelineSettingsResponse({
           characterTagNewTermDefaultOption: "temporary",
-          autoReview: true,
+          autoReview: false,
         });
       }
 
@@ -2292,6 +2423,14 @@ describe("TimelineShell", () => {
       });
 
       await submitInitialScene("A neon market alley with a courier at sunrise");
+      await flushAsyncWork();
+
+      act(() => {
+        getWorkflowStepButton("generation-gate").click();
+      });
+      act(() => {
+        getButtonByText("Confirm and render").click();
+      });
       await flushAsyncWork();
 
       const resultSection = getSectionByHeading("Artifact result");
@@ -2345,8 +2484,8 @@ describe("TimelineShell", () => {
       await flushAsyncWork();
 
       expect(confirmPayloads).toHaveLength(1);
-      expect(confirmPayloads[0]?.nodes["generation-gate"].error?.code).toBe("confirmation_required");
       expect(container.textContent).not.toContain("Review 2 new prompt tags");
+      expect(confirmPayloads[0]?.nodes["generation-gate"].error?.code).toBe("confirmation_required");
       expect(getSectionByHeading("Artifact result").textContent).toContain("timeline-confirmed.png");
     } finally {
       globalThis.fetch = originalFetch;
