@@ -2,6 +2,41 @@
 
 This log records dated implementation and documentation work. Keep entries concise and evidence-oriented.
 
+## 2026-06-13
+
+### T13 / Issue #53 Civitai BM25 Recommendation Ranking
+
+Summary:
+
+- Added a rebuildable SQLite FTS5 derived index for local Civitai `model` and `lora` resources, with Unicode-safe search text expansion for Latin tokens, CJK word segmentation, CJK 2-3 grams, and Civitai/domain synonyms.
+- Added `npm run civitai:reindex` to rebuild only the derived FTS index from `SCENEFORGE_SQLITE_FILE` or `data/sceneforge.sqlite`.
+- Updated Civitai recommendation candidate loading to require the FTS index and use SQLite `bm25()` ranking after downloaded-resource filtering and before the existing LLM selection step.
+- Preserved API request/response shape, prompt profile filtering, base model compatibility checks, candidate limits, private-field redaction, and final LLM validation.
+
+Files changed:
+
+- `src/features/persistence/civitai-search-index.ts`
+- `src/features/civitai-lora-library/ai-recommendation.ts`
+- `src/features/persistence/sqlite-storage.test.ts`
+- `src/app/api/civitai-lora-library/ai-recommendation/route.test.ts`
+- `scripts/rebuild-civitai-search-index.mjs`
+- `package.json`
+- `README.md`
+- `.env.example`
+- `docs/tech-spec.md`
+- `docs/dev-log.md`
+
+Validation:
+
+- `npm test -- --run src/features/persistence/sqlite-storage.test.ts src/features/civitai-lora-library/ai-recommendation.test.ts src/app/api/civitai-lora-library/ai-recommendation/route.test.ts` passed with 17 tests.
+- `npm run civitai:reindex` passed against `data/sceneforge.sqlite` and indexed 93 resources.
+- `npm run typecheck` passed.
+- `npm run lint` passed with existing unrelated warnings.
+- `npm test` passed with 748 tests.
+- Review follow-up: `npm test -- --run src/features/persistence/sqlite-storage.test.ts src/app/api/civitai-lora-library/ai-recommendation/route.test.ts` passed with 13 tests after readable Chinese synonym regression coverage; `npm run civitai:reindex` passed again against `data/sceneforge.sqlite`.
+- Review follow-up: `scripts/rebuild-civitai-search-index.mjs` now loads `SCENEFORGE_SQLITE_FILE` from `.env.local` or `.env` without overriding a shell-provided value, and README / `.env.example` document that Civitai imports or metadata changes require manual reindexing.
+- Review follow-up validation: `npm run civitai:reindex` passed against `data/sceneforge.sqlite` with 93 indexed resources; `npm test -- --run src/features/persistence/sqlite-storage.test.ts src/app/api/civitai-lora-library/ai-recommendation/route.test.ts` passed with 14 tests; `npm run typecheck` passed.
+
 ## 2026-06-05
 
 ### T11 / Issue #49 Named Timeline Workflow Project Management

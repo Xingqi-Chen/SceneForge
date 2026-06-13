@@ -166,6 +166,7 @@ Existing LLM-facing behavior should be reused before adding new calls:
 - Character tag inference should reuse existing prompt-library/tag and prompt binding concepts where possible.
 - Character action inference should reuse the existing stick-figure pose generation interface and parser where possible.
 - Checkpoint/LoRA recommendation should reuse Civitai recommendation logic and local candidate loading.
+- Civitai recommendation candidate search uses a rebuildable SQLite FTS5 derived index over local `model` and `lora` resources. The recommendation API ranks already-downloaded and profile-compatible candidates with `bm25()` before the existing LLM selection step. If the derived index is missing, the API should return an actionable error instructing the user to run `npm run civitai:reindex`; request handlers must not perform a full reindex.
 - Parameter recommendation should reuse existing ComfyUI generation parameter parsing and controls.
 
 Implementation expectations:
@@ -290,7 +291,7 @@ Source of truth: `.env.example`.
 - LiteLLM: `LITELLM_BASE_URL`, `LITELLM_API_KEY`, `LITELLM_DEFAULT_MODEL`, `LITELLM_NSFW_MODEL`, `LITELLM_CLASSIFICATION_MODEL`, `LITELLM_CIVITAI_RECOMMENDATION_MODEL`, `LITELLM_COMFYUI_DIAGNOSIS_MODEL`. Requests marked `nsfw` use `LITELLM_NSFW_MODEL` if configured; timeline model-resource and render-parameter recommendation nodes keep their purpose-specific models.
 - Tavily: `TAVILY_API_KEY`, `TAVILY_BASE_URL`.
 - ComfyUI: `COMFYUI_BASE_URL`, `COMFYUI_API_KEY`, `COMFYUI_TEMP_DIR`.
-- SceneForge: `SCENEFORGE_SHOW_NSFW_BUTTON`, `SCENEFORGE_PROJECTS_DIR`, `SCENEFORGE_GENERATED_IMAGES_DIR`, `SCENEFORGE_PROMPT_LIBRARY_FILE`.
+- SceneForge: `SCENEFORGE_SHOW_NSFW_BUTTON`, `SCENEFORGE_SQLITE_FILE`, `SCENEFORGE_PROJECTS_DIR`, `SCENEFORGE_GENERATED_IMAGES_DIR`, `SCENEFORGE_PROMPT_LIBRARY_FILE`.
 
 Rules:
 
@@ -307,6 +308,7 @@ Default runtime paths:
 - `data/prompt-library.json`: shared custom prompt library and hidden built-in ids.
 - `data/prompt-bindings.json`: shared prompt binding defaults.
 - `data/sceneforge.sqlite`: local SQLite data.
+- `civitai_resource_search_fts`: rebuildable SQLite FTS5 derived index inside the SceneForge SQLite database; rebuild manually with `npm run civitai:reindex` after Civitai resource metadata changes.
 - `data/civitai-lora-library/`: Civitai runtime cache and downloads.
 - `data/comfyui-generated-images/`: locally stored generated images.
 - `data/logs/`: local LLM interaction logs.
