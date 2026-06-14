@@ -7,11 +7,10 @@ import {
   confirmTimelineGeneration,
 } from "@/features/agent-timeline/state";
 import { createTimelineT8ServerNodeAdapters } from "@/features/agent-timeline/t8-server-adapters";
+import { sanitizeTimelineWorkflowState } from "@/features/agent-timeline/timeline-workflow-persistence";
 import {
-  timelineNodeIds,
   TimelineNodeExecutionError,
   type TimelineNodeMap,
-  type TimelineWorkflowState,
 } from "@/features/agent-timeline/types";
 
 export const runtime = "nodejs";
@@ -32,27 +31,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function isTimelineWorkflowState(value: unknown): value is TimelineWorkflowState {
-  if (
-    !isRecord(value) ||
-    typeof value.workflowId !== "string" ||
-    typeof value.createdAt !== "string" ||
-    typeof value.updatedAt !== "string" ||
-    typeof value.generationConfirmed !== "boolean" ||
-    !isRecord(value.nodes)
-  ) {
-    return false;
-  }
-
-  const nodes = value.nodes;
-
-  return timelineNodeIds.every((nodeId) => {
-    const node = nodes[nodeId];
-
-    return isRecord(node) && node.nodeId === nodeId && typeof node.status === "string";
-  });
-}
-
 export async function POST(request: Request) {
   let payload: unknown;
 
@@ -62,8 +40,8 @@ export async function POST(request: Request) {
     return errorResponse("Request body must be valid JSON.", 400);
   }
 
-  const workflow = isRecord(payload) ? payload.workflow : null;
-  if (!isTimelineWorkflowState(workflow)) {
+  const workflow = sanitizeTimelineWorkflowState(isRecord(payload) ? payload.workflow : null);
+  if (!workflow) {
     return errorResponse("A valid timeline workflow is required.", 400);
   }
 

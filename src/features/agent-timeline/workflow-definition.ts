@@ -153,6 +153,7 @@ export type CommonWorkflowDefinition<TNodeId extends string = string> = {
   reservedNodeIds: readonly TNodeId[];
   metadata: Record<TNodeId, CommonWorkflowNodeMetadata<TNodeId>>;
   dependencyDag: CommonWorkflowDependencyDag<TNodeId>;
+  adapterFactory?: unknown;
 };
 
 export type CommonWorkflowDagValidationIssue<TNodeId extends string = string> = {

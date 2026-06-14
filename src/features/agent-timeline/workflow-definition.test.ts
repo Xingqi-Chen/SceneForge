@@ -181,10 +181,21 @@ describe("common workflow definitions", () => {
     });
   });
 
-  it("exposes single-image node metadata without changing runtime orchestration", () => {
+  it("exposes single-image node metadata for definition-driven runtime orchestration", () => {
     expect(singleImageWorkflowDefinition.mode).toBe("single-image");
     expect(singleImageWorkflowDefinition.version).toBe(1);
     expect(singleImageWorkflowDefinition.nodeIds).toEqual(timelineNodeIds);
+    expect(singleImageWorkflowDefinition.dependencyDag["generation-gate"]).toEqual([
+      "scene-prompt",
+      "character-tags",
+      "character-action",
+      "canvas-binding",
+      "resource-recommendation",
+      "parameter-recommendation",
+    ]);
+    expect(singleImageWorkflowDefinition.adapterFactory({
+      "scene-prompt": () => ({ prompt: "adapter" }),
+    })["scene-prompt"]).toBeDefined();
     expect(singleImageWorkflowDefinition.metadata["resource-recommendation"]).toMatchObject({
       workspace: {
         key: "resource-recommendation",

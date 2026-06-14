@@ -102,6 +102,7 @@ describe("agent timeline workflow foundation", () => {
       source: "manual",
       result: { rawIntent: "A neon market at night" },
     });
+    expect(workflowWithInput.workflowMode).toBe("single-image");
     expect(workflowWithInput.nodes["scene-prompt"].status).toBe("ready");
     expect(canRunTimelineNode(workflowWithInput, "scene-prompt")).toBe(true);
     expect(canRunTimelineNode(workflowWithInput, "character-tags")).toBe(false);
@@ -311,6 +312,7 @@ describe("agent timeline workflow foundation", () => {
 
     const result = await executeTimelineGraph(workflow, adapters, { now: clock });
 
+    expect(result.workflowMode).toBe("single-image");
     expect(seen).toEqual(["canvas-binding", "resource-recommendation", "parameter-recommendation"]);
     expect(result.nodes["canvas-binding"]).toMatchObject({
       status: "done",

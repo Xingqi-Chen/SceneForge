@@ -4,6 +4,40 @@ This log records dated implementation and documentation work. Keep entries conci
 
 ## 2026-06-14
 
+### T17 / Issue #62 Definition-Driven Single-Image Timeline
+
+Summary:
+
+- Moved the single-image timeline DAG edges into `TimelineWorkflowDefinition` and made the legacy timeline DAG helpers delegate to common workflow-definition utilities.
+- Added `workflowMode` to timeline workflow state, defaulted new workflows to `single-image`, and restored legacy persisted workflow records without a mode as `single-image`.
+- Drove timeline readiness, `canRun`, stale downstream propagation, LangGraph node/edge registration, and adapter lookup from the single-image workflow definition.
+- Routed React timeline step iteration, labels, AI/manual affordance labels, and visual workspace selection through definition metadata while preserving current single-image UI behavior.
+- Sanitized confirm-generation API payloads through workflow persistence restore logic before enforcing the generation gate.
+
+Files changed:
+
+- `src/app/api/agent-timeline/confirm-generation/route.ts`
+- `src/features/agent-timeline/components/TimelineEditorWorkspace.tsx`
+- `src/features/agent-timeline/components/TimelineShell.tsx`
+- `src/features/agent-timeline/components/timeline-node-content.ts`
+- `src/features/agent-timeline/dag.ts`
+- `src/features/agent-timeline/graph.ts`
+- `src/features/agent-timeline/state.ts`
+- `src/features/agent-timeline/timeline-workflow-persistence.ts`
+- `src/features/agent-timeline/types.ts`
+- `src/features/agent-timeline/workflow-definition.ts`
+- `src/features/agent-timeline/workflow-definitions.ts`
+- `src/features/agent-timeline/timeline-workflow-persistence.test.ts`
+- `src/features/agent-timeline/workflow-definition.test.ts`
+- `src/features/agent-timeline/workflow.test.ts`
+- `docs/dev-log.md`
+
+Validation:
+
+- `npm test -- --run src/features/agent-timeline src/app/api/agent-timeline` passed with 20 files and 137 tests.
+- `npm run typecheck` passed.
+- `npm run lint` passed with 23 existing warnings unrelated to this change.
+
 ### T16 / Issue #61 Shared Workflow Definitions and Node Primitives
 
 Summary:

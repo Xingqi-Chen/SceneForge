@@ -72,6 +72,7 @@ describe("timeline workflow persistence", () => {
       },
       workflow: {
         workflowId: "timeline-persisted",
+        workflowMode: "single-image",
       },
     });
     expect(parsed?.workflow.nodes["resource-recommendation"].result).toMatchObject({
@@ -222,5 +223,42 @@ describe("timeline workflow persistence", () => {
     });
     expect(parsed?.projectId).toBeUndefined();
     expect(parsed?.name).toBeUndefined();
+  });
+
+  it("restores legacy workflow state without workflow mode as single-image", () => {
+    const parsed = sanitizeTimelineWorkflowRecord({
+      kind: "sceneforge-timeline-workflow",
+      version: 1,
+      workflow: {
+        workflowId: "timeline-legacy-no-mode",
+        createdAt: "2026-06-05T00:00:00.000Z",
+        updatedAt: "2026-06-05T00:00:00.000Z",
+        generationConfirmed: false,
+        nodes: {
+          "scene-input": {
+            nodeId: "scene-input",
+            status: "manual",
+            result: {
+              rawIntent: "A legacy scene",
+              promptProfile: "illustrious",
+              imageCount: 1,
+            },
+            source: "manual",
+            updatedAt: "2026-06-05T00:00:00.000Z",
+          },
+        },
+      },
+      sceneRequest: "A legacy scene",
+      selectedPromptProfile: "illustrious",
+      selectedImageCount: 1,
+      selectedNodeId: "scene-input",
+      outputDisplayModes: {},
+      createdAt: "2026-06-05T00:00:00.000Z",
+      updatedAt: "2026-06-05T00:00:00.000Z",
+    });
+
+    expect(parsed?.workflow.workflowMode).toBe("single-image");
+    expect(parsed?.workflow.nodes["scene-prompt"].status).toBe("ready");
+    expect(parsed?.workflow.nodes["generation-gate"].status).toBe("blocked");
   });
 });

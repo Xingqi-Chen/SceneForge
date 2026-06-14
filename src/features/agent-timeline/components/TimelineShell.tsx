@@ -48,7 +48,6 @@ import {
 } from "@/features/agent-timeline/t5-node-adapters";
 import { createTimelineT7NodeAdapters } from "@/features/agent-timeline/t7-node-adapters";
 import {
-  timelineNodeIds,
   TimelineNodeExecutionError,
   type CanvasBindingTimelineResult,
   type CharacterActionTimelineResult,
@@ -62,6 +61,7 @@ import {
   type TimelineNodeStatus,
   type TimelineWorkflowState,
 } from "@/features/agent-timeline/types";
+import { singleImageWorkflowDefinition } from "@/features/agent-timeline/workflow-definitions";
 import type {
   CivitaiAiRecommendationResponse,
   CivitaiResourceListItem,
@@ -251,6 +251,7 @@ const visualOutputNodeIds = new Set<TimelineNodeId>([
 ]);
 const nonEditableAiNodeIds = new Set<TimelineNodeId>(["character-tags", "character-action"]);
 const parallelNodeIds = new Set<TimelineNodeId>(["character-tags", "character-action"]);
+const workflowNodeIds = singleImageWorkflowDefinition.nodeIds;
 
 async function completeTimelineChatViaApi(
   request: LlmChatRequest,
@@ -781,20 +782,20 @@ function getSimpleTimelineProgress(workflow: TimelineWorkflowState | null) {
     };
   }
 
-  const completedCount = timelineNodeIds.filter((nodeId) => {
+  const completedCount = workflowNodeIds.filter((nodeId) => {
     const status = workflow.nodes[nodeId].status;
 
     return status === "done" || status === "manual";
   }).length;
-  const runningNodeId = timelineNodeIds.find((nodeId) => workflow.nodes[nodeId].status === "running");
-  const errorNodeId = timelineNodeIds.find((nodeId) => workflow.nodes[nodeId].status === "error");
+  const runningNodeId = workflowNodeIds.find((nodeId) => workflow.nodes[nodeId].status === "running");
+  const errorNodeId = workflowNodeIds.find((nodeId) => workflow.nodes[nodeId].status === "error");
   const confirmationNode = workflow.nodes["generation-gate"];
   const confirmationRequired =
     confirmationNode.status === "blocked" && confirmationNode.error?.code === "confirmation_required";
   const nextNodeId = runningNodeId ??
     errorNodeId ??
     (confirmationRequired ? "generation-gate" : undefined) ??
-    timelineNodeIds.find((nodeId) => {
+    workflowNodeIds.find((nodeId) => {
       const status = workflow.nodes[nodeId].status;
 
       return status !== "done" && status !== "manual";
@@ -802,7 +803,7 @@ function getSimpleTimelineProgress(workflow: TimelineWorkflowState | null) {
     "result-display";
   const nextNode = workflow.nodes[nextNodeId];
   const content = timelineNodeContent[nextNodeId];
-  const progress = Math.round((completedCount / timelineNodeIds.length) * 100);
+  const progress = Math.round((completedCount / workflowNodeIds.length) * 100);
 
   if (workflow.nodes["result-display"].status === "done") {
     return {
@@ -814,7 +815,7 @@ function getSimpleTimelineProgress(workflow: TimelineWorkflowState | null) {
   if (runningNodeId) {
     return {
       currentTask: `${content.title} is running.`,
-      percent: Math.min(98, Math.round(((completedCount + 0.5) / timelineNodeIds.length) * 100)),
+      percent: Math.min(98, Math.round(((completedCount + 0.5) / workflowNodeIds.length) * 100)),
     };
   }
 
@@ -1384,6 +1385,7 @@ export function TimelineShell() {
   const activeWorkflow = workflow ?? previewWorkflow;
   const selectedNode = activeWorkflow.nodes[selectedNodeId];
   const selectedContent = timelineNodeContent[selectedNodeId];
+  const selectedWorkspaceKey = singleImageWorkflowDefinition.metadata[selectedNodeId].workspace.key;
   const selectedDisplay = stepDisplay[selectedNodeId];
   const SelectedIcon = selectedDisplay.icon;
   const selectedOutput = getTimelineNodeOutputText(selectedNode);
@@ -3051,13 +3053,13 @@ export function TimelineShell() {
           <div className="mb-3 flex items-center justify-between px-1">
             <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Workflow</h2>
             <span className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] text-slate-500">
-              {timelineNodeIds.length} steps
+              {workflowNodeIds.length} steps
             </span>
           </div>
 
           <div className="relative flex flex-col gap-1.5">
             <span aria-hidden="true" className="absolute bottom-4 left-4 top-4 w-px bg-slate-200" />
-            {timelineNodeIds.map((nodeId, index) => {
+            {workflowNodeIds.map((nodeId, index) => {
               const node = activeWorkflow.nodes[nodeId];
               const content = timelineNodeContent[nodeId];
               const display = stepDisplay[nodeId];
@@ -3455,7 +3457,7 @@ export function TimelineShell() {
                         </Button>
                       </div>
                     </div>
-                  ) : selectedOutputDisplayMode === "visual" && selectedNodeId === "scene-prompt" ? (
+                  ) : selectedOutputDisplayMode === "visual" && selectedWorkspaceKey === "scene-prompt" ? (
                     <TimelineScenePromptWorkspace
                       editable={Boolean(workflow)}
                       emptyState={selectedContent.emptyState}
@@ -3464,7 +3466,7 @@ export function TimelineShell() {
                       onSave={handleSaveScenePromptVisual}
                       promptProfile={selectedPromptProfile}
                     />
-                  ) : selectedOutputDisplayMode === "visual" && selectedNodeId === "resource-recommendation" ? (
+                  ) : selectedOutputDisplayMode === "visual" && selectedWorkspaceKey === "resource-recommendation" ? (
                     <TimelineResourceRecommendationWorkspace
                       editable={Boolean(workflow)}
                       emptyState={selectedContent.emptyState}
@@ -3472,7 +3474,7 @@ export function TimelineShell() {
                       node={selectedNode}
                       onSave={handleSaveResourceRecommendationVisual}
                     />
-                  ) : selectedOutputDisplayMode === "visual" && selectedNodeId === "parameter-recommendation" ? (
+                  ) : selectedOutputDisplayMode === "visual" && selectedWorkspaceKey === "parameter-recommendation" ? (
                     <TimelineParameterRecommendationWorkspace
                       editable={Boolean(workflow)}
                       emptyState={selectedContent.emptyState}
@@ -3480,7 +3482,7 @@ export function TimelineShell() {
                       node={selectedNode}
                       onSave={handleSaveParameterRecommendationVisual}
                     />
-                  ) : selectedOutputDisplayMode === "visual" && selectedNodeId === "result-display" ? (
+                  ) : selectedOutputDisplayMode === "visual" && selectedWorkspaceKey === "result-display" ? (
                     <TimelineResultDisplayWorkspace
                       emptyState={selectedContent.emptyState}
                       key={selectedNode.updatedAt}

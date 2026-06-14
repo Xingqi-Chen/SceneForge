@@ -1,5 +1,7 @@
 import {
+  buildCommonWorkflowDependencyDag,
   commonWorkflowDefinitionVersion,
+  type CommonWorkflowDagEdge,
   type CommonWorkflowDefinition,
   type CommonWorkflowNodeMetadata,
 } from "./workflow-definition";
@@ -7,13 +9,20 @@ import {
   executableTimelineNodeIds,
   reservedTimelineNodeIds,
   timelineNodeIds,
+  type TimelineNodeAdapters,
   type TimelineNodeId,
 } from "./types";
-import { mvpTimelineDependencyDag } from "./dag";
 
 export const singleImageWorkflowMode = "single-image";
 
 export type TimelineWorkflowMode = typeof singleImageWorkflowMode;
+
+export type TimelineWorkflowAdapterFactory = (adapters: TimelineNodeAdapters) => TimelineNodeAdapters;
+
+export type TimelineWorkflowDefinition = CommonWorkflowDefinition<TimelineNodeId> & {
+  mode: TimelineWorkflowMode;
+  adapterFactory: TimelineWorkflowAdapterFactory;
+};
 
 type TimelineWorkspaceKey =
   | "scene-input"
@@ -67,13 +76,42 @@ function createTimelineNodeMetadata({
   };
 }
 
+export const singleImageWorkflowEdges = [
+  { from: "scene-input", to: "scene-prompt" },
+  { from: "scene-prompt", to: "character-tags" },
+  { from: "scene-prompt", to: "character-action" },
+  { from: "scene-prompt", to: "canvas-binding" },
+  { from: "character-tags", to: "canvas-binding" },
+  { from: "character-action", to: "canvas-binding" },
+  { from: "scene-prompt", to: "resource-recommendation" },
+  { from: "character-tags", to: "resource-recommendation" },
+  { from: "character-action", to: "resource-recommendation" },
+  { from: "scene-prompt", to: "parameter-recommendation" },
+  { from: "canvas-binding", to: "parameter-recommendation" },
+  { from: "resource-recommendation", to: "parameter-recommendation" },
+  { from: "scene-prompt", to: "generation-gate" },
+  { from: "character-tags", to: "generation-gate" },
+  { from: "character-action", to: "generation-gate" },
+  { from: "canvas-binding", to: "generation-gate" },
+  { from: "resource-recommendation", to: "generation-gate" },
+  { from: "parameter-recommendation", to: "generation-gate" },
+  { from: "generation-gate", to: "comfyui-execution" },
+  { from: "comfyui-execution", to: "result-display" },
+] as const satisfies readonly CommonWorkflowDagEdge<TimelineNodeId>[];
+
+export const singleImageWorkflowDependencyDag = buildCommonWorkflowDependencyDag(
+  timelineNodeIds,
+  singleImageWorkflowEdges,
+);
+
 export const singleImageWorkflowDefinition = {
   mode: singleImageWorkflowMode,
   version: commonWorkflowDefinitionVersion,
   nodeIds: timelineNodeIds,
   executableNodeIds: executableTimelineNodeIds,
   reservedNodeIds: reservedTimelineNodeIds,
-  dependencyDag: mvpTimelineDependencyDag,
+  dependencyDag: singleImageWorkflowDependencyDag,
+  adapterFactory: (adapters: TimelineNodeAdapters) => adapters,
   metadata: {
     "scene-input": createTimelineNodeMetadata({
       aiLabel: "Rewrite",
@@ -156,4 +194,13 @@ export const singleImageWorkflowDefinition = {
       workspaceKey: "result-display",
     }),
   },
-} as const satisfies CommonWorkflowDefinition<TimelineNodeId>;
+} as const satisfies TimelineWorkflowDefinition;
+
+export function getTimelineWorkflowDefinition(
+  mode: TimelineWorkflowMode = singleImageWorkflowMode,
+): TimelineWorkflowDefinition {
+  switch (mode) {
+    case singleImageWorkflowMode:
+      return singleImageWorkflowDefinition;
+  }
+}

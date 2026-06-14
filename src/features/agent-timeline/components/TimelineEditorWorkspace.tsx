@@ -13,12 +13,9 @@ import type {
   TimelineNodeId,
   TimelineWorkflowState,
 } from "@/features/agent-timeline";
+import { singleImageWorkflowDefinition } from "@/features/agent-timeline/workflow-definitions";
 import type { CharacterSkeleton } from "@/shared/types";
 import { TimelinePromptLibraryDrawer } from "./TimelinePromptLibraryDrawer";
-
-const visualWorkspaceNodeIds = new Set<TimelineNodeId>([
-  "canvas-binding",
-]);
 
 type TimelineEditorWorkspaceProps = {
   workflow: TimelineWorkflowState;
@@ -106,7 +103,7 @@ function getBindingSummary({
 }
 
 export function isTimelineEditorWorkspaceNode(nodeId: TimelineNodeId) {
-  return visualWorkspaceNodeIds.has(nodeId);
+  return singleImageWorkflowDefinition.metadata[nodeId].workspace.key === "canvas-binding";
 }
 
 export function TimelineEditorWorkspace({

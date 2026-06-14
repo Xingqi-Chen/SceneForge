@@ -118,4 +118,46 @@ describe("POST /api/agent-timeline/confirm-generation", () => {
       },
     });
   });
+
+  it("accepts legacy workflow payloads without workflow mode as single-image", async () => {
+    const workflow = createGateReadyWorkflow();
+    const legacyWorkflow = { ...workflow } as Partial<TimelineWorkflowState>;
+    delete legacyWorkflow.workflowMode;
+    const getObjectInfo = vi.fn().mockResolvedValue({ CheckpointLoaderSimple: {} });
+    comfyUiMocks.createComfyUiClient.mockReturnValue({ getObjectInfo });
+    comfyUiMocks.validateComfyUiTextToImageRequest.mockReturnValue({
+      ok: true,
+      request: {
+        batchSize: 1,
+        checkpointName: "local.safetensors",
+        positivePrompt: "glass greenhouse pilot",
+        preview: false,
+      },
+    });
+    comfyUiMocks.validateComfyUiRequestAgainstObjectInfo.mockReturnValue({
+      errors: [],
+      request: {
+        batchSize: 1,
+        checkpointName: "local.safetensors",
+        positivePrompt: "glass greenhouse pilot",
+        preview: false,
+      },
+      warnings: [],
+    });
+
+    const response = await POST(new Request("http://localhost/api/agent-timeline/confirm-generation", {
+      body: JSON.stringify({ workflow: legacyWorkflow }),
+      method: "POST",
+    }));
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(payload.workflow.workflowMode).toBe("single-image");
+    expect(payload.workflow.nodes["generation-gate"]).toMatchObject({
+      status: "manual",
+      result: {
+        confirmed: true,
+      },
+    });
+  });
 });
