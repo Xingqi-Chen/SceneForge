@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { createLiteLlmClient, LiteLlmError } from "./litellm-client";
 
@@ -117,6 +117,79 @@ describe("createLiteLlmClient", () => {
     await expect(client.completeChat({ messages: [{ role: "user", content }] })).resolves.toMatchObject({
       content: "polished prompt",
     });
+  });
+
+  it("posts embedding requests without logging API keys or source text", async () => {
+    const consoleInfo = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    const fetcher: typeof fetch = async (input, init) => {
+      expect(input).toBe("http://localhost:4000/v1/embeddings");
+      expect(init?.method).toBe("POST");
+      expect(init?.headers).toMatchObject({
+        "content-type": "application/json",
+        authorization: "Bearer embedding-secret",
+      });
+      expect(JSON.parse(String(init?.body))).toEqual({
+        model: "civitai-embedding-model",
+        input: ["neon rain checkpoint", "soft portrait lora"],
+      });
+
+      return new Response(
+        JSON.stringify({
+          id: "embd-1",
+          model: "civitai-embedding-model",
+          data: [
+            { embedding: [1, 0, 0], index: 0, object: "embedding" },
+            { embedding: [0, 1, 0], index: 1, object: "embedding" },
+          ],
+          usage: {
+            prompt_tokens: 6,
+            total_tokens: 6,
+          },
+        }),
+        {
+          headers: { "content-type": "application/json" },
+        },
+      );
+    };
+
+    const client = createLiteLlmClient({
+      baseUrl: "http://localhost:4000/v1",
+      apiKey: "embedding-secret",
+      defaultModel: "civitai-embedding-model",
+      fetcher,
+    });
+
+    try {
+      await expect(
+        client.createEmbedding({
+          input: ["neon rain checkpoint", "soft portrait lora"],
+        }),
+      ).resolves.toEqual({
+        id: "embd-1",
+        model: "civitai-embedding-model",
+        embeddings: [
+          [1, 0, 0],
+          [0, 1, 0],
+        ],
+        usage: {
+          promptTokens: 6,
+          completionTokens: undefined,
+          totalTokens: 6,
+        },
+      });
+
+      const logged = JSON.stringify(consoleInfo.mock.calls);
+
+      expect(logged).toContain("civitai-embedding-model");
+      expect(logged).toContain("inputCount");
+      expect(logged).toContain("dimensions");
+      expect(logged).not.toContain("embedding-secret");
+      expect(logged).not.toContain("neon rain checkpoint");
+      expect(logged).not.toContain("soft portrait lora");
+      expect(logged).not.toContain("[1,0,0]");
+    } finally {
+      consoleInfo.mockRestore();
+    }
   });
 
   it("rejects requests without a model or default model", async () => {

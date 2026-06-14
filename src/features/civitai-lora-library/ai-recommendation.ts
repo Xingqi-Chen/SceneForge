@@ -3,6 +3,8 @@ import {
   type LlmChatMessage,
   type LlmChatRequest,
   type LlmChatResponse,
+  type LlmEmbeddingRequest,
+  type LlmEmbeddingResponse,
 } from "@/features/llm";
 import { appendLlmLocalLog, serializeErrorForLlmLog } from "@/features/llm/llm-local-log";
 import {
@@ -17,6 +19,12 @@ import {
   rankCivitaiResourceIdsBySearchIndex,
   tokenizeCivitaiSearchText,
 } from "@/features/persistence/civitai-search-index";
+import {
+  CIVITAI_EMBEDDING_INDEX_MISSING_MESSAGE,
+  assertCivitaiEmbeddingIndexReady,
+  isCivitaiEmbeddingIndexBm25ReadinessError,
+  rankCivitaiResourceIdsByEmbeddingIndex,
+} from "@/features/persistence/civitai-embedding-index";
 import {
   formatPromptProfileLabel,
   isPromptProfileId,
@@ -47,6 +55,7 @@ export const CIVITAI_RECOMMENDATION_MAX_LORAS = 3;
 const DESCRIPTION_SNIPPET_MAX_LENGTH = 800;
 const LLM_TEXT_FIELD_MAX_LENGTH = 320;
 const MAX_ERROR_CHARS = 240;
+const RECIPROCAL_RANK_FUSION_K = 60;
 
 type CommonPairing = {
   resourceId: string;
@@ -372,6 +381,72 @@ function rankCivitaiRecommendationCandidatesWithFts(
   return [...matched, ...unmatched];
 }
 
+function rankCivitaiRecommendationCandidatesWithEmbeddings(
+  db: SceneForgeSqliteDatabase,
+  resources: CivitaiResourceDetail[],
+  resourceType: "model" | "lora",
+  embedding: number[],
+): CivitaiRecommendationCandidate[] {
+  const tokens = tokenizeCivitaiRecommendationQuery("");
+  const candidates = resources.map((resource) => toCandidate(resource, tokens));
+  const candidateById = new Map(candidates.map((candidate) => [candidate.resource.id, candidate]));
+  const vectorRanks = rankCivitaiResourceIdsByEmbeddingIndex(db, {
+    embedding,
+    resourceIds: resources.map((resource) => resource.id),
+    resourceType,
+  });
+
+  return Array.from(vectorRanks.entries())
+    .map(([resourceId, distance]) => {
+      const candidate = candidateById.get(resourceId);
+      return candidate ? { candidate, distance } : null;
+    })
+    .filter((entry): entry is { candidate: CivitaiRecommendationCandidate; distance: number } => Boolean(entry))
+    .sort((left, right) => {
+      if (left.distance !== right.distance) {
+        return left.distance - right.distance;
+      }
+
+      return byRecommendationRank(left.candidate, right.candidate);
+    })
+    .map(({ candidate, distance }) => ({
+      ...candidate,
+      score: Number((-distance).toFixed(4)),
+    }));
+}
+
+export function reciprocalRankFuseCivitaiRecommendationCandidates(
+  rankedLists: CivitaiRecommendationCandidate[][],
+): CivitaiRecommendationCandidate[] {
+  const fused = new Map<string, { candidate: CivitaiRecommendationCandidate; score: number }>();
+
+  for (const list of rankedLists) {
+    for (const [index, candidate] of list.entries()) {
+      const resourceId = candidate.resource.id;
+      const existing = fused.get(resourceId);
+      const score = 1 / (RECIPROCAL_RANK_FUSION_K + index + 1);
+
+      fused.set(resourceId, {
+        candidate: existing?.candidate ?? candidate,
+        score: (existing?.score ?? 0) + score,
+      });
+    }
+  }
+
+  return Array.from(fused.values())
+    .map(({ candidate, score }) => ({
+      ...candidate,
+      score: Number(score.toFixed(6)),
+    }))
+    .sort((left, right) => {
+      if (right.score !== left.score) {
+        return right.score - left.score;
+      }
+
+      return byRecommendationRank(left, right);
+    });
+}
+
 function filterCivitaiRecommendationCandidatesForPromptProfile(
   candidates: CivitaiRecommendationCandidate[],
   promptProfile: PromptProfileId,
@@ -408,10 +483,39 @@ function loadResourceDetails(db: SceneForgeSqliteDatabase, resourceType: "lora" 
 export async function loadCivitaiRecommendationCandidates(
   db: SceneForgeSqliteDatabase,
   desiredEffect: string,
-  options: { promptProfile?: PromptProfileId } = {},
+  options: {
+    createEmbedding?: (request: LlmEmbeddingRequest) => Promise<LlmEmbeddingResponse>;
+    promptProfile?: PromptProfileId;
+  } = {},
 ) {
   if (!isCivitaiSearchIndexAvailable(db)) {
     throw new CivitaiAiRecommendationError(CIVITAI_SEARCH_INDEX_MISSING_MESSAGE, 409);
+  }
+
+  const embeddingModel = process.env.LITELLM_CIVITAI_EMBEDDING_MODEL;
+  try {
+    assertCivitaiEmbeddingIndexReady(db, embeddingModel);
+  } catch (error) {
+    if (isCivitaiEmbeddingIndexBm25ReadinessError(error)) {
+      throw new CivitaiAiRecommendationError(error.message, 409, summarizeError(error));
+    }
+
+    throw new CivitaiAiRecommendationError(CIVITAI_EMBEDDING_INDEX_MISSING_MESSAGE, 409, summarizeError(error));
+  }
+
+  const createEmbedding = options.createEmbedding ?? createCivitaiEmbedding;
+  let embedding: number[] | undefined;
+  try {
+    embedding = (await createEmbedding({
+      input: desiredEffect,
+      model: embeddingModel,
+    })).embeddings[0];
+  } catch (error) {
+    throw new CivitaiAiRecommendationError(CIVITAI_EMBEDDING_INDEX_MISSING_MESSAGE, 409, summarizeError(error));
+  }
+
+  if (!embedding) {
+    throw new CivitaiAiRecommendationError(CIVITAI_EMBEDDING_INDEX_MISSING_MESSAGE, 409);
   }
 
   const promptProfile = isPromptProfileId(options.promptProfile) ? options.promptProfile : null;
@@ -419,13 +523,20 @@ export async function loadCivitaiRecommendationCandidates(
     filterDownloadedResourceDetails(db, loadResourceDetails(db, "model")),
     filterDownloadedResourceDetails(db, loadResourceDetails(db, "lora")),
   ]);
-  const rankedCheckpoints = rankCivitaiRecommendationCandidatesWithFts(
-    db,
-    downloadedCheckpoints,
-    "model",
-    desiredEffect,
-  );
-  const rankedLoras = rankCivitaiRecommendationCandidatesWithFts(db, downloadedLoras, "lora", desiredEffect);
+  let rankedCheckpoints: CivitaiRecommendationCandidate[];
+  let rankedLoras: CivitaiRecommendationCandidate[];
+  try {
+    rankedCheckpoints = reciprocalRankFuseCivitaiRecommendationCandidates([
+      rankCivitaiRecommendationCandidatesWithFts(db, downloadedCheckpoints, "model", desiredEffect),
+      rankCivitaiRecommendationCandidatesWithEmbeddings(db, downloadedCheckpoints, "model", embedding),
+    ]);
+    rankedLoras = reciprocalRankFuseCivitaiRecommendationCandidates([
+      rankCivitaiRecommendationCandidatesWithFts(db, downloadedLoras, "lora", desiredEffect),
+      rankCivitaiRecommendationCandidatesWithEmbeddings(db, downloadedLoras, "lora", embedding),
+    ]);
+  } catch (error) {
+    throw new CivitaiAiRecommendationError(CIVITAI_EMBEDDING_INDEX_MISSING_MESSAGE, 409, summarizeError(error));
+  }
 
   return {
     checkpoints: (promptProfile
@@ -437,6 +548,16 @@ export async function loadCivitaiRecommendationCandidates(
       : rankedLoras
     ).slice(0, CIVITAI_RECOMMENDATION_LORA_LIMIT),
   };
+}
+
+async function createCivitaiEmbedding(request: LlmEmbeddingRequest): Promise<LlmEmbeddingResponse> {
+  const client = createLiteLlmClient({
+    baseUrl: process.env.LITELLM_BASE_URL ?? "",
+    apiKey: process.env.LITELLM_API_KEY,
+    defaultModel: process.env.LITELLM_CIVITAI_EMBEDDING_MODEL,
+  });
+
+  return client.createEmbedding(request);
 }
 
 function normalizeRecommendationForLlm(recommendation: CivitaiResourceRecommendation) {
@@ -761,6 +882,7 @@ function normalizeMaxLoras(value: number | undefined) {
 
 export async function recommendCivitaiResourceCombination({
   completeChat = completeRecommendationChat,
+  createEmbedding = createCivitaiEmbedding,
   db,
   desiredEffect,
   maxLoras: rawMaxLoras,
@@ -768,6 +890,7 @@ export async function recommendCivitaiResourceCombination({
   promptProfile: rawPromptProfile,
 }: {
   completeChat?: (request: LlmChatRequest) => Promise<LlmChatResponse>;
+  createEmbedding?: (request: LlmEmbeddingRequest) => Promise<LlmEmbeddingResponse>;
   db: SceneForgeSqliteDatabase;
   desiredEffect: string;
   maxLoras?: number;
@@ -781,7 +904,10 @@ export async function recommendCivitaiResourceCombination({
 
   const maxLoras = normalizeMaxLoras(rawMaxLoras);
   const promptProfile = isPromptProfileId(rawPromptProfile) ? rawPromptProfile : undefined;
-  const { checkpoints, loras } = await loadCivitaiRecommendationCandidates(db, trimmedEffect, { promptProfile });
+  const { checkpoints, loras } = await loadCivitaiRecommendationCandidates(db, trimmedEffect, {
+    createEmbedding,
+    promptProfile,
+  });
   const warnings: string[] = [];
 
   if (checkpoints.length === 0) {

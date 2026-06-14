@@ -10,6 +10,7 @@
     "build": "next build",
     "start": "next start",
     "civitai:reindex": "node scripts/rebuild-civitai-search-index.mjs",
+    "civitai:reindex-embeddings": "node --experimental-sqlite scripts/rebuild-civitai-embedding-index.mjs",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
@@ -31,6 +32,7 @@
     "react-dom": "19.2.4",
     "react-konva": "^19.2.3",
     "sharp": "^0.34.5",
+    "sqlite-vec": "^0.1.9",
     "tailwind-merge": "^3.5.0",
     "three": "^0.184.0",
     "zustand": "^5.0.12"

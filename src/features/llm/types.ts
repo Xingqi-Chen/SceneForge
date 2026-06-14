@@ -53,3 +53,15 @@ export type LlmChatResponse = {
   finishReason?: string;
   usage?: LlmTokenUsage;
 };
+
+export type LlmEmbeddingRequest = {
+  input: string | string[];
+  model?: string;
+};
+
+export type LlmEmbeddingResponse = {
+  id?: string;
+  model?: string;
+  embeddings: number[][];
+  usage?: LlmTokenUsage;
+};
