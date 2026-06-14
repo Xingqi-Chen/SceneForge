@@ -11,6 +11,7 @@ import {
   getCivitaiResourceConfiguredDownloadPath,
   makeCivitaiResourceTargetFileName,
 } from "@/features/civitai-lora-library";
+import type { LlmChatRequest } from "@/features/llm";
 import {
   openSceneForgeSqliteDatabase,
   saveCivitaiLibrarySettingsToSqlite,
@@ -248,6 +249,48 @@ describe("Civitai AI recommendation route", () => {
     expect(response.status).toBe(409);
     expect(payload.error.message).toContain("npm run civitai:reindex-embeddings");
     expect(mockCompleteChat).not.toHaveBeenCalled();
+  });
+
+  it("sanitizes query text before creating a recommendation embedding", async () => {
+    const checkpoint = upsertCivitaiResourceToSqlite(
+      db,
+      makeResourceInput("model", "Cyber Checkpoint"),
+    ).resource;
+    await markDownloaded(checkpoint);
+    rebuildCivitaiSearchIndex(db);
+    rebuildTestEmbeddingIndex();
+
+    const unpairedLowSurrogate = String.fromCharCode(0xdd27);
+    const unpairedHighSurrogate = String.fromCharCode(0xd83d);
+
+    mockCompleteChat.mockResolvedValue({
+      content: JSON.stringify({
+        checkpointId: checkpoint.id,
+        checkpointReason: "Matches the requested effect.",
+        loras: [],
+        recommendationReason: "Selected the available local checkpoint.",
+        overallEffect: "Cinematic portrait.",
+      }),
+      role: "assistant",
+    });
+
+    const response = await POST(
+      new Request("http://localhost/api/civitai-lora-library/ai-recommendation", {
+        method: "POST",
+        body: JSON.stringify({
+          desiredEffect: `cinematic ${unpairedLowSurrogate} portrait ${unpairedHighSurrogate}`,
+        }),
+      }),
+    );
+    const embeddingRequest = mockCreateEmbedding.mock.calls[0]?.[0];
+    const chatRequest = mockCompleteChat.mock.calls[0]?.[0] as LlmChatRequest | undefined;
+    const chatContent = chatRequest?.messages.map((message) => message.content).join("\n") ?? "";
+
+    expect(response.status).toBe(200);
+    expect(embeddingRequest?.input).toContain("\uFFFD");
+    expect(() => encodeURIComponent(String(embeddingRequest?.input))).not.toThrow();
+    expect(chatContent).toContain("\uFFFD");
+    expect(() => encodeURIComponent(chatContent)).not.toThrow();
   });
 
   it("returns an actionable error when the embedding source text fingerprint is stale", async () => {

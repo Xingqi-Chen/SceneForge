@@ -24,6 +24,7 @@ import {
   assertCivitaiEmbeddingIndexReady,
   isCivitaiEmbeddingIndexBm25ReadinessError,
   rankCivitaiResourceIdsByEmbeddingIndex,
+  sanitizeCivitaiEmbeddingTextForUtf8,
 } from "@/features/persistence/civitai-embedding-index";
 import {
   formatPromptProfileLabel,
@@ -507,7 +508,7 @@ export async function loadCivitaiRecommendationCandidates(
   let embedding: number[] | undefined;
   try {
     embedding = (await createEmbedding({
-      input: desiredEffect,
+      input: sanitizeCivitaiEmbeddingTextForUtf8(desiredEffect),
       model: embeddingModel,
     })).embeddings[0];
   } catch (error) {
@@ -897,7 +898,7 @@ export async function recommendCivitaiResourceCombination({
   nsfw?: boolean;
   promptProfile?: PromptProfileId;
 }): Promise<CivitaiAiRecommendationResponse> {
-  const trimmedEffect = desiredEffect.trim();
+  const trimmedEffect = sanitizeCivitaiEmbeddingTextForUtf8(desiredEffect).trim();
   if (!trimmedEffect) {
     throw new CivitaiAiRecommendationError("请先输入想要的画面效果。", 400);
   }
