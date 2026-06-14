@@ -4,6 +4,31 @@ This log records dated implementation and documentation work. Keep entries conci
 
 ## 2026-06-14
 
+### T18 / Issue #63 Story Graph Domain Models and DAG
+
+Summary:
+
+- Added typed Story Graph planning artifacts for story input, story bible, outline, storyboard shots, story safety, shot dependencies, plot state, character continuity, and consistency checks.
+- Added an inactive Story Graph workflow definition using the shared T16/T17 workflow primitives and the scoped story DAG nodes from Issue #63.
+- Added validation for the story workflow DAG, required predecessors, shot dependency cycles, and invalid source shot references.
+- Kept the active timeline runtime selector on the existing single-image workflow so story mode remains unreachable until later UI/execution tracks wire it.
+
+Files changed:
+
+- `src/features/agent-timeline/story-types.ts`
+- `src/features/agent-timeline/story-workflow.ts`
+- `src/features/agent-timeline/story-workflow.test.ts`
+- `src/features/agent-timeline/index.ts`
+- `src/features/agent-timeline/workflow-definitions.ts`
+- `docs/dev-log.md`
+
+Validation:
+
+- `npm test -- --run src/features/agent-timeline/story-workflow.test.ts src/features/agent-timeline/workflow.test.ts src/features/agent-timeline/workflow-definition.test.ts` passed with 3 files and 23 tests.
+- `npm test -- --run src/features/agent-timeline` passed with 17 files and 122 tests.
+- `npm run typecheck` passed.
+- `npm run lint` passed with 23 existing warnings unrelated to this change.
+
 ### T17 / Issue #62 Definition-Driven Single-Image Timeline
 
 Summary:
