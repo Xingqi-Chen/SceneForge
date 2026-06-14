@@ -4,6 +4,32 @@ This log records dated implementation and documentation work. Keep entries conci
 
 ## 2026-06-14
 
+### T20 / Issue #65 Story Graph Resource, Parameter, Render, Preview, and NSFW Planning
+
+Summary:
+
+- Added deterministic Story Graph planning helpers for local-only resource plans, formal generation parameter plans, separate preview execution options/results, story render-plan assembly, and execution request batches.
+- Reused shared local resource validation so story resource planning selects only validated local candidates and strips model NSFW marker fields from outputs.
+- Kept NSFW as content/execution context from the story safety plan at render, generation gate, result, and execution request boundaries instead of using model tags as filters.
+- Updated the inactive `/story` planning preview with typed resource, parameter, render, gate, and result sample artifacts.
+
+Files changed:
+
+- `src/features/agent-timeline/story-planning.ts`
+- `src/features/agent-timeline/story-planning.test.ts`
+- `src/features/agent-timeline/story-types.ts`
+- `src/features/agent-timeline/components/StoryPlanningPreview.tsx`
+- `src/features/agent-timeline/index.ts`
+- `docs/tech-spec.md`
+- `docs/dev-log.md`
+
+Validation:
+
+- `npm test -- --run src/features/agent-timeline/story-planning.test.ts` passed with 5 tests.
+- `npm test -- --run src/features/agent-timeline` passed with 20 files and 135 tests.
+- `npm run typecheck` passed.
+- `npm run lint` passed with 23 existing warnings unrelated to this change.
+
 ### T19 / Issue #64 Story Graph Planning Workspaces
 
 Summary:
