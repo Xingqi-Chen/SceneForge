@@ -1,4 +1,7 @@
 import { createHash } from "node:crypto";
+import { createRequire } from "node:module";
+import path from "node:path";
+import { arch, platform } from "node:process";
 
 import * as sqliteVec from "sqlite-vec";
 
@@ -208,6 +211,23 @@ function isSqliteVecLoaded(db: SceneForgeSqliteDatabase): boolean {
   }
 }
 
+function sqliteVecPlatformPackage(): { extensionFileName: string; packageName: string } {
+  const suffix = platform === "win32" ? "dll" : platform === "darwin" ? "dylib" : "so";
+  const os = platform === "win32" ? "windows" : platform;
+
+  return {
+    extensionFileName: `vec0.${suffix}`,
+    packageName: `sqlite-vec-${os}-${arch}`,
+  };
+}
+
+function resolveSqliteVecLoadablePath(): string {
+  const { extensionFileName, packageName } = sqliteVecPlatformPackage();
+  const requireFromProject = createRequire(path.join(process.cwd(), "package.json"));
+
+  return requireFromProject.resolve(`${packageName}/${extensionFileName}`);
+}
+
 export function loadSqliteVecExtension(db: SceneForgeSqliteDatabase): void {
   if (isSqliteVecLoaded(db)) {
     return;
@@ -219,7 +239,14 @@ export function loadSqliteVecExtension(db: SceneForgeSqliteDatabase): void {
 
   try {
     db.enableLoadExtension?.(true);
-    sqliteVec.load(db as Parameters<typeof sqliteVec.load>[0]);
+    try {
+      sqliteVec.load(db as Parameters<typeof sqliteVec.load>[0]);
+    } catch (error) {
+      db.loadExtension(resolveSqliteVecLoadablePath());
+      if (!isSqliteVecLoaded(db)) {
+        throw error;
+      }
+    }
   } finally {
     db.enableLoadExtension?.(false);
   }

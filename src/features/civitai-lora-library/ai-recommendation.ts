@@ -494,6 +494,14 @@ export async function loadCivitaiRecommendationCandidates(
   }
 
   const embeddingModel = process.env.LITELLM_CIVITAI_EMBEDDING_MODEL;
+  if (!embeddingModel?.trim()) {
+    throw new CivitaiAiRecommendationError(
+      CIVITAI_EMBEDDING_INDEX_MISSING_MESSAGE,
+      409,
+      "LITELLM_CIVITAI_EMBEDDING_MODEL is not set in the Next.js server process.",
+    );
+  }
+
   try {
     assertCivitaiEmbeddingIndexReady(db, embeddingModel);
   } catch (error) {
@@ -741,7 +749,15 @@ function getCandidateMap(candidates: CivitaiRecommendationCandidate[]) {
 
 function summarizeError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
-  return message.length > MAX_ERROR_CHARS ? `${message.slice(0, MAX_ERROR_CHARS)}...` : message;
+  const details = isRecord(error) && "details" in error ? error.details : undefined;
+  const cause = error instanceof Error && error.cause instanceof Error ? error.cause.message : undefined;
+  const summary = [
+    message,
+    cause ? `Cause: ${cause}` : null,
+    details === undefined ? null : `Details: ${JSON.stringify(details)}`,
+  ].filter(Boolean).join(" ");
+
+  return summary.length > MAX_ERROR_CHARS ? `${summary.slice(0, MAX_ERROR_CHARS)}...` : summary;
 }
 
 export function validateCivitaiCombinationRecommendation({
