@@ -1,6 +1,5 @@
 import type {
   CivitaiAiRecommendationResponse,
-  CivitaiRecommendationCandidate,
   SelectedCivitaiResourcePreview,
   SelectedCivitaiResourcesPreview,
 } from "@/features/civitai-lora-library";
@@ -33,6 +32,7 @@ import {
   DEFAULT_TIMELINE_SOURCE_DENOISE,
   normalizeTimelineSourceDenoise,
 } from "./state";
+import { validateLocalResourcePlan } from "./resource-plan";
 import {
   TimelineNodeExecutionError,
   type CanvasBindingTimelineResult,
@@ -274,59 +274,11 @@ function buildDesiredEffect(context: TimelineNodeExecutionContext) {
     .join("\n");
 }
 
-function getCandidateMap(candidates: CivitaiRecommendationCandidate[]) {
-  return new Map(candidates.map((candidate) => [candidate.resource.id, candidate]));
-}
-
-function normalizeResourceMatchValue(value: string | null | undefined) {
-  return value?.trim().toLocaleLowerCase() ?? "";
-}
-
-function getResourceMatchAliases(resource: SelectedCivitaiResourcePreview) {
-  return [
-    resource.id,
-    resource.name,
-    resource.modelFileName,
-  ]
-    .map(normalizeResourceMatchValue)
-    .filter(Boolean);
-}
-
-function findUnambiguousLocalCandidate(
-  recommended: SelectedCivitaiResourcePreview,
-  candidates: CivitaiRecommendationCandidate[],
-) {
-  const byId = getCandidateMap(candidates).get(recommended.id);
-  if (byId) {
-    return byId;
-  }
-
-  const recommendedAliases = new Set(getResourceMatchAliases(recommended));
-  const matches = candidates.filter((candidate) =>
-    getResourceMatchAliases(candidate.resource).some((alias) => recommendedAliases.has(alias)),
-  );
-
-  return matches.length === 1 ? matches[0] : null;
-}
-
 function isCompatibleLora(
   lora: SelectedCivitaiResourcePreview,
   checkpoint: SelectedCivitaiResourcePreview,
 ) {
   return !checkpoint.baseModel || !lora.baseModel || isSameCivitaiBaseModel(lora.baseModel, checkpoint.baseModel);
-}
-
-function appendMappedResourceWarning(
-  warnings: string[],
-  resourceKind: "checkpoint" | "LoRA",
-  recommended: SelectedCivitaiResourcePreview,
-  selected: SelectedCivitaiResourcePreview,
-) {
-  if (recommended.id === selected.id) {
-    return;
-  }
-
-  warnings.push(`Mapped recommended ${resourceKind} ${recommended.name} to local candidate ${selected.name}.`);
 }
 
 export function validateTimelineResourceRecommendation({
@@ -336,71 +288,23 @@ export function validateTimelineResourceRecommendation({
   candidates: ResourceRecommendationTimelineResult["candidates"];
   recommendation: CivitaiAiRecommendationResponse;
 }): ResourceRecommendationTimelineResult {
-  const checkpointCandidate = findUnambiguousLocalCandidate(
-    recommendation.checkpoint.resource,
-    candidates.checkpoints,
-  );
-
-  if (!checkpointCandidate) {
-    invalidResourceSelection("Recommended checkpoint is not in the local candidate set.", {
-      checkpointId: recommendation.checkpoint.resource.id,
-      checkpointName: recommendation.checkpoint.resource.name,
-    });
-  }
-
-  const warnings = [...recommendation.warnings];
-  appendMappedResourceWarning(
-    warnings,
-    "checkpoint",
-    recommendation.checkpoint.resource,
-    checkpointCandidate.resource,
-  );
-  const selectedLoras: ResourceRecommendationTimelineResult["loras"] = [];
-  const seenLoras = new Set<string>();
-
-  for (const lora of recommendation.loras) {
-    const candidate = findUnambiguousLocalCandidate(lora.resource, candidates.loras);
-    if (!candidate) {
-      invalidResourceSelection("Recommended LoRA is not in the local candidate set.", {
-        loraId: lora.resource.id,
-        loraName: lora.resource.name,
-      });
-    }
-
-    if (seenLoras.has(candidate.resource.id)) {
-      warnings.push(`Ignored duplicate LoRA ${candidate.resource.name}.`);
-      continue;
-    }
-
-    if (selectedLoras.length >= maxTimelineLoras) {
-      warnings.push(`Only the first ${maxTimelineLoras} LoRAs were kept.`);
-      break;
-    }
-
-    if (!isCompatibleLora(candidate.resource, checkpointCandidate.resource)) {
-      warnings.push(`Ignored incompatible LoRA ${candidate.resource.name}.`);
-      continue;
-    }
-
-    appendMappedResourceWarning(warnings, "LoRA", lora.resource, candidate.resource);
-    seenLoras.add(candidate.resource.id);
-    selectedLoras.push({
-      resource: candidate.resource,
-      suggestedWeight: lora.suggestedWeight,
-      reason: lora.reason,
-    });
-  }
+  const result = validateLocalResourcePlan({
+    candidates,
+    recommendation,
+    options: {
+      areResourcesCompatible: isCompatibleLora,
+      maxLoras: maxTimelineLoras,
+      onInvalidSelection: invalidResourceSelection,
+    },
+  });
 
   return {
-    checkpoint: {
-      resource: checkpointCandidate.resource,
-      reason: recommendation.checkpoint.reason,
-    },
-    loras: selectedLoras,
+    checkpoint: result.checkpoint,
+    loras: result.loras,
     candidates,
-    recommendationReason: recommendation.recommendationReason,
-    overallEffect: recommendation.overallEffect,
-    warnings,
+    recommendationReason: result.recommendationReason,
+    overallEffect: result.overallEffect,
+    warnings: result.warnings,
   };
 }
 
