@@ -192,3 +192,10 @@ export type StoryConsistencyCheck = {
   warnings: string[];
 };
 
+export type StoryNsfwContext = {
+  enabled: boolean;
+  audienceRating: StoryAudienceRating;
+  contentWarnings: string[];
+  rationale: string;
+};
+

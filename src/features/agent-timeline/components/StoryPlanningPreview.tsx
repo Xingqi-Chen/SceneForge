@@ -11,6 +11,12 @@ import {
   type StoryWorkflowState,
 } from "@/features/agent-timeline/story-state";
 import {
+  assembleStoryRenderPlan,
+  createStoryParameterPlan,
+  createStoryResourcePlan,
+  type StoryPreviewResultReference,
+} from "@/features/agent-timeline/story-planning";
+import {
   storyWorkflowDefinition,
 } from "@/features/agent-timeline/story-workflow";
 import type {
@@ -161,40 +167,138 @@ const sampleConsistency = {
   warnings: ["Shot 3 should preserve the satchel shoulder direction from Shot 2."],
 } satisfies StoryConsistencyCheck;
 
+const sampleResourcePlan = createStoryResourcePlan({
+  storyId,
+  candidates: {
+    checkpoints: [
+      {
+        resource: {
+          id: "local-checkpoint",
+          name: "Local illustrative checkpoint",
+          baseModel: "Illustrious",
+          modelFileName: "local-illustrative.safetensors",
+          nsfw: true,
+        },
+      },
+    ],
+    loras: [
+      {
+        resource: {
+          id: "local-lora",
+          name: "Rain atmosphere LoRA",
+          baseModel: "Illustrious",
+          modelFileName: "rain-atmosphere.safetensors",
+          trainedWords: ["rain-washed platform"],
+          nsfwLevel: 4,
+        },
+      },
+    ],
+  },
+  recommendation: {
+    checkpoint: {
+      resource: {
+        id: "local-checkpoint",
+        name: "Local illustrative checkpoint",
+      },
+      reason: "Matches rainy cinematic framing.",
+    },
+    loras: [
+      {
+        resource: {
+          id: "local-lora",
+          name: "Rain atmosphere LoRA",
+        },
+        suggestedWeight: 0.6,
+        reason: "Adds wet platform atmosphere from a local LoRA.",
+      },
+    ],
+    recommendationReason: "Use only validated local story resources.",
+    overallEffect: "Cinematic rain, reflective station lighting, restrained suspense.",
+    warnings: [],
+  },
+});
+
+const sampleParameterPlan = createStoryParameterPlan({
+  storyId,
+  defaults: {
+    width: 1024,
+    height: 768,
+    steps: 28,
+    cfg: 5.5,
+    samplerName: "dpmpp_2m",
+    scheduler: "karras",
+    denoise: 1,
+  },
+  perShotOverrides: [
+    {
+      shotId: "shot-2",
+      parameters: { cfg: 6 },
+      reason: "Slightly stronger prompt adherence for the signal close-up.",
+    },
+  ],
+});
+
+const samplePreviewReferences = [
+  {
+    shotId: "shot-2",
+    promptId: "preview-prompt-2",
+    imageUrl: "/placeholder.svg",
+    createdAt: timestamp,
+    parameters: {
+      width: 512,
+      height: 384,
+      steps: 12,
+      cfg: 4.5,
+      samplerName: "dpmpp_2m",
+      scheduler: "karras",
+      denoise: 1,
+    },
+  },
+] satisfies StoryPreviewResultReference[];
+
+const sampleRenderPlan = assembleStoryRenderPlan({
+  parameterPlan: sampleParameterPlan,
+  previewOptions: {
+    enabled: true,
+    shotIds: ["shot-2"],
+    parameterOverrides: {
+      width: 512,
+      height: 384,
+      steps: 12,
+      cfg: 4.5,
+    },
+    requestedAt: timestamp,
+    reason: "Low-cost composition preview for the dependency source shot.",
+  },
+  previewResultReferences: samplePreviewReferences,
+  resourcePlan: sampleResourcePlan,
+  safetyPlan: sampleSafetyPlan,
+  shots: sampleShots,
+});
+
 const sampleResults: Partial<Record<StoryWorkflowNodeId, unknown>> = {
   "storyboard-shots": sampleShots,
   "story-safety-plan": sampleSafetyPlan,
   "shot-dependency-graph": sampleDependencyGraph,
   "plot-state-graph": samplePlotState,
   "character-continuity-graph": sampleContinuity,
-  "resource-plan": {
-    storyId,
-    checkpoints: [{ id: "local-checkpoint", name: "Local illustrative checkpoint", reason: "Matches rainy cinematic framing." }],
-    loras: [{ id: "local-lora", name: "Rain atmosphere LoRA", weight: 0.6 }],
-  },
-  "parameter-plan": {
-    storyId,
-    defaults: { width: 1024, height: 768, steps: 28, cfg: 5.5, sampler: "dpmpp_2m", scheduler: "karras" },
-    perShotOverrides: [{ shotId: "shot-2", cfg: 6 }],
-  },
-  "story-render-plan": {
-    storyId,
-    shots: sampleShots.map((shot) => ({
-      shotId: shot.id,
-      promptIntent: shot.promptIntent,
-      sourceShotIds: shot.sourceShotIds,
-    })),
-  },
+  "resource-plan": sampleResourcePlan,
+  "parameter-plan": sampleParameterPlan,
+  "story-render-plan": sampleRenderPlan,
   "story-consistency-check": sampleConsistency,
   "generation-gate": {
     storyId,
     ready: false,
-    reason: "Preview only. Story execution is intentionally out of scope for T19.",
+    nsfwContext: sampleRenderPlan.nsfwContext,
+    renderPlanShotCount: sampleRenderPlan.shots.length,
+    previewEnabled: sampleRenderPlan.preview.options.enabled,
+    reason: "Preview only. Story execution is intentionally out of scope before T21.",
   },
   "story-result-display": {
     storyId,
     status: "pending",
-    previewReferences: [],
+    nsfwContext: sampleRenderPlan.nsfwContext,
+    previewReferences: sampleRenderPlan.preview.resultReferences,
     finalReferences: [],
   },
 };
