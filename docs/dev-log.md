@@ -12,6 +12,7 @@ Summary:
 - Assembled deterministic, inspectable planning artifacts for Story Graph nodes from user-started input, including story bible, outline, storyboard shots, safety, dependency, plot, continuity, resource, parameter, render, consistency, gate, execution, and result placeholders.
 - Updated `/story` so the primary path starts from user input; static sample content is now only a fallback start action.
 - Reserved shot execution and result nodes until T21 so the generation gate can show a render/request preview without making shot execution runnable.
+- Follow-up: simplified the start surface to only story request and optional shots, derived audience rating from the Settings NSFW switch, removed user-entered title/content warning/NSFW fields, and added story request Suggest/Rewrite through the existing LiteLLM chat boundary.
 
 Files changed:
 

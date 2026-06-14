@@ -1,10 +1,11 @@
 "use client";
 
-import { useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 import Link from "next/link";
-import { CheckCircle2, CircleDot, GitBranch, Play, RotateCcw, Settings } from "lucide-react";
+import { Bot, CheckCircle2, CircleDot, GitBranch, Play, RefreshCw, RotateCcw, Settings } from "lucide-react";
 
 import {
+  createStoryGraphInputWorkflow,
   startStoryGraphWorkflow,
   type StoryGraphStartRequest,
 } from "@/features/agent-timeline/story-input";
@@ -17,9 +18,13 @@ import {
   storyWorkflowDefinition,
 } from "@/features/agent-timeline/story-workflow";
 import type {
-  StoryAudienceRating,
   StoryWorkflowNodeId,
 } from "@/features/agent-timeline/story-types";
+import {
+  getLlmProxyErrorMessage,
+  isLlmChatResponse,
+  type LlmChatRequest,
+} from "@/features/llm";
 import { cn } from "@/shared/utils/cn";
 
 import { StoryPlanningWorkspace } from "./StoryPlanningWorkspace";
@@ -29,73 +34,291 @@ const headerLinkClassName =
 
 const planningNodeIds = storyWorkflowDefinition.nodeIds;
 
+type StoryInputAiAction = "rewrite" | "suggest";
+
 const fallbackRequest = {
-  audienceRating: "safe",
-  contentWarnings: ["night setting", "mild suspense"],
   rawIntent: "A traveler in a blue raincoat enters a rain-washed elevated station, notices a red signal reflected in a puddle, then turns toward a shadowed stairwell.",
   targetShotCount: 3,
-  title: "Rain Station Signal",
   workflowId: "story-planning-fallback",
   storyId: "story-fallback",
+  nsfwEnabled: false,
 } satisfies StoryGraphStartRequest;
 
 function formatStatusLabel(status: string) {
   return status.replace(/-/g, " ");
 }
 
-function splitWarnings(value: string) {
-  return value
-    .split(",")
-    .map((item) => item.trim())
-    .filter(Boolean);
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function parseStoryInputAiText(content: string) {
+  const trimmed = content.trim();
+
+  if (!trimmed) {
+    return "";
+  }
+
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+
+    if (isRecord(parsed)) {
+      const storyRequest = parsed.storyRequest ?? parsed.sceneRequest ?? parsed.request;
+      return typeof storyRequest === "string" ? storyRequest.trim() : "";
+    }
+  } catch {
+    return trimmed;
+  }
+
+  return "";
+}
+
+function buildStoryInputAiRequest({
+  action,
+  nsfwEnabled,
+  storyRequest,
+}: {
+  action: StoryInputAiAction;
+  nsfwEnabled: boolean;
+  storyRequest: string;
+}): LlmChatRequest {
+  const actionInstruction = action === "rewrite"
+    ? [
+        "Rewrite the provided story request into a clearer storyboard-generation command.",
+        "Preserve the user's premise, characters, setting, mood, sequence intent, and constraints.",
+        "Do not add title, content warning, model, LoRA, checkpoint, or render-parameter instructions.",
+      ]
+    : [
+        storyRequest
+          ? "Suggest one stronger alternate Story Graph request inspired by the current draft."
+          : "Suggest one concise, visually rich Story Graph request for a short storyboard sequence.",
+        "Make it specific enough to start story planning while leaving shot count optional.",
+        "Do not include title, content warnings, model names, checkpoint names, LoRA names, or render parameters.",
+      ];
+
+  return {
+    purpose: "comic-sequence-storyboard",
+    nsfw: nsfwEnabled,
+    messages: [
+      {
+        role: "system",
+        content: [
+          "You are SceneForge's Story Graph input agent.",
+          "Return only valid JSON. No markdown, comments, or prose.",
+          "All natural-language fields must be English.",
+          "Keep the result as a story planning request, not a single-image prompt.",
+          `NSFW setting: ${nsfwEnabled ? "enabled / explicit audience" : "disabled / safe audience"}.`,
+          ...actionInstruction,
+          'Required shape: {"storyRequest":"..."}',
+        ].join("\n"),
+      },
+      {
+        role: "user",
+        content: JSON.stringify(
+          {
+            action,
+            currentStoryRequest: storyRequest,
+            nsfwEnabled,
+          },
+          null,
+          2,
+        ),
+      },
+    ],
+    temperature: action === "rewrite" ? 0.25 : 0.6,
+    maxTokens: 400,
+  };
+}
+
+function buildStoryPlanningShotCountRequest({
+  nsfwEnabled,
+  storyRequest,
+}: {
+  nsfwEnabled: boolean;
+  storyRequest: string;
+}): LlmChatRequest {
+  return {
+    purpose: "comic-sequence-storyboard",
+    nsfw: nsfwEnabled,
+    messages: [
+      {
+        role: "system",
+        content: [
+          "You are SceneForge's Story Graph planning agent.",
+          "Return only valid JSON. No markdown, comments, or prose.",
+          "Choose the target shot count needed for a concise storyboard planning workflow.",
+          "Use an integer from 1 to 24.",
+          "Do not include title, content warnings, model names, checkpoint names, LoRA names, or render parameters.",
+          `NSFW setting: ${nsfwEnabled ? "enabled / explicit audience" : "disabled / safe audience"}.`,
+          'Required shape: {"targetShotCount":3}',
+        ].join("\n"),
+      },
+      {
+        role: "user",
+        content: JSON.stringify(
+          {
+            storyRequest,
+            nsfwEnabled,
+          },
+          null,
+          2,
+        ),
+      },
+    ],
+    temperature: 0.2,
+    maxTokens: 100,
+  };
+}
+
+function parseStoryPlanningShotCount(content: string) {
+  const parsed = JSON.parse(content.trim()) as unknown;
+
+  if (!isRecord(parsed)) {
+    throw new Error("Story planning response must be a JSON object.");
+  }
+
+  const shotCount = Number(parsed.targetShotCount ?? parsed.shots ?? parsed.shotCount);
+
+  if (!Number.isFinite(shotCount)) {
+    throw new Error("Story planning response did not include targetShotCount.");
+  }
+
+  return shotCount;
+}
+
+async function completeStoryInputAi({
+  action,
+  nsfwEnabled,
+  storyRequest,
+}: {
+  action: StoryInputAiAction;
+  nsfwEnabled: boolean;
+  storyRequest: string;
+}) {
+  const response = await fetch("/api/llm/chat", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+    },
+    body: JSON.stringify(
+      buildStoryInputAiRequest({
+        action,
+        nsfwEnabled,
+        storyRequest,
+      }),
+    ),
+  });
+  const payload: unknown = await response.json().catch(() => null);
+
+  if (!response.ok) {
+    throw new Error(getLlmProxyErrorMessage(payload) ?? "Unable to update Story Graph request.");
+  }
+
+  if (!isLlmChatResponse(payload)) {
+    throw new Error("Story input AI response did not include chat content.");
+  }
+
+  const nextStoryRequest = parseStoryInputAiText(payload.content);
+
+  if (!nextStoryRequest) {
+    throw new Error("Story input AI response did not include a usable story request.");
+  }
+
+  return nextStoryRequest;
+}
+
+async function completeStoryPlanningShotCount({
+  nsfwEnabled,
+  storyRequest,
+}: {
+  nsfwEnabled: boolean;
+  storyRequest: string;
+}) {
+  const response = await fetch("/api/llm/chat", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+    },
+    body: JSON.stringify(
+      buildStoryPlanningShotCountRequest({
+        nsfwEnabled,
+        storyRequest,
+      }),
+    ),
+  });
+  const payload: unknown = await response.json().catch(() => null);
+
+  if (!response.ok) {
+    throw new Error(getLlmProxyErrorMessage(payload) ?? "Unable to plan Story Graph shots.");
+  }
+
+  if (!isLlmChatResponse(payload)) {
+    throw new Error("Story planning response did not include chat content.");
+  }
+
+  return parseStoryPlanningShotCount(payload.content);
 }
 
 function createClientStartRequest({
-  audienceRating,
-  contentWarnings,
-  nsfwRationale,
+  nsfwEnabled,
   rawIntent,
   targetShotCount,
-  title,
 }: {
-  audienceRating: StoryAudienceRating;
-  contentWarnings: string;
-  nsfwRationale: string;
+  nsfwEnabled: boolean;
   rawIntent: string;
-  targetShotCount: number;
-  title: string;
+  targetShotCount: string;
 }): StoryGraphStartRequest {
-  const warnings = splitWarnings(contentWarnings);
+  const normalizedShotCount = targetShotCount.trim() ? Number(targetShotCount) : undefined;
+  const audienceRating = nsfwEnabled ? "explicit" : "safe";
 
   return {
-    audienceRating,
-    contentWarnings: warnings,
-    nsfwEnabled: audienceRating === "explicit" || audienceRating === "mature" || nsfwRationale.trim().length > 0,
-    nsfwRationale,
+    nsfwEnabled,
     rawIntent,
-    targetShotCount,
-    title,
+    targetShotCount: Number.isFinite(normalizedShotCount) ? normalizedShotCount : undefined,
     settingsSnapshot: {
       audienceRating,
-      contentWarnings: warnings,
-      nsfwEnabled: audienceRating === "explicit" || audienceRating === "mature" || nsfwRationale.trim().length > 0,
-      targetShotCount,
+      nsfwEnabled,
+      targetShotCount: Number.isFinite(normalizedShotCount) ? normalizedShotCount : undefined,
     } as StoryGraphStartRequest["settingsSnapshot"],
   };
 }
 
 function StartPanel({
+  nsfwEnabled,
   onStart,
 }: {
+  nsfwEnabled: boolean;
   onStart: (request: StoryGraphStartRequest) => void;
 }) {
   const [rawIntent, setRawIntent] = useState("");
-  const [title, setTitle] = useState("");
-  const [targetShotCount, setTargetShotCount] = useState(3);
-  const [audienceRating, setAudienceRating] = useState<StoryAudienceRating>("safe");
-  const [contentWarnings, setContentWarnings] = useState("");
-  const [nsfwRationale, setNsfwRationale] = useState("");
+  const [targetShotCount, setTargetShotCount] = useState("");
+  const [aiStatus, setAiStatus] = useState<StoryInputAiAction | null>(null);
   const [error, setError] = useState("");
+
+  async function handleStoryInputAi(action: StoryInputAiAction) {
+    const currentStoryRequest = rawIntent.trim();
+
+    if (action === "rewrite" && !currentStoryRequest) {
+      setError("Add a story request before asking AI to rewrite it.");
+      return;
+    }
+
+    setError("");
+    setAiStatus(action);
+
+    try {
+      const nextStoryRequest = await completeStoryInputAi({
+        action,
+        nsfwEnabled,
+        storyRequest: currentStoryRequest,
+      });
+      setRawIntent(nextStoryRequest);
+    } catch (inputError) {
+      setError(inputError instanceof Error ? inputError.message : "Story input AI request failed.");
+    } finally {
+      setAiStatus(null);
+    }
+  }
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -108,12 +331,9 @@ function StartPanel({
     setError("");
     onStart(
       createClientStartRequest({
-        audienceRating,
-        contentWarnings,
-        nsfwRationale,
+        nsfwEnabled,
         rawIntent,
         targetShotCount,
-        title,
       }),
     );
   }
@@ -137,7 +357,29 @@ function StartPanel({
         </div>
 
         <label className="flex flex-col gap-1 text-xs font-medium text-slate-700">
-          Story request
+          <span className="flex items-center justify-between gap-3">
+            Story request
+            <span className="flex shrink-0 items-center gap-2">
+              <button
+                className="inline-flex h-8 items-center justify-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                disabled={aiStatus !== null || !rawIntent.trim()}
+                onClick={() => void handleStoryInputAi("rewrite")}
+                type="button"
+              >
+                <RefreshCw className="size-3.5" />
+                Rewrite
+              </button>
+              <button
+                className="inline-flex h-8 items-center justify-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                disabled={aiStatus !== null}
+                onClick={() => void handleStoryInputAi("suggest")}
+                type="button"
+              >
+                <Bot className="size-3.5" />
+                Suggest
+              </button>
+            </span>
+          </span>
           <textarea
             className="min-h-36 rounded-md border border-slate-200 px-3 py-2 text-sm leading-relaxed outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
             onChange={(event) => setRawIntent(event.target.value)}
@@ -146,58 +388,17 @@ function StartPanel({
           />
         </label>
 
-        <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_8rem_12rem]">
-          <label className="flex flex-col gap-1 text-xs font-medium text-slate-700">
-            Title
-            <input
-              className="h-9 rounded-md border border-slate-200 px-3 text-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
-              onChange={(event) => setTitle(event.target.value)}
-              value={title}
-            />
-          </label>
+        <div className="grid gap-3 md:grid-cols-[8rem]">
           <label className="flex flex-col gap-1 text-xs font-medium text-slate-700">
             Shots
             <input
               className="h-9 rounded-md border border-slate-200 px-3 text-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
               min={1}
               max={24}
-              onChange={(event) => setTargetShotCount(Number(event.target.value) || 1)}
+              onChange={(event) => setTargetShotCount(event.target.value)}
+              placeholder="Auto"
               type="number"
               value={targetShotCount}
-            />
-          </label>
-          <label className="flex flex-col gap-1 text-xs font-medium text-slate-700">
-            Audience rating
-            <select
-              className="h-9 rounded-md border border-slate-200 bg-white px-3 text-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
-              onChange={(event) => setAudienceRating(event.target.value as StoryAudienceRating)}
-              value={audienceRating}
-            >
-              <option value="safe">Safe</option>
-              <option value="suggestive">Suggestive</option>
-              <option value="mature">Mature</option>
-              <option value="explicit">Explicit</option>
-            </select>
-          </label>
-        </div>
-
-        <div className="grid gap-3 md:grid-cols-2">
-          <label className="flex flex-col gap-1 text-xs font-medium text-slate-700">
-            Content warnings
-            <input
-              className="h-9 rounded-md border border-slate-200 px-3 text-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
-              onChange={(event) => setContentWarnings(event.target.value)}
-              placeholder="comma-separated"
-              value={contentWarnings}
-            />
-          </label>
-          <label className="flex flex-col gap-1 text-xs font-medium text-slate-700">
-            NSFW context
-            <input
-              className="h-9 rounded-md border border-slate-200 px-3 text-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
-              onChange={(event) => setNsfwRationale(event.target.value)}
-              placeholder="optional rationale"
-              value={nsfwRationale}
             />
           </label>
         </div>
@@ -221,6 +422,8 @@ function StartPanel({
 export function StoryPlanningPreview() {
   const [workflow, setWorkflow] = useState<StoryWorkflowState | null>(null);
   const [selectedNodeId, setSelectedNodeId] = useState<StoryWorkflowNodeId>("story-input");
+  const [settingsNsfwEnabled, setSettingsNsfwEnabled] = useState(false);
+  const [planningError, setPlanningError] = useState("");
   const selectedNode = workflow?.nodes[selectedNodeId];
   const metadata = storyWorkflowDefinition.metadata[selectedNodeId];
   const rawJson = useMemo(
@@ -230,10 +433,53 @@ export function StoryPlanningPreview() {
   const selectedIndex = planningNodeIds.indexOf(selectedNodeId) + 1;
   const selectedDependencies = storyWorkflowDefinition.dependencyDag[selectedNodeId];
 
-  function handleStart(request: StoryGraphStartRequest) {
-    const started = startStoryGraphWorkflow(request);
-    setWorkflow(started);
+  useEffect(() => {
+    if (typeof fetch !== "function") {
+      return;
+    }
+
+    let active = true;
+
+    void fetch("/api/settings")
+      .then((response) => (response.ok ? response.json() as Promise<unknown> : null))
+      .then((payload) => {
+        if (!active || !payload || typeof payload !== "object") {
+          return;
+        }
+
+        const nsfw = (payload as { general?: { nsfw?: { supportsNsfw?: boolean } } }).general?.nsfw;
+        setSettingsNsfwEnabled(nsfw?.supportsNsfw === true);
+      })
+      .catch(() => {
+        if (active) {
+          setSettingsNsfwEnabled(false);
+        }
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  async function handleStart(request: StoryGraphStartRequest) {
+    setPlanningError("");
+    const started = createStoryGraphInputWorkflow(request);
+    setWorkflow(started.workflow);
     setSelectedNodeId("story-input");
+
+    try {
+      const targetShotCount = request.targetShotCount ?? await completeStoryPlanningShotCount({
+        nsfwEnabled: request.nsfwEnabled ?? false,
+        storyRequest: request.rawIntent,
+      });
+      const planned = startStoryGraphWorkflow({
+        ...request,
+        targetShotCount,
+      });
+      setWorkflow(planned);
+    } catch (error) {
+      setPlanningError(error instanceof Error ? error.message : "Story Graph planning failed.");
+    }
   }
 
   function handleSave(nodeId: StoryWorkflowNodeId, result: unknown, scope: StoryManualEditScope) {
@@ -286,7 +532,7 @@ export function StoryPlanningPreview() {
       </header>
 
       {!workflow || !selectedNode ? (
-        <StartPanel onStart={handleStart} />
+        <StartPanel nsfwEnabled={settingsNsfwEnabled} onStart={(request) => void handleStart(request)} />
       ) : (
         <div className="sf-agent-workbench flex min-h-0 flex-1 flex-col overflow-hidden lg:flex-row">
           <aside className="sf-agent-workbench__nav custom-scrollbar touch-scroll-region order-2 min-h-0 overflow-y-auto border-b border-slate-200 bg-white p-3 lg:order-1 lg:w-72 lg:flex-[0_0_18rem] lg:border-b-0 lg:border-r">
@@ -388,6 +634,11 @@ export function StoryPlanningPreview() {
                   </div>
 
                   <div className="flex min-h-[36rem] flex-1 flex-col rounded-md border border-slate-200 bg-white p-3">
+                    {planningError ? (
+                      <div className="mb-3 rounded-md border border-rose-200 bg-rose-50 p-3 text-xs text-rose-700">
+                        {planningError}
+                      </div>
+                    ) : null}
                     <div className="mb-2 flex items-center justify-between gap-3">
                       <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Step output</p>
                       <span className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] font-medium uppercase text-slate-500">

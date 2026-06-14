@@ -33,10 +33,9 @@ type StoryClock = () => string;
 
 export type StoryGraphStartSettingsSnapshot = {
   capturedAt: string;
-  contentWarnings: string[];
   nsfwEnabled: boolean;
   source: "story-form";
-  targetShotCount: number;
+  targetShotCount?: number;
   audienceRating: StoryAudienceRating;
   planningMode: "deterministic-local";
   resourceCandidates?: {
@@ -47,15 +46,11 @@ export type StoryGraphStartSettingsSnapshot = {
 
 export type StoryGraphStartRequest = {
   rawIntent: string;
-  audienceRating?: StoryAudienceRating;
-  contentWarnings?: string[];
   nsfwEnabled?: boolean;
-  nsfwRationale?: string;
   now?: StoryClock;
   settingsSnapshot?: Partial<StoryGraphStartSettingsSnapshot>;
   storyId?: string;
   targetShotCount?: number;
-  title?: string;
   workflowId?: string;
 };
 
@@ -109,6 +104,11 @@ export type StoryPlanningArtifacts = {
   resultDisplay: StoryResultDisplayPending;
 };
 
+export type StoryGraphInputWorkflowStart = {
+  input: StoryInput;
+  workflow: StoryWorkflowState;
+};
+
 const defaultTimestamp = "2026-06-14T00:00:00.000Z";
 const maxTargetShotCount = 24;
 
@@ -116,18 +116,9 @@ function defaultNow() {
   return new Date().toISOString();
 }
 
-function trimToUndefined(value: string | undefined) {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : undefined;
-}
-
-function normalizeList(values: readonly string[] | undefined) {
-  return [...(values ?? [])].map((value) => value.trim()).filter(Boolean);
-}
-
 function normalizeTargetShotCount(value: number | undefined) {
   if (!Number.isFinite(value ?? Number.NaN)) {
-    return 3;
+    return undefined;
   }
 
   return Math.min(maxTargetShotCount, Math.max(1, Math.round(value as number)));
@@ -144,59 +135,48 @@ function slugifyIdPart(value: string) {
   return slug || "story";
 }
 
-function deriveTitle(rawIntent: string, title: string | undefined) {
-  if (title) {
-    return title;
-  }
-
+function deriveTitle(rawIntent: string) {
   const sentence = rawIntent.split(/[.!?]/)[0]?.trim() ?? rawIntent.trim();
   return sentence.length > 64 ? `${sentence.slice(0, 61).trim()}...` : sentence;
 }
 
 function createSettingsSnapshot({
   audienceRating,
-  contentWarnings,
   nsfwEnabled,
   request,
   targetShotCount,
   timestamp,
 }: {
   audienceRating: StoryAudienceRating;
-  contentWarnings: string[];
   nsfwEnabled: boolean;
   request: StoryGraphStartRequest;
-  targetShotCount: number;
+  targetShotCount?: number;
   timestamp: string;
 }): StoryGraphStartSettingsSnapshot {
   return {
     capturedAt: request.settingsSnapshot?.capturedAt ?? timestamp,
     source: "story-form",
     planningMode: "deterministic-local",
-    targetShotCount,
-    audienceRating,
-    nsfwEnabled,
     resourceCandidates: request.settingsSnapshot?.resourceCandidates,
     ...request.settingsSnapshot,
-    contentWarnings,
+    audienceRating,
+    nsfwEnabled,
+    targetShotCount,
   } as StoryGraphStartSettingsSnapshot;
 }
 
 function createNsfwContext({
   audienceRating,
-  contentWarnings,
   enabled,
-  rationale,
 }: {
   audienceRating: StoryAudienceRating;
-  contentWarnings: string[];
   enabled: boolean;
-  rationale?: string;
 }): StoryNsfwContext {
   return {
     audienceRating,
-    contentWarnings,
+    contentWarnings: [],
     enabled,
-    rationale: trimToUndefined(rationale) ?? (enabled ? "User supplied NSFW or mature story context." : "No NSFW context requested."),
+    rationale: enabled ? "NSFW is enabled in SceneForge settings." : "NSFW is disabled in SceneForge settings.",
   };
 }
 
@@ -207,10 +187,9 @@ export function createStoryInputFromStartRequest(request: StoryGraphStartRequest
     throw new Error("Story request is required.");
   }
 
-  const audienceRating = request.audienceRating ?? "safe";
+  const nsfwEnabled = request.nsfwEnabled ?? request.settingsSnapshot?.nsfwEnabled ?? false;
+  const audienceRating: StoryAudienceRating = nsfwEnabled ? "explicit" : "safe";
   const targetShotCount = normalizeTargetShotCount(request.targetShotCount);
-  const contentWarnings = normalizeList(request.contentWarnings);
-  const nsfwEnabled = request.nsfwEnabled ?? (audienceRating === "explicit" || audienceRating === "mature");
   const now = request.now ?? defaultNow;
   const timestamp = now();
   const storyId = request.storyId ?? `story-${slugifyIdPart(rawIntent)}-${timestamp.replace(/[^0-9]/g, "").slice(0, 14)}`;
@@ -218,18 +197,15 @@ export function createStoryInputFromStartRequest(request: StoryGraphStartRequest
   return {
     storyId,
     rawIntent,
-    title: trimToUndefined(request.title),
+    title: undefined,
     targetShotCount,
     audienceRating,
     nsfwContext: createNsfwContext({
       audienceRating,
-      contentWarnings,
       enabled: nsfwEnabled,
-      rationale: request.nsfwRationale,
     }),
     settingsSnapshot: createSettingsSnapshot({
       audienceRating,
-      contentWarnings,
       nsfwEnabled,
       request,
       targetShotCount,
@@ -239,7 +215,7 @@ export function createStoryInputFromStartRequest(request: StoryGraphStartRequest
 }
 
 function createBible(input: StoryInput): StoryBible {
-  const title = deriveTitle(input.rawIntent, input.title);
+  const title = deriveTitle(input.rawIntent);
 
   return {
     storyId: input.storyId,
@@ -275,8 +251,12 @@ function createBible(input: StoryInput): StoryBible {
   };
 }
 
+function getPlanningShotCount(input: StoryInput) {
+  return input.targetShotCount ?? 3;
+}
+
 function createOutline(input: StoryInput): StoryOutline {
-  const shotCount = input.targetShotCount ?? 3;
+  const shotCount = getPlanningShotCount(input);
 
   return {
     storyId: input.storyId,
@@ -324,7 +304,6 @@ function createShots(input: StoryInput, outline: StoryOutline): StoryShot[] {
 function createSafetyPlan(input: StoryInput, shots: readonly StoryShot[]): StorySafetyPlan {
   const nsfwContext = input.nsfwContext ?? createNsfwContext({
     audienceRating: input.audienceRating ?? "safe",
-    contentWarnings: [],
     enabled: false,
   });
 
@@ -577,6 +556,38 @@ export function createStoryPlanningArtifacts(input: StoryInput, timestamp = defa
   };
 }
 
+export function createStoryGraphInputWorkflow(request: StoryGraphStartRequest): StoryGraphInputWorkflowStart {
+  const now = request.now ?? defaultNow;
+  const timestamp = now();
+  const input = createStoryInputFromStartRequest({
+    ...request,
+    now: () => timestamp,
+  });
+  const workflow = createStoryWorkflowState({
+    now: () => timestamp,
+    storyId: input.storyId,
+    workflowId: request.workflowId,
+  });
+
+  return {
+    input,
+    workflow: refreshStoryWorkflowReadiness({
+      ...workflow,
+      nodes: {
+        ...workflow.nodes,
+        "story-input": {
+          nodeId: "story-input",
+          result: input,
+          source: "manual",
+          status: "manual",
+          updatedAt: timestamp,
+        },
+      },
+      updatedAt: timestamp,
+    }),
+  };
+}
+
 const artifactNodeMap = {
   "story-input": "input",
   "story-bible": "bible",
@@ -596,18 +607,11 @@ const artifactNodeMap = {
 } as const satisfies Record<StoryWorkflowNodeId, keyof StoryPlanningArtifacts>;
 
 export function startStoryGraphWorkflow(request: StoryGraphStartRequest): StoryWorkflowState {
-  const now = request.now ?? defaultNow;
-  const timestamp = now();
-  const input = createStoryInputFromStartRequest({
-    ...request,
-    now: () => timestamp,
-  });
+  const { input, workflow } = createStoryGraphInputWorkflow(request);
+  const timestamp = input.settingsSnapshot && typeof input.settingsSnapshot === "object" && "capturedAt" in input.settingsSnapshot
+    ? String((input.settingsSnapshot as { capturedAt: string }).capturedAt)
+    : defaultNow();
   const artifacts = createStoryPlanningArtifacts(input, timestamp);
-  const workflow = createStoryWorkflowState({
-    now: () => timestamp,
-    storyId: input.storyId,
-    workflowId: request.workflowId,
-  });
   const nodes = { ...workflow.nodes };
 
   for (const [nodeId, artifactKey] of Object.entries(artifactNodeMap) as Array<[StoryWorkflowNodeId, keyof StoryPlanningArtifacts]>) {

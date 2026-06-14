@@ -14,36 +14,52 @@ const now = () => "2026-06-14T00:00:00.000Z";
 describe("story input workflow start", () => {
   it("normalizes user input into typed StoryInput with settings and NSFW context", () => {
     const input = createStoryInputFromStartRequest({
-      audienceRating: "mature",
-      contentWarnings: ["  body horror ", ""],
-      nsfwRationale: "Adult horror context.",
       rawIntent: "A four-shot gothic chapel sequence.",
-      targetShotCount: 4.4,
-      title: "Chapel Sequence",
       storyId: "story-1",
+      targetShotCount: 4.4,
+      nsfwEnabled: true,
       now,
     });
 
     expect(input).toMatchObject({
       storyId: "story-1",
       rawIntent: "A four-shot gothic chapel sequence.",
-      title: "Chapel Sequence",
+      title: undefined,
       targetShotCount: 4,
-      audienceRating: "mature",
+      audienceRating: "explicit",
       nsfwContext: {
         enabled: true,
-        audienceRating: "mature",
-        contentWarnings: ["body horror"],
-        rationale: "Adult horror context.",
+        audienceRating: "explicit",
+        contentWarnings: [],
+        rationale: "NSFW is enabled in SceneForge settings.",
       },
       settingsSnapshot: {
         source: "story-form",
         planningMode: "deterministic-local",
         targetShotCount: 4,
-        audienceRating: "mature",
+        audienceRating: "explicit",
         nsfwEnabled: true,
       },
     });
+  });
+
+  it("leaves target shot count unset when the user lets the workflow decide", () => {
+    const input = createStoryInputFromStartRequest({
+      rawIntent: "A moody station encounter.",
+      storyId: "story-auto-shots",
+      now,
+    });
+    const artifacts = createStoryPlanningArtifacts(input, now());
+
+    expect(input.targetShotCount).toBeUndefined();
+    expect(input.audienceRating).toBe("safe");
+    expect(input.nsfwContext).toMatchObject({
+      enabled: false,
+      audienceRating: "safe",
+      rationale: "NSFW is disabled in SceneForge settings.",
+    });
+    expect(artifacts.outline.beats).toHaveLength(3);
+    expect(artifacts.shots).toHaveLength(3);
   });
 
   it("creates inspectable planning artifacts from a user-started story input", () => {
