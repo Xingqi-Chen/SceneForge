@@ -2,6 +2,36 @@
 
 This log records dated implementation and documentation work. Keep entries concise and evidence-oriented.
 
+## 2026-06-14
+
+### T16 / Issue #61 Shared Workflow Definitions and Node Primitives
+
+Summary:
+
+- Added reusable workflow primitives for definition version, workflow mode, node metadata, dependency DAGs, readiness, manual edit stale propagation, raw JSON display, workspace routing, AI retry affordances, and adapter result normalization.
+- Added adapter artifact scopes for current workflow-scoped single artifacts and future story-scoped or shot-scoped artifacts.
+- Extracted a single-image workflow definition data object without migrating current LangGraph registration or changing single-image runtime behavior.
+- Extracted shared local resource-plan validation and routed timeline resource recommendation through it.
+- Kept common resource-plan behavior independent of model NSFW markers and stripped known NSFW marker fields from shared resource-plan outputs.
+
+Files changed:
+
+- `src/features/agent-timeline/workflow-definition.ts`
+- `src/features/agent-timeline/workflow-definitions.ts`
+- `src/features/agent-timeline/resource-plan.ts`
+- `src/features/agent-timeline/t7-node-adapters.ts`
+- `src/features/agent-timeline/index.ts`
+- `src/features/agent-timeline/workflow-definition.test.ts`
+- `src/features/agent-timeline/resource-plan.test.ts`
+- `docs/tech-spec.md`
+- `docs/dev-log.md`
+
+Validation:
+
+- `npm test -- --run src/features/agent-timeline` passed with 16 files and 114 tests.
+- `npm run typecheck` passed.
+- `npm run lint` passed with 23 existing warnings unrelated to this change.
+
 ## 2026-06-13
 
 ### T15 / Issue #57 sqlite-vec Civitai Recommendation Index

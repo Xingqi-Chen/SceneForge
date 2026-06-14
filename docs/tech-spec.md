@@ -158,6 +158,13 @@ type TimelineNodeResult<T> = {
 - Graph execution must stop at `generation-gate` until the user confirms.
 - ComfyUI calls must not be constructed before confirmation.
 
+### Shared Workflow Primitives
+
+- `src/features/agent-timeline/workflow-definition.ts` owns reusable workflow contracts for mode, definition version, node metadata, dependency DAGs, node status, readiness, manual-edit stale propagation, raw JSON display, workspace routing, AI retry affordance, and adapter result normalization.
+- Adapter contracts must support current workflow-scoped single artifacts and future story-scoped or shot-scoped artifacts through explicit artifact scopes. Current single-image execution remains hard-coded until the definition-driven migration track.
+- `src/features/agent-timeline/workflow-definitions.ts` exposes the extracted single-image workflow definition data for future migration without changing the current LangGraph registration path.
+- `src/features/agent-timeline/resource-plan.ts` owns reusable local resource-plan validation. It selects only validated local candidates, rejects invented or ambiguous resources, and strips model NSFW marker fields from common resource-plan outputs. Resource-plan behavior must not read, depend on, or expose model NSFW markers; NSFW remains content and execution context only.
+
 ## LLM and AI Node Adapter Rules
 
 Existing LLM-facing behavior should be reused before adding new calls:

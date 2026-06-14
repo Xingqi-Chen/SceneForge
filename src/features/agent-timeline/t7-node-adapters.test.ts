@@ -331,6 +331,44 @@ describe("T7 timeline adapters", () => {
     expect(result.warnings).toEqual(["Ignored duplicate LoRA Duplicated LoRA."]);
   });
 
+  it("keeps only the first three local LoRAs from a recommendation", () => {
+    const checkpoint = makeResource("model", "checkpoint-local", "Local Checkpoint", "Pony");
+    const loras = [
+      makeResource("lora", "lora-1", "First LoRA", "Pony"),
+      makeResource("lora", "lora-2", "Second LoRA", "Pony"),
+      makeResource("lora", "lora-3", "Third LoRA", "Pony"),
+      makeResource("lora", "lora-4", "Fourth LoRA", "Pony"),
+    ];
+
+    const result = validateTimelineResourceRecommendation({
+      candidates: {
+        checkpoints: [makeCandidate(checkpoint)],
+        loras: loras.map(makeCandidate),
+      },
+      recommendation: {
+        checkpoint: {
+          resource: checkpoint,
+          reason: "Local checkpoint.",
+        },
+        loras: loras.map((lora) => ({
+          resource: lora,
+          suggestedWeight: 0.7,
+          reason: "Local LoRA.",
+        })),
+        recommendationReason: "Use local resources.",
+        overallEffect: "Neon portrait.",
+        warnings: [],
+      },
+    });
+
+    expect(result.loras.map((lora) => lora.resource.id)).toEqual([
+      "lora-1",
+      "lora-2",
+      "lora-3",
+    ]);
+    expect(result.warnings).toEqual(["Only the first 3 LoRAs were kept."]);
+  });
+
   it("uses resolved local resource metadata for final prompt and ComfyUI request fields", () => {
     const localCheckpoint = makeResource("model", "checkpoint-local", "Shared Checkpoint", "Pony", {
       modelFileName: "local-checkpoint.safetensors",
