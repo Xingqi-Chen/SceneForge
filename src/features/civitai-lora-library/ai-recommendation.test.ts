@@ -6,6 +6,7 @@ import type { CivitaiResourceDetail } from "./types";
 import {
   rankCivitaiRecommendationCandidates,
   parseCivitaiCombinationRecommendationContent,
+  reciprocalRankFuseCivitaiRecommendationCandidates,
   toLlmCivitaiRecommendationCandidate,
   validateCivitaiCombinationRecommendation,
 } from "./ai-recommendation";
@@ -112,6 +113,37 @@ describe("Civitai AI recommendation helpers", () => {
       { id: "lora-a", suggestedWeight: null, reason: "" },
       { id: "lora-b", suggestedWeight: 0.75, reason: "" },
     ]);
+  });
+
+  it("merges independent BM25 and embedding ranks with fixed reciprocal rank fusion", () => {
+    const bm25First = rankCivitaiRecommendationCandidates(
+      [makeDetail({ id: "bm25-first", name: "Cyber Neon Detail", importedImageCount: 1 })],
+      "cyber neon",
+    )[0];
+    const bm25Second = rankCivitaiRecommendationCandidates(
+      [makeDetail({ id: "shared", name: "Cyber Shared Detail", importedImageCount: 1 })],
+      "cyber",
+    )[0];
+    const embeddingFirst = rankCivitaiRecommendationCandidates(
+      [makeDetail({ id: "shared", name: "Embedding Shared Detail", importedImageCount: 1 })],
+      "embedding",
+    )[0];
+    const embeddingSecond = rankCivitaiRecommendationCandidates(
+      [makeDetail({ id: "embedding-second", name: "Embedding Second Detail", importedImageCount: 1 })],
+      "embedding",
+    )[0];
+
+    const fused = reciprocalRankFuseCivitaiRecommendationCandidates([
+      [bm25First, bm25Second],
+      [embeddingFirst, embeddingSecond],
+    ]);
+
+    expect(fused.map((candidate) => candidate.resource.id)).toEqual([
+      "shared",
+      "bm25-first",
+      "embedding-second",
+    ]);
+    expect(fused[0].score).toBeCloseTo(1 / 62 + 1 / 61, 6);
   });
 
   it("validates ids, dedupes LoRAs, and enforces the max LoRA count", () => {

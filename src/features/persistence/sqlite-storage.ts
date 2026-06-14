@@ -65,7 +65,9 @@ type SceneForgeSqliteStatement = {
 
 export type SceneForgeSqliteDatabase = {
   close(): void;
+  enableLoadExtension?(allow: boolean): void;
   exec(sql: string): void;
+  loadExtension?(file: string, entrypoint?: string): void;
   prepare(sql: string): SceneForgeSqliteStatement;
 };
 
@@ -78,7 +80,7 @@ const CIVITAI_LOCAL_IMAGE_ROUTE_PREFIX = "/api/civitai-lora-library/images/";
 const ARTIST_STRING_LOCAL_IMAGE_ROUTE_PREFIX = "/api/artist-string-library/images/";
 
 type NodeSqliteModule = {
-  DatabaseSync: new (location: string) => SceneForgeSqliteDatabase;
+  DatabaseSync: new (location: string, options?: { allowExtension?: boolean }) => SceneForgeSqliteDatabase;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -394,13 +396,15 @@ export function ensureSceneForgeSqliteSchema(db: SceneForgeSqliteDatabase): void
 
 export async function openSceneForgeSqliteDatabase(
   filePath = getResolvedSqliteFilePath(),
+  options: { allowExtensions?: boolean } = {},
 ): Promise<SceneForgeSqliteDatabase> {
   const resolved = path.resolve(filePath);
   await fs.mkdir(/*turbopackIgnore: true*/ path.dirname(resolved), { recursive: true });
 
   const sqlite = (await import("node:sqlite")) as NodeSqliteModule;
-  const db = new sqlite.DatabaseSync(resolved);
+  const db = new sqlite.DatabaseSync(resolved, { allowExtension: options.allowExtensions === true });
   ensureSceneForgeSqliteSchema(db);
+  db.enableLoadExtension?.(false);
   return db;
 }
 

@@ -11,6 +11,7 @@ import {
   getCivitaiResourceConfiguredDownloadPath,
   makeCivitaiResourceTargetFileName,
 } from "@/features/civitai-lora-library";
+import type { LlmChatRequest } from "@/features/llm";
 import {
   openSceneForgeSqliteDatabase,
   saveCivitaiLibrarySettingsToSqlite,
@@ -18,8 +19,14 @@ import {
   type SceneForgeSqliteDatabase,
 } from "@/features/persistence/sqlite-storage";
 import { rebuildCivitaiSearchIndex } from "@/features/persistence/civitai-search-index";
+import {
+  listCivitaiResourceEmbeddingInputs,
+  readCivitaiEmbeddingIndexMetadata,
+  rebuildCivitaiEmbeddingIndex,
+} from "@/features/persistence/civitai-embedding-index";
 
 const mockCompleteChat = vi.hoisted(() => vi.fn());
+const mockCreateEmbedding = vi.hoisted(() => vi.fn());
 
 vi.mock("@/features/llm", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/features/llm")>();
@@ -28,6 +35,7 @@ vi.mock("@/features/llm", async (importOriginal) => {
     ...actual,
     createLiteLlmClient: vi.fn(() => ({
       completeChat: mockCompleteChat,
+      createEmbedding: mockCreateEmbedding,
     })),
   };
 });
@@ -93,15 +101,22 @@ describe("Civitai AI recommendation route", () => {
   let db: SceneForgeSqliteDatabase;
   let settings: CivitaiLibrarySettings;
   let previousSqliteFile: string | undefined;
+  let previousEmbeddingModel: string | undefined;
   let previousNsfwModel: string | undefined;
 
   beforeEach(async () => {
     mockCompleteChat.mockReset();
+    mockCreateEmbedding.mockReset();
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "sceneforge-civitai-ai-rec-"));
     previousSqliteFile = process.env.SCENEFORGE_SQLITE_FILE;
+    previousEmbeddingModel = process.env.LITELLM_CIVITAI_EMBEDDING_MODEL;
     previousNsfwModel = process.env.LITELLM_NSFW_MODEL;
     process.env.SCENEFORGE_SQLITE_FILE = path.join(tempDir, "sceneforge.sqlite");
-    db = await openSceneForgeSqliteDatabase();
+    process.env.LITELLM_CIVITAI_EMBEDDING_MODEL = "test-embedding-model";
+    mockCreateEmbedding.mockResolvedValue({
+      embeddings: [[1, 0, 0]],
+    });
+    db = await openSceneForgeSqliteDatabase(undefined, { allowExtensions: true });
     settings = {
       checkpointDownloadPath: path.join(tempDir, "checkpoints"),
       controlNetModelPath: path.join(tempDir, "controlnet"),
@@ -124,12 +139,37 @@ describe("Civitai AI recommendation route", () => {
     } else {
       process.env.LITELLM_NSFW_MODEL = previousNsfwModel;
     }
+    if (previousEmbeddingModel === undefined) {
+      delete process.env.LITELLM_CIVITAI_EMBEDDING_MODEL;
+    } else {
+      process.env.LITELLM_CIVITAI_EMBEDDING_MODEL = previousEmbeddingModel;
+    }
     await fs.rm(tempDir, { recursive: true, force: true });
   });
 
   async function markDownloaded(resource: CivitaiResourceRecord) {
     const downloadPath = getCivitaiResourceConfiguredDownloadPath(resource, settings);
     await fs.writeFile(path.join(downloadPath, makeCivitaiResourceTargetFileName(resource)), "downloaded");
+  }
+
+  function rebuildTestEmbeddingIndex() {
+    const inputs = listCivitaiResourceEmbeddingInputs(db);
+
+    rebuildCivitaiEmbeddingIndex(db, {
+      model: "test-embedding-model",
+      embeddings: inputs.map((input) => {
+        const text = input.text.toLocaleLowerCase();
+
+        return {
+          chunkFingerprint: input.chunkFingerprint,
+          chunkIndex: input.chunkIndex,
+          resourceId: input.resourceId,
+          resourceType: input.resourceType,
+          sourceFingerprint: input.sourceFingerprint,
+          embedding: text.includes("cyber") || text.includes("neon") ? [1, 0, 0] : [0, 1, 0],
+        };
+      }),
+    });
   }
 
   it("returns an actionable error when the Civitai FTS index is missing", async () => {
@@ -147,7 +187,10 @@ describe("Civitai AI recommendation route", () => {
   });
 
   it("returns an error before calling the LLM when no checkpoint exists", async () => {
+    const lora = upsertCivitaiResourceToSqlite(db, makeResourceInput("lora", "Only LoRA")).resource;
+    await markDownloaded(lora);
     rebuildCivitaiSearchIndex(db);
+    rebuildTestEmbeddingIndex();
 
     const response = await POST(
       new Request("http://localhost/api/civitai-lora-library/ai-recommendation", {
@@ -162,6 +205,152 @@ describe("Civitai AI recommendation route", () => {
     expect(mockCompleteChat).not.toHaveBeenCalled();
   });
 
+  it("returns an actionable error when the Civitai embedding index is missing", async () => {
+    const checkpoint = upsertCivitaiResourceToSqlite(
+      db,
+      makeResourceInput("model", "Cyber Checkpoint"),
+    ).resource;
+    await markDownloaded(checkpoint);
+    rebuildCivitaiSearchIndex(db);
+
+    const response = await POST(
+      new Request("http://localhost/api/civitai-lora-library/ai-recommendation", {
+        method: "POST",
+        body: JSON.stringify({ desiredEffect: "cyber neon" }),
+      }),
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(409);
+    expect(payload.error.message).toContain("npm run civitai:reindex-embeddings");
+    expect(readCivitaiEmbeddingIndexMetadata(db)).toBeNull();
+    expect(mockCreateEmbedding).not.toHaveBeenCalled();
+    expect(mockCompleteChat).not.toHaveBeenCalled();
+  });
+
+  it("returns an actionable error when query embedding generation fails", async () => {
+    const checkpoint = upsertCivitaiResourceToSqlite(
+      db,
+      makeResourceInput("model", "Cyber Checkpoint"),
+    ).resource;
+    await markDownloaded(checkpoint);
+    rebuildCivitaiSearchIndex(db);
+    rebuildTestEmbeddingIndex();
+    mockCreateEmbedding.mockRejectedValue(new Error("embedding server unavailable"));
+
+    const response = await POST(
+      new Request("http://localhost/api/civitai-lora-library/ai-recommendation", {
+        method: "POST",
+        body: JSON.stringify({ desiredEffect: "cyber neon" }),
+      }),
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(409);
+    expect(payload.error.message).toContain("npm run civitai:reindex-embeddings");
+    expect(mockCompleteChat).not.toHaveBeenCalled();
+  });
+
+  it("sanitizes query text before creating a recommendation embedding", async () => {
+    const checkpoint = upsertCivitaiResourceToSqlite(
+      db,
+      makeResourceInput("model", "Cyber Checkpoint"),
+    ).resource;
+    await markDownloaded(checkpoint);
+    rebuildCivitaiSearchIndex(db);
+    rebuildTestEmbeddingIndex();
+
+    const unpairedLowSurrogate = String.fromCharCode(0xdd27);
+    const unpairedHighSurrogate = String.fromCharCode(0xd83d);
+
+    mockCompleteChat.mockResolvedValue({
+      content: JSON.stringify({
+        checkpointId: checkpoint.id,
+        checkpointReason: "Matches the requested effect.",
+        loras: [],
+        recommendationReason: "Selected the available local checkpoint.",
+        overallEffect: "Cinematic portrait.",
+      }),
+      role: "assistant",
+    });
+
+    const response = await POST(
+      new Request("http://localhost/api/civitai-lora-library/ai-recommendation", {
+        method: "POST",
+        body: JSON.stringify({
+          desiredEffect: `cinematic ${unpairedLowSurrogate} portrait ${unpairedHighSurrogate}`,
+        }),
+      }),
+    );
+    const embeddingRequest = mockCreateEmbedding.mock.calls[0]?.[0];
+    const chatRequest = mockCompleteChat.mock.calls[0]?.[0] as LlmChatRequest | undefined;
+    const chatContent = chatRequest?.messages.map((message) => message.content).join("\n") ?? "";
+
+    expect(response.status).toBe(200);
+    expect(embeddingRequest?.input).toContain("\uFFFD");
+    expect(() => encodeURIComponent(String(embeddingRequest?.input))).not.toThrow();
+    expect(chatContent).toContain("\uFFFD");
+    expect(() => encodeURIComponent(chatContent)).not.toThrow();
+  });
+
+  it("returns an actionable error when the embedding source text fingerprint is stale", async () => {
+    const checkpoint = upsertCivitaiResourceToSqlite(
+      db,
+      makeResourceInput("model", "Cyber Checkpoint"),
+    ).resource;
+    await markDownloaded(checkpoint);
+    rebuildCivitaiSearchIndex(db);
+    rebuildTestEmbeddingIndex();
+
+    db.prepare(`
+      UPDATE civitai_resource_search_fts
+      SET search_text = ?
+      WHERE resource_id = ?
+    `).run("changed semantic source text", checkpoint.id);
+
+    const response = await POST(
+      new Request("http://localhost/api/civitai-lora-library/ai-recommendation", {
+        method: "POST",
+        body: JSON.stringify({ desiredEffect: "cyber neon" }),
+      }),
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(409);
+    expect(payload.error.message).toContain("npm run civitai:reindex-embeddings");
+    expect(mockCreateEmbedding).not.toHaveBeenCalled();
+    expect(mockCompleteChat).not.toHaveBeenCalled();
+  });
+
+  it("returns BM25 reindex remediation when the FTS index is stale before embedding readiness", async () => {
+    const checkpoint = upsertCivitaiResourceToSqlite(
+      db,
+      makeResourceInput("model", "Cyber Checkpoint"),
+    ).resource;
+    await markDownloaded(checkpoint);
+    rebuildCivitaiSearchIndex(db);
+    rebuildTestEmbeddingIndex();
+
+    const lateCheckpoint = upsertCivitaiResourceToSqlite(
+      db,
+      makeResourceInput("model", "Late Checkpoint"),
+    ).resource;
+    await markDownloaded(lateCheckpoint);
+
+    const response = await POST(
+      new Request("http://localhost/api/civitai-lora-library/ai-recommendation", {
+        method: "POST",
+        body: JSON.stringify({ desiredEffect: "cyber neon" }),
+      }),
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(409);
+    expect(payload.error.message).toContain("npm run civitai:reindex before npm run civitai:reindex-embeddings");
+    expect(mockCreateEmbedding).not.toHaveBeenCalled();
+    expect(mockCompleteChat).not.toHaveBeenCalled();
+  });
+
   it("uses the NSFW model for NSFW recommendation requests", async () => {
     const checkpoint = upsertCivitaiResourceToSqlite(
       db,
@@ -169,6 +358,7 @@ describe("Civitai AI recommendation route", () => {
     ).resource;
     await markDownloaded(checkpoint);
     rebuildCivitaiSearchIndex(db);
+    rebuildTestEmbeddingIndex();
     process.env.LITELLM_NSFW_MODEL = "nsfw-model";
 
     mockCompleteChat.mockResolvedValue({
@@ -209,6 +399,7 @@ describe("Civitai AI recommendation route", () => {
     ).resource;
     await Promise.all([markDownloaded(checkpoint), markDownloaded(loraA), markDownloaded(loraB)]);
     rebuildCivitaiSearchIndex(db);
+    rebuildTestEmbeddingIndex();
 
     mockCompleteChat.mockResolvedValue({
       content: JSON.stringify({
@@ -277,6 +468,7 @@ describe("Civitai AI recommendation route", () => {
     ).resource;
     await Promise.all([markDownloaded(checkpoint), markDownloaded(exactLora), markDownloaded(fallbackLora)]);
     rebuildCivitaiSearchIndex(db);
+    rebuildTestEmbeddingIndex();
 
     mockCompleteChat.mockResolvedValue({
       content: JSON.stringify({
@@ -307,7 +499,6 @@ describe("Civitai AI recommendation route", () => {
     expect(userContent.checkpointCandidates.map((candidate: { id: string }) => candidate.id)).toEqual([
       checkpoint.id,
     ]);
-    expect(userContent.loraCandidates[0].score).toBeGreaterThan(userContent.loraCandidates[1].score);
   });
 
   it("passes promptProfile through and only sends matching profile candidates to the LLM", async () => {
@@ -353,6 +544,7 @@ describe("Civitai AI recommendation route", () => {
     ).resource;
     await Promise.all([markDownloaded(animaCheckpoint), markDownloaded(animaLora)]);
     rebuildCivitaiSearchIndex(db);
+    rebuildTestEmbeddingIndex();
 
     mockCompleteChat.mockResolvedValue({
       content: JSON.stringify({
@@ -423,6 +615,7 @@ describe("Civitai AI recommendation route", () => {
     ).resource;
     await Promise.all([markDownloaded(illustriousCheckpoint), markDownloaded(sdxlCheckpoint)]);
     rebuildCivitaiSearchIndex(db);
+    rebuildTestEmbeddingIndex();
 
     mockCompleteChat.mockResolvedValue({
       content: JSON.stringify({

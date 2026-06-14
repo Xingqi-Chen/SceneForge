@@ -3,6 +3,8 @@ import type {
   LlmChatMessage,
   LlmChatRequest,
   LlmChatResponse,
+  LlmEmbeddingRequest,
+  LlmEmbeddingResponse,
   LlmChatRole,
   LlmTokenUsage,
 } from "./types";
@@ -85,6 +87,18 @@ type LiteLlmChatCompletion = {
     completion_tokens?: number;
     total_tokens?: number;
   };
+};
+
+type LiteLlmEmbeddingItem = {
+  embedding?: unknown;
+  index?: number;
+};
+
+type LiteLlmEmbeddingPayload = {
+  id?: string;
+  model?: string;
+  data?: LiteLlmEmbeddingItem[];
+  usage?: LiteLlmChatCompletion["usage"];
 };
 
 type LiteLlmStreamChoice = {
@@ -179,6 +193,46 @@ function normalizeLiteLlmCompletion(payload: unknown): LlmChatResponse {
     role,
     finishReason: firstChoice?.finish_reason,
     usage: toTokenUsage(completion.usage),
+  };
+}
+
+function normalizeEmbedding(value: unknown): number[] {
+  if (!Array.isArray(value)) {
+    throw new LiteLlmError("LiteLLM embedding response included a malformed vector.", {
+      statusCode: 502,
+      details: value,
+    });
+  }
+
+  const embedding = value.map((entry) => (typeof entry === "number" && Number.isFinite(entry) ? entry : null));
+  if (embedding.some((entry) => entry === null)) {
+    throw new LiteLlmError("LiteLLM embedding response included a non-finite vector value.", {
+      statusCode: 502,
+    });
+  }
+
+  return embedding as number[];
+}
+
+function normalizeLiteLlmEmbedding(payload: unknown): LlmEmbeddingResponse {
+  const response = payload as LiteLlmEmbeddingPayload;
+  const data = Array.isArray(response.data) ? response.data : null;
+
+  if (!data || data.length === 0) {
+    throw new LiteLlmError("LiteLLM response did not include embeddings.", {
+      statusCode: 502,
+      details: payload,
+    });
+  }
+
+  return {
+    id: response.id,
+    model: response.model,
+    embeddings: data
+      .slice()
+      .sort((left, right) => (left.index ?? 0) - (right.index ?? 0))
+      .map((entry) => normalizeEmbedding(entry.embedding)),
+    usage: toTokenUsage(response.usage),
   };
 }
 
@@ -370,6 +424,58 @@ export function createLiteLlmClient(options: LiteLlmClientOptions) {
       });
 
       return completion;
+    },
+
+    async createEmbedding(request: LlmEmbeddingRequest): Promise<LlmEmbeddingResponse> {
+      const model = request.model ?? options.defaultModel;
+
+      if (!model) {
+        throw new LiteLlmError(
+          "Embedding model is required. Pass model in the request or set LITELLM_CIVITAI_EMBEDDING_MODEL.",
+          { statusCode: 400 },
+        );
+      }
+
+      const inputCount = Array.isArray(request.input) ? request.input.length : 1;
+      console.info("[SceneForge] [llm] outbound LiteLLM embedding request", {
+        model,
+        inputCount,
+      });
+
+      const response = await fetcher(`${baseUrl}/embeddings`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          ...(options.apiKey ? { authorization: `Bearer ${options.apiKey}` } : {}),
+        },
+        body: JSON.stringify({
+          model,
+          input: request.input,
+        }),
+      });
+      const payload = await parseJsonResponse(response);
+
+      if (!response.ok) {
+        console.info("[SceneForge] [llm] inbound LiteLLM embedding error response", {
+          httpStatus: response.status,
+          detailsType: typeof payload,
+        });
+        throw new LiteLlmError("LiteLLM embedding request failed.", {
+          statusCode: response.status,
+          details: payload,
+        });
+      }
+
+      const embedding = normalizeLiteLlmEmbedding(payload);
+      console.info("[SceneForge] [llm] inbound LiteLLM embedding response", {
+        id: embedding.id,
+        model: embedding.model,
+        embeddingCount: embedding.embeddings.length,
+        dimensions: embedding.embeddings[0]?.length ?? 0,
+        usage: embedding.usage,
+      });
+
+      return embedding;
     },
   };
 }

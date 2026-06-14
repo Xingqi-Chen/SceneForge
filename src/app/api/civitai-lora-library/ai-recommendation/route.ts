@@ -50,7 +50,7 @@ export async function POST(request: Request) {
     return errorResponse("Request body must include desiredEffect.", 400);
   }
 
-  const db = await openSceneForgeSqliteDatabase();
+  const db = await openSceneForgeSqliteDatabase(undefined, { allowExtensions: true });
   try {
     const recommendation = await recommendCivitaiResourceCombination({
       db,

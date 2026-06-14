@@ -26,13 +26,14 @@ npm run dev
 Open [http://localhost:3000](http://localhost:3000) with your browser. The timeline MVP is the root route.
 The legacy visual editor remains available at [http://localhost:3000/editor](http://localhost:3000/editor).
 
-After importing or changing local Civitai model/LoRA metadata, rebuild the derived FTS search index used by recommendation ranking:
+After importing or changing local Civitai model/LoRA metadata, rebuild the derived FTS search index and then the derived sqlite-vec embedding index used by recommendation ranking:
 
 ```bash
 npm run civitai:reindex
+npm run civitai:reindex-embeddings
 ```
 
-The command reads `SCENEFORGE_SQLITE_FILE` from the shell environment first, then from `.env.local` or `.env`, and otherwise uses `data/sceneforge.sqlite`. It rebuilds only the derived Civitai FTS index and does not rewrite original Civitai resource rows. Run it again after importing or modifying Civitai resources so recommendations do not use a stale index.
+Both commands read `SCENEFORGE_SQLITE_FILE` from the shell environment first, then from `.env.local` or `.env`, and otherwise use `data/sceneforge.sqlite`. `npm run civitai:reindex` rebuilds only the derived Civitai FTS index and does not rewrite original Civitai resource rows. `npm run civitai:reindex-embeddings` requires the FTS index to already exist, reads `LITELLM_BASE_URL`, optional `LITELLM_API_KEY`, and `LITELLM_CIVITAI_EMBEDDING_MODEL`, then rebuilds only derived chunked vector tables/metadata from the full FTS source text. Run both again after importing or modifying Civitai resources so recommendations do not use stale indexes.
 
 ## Continuous Integration
 
@@ -79,9 +80,10 @@ LITELLM_DEFAULT_MODEL=your-model-name
 LITELLM_NSFW_MODEL=optional-nsfw-model
 SCENEFORGE_SHOW_NSFW_BUTTON=false
 LITELLM_CIVITAI_RECOMMENDATION_MODEL=optional-civitai-recommendation-model
+LITELLM_CIVITAI_EMBEDDING_MODEL=required-civitai-embedding-model
 ```
 
-The endpoint accepts `model`, `messages`, `temperature`, `maxTokens`, and optional `nsfw`. Requests marked `nsfw` use `LITELLM_NSFW_MODEL` when it is configured before forwarding to LiteLLM's OpenAI-compatible `/v1/chat/completions` API. Timeline model-resource and render-parameter recommendation nodes keep their purpose-specific models.
+The endpoint accepts `model`, `messages`, `temperature`, `maxTokens`, and optional `nsfw`. Requests marked `nsfw` use `LITELLM_NSFW_MODEL` when it is configured before forwarding to LiteLLM's OpenAI-compatible `/v1/chat/completions` API. Civitai semantic candidate retrieval requires `LITELLM_CIVITAI_EMBEDDING_MODEL` through LiteLLM's `/v1/embeddings` API during `npm run civitai:reindex-embeddings` and recommendation requests. Long Civitai source text is embedded in overlapping chunks, and recommendation ranking uses each resource's nearest chunk. Timeline model-resource and render-parameter recommendation nodes keep their purpose-specific models.
 
 ## Settings
 
@@ -102,7 +104,7 @@ Secrets should remain server-only in `.env.local` unless a later scoped issue ad
 
 Runtime data is stored under `data/` by default or in configured absolute paths. Do not commit generated projects, logs, caches, databases, downloaded assets, or generated images.
 
-SQLite-backed settings and Civitai metadata use `data/sceneforge.sqlite` by default. Set `SCENEFORGE_SQLITE_FILE` to an absolute path to override the database location. `npm run civitai:reindex` uses the same value from the shell, `.env.local`, or `.env`.
+SQLite-backed settings and Civitai metadata use `data/sceneforge.sqlite` by default. Set `SCENEFORGE_SQLITE_FILE` to an absolute path to override the database location. `npm run civitai:reindex` and `npm run civitai:reindex-embeddings` use the same value from the shell, `.env.local`, or `.env`.
 
 Timeline workflow records are stored under `data/timeline-workflows/` by default. The active autosave record remains `active-workflow.json`; named workflow records are separate JSON files in the same directory. They contain local workflow state and references needed to restore progress; they must not contain API keys or `.env.local` secret values. Deleting a named workflow removes only that workflow JSON record and does not delete generated images or external assets referenced by the workflow.
 

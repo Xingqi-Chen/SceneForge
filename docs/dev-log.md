@@ -4,6 +4,45 @@ This log records dated implementation and documentation work. Keep entries conci
 
 ## 2026-06-13
 
+### T15 / Issue #57 sqlite-vec Civitai Recommendation Index
+
+Summary:
+
+- Added a sqlite-vec derived embedding index for local Civitai `model` and `lora` resources, with metadata tracking for embedding model, dimensions, indexed time, and indexed chunk count.
+- Added deterministic source-text fingerprint metadata so request-time readiness detects stale embeddings when FTS `search_text` changes without a resource count change.
+- Split per-resource embedding input text into overlapping chunks before LiteLLM requests so long Civitai descriptions do not exceed embedding model input limits; recommendation ranking uses each resource's nearest chunk distance.
+- Added chunked embedding schema/chunking metadata and vector-table column validation so legacy single-vector embedding indexes are treated as missing until rebuilt.
+- Added `npm run civitai:reindex-embeddings` to rebuild only the derived embedding index after the FTS index exists and is current.
+- Added LiteLLM `/v1/embeddings` support for `LITELLM_CIVITAI_EMBEDDING_MODEL`.
+- Updated Civitai recommendation candidate loading to require the FTS index and embedding index/config, rank BM25 and embedding retrieval independently, merge with fixed Reciprocal Rank Fusion, and preserve downloaded-resource, prompt-profile, Anima, limit, and LLM validation gates.
+
+Files changed:
+
+- `src/features/llm/litellm-client.ts`
+- `src/features/llm/types.ts`
+- `src/features/persistence/civitai-embedding-index.ts`
+- `src/features/persistence/sqlite-storage.ts`
+- `src/features/civitai-lora-library/ai-recommendation.ts`
+- `src/features/civitai-lora-library/ai-recommendation.test.ts`
+- `src/app/api/civitai-lora-library/ai-recommendation/route.test.ts`
+- `scripts/rebuild-civitai-embedding-index.mjs`
+- `package.json`
+- `README.md`
+- `.env.example`
+- `docs/tech-spec.md`
+- `docs/plan.md`
+- `docs/dev-log.md`
+
+Validation:
+
+- `npm run typecheck` passed.
+- `npm test -- --run src/features/civitai-lora-library/ai-recommendation.test.ts src/app/api/civitai-lora-library/ai-recommendation/route.test.ts src/features/persistence/sqlite-storage.test.ts` passed with 21 tests.
+- Follow-up stale-source validation: `npm test -- --run src/app/api/civitai-lora-library/ai-recommendation/route.test.ts src/features/persistence/sqlite-storage.test.ts` passed with 17 tests; `npm run typecheck` passed.
+- Follow-up long embedding input validation: `npm test -- --run src/features/persistence/civitai-embedding-index.test.ts` passed with 5 tests; `npm run typecheck` passed.
+- `npm run lint` passed with existing unrelated warnings.
+- `npm run build` passed.
+- `npm test` passed with 102 files and 755 tests.
+
 ### T14 / Issue #55 Simple and Detailed Run Display Modes
 
 Summary:
