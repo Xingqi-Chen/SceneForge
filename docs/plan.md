@@ -8,9 +8,9 @@ Tracks are planning units. Implementation work must be split into issue-ready ta
 
 ## Immediate Next Step
 
-`T14` is complete and validated in PR `#56`. It adds simple and detailed Run workflow display modes while preserving the existing active workflow and configurable ComfyUI generation gate behavior.
+Story Graph planning tracks `T16` through `T22` were added in PR `#60`.
 
-Choose the next Agent Timeline MVP track or create a new GitHub Issue for the next scoped implementation unit before starting additional code work.
+Create a GitHub Issue for `T16` before starting implementation. `T16` must extract shared workflow definitions and common node primitives before any story-specific workflow work begins.
 
 ## Status Values
 
