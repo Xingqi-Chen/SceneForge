@@ -72,6 +72,7 @@ describe("story workflow definition", () => {
     expect(storyWorkflowDefinition.dependencyDag["storyboard-shots"]).toEqual(["story-outline"]);
     expect(storyWorkflowDefinition.dependencyDag["shot-graph-execution"]).toEqual(["generation-gate"]);
     expect(storyWorkflowDefinition.dependencyDag["story-result-display"]).toEqual(["shot-graph-execution"]);
+    expect(storyWorkflowDefinition.reservedNodeIds).toEqual(["shot-graph-execution", "story-result-display"]);
   });
 
   it("uses shared readiness helpers for story node predecessors", () => {

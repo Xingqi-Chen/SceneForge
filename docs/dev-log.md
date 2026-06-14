@@ -4,6 +4,33 @@ This log records dated implementation and documentation work. Keep entries conci
 
 ## 2026-06-14
 
+### T20A / Issue #77 Story Graph Input and Planning Start Workflow
+
+Summary:
+
+- Added a typed Story Graph start action that normalizes user story input, target shot count, audience rating, NSFW context, and a settings snapshot into `StoryInput`.
+- Assembled deterministic, inspectable planning artifacts for Story Graph nodes from user-started input, including story bible, outline, storyboard shots, safety, dependency, plot, continuity, resource, parameter, render, consistency, gate, execution, and result placeholders.
+- Updated `/story` so the primary path starts from user input; static sample content is now only a fallback start action.
+- Reserved shot execution and result nodes until T21 so the generation gate can show a render/request preview without making shot execution runnable.
+
+Files changed:
+
+- `src/features/agent-timeline/story-input.ts`
+- `src/features/agent-timeline/story-input.test.ts`
+- `src/features/agent-timeline/story-types.ts`
+- `src/features/agent-timeline/story-workflow.test.ts`
+- `src/features/agent-timeline/components/StoryPlanningPreview.tsx`
+- `src/features/agent-timeline/components/StoryPlanningPreview.test.tsx`
+- `src/features/agent-timeline/index.ts`
+- `docs/dev-log.md`
+
+Validation:
+
+- `npm test -- --run src/features/agent-timeline/story-input.test.ts src/features/agent-timeline/story-workflow.test.ts src/features/agent-timeline/story-state.test.ts src/features/agent-timeline/components/StoryPlanningPreview.test.tsx src/features/agent-timeline/components/StoryPlanningWorkspace.test.tsx` passed with 5 files and 20 tests.
+- `npm test -- --run src/features/agent-timeline` passed with 22 files and 140 tests.
+- `npm run typecheck` passed.
+- `npm run lint` passed with 23 existing warnings unrelated to this change.
+
 ### T20 / Issue #65 Story Graph Resource, Parameter, Render, Preview, and NSFW Planning
 
 Summary:
