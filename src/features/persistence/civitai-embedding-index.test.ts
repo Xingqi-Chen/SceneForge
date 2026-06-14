@@ -10,6 +10,7 @@ import { rebuildCivitaiSearchIndex } from "./civitai-search-index";
 import {
   CIVITAI_EMBEDDING_INDEX_BM25_MISSING_MESSAGE,
   CIVITAI_EMBEDDING_INDEX_MISSING_MESSAGE,
+  CIVITAI_EMBEDDING_TEXT_MAX_CHARS,
   assertCivitaiEmbeddingIndexReady,
   isCivitaiEmbeddingIndexAvailable,
   listCivitaiResourceEmbeddingInputs,
@@ -111,6 +112,23 @@ describe("Civitai sqlite-vec embedding index", () => {
 
     expect(() => listCivitaiResourceEmbeddingInputs(db)).toThrow(CIVITAI_EMBEDDING_INDEX_BM25_MISSING_MESSAGE);
     expect(readCivitaiEmbeddingIndexMetadata(db)).toBeNull();
+  });
+
+  it("truncates long FTS source text before embedding", () => {
+    const longDescription = "cinematic neon detail ".repeat(700);
+    const resource = upsertCivitaiResourceToSqlite(
+      db,
+      makeResource("lora", "Long Text LoRA", {
+        description: longDescription,
+      }),
+    ).resource;
+
+    rebuildCivitaiSearchIndex(db);
+
+    const input = listCivitaiResourceEmbeddingInputs(db).find((entry) => entry.resourceId === resource.id);
+
+    expect(input?.text.length).toBe(CIVITAI_EMBEDDING_TEXT_MAX_CHARS);
+    expect(input?.text.startsWith("Long Text LoRA")).toBe(true);
   });
 
   it("stores only derived vectors and metadata while preserving Civitai resource business rows", () => {

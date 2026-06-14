@@ -10,6 +10,7 @@ Summary:
 
 - Added a sqlite-vec derived embedding index for local Civitai `model` and `lora` resources, with metadata tracking for embedding model, dimensions, indexed time, and indexed count.
 - Added deterministic source-text fingerprint metadata so request-time readiness detects stale embeddings when FTS `search_text` changes without a resource count change.
+- Truncated per-resource embedding input text before LiteLLM requests so long Civitai descriptions do not exceed embedding model input limits.
 - Added `npm run civitai:reindex-embeddings` to rebuild only the derived embedding index after the FTS index exists and is current.
 - Added LiteLLM `/v1/embeddings` support for `LITELLM_CIVITAI_EMBEDDING_MODEL`.
 - Updated Civitai recommendation candidate loading to require the FTS index and embedding index/config, rank BM25 and embedding retrieval independently, merge with fixed Reciprocal Rank Fusion, and preserve downloaded-resource, prompt-profile, Anima, limit, and LLM validation gates.
@@ -36,6 +37,7 @@ Validation:
 - `npm run typecheck` passed.
 - `npm test -- --run src/features/civitai-lora-library/ai-recommendation.test.ts src/app/api/civitai-lora-library/ai-recommendation/route.test.ts src/features/persistence/sqlite-storage.test.ts` passed with 21 tests.
 - Follow-up stale-source validation: `npm test -- --run src/app/api/civitai-lora-library/ai-recommendation/route.test.ts src/features/persistence/sqlite-storage.test.ts` passed with 17 tests; `npm run typecheck` passed.
+- Follow-up long embedding input validation: `npm test -- --run src/features/persistence/civitai-embedding-index.test.ts` passed with 5 tests; `npm run typecheck` passed.
 - `npm run lint` passed with existing unrelated warnings.
 - `npm run build` passed.
 - `npm test` passed with 102 files and 755 tests.

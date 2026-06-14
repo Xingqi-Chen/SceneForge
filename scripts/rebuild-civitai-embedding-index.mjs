@@ -13,6 +13,7 @@ const EMBEDDING_MODEL_ENV_KEY = "LITELLM_CIVITAI_EMBEDDING_MODEL";
 const LITELLM_BASE_URL_ENV_KEY = "LITELLM_BASE_URL";
 const LITELLM_API_KEY_ENV_KEY = "LITELLM_API_KEY";
 const BATCH_SIZE = 16;
+const EMBEDDING_TEXT_MAX_CHARS = 6000;
 
 function parseEnvValue(rawValue) {
   let value = rawValue.trim();
@@ -89,7 +90,12 @@ function loadEmbeddingInputs(db) {
     FROM ${SEARCH_INDEX_TABLE}
     WHERE resource_type IN ('model', 'lora')
     ORDER BY resource_type, resource_id
-  `).all().filter((row) => row.resource_id && row.search_text?.trim());
+  `).all()
+    .map((row) => ({
+      ...row,
+      search_text: String(row.search_text ?? "").slice(0, EMBEDDING_TEXT_MAX_CHARS),
+    }))
+    .filter((row) => row.resource_id && row.search_text.trim());
 }
 
 function embeddingBlob(embedding) {

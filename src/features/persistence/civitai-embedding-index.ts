@@ -17,6 +17,7 @@ export const CIVITAI_EMBEDDING_INDEX_MISSING_MESSAGE =
   "Civitai embedding index is missing or unusable. Configure LITELLM_CIVITAI_EMBEDDING_MODEL, run npm run civitai:reindex-embeddings, then try the recommendation again.";
 export const CIVITAI_EMBEDDING_INDEX_BM25_MISSING_MESSAGE =
   "Civitai BM25/FTS index is missing or stale. Run npm run civitai:reindex before npm run civitai:reindex-embeddings.";
+export const CIVITAI_EMBEDDING_TEXT_MAX_CHARS = 6000;
 
 type Metadata = {
   dimensions: number;
@@ -58,6 +59,12 @@ function tableExists(db: SceneForgeSqliteDatabase, tableName: string): boolean {
 
 function normalizeEmbeddingModel(model: string | null | undefined): string {
   return (model ?? "").trim();
+}
+
+function truncateEmbeddingText(text: string): string {
+  return text.length <= CIVITAI_EMBEDDING_TEXT_MAX_CHARS
+    ? text
+    : text.slice(0, CIVITAI_EMBEDDING_TEXT_MAX_CHARS);
 }
 
 function fingerprintEmbeddingInputs(
@@ -313,7 +320,7 @@ export function listCivitaiResourceEmbeddingInputs(db: SceneForgeSqliteDatabase)
     return {
       resourceId: readTextColumn(row, "resource_id") ?? "",
       resourceType,
-      text: readTextColumn(row, "search_text") ?? "",
+      text: truncateEmbeddingText(readTextColumn(row, "search_text") ?? ""),
     };
   }).filter((row) => row.resourceId.length > 0 && row.text.trim().length > 0);
 }
