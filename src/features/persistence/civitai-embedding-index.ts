@@ -95,12 +95,40 @@ function fingerprintText(text: string): string {
   return createHash("sha256").update(text).digest("hex");
 }
 
+export function sanitizeCivitaiEmbeddingTextForUtf8(text: string): string {
+  let sanitized = "";
+
+  for (let index = 0; index < text.length; index += 1) {
+    const code = text.charCodeAt(index);
+
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const nextCode = text.charCodeAt(index + 1);
+      if (nextCode >= 0xdc00 && nextCode <= 0xdfff) {
+        sanitized += text[index] + text[index + 1];
+        index += 1;
+      } else {
+        sanitized += "\uFFFD";
+      }
+      continue;
+    }
+
+    if (code >= 0xdc00 && code <= 0xdfff) {
+      sanitized += "\uFFFD";
+      continue;
+    }
+
+    sanitized += text[index];
+  }
+
+  return sanitized;
+}
+
 export function chunkCivitaiEmbeddingText(
   text: string,
   maxChars = CIVITAI_EMBEDDING_CHUNK_MAX_CHARS,
   overlapChars = CIVITAI_EMBEDDING_CHUNK_OVERLAP_CHARS,
 ): string[] {
-  const normalized = text.trim();
+  const normalized = sanitizeCivitaiEmbeddingTextForUtf8(text).trim();
   if (!normalized) {
     return [];
   }
@@ -116,7 +144,7 @@ export function chunkCivitaiEmbeddingText(
   let start = 0;
   while (start < normalized.length) {
     const end = Math.min(start + maxChars, normalized.length);
-    chunks.push(normalized.slice(start, end));
+    chunks.push(sanitizeCivitaiEmbeddingTextForUtf8(normalized.slice(start, end)));
     if (end >= normalized.length) {
       break;
     }

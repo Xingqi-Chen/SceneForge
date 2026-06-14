@@ -21,6 +21,7 @@ import {
   rankCivitaiResourceIdsByEmbeddingIndex,
   readCivitaiEmbeddingIndexMetadata,
   rebuildCivitaiEmbeddingIndex,
+  sanitizeCivitaiEmbeddingTextForUtf8,
 } from "./civitai-embedding-index";
 import {
   getCivitaiResourceDetailFromSqlite,
@@ -143,6 +144,33 @@ describe("Civitai sqlite-vec embedding index", () => {
     expect(input?.text.startsWith("Long Text LoRA")).toBe(true);
     expect(input).toBeDefined();
     expect(inputs[1]?.text.startsWith(input?.text.slice(-CIVITAI_EMBEDDING_CHUNK_OVERLAP_CHARS) ?? "")).toBe(true);
+  });
+
+  it("replaces unpaired surrogate code units before embedding", () => {
+    const unpairedLowSurrogate = String.fromCharCode(0xdd27);
+    const unpairedHighSurrogate = String.fromCharCode(0xd83d);
+    const validEmoji = "🧰";
+
+    const raw = `valid ${validEmoji} bad-low ${unpairedLowSurrogate} bad-high ${unpairedHighSurrogate}`;
+    const sanitized = sanitizeCivitaiEmbeddingTextForUtf8(raw);
+
+    expect(sanitized).toContain(validEmoji);
+    expect(sanitized).toContain("\uFFFD");
+    expect(() => encodeURIComponent(sanitized)).not.toThrow();
+
+    const chunks = chunkCivitaiEmbeddingText(raw);
+    expect(chunks).toHaveLength(1);
+    expect(chunks[0]).toBe(sanitized);
+  });
+
+  it("keeps embedding chunks encodable when surrogate pairs cross chunk boundaries", () => {
+    const raw = `${"a".repeat(CIVITAI_EMBEDDING_CHUNK_MAX_CHARS - 1)}🧰tail`;
+    const chunks = chunkCivitaiEmbeddingText(raw);
+
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const chunk of chunks) {
+      expect(() => encodeURIComponent(chunk)).not.toThrow();
+    }
   });
 
   it("uses complete source text for freshness instead of chunk text", () => {

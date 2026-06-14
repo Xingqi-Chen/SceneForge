@@ -146,8 +146,36 @@ function fingerprintText(text) {
   return createHash("sha256").update(text).digest("hex");
 }
 
+function sanitizeEmbeddingTextForUtf8(text) {
+  let sanitized = "";
+
+  for (let index = 0; index < text.length; index += 1) {
+    const code = text.charCodeAt(index);
+
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const nextCode = text.charCodeAt(index + 1);
+      if (nextCode >= 0xdc00 && nextCode <= 0xdfff) {
+        sanitized += text[index] + text[index + 1];
+        index += 1;
+      } else {
+        sanitized += "\uFFFD";
+      }
+      continue;
+    }
+
+    if (code >= 0xdc00 && code <= 0xdfff) {
+      sanitized += "\uFFFD";
+      continue;
+    }
+
+    sanitized += text[index];
+  }
+
+  return sanitized;
+}
+
 function chunkEmbeddingText(text) {
-  const normalized = text.trim();
+  const normalized = sanitizeEmbeddingTextForUtf8(text).trim();
   if (!normalized) {
     return [];
   }
@@ -156,7 +184,7 @@ function chunkEmbeddingText(text) {
   let start = 0;
   while (start < normalized.length) {
     const end = Math.min(start + EMBEDDING_CHUNK_MAX_CHARS, normalized.length);
-    chunks.push(normalized.slice(start, end));
+    chunks.push(sanitizeEmbeddingTextForUtf8(normalized.slice(start, end)));
     if (end >= normalized.length) {
       break;
     }
