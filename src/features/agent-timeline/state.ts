@@ -1,11 +1,14 @@
 import {
-  getTimelineDownstreamClosure,
-  getTimelineNodeDependencies,
-  isExecutableTimelineNodeId,
-  isReservedTimelineNodeId,
-} from "./dag";
+  areCommonWorkflowDependenciesSatisfied,
+  canRunCommonWorkflowNode,
+  refreshCommonWorkflowReadiness,
+  setCommonWorkflowNodeManualResult,
+} from "./workflow-definition";
 import {
-  timelineNodeIds,
+  getTimelineWorkflowDefinition,
+  singleImageWorkflowMode,
+} from "./workflow-definitions";
+import {
   TimelineNodeExecutionError,
   type GenerationGateTimelineResult,
   type SceneInputTimelineResult,
@@ -36,8 +39,6 @@ type TimelineMutationOptions = {
   now?: TimelineClock;
 };
 
-const dependencyCompleteStatuses = new Set(["done", "manual"]);
-const runnableStatuses = new Set(["ready", "stale", "error"]);
 export const MIN_TIMELINE_IMAGE_COUNT = 1;
 export const MAX_TIMELINE_IMAGE_COUNT = 4;
 export const DEFAULT_TIMELINE_IMAGE_COUNT = 1;
@@ -73,16 +74,20 @@ export function normalizeTimelineSourceDenoise(value: unknown) {
 }
 
 function createNode(nodeId: TimelineNodeId, updatedAt: string): TimelineNodeResult {
+  const definition = getTimelineWorkflowDefinition();
+
   return {
     nodeId,
-    status: getTimelineNodeDependencies(nodeId).length === 0 ? "ready" : "blocked",
+    status: definition.dependencyDag[nodeId].length === 0 ? "ready" : "blocked",
     updatedAt,
     source: "system",
   };
 }
 
 function cloneNodeMap(nodes: TimelineNodeMap): TimelineNodeMap {
-  return Object.fromEntries(timelineNodeIds.map((nodeId) => [nodeId, { ...nodes[nodeId] }])) as TimelineNodeMap;
+  const definition = getTimelineWorkflowDefinition();
+
+  return Object.fromEntries(definition.nodeIds.map((nodeId) => [nodeId, { ...nodes[nodeId] }])) as TimelineNodeMap;
 }
 
 function withUpdatedWorkflow(
@@ -138,56 +143,51 @@ export function areTimelineNodeDependenciesSatisfied(
   workflow: TimelineWorkflowState,
   nodeId: TimelineNodeId,
 ) {
-  return getTimelineNodeDependencies(nodeId).every((dependencyId) =>
-    dependencyCompleteStatuses.has(workflow.nodes[dependencyId].status),
-  );
+  const definition = getTimelineWorkflowDefinition(workflow.workflowMode);
+
+  return areCommonWorkflowDependenciesSatisfied(workflow.nodes, nodeId, definition.dependencyDag);
 }
 
 export function refreshTimelineReadiness(workflow: TimelineWorkflowState): TimelineWorkflowState {
-  const nodes = cloneNodeMap(workflow.nodes);
-  let changed = false;
+  const definition = getTimelineWorkflowDefinition(workflow.workflowMode);
+  const guardedNodes = cloneNodeMap(workflow.nodes);
 
-  for (const nodeId of timelineNodeIds) {
-    const node = nodes[nodeId];
-
-    if (node.status === "done" || node.status === "manual" || node.status === "running" || node.status === "error") {
-      continue;
-    }
-
-    if (node.status === "stale") {
-      continue;
-    }
-
+  for (const nodeId of definition.nodeIds) {
+    const node = guardedNodes[nodeId];
     if (node.status === "blocked" && node.error?.code === "confirmation_required" && !workflow.generationConfirmed) {
-      continue;
-    }
-
-    const nextStatus =
-      areTimelineNodeDependenciesSatisfied({ ...workflow, nodes }, nodeId) &&
-      isExecutableTimelineNodeId(nodeId) &&
-      !isReservedTimelineNodeId(nodeId)
-        ? "ready"
-        : "blocked";
-
-    if (node.status !== nextStatus) {
-      nodes[nodeId] = {
+      guardedNodes[nodeId] = {
         ...node,
-        status: nextStatus,
-        error: nextStatus === "ready" ? undefined : node.error,
+        status: "error",
       };
-      changed = true;
     }
   }
 
-  return changed ? { ...workflow, nodes } : workflow;
+  const refreshedNodes = refreshCommonWorkflowReadiness({
+    dag: definition.dependencyDag,
+    executableNodeIds: definition.executableNodeIds,
+    nodeIds: definition.nodeIds,
+    nodes: guardedNodes,
+    reservedNodeIds: definition.reservedNodeIds,
+  }) as TimelineNodeMap;
+
+  for (const nodeId of definition.nodeIds) {
+    const node = workflow.nodes[nodeId];
+    if (node.status === "blocked" && node.error?.code === "confirmation_required" && !workflow.generationConfirmed) {
+      refreshedNodes[nodeId] = node;
+    }
+  }
+
+  return refreshedNodes === workflow.nodes ? workflow : { ...workflow, nodes: refreshedNodes };
 }
 
 export function createTimelineWorkflowState(options: TimelineWorkflowOptions = {}): TimelineWorkflowState {
   const now = options.now ?? defaultNow;
   const timestamp = now();
-  const nodes = Object.fromEntries(timelineNodeIds.map((nodeId) => [nodeId, createNode(nodeId, timestamp)])) as TimelineNodeMap;
+  const definition = getTimelineWorkflowDefinition();
+  const nodes = Object.fromEntries(definition.nodeIds.map((nodeId) => [nodeId, createNode(nodeId, timestamp)])) as TimelineNodeMap;
   const workflow: TimelineWorkflowState = {
     workflowId: options.workflowId ?? createWorkflowId(),
+    workflowMode: singleImageWorkflowMode,
     nodes,
     createdAt: timestamp,
     updatedAt: timestamp,
@@ -220,21 +220,17 @@ export function isTimelineNodeRegenerationEligible(
   workflow: TimelineWorkflowState,
   nodeId: TimelineNodeId,
 ) {
+  const definition = getTimelineWorkflowDefinition(workflow.workflowMode);
+
   return (
-    isExecutableTimelineNodeId(nodeId) &&
+    definition.executableNodeIds.includes(nodeId) &&
     workflow.nodes[nodeId].status === "stale" &&
     areTimelineNodeDependenciesSatisfied(workflow, nodeId)
   );
 }
 
 export function canRunTimelineNode(workflow: TimelineWorkflowState, nodeId: TimelineNodeId) {
-  if (!isExecutableTimelineNodeId(nodeId) || isReservedTimelineNodeId(nodeId)) {
-    return false;
-  }
-
-  if (!areTimelineNodeDependenciesSatisfied(workflow, nodeId)) {
-    return false;
-  }
+  const definition = getTimelineWorkflowDefinition(workflow.workflowMode);
 
   const node = workflow.nodes[nodeId];
 
@@ -242,13 +238,20 @@ export function canRunTimelineNode(workflow: TimelineWorkflowState, nodeId: Time
     return false;
   }
 
-  return runnableStatuses.has(node.status);
+  return canRunCommonWorkflowNode({
+    dag: definition.dependencyDag,
+    executableNodeIds: definition.executableNodeIds,
+    nodeId,
+    nodes: workflow.nodes,
+    reservedNodeIds: definition.reservedNodeIds,
+  });
 }
 
 export function getRunnableTimelineNodeIds(workflow: TimelineWorkflowState) {
   const refreshed = refreshTimelineReadiness(workflow);
+  const definition = getTimelineWorkflowDefinition(refreshed.workflowMode);
 
-  return timelineNodeIds.filter((nodeId) => canRunTimelineNode(refreshed, nodeId));
+  return definition.nodeIds.filter((nodeId) => canRunTimelineNode(refreshed, nodeId));
 }
 
 export function markTimelineNodeRunning(
@@ -337,29 +340,20 @@ export function setTimelineNodeManualResult<T>(
 ): TimelineWorkflowState {
   const now = options.now ?? defaultNow;
   const updatedAt = now();
-  const nodes = cloneNodeMap(workflow.nodes);
-  const downstreamNodeIds = getTimelineDownstreamClosure(nodeId);
-
-  nodes[nodeId] = {
+  const definition = getTimelineWorkflowDefinition(workflow.workflowMode);
+  const edit = setCommonWorkflowNodeManualResult({
+    dag: definition.dependencyDag,
     nodeId,
-    status: "manual",
+    nodeIds: definition.nodeIds,
+    nodes: cloneNodeMap(workflow.nodes),
     result,
-    source: "manual",
     updatedAt,
-  };
-
-  for (const downstreamNodeId of downstreamNodeIds) {
-    const downstreamNode = nodes[downstreamNodeId];
-    nodes[downstreamNodeId] = {
-      ...downstreamNode,
-      status: "stale",
-      error: undefined,
-      updatedAt,
-    };
-  }
+    trackManualEdit: false,
+  });
+  const nodes = edit.nodes as TimelineNodeMap;
 
   const generationConfirmed =
-    nodeId === "generation-gate" || downstreamNodeIds.includes("generation-gate")
+    nodeId === "generation-gate" || edit.staleNodeIds.includes("generation-gate")
       ? false
       : workflow.generationConfirmed;
 

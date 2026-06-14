@@ -12,6 +12,7 @@ import type { StickFigurePoseV1 } from "@/shared/types/stick-figure-pose";
 import type { PromptProfileId } from "@/shared/prompt-profile";
 import type { AnimaPromptSections } from "@/features/editor/ai-prompt/anima-prompt";
 import type { IllustriousPromptSections } from "@/features/editor/ai-prompt/illustrious-prompt";
+import type { TimelineWorkflowMode } from "./workflow-definitions";
 
 export const timelineNodeStatuses = [
   "blocked",
@@ -101,6 +102,7 @@ export type TimelineNodeMap = {
 
 export type TimelineWorkflowState = {
   workflowId: string;
+  workflowMode: TimelineWorkflowMode;
   nodes: TimelineNodeMap;
   createdAt: string;
   updatedAt: string;

@@ -4,6 +4,11 @@ import {
   refreshTimelineReadiness,
 } from "./state";
 import {
+  getTimelineWorkflowDefinition,
+  singleImageWorkflowMode,
+  type TimelineWorkflowMode,
+} from "./workflow-definitions";
+import {
   timelineNodeIds,
   timelineNodeStatuses,
   type TimelineNodeId,
@@ -165,17 +170,23 @@ function sanitizeTimelineNode(
   };
 }
 
+function sanitizeWorkflowMode(value: unknown): TimelineWorkflowMode {
+  return value === singleImageWorkflowMode ? singleImageWorkflowMode : singleImageWorkflowMode;
+}
+
 export function sanitizeTimelineWorkflowState(raw: unknown): TimelineWorkflowState | null {
   if (!isRecord(raw) || typeof raw.workflowId !== "string" || !raw.workflowId.trim()) {
     return null;
   }
 
+  const workflowMode = sanitizeWorkflowMode(raw.workflowMode);
+  const definition = getTimelineWorkflowDefinition(workflowMode);
   const fallback = createTimelineWorkflowState({ workflowId: raw.workflowId.trim() });
   const createdAt = sanitizeDateString(raw.createdAt, fallback.createdAt);
   const updatedAt = sanitizeDateString(raw.updatedAt, fallback.updatedAt);
   const rawNodes = isRecord(raw.nodes) ? raw.nodes : {};
   const nodes = Object.fromEntries(
-    timelineNodeIds.map((nodeId) => [
+    definition.nodeIds.map((nodeId) => [
       nodeId,
       sanitizeTimelineNode(nodeId, rawNodes[nodeId], updatedAt),
     ]),
@@ -183,6 +194,7 @@ export function sanitizeTimelineWorkflowState(raw: unknown): TimelineWorkflowSta
 
   return refreshTimelineReadiness({
     workflowId: raw.workflowId.trim(),
+    workflowMode,
     createdAt,
     updatedAt,
     generationConfirmed: typeof raw.generationConfirmed === "boolean" ? raw.generationConfirmed : false,

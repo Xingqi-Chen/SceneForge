@@ -1,6 +1,5 @@
 import { Annotation, END, START, StateGraph } from "@langchain/langgraph";
 
-import { getTimelineNodeDependencies } from "./dag";
 import {
   areTimelineNodeDependenciesSatisfied,
   blockTimelineNode,
@@ -12,10 +11,12 @@ import {
   markTimelineNodeRunning,
   refreshTimelineReadiness,
 } from "./state";
+import { getTimelineWorkflowDefinition } from "./workflow-definitions";
 import type {
   TimelineExecutableNodeId,
   TimelineNodeAdapterResult,
   TimelineNodeAdapters,
+  TimelineNodeId,
   TimelineNodeMap,
   TimelineWorkflowState,
 } from "./types";
@@ -31,6 +32,19 @@ type TimelineGraphState = {
 type TimelineGraphOptions = {
   now?: () => string;
   onWorkflowUpdate?: (update: TimelineWorkflowUpdate) => void;
+};
+
+type TimelineGraphNodeHandler = ReturnType<typeof createTimelineGraphNode>;
+
+type DynamicTimelineGraphBuilder = {
+  addNode(nodeId: TimelineExecutableNodeId, action: TimelineGraphNodeHandler): DynamicTimelineGraphBuilder;
+  addEdge(
+    startKey: typeof START | TimelineNodeId | TimelineNodeId[],
+    endKey: TimelineNodeId | typeof END,
+  ): DynamicTimelineGraphBuilder;
+  compile(): {
+    invoke(input: TimelineGraphState): Promise<TimelineGraphState>;
+  };
 };
 
 function mergeTimelineWorkflowUpdate(
@@ -89,6 +103,7 @@ function createTimelineGraphNode(
 ) {
   return async (state: TimelineGraphState): Promise<{ workflow?: TimelineWorkflowUpdate }> => {
     const refreshedWorkflow = refreshTimelineReadiness(state.workflow);
+    const definition = getTimelineWorkflowDefinition(refreshedWorkflow.workflowMode);
 
     if (
       nodeId === "generation-gate" &&
@@ -140,7 +155,7 @@ function createTimelineGraphNode(
         await adapter({
           nodeId,
           workflow: runningWorkflow,
-          dependencies: getTimelineNodeDependencies(nodeId).map((dependencyId) => runningWorkflow.nodes[dependencyId]),
+          dependencies: definition.dependencyDag[nodeId].map((dependencyId) => runningWorkflow.nodes[dependencyId]),
         }),
       );
       const completedWorkflow = completeTimelineNode(
@@ -167,29 +182,36 @@ function createTimelineGraphNode(
 }
 
 export function createTimelineLangGraph(adapters: TimelineNodeAdapters, options: TimelineGraphOptions = {}) {
-  return new StateGraph(TimelineGraphAnnotation)
-    .addNode("scene-input", createTimelineGraphNode("scene-input", adapters, options))
-    .addNode("scene-prompt", createTimelineGraphNode("scene-prompt", adapters, options))
-    .addNode("character-tags", createTimelineGraphNode("character-tags", adapters, options))
-    .addNode("character-action", createTimelineGraphNode("character-action", adapters, options))
-    .addNode("canvas-binding", createTimelineGraphNode("canvas-binding", adapters, options))
-    .addNode("resource-recommendation", createTimelineGraphNode("resource-recommendation", adapters, options))
-    .addNode("parameter-recommendation", createTimelineGraphNode("parameter-recommendation", adapters, options))
-    .addNode("generation-gate", createTimelineGraphNode("generation-gate", adapters, options))
-    .addNode("comfyui-execution", createTimelineGraphNode("comfyui-execution", adapters, options))
-    .addNode("result-display", createTimelineGraphNode("result-display", adapters, options))
-    .addEdge(START, "scene-input")
-    .addEdge("scene-input", "scene-prompt")
-    .addEdge("scene-prompt", "character-tags")
-    .addEdge("scene-prompt", "character-action")
-    .addEdge(["scene-prompt", "character-tags", "character-action"], "canvas-binding")
-    .addEdge(["scene-prompt", "character-tags", "character-action"], "resource-recommendation")
-    .addEdge(["canvas-binding", "resource-recommendation"], "parameter-recommendation")
-    .addEdge("parameter-recommendation", "generation-gate")
-    .addEdge("generation-gate", "comfyui-execution")
-    .addEdge("comfyui-execution", "result-display")
-    .addEdge("result-display", END)
-    .compile();
+  const definition = getTimelineWorkflowDefinition();
+  // LangGraph's builder type accumulates literal node names across chained calls,
+  // but this workflow intentionally registers nodes from a runtime definition.
+  let graph = new StateGraph(TimelineGraphAnnotation) as unknown as DynamicTimelineGraphBuilder;
+  const executableAdapters = definition.adapterFactory(adapters);
+
+  for (const nodeId of definition.executableNodeIds) {
+    graph = graph.addNode(nodeId, createTimelineGraphNode(nodeId, executableAdapters, options));
+  }
+
+  for (const nodeId of definition.nodeIds) {
+    const dependencies = definition.dependencyDag[nodeId];
+
+    if (dependencies.length === 0) {
+      graph = graph.addEdge(START, nodeId);
+      continue;
+    }
+
+    graph = graph.addEdge(dependencies.length === 1 ? dependencies[0] : [...dependencies], nodeId);
+  }
+
+  const terminalNodeIds = definition.nodeIds.filter((nodeId) =>
+    definition.nodeIds.every((candidateId) => !definition.dependencyDag[candidateId].includes(nodeId)),
+  );
+
+  for (const terminalNodeId of terminalNodeIds) {
+    graph = graph.addEdge(terminalNodeId, END);
+  }
+
+  return graph.compile();
 }
 
 export async function executeTimelineGraph(
