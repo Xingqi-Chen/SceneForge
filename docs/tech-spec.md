@@ -164,6 +164,8 @@ type TimelineNodeResult<T> = {
 - Adapter contracts must support current workflow-scoped single artifacts and future story-scoped or shot-scoped artifacts through explicit artifact scopes. Current single-image execution remains hard-coded until the definition-driven migration track.
 - `src/features/agent-timeline/workflow-definitions.ts` exposes the extracted single-image workflow definition data for future migration without changing the current LangGraph registration path.
 - `src/features/agent-timeline/resource-plan.ts` owns reusable local resource-plan validation. It selects only validated local candidates, rejects invented or ambiguous resources, and strips model NSFW marker fields from common resource-plan outputs. Resource-plan behavior must not read, depend on, or expose model NSFW markers; NSFW remains content and execution context only.
+- `src/features/agent-timeline/story-state.ts` owns Story Graph runtime mutation helpers for story-scoped and shot-scoped manual edits. It reuses common workflow stale propagation for node dependencies and records downstream shot ids for shot dependency graph edits without staling unrelated shot branches.
+- `src/features/agent-timeline/components/StoryPlanningWorkspace.tsx` owns inactive Story Graph planning workspaces for storyboard shots, story safety, shot dependencies, plot state, character continuity, and story-scoped shared JSON nodes. `src/features/agent-timeline/components/StoryPlanningPreview.tsx` mounts those workspaces at `/story` with in-memory sample artifacts so the planning surface is inspectable before later route, persistence, and execution tracks wire real story generation.
 
 ## LLM and AI Node Adapter Rules
 

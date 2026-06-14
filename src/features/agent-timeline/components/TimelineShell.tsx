@@ -2884,6 +2884,10 @@ export function TimelineShell() {
             <Button className="h-9 px-3 text-xs shadow-none" onClick={handleNewScene} type="button" variant="secondary">
               New scene
             </Button>
+            <Link aria-label="Open Story Graph planning" className={settingsLinkClassName} href="/story" title="Open Story Graph planning">
+              <GitBranch className="size-3.5" />
+              Story
+            </Link>
             <Link aria-label="Open settings" className={settingsLinkClassName} href="/settings" title="Open settings">
               <Settings className="size-3.5" />
               Settings
@@ -3041,6 +3045,10 @@ export function TimelineShell() {
             <Play className="size-3.5" />
             Run
           </Button>
+          <Link aria-label="Open Story Graph planning" className={settingsLinkClassName} href="/story" title="Open Story Graph planning">
+            <GitBranch className="size-3.5" />
+            Story
+          </Link>
           <Link aria-label="Open settings" className={settingsLinkClassName} href="/settings" title="Open settings">
             <Settings className="size-3.5" />
             Settings
