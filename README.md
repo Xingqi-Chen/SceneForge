@@ -25,6 +25,7 @@ npm run dev
 
 Open [http://localhost:3000](http://localhost:3000) with your browser. The timeline MVP is the root route.
 The legacy visual editor remains available at [http://localhost:3000/editor](http://localhost:3000/editor).
+The inactive Story Graph planning workspace preview is available at [http://localhost:3000/story](http://localhost:3000/story).
 
 After importing or changing local Civitai model/LoRA metadata, rebuild the derived FTS search index and then the derived sqlite-vec embedding index used by recommendation ranking:
 

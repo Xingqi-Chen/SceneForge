@@ -163,3 +163,9 @@ Workflow project management UI is a separate follow-up track. It should provide 
 - Should settings allow editing LiteLLM and ComfyUI API keys, or only show server-side configuration status?
 - Should persisted timeline result references also bind to the legacy editor project generated-image history, or stay in workflow-project history only?
 - Should the legacy full editor remain the default route while the timeline MVP is built under a new route, or should timeline become the default entry after T4?
+
+## Story Graph Planning Workspaces
+
+Story Graph planning builds on the shared workflow definition primitives rather than the old editor sequence implementation. The inactive `/story` planning preview provides dedicated inspection and manual-edit workspaces for storyboard shots, story safety, shot dependency graph, plot state graph, and character continuity graph. Shared story-scoped resource, parameter, generation gate, and result nodes use the common raw JSON/manual edit controls until later tracks define execution-ready story-specific controls.
+
+Manual story edits must record whether the edited artifact is story-scoped or shot-scoped. Shot dependency edits also record downstream shot ids from the Story Graph shot DAG so later execution tracks can regenerate only affected shot branches.

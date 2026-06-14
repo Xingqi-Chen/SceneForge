@@ -4,6 +4,39 @@ This log records dated implementation and documentation work. Keep entries conci
 
 ## 2026-06-14
 
+### T19 / Issue #64 Story Graph Planning Workspaces
+
+Summary:
+
+- Added Story Graph runtime mutation helpers for story-scoped and shot-scoped manual edits.
+- Reused shared workflow stale propagation for Story Graph DAG nodes and recorded downstream shot ids for shot dependency graph edits.
+- Added story-facing planning workspaces for storyboard shots, story safety, shot dependency graph, plot-state graph, character continuity, and story-scoped shared JSON nodes.
+- Mounted the inactive `/story` planning preview with the same three-column detailed workbench layout style used by the Run route's detailed display mode.
+- Kept Story Graph planning code independent of the old editor sequence implementation and did not activate story execution or persistence.
+
+Files changed:
+
+- `src/features/agent-timeline/story-state.ts`
+- `src/features/agent-timeline/story-state.test.ts`
+- `src/features/agent-timeline/components/StoryPlanningPreview.tsx`
+- `src/features/agent-timeline/components/StoryPlanningWorkspace.tsx`
+- `src/features/agent-timeline/components/StoryPlanningWorkspace.test.tsx`
+- `src/features/agent-timeline/components/index.ts`
+- `src/features/agent-timeline/index.ts`
+- `src/features/agent-timeline/components/TimelineShell.tsx`
+- `src/app/story/page.tsx`
+- `README.md`
+- `docs/product-spec.md`
+- `docs/tech-spec.md`
+- `docs/dev-log.md`
+
+Validation:
+
+- `npm test -- --run src/features/agent-timeline/story-workflow.test.ts src/features/agent-timeline/story-state.test.ts src/features/agent-timeline/components/StoryPlanningWorkspace.test.tsx src/features/agent-timeline/components/TimelineShell.test.tsx` passed with 4 files and 45 tests.
+- `npm run typecheck` passed.
+- `npm run lint` passed with 23 existing warnings unrelated to this change.
+- `npm run build` passed and generated the `/story` static route.
+
 ### T18 / Issue #63 Story Graph Domain Models and DAG
 
 Summary:
