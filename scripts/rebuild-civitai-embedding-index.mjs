@@ -13,7 +13,9 @@ const EMBEDDING_MODEL_ENV_KEY = "LITELLM_CIVITAI_EMBEDDING_MODEL";
 const LITELLM_BASE_URL_ENV_KEY = "LITELLM_BASE_URL";
 const LITELLM_API_KEY_ENV_KEY = "LITELLM_API_KEY";
 const BATCH_SIZE = 16;
-const EMBEDDING_TEXT_MAX_CHARS = 6000;
+const EMBEDDING_INDEX_SCHEMA_VERSION = "2";
+const EMBEDDING_CHUNK_MAX_CHARS = 4000;
+const EMBEDDING_CHUNK_OVERLAP_CHARS = 400;
 
 function parseEnvValue(rawValue) {
   let value = rawValue.trim();
@@ -85,7 +87,7 @@ function assertSearchIndexReady(db) {
 function loadEmbeddingInputs(db) {
   assertSearchIndexReady(db);
 
-  return db.prepare(`
+  const rows = db.prepare(`
     SELECT resource_id, resource_type, search_text
     FROM ${SEARCH_INDEX_TABLE}
     WHERE resource_type IN ('model', 'lora')
@@ -93,9 +95,22 @@ function loadEmbeddingInputs(db) {
   `).all()
     .map((row) => ({
       ...row,
-      search_text: String(row.search_text ?? "").slice(0, EMBEDDING_TEXT_MAX_CHARS),
+      search_text: String(row.search_text ?? ""),
     }))
     .filter((row) => row.resource_id && row.search_text.trim());
+
+  return rows.flatMap((row) => {
+    const sourceFingerprint = fingerprintText(row.search_text);
+
+    return chunkEmbeddingText(row.search_text).map((text, chunkIndex) => ({
+      chunk_fingerprint: fingerprintText(text),
+      chunk_index: chunkIndex,
+      resource_id: row.resource_id,
+      resource_type: row.resource_type,
+      search_text: text,
+      source_fingerprint: sourceFingerprint,
+    }));
+  });
 }
 
 function embeddingBlob(embedding) {
@@ -125,6 +140,46 @@ function fingerprintEmbeddingInputs(rows) {
   }
 
   return hash.digest("hex");
+}
+
+function fingerprintText(text) {
+  return createHash("sha256").update(text).digest("hex");
+}
+
+function chunkEmbeddingText(text) {
+  const normalized = text.trim();
+  if (!normalized) {
+    return [];
+  }
+
+  const chunks = [];
+  let start = 0;
+  while (start < normalized.length) {
+    const end = Math.min(start + EMBEDDING_CHUNK_MAX_CHARS, normalized.length);
+    chunks.push(normalized.slice(start, end));
+    if (end >= normalized.length) {
+      break;
+    }
+    start = end - EMBEDDING_CHUNK_OVERLAP_CHARS;
+  }
+
+  return chunks;
+}
+
+function loadEmbeddingSourceRows(db) {
+  assertSearchIndexReady(db);
+
+  return db.prepare(`
+    SELECT resource_id, resource_type, search_text
+    FROM ${SEARCH_INDEX_TABLE}
+    WHERE resource_type IN ('model', 'lora')
+    ORDER BY resource_type, resource_id
+  `).all()
+    .map((row) => ({
+      ...row,
+      search_text: String(row.search_text ?? ""),
+    }))
+    .filter((row) => row.resource_id && row.search_text.trim());
 }
 
 async function fetchEmbeddingBatch({ apiKey, baseUrl, inputs, model }) {
@@ -171,13 +226,16 @@ async function buildEmbeddings(rows, { apiKey, baseUrl, model }) {
     for (const [offset, embedding] of vectors.entries()) {
       const row = batch[offset];
       embeddings.push({
+        chunkFingerprint: row.chunk_fingerprint,
+        chunkIndex: row.chunk_index,
         embedding,
         resourceId: row.resource_id,
         resourceType: row.resource_type,
+        sourceFingerprint: row.source_fingerprint,
       });
     }
 
-    console.log(`Embedded ${Math.min(index + batch.length, rows.length)} / ${rows.length} resources.`);
+    console.log(`Embedded ${Math.min(index + batch.length, rows.length)} / ${rows.length} chunks.`);
   }
 
   return embeddings;
@@ -203,8 +261,12 @@ function rebuildEmbeddingIndex(db, embeddings, model, sourceFingerprint) {
 
       CREATE VIRTUAL TABLE ${EMBEDDING_INDEX_TABLE}
       USING vec0(
-        resource_id TEXT PRIMARY KEY,
+        chunk_id TEXT PRIMARY KEY,
+        resource_id TEXT,
         resource_type TEXT,
+        chunk_index TEXT,
+        source_fingerprint TEXT,
+        chunk_fingerprint TEXT,
         embedding float[${dimensions}]
       );
 
@@ -215,11 +277,27 @@ function rebuildEmbeddingIndex(db, embeddings, model, sourceFingerprint) {
     `);
 
     const insert = db.prepare(`
-      INSERT INTO ${EMBEDDING_INDEX_TABLE} (resource_id, resource_type, embedding)
-      VALUES (?, ?, ?)
+      INSERT INTO ${EMBEDDING_INDEX_TABLE} (
+        chunk_id,
+        resource_id,
+        resource_type,
+        chunk_index,
+        source_fingerprint,
+        chunk_fingerprint,
+        embedding
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?)
     `);
     for (const entry of embeddings) {
-      insert.run(entry.resourceId, entry.resourceType, embeddingBlob(entry.embedding));
+      insert.run(
+        `${entry.resourceType}:${entry.resourceId}:${entry.chunkIndex}`,
+        entry.resourceId,
+        entry.resourceType,
+        String(entry.chunkIndex),
+        entry.sourceFingerprint,
+        entry.chunkFingerprint,
+        embeddingBlob(entry.embedding),
+      );
     }
 
     const meta = db.prepare(`
@@ -227,6 +305,9 @@ function rebuildEmbeddingIndex(db, embeddings, model, sourceFingerprint) {
       VALUES (?, ?)
     `);
     meta.run("model", model);
+    meta.run("schema_version", EMBEDDING_INDEX_SCHEMA_VERSION);
+    meta.run("chunk_max_chars", String(EMBEDDING_CHUNK_MAX_CHARS));
+    meta.run("chunk_overlap_chars", String(EMBEDDING_CHUNK_OVERLAP_CHARS));
     meta.run("dimensions", String(dimensions));
     meta.run("source_fingerprint", sourceFingerprint);
     meta.run("indexed_at", new Date().toISOString());
@@ -267,9 +348,10 @@ try {
   } finally {
     db.enableLoadExtension?.(false);
   }
-  const rows = loadEmbeddingInputs(db);
-  const sourceFingerprint = fingerprintEmbeddingInputs(rows);
-  const embeddings = await buildEmbeddings(rows, {
+  const sourceRows = loadEmbeddingSourceRows(db);
+  const chunks = loadEmbeddingInputs(db);
+  const sourceFingerprint = fingerprintEmbeddingInputs(sourceRows);
+  const embeddings = await buildEmbeddings(chunks, {
     apiKey,
     baseUrl: normalizeLiteLlmBaseUrl(baseUrl),
     model,
@@ -277,7 +359,7 @@ try {
   const result = rebuildEmbeddingIndex(db, embeddings, model, sourceFingerprint);
 
   console.log(
-    `Rebuilt Civitai sqlite-vec embedding index at ${filePath}. Indexed ${result.indexedCount} resources with ${result.dimensions} dimensions.`,
+    `Rebuilt Civitai sqlite-vec embedding index at ${filePath}. Indexed ${result.indexedCount} chunks from ${sourceRows.length} resources with ${result.dimensions} dimensions.`,
   );
 } catch (error) {
   console.error("Failed to rebuild Civitai sqlite-vec embedding index.");

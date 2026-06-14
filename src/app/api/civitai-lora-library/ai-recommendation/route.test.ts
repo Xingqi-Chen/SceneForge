@@ -160,8 +160,11 @@ describe("Civitai AI recommendation route", () => {
         const text = input.text.toLocaleLowerCase();
 
         return {
+          chunkFingerprint: input.chunkFingerprint,
+          chunkIndex: input.chunkIndex,
           resourceId: input.resourceId,
           resourceType: input.resourceType,
+          sourceFingerprint: input.sourceFingerprint,
           embedding: text.includes("cyber") || text.includes("neon") ? [1, 0, 0] : [0, 1, 0],
         };
       }),

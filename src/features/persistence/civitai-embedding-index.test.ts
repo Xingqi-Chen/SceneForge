@@ -10,8 +10,11 @@ import { rebuildCivitaiSearchIndex } from "./civitai-search-index";
 import {
   CIVITAI_EMBEDDING_INDEX_BM25_MISSING_MESSAGE,
   CIVITAI_EMBEDDING_INDEX_MISSING_MESSAGE,
-  CIVITAI_EMBEDDING_TEXT_MAX_CHARS,
+  CIVITAI_EMBEDDING_CHUNK_MAX_CHARS,
+  CIVITAI_EMBEDDING_CHUNK_OVERLAP_CHARS,
   assertCivitaiEmbeddingIndexReady,
+  chunkCivitaiEmbeddingText,
+  float32EmbeddingBlob,
   isCivitaiEmbeddingIndexAvailable,
   listCivitaiResourceEmbeddingInputs,
   loadSqliteVecExtension,
@@ -98,7 +101,14 @@ describe("Civitai sqlite-vec embedding index", () => {
     expect(() =>
       rebuildCivitaiEmbeddingIndex(db, {
         model: "embedding-model",
-        embeddings: [{ resourceId: cyberLora.id, resourceType: "lora", embedding: [1, 0] }],
+        embeddings: [{
+          chunkFingerprint: "chunk",
+          chunkIndex: 0,
+          resourceId: cyberLora.id,
+          resourceType: "lora",
+          sourceFingerprint: "source",
+          embedding: [1, 0],
+        }],
       }),
     ).toThrow(CIVITAI_EMBEDDING_INDEX_BM25_MISSING_MESSAGE);
 
@@ -114,7 +124,7 @@ describe("Civitai sqlite-vec embedding index", () => {
     expect(readCivitaiEmbeddingIndexMetadata(db)).toBeNull();
   });
 
-  it("truncates long FTS source text before embedding", () => {
+  it("splits long FTS source text into overlapping embedding chunks", () => {
     const longDescription = "cinematic neon detail ".repeat(700);
     const resource = upsertCivitaiResourceToSqlite(
       db,
@@ -126,9 +136,48 @@ describe("Civitai sqlite-vec embedding index", () => {
     rebuildCivitaiSearchIndex(db);
 
     const input = listCivitaiResourceEmbeddingInputs(db).find((entry) => entry.resourceId === resource.id);
+    const inputs = listCivitaiResourceEmbeddingInputs(db).filter((entry) => entry.resourceId === resource.id);
 
-    expect(input?.text.length).toBe(CIVITAI_EMBEDDING_TEXT_MAX_CHARS);
+    expect(inputs.length).toBeGreaterThan(1);
+    expect(input?.text.length).toBe(CIVITAI_EMBEDDING_CHUNK_MAX_CHARS);
     expect(input?.text.startsWith("Long Text LoRA")).toBe(true);
+    expect(input).toBeDefined();
+    expect(inputs[1]?.text.startsWith(input?.text.slice(-CIVITAI_EMBEDDING_CHUNK_OVERLAP_CHARS) ?? "")).toBe(true);
+  });
+
+  it("uses complete source text for freshness instead of chunk text", () => {
+    const firstChunk = `${"a".repeat(CIVITAI_EMBEDDING_CHUNK_MAX_CHARS)}tail-a`;
+    const changedTail = `${"a".repeat(CIVITAI_EMBEDDING_CHUNK_MAX_CHARS)}tail-b`;
+
+    expect(chunkCivitaiEmbeddingText(firstChunk)[0]).toBe(chunkCivitaiEmbeddingText(changedTail)[0]);
+
+    const resource = upsertCivitaiResourceToSqlite(
+      db,
+      makeResource("lora", "Tail Freshness LoRA", {
+        description: firstChunk,
+      }),
+    ).resource;
+
+    rebuildCivitaiSearchIndex(db);
+    rebuildCivitaiEmbeddingIndex(db, {
+      model: "embedding-model",
+      embeddings: listCivitaiResourceEmbeddingInputs(db).map((input) => ({
+        chunkFingerprint: input.chunkFingerprint,
+        chunkIndex: input.chunkIndex,
+        resourceId: input.resourceId,
+        resourceType: input.resourceType,
+        sourceFingerprint: input.sourceFingerprint,
+        embedding: [1, 0],
+      })),
+    });
+
+    db.prepare(`
+      UPDATE civitai_resource_search_fts
+      SET search_text = ?
+      WHERE resource_id = ?
+    `).run(changedTail, resource.id);
+
+    expect(isCivitaiEmbeddingIndexAvailable(db, "embedding-model")).toBe(false);
   });
 
   it("stores only derived vectors and metadata while preserving Civitai resource business rows", () => {
@@ -166,12 +215,15 @@ describe("Civitai sqlite-vec embedding index", () => {
       rebuildCivitaiEmbeddingIndex(db, {
         model: "embedding-model",
         embeddings: inputs.map((input) => ({
+          chunkFingerprint: input.chunkFingerprint,
+          chunkIndex: input.chunkIndex,
           resourceId: input.resourceId,
           resourceType: input.resourceType,
+          sourceFingerprint: input.sourceFingerprint,
           embedding: input.resourceId === checkpoint.id ? [1, 0, 0] : [0, 1, 0],
         })),
       }),
-    ).toEqual({ indexedCount: 3, dimensions: 3 });
+    ).toEqual({ indexedCount: inputs.length, dimensions: 3 });
 
     const metadata = readCivitaiEmbeddingIndexMetadata(db);
     expect(metadata).toMatchObject({
@@ -192,6 +244,125 @@ describe("Civitai sqlite-vec embedding index", () => {
     expect(Array.from(ranked.keys())).toEqual([checkpoint.id, portraitCheckpoint.id]);
   });
 
+  it("rejects legacy single-vector embedding tables even when metadata source is current", () => {
+    const checkpoint = upsertCivitaiResourceToSqlite(
+      db,
+      makeResource("model", "Legacy Single Vector Checkpoint", {
+        tags: ["legacy", "vector"],
+      }),
+    ).resource;
+
+    rebuildCivitaiSearchIndex(db);
+    const inputs = listCivitaiResourceEmbeddingInputs(db);
+    rebuildCivitaiEmbeddingIndex(db, {
+      model: "embedding-model",
+      embeddings: inputs.map((input) => ({
+        chunkFingerprint: input.chunkFingerprint,
+        chunkIndex: input.chunkIndex,
+        resourceId: input.resourceId,
+        resourceType: input.resourceType,
+        sourceFingerprint: input.sourceFingerprint,
+        embedding: [1, 0],
+      })),
+    });
+    const sourceFingerprint = readCivitaiEmbeddingIndexMetadata(db)?.sourceFingerprint;
+    expect(sourceFingerprint).toMatch(/^[a-f0-9]{64}$/);
+
+    db.exec(`
+      DROP TABLE IF EXISTS civitai_resource_embedding_vec;
+      DROP TABLE IF EXISTS civitai_resource_embedding_index_metadata;
+
+      CREATE VIRTUAL TABLE civitai_resource_embedding_vec
+      USING vec0(
+        resource_id TEXT PRIMARY KEY,
+        resource_type TEXT,
+        embedding float[2]
+      );
+
+      CREATE TABLE civitai_resource_embedding_index_metadata (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      );
+    `);
+    db.prepare(`
+      INSERT INTO civitai_resource_embedding_vec (resource_id, resource_type, embedding)
+      VALUES (?, ?, ?)
+    `).run(checkpoint.id, "model", float32EmbeddingBlob([1, 0]));
+    const writeMetadata = db.prepare(`
+      INSERT INTO civitai_resource_embedding_index_metadata (key, value)
+      VALUES (?, ?)
+    `);
+    writeMetadata.run("model", "embedding-model");
+    writeMetadata.run("dimensions", "2");
+    writeMetadata.run("source_fingerprint", sourceFingerprint ?? "");
+    writeMetadata.run("indexed_at", new Date().toISOString());
+    writeMetadata.run("indexed_count", "1");
+
+    expect(isCivitaiEmbeddingIndexAvailable(db, "embedding-model")).toBe(false);
+    expect(() => assertCivitaiEmbeddingIndexReady(db, "embedding-model")).toThrow(
+      CIVITAI_EMBEDDING_INDEX_MISSING_MESSAGE,
+    );
+
+    writeMetadata.run("schema_version", "2");
+    writeMetadata.run("chunk_max_chars", String(CIVITAI_EMBEDDING_CHUNK_MAX_CHARS));
+    writeMetadata.run("chunk_overlap_chars", String(CIVITAI_EMBEDDING_CHUNK_OVERLAP_CHARS));
+
+    expect(isCivitaiEmbeddingIndexAvailable(db, "embedding-model")).toBe(false);
+    expect(() => assertCivitaiEmbeddingIndexReady(db, "embedding-model")).toThrow(
+      CIVITAI_EMBEDDING_INDEX_MISSING_MESSAGE,
+    );
+  });
+
+  it("rolls back vector table replacement when chunk insertion fails", () => {
+    const checkpoint = upsertCivitaiResourceToSqlite(
+      db,
+      makeResource("model", "Rollback Checkpoint", {
+        tags: ["rollback", "stable"],
+      }),
+    ).resource;
+
+    rebuildCivitaiSearchIndex(db);
+    const input = listCivitaiResourceEmbeddingInputs(db).find((entry) => entry.resourceId === checkpoint.id);
+    expect(input).toBeDefined();
+
+    rebuildCivitaiEmbeddingIndex(db, {
+      model: "embedding-model",
+      embeddings: [{
+        chunkFingerprint: input?.chunkFingerprint ?? "",
+        chunkIndex: input?.chunkIndex ?? 0,
+        resourceId: checkpoint.id,
+        resourceType: "model",
+        sourceFingerprint: input?.sourceFingerprint ?? "",
+        embedding: [1, 0],
+      }],
+    });
+
+    expect(() =>
+      rebuildCivitaiEmbeddingIndex(db, {
+        model: "embedding-model",
+        embeddings: [{
+          chunkFingerprint: input?.chunkFingerprint ?? "",
+          chunkIndex: input?.chunkIndex ?? 0,
+          resourceId: checkpoint.id,
+          resourceType: "model",
+          sourceFingerprint: input?.sourceFingerprint ?? "",
+          embedding: [Number.NaN, 1],
+        }],
+      }),
+    ).toThrow("Embedding vector contains a non-finite value.");
+
+    expect(assertCivitaiEmbeddingIndexReady(db, "embedding-model")).toMatchObject({
+      dimensions: 2,
+      model: "embedding-model",
+    });
+    const ranked = rankCivitaiResourceIdsByEmbeddingIndex(db, {
+      embedding: [1, 0],
+      resourceIds: [checkpoint.id],
+      resourceType: "model",
+    });
+    expect(Array.from(ranked.keys())).toEqual([checkpoint.id]);
+  });
+
   it("detects stale embedding metadata when BM25 source text changes after reindexing", () => {
     const checkpoint = upsertCivitaiResourceToSqlite(
       db,
@@ -204,8 +375,11 @@ describe("Civitai sqlite-vec embedding index", () => {
     rebuildCivitaiEmbeddingIndex(db, {
       model: "embedding-model",
       embeddings: listCivitaiResourceEmbeddingInputs(db).map((input) => ({
+        chunkFingerprint: input.chunkFingerprint,
+        chunkIndex: input.chunkIndex,
         resourceId: input.resourceId,
         resourceType: input.resourceType,
+        sourceFingerprint: input.sourceFingerprint,
         embedding: [1, 0],
       })),
     });
@@ -225,5 +399,65 @@ describe("Civitai sqlite-vec embedding index", () => {
     expect(() => assertCivitaiEmbeddingIndexReady(db, "embedding-model")).toThrow(
       CIVITAI_EMBEDDING_INDEX_MISSING_MESSAGE,
     );
+  });
+
+  it("ranks each resource by its nearest embedding chunk", () => {
+    const checkpoint = upsertCivitaiResourceToSqlite(
+      db,
+      makeResource("model", "Chunked Checkpoint", {
+        description: "chunked semantic source",
+      }),
+    ).resource;
+    const portraitCheckpoint = upsertCivitaiResourceToSqlite(
+      db,
+      makeResource("model", "Portrait Checkpoint", {
+        description: "portrait source",
+      }),
+    ).resource;
+
+    rebuildCivitaiSearchIndex(db);
+    const inputs = listCivitaiResourceEmbeddingInputs(db);
+    const checkpointInput = inputs.find((input) => input.resourceId === checkpoint.id);
+    const portraitInput = inputs.find((input) => input.resourceId === portraitCheckpoint.id);
+    expect(checkpointInput).toBeDefined();
+    expect(portraitInput).toBeDefined();
+
+    rebuildCivitaiEmbeddingIndex(db, {
+      model: "embedding-model",
+      embeddings: [
+        {
+          chunkFingerprint: `${checkpointInput?.chunkFingerprint}-far`,
+          chunkIndex: 0,
+          resourceId: checkpoint.id,
+          resourceType: "model",
+          sourceFingerprint: checkpointInput?.sourceFingerprint ?? "",
+          embedding: [0, 1],
+        },
+        {
+          chunkFingerprint: `${checkpointInput?.chunkFingerprint}-near`,
+          chunkIndex: 1,
+          resourceId: checkpoint.id,
+          resourceType: "model",
+          sourceFingerprint: checkpointInput?.sourceFingerprint ?? "",
+          embedding: [1, 0],
+        },
+        {
+          chunkFingerprint: portraitInput?.chunkFingerprint ?? "",
+          chunkIndex: 0,
+          resourceId: portraitCheckpoint.id,
+          resourceType: "model",
+          sourceFingerprint: portraitInput?.sourceFingerprint ?? "",
+          embedding: [0, 1],
+        },
+      ],
+    });
+
+    const ranked = rankCivitaiResourceIdsByEmbeddingIndex(db, {
+      embedding: [1, 0],
+      resourceIds: [portraitCheckpoint.id, checkpoint.id],
+      resourceType: "model",
+    });
+
+    expect(Array.from(ranked.keys())).toEqual([checkpoint.id, portraitCheckpoint.id]);
   });
 });

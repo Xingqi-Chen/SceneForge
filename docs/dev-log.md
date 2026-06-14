@@ -8,9 +8,10 @@ This log records dated implementation and documentation work. Keep entries conci
 
 Summary:
 
-- Added a sqlite-vec derived embedding index for local Civitai `model` and `lora` resources, with metadata tracking for embedding model, dimensions, indexed time, and indexed count.
+- Added a sqlite-vec derived embedding index for local Civitai `model` and `lora` resources, with metadata tracking for embedding model, dimensions, indexed time, and indexed chunk count.
 - Added deterministic source-text fingerprint metadata so request-time readiness detects stale embeddings when FTS `search_text` changes without a resource count change.
-- Truncated per-resource embedding input text before LiteLLM requests so long Civitai descriptions do not exceed embedding model input limits.
+- Split per-resource embedding input text into overlapping chunks before LiteLLM requests so long Civitai descriptions do not exceed embedding model input limits; recommendation ranking uses each resource's nearest chunk distance.
+- Added chunked embedding schema/chunking metadata and vector-table column validation so legacy single-vector embedding indexes are treated as missing until rebuilt.
 - Added `npm run civitai:reindex-embeddings` to rebuild only the derived embedding index after the FTS index exists and is current.
 - Added LiteLLM `/v1/embeddings` support for `LITELLM_CIVITAI_EMBEDDING_MODEL`.
 - Updated Civitai recommendation candidate loading to require the FTS index and embedding index/config, rank BM25 and embedding retrieval independently, merge with fixed Reciprocal Rank Fusion, and preserve downloaded-resource, prompt-profile, Anima, limit, and LLM validation gates.

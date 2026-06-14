@@ -17,11 +17,16 @@ export const CIVITAI_EMBEDDING_INDEX_MISSING_MESSAGE =
   "Civitai embedding index is missing or unusable. Configure LITELLM_CIVITAI_EMBEDDING_MODEL, run npm run civitai:reindex-embeddings, then try the recommendation again.";
 export const CIVITAI_EMBEDDING_INDEX_BM25_MISSING_MESSAGE =
   "Civitai BM25/FTS index is missing or stale. Run npm run civitai:reindex before npm run civitai:reindex-embeddings.";
-export const CIVITAI_EMBEDDING_TEXT_MAX_CHARS = 6000;
+export const CIVITAI_EMBEDDING_INDEX_SCHEMA_VERSION = "2";
+export const CIVITAI_EMBEDDING_CHUNK_MAX_CHARS = 4000;
+export const CIVITAI_EMBEDDING_CHUNK_OVERLAP_CHARS = 400;
 
 type Metadata = {
+  chunkMaxChars: number;
+  chunkOverlapChars: number;
   dimensions: number;
   model: string;
+  schemaVersion: string;
   sourceFingerprint: string;
 };
 
@@ -57,17 +62,71 @@ function tableExists(db: SceneForgeSqliteDatabase, tableName: string): boolean {
   return readTextColumn(row, "name") === tableName;
 }
 
+function tableColumnNames(db: SceneForgeSqliteDatabase, tableName: string): Set<string> {
+  return new Set(
+    db.prepare(`PRAGMA table_info(${tableName})`).all()
+      .map((row) => readTextColumn(row, "name") ?? "")
+      .filter((name) => name.length > 0),
+  );
+}
+
+function hasExpectedEmbeddingIndexSchema(db: SceneForgeSqliteDatabase): boolean {
+  if (!tableExists(db, CIVITAI_EMBEDDING_INDEX_TABLE)) {
+    return false;
+  }
+
+  const columns = tableColumnNames(db, CIVITAI_EMBEDDING_INDEX_TABLE);
+  return [
+    "chunk_id",
+    "resource_id",
+    "resource_type",
+    "chunk_index",
+    "source_fingerprint",
+    "chunk_fingerprint",
+    "embedding",
+  ].every((column) => columns.has(column));
+}
+
 function normalizeEmbeddingModel(model: string | null | undefined): string {
   return (model ?? "").trim();
 }
 
-function truncateEmbeddingText(text: string): string {
-  return text.length <= CIVITAI_EMBEDDING_TEXT_MAX_CHARS
-    ? text
-    : text.slice(0, CIVITAI_EMBEDDING_TEXT_MAX_CHARS);
+function fingerprintText(text: string): string {
+  return createHash("sha256").update(text).digest("hex");
 }
 
-function fingerprintEmbeddingInputs(
+export function chunkCivitaiEmbeddingText(
+  text: string,
+  maxChars = CIVITAI_EMBEDDING_CHUNK_MAX_CHARS,
+  overlapChars = CIVITAI_EMBEDDING_CHUNK_OVERLAP_CHARS,
+): string[] {
+  const normalized = text.trim();
+  if (!normalized) {
+    return [];
+  }
+
+  if (!Number.isInteger(maxChars) || maxChars <= 0) {
+    throw new Error("Civitai embedding chunk size must be a positive integer.");
+  }
+  if (!Number.isInteger(overlapChars) || overlapChars < 0 || overlapChars >= maxChars) {
+    throw new Error("Civitai embedding chunk overlap must be smaller than the chunk size.");
+  }
+
+  const chunks: string[] = [];
+  let start = 0;
+  while (start < normalized.length) {
+    const end = Math.min(start + maxChars, normalized.length);
+    chunks.push(normalized.slice(start, end));
+    if (end >= normalized.length) {
+      break;
+    }
+    start = end - overlapChars;
+  }
+
+  return chunks;
+}
+
+function fingerprintEmbeddingSources(
   rows: Array<{
     resourceId: string;
     resourceType: Extract<CivitaiResourceType, "model" | "lora">;
@@ -165,14 +224,27 @@ export function readCivitaiEmbeddingIndexMetadata(db: SceneForgeSqliteDatabase):
     rows.map((row) => [readTextColumn(row, "key") ?? "", readTextColumn(row, "value") ?? ""]),
   );
   const dimensions = Number(values.get("dimensions"));
+  const chunkMaxChars = Number(values.get("chunk_max_chars"));
+  const chunkOverlapChars = Number(values.get("chunk_overlap_chars"));
   const model = normalizeEmbeddingModel(values.get("model"));
+  const schemaVersion = values.get("schema_version") ?? "";
   const sourceFingerprint = values.get("source_fingerprint") ?? "";
 
-  if (!Number.isInteger(dimensions) || dimensions <= 0 || !model || !sourceFingerprint) {
+  if (
+    !Number.isInteger(dimensions) ||
+    dimensions <= 0 ||
+    !Number.isInteger(chunkMaxChars) ||
+    chunkMaxChars !== CIVITAI_EMBEDDING_CHUNK_MAX_CHARS ||
+    !Number.isInteger(chunkOverlapChars) ||
+    chunkOverlapChars !== CIVITAI_EMBEDDING_CHUNK_OVERLAP_CHARS ||
+    !model ||
+    schemaVersion !== CIVITAI_EMBEDDING_INDEX_SCHEMA_VERSION ||
+    !sourceFingerprint
+  ) {
     return null;
   }
 
-  return { dimensions, model, sourceFingerprint };
+  return { chunkMaxChars, chunkOverlapChars, dimensions, model, schemaVersion, sourceFingerprint };
 }
 
 export function isCivitaiEmbeddingIndexAvailable(
@@ -188,12 +260,12 @@ export function isCivitaiEmbeddingIndexAvailable(
   const model = normalizeEmbeddingModel(expectedModel);
   const metadata = readCivitaiEmbeddingIndexMetadata(db);
 
-  if (!model || !metadata || metadata.model !== model || !tableExists(db, CIVITAI_EMBEDDING_INDEX_TABLE)) {
+  if (!model || !metadata || metadata.model !== model || !hasExpectedEmbeddingIndexSchema(db)) {
     return false;
   }
 
   try {
-    return metadata.sourceFingerprint === fingerprintEmbeddingInputs(listCivitaiResourceEmbeddingInputs(db));
+    return metadata.sourceFingerprint === fingerprintEmbeddingSources(listCivitaiResourceEmbeddingSourceInputs(db));
   } catch {
     return false;
   }
@@ -217,11 +289,11 @@ export function assertCivitaiEmbeddingIndexReady(
   }
 
   const metadata = readCivitaiEmbeddingIndexMetadata(db);
-  if (!metadata || metadata.model !== model || !tableExists(db, CIVITAI_EMBEDDING_INDEX_TABLE)) {
+  if (!metadata || metadata.model !== model || !hasExpectedEmbeddingIndexSchema(db)) {
     throw new Error(CIVITAI_EMBEDDING_INDEX_MISSING_MESSAGE);
   }
 
-  if (metadata.sourceFingerprint !== fingerprintEmbeddingInputs(listCivitaiResourceEmbeddingInputs(db))) {
+  if (metadata.sourceFingerprint !== fingerprintEmbeddingSources(listCivitaiResourceEmbeddingSourceInputs(db))) {
     throw new Error(CIVITAI_EMBEDDING_INDEX_MISSING_MESSAGE);
   }
 
@@ -232,9 +304,12 @@ export function rebuildCivitaiEmbeddingIndex(
   db: SceneForgeSqliteDatabase,
   input: {
     embeddings: Array<{
+      chunkFingerprint: string;
+      chunkIndex: number;
       embedding: number[];
       resourceId: string;
       resourceType: Extract<CivitaiResourceType, "model" | "lora">;
+      sourceFingerprint: string;
     }>;
     model: string;
   },
@@ -242,7 +317,7 @@ export function rebuildCivitaiEmbeddingIndex(
   assertCivitaiSearchIndexReadyForEmbeddings(db);
   loadSqliteVecExtension(db);
 
-  const sourceFingerprint = fingerprintEmbeddingInputs(listCivitaiResourceEmbeddingInputs(db));
+  const sourceFingerprint = fingerprintEmbeddingSources(listCivitaiResourceEmbeddingSourceInputs(db));
   const model = normalizeEmbeddingModel(input.model);
   const firstEmbedding = input.embeddings[0]?.embedding;
   const dimensions = firstEmbedding?.length ?? 0;
@@ -254,6 +329,12 @@ export function rebuildCivitaiEmbeddingIndex(
     if (entry.embedding.length !== dimensions) {
       throw new Error("Civitai embedding index rebuild received inconsistent vector dimensions.");
     }
+    if (!Number.isInteger(entry.chunkIndex) || entry.chunkIndex < 0) {
+      throw new Error("Civitai embedding index rebuild received an invalid chunk index.");
+    }
+    if (!entry.sourceFingerprint || !entry.chunkFingerprint) {
+      throw new Error("Civitai embedding index rebuild received missing chunk metadata.");
+    }
   }
 
   db.exec("BEGIN IMMEDIATE");
@@ -264,8 +345,12 @@ export function rebuildCivitaiEmbeddingIndex(
 
       CREATE VIRTUAL TABLE ${CIVITAI_EMBEDDING_INDEX_TABLE}
       USING vec0(
-        resource_id TEXT PRIMARY KEY,
+        chunk_id TEXT PRIMARY KEY,
+        resource_id TEXT,
         resource_type TEXT,
+        chunk_index TEXT,
+        source_fingerprint TEXT,
+        chunk_fingerprint TEXT,
         embedding float[${dimensions}]
       );
 
@@ -276,11 +361,27 @@ export function rebuildCivitaiEmbeddingIndex(
     `);
 
     const insert = db.prepare(`
-      INSERT INTO ${CIVITAI_EMBEDDING_INDEX_TABLE} (resource_id, resource_type, embedding)
-      VALUES (?, ?, ?)
+      INSERT INTO ${CIVITAI_EMBEDDING_INDEX_TABLE} (
+        chunk_id,
+        resource_id,
+        resource_type,
+        chunk_index,
+        source_fingerprint,
+        chunk_fingerprint,
+        embedding
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?)
     `);
     for (const entry of input.embeddings) {
-      insert.run(entry.resourceId, entry.resourceType, float32EmbeddingBlob(entry.embedding));
+      insert.run(
+        `${entry.resourceType}:${entry.resourceId}:${entry.chunkIndex}`,
+        entry.resourceId,
+        entry.resourceType,
+        String(entry.chunkIndex),
+        entry.sourceFingerprint,
+        entry.chunkFingerprint,
+        float32EmbeddingBlob(entry.embedding),
+      );
     }
 
     const writeMetadata = db.prepare(`
@@ -288,6 +389,9 @@ export function rebuildCivitaiEmbeddingIndex(
       VALUES (?, ?)
     `);
     writeMetadata.run("model", model);
+    writeMetadata.run("schema_version", CIVITAI_EMBEDDING_INDEX_SCHEMA_VERSION);
+    writeMetadata.run("chunk_max_chars", String(CIVITAI_EMBEDDING_CHUNK_MAX_CHARS));
+    writeMetadata.run("chunk_overlap_chars", String(CIVITAI_EMBEDDING_CHUNK_OVERLAP_CHARS));
     writeMetadata.run("dimensions", String(dimensions));
     writeMetadata.run("source_fingerprint", sourceFingerprint);
     writeMetadata.run("indexed_at", new Date().toISOString());
@@ -301,7 +405,7 @@ export function rebuildCivitaiEmbeddingIndex(
   }
 }
 
-export function listCivitaiResourceEmbeddingInputs(db: SceneForgeSqliteDatabase): Array<{
+function listCivitaiResourceEmbeddingSourceInputs(db: SceneForgeSqliteDatabase): Array<{
   resourceId: string;
   resourceType: Extract<CivitaiResourceType, "model" | "lora">;
   text: string;
@@ -320,9 +424,31 @@ export function listCivitaiResourceEmbeddingInputs(db: SceneForgeSqliteDatabase)
     return {
       resourceId: readTextColumn(row, "resource_id") ?? "",
       resourceType,
-      text: truncateEmbeddingText(readTextColumn(row, "search_text") ?? ""),
+      text: readTextColumn(row, "search_text") ?? "",
     };
   }).filter((row) => row.resourceId.length > 0 && row.text.trim().length > 0);
+}
+
+export function listCivitaiResourceEmbeddingInputs(db: SceneForgeSqliteDatabase): Array<{
+  chunkFingerprint: string;
+  chunkIndex: number;
+  resourceId: string;
+  resourceType: Extract<CivitaiResourceType, "model" | "lora">;
+  sourceFingerprint: string;
+  text: string;
+}> {
+  return listCivitaiResourceEmbeddingSourceInputs(db).flatMap((row) => {
+    const sourceFingerprint = fingerprintText(row.text);
+
+    return chunkCivitaiEmbeddingText(row.text).map((text, chunkIndex) => ({
+      chunkFingerprint: fingerprintText(text),
+      chunkIndex,
+      resourceId: row.resourceId,
+      resourceType: row.resourceType,
+      sourceFingerprint,
+      text,
+    }));
+  });
 }
 
 export function rankCivitaiResourceIdsByEmbeddingIndex(
@@ -338,16 +464,23 @@ export function rankCivitaiResourceIdsByEmbeddingIndex(
   }
 
   const placeholders = input.resourceIds.map(() => "?").join(", ");
-  const indexedCount = readNumberColumn(db.prepare(`
-    SELECT COUNT(*) AS count
+  const indexedResourceCount = readNumberColumn(db.prepare(`
+    SELECT COUNT(DISTINCT resource_id) AS count
     FROM ${CIVITAI_EMBEDDING_INDEX_TABLE}
     WHERE resource_type = ?
       AND resource_id IN (${placeholders})
   `).get(input.resourceType, ...input.resourceIds), "count") ?? 0;
 
-  if (indexedCount !== input.resourceIds.length) {
+  if (indexedResourceCount !== input.resourceIds.length) {
     throw new Error(CIVITAI_EMBEDDING_INDEX_MISSING_MESSAGE);
   }
+
+  const indexedChunkCount = readNumberColumn(db.prepare(`
+    SELECT COUNT(*) AS count
+    FROM ${CIVITAI_EMBEDDING_INDEX_TABLE}
+    WHERE resource_type = ?
+      AND resource_id IN (${placeholders})
+  `).get(input.resourceType, ...input.resourceIds), "count") ?? 0;
 
   const rows = db.prepare(`
     SELECT resource_id, distance
@@ -357,13 +490,26 @@ export function rankCivitaiResourceIdsByEmbeddingIndex(
       AND resource_type = ?
       AND resource_id IN (${placeholders})
     ORDER BY distance ASC
-  `).all(float32EmbeddingBlob(input.embedding), input.resourceIds.length, input.resourceType, ...input.resourceIds);
+  `).all(float32EmbeddingBlob(input.embedding), indexedChunkCount, input.resourceType, ...input.resourceIds);
+
+  const bestDistanceByResourceId = new Map<string, number>();
+  for (const [index, row] of rows.entries()) {
+    const resourceId = readTextColumn(row, "resource_id") ?? "";
+    const distance = readNumberColumn(row, "distance") ?? index;
+    const previousDistance = bestDistanceByResourceId.get(resourceId);
+    if (resourceId && (previousDistance === undefined || distance < previousDistance)) {
+      bestDistanceByResourceId.set(resourceId, distance);
+    }
+  }
 
   return new Map(
-    rows.map((row, index) => [
-      readTextColumn(row, "resource_id") ?? "",
-      readNumberColumn(row, "distance") ?? index,
-    ]),
+    Array.from(bestDistanceByResourceId.entries()).sort((left, right) => {
+      if (left[1] !== right[1]) {
+        return left[1] - right[1];
+      }
+
+      return left[0].localeCompare(right[0]);
+    }),
   );
 }
 
