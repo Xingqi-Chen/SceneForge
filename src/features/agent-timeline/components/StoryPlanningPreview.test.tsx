@@ -23,6 +23,17 @@ function setNativeInputValue(input: HTMLInputElement | HTMLTextAreaElement, valu
   input.dispatchEvent(new Event("input", { bubbles: true }));
 }
 
+function setNativeSelectValue(select: HTMLSelectElement, value: string) {
+  const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(select), "value")?.set;
+
+  if (!setter) {
+    throw new Error("Unable to set select value.");
+  }
+
+  setter.call(select, value);
+  select.dispatchEvent(new Event("change", { bubbles: true }));
+}
+
 const resourceCandidates = {
   checkpoints: [
     {
@@ -292,7 +303,10 @@ describe("StoryPlanningPreview", () => {
 
     expect(textarea).not.toBeNull();
     expect(shotsInput).toBeDefined();
-    expect(container.querySelector("select")).toBeNull();
+    const baseModelSelect = container.querySelector("select") as HTMLSelectElement | null;
+
+    expect(baseModelSelect).not.toBeNull();
+    expect(baseModelSelect?.value).toBe("illustrious");
 
     act(() => {
       setNativeInputValue(textarea as HTMLTextAreaElement, "A detective follows a signal through a storm-lit city.");
@@ -336,6 +350,75 @@ describe("StoryPlanningPreview", () => {
     const executionButton = container.querySelector('button[data-node-id="shot-graph-execution"]') as HTMLButtonElement | null;
 
     expect(executionButton?.textContent).toContain("blocked");
+  });
+
+  it("uses the selected Story input base model to scope checkpoint and LoRA candidates", async () => {
+    const plannedWorkflow = createPlannedWorkflow("A detective follows a signal through a storm-lit city.");
+    const fetchMock = vi.fn<typeof fetch>(async (url) => {
+      const target = typeof url === "string" ? url : url instanceof Request ? url.url : url.toString();
+      const resourceResponse = handleStoryResourceListFetch(target);
+      if (resourceResponse) {
+        return resourceResponse;
+      }
+
+      if (target === "/api/settings") {
+        return {
+          ok: true,
+          json: async () => ({}),
+        } as Response;
+      }
+
+      if (target === "/api/agent-timeline/story/run-planning") {
+        return {
+          ok: true,
+          json: async () => ({
+            workflow: plannedWorkflow,
+          }),
+        } as Response;
+      }
+
+      throw new Error(`Unexpected fetch ${target}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await act(async () => {
+      root.render(<StoryPlanningPreview />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const textarea = container.querySelector("textarea") as HTMLTextAreaElement | null;
+    const baseModelSelect = container.querySelector("select") as HTMLSelectElement | null;
+
+    expect(textarea).not.toBeNull();
+    expect(baseModelSelect).not.toBeNull();
+
+    act(() => {
+      setNativeInputValue(textarea as HTMLTextAreaElement, "A detective follows a signal through a storm-lit city.");
+      setNativeSelectValue(baseModelSelect as HTMLSelectElement, "anima");
+    });
+    await clickButtonAsync("Start planning");
+
+    const fetchTargets = fetchMock.mock.calls.map(([input]) =>
+      typeof input === "string" ? input : input instanceof Request ? input.url : input.toString(),
+    );
+
+    expect(fetchTargets).toContain(
+      "/api/civitai-lora-library/resources?resourceType=model&category=all&downloaded=ready&promptProfile=anima",
+    );
+    expect(fetchTargets).toContain(
+      "/api/civitai-lora-library/resources?resourceType=lora&category=all&downloaded=ready&promptProfile=anima",
+    );
+
+    const planningBody = JSON.parse(String(
+      fetchMock.mock.calls.find(([input]) => input === "/api/agent-timeline/story/run-planning")?.[1]?.body ?? "{}",
+    )) as {
+      settingsSnapshot?: {
+        promptProfile?: string;
+      };
+    };
+
+    expect(planningBody.settingsSnapshot?.promptProfile).toBe("anima");
   });
 
   it("enters the workflow immediately and streams running node updates", async () => {

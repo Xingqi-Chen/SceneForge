@@ -34,6 +34,7 @@ import type {
   StoryWorkflowNodeId,
 } from "./story-types";
 import { createStoryWorkflowState } from "./story-state";
+import type { PromptProfileId } from "@/shared/prompt-profile";
 
 type StoryClock = () => string;
 
@@ -44,6 +45,7 @@ export type StoryGraphStartSettingsSnapshot = {
   targetShotCount?: number;
   audienceRating: StoryAudienceRating;
   planningMode: "deterministic-local";
+  promptProfile?: PromptProfileId;
   resourceCandidates?: {
     checkpoints: StoryLocalResource[];
     loras: StoryLocalResource[];

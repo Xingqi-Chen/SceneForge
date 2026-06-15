@@ -32,7 +32,13 @@ import {
   getCivitaiModelStorageKind,
   makeCivitaiResourceTargetFileName,
 } from "@/features/civitai-lora-library/resource-files";
-import { defaultPromptProfileId } from "@/shared/prompt-profile";
+import {
+  defaultPromptProfileId,
+  formatPromptProfileLabel,
+  normalizePromptProfileId,
+  promptProfileIds,
+  type PromptProfileId,
+} from "@/shared/prompt-profile";
 import { cn } from "@/shared/utils/cn";
 
 import { StoryPlanningWorkspace } from "./StoryPlanningWorkspace";
@@ -50,6 +56,9 @@ const fallbackRequest = {
   workflowId: "story-planning-fallback",
   storyId: "story-fallback",
   nsfwEnabled: false,
+  settingsSnapshot: {
+    promptProfile: defaultPromptProfileId,
+  },
 } satisfies StoryGraphStartRequest;
 
 function formatStatusLabel(status: string) {
@@ -181,10 +190,12 @@ async function completeStoryInputAi({
 
 function createClientStartRequest({
   nsfwEnabled,
+  promptProfile,
   rawIntent,
   targetShotCount,
 }: {
   nsfwEnabled: boolean;
+  promptProfile: PromptProfileId;
   rawIntent: string;
   targetShotCount: string;
 }): StoryGraphStartRequest {
@@ -198,6 +209,7 @@ function createClientStartRequest({
     settingsSnapshot: {
       audienceRating,
       nsfwEnabled,
+      promptProfile,
       targetShotCount: Number.isFinite(normalizedShotCount) ? normalizedShotCount : undefined,
     } as StoryGraphStartRequest["settingsSnapshot"],
   };
@@ -223,10 +235,14 @@ function toStoryLocalResource(resource: CivitaiResourceListItem): StoryLocalReso
   };
 }
 
-async function loadStoryResourceItems(resourceType: "lora" | "model") {
-  const response = await fetch(
-    `/api/civitai-lora-library/resources?resourceType=${resourceType}&category=all&downloaded=ready&promptProfile=${defaultPromptProfileId}`,
-  );
+async function loadStoryResourceItems(resourceType: "lora" | "model", promptProfile: PromptProfileId) {
+  const params = new URLSearchParams({
+    resourceType,
+    category: "all",
+    downloaded: "ready",
+    promptProfile,
+  });
+  const response = await fetch(`/api/civitai-lora-library/resources?${params.toString()}`);
   const payload: unknown = await response.json().catch(() => null);
 
   if (!response.ok) {
@@ -240,10 +256,10 @@ async function loadStoryResourceItems(resourceType: "lora" | "model") {
   return payload.items as CivitaiResourceListItem[];
 }
 
-async function loadStoryResourceCandidates() {
+async function loadStoryResourceCandidates(promptProfile: PromptProfileId) {
   const [checkpoints, loras] = await Promise.all([
-    loadStoryResourceItems("model"),
-    loadStoryResourceItems("lora"),
+    loadStoryResourceItems("model", promptProfile),
+    loadStoryResourceItems("lora", promptProfile),
   ]);
   const resourceCandidates = {
     checkpoints: checkpoints.map(toStoryLocalResource),
@@ -421,6 +437,7 @@ function StartPanel({
 }) {
   const [rawIntent, setRawIntent] = useState("");
   const [targetShotCount, setTargetShotCount] = useState("");
+  const [promptProfile, setPromptProfile] = useState<PromptProfileId>(defaultPromptProfileId);
   const [aiStatus, setAiStatus] = useState<StoryInputAiAction | null>(null);
   const [error, setError] = useState("");
 
@@ -461,6 +478,7 @@ function StartPanel({
     onStart(
       createClientStartRequest({
         nsfwEnabled,
+        promptProfile,
         rawIntent,
         targetShotCount,
       }),
@@ -477,7 +495,15 @@ function StartPanel({
           </div>
           <button
             className="inline-flex h-8 items-center justify-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-100"
-            onClick={() => onStart(fallbackRequest)}
+            onClick={() =>
+              onStart({
+                ...fallbackRequest,
+                settingsSnapshot: {
+                  ...fallbackRequest.settingsSnapshot,
+                  promptProfile,
+                },
+              })
+            }
             type="button"
           >
             <RotateCcw className="size-3.5" />
@@ -517,7 +543,21 @@ function StartPanel({
           />
         </label>
 
-        <div className="grid gap-3 md:grid-cols-[8rem]">
+        <div className="grid gap-3 md:grid-cols-[minmax(0,12rem)_8rem]">
+          <label className="flex flex-col gap-1 text-xs font-medium text-slate-700">
+            Base model
+            <select
+              className="h-9 rounded-md border border-slate-200 bg-white px-3 text-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+              onChange={(event) => setPromptProfile(normalizePromptProfileId(event.target.value))}
+              value={promptProfile}
+            >
+              {promptProfileIds.map((profile) => (
+                <option key={profile} value={profile}>
+                  {formatPromptProfileLabel(profile)}
+                </option>
+              ))}
+            </select>
+          </label>
           <label className="flex flex-col gap-1 text-xs font-medium text-slate-700">
             Shots
             <input
@@ -714,9 +754,11 @@ export function StoryPlanningPreview() {
     try {
       const initialStart = createStoryGraphInputWorkflow(request);
       setWorkflow(initialStart.workflow);
-      const resourceCandidates = await loadStoryResourceCandidates();
+      const promptProfile = normalizePromptProfileId(request.settingsSnapshot?.promptProfile);
+      const resourceCandidates = await loadStoryResourceCandidates(promptProfile);
       const settingsSnapshot = {
         ...(isRecord(request.settingsSnapshot) ? request.settingsSnapshot : {}),
+        promptProfile,
         resourceCandidates,
       };
       const planned = await postStoryWorkflowStream({

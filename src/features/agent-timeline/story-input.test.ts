@@ -19,6 +19,9 @@ describe("story input workflow start", () => {
       targetShotCount: 4.4,
       nsfwEnabled: true,
       now,
+      settingsSnapshot: {
+        promptProfile: "anima",
+      },
     });
 
     expect(input).toMatchObject({
@@ -36,6 +39,7 @@ describe("story input workflow start", () => {
       settingsSnapshot: {
         source: "story-form",
         planningMode: "deterministic-local",
+        promptProfile: "anima",
         targetShotCount: 4,
         audienceRating: "explicit",
         nsfwEnabled: true,
