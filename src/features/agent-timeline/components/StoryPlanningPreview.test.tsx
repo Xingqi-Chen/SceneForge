@@ -483,6 +483,13 @@ describe("StoryPlanningPreview", () => {
     expect(container.textContent).toContain("User-started planning workflow");
     expect(container.textContent).toContain("story-input");
 
+    const readyBibleButton = container.querySelector('button[data-node-id="story-bible"]') as HTMLButtonElement | null;
+    const readyBibleTone = readyBibleButton?.querySelector("span");
+
+    expect(readyBibleButton?.textContent).toContain("ready");
+    expect(readyBibleTone?.className).toContain("bg-blue-50");
+    expect(readyBibleTone?.className).not.toContain("bg-emerald-50");
+
     await act(async () => {
       streamResponse.write({
         nodeId: "story-bible",

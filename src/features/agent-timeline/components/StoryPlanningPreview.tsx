@@ -65,6 +65,34 @@ function formatStatusLabel(status: string) {
   return status.replace(/-/g, " ");
 }
 
+function getStoryNodeStatusTone(status: string) {
+  if (status === "manual") {
+    return "border-violet-200 bg-violet-50 text-violet-700";
+  }
+
+  if (status === "done") {
+    return "border-emerald-200 bg-emerald-50 text-emerald-700";
+  }
+
+  if (status === "ready") {
+    return "border-blue-200 bg-blue-50 text-blue-700";
+  }
+
+  if (status === "running") {
+    return "border-indigo-200 bg-indigo-50 text-indigo-700";
+  }
+
+  if (status === "stale") {
+    return "border-amber-200 bg-amber-50 text-amber-700";
+  }
+
+  if (status === "error") {
+    return "border-rose-200 bg-rose-50 text-rose-700";
+  }
+
+  return "border-slate-200 bg-slate-50 text-slate-500";
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
@@ -940,15 +968,7 @@ export function StoryPlanningPreview() {
                     <span
                       className={cn(
                         "relative z-10 flex size-8 shrink-0 items-center justify-center rounded-full border text-[11px] font-semibold ring-4 ring-white",
-                        node.status === "manual"
-                          ? "border-violet-200 bg-violet-50 text-violet-700"
-                          : node.status === "stale"
-                            ? "border-amber-200 bg-amber-50 text-amber-700"
-                            : node.status === "running"
-                              ? "border-indigo-200 bg-indigo-50 text-indigo-700"
-                            : node.status === "blocked"
-                              ? "border-slate-200 bg-slate-50 text-slate-500"
-                              : "border-emerald-200 bg-emerald-50 text-emerald-700",
+                        getStoryNodeStatusTone(node.status),
                       )}
                     >
                       {node.status === "running" ? (
