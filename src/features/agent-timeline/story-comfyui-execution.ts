@@ -23,8 +23,11 @@ import type {
 } from "./story-execution";
 
 const DEFAULT_COMFYUI_BASE_URL = "http://127.0.0.1:8188";
-const DEFAULT_HISTORY_POLL_ATTEMPTS = 20;
-const DEFAULT_HISTORY_POLL_INTERVAL_MS = 500;
+const DEFAULT_HISTORY_POLL_INTERVAL_MS = 2000;
+const DEFAULT_HISTORY_POLL_TIMEOUT_MS = 60 * 60 * 1000;
+const DEFAULT_HISTORY_POLL_ATTEMPTS = Math.ceil(
+  DEFAULT_HISTORY_POLL_TIMEOUT_MS / DEFAULT_HISTORY_POLL_INTERVAL_MS,
+);
 
 type StoreGeneratedImage = typeof storeGeneratedImage;
 type FetchImage = (url: string) => Promise<{

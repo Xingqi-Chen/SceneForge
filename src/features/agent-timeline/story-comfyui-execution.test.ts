@@ -236,6 +236,68 @@ describe("story ComfyUI execution adapter", () => {
     expect(client.generateImage).not.toHaveBeenCalled();
   });
 
+  it("uses production-scale default history polling for real ComfyUI generations", async () => {
+    const client = createClient();
+    let historyCalls = 0;
+    client.getHistory = vi.fn<StoryComfyUiExecutionClient["getHistory"]>(async () => {
+      historyCalls += 1;
+
+      return historyCalls < 26
+        ? {
+            "prompt-shot-a": {},
+          }
+        : {
+            "prompt-shot-a": {
+              outputs: {
+                "9": {
+                  images: [
+                    {
+                      filename: "shot-a.png",
+                      type: "output",
+                    },
+                  ],
+                },
+              },
+            },
+          };
+    });
+    const fetchImage = vi.fn(async () => ({
+      bytes: new Uint8Array([1, 2, 3]),
+      contentType: "image/png",
+    }));
+    const storeImage = vi.fn(async (bytes: Uint8Array, contentType: string | null) => ({
+      byteLength: bytes.byteLength,
+      contentType: contentType ?? "image/png",
+      filename: "stored-shot-a.png",
+      url: "/api/comfyui/generated-images/stored-shot-a.png",
+    }));
+    const adapter = createStoryComfyUiExecutionAdapter({
+      client,
+      fetchImage,
+      historyPollIntervalMs: 0,
+      storeImage,
+      validateObjectInfo: () => ({
+        errors: [],
+        request: baseRequest,
+        warnings: [],
+      }),
+      validateRequest: () => ({
+        ok: true,
+        request: baseRequest,
+      }),
+    });
+
+    const result = await executeStoryShotGraph(createBatch(), adapter);
+
+    expect(client.getHistory).toHaveBeenCalledTimes(26);
+    expect(result.shots[0]).toMatchObject({
+      resultReference: {
+        promptId: "prompt-shot-a",
+      },
+      status: "done",
+    });
+  });
+
   it("raises a typed error when prompt history never completes", async () => {
     const client = createClient();
     client.getHistory = vi.fn<StoryComfyUiExecutionClient["getHistory"]>().mockResolvedValue({
