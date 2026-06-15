@@ -128,7 +128,7 @@ function withExecution(workflow: StoryWorkflowState, promptPrefix = "prompt"): S
           filename: `${shotId}.png`,
           nodeId: "9",
           type: "output",
-          url: `/api/comfyui/generated-images/${promptPrefix}-${shotId}.png`,
+          url: `http://comfyui.test/view?filename=${promptPrefix}-${shotId}.png&type=output`,
         },
         promptId: `${promptPrefix}-${shotId}`,
         shotId,
@@ -606,6 +606,19 @@ describe("StoryPlanningPreview", () => {
     expect(container.textContent).toContain("Shot execution");
     expect(container.textContent).toContain("first-shot-1");
 
+    const resultButton = container.querySelector('button[data-node-id="story-result-display"]') as HTMLButtonElement | null;
+    act(() => {
+      (resultButton as HTMLButtonElement).click();
+    });
+
+    const resultImage = container.querySelector('img[alt="Generated shot-1"]') as HTMLImageElement | null;
+    expect(resultImage?.getAttribute("src")).toBe("/api/comfyui/generated-images/first-shot-1.png");
+    expect(resultImage?.getAttribute("src")).not.toContain("comfyui.test/view");
+
+    const executionButton = container.querySelector('button[data-node-id="shot-graph-execution"]') as HTMLButtonElement | null;
+    act(() => {
+      (executionButton as HTMLButtonElement).click();
+    });
     await clickButtonAsync("Regenerate shot");
 
     expect(container.textContent).toContain("regen-shot-1");

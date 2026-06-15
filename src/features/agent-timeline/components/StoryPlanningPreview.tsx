@@ -294,6 +294,14 @@ function isStoryResultDisplay(value: unknown): value is StoryResultDisplay {
   return isRecord(value) && Array.isArray(value.finalReferences) && typeof value.status === "string";
 }
 
+function getStoryResultImageUrl(reference: StoryResultDisplay["finalReferences"][number]) {
+  return reference.storedImage?.url ?? reference.image?.url ?? "";
+}
+
+function getStoryExecutionImageUrl(reference: StoryShotGraphExecutionState["shots"][number]["resultReference"]) {
+  return reference?.storedImage?.url ?? reference?.image?.url ?? "";
+}
+
 function getGenerationGateReady(workflow: StoryWorkflowState | null) {
   const gate = workflow?.nodes["generation-gate"];
   return gate?.status === "done" && isRecord(gate.result) && gate.result.ready === true;
@@ -479,7 +487,7 @@ function StoryExecutionPanel({
             {shot.resultReference?.image ? (
               <div className="mt-2 flex items-center gap-2 text-[11px] text-slate-600">
                 <ImageIcon className="size-3.5" />
-                <a className="break-all text-blue-700 underline-offset-2 hover:underline" href={shot.resultReference.image.url} target="_blank" rel="noreferrer">
+                <a className="break-all text-blue-700 underline-offset-2 hover:underline" href={getStoryExecutionImageUrl(shot.resultReference)} target="_blank" rel="noreferrer">
                   {shot.resultReference.image.filename}
                 </a>
               </div>
@@ -522,20 +530,24 @@ function StoryResultGrid({ result }: { result: StoryResultDisplay }) {
         </span>
       </div>
       <div className="grid gap-3 sm:grid-cols-2">
-        {result.finalReferences.map((reference) => (
-          <article className="rounded-md border border-slate-200 bg-white p-2" key={reference.shotId}>
-            {reference.image ? (
+        {result.finalReferences.map((reference) => {
+          const imageUrl = getStoryResultImageUrl(reference);
+
+          return (
+            <article className="rounded-md border border-slate-200 bg-white p-2" key={reference.shotId}>
+              {imageUrl ? (
               // eslint-disable-next-line @next/next/no-img-element
-              <img alt={`Generated ${reference.shotId}`} className="aspect-video w-full rounded object-cover" src={reference.image.url} />
-            ) : (
-              <div className="flex aspect-video items-center justify-center rounded bg-slate-100 text-xs text-slate-500">
-                No image
-              </div>
-            )}
-            <p className="mt-2 text-xs font-semibold text-slate-900">{reference.shotId}</p>
-            <p className="mt-1 break-all text-[11px] text-slate-500">{reference.promptId}</p>
-          </article>
-        ))}
+                <img alt={`Generated ${reference.shotId}`} className="aspect-video w-full rounded object-cover" src={imageUrl} />
+              ) : (
+                <div className="flex aspect-video items-center justify-center rounded bg-slate-100 text-xs text-slate-500">
+                  No image
+                </div>
+              )}
+              <p className="mt-2 text-xs font-semibold text-slate-900">{reference.shotId}</p>
+              <p className="mt-1 break-all text-[11px] text-slate-500">{reference.promptId}</p>
+            </article>
+          );
+        })}
       </div>
       {result.errors.length > 0 ? (
         <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 p-2 text-[11px] text-amber-800">
