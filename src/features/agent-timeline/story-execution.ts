@@ -503,7 +503,9 @@ function buildInitialRecords(batch: StoryExecutionRequestBatch, initialState?: S
       ...previous,
       shotId: request.shotId,
       sourceShotIds: [...request.sourceShotIds],
-      status: previous?.status === "done" && previous.resultReference
+      status: previous?.status === "stale"
+        ? "stale"
+        : previous?.status === "done" && previous.resultReference
         ? "done"
         : request.sourceShotIds.length === 0
           ? "ready"

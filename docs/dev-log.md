@@ -2,6 +2,46 @@
 
 This log records dated implementation and documentation work. Keep entries concise and evidence-oriented.
 
+## 2026-06-15
+
+### Story Graph Full Real Flow
+
+Summary:
+
+- Added server-side Story Graph planning through `POST /api/agent-timeline/story/run-planning`, with LiteLLM-backed Story node adapters for bible, outline, storyboard shots, safety, dependency, plot, continuity, resource, and parameter planning.
+- Kept system-owned Story render plan, consistency check, and generation gate assembly deterministic; hard validation now blocks unknown shot dependencies, dependency cycles, render/source mismatch, and non-executable resource plans.
+- Added Story Graph generation APIs for confirmation and scoped shot regeneration; both use the existing Story shot scheduler plus the ComfyUI execution adapter and preserve unrelated shot result references during reruns.
+- Updated `/story` to call server planning, expose generation after a ready gate, display shot execution/result state, and trigger per-shot regeneration.
+- Removed the old client-side deterministic mock path from the main start flow; the old planning fallback checkpoint is rejected by the executable gate instead of being accepted as a real model.
+- Follow-up: `/story` now loads real downloaded local Civitai checkpoint and LoRA candidates before planning and blocks with a clear UI error when no downloaded checkpoint is available.
+- Follow-up: Story generation and shot regeneration recompute the render plan server-side from the validated current workflow so tampered submitted `story-render-plan` resources cannot execute.
+
+Files changed:
+
+- `src/app/api/agent-timeline/story/run-planning/route.ts`
+- `src/app/api/agent-timeline/story/confirm-generation/route.ts`
+- `src/app/api/agent-timeline/story/regenerate-shot/route.ts`
+- `src/features/agent-timeline/story-api.ts`
+- `src/features/agent-timeline/story-llm-adapters.ts`
+- `src/features/agent-timeline/story-runner.ts`
+- `src/features/agent-timeline/story-state.ts`
+- `src/features/agent-timeline/story-execution.ts`
+- `src/features/agent-timeline/components/StoryPlanningPreview.tsx`
+- Focused Story adapter, route, scheduler, and UI tests under `src/features/agent-timeline` and `src/app/api/agent-timeline/story`.
+
+Validation:
+
+- `npm test -- --run src/features/agent-timeline/story-llm-adapters.test.ts` passed with 6 tests.
+- `npm test -- --run src/app/api/agent-timeline/story` passed with 3 files and 7 tests.
+- `npm test -- --run src/features/agent-timeline/components/StoryPlanningPreview.test.tsx` passed with 5 tests.
+- `npm test -- --run src/features/agent-timeline` passed with 25 files and 165 tests.
+- `npm run typecheck` passed.
+- `npm run lint` passed with 23 existing warnings unrelated to this change.
+- Follow-up validation: `npm test -- --run src/features/agent-timeline/components/StoryPlanningPreview.test.tsx` passed with 6 tests.
+- Follow-up validation: `npm test -- --run src/app/api/agent-timeline/story` passed with 3 files and 9 tests.
+- Follow-up validation: `npm test -- --run src/features/agent-timeline` passed with 25 files and 166 tests.
+- Follow-up validation: `npm run typecheck` passed.
+
 ## 2026-06-14
 
 ### T21 / Issue #66 Shot Graph Execution Scheduler
