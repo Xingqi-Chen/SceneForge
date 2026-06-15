@@ -24,9 +24,11 @@ import { normalizeCommonWorkflowAdapterResult } from "./workflow-definition";
 
 export type RunStoryPlanningRequest = {
   rawIntent: string;
+  storyId?: string;
   targetShotCount?: number;
   nsfwEnabled?: boolean;
   settingsSnapshot?: StoryGraphStartRequest["settingsSnapshot"];
+  workflowId?: string;
 };
 
 export type RunStoryPlanningOptions = {
@@ -60,6 +62,7 @@ function createInitialStoryPlanningWorkflow({
   const timestamp = now();
   const input = createStoryInputFromStartRequest({
     rawIntent: request.rawIntent,
+    storyId: request.storyId,
     targetShotCount: request.targetShotCount,
     nsfwEnabled: request.nsfwEnabled,
     settingsSnapshot: request.settingsSnapshot,
@@ -68,6 +71,7 @@ function createInitialStoryPlanningWorkflow({
   const workflow = createStoryWorkflowState({
     now: () => timestamp,
     storyId: input.storyId,
+    workflowId: request.workflowId,
   });
 
   return refreshStoryWorkflowReadiness({

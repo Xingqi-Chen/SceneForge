@@ -2,9 +2,10 @@
 
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import Link from "next/link";
-import { Bot, CheckCircle2, CircleDot, GitBranch, ImageIcon, Play, RefreshCw, RotateCcw, Settings } from "lucide-react";
+import { Bot, CheckCircle2, CircleDot, GitBranch, ImageIcon, LoaderCircle, Play, RefreshCw, RotateCcw, Settings } from "lucide-react";
 
 import {
+  createStoryGraphInputWorkflow,
   type StoryGraphStartRequest,
 } from "@/features/agent-timeline/story-input";
 import type { StoryResultDisplay } from "@/features/agent-timeline/story-api";
@@ -284,6 +285,110 @@ async function postStoryWorkflow(
   }
 
   return payload.workflow as unknown as StoryWorkflowState;
+}
+
+type StoryPlanningStreamEvent =
+  | {
+      nodeId?: StoryWorkflowNodeId;
+      type: "workflow";
+      workflow: StoryWorkflowState;
+    }
+  | {
+      type: "done";
+      workflow: StoryWorkflowState;
+    }
+  | {
+      error?: {
+        message?: string;
+      };
+      type: "error";
+    };
+
+async function postStoryWorkflowStream({
+  body,
+  fallbackMessage,
+  onUpdate,
+  url,
+}: {
+  body: unknown;
+  fallbackMessage: string;
+  onUpdate: (workflow: StoryWorkflowState, nodeId?: StoryWorkflowNodeId) => void;
+  url: string;
+}): Promise<StoryWorkflowState> {
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      accept: "application/x-ndjson",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    const payload: unknown = await response.json().catch(() => null);
+    throw new Error(getApiErrorMessage(payload, fallbackMessage));
+  }
+
+  const contentType = response.headers?.get("content-type") ?? "";
+  if (!response.body || !contentType.includes("application/x-ndjson")) {
+    const payload: unknown = await response.json().catch(() => null);
+    if (!isRecord(payload) || !isRecord(payload.workflow)) {
+      throw new Error(fallbackMessage);
+    }
+
+    return payload.workflow as unknown as StoryWorkflowState;
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let latestWorkflow: StoryWorkflowState | null = null;
+
+  function handleLine(line: string) {
+    if (!line.trim()) {
+      return;
+    }
+
+    const event = JSON.parse(line) as StoryPlanningStreamEvent;
+    if (event.type === "error") {
+      throw new Error(event.error?.message ?? fallbackMessage);
+    }
+
+    latestWorkflow = event.workflow;
+    if (event.type === "workflow") {
+      onUpdate(event.workflow, event.nodeId);
+    } else {
+      onUpdate(event.workflow);
+    }
+  }
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (value) {
+      buffer += decoder.decode(value, { stream: !done });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
+
+      for (const line of lines) {
+        handleLine(line);
+      }
+    }
+
+    if (done) {
+      break;
+    }
+  }
+
+  buffer += decoder.decode();
+  if (buffer.trim()) {
+    handleLine(buffer);
+  }
+
+  if (!latestWorkflow) {
+    throw new Error(fallbackMessage);
+  }
+
+  return latestWorkflow;
 }
 
 function isStoryExecutionState(value: unknown): value is StoryShotGraphExecutionState {
@@ -607,16 +712,31 @@ export function StoryPlanningPreview() {
     setPlanningStatus("planning");
 
     try {
+      const initialStart = createStoryGraphInputWorkflow(request);
+      setWorkflow(initialStart.workflow);
       const resourceCandidates = await loadStoryResourceCandidates();
-      const planned = await postStoryWorkflow("/api/agent-timeline/story/run-planning", {
-        rawIntent: request.rawIntent,
-        targetShotCount: request.targetShotCount,
-        nsfwEnabled: request.nsfwEnabled,
-        settingsSnapshot: {
-          ...(isRecord(request.settingsSnapshot) ? request.settingsSnapshot : {}),
-          resourceCandidates,
+      const settingsSnapshot = {
+        ...(isRecord(request.settingsSnapshot) ? request.settingsSnapshot : {}),
+        resourceCandidates,
+      };
+      const planned = await postStoryWorkflowStream({
+        url: "/api/agent-timeline/story/run-planning",
+        body: {
+          rawIntent: request.rawIntent,
+          storyId: initialStart.input.storyId,
+          targetShotCount: request.targetShotCount,
+          nsfwEnabled: request.nsfwEnabled,
+          settingsSnapshot,
+          workflowId: initialStart.workflow.workflowId,
         },
-      }, "Story Graph planning failed.");
+        fallbackMessage: "Story Graph planning failed.",
+        onUpdate: (updatedWorkflow, nodeId) => {
+          setWorkflow(updatedWorkflow);
+          if (nodeId) {
+            setSelectedNodeId(nodeId);
+          }
+        },
+      });
       setWorkflow(planned);
     } catch (error) {
       setPlanningError(error instanceof Error ? error.message : "Story Graph planning failed.");
@@ -782,12 +902,18 @@ export function StoryPlanningPreview() {
                           ? "border-violet-200 bg-violet-50 text-violet-700"
                           : node.status === "stale"
                             ? "border-amber-200 bg-amber-50 text-amber-700"
+                            : node.status === "running"
+                              ? "border-indigo-200 bg-indigo-50 text-indigo-700"
                             : node.status === "blocked"
                               ? "border-slate-200 bg-slate-50 text-slate-500"
                               : "border-emerald-200 bg-emerald-50 text-emerald-700",
                       )}
                     >
-                      {planningNodeIds.indexOf(nodeId) + 1}
+                      {node.status === "running" ? (
+                        <LoaderCircle className="size-3.5 animate-spin" />
+                      ) : (
+                        planningNodeIds.indexOf(nodeId) + 1
+                      )}
                     </span>
                     <span className="min-w-0 flex-1">
                       <span className="flex items-center gap-1.5">
@@ -820,7 +946,13 @@ export function StoryPlanningPreview() {
                       <p className="mt-1 text-xs leading-relaxed text-slate-500">{metadata.manualEdit.label}</p>
                     </div>
                     <span className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-xs font-medium text-slate-600">
-                      {selectedNode.status === "manual" ? <CheckCircle2 className="size-3.5 text-violet-500" /> : <CircleDot className="size-3.5" />}
+                      {selectedNode.status === "running" ? (
+                        <LoaderCircle className="size-3.5 animate-spin text-indigo-500" />
+                      ) : selectedNode.status === "manual" ? (
+                        <CheckCircle2 className="size-3.5 text-violet-500" />
+                      ) : (
+                        <CircleDot className="size-3.5" />
+                      )}
                       {formatStatusLabel(selectedNode.status)}
                     </span>
                   </div>

@@ -180,6 +180,30 @@ function withExecution(workflow: StoryWorkflowState, promptPrefix = "prompt"): S
   };
 }
 
+function createStoryPlanningStreamResponse() {
+  const encoder = new TextEncoder();
+  let controller: ReadableStreamDefaultController<Uint8Array> | null = null;
+  const stream = new ReadableStream<Uint8Array>({
+    start(nextController) {
+      controller = nextController;
+    },
+  });
+
+  return {
+    close() {
+      controller?.close();
+    },
+    response: new Response(stream, {
+      headers: {
+        "content-type": "application/x-ndjson",
+      },
+    }),
+    write(event: unknown) {
+      controller?.enqueue(encoder.encode(`${JSON.stringify(event)}\n`));
+    },
+  };
+}
+
 async function clickButtonAsync(label: string) {
   const button = Array.from(container.querySelectorAll("button")).find(
     (candidate) => candidate.textContent?.replace(/\s+/g, " ").trim() === label,
@@ -312,6 +336,93 @@ describe("StoryPlanningPreview", () => {
     const executionButton = container.querySelector('button[data-node-id="shot-graph-execution"]') as HTMLButtonElement | null;
 
     expect(executionButton?.textContent).toContain("blocked");
+  });
+
+  it("enters the workflow immediately and streams running node updates", async () => {
+    const plannedWorkflow = createPlannedWorkflow("A detective follows a signal through a storm-lit city.");
+    const runningWorkflow: StoryWorkflowState = {
+      ...plannedWorkflow,
+      nodes: {
+        ...plannedWorkflow.nodes,
+        "story-bible": {
+          nodeId: "story-bible",
+          source: "ai",
+          status: "running",
+          updatedAt: "2026-06-15T00:00:01.000Z",
+        },
+      },
+      updatedAt: "2026-06-15T00:00:01.000Z",
+    };
+    const streamResponse = createStoryPlanningStreamResponse();
+    const fetchMock = vi.fn<typeof fetch>(async (url) => {
+      const target = typeof url === "string" ? url : url instanceof Request ? url.url : url.toString();
+      const resourceResponse = handleStoryResourceListFetch(target);
+      if (resourceResponse) {
+        return resourceResponse;
+      }
+
+      if (target === "/api/settings") {
+        return {
+          ok: true,
+          json: async () => ({}),
+        } as Response;
+      }
+
+      if (target === "/api/agent-timeline/story/run-planning") {
+        return streamResponse.response;
+      }
+
+      throw new Error(`Unexpected fetch ${target}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await act(async () => {
+      root.render(<StoryPlanningPreview />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const textarea = container.querySelector("textarea") as HTMLTextAreaElement | null;
+    const startButton = Array.from(container.querySelectorAll("button")).find(
+      (button) => button.textContent?.replace(/\s+/g, " ").trim() === "Start planning",
+    ) as HTMLButtonElement | undefined;
+
+    act(() => {
+      setNativeInputValue(textarea as HTMLTextAreaElement, "A detective follows a signal through a storm-lit city.");
+    });
+    await act(async () => {
+      startButton?.click();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(container.textContent).toContain("User-started planning workflow");
+    expect(container.textContent).toContain("story-input");
+
+    await act(async () => {
+      streamResponse.write({
+        nodeId: "story-bible",
+        type: "workflow",
+        workflow: runningWorkflow,
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const bibleButton = container.querySelector('button[data-node-id="story-bible"]') as HTMLButtonElement | null;
+    expect(bibleButton?.textContent).toContain("running");
+    expect(bibleButton?.querySelector(".animate-spin")).not.toBeNull();
+
+    await act(async () => {
+      streamResponse.write({
+        type: "done",
+        workflow: plannedWorkflow,
+      });
+      streamResponse.close();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
   });
 
   it("keeps sample content behind a fallback start action", async () => {
