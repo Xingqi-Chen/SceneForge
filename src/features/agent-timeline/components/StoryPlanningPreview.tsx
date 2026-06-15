@@ -30,6 +30,7 @@ import {
 import type { CivitaiResourceListItem } from "@/features/civitai-lora-library";
 import {
   getCivitaiModelStorageKind,
+  makeCivitaiResourceFileNameAliases,
   makeCivitaiResourceTargetFileName,
 } from "@/features/civitai-lora-library/resource-files";
 import {
@@ -255,10 +256,22 @@ function toStoryLocalResource(resource: CivitaiResourceListItem): StoryLocalReso
   return {
     id: resource.id,
     name: resource.name,
+    versionName: resource.versionName,
     baseModel: resource.baseModel,
+    creator: resource.creator,
     modelBaseModel: resource.baseModel ?? undefined,
     modelFileName,
+    modelFileNameAliases: makeCivitaiResourceFileNameAliases(resource),
     modelStorageKind: resource.resourceType === "model" ? getCivitaiModelStorageKind(resource) : undefined,
+    tags: resource.tags,
+    categories: resource.categories,
+    usageGuide: resource.usageGuide,
+    descriptionSnippet: resource.description?.slice(0, 800) ?? null,
+    averageWeight: resource.averageWeight,
+    minWeight: resource.minWeight,
+    maxWeight: resource.maxWeight,
+    recommendations: resource.recommendations,
+    previewImage: resource.previewImage,
     trainedWords: resource.trainedWords,
   };
 }
