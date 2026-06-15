@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  confirmStoryGeneration,
   createStoryWorkflowState,
   setStoryNodeManualResult,
 } from "./story-state";
@@ -53,6 +54,14 @@ const shots = [
 ] satisfies StoryShot[];
 
 describe("story workflow state", () => {
+  it("does not confirm generation before the generation gate is complete", () => {
+    const workflow = createStoryWorkflowState({ now, storyId: "story-1", workflowId: "story-workflow-1" });
+    const confirmed = confirmStoryGeneration(workflow, { now: editedAt });
+
+    expect(confirmed.generationConfirmed).toBe(false);
+    expect(confirmed.nodes["shot-graph-execution"].status).toBe("blocked");
+  });
+
   it("marks manual story artifacts and Story Graph downstream nodes stale", () => {
     const workflow = createStoryWorkflowState({ now, storyId: "story-1", workflowId: "story-workflow-1" });
     const safetyPlan = {

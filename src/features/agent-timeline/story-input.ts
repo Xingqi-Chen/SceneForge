@@ -1,5 +1,6 @@
 import {
   assembleStoryRenderPlan,
+  createStoryExecutionRequestBatch,
   createStoryParameterPlan,
   createStoryResourcePlan,
   type StoryGenerationParameters,
@@ -8,6 +9,11 @@ import {
   type StoryRenderPlan,
   type StoryResourcePlan,
 } from "./story-planning";
+import {
+  createStoryShotExecutionState,
+  type StoryShotGraphExecutionState,
+  type StoryShotResultReference,
+} from "./story-execution";
 import { refreshStoryWorkflowReadiness, type StoryWorkflowState } from "./story-state";
 import {
   validateShotDependencyGraph,
@@ -56,9 +62,10 @@ export type StoryGraphStartRequest = {
 
 export type StoryGenerationGatePreview = {
   storyId: string;
-  ready: false;
-  executionAvailable: false;
-  blockingReason: string;
+  ready: boolean;
+  executionAvailable: boolean;
+  blockingReason?: string;
+  confirmationRequired: boolean;
   nsfwContext: StoryNsfwContext;
   renderPlanShotCount: number;
   previewEnabled: boolean;
@@ -72,18 +79,12 @@ export type StoryGenerationGatePreview = {
   }>;
 };
 
-export type StoryExecutionUnavailable = {
-  storyId: string;
-  status: "blocked";
-  reason: string;
-};
-
 export type StoryResultDisplayPending = {
   storyId: string;
   status: "pending";
   nsfwContext: StoryNsfwContext;
   previewReferences: [];
-  finalReferences: [];
+  finalReferences: StoryShotResultReference[];
 };
 
 export type StoryPlanningArtifacts = {
@@ -100,7 +101,7 @@ export type StoryPlanningArtifacts = {
   renderPlan: StoryRenderPlan;
   consistencyCheck: StoryConsistencyCheck;
   generationGate: StoryGenerationGatePreview;
-  execution: StoryExecutionUnavailable;
+  execution: StoryShotGraphExecutionState;
   resultDisplay: StoryResultDisplayPending;
 };
 
@@ -486,9 +487,10 @@ function createConsistencyCheck({
 function createGenerationGate(renderPlan: StoryRenderPlan): StoryGenerationGatePreview {
   return {
     storyId: renderPlan.storyId,
-    ready: false,
-    executionAvailable: false,
-    blockingReason: "Shot graph execution is intentionally unavailable until Track T21.",
+    ready: true,
+    executionAvailable: true,
+    blockingReason: "Confirm generation to start shot graph execution.",
+    confirmationRequired: true,
     nsfwContext: renderPlan.nsfwContext,
     renderPlanShotCount: renderPlan.shots.length,
     previewEnabled: renderPlan.preview.options.enabled,
@@ -519,6 +521,10 @@ export function createStoryPlanningArtifacts(input: StoryInput, timestamp = defa
     safetyPlan,
     shots,
   });
+  const executionBatch = createStoryExecutionRequestBatch({
+    mode: "final",
+    renderPlan,
+  });
   const consistencyCheck = createConsistencyCheck({
     dependencyGraph,
     input,
@@ -541,11 +547,10 @@ export function createStoryPlanningArtifacts(input: StoryInput, timestamp = defa
     renderPlan,
     consistencyCheck,
     generationGate,
-    execution: {
-      storyId: input.storyId,
-      status: "blocked",
-      reason: "Shot graph execution scheduler is not implemented until Track T21.",
-    },
+    execution: createStoryShotExecutionState({
+      batch: executionBatch,
+      now: () => timestamp,
+    }),
     resultDisplay: {
       storyId: input.storyId,
       status: "pending",
@@ -615,17 +620,20 @@ export function startStoryGraphWorkflow(request: StoryGraphStartRequest): StoryW
   const nodes = { ...workflow.nodes };
 
   for (const [nodeId, artifactKey] of Object.entries(artifactNodeMap) as Array<[StoryWorkflowNodeId, keyof StoryPlanningArtifacts]>) {
-    const isExecutionLocked = nodeId === "shot-graph-execution" || nodeId === "story-result-display";
     nodes[nodeId] = {
       nodeId,
       result: artifacts[artifactKey],
       source: nodeId === "story-input" ? "manual" : "system",
-      status: isExecutionLocked ? "blocked" : nodeId === "story-input" ? "manual" : "done",
+      status: nodeId === "shot-graph-execution" || nodeId === "story-result-display"
+        ? "blocked"
+        : nodeId === "story-input"
+          ? "manual"
+          : "done",
       updatedAt: timestamp,
-      error: isExecutionLocked
+      error: nodeId === "shot-graph-execution"
         ? {
-            code: "story_execution_unavailable",
-            message: "Shot graph execution is unavailable until Track T21.",
+            code: "confirmation_required",
+            message: "Confirm generation before starting Story Graph shot execution.",
           }
         : undefined,
     };

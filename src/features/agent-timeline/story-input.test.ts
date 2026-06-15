@@ -5,7 +5,7 @@ import {
   createStoryPlanningArtifacts,
   startStoryGraphWorkflow,
 } from "./story-input";
-import { setStoryNodeManualResult } from "./story-state";
+import { confirmStoryGeneration, setStoryNodeManualResult } from "./story-state";
 import { canRunCommonWorkflowNode } from "./workflow-definition";
 import { storyWorkflowDefinition } from "./story-workflow";
 
@@ -78,12 +78,14 @@ describe("story input workflow start", () => {
     expect(artifacts.resourcePlan.checkpoint.resource.id).toBe("story-planning-fallback-checkpoint");
     expect(JSON.stringify(artifacts.resourcePlan)).not.toContain("nsfw");
     expect(artifacts.generationGate).toMatchObject({
-      ready: false,
-      executionAvailable: false,
+      confirmationRequired: true,
+      ready: true,
+      executionAvailable: true,
       renderPlanShotCount: 5,
     });
     expect(artifacts.execution).toMatchObject({
-      status: "blocked",
+      readyShotIds: ["shot-1", "shot-2", "shot-3", "shot-4", "shot-5"],
+      status: "ready",
     });
   });
 
@@ -144,7 +146,7 @@ describe("story input workflow start", () => {
     expect(renderPlanJson).not.toContain("aiNsfwLevel");
   });
 
-  it("starts a story-graph workflow and keeps execution non-runnable until T21", () => {
+  it("starts a story-graph workflow with confirmation-gated shot execution", () => {
     const workflow = startStoryGraphWorkflow({
       rawIntent: "A three-shot market chase.",
       storyId: "story-3",
@@ -169,14 +171,15 @@ describe("story input workflow start", () => {
     expect(workflow.nodes["generation-gate"]).toMatchObject({
       status: "done",
       result: expect.objectContaining({
-        executionAvailable: false,
+        confirmationRequired: true,
+        executionAvailable: true,
       }),
     });
     expect(workflow.nodes["shot-graph-execution"]).toMatchObject({
       status: "blocked",
       error: {
-        code: "story_execution_unavailable",
-        message: "Shot graph execution is unavailable until Track T21.",
+        code: "confirmation_required",
+        message: "Confirm generation before starting Story Graph shot execution.",
       },
     });
     expect(
@@ -188,9 +191,26 @@ describe("story input workflow start", () => {
         reservedNodeIds: storyWorkflowDefinition.reservedNodeIds,
       }),
     ).toBe(false);
+
+    const confirmed = confirmStoryGeneration(workflow, { now });
+
+    expect(confirmed.generationConfirmed).toBe(true);
+    expect(confirmed.nodes["shot-graph-execution"]).toMatchObject({
+      status: "ready",
+      error: undefined,
+    });
+    expect(
+      canRunCommonWorkflowNode({
+        dag: storyWorkflowDefinition.dependencyDag,
+        executableNodeIds: storyWorkflowDefinition.executableNodeIds,
+        nodeId: "shot-graph-execution",
+        nodes: confirmed.nodes,
+        reservedNodeIds: storyWorkflowDefinition.reservedNodeIds,
+      }),
+    ).toBe(true);
   });
 
-  it("preserves shared stale propagation for manual edits on a user-started workflow without enabling execution", () => {
+  it("preserves shared stale propagation for manual edits on a user-started workflow", () => {
     const workflow = startStoryGraphWorkflow({
       rawIntent: "A three-shot market chase.",
       storyId: "story-manual-edit",
@@ -243,5 +263,73 @@ describe("story input workflow start", () => {
         reservedNodeIds: storyWorkflowDefinition.reservedNodeIds,
       }),
     ).toBe(false);
+  });
+
+  it("requires a fresh confirmation after manual generation gate edits", () => {
+    const workflow = startStoryGraphWorkflow({
+      rawIntent: "A three-shot market chase.",
+      storyId: "story-gate-edit",
+      workflowId: "workflow-gate-edit",
+      now,
+    });
+    const confirmed = confirmStoryGeneration(workflow, { now });
+    const gatePreview = confirmed.nodes["generation-gate"].result;
+
+    if (!gatePreview || typeof gatePreview !== "object") {
+      throw new Error("Expected generation gate preview.");
+    }
+
+    const edited = setStoryNodeManualResult(
+      confirmed,
+      "generation-gate",
+      {
+        ...gatePreview,
+        blockingReason: "Manual gate review changed the request preview.",
+      },
+      {
+        now: () => "2026-06-14T00:00:01.000Z",
+        scope: {
+          artifactType: "generation-gate",
+          kind: "story",
+          storyId: "story-gate-edit",
+        },
+      },
+    );
+
+    expect(edited.generationConfirmed).toBe(false);
+    expect(edited.nodes["shot-graph-execution"]).toMatchObject({
+      status: "blocked",
+      error: {
+        code: "confirmation_required",
+      },
+    });
+    expect(
+      canRunCommonWorkflowNode({
+        dag: storyWorkflowDefinition.dependencyDag,
+        executableNodeIds: storyWorkflowDefinition.executableNodeIds,
+        nodeId: "shot-graph-execution",
+        nodes: edited.nodes,
+        reservedNodeIds: storyWorkflowDefinition.reservedNodeIds,
+      }),
+    ).toBe(false);
+
+    const reconfirmed = confirmStoryGeneration(edited, {
+      now: () => "2026-06-14T00:00:02.000Z",
+    });
+
+    expect(reconfirmed.generationConfirmed).toBe(true);
+    expect(reconfirmed.nodes["shot-graph-execution"]).toMatchObject({
+      status: "ready",
+      error: undefined,
+    });
+    expect(
+      canRunCommonWorkflowNode({
+        dag: storyWorkflowDefinition.dependencyDag,
+        executableNodeIds: storyWorkflowDefinition.executableNodeIds,
+        nodeId: "shot-graph-execution",
+        nodes: reconfirmed.nodes,
+        reservedNodeIds: storyWorkflowDefinition.reservedNodeIds,
+      }),
+    ).toBe(true);
   });
 });

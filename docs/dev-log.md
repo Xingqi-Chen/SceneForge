@@ -4,6 +4,41 @@ This log records dated implementation and documentation work. Keep entries conci
 
 ## 2026-06-14
 
+### T21 / Issue #66 Shot Graph Execution Scheduler
+
+Summary:
+
+- Added a Story Graph shot execution scheduler with per-shot status, queue metadata, result references, and recoverable error state.
+- Scheduled `StoryExecutionRequestBatch` inputs topologically so independent shots are ready together, source/img2img shots wait for source results, and multi-reference shots wait for all referenced sources.
+- Added an injected shot execution adapter boundary that can wrap existing ComfyUI validation, queue, history, and generated image storage helpers without hard-wiring live network calls into scheduler tests.
+- Added selected-shot regeneration that marks only the selected shot and downstream dependent shots stale while preserving unrelated branch result references.
+- Replaced the old T21-unavailable Story Graph execution placeholder with confirmation-gated scheduler state.
+- Added a server-side Story Graph ComfyUI execution adapter that reuses existing text-to-image validation, `object_info` compatibility checks, queueing, history polling, view reads, and generated-image storage helpers behind the scheduler adapter boundary.
+
+Files changed:
+
+- `src/features/agent-timeline/story-execution.ts`
+- `src/features/agent-timeline/story-execution.test.ts`
+- `src/features/agent-timeline/story-comfyui-execution.ts`
+- `src/features/agent-timeline/story-comfyui-execution.test.ts`
+- `src/features/agent-timeline/story-input.ts`
+- `src/features/agent-timeline/story-input.test.ts`
+- `src/features/agent-timeline/story-state.ts`
+- `src/features/agent-timeline/story-types.ts`
+- `src/features/agent-timeline/story-workflow.test.ts`
+- `docs/product-spec.md`
+- `docs/tech-spec.md`
+- `docs/dev-log.md`
+
+Validation:
+
+- `npm test -- --run src/features/agent-timeline/story-state.test.ts src/features/agent-timeline/story-input.test.ts src/features/agent-timeline/story-comfyui-execution.test.ts src/features/agent-timeline/story-execution.test.ts` passed with 4 files and 22 tests after the confirmation-gate stale regression fix and ComfyUI adapter coverage.
+- `npm test -- --run src/features/agent-timeline` passed with 24 files and 158 tests.
+- `npm test` passed with 113 files and 823 tests.
+- `npm run typecheck` passed.
+- `npm run lint` passed with 23 existing warnings unrelated to this change.
+- `npm run build` passed.
+
 ### T20A / Issue #77 Story Graph Input and Planning Start Workflow
 
 Summary:

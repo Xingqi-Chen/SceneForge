@@ -66,6 +66,10 @@ type StoryManualEditOptions = {
   scope: StoryManualEditScope;
 };
 
+type StoryGenerationConfirmOptions = {
+  now?: StoryClock;
+};
+
 function defaultNow() {
   return new Date().toISOString();
 }
@@ -186,6 +190,27 @@ export function refreshStoryWorkflowReadiness(workflow: StoryWorkflowState): Sto
     nodes: cloneStoryNodeMap(workflow.nodes) as CommonWorkflowNodeMap<StoryWorkflowNodeId>,
     reservedNodeIds: storyWorkflowDefinition.reservedNodeIds,
   }) as StoryWorkflowNodeMap;
+  const executionNode = refreshedNodes["shot-graph-execution"];
+
+  if (
+    !workflow.generationConfirmed &&
+    ["done", "manual", "ready", "running", "stale"].includes(executionNode.status)
+  ) {
+    const nextNodes = cloneStoryNodeMap(refreshedNodes);
+    nextNodes["shot-graph-execution"] = {
+      ...executionNode,
+      error: {
+        code: "confirmation_required",
+        message: "Confirm generation before starting Story Graph shot execution.",
+      },
+      status: "blocked",
+    };
+
+    return {
+      ...workflow,
+      nodes: nextNodes,
+    };
+  }
 
   return refreshedNodes === workflow.nodes ? workflow : { ...workflow, nodes: refreshedNodes };
 }
@@ -227,6 +252,35 @@ export function setStoryNodeManualResult<T>(
   return refreshStoryWorkflowReadiness({
     ...workflow,
     generationConfirmed,
+    nodes,
+    updatedAt,
+  });
+}
+
+export function confirmStoryGeneration(
+  workflow: StoryWorkflowState,
+  options: StoryGenerationConfirmOptions = {},
+): StoryWorkflowState {
+  const now = options.now ?? defaultNow;
+  const updatedAt = now();
+  const nodes = cloneStoryNodeMap(workflow.nodes);
+  const executionNode = nodes["shot-graph-execution"];
+  const gateDone = nodes["generation-gate"].status === "done" || nodes["generation-gate"].status === "manual";
+
+  if (!gateDone || executionNode.status !== "blocked" || executionNode.error?.code !== "confirmation_required") {
+    return refreshStoryWorkflowReadiness(workflow);
+  }
+
+  nodes["shot-graph-execution"] = {
+    ...executionNode,
+    error: undefined,
+    status: "ready",
+    updatedAt,
+  };
+
+  return refreshStoryWorkflowReadiness({
+    ...workflow,
+    generationConfirmed: true,
     nodes,
     updatedAt,
   });
