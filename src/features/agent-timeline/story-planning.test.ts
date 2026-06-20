@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   assembleStoryRenderPlan,
   createStoryExecutionRequestBatch,
+  createStoryDefaultGenerationParameters,
   createStoryParameterPlan,
   createStoryPreviewParameters,
   createStoryResourcePlan,
@@ -132,6 +133,54 @@ function createResourcePlan() {
   });
 }
 
+function createAnimaResourcePlan() {
+  const checkpoint: StoryLocalResource = {
+    id: "checkpoint-anima",
+    name: "Anima Checkpoint",
+    baseModel: "Anima",
+    modelBaseModel: "Anima",
+    modelFileName: "anima.safetensors",
+    modelFileNameAliases: ["pencil-xl-diffusion.safetensors"],
+    modelStorageKind: "diffusion",
+    workflowProfile: "anima",
+    clipName: "qwen_3_06b_base.safetensors",
+    clipDevice: "default",
+    vaeName: "qwen_image_vae.safetensors",
+    unetWeightDtype: "default",
+  };
+  const lora: StoryLocalResource = {
+    id: "lora-anima",
+    name: "Anima LoRA",
+    baseModel: "Anima",
+    modelFileName: "anima-lora.safetensors",
+    trainedWords: ["anima_style"],
+  };
+
+  return createStoryResourcePlan({
+    storyId,
+    candidates: {
+      checkpoints: [{ resource: checkpoint }],
+      loras: [{ resource: lora }],
+    },
+    recommendation: {
+      checkpoint: {
+        resource: checkpoint,
+        reason: "Local Anima checkpoint.",
+      },
+      loras: [
+        {
+          resource: lora,
+          suggestedWeight: 0.62,
+          reason: "Local Anima LoRA.",
+        },
+      ],
+      recommendationReason: "Use local Anima resources.",
+      overallEffect: "Anima storyboard panels.",
+      warnings: [],
+    },
+  });
+}
+
 describe("story planning", () => {
   it("selects only validated local resources and strips model NSFW markers", () => {
     const resourcePlan = createResourcePlan();
@@ -252,6 +301,155 @@ describe("story planning", () => {
     });
   });
 
+  it("normalizes Story parameter plans against live sampler and scheduler options", () => {
+    const parameterPlan = createStoryParameterPlan({
+      storyId,
+      defaults: {
+        ...defaults,
+        samplerName: "dpmpp_2m",
+        scheduler: "karras",
+      },
+      samplerOptions: {
+        samplers: ["uni_pc"],
+        schedulers: ["sgm_uniform"],
+      },
+    });
+
+    expect(parameterPlan.defaults).toMatchObject({
+      samplerName: "uni_pc",
+      scheduler: "sgm_uniform",
+    });
+  });
+
+  it("normalizes string per-shot parameter overrides and falls back invalid numeric values", () => {
+    const parameterPlan = createStoryParameterPlan({
+      storyId,
+      defaults,
+      perShotOverrides: [
+        {
+          shotId: "shot-2",
+          parameters: {
+            cfg: "6.25",
+            denoise: "0.7",
+            height: "386",
+            samplerName: "invented_sampler",
+            scheduler: "invented_scheduler",
+            steps: "12",
+            width: "513",
+          } as unknown as Partial<StoryGenerationParameters>,
+        },
+        {
+          shotId: "shot-1",
+          parameters: {
+            cfg: "not-a-number",
+            denoise: "also-bad",
+          } as unknown as Partial<StoryGenerationParameters>,
+        },
+      ],
+      samplerOptions: {
+        samplers: ["uni_pc"],
+        schedulers: ["sgm_uniform"],
+      },
+    });
+
+    expect(parameterPlan.perShotOverrides[0]?.parameters).toMatchObject({
+      cfg: 6.25,
+      denoise: 0.7,
+      height: 384,
+      samplerName: "uni_pc",
+      scheduler: "sgm_uniform",
+      steps: 12,
+      width: 512,
+    });
+    expect(parameterPlan.perShotOverrides[1]?.parameters).toMatchObject({
+      cfg: defaults.cfg,
+      denoise: defaults.denoise,
+    });
+  });
+
+  it("uses model-family sampler defaults for Anima Story resources", () => {
+    const defaultsForAnima = createStoryDefaultGenerationParameters({
+      resourcePlan: createAnimaResourcePlan(),
+      samplerOptions: {
+        samplers: ["euler", "dpmpp_2m"],
+        schedulers: ["normal", "karras"],
+      },
+    });
+
+    expect(defaultsForAnima).toMatchObject({
+      samplerName: "euler",
+      scheduler: "normal",
+    });
+  });
+
+  it("reuses the base-model-aware ComfyUI prompt resolver for Story render prompts", () => {
+    const renderPlan = assembleStoryRenderPlan({
+      parameterPlan: createStoryParameterPlan({ storyId, defaults }),
+      resourcePlan: createAnimaResourcePlan(),
+      safetyPlan,
+      shots,
+    });
+    const finalBatch = createStoryExecutionRequestBatch({ mode: "final", renderPlan });
+    const firstShot = renderPlan.shots[0];
+    const firstRequest = finalBatch.requests[0]?.request;
+
+    expect(firstShot.positivePrompt).toContain("masterpiece");
+    expect(firstShot.positivePrompt).toContain("score_9");
+    expect(firstShot.positivePrompt).toContain("score_8");
+    expect(firstShot.positivePrompt).toContain("score_7");
+    expect(firstShot.positivePrompt).toContain("anima_style");
+    expect(firstShot.negativePrompt).toContain("worst quality");
+    expect(firstShot.negativePrompt).toContain("score_1");
+    expect(firstShot.negativePrompt).toContain("graphic harm");
+    expect(firstRequest).toMatchObject({
+      checkpointName: "anima.safetensors",
+      checkpointNameAliases: ["pencil-xl-diffusion.safetensors"],
+      workflowProfile: "anima",
+      modelBaseModel: "Anima",
+      modelStorageKind: "diffusion",
+      clipName: "qwen_3_06b_base.safetensors",
+      clipDevice: "default",
+      vaeName: "qwen_image_vae.safetensors",
+      unetWeightDtype: "default",
+      positivePrompt: firstShot.positivePrompt,
+      negativePrompt: firstShot.negativePrompt,
+      loras: [
+        {
+          loraName: "anima-lora.safetensors",
+          strengthModel: 0.62,
+          strengthClip: 0.62,
+        },
+      ],
+    });
+  });
+
+  it("preserves manually edited Story render prompts when creating execution requests", () => {
+    const renderPlan = assembleStoryRenderPlan({
+      parameterPlan: createStoryParameterPlan({ storyId, defaults }),
+      resourcePlan: createAnimaResourcePlan(),
+      safetyPlan,
+      shots,
+    });
+    const editedRenderPlan = {
+      ...renderPlan,
+      shots: renderPlan.shots.map((shot, index) =>
+        index === 0
+          ? {
+              ...shot,
+              positivePrompt: "manual edited anima prompt, anima_style",
+              negativePrompt: "manual edited negative",
+            }
+          : shot,
+      ),
+    };
+    const finalBatch = createStoryExecutionRequestBatch({ mode: "final", renderPlan: editedRenderPlan });
+    const firstRequest = finalBatch.requests[0]?.request;
+
+    expect(firstRequest?.positivePrompt).toBe("manual edited anima prompt, anima_style");
+    expect(firstRequest?.negativePrompt).toContain("manual edited negative");
+    expect(firstRequest?.negativePrompt).toContain("worst quality");
+  });
+
   it("assembles final and preview execution requests without model NSFW resource filtering", () => {
     const renderPlan = assembleStoryRenderPlan({
       parameterPlan: createStoryParameterPlan({ storyId, defaults }),
@@ -283,5 +481,38 @@ describe("story planning", () => {
     });
     expect(JSON.stringify(finalBatch)).not.toContain("modelNsfw");
     expect(JSON.stringify(previewBatch)).not.toContain("aiNsfwLevel");
+  });
+
+  it("normalizes Story execution requests against live sampler and scheduler options", () => {
+    const renderPlan = assembleStoryRenderPlan({
+      parameterPlan: createStoryParameterPlan({ storyId, defaults }),
+      resourcePlan: createResourcePlan(),
+      safetyPlan,
+      shots,
+    });
+    const editedRenderPlan = {
+      ...renderPlan,
+      shots: renderPlan.shots.map((shot) => ({
+        ...shot,
+        parameters: {
+          ...shot.parameters,
+          samplerName: "invented_sampler",
+          scheduler: "invented_scheduler",
+        },
+      })),
+    };
+    const finalBatch = createStoryExecutionRequestBatch({
+      mode: "final",
+      renderPlan: editedRenderPlan,
+      samplerOptions: {
+        samplers: ["uni_pc"],
+        schedulers: ["sgm_uniform"],
+      },
+    });
+
+    expect(finalBatch.requests[0]?.request).toMatchObject({
+      samplerName: "uni_pc",
+      scheduler: "sgm_uniform",
+    });
   });
 });

@@ -1,4 +1,5 @@
 import {
+  canRunCommonWorkflowNode,
   refreshCommonWorkflowReadiness,
   setCommonWorkflowNodeManualResult,
   type CommonWorkflowArtifactScope,
@@ -7,6 +8,7 @@ import {
   type CommonWorkflowNodeResult,
 } from "./workflow-definition";
 import { storyGraphWorkflowMode, storyWorkflowDefinition } from "./story-workflow";
+import { createTimelineNodeError, normalizeTimelineError } from "./state";
 import type {
   ShotDependencyGraph,
   StoryId,
@@ -64,6 +66,10 @@ type StoryWorkflowOptions = {
 type StoryManualEditOptions = {
   now?: StoryClock;
   scope: StoryManualEditScope;
+};
+
+type StoryGenerationConfirmOptions = {
+  now?: StoryClock;
 };
 
 function defaultNow() {
@@ -151,6 +157,20 @@ function cloneStoryNodeMap(nodes: StoryWorkflowNodeMap): StoryWorkflowNodeMap {
   ) as StoryWorkflowNodeMap;
 }
 
+function withUpdatedWorkflow(
+  workflow: StoryWorkflowState,
+  nodes: StoryWorkflowNodeMap,
+  updatedAt: string,
+  generationConfirmed = workflow.generationConfirmed,
+): StoryWorkflowState {
+  return {
+    ...workflow,
+    generationConfirmed,
+    nodes,
+    updatedAt,
+  };
+}
+
 export function createStoryWorkflowState(options: StoryWorkflowOptions = {}): StoryWorkflowState {
   const now = options.now ?? defaultNow;
   const timestamp = now();
@@ -186,8 +206,118 @@ export function refreshStoryWorkflowReadiness(workflow: StoryWorkflowState): Sto
     nodes: cloneStoryNodeMap(workflow.nodes) as CommonWorkflowNodeMap<StoryWorkflowNodeId>,
     reservedNodeIds: storyWorkflowDefinition.reservedNodeIds,
   }) as StoryWorkflowNodeMap;
+  const executionNode = refreshedNodes["shot-graph-execution"];
+
+  if (
+    !workflow.generationConfirmed &&
+    ["done", "manual", "ready", "running", "stale"].includes(executionNode.status)
+  ) {
+    const nextNodes = cloneStoryNodeMap(refreshedNodes);
+    nextNodes["shot-graph-execution"] = {
+      ...executionNode,
+      error: {
+        code: "confirmation_required",
+        message: "Confirm generation before starting Story Graph shot execution.",
+      },
+      status: "blocked",
+    };
+
+    return {
+      ...workflow,
+      nodes: nextNodes,
+    };
+  }
 
   return refreshedNodes === workflow.nodes ? workflow : { ...workflow, nodes: refreshedNodes };
+}
+
+export function canRunStoryNode(workflow: StoryWorkflowState, nodeId: StoryWorkflowNodeId) {
+  return canRunCommonWorkflowNode({
+    dag: storyWorkflowDefinition.dependencyDag,
+    executableNodeIds: storyWorkflowDefinition.executableNodeIds,
+    nodeId,
+    nodes: workflow.nodes,
+    reservedNodeIds: storyWorkflowDefinition.reservedNodeIds,
+  });
+}
+
+export function markStoryNodeRunning(
+  workflow: StoryWorkflowState,
+  nodeId: StoryWorkflowNodeId,
+  options: { now?: StoryClock } = {},
+): StoryWorkflowState {
+  const now = options.now ?? defaultNow;
+  const updatedAt = now();
+  const nodes = cloneStoryNodeMap(workflow.nodes);
+  nodes[nodeId] = {
+    ...nodes[nodeId],
+    error: undefined,
+    status: "running",
+    updatedAt,
+  };
+
+  return withUpdatedWorkflow(workflow, nodes, updatedAt);
+}
+
+export function completeStoryNode<T>(
+  workflow: StoryWorkflowState,
+  nodeId: StoryWorkflowNodeId,
+  result: T,
+  source: StoryWorkflowNodeResult["source"] = "ai",
+  options: { now?: StoryClock } = {},
+): StoryWorkflowState {
+  const now = options.now ?? defaultNow;
+  const updatedAt = now();
+  const nodes = cloneStoryNodeMap(workflow.nodes);
+  nodes[nodeId] = {
+    nodeId,
+    result,
+    source,
+    status: "done",
+    updatedAt,
+  };
+
+  return refreshStoryWorkflowReadiness(withUpdatedWorkflow(workflow, nodes, updatedAt));
+}
+
+export function failStoryNode(
+  workflow: StoryWorkflowState,
+  nodeId: StoryWorkflowNodeId,
+  error: unknown,
+  options: { now?: StoryClock } = {},
+): StoryWorkflowState {
+  const now = options.now ?? defaultNow;
+  const updatedAt = now();
+  const nodes = cloneStoryNodeMap(workflow.nodes);
+  nodes[nodeId] = {
+    ...nodes[nodeId],
+    error: normalizeTimelineError(error),
+    status: "error",
+    updatedAt,
+  };
+
+  return withUpdatedWorkflow(workflow, nodes, updatedAt);
+}
+
+export function blockStoryNode(
+  workflow: StoryWorkflowState,
+  nodeId: StoryWorkflowNodeId,
+  message: string,
+  details?: unknown,
+  options: { now?: StoryClock } = {},
+): StoryWorkflowState {
+  const now = options.now ?? defaultNow;
+  const updatedAt = now();
+  const nodes = cloneStoryNodeMap(workflow.nodes);
+  nodes[nodeId] = {
+    ...nodes[nodeId],
+    error: createTimelineNodeError("timeline_node_blocked", message, details),
+    source: "system",
+    status: "blocked",
+    updatedAt,
+  };
+
+  return withUpdatedWorkflow(workflow, nodes, updatedAt);
 }
 
 export function setStoryNodeManualResult<T>(
@@ -227,6 +357,35 @@ export function setStoryNodeManualResult<T>(
   return refreshStoryWorkflowReadiness({
     ...workflow,
     generationConfirmed,
+    nodes,
+    updatedAt,
+  });
+}
+
+export function confirmStoryGeneration(
+  workflow: StoryWorkflowState,
+  options: StoryGenerationConfirmOptions = {},
+): StoryWorkflowState {
+  const now = options.now ?? defaultNow;
+  const updatedAt = now();
+  const nodes = cloneStoryNodeMap(workflow.nodes);
+  const executionNode = nodes["shot-graph-execution"];
+  const gateDone = nodes["generation-gate"].status === "done" || nodes["generation-gate"].status === "manual";
+
+  if (!gateDone || executionNode.status !== "blocked" || executionNode.error?.code !== "confirmation_required") {
+    return refreshStoryWorkflowReadiness(workflow);
+  }
+
+  nodes["shot-graph-execution"] = {
+    ...executionNode,
+    error: undefined,
+    status: "ready",
+    updatedAt,
+  };
+
+  return refreshStoryWorkflowReadiness({
+    ...workflow,
+    generationConfirmed: true,
     nodes,
     updatedAt,
   });

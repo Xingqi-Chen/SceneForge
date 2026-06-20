@@ -2,13 +2,15 @@
 
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import Link from "next/link";
-import { Bot, CheckCircle2, CircleDot, GitBranch, Play, RefreshCw, RotateCcw, Settings } from "lucide-react";
+import { Bot, CheckCircle2, CircleDot, GitBranch, ImageIcon, LoaderCircle, Play, RefreshCw, RotateCcw, Settings } from "lucide-react";
 
 import {
   createStoryGraphInputWorkflow,
-  startStoryGraphWorkflow,
   type StoryGraphStartRequest,
 } from "@/features/agent-timeline/story-input";
+import type { StoryResultDisplay } from "@/features/agent-timeline/story-api";
+import type { StoryShotGraphExecutionState } from "@/features/agent-timeline/story-execution";
+import type { StoryLocalResource } from "@/features/agent-timeline/story-planning";
 import {
   setStoryNodeManualResult,
   type StoryManualEditScope,
@@ -25,6 +27,19 @@ import {
   isLlmChatResponse,
   type LlmChatRequest,
 } from "@/features/llm";
+import type { CivitaiResourceListItem } from "@/features/civitai-lora-library";
+import {
+  getCivitaiModelStorageKind,
+  makeCivitaiResourceFileNameAliases,
+  makeCivitaiResourceTargetFileName,
+} from "@/features/civitai-lora-library/resource-files";
+import {
+  defaultPromptProfileId,
+  formatPromptProfileLabel,
+  normalizePromptProfileId,
+  promptProfileIds,
+  type PromptProfileId,
+} from "@/shared/prompt-profile";
 import { cn } from "@/shared/utils/cn";
 
 import { StoryPlanningWorkspace } from "./StoryPlanningWorkspace";
@@ -42,10 +57,41 @@ const fallbackRequest = {
   workflowId: "story-planning-fallback",
   storyId: "story-fallback",
   nsfwEnabled: false,
+  settingsSnapshot: {
+    promptProfile: defaultPromptProfileId,
+  },
 } satisfies StoryGraphStartRequest;
 
 function formatStatusLabel(status: string) {
   return status.replace(/-/g, " ");
+}
+
+function getStoryNodeStatusTone(status: string) {
+  if (status === "manual") {
+    return "border-violet-200 bg-violet-50 text-violet-700";
+  }
+
+  if (status === "done") {
+    return "border-emerald-200 bg-emerald-50 text-emerald-700";
+  }
+
+  if (status === "ready") {
+    return "border-blue-200 bg-blue-50 text-blue-700";
+  }
+
+  if (status === "running") {
+    return "border-indigo-200 bg-indigo-50 text-indigo-700";
+  }
+
+  if (status === "stale") {
+    return "border-amber-200 bg-amber-50 text-amber-700";
+  }
+
+  if (status === "error") {
+    return "border-rose-200 bg-rose-50 text-rose-700";
+  }
+
+  return "border-slate-200 bg-slate-50 text-slate-500";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -130,62 +176,6 @@ function buildStoryInputAiRequest({
   };
 }
 
-function buildStoryPlanningShotCountRequest({
-  nsfwEnabled,
-  storyRequest,
-}: {
-  nsfwEnabled: boolean;
-  storyRequest: string;
-}): LlmChatRequest {
-  return {
-    purpose: "comic-sequence-storyboard",
-    nsfw: nsfwEnabled,
-    messages: [
-      {
-        role: "system",
-        content: [
-          "You are SceneForge's Story Graph planning agent.",
-          "Return only valid JSON. No markdown, comments, or prose.",
-          "Choose the target shot count needed for a concise storyboard planning workflow.",
-          "Use an integer from 1 to 24.",
-          "Do not include title, content warnings, model names, checkpoint names, LoRA names, or render parameters.",
-          `NSFW setting: ${nsfwEnabled ? "enabled / explicit audience" : "disabled / safe audience"}.`,
-          'Required shape: {"targetShotCount":3}',
-        ].join("\n"),
-      },
-      {
-        role: "user",
-        content: JSON.stringify(
-          {
-            storyRequest,
-            nsfwEnabled,
-          },
-          null,
-          2,
-        ),
-      },
-    ],
-    temperature: 0.2,
-    maxTokens: 100,
-  };
-}
-
-function parseStoryPlanningShotCount(content: string) {
-  const parsed = JSON.parse(content.trim()) as unknown;
-
-  if (!isRecord(parsed)) {
-    throw new Error("Story planning response must be a JSON object.");
-  }
-
-  const shotCount = Number(parsed.targetShotCount ?? parsed.shots ?? parsed.shotCount);
-
-  if (!Number.isFinite(shotCount)) {
-    throw new Error("Story planning response did not include targetShotCount.");
-  }
-
-  return shotCount;
-}
-
 async function completeStoryInputAi({
   action,
   nsfwEnabled,
@@ -227,44 +217,14 @@ async function completeStoryInputAi({
   return nextStoryRequest;
 }
 
-async function completeStoryPlanningShotCount({
-  nsfwEnabled,
-  storyRequest,
-}: {
-  nsfwEnabled: boolean;
-  storyRequest: string;
-}) {
-  const response = await fetch("/api/llm/chat", {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-    },
-    body: JSON.stringify(
-      buildStoryPlanningShotCountRequest({
-        nsfwEnabled,
-        storyRequest,
-      }),
-    ),
-  });
-  const payload: unknown = await response.json().catch(() => null);
-
-  if (!response.ok) {
-    throw new Error(getLlmProxyErrorMessage(payload) ?? "Unable to plan Story Graph shots.");
-  }
-
-  if (!isLlmChatResponse(payload)) {
-    throw new Error("Story planning response did not include chat content.");
-  }
-
-  return parseStoryPlanningShotCount(payload.content);
-}
-
 function createClientStartRequest({
   nsfwEnabled,
+  promptProfile,
   rawIntent,
   targetShotCount,
 }: {
   nsfwEnabled: boolean;
+  promptProfile: PromptProfileId;
   rawIntent: string;
   targetShotCount: string;
 }): StoryGraphStartRequest {
@@ -278,9 +238,235 @@ function createClientStartRequest({
     settingsSnapshot: {
       audienceRating,
       nsfwEnabled,
+      promptProfile,
       targetShotCount: Number.isFinite(normalizedShotCount) ? normalizedShotCount : undefined,
     } as StoryGraphStartRequest["settingsSnapshot"],
   };
+}
+
+function getApiErrorMessage(payload: unknown, fallback: string) {
+  return isRecord(payload) && isRecord(payload.error) && typeof payload.error.message === "string"
+    ? payload.error.message
+    : fallback;
+}
+
+function toStoryLocalResource(resource: CivitaiResourceListItem): StoryLocalResource {
+  const modelFileName = makeCivitaiResourceTargetFileName(resource);
+
+  return {
+    id: resource.id,
+    name: resource.name,
+    versionName: resource.versionName,
+    baseModel: resource.baseModel,
+    creator: resource.creator,
+    modelBaseModel: resource.baseModel ?? undefined,
+    modelFileName,
+    modelFileNameAliases: makeCivitaiResourceFileNameAliases(resource),
+    modelStorageKind: resource.resourceType === "model" ? getCivitaiModelStorageKind(resource) : undefined,
+    tags: resource.tags,
+    categories: resource.categories,
+    usageGuide: resource.usageGuide,
+    descriptionSnippet: resource.description?.slice(0, 800) ?? null,
+    averageWeight: resource.averageWeight,
+    minWeight: resource.minWeight,
+    maxWeight: resource.maxWeight,
+    recommendations: resource.recommendations,
+    previewImage: resource.previewImage,
+    trainedWords: resource.trainedWords,
+  };
+}
+
+async function loadStoryResourceItems(resourceType: "lora" | "model", promptProfile: PromptProfileId) {
+  const params = new URLSearchParams({
+    resourceType,
+    category: "all",
+    downloaded: "ready",
+    promptProfile,
+  });
+  const response = await fetch(`/api/civitai-lora-library/resources?${params.toString()}`);
+  const payload: unknown = await response.json().catch(() => null);
+
+  if (!response.ok) {
+    throw new Error(getApiErrorMessage(payload, "Unable to load local Civitai resources for Story Graph planning."));
+  }
+
+  if (!isRecord(payload) || !Array.isArray(payload.items)) {
+    throw new Error("Civitai resource response did not include an item list.");
+  }
+
+  return payload.items as CivitaiResourceListItem[];
+}
+
+async function loadStoryResourceCandidates(promptProfile: PromptProfileId) {
+  const [checkpoints, loras] = await Promise.all([
+    loadStoryResourceItems("model", promptProfile),
+    loadStoryResourceItems("lora", promptProfile),
+  ]);
+  const resourceCandidates = {
+    checkpoints: checkpoints.map(toStoryLocalResource),
+    loras: loras.map(toStoryLocalResource),
+  };
+
+  if (resourceCandidates.checkpoints.length === 0) {
+    throw new Error(
+      "Story Graph needs at least one downloaded local checkpoint before planning can reach generation. Import or download a compatible Civitai checkpoint first.",
+    );
+  }
+
+  return resourceCandidates;
+}
+
+async function postStoryWorkflow(
+  url: string,
+  body: unknown,
+  fallbackMessage: string,
+): Promise<StoryWorkflowState> {
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+  const payload: unknown = await response.json().catch(() => null);
+
+  if (!response.ok) {
+    const message = isRecord(payload) && isRecord(payload.error) && typeof payload.error.message === "string"
+      ? payload.error.message
+      : fallbackMessage;
+    throw new Error(message);
+  }
+
+  if (!isRecord(payload) || !isRecord(payload.workflow)) {
+    throw new Error(fallbackMessage);
+  }
+
+  return payload.workflow as unknown as StoryWorkflowState;
+}
+
+type StoryPlanningStreamEvent =
+  | {
+      nodeId?: StoryWorkflowNodeId;
+      type: "workflow";
+      workflow: StoryWorkflowState;
+    }
+  | {
+      type: "done";
+      workflow: StoryWorkflowState;
+    }
+  | {
+      error?: {
+        message?: string;
+      };
+      type: "error";
+    };
+
+async function postStoryWorkflowStream({
+  body,
+  fallbackMessage,
+  onUpdate,
+  url,
+}: {
+  body: unknown;
+  fallbackMessage: string;
+  onUpdate: (workflow: StoryWorkflowState, nodeId?: StoryWorkflowNodeId) => void;
+  url: string;
+}): Promise<StoryWorkflowState> {
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      accept: "application/x-ndjson",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    const payload: unknown = await response.json().catch(() => null);
+    throw new Error(getApiErrorMessage(payload, fallbackMessage));
+  }
+
+  const contentType = response.headers?.get("content-type") ?? "";
+  if (!response.body || !contentType.includes("application/x-ndjson")) {
+    const payload: unknown = await response.json().catch(() => null);
+    if (!isRecord(payload) || !isRecord(payload.workflow)) {
+      throw new Error(fallbackMessage);
+    }
+
+    return payload.workflow as unknown as StoryWorkflowState;
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let latestWorkflow: StoryWorkflowState | null = null;
+
+  function handleLine(line: string) {
+    if (!line.trim()) {
+      return;
+    }
+
+    const event = JSON.parse(line) as StoryPlanningStreamEvent;
+    if (event.type === "error") {
+      throw new Error(event.error?.message ?? fallbackMessage);
+    }
+
+    latestWorkflow = event.workflow;
+    if (event.type === "workflow") {
+      onUpdate(event.workflow, event.nodeId);
+    } else {
+      onUpdate(event.workflow);
+    }
+  }
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (value) {
+      buffer += decoder.decode(value, { stream: !done });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
+
+      for (const line of lines) {
+        handleLine(line);
+      }
+    }
+
+    if (done) {
+      break;
+    }
+  }
+
+  buffer += decoder.decode();
+  if (buffer.trim()) {
+    handleLine(buffer);
+  }
+
+  if (!latestWorkflow) {
+    throw new Error(fallbackMessage);
+  }
+
+  return latestWorkflow;
+}
+
+function isStoryExecutionState(value: unknown): value is StoryShotGraphExecutionState {
+  return isRecord(value) && Array.isArray(value.shots) && typeof value.status === "string";
+}
+
+function isStoryResultDisplay(value: unknown): value is StoryResultDisplay {
+  return isRecord(value) && Array.isArray(value.finalReferences) && typeof value.status === "string";
+}
+
+function getStoryResultImageUrl(reference: StoryResultDisplay["finalReferences"][number]) {
+  return reference.storedImage?.url ?? reference.image?.url ?? "";
+}
+
+function getStoryExecutionImageUrl(reference: StoryShotGraphExecutionState["shots"][number]["resultReference"]) {
+  return reference?.storedImage?.url ?? reference?.image?.url ?? "";
+}
+
+function getGenerationGateReady(workflow: StoryWorkflowState | null) {
+  const gate = workflow?.nodes["generation-gate"];
+  return gate?.status === "done" && isRecord(gate.result) && gate.result.ready === true;
 }
 
 function StartPanel({
@@ -292,6 +478,7 @@ function StartPanel({
 }) {
   const [rawIntent, setRawIntent] = useState("");
   const [targetShotCount, setTargetShotCount] = useState("");
+  const [promptProfile, setPromptProfile] = useState<PromptProfileId>(defaultPromptProfileId);
   const [aiStatus, setAiStatus] = useState<StoryInputAiAction | null>(null);
   const [error, setError] = useState("");
 
@@ -332,6 +519,7 @@ function StartPanel({
     onStart(
       createClientStartRequest({
         nsfwEnabled,
+        promptProfile,
         rawIntent,
         targetShotCount,
       }),
@@ -348,7 +536,15 @@ function StartPanel({
           </div>
           <button
             className="inline-flex h-8 items-center justify-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-100"
-            onClick={() => onStart(fallbackRequest)}
+            onClick={() =>
+              onStart({
+                ...fallbackRequest,
+                settingsSnapshot: {
+                  ...fallbackRequest.settingsSnapshot,
+                  promptProfile,
+                },
+              })
+            }
             type="button"
           >
             <RotateCcw className="size-3.5" />
@@ -388,7 +584,21 @@ function StartPanel({
           />
         </label>
 
-        <div className="grid gap-3 md:grid-cols-[8rem]">
+        <div className="grid gap-3 md:grid-cols-[minmax(0,12rem)_8rem]">
+          <label className="flex flex-col gap-1 text-xs font-medium text-slate-700">
+            Base model
+            <select
+              className="h-9 rounded-md border border-slate-200 bg-white px-3 text-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+              onChange={(event) => setPromptProfile(normalizePromptProfileId(event.target.value))}
+              value={promptProfile}
+            >
+              {promptProfileIds.map((profile) => (
+                <option key={profile} value={profile}>
+                  {formatPromptProfileLabel(profile)}
+                </option>
+              ))}
+            </select>
+          </label>
           <label className="flex flex-col gap-1 text-xs font-medium text-slate-700">
             Shots
             <input
@@ -419,11 +629,127 @@ function StartPanel({
   );
 }
 
+function StoryExecutionPanel({
+  busy,
+  execution,
+  onRegenerateShot,
+}: {
+  busy: boolean;
+  execution: StoryShotGraphExecutionState;
+  onRegenerateShot: (shotId: string) => void;
+}) {
+  return (
+    <section className="rounded-md border border-slate-200 bg-slate-50 p-3" data-testid="story-execution-panel">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Shot execution</h3>
+          <p className="mt-1 text-xs text-slate-600">
+            {execution.status} / {execution.shots.length} shots
+          </p>
+        </div>
+        <span className="rounded-md border border-slate-200 bg-white px-2 py-1 text-[11px] font-medium uppercase text-slate-500">
+          {execution.updatedAt ?? "not run"}
+        </span>
+      </div>
+      <div className="grid gap-2">
+        {execution.shots.map((shot) => (
+          <article className="rounded-md border border-slate-200 bg-white p-3" key={shot.shotId}>
+            <div className="flex flex-wrap items-start justify-between gap-2">
+              <div className="min-w-0">
+                <p className="text-xs font-semibold text-slate-900">{shot.shotId}</p>
+                <p className="mt-1 text-[11px] text-slate-500">
+                  Sources: {shot.sourceShotIds.join(", ") || "none"}
+                </p>
+              </div>
+              <span className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] font-medium uppercase text-slate-500">
+                {shot.status}
+              </span>
+            </div>
+            {shot.queueMetadata?.promptId || shot.resultReference?.promptId ? (
+              <p className="mt-2 break-all text-[11px] text-slate-500">
+                Prompt: {shot.resultReference?.promptId ?? shot.queueMetadata?.promptId}
+              </p>
+            ) : null}
+            {shot.resultReference?.image ? (
+              <div className="mt-2 flex items-center gap-2 text-[11px] text-slate-600">
+                <ImageIcon className="size-3.5" />
+                <a className="break-all text-blue-700 underline-offset-2 hover:underline" href={getStoryExecutionImageUrl(shot.resultReference)} target="_blank" rel="noreferrer">
+                  {shot.resultReference.image.filename}
+                </a>
+              </div>
+            ) : null}
+            {shot.error ? (
+              <div className="mt-2 rounded-md border border-rose-200 bg-rose-50 p-2 text-[11px] text-rose-700">
+                {shot.error.message}
+              </div>
+            ) : null}
+            <div className="mt-3 flex justify-end">
+              <button
+                className="inline-flex h-8 items-center justify-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                disabled={busy}
+                onClick={() => onRegenerateShot(shot.shotId)}
+                type="button"
+              >
+                <RefreshCw className="size-3.5" />
+                Regenerate shot
+              </button>
+            </div>
+          </article>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function StoryResultGrid({ result }: { result: StoryResultDisplay }) {
+  return (
+    <section className="rounded-md border border-slate-200 bg-slate-50 p-3" data-testid="story-result-grid">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Final result grid</h3>
+          <p className="mt-1 text-xs text-slate-600">
+            {result.status} / {result.finalReferences.length} rendered references
+          </p>
+        </div>
+        <span className="rounded-md border border-slate-200 bg-white px-2 py-1 text-[11px] font-medium uppercase text-slate-500">
+          {result.nsfwContext.enabled ? "nsfw enabled" : "safe context"}
+        </span>
+      </div>
+      <div className="grid gap-3 sm:grid-cols-2">
+        {result.finalReferences.map((reference) => {
+          const imageUrl = getStoryResultImageUrl(reference);
+
+          return (
+            <article className="rounded-md border border-slate-200 bg-white p-2" key={reference.shotId}>
+              {imageUrl ? (
+              // eslint-disable-next-line @next/next/no-img-element
+                <img alt={`Generated ${reference.shotId}`} className="aspect-video w-full rounded object-cover" src={imageUrl} />
+              ) : (
+                <div className="flex aspect-video items-center justify-center rounded bg-slate-100 text-xs text-slate-500">
+                  No image
+                </div>
+              )}
+              <p className="mt-2 text-xs font-semibold text-slate-900">{reference.shotId}</p>
+              <p className="mt-1 break-all text-[11px] text-slate-500">{reference.promptId}</p>
+            </article>
+          );
+        })}
+      </div>
+      {result.errors.length > 0 ? (
+        <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 p-2 text-[11px] text-amber-800">
+          {result.errors.map((error) => error.message).join(" ")}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
 export function StoryPlanningPreview() {
   const [workflow, setWorkflow] = useState<StoryWorkflowState | null>(null);
   const [selectedNodeId, setSelectedNodeId] = useState<StoryWorkflowNodeId>("story-input");
   const [settingsNsfwEnabled, setSettingsNsfwEnabled] = useState(false);
   const [planningError, setPlanningError] = useState("");
+  const [planningStatus, setPlanningStatus] = useState<"idle" | "planning" | "generating" | "regenerating">("idle");
   const selectedNode = workflow?.nodes[selectedNodeId];
   const metadata = storyWorkflowDefinition.metadata[selectedNodeId];
   const rawJson = useMemo(
@@ -463,22 +789,85 @@ export function StoryPlanningPreview() {
 
   async function handleStart(request: StoryGraphStartRequest) {
     setPlanningError("");
-    const started = createStoryGraphInputWorkflow(request);
-    setWorkflow(started.workflow);
     setSelectedNodeId("story-input");
+    setPlanningStatus("planning");
 
     try {
-      const targetShotCount = request.targetShotCount ?? await completeStoryPlanningShotCount({
-        nsfwEnabled: request.nsfwEnabled ?? false,
-        storyRequest: request.rawIntent,
-      });
-      const planned = startStoryGraphWorkflow({
-        ...request,
-        targetShotCount,
+      const initialStart = createStoryGraphInputWorkflow(request);
+      setWorkflow(initialStart.workflow);
+      const promptProfile = normalizePromptProfileId(request.settingsSnapshot?.promptProfile);
+      const resourceCandidates = await loadStoryResourceCandidates(promptProfile);
+      const settingsSnapshot = {
+        ...(isRecord(request.settingsSnapshot) ? request.settingsSnapshot : {}),
+        promptProfile,
+        resourceCandidates,
+      };
+      const planned = await postStoryWorkflowStream({
+        url: "/api/agent-timeline/story/run-planning",
+        body: {
+          rawIntent: request.rawIntent,
+          storyId: initialStart.input.storyId,
+          targetShotCount: request.targetShotCount,
+          nsfwEnabled: request.nsfwEnabled,
+          settingsSnapshot,
+          workflowId: initialStart.workflow.workflowId,
+        },
+        fallbackMessage: "Story Graph planning failed.",
+        onUpdate: (updatedWorkflow, nodeId) => {
+          setWorkflow(updatedWorkflow);
+          if (nodeId) {
+            setSelectedNodeId(nodeId);
+          }
+        },
       });
       setWorkflow(planned);
     } catch (error) {
       setPlanningError(error instanceof Error ? error.message : "Story Graph planning failed.");
+    } finally {
+      setPlanningStatus("idle");
+    }
+  }
+
+  async function handleConfirmGeneration() {
+    if (!workflow) {
+      return;
+    }
+
+    setPlanningError("");
+    setPlanningStatus("generating");
+
+    try {
+      const generated = await postStoryWorkflow("/api/agent-timeline/story/confirm-generation", {
+        workflow,
+      }, "Story Graph generation failed.");
+      setWorkflow(generated);
+      setSelectedNodeId("shot-graph-execution");
+    } catch (error) {
+      setPlanningError(error instanceof Error ? error.message : "Story Graph generation failed.");
+    } finally {
+      setPlanningStatus("idle");
+    }
+  }
+
+  async function handleRegenerateShot(shotId: string) {
+    if (!workflow) {
+      return;
+    }
+
+    setPlanningError("");
+    setPlanningStatus("regenerating");
+
+    try {
+      const regenerated = await postStoryWorkflow("/api/agent-timeline/story/regenerate-shot", {
+        workflow,
+        shotId,
+      }, "Story Graph shot regeneration failed.");
+      setWorkflow(regenerated);
+      setSelectedNodeId("shot-graph-execution");
+    } catch (error) {
+      setPlanningError(error instanceof Error ? error.message : "Story Graph shot regeneration failed.");
+    } finally {
+      setPlanningStatus("idle");
     }
   }
 
@@ -491,6 +880,15 @@ export function StoryPlanningPreview() {
         : current,
     );
   }
+
+  const generationReady = getGenerationGateReady(workflow);
+  const executionResult = isStoryExecutionState(workflow?.nodes["shot-graph-execution"].result)
+    ? workflow?.nodes["shot-graph-execution"].result
+    : null;
+  const storyResult = isStoryResultDisplay(workflow?.nodes["story-result-display"].result)
+    ? workflow?.nodes["story-result-display"].result
+    : null;
+  const actionBusy = planningStatus !== "idle";
 
   return (
     <main className="flex h-screen min-h-screen flex-col overflow-hidden bg-slate-50 text-slate-950">
@@ -517,6 +915,17 @@ export function StoryPlanningPreview() {
         </div>
 
         <div className="flex shrink-0 items-center gap-2">
+          {workflow && generationReady ? (
+            <button
+              className={headerLinkClassName}
+              disabled={actionBusy}
+              onClick={() => void handleConfirmGeneration()}
+              type="button"
+            >
+              <Play className="size-3.5" />
+              {planningStatus === "generating" ? "Generating" : "Start shot generation"}
+            </button>
+          ) : null}
           {workflow ? (
             <button className={headerLinkClassName} onClick={() => setWorkflow(null)} type="button">
               <RotateCcw className="size-3.5" />
@@ -532,7 +941,14 @@ export function StoryPlanningPreview() {
       </header>
 
       {!workflow || !selectedNode ? (
-        <StartPanel nsfwEnabled={settingsNsfwEnabled} onStart={(request) => void handleStart(request)} />
+        <>
+          {planningError ? (
+            <div className="mx-auto mt-4 w-full max-w-4xl rounded-md border border-rose-200 bg-rose-50 p-3 text-xs text-rose-700">
+              {planningError}
+            </div>
+          ) : null}
+          <StartPanel nsfwEnabled={settingsNsfwEnabled} onStart={(request) => void handleStart(request)} />
+        </>
       ) : (
         <div className="sf-agent-workbench flex min-h-0 flex-1 flex-col overflow-hidden lg:flex-row">
           <aside className="sf-agent-workbench__nav custom-scrollbar touch-scroll-region order-2 min-h-0 overflow-y-auto border-b border-slate-200 bg-white p-3 lg:order-1 lg:w-72 lg:flex-[0_0_18rem] lg:border-b-0 lg:border-r">
@@ -565,16 +981,14 @@ export function StoryPlanningPreview() {
                     <span
                       className={cn(
                         "relative z-10 flex size-8 shrink-0 items-center justify-center rounded-full border text-[11px] font-semibold ring-4 ring-white",
-                        node.status === "manual"
-                          ? "border-violet-200 bg-violet-50 text-violet-700"
-                          : node.status === "stale"
-                            ? "border-amber-200 bg-amber-50 text-amber-700"
-                            : node.status === "blocked"
-                              ? "border-slate-200 bg-slate-50 text-slate-500"
-                              : "border-emerald-200 bg-emerald-50 text-emerald-700",
+                        getStoryNodeStatusTone(node.status),
                       )}
                     >
-                      {planningNodeIds.indexOf(nodeId) + 1}
+                      {node.status === "running" ? (
+                        <LoaderCircle className="size-3.5 animate-spin" />
+                      ) : (
+                        planningNodeIds.indexOf(nodeId) + 1
+                      )}
                     </span>
                     <span className="min-w-0 flex-1">
                       <span className="flex items-center gap-1.5">
@@ -607,7 +1021,13 @@ export function StoryPlanningPreview() {
                       <p className="mt-1 text-xs leading-relaxed text-slate-500">{metadata.manualEdit.label}</p>
                     </div>
                     <span className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-xs font-medium text-slate-600">
-                      {selectedNode.status === "manual" ? <CheckCircle2 className="size-3.5 text-violet-500" /> : <CircleDot className="size-3.5" />}
+                      {selectedNode.status === "running" ? (
+                        <LoaderCircle className="size-3.5 animate-spin text-indigo-500" />
+                      ) : selectedNode.status === "manual" ? (
+                        <CheckCircle2 className="size-3.5 text-violet-500" />
+                      ) : (
+                        <CircleDot className="size-3.5" />
+                      )}
                       {formatStatusLabel(selectedNode.status)}
                     </span>
                   </div>
@@ -653,6 +1073,20 @@ export function StoryPlanningPreview() {
                       onSave={handleSave}
                       storyId={workflow.storyId}
                     />
+                    {selectedNodeId === "shot-graph-execution" && executionResult ? (
+                      <div className="mt-4">
+                        <StoryExecutionPanel
+                          busy={actionBusy}
+                          execution={executionResult}
+                          onRegenerateShot={(shotId) => void handleRegenerateShot(shotId)}
+                        />
+                      </div>
+                    ) : null}
+                    {selectedNodeId === "story-result-display" && storyResult ? (
+                      <div className="mt-4">
+                        <StoryResultGrid result={storyResult} />
+                      </div>
+                    ) : null}
                   </div>
                 </div>
 
@@ -717,7 +1151,7 @@ export function StoryPlanningPreview() {
                   <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Tool calls</h2>
                 </header>
                 <div className="p-3 text-xs leading-relaxed text-slate-500">
-                  Story planning is local and in-memory. It does not call LLM, ComfyUI, persistence, or old sequence APIs.
+                  Story planning runs through the server Story Graph LiteLLM adapters. Shot generation is confirmation-gated and uses the Story ComfyUI shot graph scheduler.
                 </div>
               </section>
             </div>

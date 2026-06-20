@@ -22,10 +22,7 @@ export const executableStoryWorkflowNodeIds = storyWorkflowNodeIds;
 
 export type StoryWorkflowExecutableNodeId = (typeof executableStoryWorkflowNodeIds)[number];
 
-export const reservedStoryWorkflowNodeIds = [
-  "shot-graph-execution",
-  "story-result-display",
-] as const satisfies readonly StoryWorkflowNodeId[];
+export const reservedStoryWorkflowNodeIds = [] as const satisfies readonly StoryWorkflowNodeId[];
 
 export type StoryId = string;
 

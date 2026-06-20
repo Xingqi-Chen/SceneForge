@@ -2,7 +2,148 @@
 
 This log records dated implementation and documentation work. Keep entries concise and evidence-oriented.
 
+## 2026-06-20
+
+### Issue #66 Confirm Generation Trust Boundary Follow-up
+
+Summary:
+
+- Fixed Story Graph confirmation so submitted `shot-graph-execution.result` is not reused as initial execution state.
+- Kept scoped shot regeneration explicitly dependent on submitted prior execution state so unchanged upstream source results remain available during reruns.
+
+Files changed:
+
+- `src/features/agent-timeline/story-api.ts`
+- `docs/dev-log.md`
+
+Validation:
+
+- `npm test -- --run src/features/agent-timeline/story-comfyui-execution.test.ts src/app/api/agent-timeline/story/regenerate-shot/route.test.ts src/app/api/agent-timeline/story/confirm-generation/route.test.ts` passed with 3 files and 17 tests.
+- `npm test -- --run src/features/agent-timeline/story-llm-adapters.test.ts src/features/agent-timeline/story-planning.test.ts src/features/agent-timeline/story-execution.test.ts src/features/agent-timeline/story-comfyui-execution.test.ts src/app/api/agent-timeline/story` passed with 7 files and 48 tests.
+- `npm run typecheck` passed.
+
+### Issue #66 Second Reviewer Blocking Follow-up
+
+Summary:
+
+- Hardened Story ComfyUI source shot image handling so submitted `resultReference` URLs are not trusted during downstream shot execution.
+- Rebuilt source ComfyUI image fetches from sanitized `filename`, `subfolder`, and `type`; local generated-image fallback now uses validated storage filenames instead of remote URLs.
+- Restricted the default ComfyUI image fetcher to the configured ComfyUI `/view` endpoint before attaching the ComfyUI auth header.
+- Fixed preview/no-source execution so object-info validation and queueing use the preview-transformed request.
+
+Files changed:
+
+- `src/features/agent-timeline/story-comfyui-execution.ts`
+- `src/features/agent-timeline/story-comfyui-execution.test.ts`
+- `docs/dev-log.md`
+
+Validation:
+
+- `npm test -- --run src/features/agent-timeline/story-comfyui-execution.test.ts src/app/api/agent-timeline/story/regenerate-shot/route.test.ts src/app/api/agent-timeline/story/confirm-generation/route.test.ts` passed with 3 files and 15 tests.
+- `npm test -- --run src/features/agent-timeline/story-llm-adapters.test.ts src/features/agent-timeline/story-planning.test.ts src/features/agent-timeline/story-execution.test.ts src/features/agent-timeline/story-comfyui-execution.test.ts src/app/api/agent-timeline/story` passed with 7 files and 46 tests.
+- `npm run typecheck` passed.
+- `npm run lint` passed with 23 existing warnings unrelated to this change.
+
+## 2026-06-15
+
+### Issue #66 Reviewer Blocking Follow-up
+
+Summary:
+
+- Fixed Story Graph source shot execution semantics so the Story ComfyUI adapter uploads completed source shot images and injects them into downstream ComfyUI requests.
+- Uses the first source shot as the img2img `imageName`; additional source shots are appended as IPAdapter character references so multi-source dependencies carry image data instead of only affecting schedule order.
+- Hardened Story parameter normalization so LLM/manual per-shot override strings are coerced before render planning and invalid numeric overrides fall back to defaults instead of reaching `.toFixed()`.
+- Removed unrelated `next.config.ts` dev-origin drift from the scoped diff.
+
+Files changed:
+
+- `src/features/agent-timeline/story-comfyui-execution.ts`
+- `src/features/agent-timeline/story-comfyui-execution.test.ts`
+- `src/features/agent-timeline/story-planning.ts`
+- `src/features/agent-timeline/story-planning.test.ts`
+- `src/features/agent-timeline/story-llm-adapters.test.ts`
+- `docs/dev-log.md`
+
+Validation:
+
+- `npm test -- --run src/features/agent-timeline/story-llm-adapters.test.ts src/features/agent-timeline/story-planning.test.ts src/features/agent-timeline/story-execution.test.ts src/features/agent-timeline/story-comfyui-execution.test.ts src/app/api/agent-timeline/story` passed with 7 files and 44 tests.
+- `npm run typecheck` passed.
+- `npm run lint` passed with 23 existing warnings unrelated to this change.
+
+### Story Graph Full Real Flow
+
+Summary:
+
+- Added server-side Story Graph planning through `POST /api/agent-timeline/story/run-planning`, with LiteLLM-backed Story node adapters for bible, outline, storyboard shots, safety, dependency, plot, continuity, resource, and parameter planning.
+- Kept system-owned Story render plan, consistency check, and generation gate assembly deterministic; hard validation now blocks unknown shot dependencies, dependency cycles, render/source mismatch, and non-executable resource plans.
+- Added Story Graph generation APIs for confirmation and scoped shot regeneration; both use the existing Story shot scheduler plus the ComfyUI execution adapter and preserve unrelated shot result references during reruns.
+- Updated `/story` to call server planning, expose generation after a ready gate, display shot execution/result state, and trigger per-shot regeneration.
+- Removed the old client-side deterministic mock path from the main start flow; the old planning fallback checkpoint is rejected by the executable gate instead of being accepted as a real model.
+- Follow-up: `/story` now loads real downloaded local Civitai checkpoint and LoRA candidates before planning and blocks with a clear UI error when no downloaded checkpoint is available.
+- Follow-up: Story generation and shot regeneration recompute the render plan server-side from the validated current workflow so tampered submitted `story-render-plan` resources cannot execute.
+
+Files changed:
+
+- `src/app/api/agent-timeline/story/run-planning/route.ts`
+- `src/app/api/agent-timeline/story/confirm-generation/route.ts`
+- `src/app/api/agent-timeline/story/regenerate-shot/route.ts`
+- `src/features/agent-timeline/story-api.ts`
+- `src/features/agent-timeline/story-llm-adapters.ts`
+- `src/features/agent-timeline/story-runner.ts`
+- `src/features/agent-timeline/story-state.ts`
+- `src/features/agent-timeline/story-execution.ts`
+- `src/features/agent-timeline/components/StoryPlanningPreview.tsx`
+- Focused Story adapter, route, scheduler, and UI tests under `src/features/agent-timeline` and `src/app/api/agent-timeline/story`.
+
+Validation:
+
+- `npm test -- --run src/features/agent-timeline/story-llm-adapters.test.ts` passed with 6 tests.
+- `npm test -- --run src/app/api/agent-timeline/story` passed with 3 files and 7 tests.
+- `npm test -- --run src/features/agent-timeline/components/StoryPlanningPreview.test.tsx` passed with 5 tests.
+- `npm test -- --run src/features/agent-timeline` passed with 25 files and 165 tests.
+- `npm run typecheck` passed.
+- `npm run lint` passed with 23 existing warnings unrelated to this change.
+- Follow-up validation: `npm test -- --run src/features/agent-timeline/components/StoryPlanningPreview.test.tsx` passed with 6 tests.
+- Follow-up validation: `npm test -- --run src/app/api/agent-timeline/story` passed with 3 files and 9 tests.
+- Follow-up validation: `npm test -- --run src/features/agent-timeline` passed with 25 files and 166 tests.
+- Follow-up validation: `npm run typecheck` passed.
+
 ## 2026-06-14
+
+### T21 / Issue #66 Shot Graph Execution Scheduler
+
+Summary:
+
+- Added a Story Graph shot execution scheduler with per-shot status, queue metadata, result references, and recoverable error state.
+- Scheduled `StoryExecutionRequestBatch` inputs topologically so independent shots are ready together, source/img2img shots wait for source results, and multi-reference shots wait for all referenced sources.
+- Added an injected shot execution adapter boundary that can wrap existing ComfyUI validation, queue, history, and generated image storage helpers without hard-wiring live network calls into scheduler tests.
+- Added selected-shot regeneration that marks only the selected shot and downstream dependent shots stale while preserving unrelated branch result references.
+- Replaced the old T21-unavailable Story Graph execution placeholder with confirmation-gated scheduler state.
+- Added a server-side Story Graph ComfyUI execution adapter that reuses existing text-to-image validation, `object_info` compatibility checks, queueing, history polling, view reads, and generated-image storage helpers behind the scheduler adapter boundary.
+
+Files changed:
+
+- `src/features/agent-timeline/story-execution.ts`
+- `src/features/agent-timeline/story-execution.test.ts`
+- `src/features/agent-timeline/story-comfyui-execution.ts`
+- `src/features/agent-timeline/story-comfyui-execution.test.ts`
+- `src/features/agent-timeline/story-input.ts`
+- `src/features/agent-timeline/story-input.test.ts`
+- `src/features/agent-timeline/story-state.ts`
+- `src/features/agent-timeline/story-types.ts`
+- `src/features/agent-timeline/story-workflow.test.ts`
+- `docs/product-spec.md`
+- `docs/tech-spec.md`
+- `docs/dev-log.md`
+
+Validation:
+
+- `npm test -- --run src/features/agent-timeline/story-state.test.ts src/features/agent-timeline/story-input.test.ts src/features/agent-timeline/story-comfyui-execution.test.ts src/features/agent-timeline/story-execution.test.ts` passed with 4 files and 22 tests after the confirmation-gate stale regression fix and ComfyUI adapter coverage.
+- `npm test -- --run src/features/agent-timeline` passed with 24 files and 158 tests.
+- `npm test` passed with 113 files and 823 tests.
+- `npm run typecheck` passed.
+- `npm run lint` passed with 23 existing warnings unrelated to this change.
+- `npm run build` passed.
 
 ### T20A / Issue #77 Story Graph Input and Planning Start Workflow
 
