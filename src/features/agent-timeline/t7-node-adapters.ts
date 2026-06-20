@@ -47,11 +47,12 @@ import {
   type TimelineNodeResult,
   type TimelineSeedPolicy,
 } from "./types";
-
-export type TimelineSamplerOptions = {
-  samplers: string[];
-  schedulers: string[];
-};
+import {
+  defaultTimelineSamplerOptions,
+  normalizeTimelineSamplerOptions,
+  pickSupportedValue,
+  type TimelineSamplerOptions,
+} from "./timeline-sampler-options";
 
 export type TimelineResourceRecommendationRequest = {
   desiredEffect: string;
@@ -97,11 +98,6 @@ export type TimelineT7NodeAdapterOptions = {
 };
 
 const maxTimelineLoras = 3;
-const defaultSamplerOptions: TimelineSamplerOptions = {
-  samplers: ["euler", "euler_ancestral", "dpmpp_2m", "dpmpp_2m_sde"],
-  schedulers: ["normal", "karras"],
-};
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -444,28 +440,6 @@ function inferCfg(resource: SelectedCivitaiResourcePreview) {
   return 7;
 }
 
-function normalizeOptions(options: TimelineSamplerOptions | undefined): TimelineSamplerOptions {
-  const samplers = options?.samplers.filter(Boolean) ?? [];
-  const schedulers = options?.schedulers.filter(Boolean) ?? [];
-
-  return {
-    samplers: samplers.length > 0 ? samplers : defaultSamplerOptions.samplers,
-    schedulers: schedulers.length > 0 ? schedulers : defaultSamplerOptions.schedulers,
-  };
-}
-
-function pickSupportedValue(value: string | undefined, options: string[], fallback: string) {
-  if (!value) {
-    return options.includes(fallback) ? fallback : options[0] ?? fallback;
-  }
-
-  if (options.includes(value)) {
-    return value;
-  }
-
-  return options.includes(fallback) ? fallback : options[0] ?? fallback;
-}
-
 function normalizeRenderDimension(value: unknown, fallback: number) {
   const parsed = typeof value === "number" ? value : Number(value);
   if (!Number.isFinite(parsed)) {
@@ -546,7 +520,7 @@ export function createTimelineParameterRecommendation({
   sourceDenoise?: number;
   sourceImage?: SceneInputTimelineResult["sourceImage"];
 }): ParameterRecommendationTimelineResult {
-  const samplerOptions = normalizeOptions(rawSamplerOptions);
+  const samplerOptions = normalizeTimelineSamplerOptions(rawSamplerOptions);
   const selectedResources = getSelectedResources(resourceResult);
   const finalPositivePrompt = buildTimelineFinalPositivePrompt({
     promptProfile,
@@ -658,7 +632,7 @@ export function createTimelineT7NodeAdapters({
       const scenePrompt = getScenePromptResult(context.workflow);
       const promptProfile = getTimelinePromptProfile(context.workflow);
       const resourceResult = getResourceRecommendationResult(context.workflow.nodes["resource-recommendation"]);
-      const samplerOptions = loadSamplerOptions ? await loadSamplerOptions(context) : defaultSamplerOptions;
+      const samplerOptions = loadSamplerOptions ? await loadSamplerOptions(context) : defaultTimelineSamplerOptions;
       const selectedResources = getSelectedResources(resourceResult);
       const finalPositivePrompt = buildTimelineFinalPositivePrompt({
         promptProfile,

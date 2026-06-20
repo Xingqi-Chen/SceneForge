@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   assembleStoryRenderPlan,
   createStoryExecutionRequestBatch,
+  createStoryDefaultGenerationParameters,
   createStoryParameterPlan,
   createStoryPreviewParameters,
   createStoryResourcePlan,
@@ -300,6 +301,87 @@ describe("story planning", () => {
     });
   });
 
+  it("normalizes Story parameter plans against live sampler and scheduler options", () => {
+    const parameterPlan = createStoryParameterPlan({
+      storyId,
+      defaults: {
+        ...defaults,
+        samplerName: "dpmpp_2m",
+        scheduler: "karras",
+      },
+      samplerOptions: {
+        samplers: ["uni_pc"],
+        schedulers: ["sgm_uniform"],
+      },
+    });
+
+    expect(parameterPlan.defaults).toMatchObject({
+      samplerName: "uni_pc",
+      scheduler: "sgm_uniform",
+    });
+  });
+
+  it("normalizes string per-shot parameter overrides and falls back invalid numeric values", () => {
+    const parameterPlan = createStoryParameterPlan({
+      storyId,
+      defaults,
+      perShotOverrides: [
+        {
+          shotId: "shot-2",
+          parameters: {
+            cfg: "6.25",
+            denoise: "0.7",
+            height: "386",
+            samplerName: "invented_sampler",
+            scheduler: "invented_scheduler",
+            steps: "12",
+            width: "513",
+          } as unknown as Partial<StoryGenerationParameters>,
+        },
+        {
+          shotId: "shot-1",
+          parameters: {
+            cfg: "not-a-number",
+            denoise: "also-bad",
+          } as unknown as Partial<StoryGenerationParameters>,
+        },
+      ],
+      samplerOptions: {
+        samplers: ["uni_pc"],
+        schedulers: ["sgm_uniform"],
+      },
+    });
+
+    expect(parameterPlan.perShotOverrides[0]?.parameters).toMatchObject({
+      cfg: 6.25,
+      denoise: 0.7,
+      height: 384,
+      samplerName: "uni_pc",
+      scheduler: "sgm_uniform",
+      steps: 12,
+      width: 512,
+    });
+    expect(parameterPlan.perShotOverrides[1]?.parameters).toMatchObject({
+      cfg: defaults.cfg,
+      denoise: defaults.denoise,
+    });
+  });
+
+  it("uses model-family sampler defaults for Anima Story resources", () => {
+    const defaultsForAnima = createStoryDefaultGenerationParameters({
+      resourcePlan: createAnimaResourcePlan(),
+      samplerOptions: {
+        samplers: ["euler", "dpmpp_2m"],
+        schedulers: ["normal", "karras"],
+      },
+    });
+
+    expect(defaultsForAnima).toMatchObject({
+      samplerName: "euler",
+      scheduler: "normal",
+    });
+  });
+
   it("reuses the base-model-aware ComfyUI prompt resolver for Story render prompts", () => {
     const renderPlan = assembleStoryRenderPlan({
       parameterPlan: createStoryParameterPlan({ storyId, defaults }),
@@ -399,5 +481,38 @@ describe("story planning", () => {
     });
     expect(JSON.stringify(finalBatch)).not.toContain("modelNsfw");
     expect(JSON.stringify(previewBatch)).not.toContain("aiNsfwLevel");
+  });
+
+  it("normalizes Story execution requests against live sampler and scheduler options", () => {
+    const renderPlan = assembleStoryRenderPlan({
+      parameterPlan: createStoryParameterPlan({ storyId, defaults }),
+      resourcePlan: createResourcePlan(),
+      safetyPlan,
+      shots,
+    });
+    const editedRenderPlan = {
+      ...renderPlan,
+      shots: renderPlan.shots.map((shot) => ({
+        ...shot,
+        parameters: {
+          ...shot.parameters,
+          samplerName: "invented_sampler",
+          scheduler: "invented_scheduler",
+        },
+      })),
+    };
+    const finalBatch = createStoryExecutionRequestBatch({
+      mode: "final",
+      renderPlan: editedRenderPlan,
+      samplerOptions: {
+        samplers: ["uni_pc"],
+        schedulers: ["sgm_uniform"],
+      },
+    });
+
+    expect(finalBatch.requests[0]?.request).toMatchObject({
+      samplerName: "uni_pc",
+      scheduler: "sgm_uniform",
+    });
   });
 });

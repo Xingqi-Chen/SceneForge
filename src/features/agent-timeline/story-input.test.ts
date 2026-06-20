@@ -150,6 +150,39 @@ describe("story input workflow start", () => {
     expect(renderPlanJson).not.toContain("aiNsfwLevel");
   });
 
+  it("uses Anima sampler defaults for local Story planning artifacts", () => {
+    const input = createStoryInputFromStartRequest({
+      rawIntent: "A two-shot anime rooftop conversation.",
+      targetShotCount: 2,
+      storyId: "story-anima-resources",
+      now,
+      settingsSnapshot: {
+        resourceCandidates: {
+          checkpoints: [
+            {
+              id: "anima-checkpoint",
+              name: "Anima Checkpoint",
+              baseModel: "Anima",
+              modelBaseModel: "Anima",
+              modelFileName: "anima.safetensors",
+            },
+          ],
+          loras: [],
+        },
+      },
+    });
+    const artifacts = createStoryPlanningArtifacts(input, now());
+
+    expect(artifacts.parameterPlan.defaults).toMatchObject({
+      samplerName: "euler",
+      scheduler: "normal",
+    });
+    expect(artifacts.generationGate.requestPreview[0]?.parameters).toMatchObject({
+      samplerName: "euler",
+      scheduler: "normal",
+    });
+  });
+
   it("starts a story-graph workflow with confirmation-gated shot execution", () => {
     const workflow = startStoryGraphWorkflow({
       rawIntent: "A three-shot market chase.",

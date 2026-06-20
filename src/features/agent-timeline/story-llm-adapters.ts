@@ -2,6 +2,7 @@ import { isLlmChatResponse, LiteLlmError, type LlmChatRequest, type LlmChatRespo
 
 import {
   assembleStoryRenderPlan,
+  createStoryDefaultGenerationParameters,
   createStoryParameterPlan,
   createStoryResourcePlan,
   type StoryGenerationParameters,
@@ -17,6 +18,10 @@ import {
   TimelineNodeExecutionError,
   type TimelineNodeSource,
 } from "./types";
+import {
+  normalizeTimelineSamplerOptions,
+  type TimelineSamplerOptions,
+} from "./timeline-sampler-options";
 import type {
   CharacterContinuityGraph,
   PlotStateGraph,
@@ -58,6 +63,7 @@ export type StoryNodeAdapters = Partial<Record<StoryWorkflowNodeId, StoryNodeAda
 export type StoryLlmNodeAdapterOptions = {
   completeChat: StoryCompleteChat;
   now?: () => string;
+  samplerOptions?: TimelineSamplerOptions;
 };
 
 const maxCharacters = 12;
@@ -694,7 +700,13 @@ export function normalizeStoryResourcePlan(raw: unknown, input: StoryInput): Sto
   });
 }
 
-export function normalizeStoryParameterPlan(raw: unknown, input: StoryInput, shots: readonly StoryShot[]): StoryParameterPlan {
+export function normalizeStoryParameterPlan(
+  raw: unknown,
+  input: StoryInput,
+  shots: readonly StoryShot[],
+  samplerOptions?: TimelineSamplerOptions,
+  fallbackDefaults: StoryGenerationParameters = fallbackParameters,
+): StoryParameterPlan {
   const parsed = typeof raw === "string" ? parseJsonObjectFromText(raw) : raw;
   if (!isRecord(parsed)) {
     throw malformedResponse("Parameter plan response must be a JSON object.", { raw });
@@ -711,14 +723,14 @@ export function normalizeStoryParameterPlan(raw: unknown, input: StoryInput, sho
   return createStoryParameterPlan({
     storyId: input.storyId,
     defaults: {
-      width: Number(defaultsRaw.width) || fallbackParameters.width,
-      height: Number(defaultsRaw.height) || fallbackParameters.height,
-      steps: Number(defaultsRaw.steps) || fallbackParameters.steps,
-      cfg: Number(defaultsRaw.cfg) || fallbackParameters.cfg,
+      width: Number(defaultsRaw.width) || fallbackDefaults.width,
+      height: Number(defaultsRaw.height) || fallbackDefaults.height,
+      steps: Number(defaultsRaw.steps) || fallbackDefaults.steps,
+      cfg: Number(defaultsRaw.cfg) || fallbackDefaults.cfg,
       samplerName: compactText(defaultsRaw.samplerName ?? defaultsRaw.sampler_name, 80) ||
-        fallbackParameters.samplerName,
-      scheduler: compactText(defaultsRaw.scheduler, 80) || fallbackParameters.scheduler,
-      denoise: Number(defaultsRaw.denoise ?? fallbackParameters.denoise),
+        fallbackDefaults.samplerName,
+      scheduler: compactText(defaultsRaw.scheduler, 80) || fallbackDefaults.scheduler,
+      denoise: Number(defaultsRaw.denoise ?? fallbackDefaults.denoise),
       ...(Number.isSafeInteger(Number(defaultsRaw.seed)) ? { seed: Number(defaultsRaw.seed) } : {}),
     },
     perShotOverrides: perShotOverridesRaw
@@ -730,6 +742,7 @@ export function normalizeStoryParameterPlan(raw: unknown, input: StoryInput, sho
       }))
       .filter((override) => shotIds.has(override.shotId)),
     warnings: normalizeStringList(parsed.warnings, maxWarnings),
+    samplerOptions,
   });
 }
 
@@ -738,12 +751,16 @@ export function isStoryResourcePlanExecutable(resourcePlan: StoryResourcePlan): 
   return Boolean(fileName) && fileName !== "story-planning-fallback.safetensors";
 }
 
-export function createStoryRenderPlanFromWorkflow(workflow: StoryWorkflowState): StoryRenderPlan {
+export function createStoryRenderPlanFromWorkflow(
+  workflow: StoryWorkflowState,
+  samplerOptions?: TimelineSamplerOptions,
+): StoryRenderPlan {
   const shots = syncStoryShotsWithDependencyGraph(getShots(workflow), getDependencyGraph(workflow));
 
   return assembleStoryRenderPlan({
     parameterPlan: getParameterPlan(workflow),
     resourcePlan: getResourcePlan(workflow),
+    samplerOptions,
     safetyPlan: getSafetyPlan(workflow),
     shots,
   });
@@ -753,6 +770,7 @@ export function createStoryConsistencyCheckFromWorkflow(
   workflow: StoryWorkflowState,
   now: () => string,
   extraWarnings: string[] = [],
+  samplerOptions?: TimelineSamplerOptions,
 ): StoryConsistencyCheck {
   const input = getStoryInput(workflow);
   const rawShots = getShots(workflow);
@@ -760,7 +778,7 @@ export function createStoryConsistencyCheckFromWorkflow(
   const shots = syncStoryShotsWithDependencyGraph(rawShots, graph);
   const safetyPlan = getSafetyPlan(workflow);
   const resourcePlan = getResourcePlan(workflow);
-  const renderPlan = createStoryRenderPlanFromWorkflow(workflow);
+  const renderPlan = createStoryRenderPlanFromWorkflow(workflow, samplerOptions);
   const shotIds = new Set(shots.map((shot) => shot.id));
   const issues: StoryConsistencyIssue[] = validateShotDependencyGraph(graph, shots).map((issue) => ({
     code: issue.nodeId ? `node-${issue.nodeId}` : "shot-dependency",
@@ -819,9 +837,12 @@ export function createStoryConsistencyCheckFromWorkflow(
   };
 }
 
-export function createStoryGenerationGateFromWorkflow(workflow: StoryWorkflowState) {
+export function createStoryGenerationGateFromWorkflow(
+  workflow: StoryWorkflowState,
+  samplerOptions?: TimelineSamplerOptions,
+) {
   const consistency = getNodeResult<StoryConsistencyCheck>(workflow, "story-consistency-check");
-  const renderPlan = createStoryRenderPlanFromWorkflow(workflow);
+  const renderPlan = createStoryRenderPlanFromWorkflow(workflow, samplerOptions);
   const resourcePlan = getResourcePlan(workflow);
   const executable = isStoryResourcePlanExecutable(resourcePlan);
   const ready = consistency.passed && executable;
@@ -933,7 +954,9 @@ function buildResourceCandidatePayload(input: StoryInput) {
 export function createStoryLlmNodeAdapters({
   completeChat,
   now = () => new Date().toISOString(),
+  samplerOptions: rawSamplerOptions,
 }: StoryLlmNodeAdapterOptions): StoryNodeAdapters {
+  const samplerOptions = normalizeTimelineSamplerOptions(rawSamplerOptions);
   const storyBible = createLlmStoryNodeAdapter<StoryBible>({
     buildRequest: (context) => {
       const input = getStoryInput(context.workflow);
@@ -1090,12 +1113,20 @@ export function createStoryLlmNodeAdapters({
   const parameterPlan = createLlmStoryNodeAdapter<StoryParameterPlan>({
     buildRequest: (context) => {
       const input = getStoryInput(context.workflow);
+      const parameterDefaults = createStoryDefaultGenerationParameters({
+        resourcePlan: getResourcePlan(context.workflow),
+        samplerOptions,
+      });
+
       return makeJsonRequest({
         input,
         instruction:
-          'Create a typed StoryParameterPlan. Width and height must be positive image dimensions; steps/cfg/denoise should be conservative. Required shape: {"defaults":{"width":1024,"height":768,"steps":28,"cfg":5.5,"samplerName":"dpmpp_2m","scheduler":"karras","denoise":1},"perShotOverrides":[{"shotId":"","parameters":{},"reason":""}],"warnings":[""]}.',
+          `Create a typed StoryParameterPlan. Width and height must be positive image dimensions; steps/cfg/denoise should be conservative. samplerName must be one of availableSamplers and scheduler must be one of availableSchedulers. Start from supplied modelDefaultParameters unless a shot has a strong reason to override. Required shape: {"defaults":{"width":${parameterDefaults.width},"height":${parameterDefaults.height},"steps":${parameterDefaults.steps},"cfg":${parameterDefaults.cfg},"samplerName":"${parameterDefaults.samplerName}","scheduler":"${parameterDefaults.scheduler}","denoise":${parameterDefaults.denoise}},"perShotOverrides":[{"shotId":"","parameters":{},"reason":""}],"warnings":[""]}.`,
         payload: {
+          availableSamplers: samplerOptions.samplers,
+          availableSchedulers: samplerOptions.schedulers,
           input,
+          modelDefaultParameters: parameterDefaults,
           resourcePlan: getResourcePlan(context.workflow),
           shots: getShots(context.workflow),
         },
@@ -1105,6 +1136,11 @@ export function createStoryLlmNodeAdapters({
       response.content,
       getStoryInput(context.workflow),
       getShots(context.workflow),
+      samplerOptions,
+      createStoryDefaultGenerationParameters({
+        resourcePlan: getResourcePlan(context.workflow),
+        samplerOptions,
+      }),
     ),
   })(completeChat);
 
@@ -1119,15 +1155,15 @@ export function createStoryLlmNodeAdapters({
     "resource-plan": resourcePlan,
     "parameter-plan": parameterPlan,
     "story-render-plan": (context) => ({
-      value: createStoryRenderPlanFromWorkflow(context.workflow),
+      value: createStoryRenderPlanFromWorkflow(context.workflow, samplerOptions),
       source: "system",
     }),
     "story-consistency-check": (context) => ({
-      value: createStoryConsistencyCheckFromWorkflow(context.workflow, now),
+      value: createStoryConsistencyCheckFromWorkflow(context.workflow, now, [], samplerOptions),
       source: "system",
     }),
     "generation-gate": (context) => ({
-      value: createStoryGenerationGateFromWorkflow(context.workflow),
+      value: createStoryGenerationGateFromWorkflow(context.workflow, samplerOptions),
       source: "system",
     }),
   };

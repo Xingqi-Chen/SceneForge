@@ -6,7 +6,10 @@ import type {
   SelectedCivitaiResourcePreview,
   SelectedCivitaiResourcesPreview,
 } from "@/features/civitai-lora-library";
-import { resolveComfyUiGenerationSettings } from "@/features/editor/ai-prompt/comfyui-generation-params";
+import {
+  parseComfyUiAiGenerationParameters,
+  resolveComfyUiGenerationSettings,
+} from "@/features/editor/ai-prompt/comfyui-generation-params";
 import type { CivitaiAiPromptResult } from "@/features/editor/ai-prompt/civitai-ai-context";
 import {
   type PromptProfileId,
@@ -28,6 +31,11 @@ import type {
 import {
   buildTimelineFinalPositivePrompt,
 } from "./t7-node-adapters";
+import {
+  normalizeTimelineSamplerOptions,
+  pickSupportedValue,
+  type TimelineSamplerOptions,
+} from "./timeline-sampler-options";
 import type {
   ResourceRecommendationTimelineResult,
   ScenePromptTimelineResult,
@@ -85,6 +93,14 @@ export type StoryParameterPlan = {
     reason?: string;
   }>;
   warnings: string[];
+};
+
+type StoryGenerationParameterInput = Partial<Record<keyof StoryGenerationParameters, unknown>>;
+
+type StoryParameterOverrideInput = {
+  shotId: StoryShotId;
+  parameters: StoryGenerationParameterInput;
+  reason?: string;
 };
 
 export type StoryPreviewExecutionOptions = {
@@ -162,6 +178,15 @@ const defaultPreviewExecutionOptions: StoryPreviewExecutionOptions = {
   shotIds: [],
   parameterOverrides: {},
 };
+const defaultStoryGenerationParameters = {
+  width: 1024,
+  height: 768,
+  steps: 28,
+  cfg: 5.5,
+  samplerName: "dpmpp_2m",
+  scheduler: "karras",
+  denoise: 1,
+} satisfies StoryGenerationParameters;
 
 function failStoryResourcePlan(message: string, details?: unknown): never {
   throw new StoryResourcePlanValidationError({ message, details });
@@ -175,25 +200,159 @@ function normalizeDimension(value: number) {
   return Math.max(8, Math.round(value / 8) * 8);
 }
 
-function normalizeParameters(parameters: StoryGenerationParameters): StoryGenerationParameters {
+function readFiniteNumber(value: unknown, fallback: number) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function readString(value: unknown, fallback: string) {
+  return typeof value === "string" && value.trim() ? value.trim() : fallback;
+}
+
+function readSeed(value: unknown) {
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : undefined;
+}
+
+function getReferenceSampler(resource: StoryLocalResource) {
+  return resource.recommendations?.find((recommendation) => recommendation.sampler)?.sampler ?? undefined;
+}
+
+function getStoryModelFamilyText(resourcePlan: StoryResourcePlan) {
+  return [
+    resourcePlan.checkpoint.resource.modelBaseModel,
+    resourcePlan.checkpoint.resource.baseModel,
+    resourcePlan.checkpoint.resource.name,
+    resourcePlan.checkpoint.resource.versionName,
+    resourcePlan.checkpoint.resource.modelFileName,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLocaleLowerCase();
+}
+
+function getModelFamilySamplerDefaults(resourcePlan: StoryResourcePlan) {
+  const family = getStoryModelFamilyText(resourcePlan);
+
+  if (/\b(?:anima|anime|flux|qwen|z\s*image|lumina)\b/.test(family)) {
+    return {
+      samplerName: "euler",
+      scheduler: "normal",
+    };
+  }
+
   return {
-    ...parameters,
-    width: normalizeDimension(parameters.width),
-    height: normalizeDimension(parameters.height),
-    steps: Math.max(1, Math.round(parameters.steps)),
-    cfg: Number(parameters.cfg.toFixed(2)),
-    denoise: Math.min(1, Math.max(0, Number(parameters.denoise.toFixed(2)))),
+    samplerName: defaultStoryGenerationParameters.samplerName,
+    scheduler: defaultStoryGenerationParameters.scheduler,
   };
+}
+
+export function createStoryDefaultGenerationParameters({
+  resourcePlan,
+  samplerOptions,
+}: {
+  resourcePlan: StoryResourcePlan;
+  samplerOptions?: TimelineSamplerOptions;
+}): StoryGenerationParameters {
+  const referenceSampler = getReferenceSampler(resourcePlan.checkpoint.resource)
+    ?? resourcePlan.loras.map((lora) => getReferenceSampler(lora.resource)).find(Boolean);
+  const parsedSampler = parseComfyUiAiGenerationParameters({
+    sampler: referenceSampler,
+  });
+  const familyDefaults = getModelFamilySamplerDefaults(resourcePlan);
+
+  return normalizeParameters({
+    ...defaultStoryGenerationParameters,
+    samplerName: parsedSampler?.samplerName ?? familyDefaults.samplerName,
+    scheduler: parsedSampler?.scheduler ?? familyDefaults.scheduler,
+  }, samplerOptions);
+}
+
+function normalizeParameters(
+  parameters: StoryGenerationParameterInput,
+  samplerOptions?: TimelineSamplerOptions,
+  fallback: StoryGenerationParameters = defaultStoryGenerationParameters,
+): StoryGenerationParameters {
+  const normalizedSamplerOptions = samplerOptions ? normalizeTimelineSamplerOptions(samplerOptions) : null;
+  const samplerName = readString(parameters.samplerName, fallback.samplerName);
+  const scheduler = readString(parameters.scheduler, fallback.scheduler);
+  const seed = readSeed(parameters.seed);
+
+  return {
+    width: normalizeDimension(readFiniteNumber(parameters.width, fallback.width)),
+    height: normalizeDimension(readFiniteNumber(parameters.height, fallback.height)),
+    steps: Math.max(1, Math.round(readFiniteNumber(parameters.steps, fallback.steps))),
+    cfg: Number(readFiniteNumber(parameters.cfg, fallback.cfg).toFixed(2)),
+    samplerName: normalizedSamplerOptions
+      ? pickSupportedValue(samplerName, normalizedSamplerOptions.samplers, "euler")
+      : samplerName,
+    scheduler: normalizedSamplerOptions
+      ? pickSupportedValue(scheduler, normalizedSamplerOptions.schedulers, "normal")
+      : scheduler,
+    denoise: Math.min(1, Math.max(0, Number(readFiniteNumber(parameters.denoise, fallback.denoise).toFixed(2)))),
+    ...(seed !== undefined ? { seed } : {}),
+  };
+}
+
+function hasOverrideValue(parameters: StoryGenerationParameterInput, key: keyof StoryGenerationParameters) {
+  return Object.prototype.hasOwnProperty.call(parameters, key);
+}
+
+function normalizeParameterOverride(
+  parameters: StoryGenerationParameterInput,
+  defaults: StoryGenerationParameters,
+  samplerOptions?: TimelineSamplerOptions,
+): Partial<StoryGenerationParameters> {
+  const normalized = normalizeParameters({
+    ...defaults,
+    ...parameters,
+  }, samplerOptions, defaults);
+  const override: Partial<StoryGenerationParameters> = {};
+
+  if (hasOverrideValue(parameters, "width")) {
+    override.width = normalized.width;
+  }
+
+  if (hasOverrideValue(parameters, "height")) {
+    override.height = normalized.height;
+  }
+
+  if (hasOverrideValue(parameters, "steps")) {
+    override.steps = normalized.steps;
+  }
+
+  if (hasOverrideValue(parameters, "cfg")) {
+    override.cfg = normalized.cfg;
+  }
+
+  if (hasOverrideValue(parameters, "samplerName")) {
+    override.samplerName = normalized.samplerName;
+  }
+
+  if (hasOverrideValue(parameters, "scheduler")) {
+    override.scheduler = normalized.scheduler;
+  }
+
+  if (hasOverrideValue(parameters, "denoise")) {
+    override.denoise = normalized.denoise;
+  }
+
+  if (hasOverrideValue(parameters, "seed") && normalized.seed !== undefined) {
+    override.seed = normalized.seed;
+  }
+
+  return override;
 }
 
 function applyParameterOverride(
   defaults: StoryGenerationParameters,
   override: Partial<StoryGenerationParameters> | undefined,
+  samplerOptions?: TimelineSamplerOptions,
 ): StoryGenerationParameters {
   return normalizeParameters({
     ...defaults,
     ...override,
-  });
+  }, samplerOptions);
 }
 
 function getPerShotOverride(parameterPlan: StoryParameterPlan, shotId: StoryShotId) {
@@ -435,8 +594,10 @@ function createShotComfyUiRequest(
   shot: StoryRenderPlanShot,
   storyId: string,
   nsfwContext: StoryNsfwContext,
+  samplerOptions?: TimelineSamplerOptions,
 ): ComfyUiTextToImageRequest {
   const checkpoint = shot.resources.checkpoint.resource;
+  const parameters = normalizeParameters(shot.parameters, samplerOptions);
   const resourcePlan = {
     storyId,
     checkpoint: shot.resources.checkpoint,
@@ -448,21 +609,21 @@ function createShotComfyUiRequest(
   const settings = createStoryComfyUiSettings({
     baseNegativePrompt: shot.negativePrompt,
     formattedPositivePrompt: shot.positivePrompt,
-    parameters: shot.parameters,
+    parameters,
     resourcePlan,
     supportsNsfw: nsfwContext.enabled,
   });
 
   return {
     ...settings.request,
-    cfg: shot.parameters.cfg,
-    denoise: shot.parameters.denoise,
-    height: shot.parameters.height,
-    samplerName: shot.parameters.samplerName,
-    scheduler: shot.parameters.scheduler,
-    seed: shot.parameters.seed,
-    steps: shot.parameters.steps,
-    width: shot.parameters.width,
+    cfg: parameters.cfg,
+    denoise: parameters.denoise,
+    height: parameters.height,
+    samplerName: parameters.samplerName,
+    scheduler: parameters.scheduler,
+    seed: parameters.seed,
+    steps: parameters.steps,
+    width: parameters.width,
     workflowProfile: checkpoint.workflowProfile ?? settings.request.workflowProfile,
     clipName: checkpoint.clipName ?? settings.request.clipName,
     clipDevice: checkpoint.clipDevice ?? settings.request.clipDevice,
@@ -498,19 +659,23 @@ export function createStoryResourcePlan({
 export function createStoryParameterPlan({
   defaults,
   perShotOverrides = [],
+  samplerOptions,
   storyId,
   warnings = [],
 }: {
   defaults: StoryGenerationParameters;
-  perShotOverrides?: StoryParameterPlan["perShotOverrides"];
+  perShotOverrides?: StoryParameterOverrideInput[];
+  samplerOptions?: TimelineSamplerOptions;
   storyId: string;
   warnings?: string[];
 }): StoryParameterPlan {
+  const normalizedDefaults = normalizeParameters(defaults, samplerOptions);
+
   return {
-    defaults: normalizeParameters(defaults),
+    defaults: normalizedDefaults,
     perShotOverrides: perShotOverrides.map((override) => ({
       ...override,
-      parameters: { ...override.parameters },
+      parameters: normalizeParameterOverride(override.parameters, normalizedDefaults, samplerOptions),
     })),
     storyId,
     warnings: [...warnings],
@@ -521,10 +686,12 @@ export function createStoryPreviewParameters(
   parameterPlan: StoryParameterPlan,
   options: StoryPreviewExecutionOptions,
   shotId: StoryShotId,
+  samplerOptions?: TimelineSamplerOptions,
 ): StoryGenerationParameters {
   return applyParameterOverride(
-    applyParameterOverride(parameterPlan.defaults, getPerShotOverride(parameterPlan, shotId)),
+    applyParameterOverride(parameterPlan.defaults, getPerShotOverride(parameterPlan, shotId), samplerOptions),
     options.parameterOverrides,
+    samplerOptions,
   );
 }
 
@@ -533,6 +700,7 @@ export function assembleStoryRenderPlan({
   previewOptions = defaultPreviewExecutionOptions,
   previewResultReferences = [],
   resourcePlan,
+  samplerOptions,
   safetyPlan,
   shots,
 }: {
@@ -540,6 +708,7 @@ export function assembleStoryRenderPlan({
   previewOptions?: StoryPreviewExecutionOptions;
   previewResultReferences?: StoryPreviewResultReference[];
   resourcePlan: StoryResourcePlan;
+  samplerOptions?: TimelineSamplerOptions;
   safetyPlan: StorySafetyPlan;
   shots: readonly StoryShot[];
 }): StoryRenderPlan {
@@ -560,7 +729,11 @@ export function assembleStoryRenderPlan({
       })),
     },
     shots: shots.map((shot) => {
-      const parameters = applyParameterOverride(parameterPlan.defaults, getPerShotOverride(parameterPlan, shot.id));
+      const parameters = applyParameterOverride(
+        parameterPlan.defaults,
+        getPerShotOverride(parameterPlan, shot.id),
+        samplerOptions,
+      );
       const baseNegativePrompt = getBaseNegativePrompt(safetyPlan, shot.id);
       const positivePrompt = createFormattedStoryPositivePrompt({
         baseNegativePrompt,
@@ -597,9 +770,11 @@ export function assembleStoryRenderPlan({
 export function createStoryExecutionRequestBatch({
   mode,
   renderPlan,
+  samplerOptions,
 }: {
   mode: "preview" | "final";
   renderPlan: StoryRenderPlan;
+  samplerOptions?: TimelineSamplerOptions;
 }): StoryExecutionRequestBatch {
   const selectedShotIds = mode === "preview"
     ? new Set(renderPlan.preview.options.enabled ? renderPlan.preview.options.shotIds : [])
@@ -622,8 +797,9 @@ export function createStoryExecutionRequestBatch({
             },
             renderPlan.preview.options,
             shot.shotId,
+            samplerOptions,
           )
-        : shot.parameters;
+        : normalizeParameters(shot.parameters, samplerOptions);
       const requestShot = {
         ...shot,
         parameters,
@@ -632,7 +808,7 @@ export function createStoryExecutionRequestBatch({
       return {
         nsfwContext: renderPlan.nsfwContext,
         request: {
-          ...createShotComfyUiRequest(requestShot, renderPlan.storyId, renderPlan.nsfwContext),
+          ...createShotComfyUiRequest(requestShot, renderPlan.storyId, renderPlan.nsfwContext, samplerOptions),
           preview: mode === "preview",
         },
         shotId: shot.shotId,

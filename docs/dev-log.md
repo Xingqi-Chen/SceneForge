@@ -2,7 +2,73 @@
 
 This log records dated implementation and documentation work. Keep entries concise and evidence-oriented.
 
+## 2026-06-20
+
+### Issue #66 Confirm Generation Trust Boundary Follow-up
+
+Summary:
+
+- Fixed Story Graph confirmation so submitted `shot-graph-execution.result` is not reused as initial execution state.
+- Kept scoped shot regeneration explicitly dependent on submitted prior execution state so unchanged upstream source results remain available during reruns.
+
+Files changed:
+
+- `src/features/agent-timeline/story-api.ts`
+- `docs/dev-log.md`
+
+Validation:
+
+- `npm test -- --run src/features/agent-timeline/story-comfyui-execution.test.ts src/app/api/agent-timeline/story/regenerate-shot/route.test.ts src/app/api/agent-timeline/story/confirm-generation/route.test.ts` passed with 3 files and 17 tests.
+- `npm test -- --run src/features/agent-timeline/story-llm-adapters.test.ts src/features/agent-timeline/story-planning.test.ts src/features/agent-timeline/story-execution.test.ts src/features/agent-timeline/story-comfyui-execution.test.ts src/app/api/agent-timeline/story` passed with 7 files and 48 tests.
+- `npm run typecheck` passed.
+
+### Issue #66 Second Reviewer Blocking Follow-up
+
+Summary:
+
+- Hardened Story ComfyUI source shot image handling so submitted `resultReference` URLs are not trusted during downstream shot execution.
+- Rebuilt source ComfyUI image fetches from sanitized `filename`, `subfolder`, and `type`; local generated-image fallback now uses validated storage filenames instead of remote URLs.
+- Restricted the default ComfyUI image fetcher to the configured ComfyUI `/view` endpoint before attaching the ComfyUI auth header.
+- Fixed preview/no-source execution so object-info validation and queueing use the preview-transformed request.
+
+Files changed:
+
+- `src/features/agent-timeline/story-comfyui-execution.ts`
+- `src/features/agent-timeline/story-comfyui-execution.test.ts`
+- `docs/dev-log.md`
+
+Validation:
+
+- `npm test -- --run src/features/agent-timeline/story-comfyui-execution.test.ts src/app/api/agent-timeline/story/regenerate-shot/route.test.ts src/app/api/agent-timeline/story/confirm-generation/route.test.ts` passed with 3 files and 15 tests.
+- `npm test -- --run src/features/agent-timeline/story-llm-adapters.test.ts src/features/agent-timeline/story-planning.test.ts src/features/agent-timeline/story-execution.test.ts src/features/agent-timeline/story-comfyui-execution.test.ts src/app/api/agent-timeline/story` passed with 7 files and 46 tests.
+- `npm run typecheck` passed.
+- `npm run lint` passed with 23 existing warnings unrelated to this change.
+
 ## 2026-06-15
+
+### Issue #66 Reviewer Blocking Follow-up
+
+Summary:
+
+- Fixed Story Graph source shot execution semantics so the Story ComfyUI adapter uploads completed source shot images and injects them into downstream ComfyUI requests.
+- Uses the first source shot as the img2img `imageName`; additional source shots are appended as IPAdapter character references so multi-source dependencies carry image data instead of only affecting schedule order.
+- Hardened Story parameter normalization so LLM/manual per-shot override strings are coerced before render planning and invalid numeric overrides fall back to defaults instead of reaching `.toFixed()`.
+- Removed unrelated `next.config.ts` dev-origin drift from the scoped diff.
+
+Files changed:
+
+- `src/features/agent-timeline/story-comfyui-execution.ts`
+- `src/features/agent-timeline/story-comfyui-execution.test.ts`
+- `src/features/agent-timeline/story-planning.ts`
+- `src/features/agent-timeline/story-planning.test.ts`
+- `src/features/agent-timeline/story-llm-adapters.test.ts`
+- `docs/dev-log.md`
+
+Validation:
+
+- `npm test -- --run src/features/agent-timeline/story-llm-adapters.test.ts src/features/agent-timeline/story-planning.test.ts src/features/agent-timeline/story-execution.test.ts src/features/agent-timeline/story-comfyui-execution.test.ts src/app/api/agent-timeline/story` passed with 7 files and 44 tests.
+- `npm run typecheck` passed.
+- `npm run lint` passed with 23 existing warnings unrelated to this change.
 
 ### Story Graph Full Real Flow
 

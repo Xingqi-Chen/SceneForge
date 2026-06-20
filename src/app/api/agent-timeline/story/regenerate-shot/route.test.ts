@@ -238,9 +238,14 @@ describe("POST /api/agent-timeline/story/regenerate-shot", () => {
       "first-shot-3",
     ]);
 
-    comfyMocks.adapter.mockImplementation(({ request }: Parameters<StoryShotExecutionAdapter>[0]) =>
-      adapterResult(request.shotId, "regen"),
-    );
+    const calls: Array<{ shotId: string; sourcePromptIds: string[] }> = [];
+    comfyMocks.adapter.mockImplementation(({ request, sourceResults }: Parameters<StoryShotExecutionAdapter>[0]) => {
+      calls.push({
+        shotId: request.shotId,
+        sourcePromptIds: Object.values(sourceResults).map((reference) => reference.promptId),
+      });
+      return adapterResult(request.shotId, "regen");
+    });
 
     const response = await POST(new Request("http://localhost/api/agent-timeline/story/regenerate-shot", {
       method: "POST",
@@ -251,6 +256,10 @@ describe("POST /api/agent-timeline/story/regenerate-shot", () => {
 
     expect(response.status).toBe(200);
     expect(comfyMocks.adapter).toHaveBeenCalledTimes(2);
+    expect(calls).toEqual([
+      { shotId: "shot-1", sourcePromptIds: [] },
+      { shotId: "shot-2", sourcePromptIds: ["regen-shot-1"] },
+    ]);
     expect(nextExecution.shots.map((shot: { resultReference?: { promptId: string } }) => shot.resultReference?.promptId)).toEqual([
       "regen-shot-1",
       "regen-shot-2",

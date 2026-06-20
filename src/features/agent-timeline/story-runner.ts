@@ -1,3 +1,7 @@
+import {
+  createComfyUiClient,
+  readComfyUiKSamplerOptions,
+} from "@/features/comfyui";
 import { createLiteLlmClient } from "@/features/llm";
 
 import {
@@ -18,9 +22,12 @@ import {
   type StoryCompleteChat,
   type StoryNodeAdapters,
 } from "./story-llm-adapters";
+import type { TimelineSamplerOptions } from "./timeline-sampler-options";
 import { storyWorkflowDefinition } from "./story-workflow";
 import type { StoryWorkflowNodeId } from "./story-types";
 import { normalizeCommonWorkflowAdapterResult } from "./workflow-definition";
+
+const STORY_SAMPLER_OPTIONS_TIMEOUT_MS = 2500;
 
 export type RunStoryPlanningRequest = {
   rawIntent: string;
@@ -34,8 +41,10 @@ export type RunStoryPlanningRequest = {
 export type RunStoryPlanningOptions = {
   adapters?: StoryNodeAdapters;
   completeChat?: StoryCompleteChat;
+  loadSamplerOptions?: () => Promise<TimelineSamplerOptions> | TimelineSamplerOptions;
   now?: () => string;
   onWorkflowUpdate?: (workflow: StoryWorkflowState, nodeId: StoryWorkflowNodeId) => void;
+  samplerOptions?: TimelineSamplerOptions;
 };
 
 function defaultNow() {
@@ -50,6 +59,29 @@ export function createDefaultStoryCompleteChat(): StoryCompleteChat {
   });
 
   return client.completeChat;
+}
+
+export async function loadStorySamplerOptionsFromComfyUi(): Promise<TimelineSamplerOptions> {
+  try {
+    const client = createComfyUiClient({
+      baseUrl: process.env.COMFYUI_BASE_URL ?? "http://127.0.0.1:8188",
+      apiKey: process.env.COMFYUI_API_KEY || undefined,
+      fetcher: (input, init) =>
+        fetch(input, {
+          ...init,
+          signal: AbortSignal.timeout(STORY_SAMPLER_OPTIONS_TIMEOUT_MS),
+        }),
+    });
+    const objectInfo = await client.getObjectInfo();
+
+    return readComfyUiKSamplerOptions(objectInfo);
+  } catch (error) {
+    console.warn("[SceneForge] [agent-timeline] failed to load Story KSampler options; using defaults", { error });
+    return {
+      samplers: [],
+      schedulers: [],
+    };
+  }
 }
 
 function createInitialStoryPlanningWorkflow({
@@ -96,9 +128,12 @@ export async function runStoryPlanning(
 ): Promise<StoryWorkflowState> {
   const now = options.now ?? defaultNow;
   let workflow = createInitialStoryPlanningWorkflow({ now, request });
+  const samplerOptions = options.samplerOptions
+    ?? (options.loadSamplerOptions ? await options.loadSamplerOptions() : undefined);
   const adapters = options.adapters ?? createStoryLlmNodeAdapters({
     completeChat: options.completeChat ?? createDefaultStoryCompleteChat(),
     now,
+    samplerOptions,
   });
   let progressed = true;
 

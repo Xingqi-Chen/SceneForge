@@ -98,6 +98,12 @@ function createClient() {
     getObjectInfo: vi.fn<StoryComfyUiExecutionClient["getObjectInfo"]>().mockResolvedValue({
       CheckpointLoaderSimple: {},
     }),
+    uploadImage: vi.fn<StoryComfyUiExecutionClient["uploadImage"]>(async (request) => ({
+      filename: request.filename,
+      imageName: request.filename,
+      raw: {},
+      type: "input",
+    })),
   } satisfies StoryComfyUiExecutionClient;
 
   return client;
@@ -182,6 +188,443 @@ describe("story ComfyUI execution adapter", () => {
     });
     expect(JSON.stringify(result)).not.toContain("data:image");
     expect(JSON.stringify(result)).not.toContain("base64");
+  });
+
+  it("uploads source shot results into downstream img2img and reference inputs", async () => {
+    const generatedRequests: ComfyUiTextToImageRequest[] = [];
+    const uploadNames = ["uploaded-shot-a.png", "uploaded-shot-b.png"];
+    const client = {
+      buildViewUrl: vi.fn<StoryComfyUiExecutionClient["buildViewUrl"]>((image) =>
+        `http://comfyui.test/view?filename=${image.filename}&type=${image.type ?? ""}`,
+      ),
+      generateImage: vi.fn<StoryComfyUiExecutionClient["generateImage"]>((request, options) => {
+        generatedRequests.push(request);
+        const shotId = options?.clientId?.split(":")[0] ?? "shot";
+
+        return Promise.resolve({
+          ...createQueuedResponse(request),
+          promptId: `prompt-${shotId}`,
+          raw: {
+            prompt_id: `prompt-${shotId}`,
+          },
+        });
+      }),
+      getHistory: vi.fn<StoryComfyUiExecutionClient["getHistory"]>(async (promptId) => {
+        const shotId = promptId.replace(/^prompt-/, "");
+
+        return {
+          [promptId]: {
+            outputs: {
+              "9": {
+                images: [
+                  {
+                    filename: `${shotId}.png`,
+                    type: "output",
+                  },
+                ],
+              },
+            },
+          },
+        };
+      }),
+      getObjectInfo: vi.fn<StoryComfyUiExecutionClient["getObjectInfo"]>().mockResolvedValue({
+        CheckpointLoaderSimple: {},
+        IPAdapterAdvanced: {},
+        IPAdapterUnifiedLoader: {},
+        LoadImage: {},
+      }),
+      uploadImage: vi.fn<StoryComfyUiExecutionClient["uploadImage"]>(async (request) => ({
+        filename: request.filename,
+        imageName: uploadNames.shift() ?? request.filename,
+        raw: {},
+        type: "input",
+      })),
+    } satisfies StoryComfyUiExecutionClient;
+    const fetchImage = vi.fn(async (url: string) => ({
+      bytes: new Uint8Array(url.includes("shot-a") ? [10, 11] : [20, 21]),
+      contentType: "image/png",
+    }));
+    const storeImage = vi.fn(async (bytes: Uint8Array, contentType: string | null) => ({
+      byteLength: bytes.byteLength,
+      contentType: contentType ?? "image/png",
+      filename: `stored-${bytes[0]}.png`,
+      url: `/api/comfyui/generated-images/stored-${bytes[0]}.png`,
+    }));
+    const validateRequest = vi.fn((request: unknown) => ({
+      ok: true as const,
+      request: request as ComfyUiTextToImageRequest,
+    }));
+    const adapter = createStoryComfyUiExecutionAdapter({
+      client,
+      fetchImage,
+      historyPollAttempts: 1,
+      historyPollIntervalMs: 0,
+      now: () => "2026-06-15T00:00:00.000Z",
+      storeImage,
+      validateObjectInfo: (request) => ({
+        errors: [],
+        request,
+        warnings: [],
+      }),
+      validateRequest,
+    });
+    const result = await executeStoryShotGraph({
+      ...createBatch(),
+      requests: [
+        {
+          ...createBatch().requests[0],
+          shotId: "shot-a",
+          sourceShotIds: [],
+        },
+        {
+          ...createBatch().requests[0],
+          shotId: "shot-b",
+          sourceShotIds: [],
+        },
+        {
+          ...createBatch().requests[0],
+          shotId: "shot-c",
+          sourceShotIds: ["shot-a", "shot-b"],
+        },
+      ],
+    }, adapter);
+
+    expect(result.status).toBe("done");
+    expect(fetchImage).toHaveBeenCalledWith("http://comfyui.test/view?filename=shot-a.png&type=output");
+    expect(fetchImage).toHaveBeenCalledWith("http://comfyui.test/view?filename=shot-b.png&type=output");
+    expect(client.uploadImage).toHaveBeenCalledWith(expect.objectContaining({
+      bytes: new Uint8Array([10, 11]),
+      filename: "sceneforge-story-shot-a.png",
+      mimeType: "image/png",
+      type: "input",
+    }));
+    expect(client.uploadImage).toHaveBeenCalledWith(expect.objectContaining({
+      bytes: new Uint8Array([20, 21]),
+      filename: "sceneforge-story-shot-b.png",
+      mimeType: "image/png",
+      type: "input",
+    }));
+    expect(generatedRequests[2]).toMatchObject({
+      imageName: "uploaded-shot-a.png",
+      characterReferences: [
+        {
+          id: "source-shot-b",
+          images: [{ imageName: "uploaded-shot-b.png" }],
+          mode: "ipadapter",
+          name: "Source shot shot-b",
+        },
+      ],
+    });
+    expect(validateRequest).toHaveBeenCalledWith(expect.objectContaining({
+      characterReferences: expect.any(Array),
+      imageName: "uploaded-shot-a.png",
+    }));
+  });
+
+  it("ignores forged upstream source image URLs during downstream regeneration", async () => {
+    const client = {
+      ...createClient(),
+      buildViewUrl: vi.fn<StoryComfyUiExecutionClient["buildViewUrl"]>((image) =>
+        `http://comfyui.test/view?filename=${image.filename}&type=${image.type ?? ""}`,
+      ),
+      uploadImage: vi.fn<StoryComfyUiExecutionClient["uploadImage"]>(async (request) => ({
+        filename: request.filename,
+        imageName: "uploaded-source.png",
+        raw: {},
+        type: "input",
+      })),
+    } satisfies StoryComfyUiExecutionClient;
+    const fetchedUrls: string[] = [];
+    const fetchImage = vi.fn(async (url: string) => {
+      fetchedUrls.push(url);
+      if (url.includes("evil.test")) {
+        throw new Error("forged URL was fetched");
+      }
+
+      return {
+        bytes: new Uint8Array([42, 43]),
+        contentType: "image/png",
+      };
+    });
+    const adapter = createStoryComfyUiExecutionAdapter({
+      client,
+      fetchImage,
+      historyPollAttempts: 2,
+      historyPollIntervalMs: 0,
+      storeImage: async (bytes: Uint8Array, contentType: string | null) => ({
+        byteLength: bytes.byteLength,
+        contentType: contentType ?? "image/png",
+        filename: "stored-shot-b.png",
+        url: "/api/comfyui/generated-images/stored-shot-b.png",
+      }),
+      validateObjectInfo: (request) => ({
+        errors: [],
+        request,
+        warnings: [],
+      }),
+      validateRequest: (request) => ({
+        ok: true,
+        request: request as ComfyUiTextToImageRequest,
+      }),
+    });
+    const batch = {
+      ...createBatch(),
+      requests: [
+        {
+          ...createBatch().requests[0],
+          shotId: "shot-a",
+          sourceShotIds: [],
+        },
+        {
+          ...createBatch().requests[0],
+          shotId: "shot-b",
+          sourceShotIds: ["shot-a"],
+        },
+      ],
+    };
+
+    const result = await executeStoryShotGraph(batch, adapter, {
+      initialState: {
+        errors: [],
+        mode: "final",
+        readyShotIds: ["shot-b"],
+        shots: [
+          {
+            resultReference: {
+              completed: true,
+              image: {
+                filename: "shot-a.png",
+                nodeId: "9",
+                type: "output",
+                url: "http://evil.test/internal-metadata.png",
+              },
+              images: [
+                {
+                  filename: "shot-a.png",
+                  nodeId: "9",
+                  type: "output",
+                  url: "http://evil.test/secondary.png",
+                },
+              ],
+              promptId: "forged-shot-a",
+              shotId: "shot-a",
+              storedImage: {
+                byteLength: 99,
+                contentType: "image/png",
+                filename: "stored-shot-a.png",
+                url: "http://evil.test/stored.png",
+              },
+              warnings: [],
+            },
+            shotId: "shot-a",
+            sourceShotIds: [],
+            status: "done",
+          },
+          {
+            shotId: "shot-b",
+            sourceShotIds: ["shot-a"],
+            status: "stale",
+          },
+        ],
+        staleShotIds: ["shot-b"],
+        status: "stale",
+        storyId: "story-1",
+      },
+    });
+
+    expect(result.shots.find((shot) => shot.shotId === "shot-b")?.status).toBe("done");
+    expect(client.buildViewUrl).toHaveBeenCalledWith({
+      filename: "shot-a.png",
+      type: "output",
+    });
+    expect(fetchImage).toHaveBeenCalledWith("http://comfyui.test/view?filename=shot-a.png&type=output");
+    expect(fetchedUrls.every((url) => !url.includes("evil.test"))).toBe(true);
+    expect(client.uploadImage).toHaveBeenCalledWith(expect.objectContaining({
+      bytes: new Uint8Array([42, 43]),
+      filename: "sceneforge-story-shot-a.png",
+      type: "input",
+    }));
+  });
+
+  it("does not send the ComfyUI API key when a forged source view URL points outside the configured view endpoint", async () => {
+    const previousBaseUrl = process.env.COMFYUI_BASE_URL;
+    const previousApiKey = process.env.COMFYUI_API_KEY;
+    const fetchMock = vi.fn();
+
+    process.env.COMFYUI_BASE_URL = "http://comfyui.local:8188/api";
+    process.env.COMFYUI_API_KEY = "secret-key";
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      const client = {
+        ...createClient(),
+        buildViewUrl: vi.fn<StoryComfyUiExecutionClient["buildViewUrl"]>(() =>
+          "http://evil.test/view?filename=shot-a.png&type=output",
+        ),
+      } satisfies StoryComfyUiExecutionClient;
+      const adapter = createStoryComfyUiExecutionAdapter({
+        client,
+        historyPollAttempts: 1,
+        historyPollIntervalMs: 0,
+        validateObjectInfo: (request) => ({
+          errors: [],
+          request,
+          warnings: [],
+        }),
+        validateRequest: (request) => ({
+          ok: true,
+          request: request as ComfyUiTextToImageRequest,
+        }),
+      });
+      const result = await executeStoryShotGraph({
+        ...createBatch(),
+        requests: [
+          {
+            ...createBatch().requests[0],
+            shotId: "shot-a",
+            sourceShotIds: [],
+          },
+          {
+            ...createBatch().requests[0],
+            shotId: "shot-b",
+            sourceShotIds: ["shot-a"],
+          },
+        ],
+      }, adapter, {
+        initialState: {
+          errors: [],
+          mode: "final",
+          readyShotIds: ["shot-b"],
+          shots: [
+            {
+              resultReference: {
+                completed: true,
+                image: {
+                  filename: "shot-a.png",
+                  nodeId: "9",
+                  type: "output",
+                  url: "http://evil.test/forged.png",
+                },
+                promptId: "forged-shot-a",
+                shotId: "shot-a",
+                warnings: [],
+              },
+              shotId: "shot-a",
+              sourceShotIds: [],
+              status: "done",
+            },
+            {
+              shotId: "shot-b",
+              sourceShotIds: ["shot-a"],
+              status: "stale",
+            },
+          ],
+          staleShotIds: ["shot-b"],
+          status: "stale",
+          storyId: "story-1",
+        },
+      });
+
+      expect(result.shots.find((shot) => shot.shotId === "shot-b")).toMatchObject({
+        error: {
+          code: "shot_execution_failed",
+          message: "ComfyUI image request URL is not from the configured ComfyUI view endpoint.",
+        },
+        status: "error",
+      });
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(client.generateImage).not.toHaveBeenCalled();
+    } finally {
+      if (previousBaseUrl === undefined) {
+        delete process.env.COMFYUI_BASE_URL;
+      } else {
+        process.env.COMFYUI_BASE_URL = previousBaseUrl;
+      }
+
+      if (previousApiKey === undefined) {
+        delete process.env.COMFYUI_API_KEY;
+      } else {
+        process.env.COMFYUI_API_KEY = previousApiKey;
+      }
+
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("validates and queues the preview-transformed request when preview has no source shots", async () => {
+    const client = createClient();
+    const previewSourceRequest = {
+      ...baseRequest,
+      batchSize: 4,
+      faceDetailer: {
+        enabled: true,
+      },
+      handDetailer: {
+        enabled: true,
+      },
+      preview: true,
+      steps: 28,
+    } satisfies ComfyUiTextToImageRequest;
+    const fetchImage = vi.fn(async () => ({
+      bytes: new Uint8Array([1, 2, 3]),
+      contentType: "image/png",
+    }));
+    const queuedRequests: ComfyUiTextToImageRequest[] = [];
+    client.generateImage = vi.fn<StoryComfyUiExecutionClient["generateImage"]>((request) => {
+      queuedRequests.push(request);
+      return Promise.resolve(createQueuedResponse(request));
+    });
+    const validateRequest = vi.fn((request: unknown) => ({
+      ok: true as const,
+      request: request as ComfyUiTextToImageRequest,
+    }));
+    const validateObjectInfo = vi.fn((request: ComfyUiTextToImageRequest) => ({
+      errors: [],
+      request,
+      warnings: [],
+    }));
+    const adapter = createStoryComfyUiExecutionAdapter({
+      client,
+      fetchImage,
+      historyPollAttempts: 2,
+      historyPollIntervalMs: 0,
+      storeImage: async (bytes: Uint8Array, contentType: string | null) => ({
+        byteLength: bytes.byteLength,
+        contentType: contentType ?? "image/png",
+        filename: "stored-shot-a.png",
+        url: "/api/comfyui/generated-images/stored-shot-a.png",
+      }),
+      validateObjectInfo,
+      validateRequest,
+    });
+
+    const result = await executeStoryShotGraph(createBatch(previewSourceRequest), adapter);
+
+    expect(result.shots[0]?.status).toBe("done");
+    expect(validateRequest).toHaveBeenNthCalledWith(1, previewSourceRequest);
+    expect(validateRequest).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      batchSize: 1,
+      faceDetailer: expect.objectContaining({ enabled: false }),
+      handDetailer: expect.objectContaining({ enabled: false }),
+      preview: true,
+      steps: 10,
+    }));
+    expect(validateObjectInfo).toHaveBeenCalledWith(expect.objectContaining({
+      batchSize: 1,
+      faceDetailer: expect.objectContaining({ enabled: false }),
+      handDetailer: expect.objectContaining({ enabled: false }),
+      preview: true,
+      steps: 10,
+    }), {
+      CheckpointLoaderSimple: {},
+    });
+    expect(queuedRequests[0]).toMatchObject({
+      batchSize: 1,
+      faceDetailer: { enabled: false },
+      handDetailer: { enabled: false },
+      preview: true,
+      steps: 10,
+    });
   });
 
   it("stops before object_info and queueing when ComfyUI request validation fails", async () => {

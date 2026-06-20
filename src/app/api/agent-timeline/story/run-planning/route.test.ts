@@ -3,6 +3,7 @@ import { describe, expect, it, vi, afterEach } from "vitest";
 const runStoryPlanningMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@/features/agent-timeline/story-runner", () => ({
+  loadStorySamplerOptionsFromComfyUi: vi.fn(),
   runStoryPlanning: runStoryPlanningMock,
 }));
 
@@ -43,17 +44,22 @@ describe("POST /api/agent-timeline/story/run-planning", () => {
 
     expect(response.status).toBe(200);
     expect(payload.workflow.workflowMode).toBe("story-graph");
-    expect(runStoryPlanningMock).toHaveBeenCalledWith({
-      rawIntent: "A courier follows a signal.",
-      targetShotCount: 3,
-      nsfwEnabled: false,
-      settingsSnapshot: {
-        resourceCandidates: {
-          checkpoints: [{ id: "checkpoint-local", name: "Local", modelFileName: "local.safetensors" }],
-          loras: [],
+    expect(runStoryPlanningMock).toHaveBeenCalledWith(
+      {
+        rawIntent: "A courier follows a signal.",
+        targetShotCount: 3,
+        nsfwEnabled: false,
+        settingsSnapshot: {
+          resourceCandidates: {
+            checkpoints: [{ id: "checkpoint-local", name: "Local", modelFileName: "local.safetensors" }],
+            loras: [],
+          },
         },
       },
-    });
+      expect.objectContaining({
+        loadSamplerOptions: expect.any(Function),
+      }),
+    );
   });
 
   it("returns bad request for invalid input and server failure for planner errors", async () => {
@@ -145,6 +151,7 @@ describe("POST /api/agent-timeline/story/run-planning", () => {
         workflowId: "story-workflow-1",
       },
       expect.objectContaining({
+        loadSamplerOptions: expect.any(Function),
         onWorkflowUpdate: expect.any(Function),
       }),
     );

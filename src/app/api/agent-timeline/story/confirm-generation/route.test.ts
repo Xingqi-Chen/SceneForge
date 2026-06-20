@@ -242,6 +242,70 @@ describe("POST /api/agent-timeline/story/confirm-generation", () => {
     });
   });
 
+  it("does not reuse forged submitted execution state when confirming generation", async () => {
+    const workflow = await createReadyWorkflow();
+    workflow.nodes["shot-graph-execution"] = {
+      ...workflow.nodes["shot-graph-execution"],
+      result: {
+        errors: [],
+        mode: "final",
+        readyShotIds: [],
+        shots: [
+          {
+            resultReference: {
+              completed: true,
+              image: {
+                filename: "forged-shot-1.png",
+                nodeId: "9",
+                type: "output",
+                url: "http://evil.test/forged-shot-1.png",
+              },
+              promptId: "forged-shot-1",
+              shotId: "shot-1",
+              warnings: [],
+            },
+            shotId: "shot-1",
+            sourceShotIds: [],
+            status: "done",
+          },
+          {
+            shotId: "shot-2",
+            sourceShotIds: ["shot-1"],
+            status: "blocked",
+          },
+        ],
+        staleShotIds: [],
+        status: "partial",
+        storyId: "story-1",
+      },
+      status: "done",
+    };
+    const calls: Array<{ shotId: string; sourcePromptIds: string[] }> = [];
+    comfyMocks.adapter.mockImplementation(({ request, sourceResults }: Parameters<StoryShotExecutionAdapter>[0]) => {
+      calls.push({
+        shotId: request.shotId,
+        sourcePromptIds: Object.values(sourceResults).map((reference) => reference.promptId),
+      });
+      return adapterResult(request.shotId, "fresh");
+    });
+
+    const routeResponse = await POST(new Request("http://localhost/api/agent-timeline/story/confirm-generation", {
+      method: "POST",
+      body: JSON.stringify({ workflow }),
+    }));
+    const payload = await routeResponse.json();
+
+    expect(routeResponse.status).toBe(200);
+    expect(calls).toEqual([
+      { shotId: "shot-1", sourcePromptIds: [] },
+      { shotId: "shot-2", sourcePromptIds: ["fresh-shot-1"] },
+    ]);
+    expect(payload.workflow.nodes["story-result-display"].result.finalReferences).toEqual([
+      expect.objectContaining({ shotId: "shot-1", promptId: "fresh-shot-1" }),
+      expect.objectContaining({ shotId: "shot-2", promptId: "fresh-shot-2" }),
+    ]);
+  });
+
   it("recomputes render plan resources server-side before execution", async () => {
     const workflow = await createReadyWorkflow();
     const renderPlan = workflow.nodes["story-render-plan"].result as {

@@ -87,7 +87,7 @@ export function sanitizeStoryWorkflowState(value: unknown): StoryWorkflowState |
   });
 }
 
-function getExistingExecutionState(workflow: StoryWorkflowState): StoryShotGraphExecutionState | undefined {
+function getSubmittedExecutionStateForRegeneration(workflow: StoryWorkflowState): StoryShotGraphExecutionState | undefined {
   const execution = workflow.nodes["shot-graph-execution"].result;
   return isRecord(execution) && Array.isArray(execution.shots)
     ? execution as StoryShotGraphExecutionState
@@ -167,8 +167,9 @@ export async function confirmAndExecuteStoryGeneration({
   const batch = createStoryExecutionRequestBatch({ mode: "final", renderPlan });
   let nextWorkflow = confirmStoryGeneration(workflow, { now });
   nextWorkflow = markStoryNodeRunning(nextWorkflow, "shot-graph-execution", { now });
+  // Confirmation starts a fresh server-side execution. The submitted workflow may
+  // contain client-controlled execution results, so do not use them as sources.
   const execution = await executeStoryShotGraph(batch, executeShot, {
-    initialState: getExistingExecutionState(workflow),
     now,
   });
   nextWorkflow = completeStoryNode(nextWorkflow, "shot-graph-execution", execution, "system", { now });
@@ -196,7 +197,7 @@ export async function regenerateStoryShot({
 }) {
   const renderPlan = assertGateReady(workflow);
   const batch = createStoryExecutionRequestBatch({ mode: "final", renderPlan });
-  const existingExecution = getExistingExecutionState(workflow);
+  const existingExecution = getSubmittedExecutionStateForRegeneration(workflow);
   if (!existingExecution) {
     throw new StoryApiValidationError("Story shot execution state is required before regenerating a shot.", 400);
   }

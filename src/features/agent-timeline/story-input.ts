@@ -1,6 +1,7 @@
 import {
   assembleStoryRenderPlan,
   createStoryExecutionRequestBatch,
+  createStoryDefaultGenerationParameters,
   createStoryParameterPlan,
   createStoryResourcePlan,
   type StoryGenerationParameters,
@@ -440,18 +441,10 @@ function createResourcePlan(input: StoryInput): StoryResourcePlan {
   });
 }
 
-function createParameterPlan(input: StoryInput): StoryParameterPlan {
+function createParameterPlan(input: StoryInput, resourcePlan: StoryResourcePlan): StoryParameterPlan {
   return createStoryParameterPlan({
     storyId: input.storyId,
-    defaults: {
-      width: 1024,
-      height: 768,
-      steps: 28,
-      cfg: 5.5,
-      samplerName: "dpmpp_2m",
-      scheduler: "karras",
-      denoise: 1,
-    },
+    defaults: createStoryDefaultGenerationParameters({ resourcePlan }),
     warnings: ["Parameters are planning defaults and remain editable before execution is implemented."],
   });
 }
@@ -516,7 +509,7 @@ export function createStoryPlanningArtifacts(input: StoryInput, timestamp = defa
   const plotStateGraph = createPlotStateGraph(input, outline, shots);
   const characterContinuityGraph = createCharacterContinuityGraph(input, bible, shots);
   const resourcePlan = createResourcePlan(input);
-  const parameterPlan = createParameterPlan(input);
+  const parameterPlan = createParameterPlan(input, resourcePlan);
   const renderPlan = assembleStoryRenderPlan({
     parameterPlan,
     resourcePlan,

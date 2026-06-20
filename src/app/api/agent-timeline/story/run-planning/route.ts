@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import {
+  loadStorySamplerOptionsFromComfyUi,
   runStoryPlanning,
   type RunStoryPlanningRequest,
 } from "@/features/agent-timeline/story-runner";
@@ -60,6 +61,7 @@ function createPlanningStream(planningRequest: RunStoryPlanningRequest) {
     async start(controller) {
       try {
         const workflow = await runStoryPlanning(planningRequest, {
+          loadSamplerOptions: loadStorySamplerOptionsFromComfyUi,
           onWorkflowUpdate: (updatedWorkflow: StoryWorkflowState, nodeId: StoryWorkflowNodeId) => {
             controller.enqueue(encode({
               nodeId,
@@ -113,7 +115,9 @@ export async function POST(request: Request) {
   }
 
   try {
-    const workflow = await runStoryPlanning(planningRequest);
+    const workflow = await runStoryPlanning(planningRequest, {
+      loadSamplerOptions: loadStorySamplerOptionsFromComfyUi,
+    });
 
     return NextResponse.json({
       workflow,

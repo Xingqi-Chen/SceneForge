@@ -4,6 +4,7 @@ import { LiteLlmError, type LlmChatResponse } from "@/features/llm";
 
 import {
   createStoryLlmNodeAdapters,
+  normalizeStoryParameterPlan,
   normalizeShotDependencyGraph,
   normalizeStoryBible,
   normalizeStoryResourcePlan,
@@ -13,6 +14,7 @@ import { createStoryWorkflowState } from "./story-state";
 import {
   TimelineNodeExecutionError,
 } from "./types";
+import type { StoryParameterPlan } from "./story-planning";
 import type {
   StoryInput,
   StoryShot,
@@ -231,6 +233,242 @@ describe("story LLM adapters", () => {
     expect(plan.loras[0]?.resource).toMatchObject({
       id: "lora-local",
       modelFileName: "local-lora.safetensors",
+    });
+  });
+
+  it("constrains parameter planning to live sampler and scheduler options", async () => {
+    const workflow = createStoryWorkflowState({ storyId: "story-1", workflowId: "workflow-1" });
+    workflow.nodes["story-input"] = {
+      nodeId: "story-input",
+      result: input,
+      source: "manual",
+      status: "manual",
+      updatedAt: workflow.updatedAt,
+    };
+    workflow.nodes["storyboard-shots"] = {
+      nodeId: "storyboard-shots",
+      result: shots,
+      source: "ai",
+      status: "done",
+      updatedAt: workflow.updatedAt,
+    };
+    workflow.nodes["resource-plan"] = {
+      nodeId: "resource-plan",
+      result: normalizeStoryResourcePlan(
+        {
+          checkpoint: { resource: { id: "checkpoint-local" }, reason: "Local checkpoint." },
+          loras: [],
+          recommendationReason: "Use real resources.",
+          overallEffect: "Neon continuity.",
+          warnings: [],
+        },
+        input,
+      ),
+      source: "ai",
+      status: "done",
+      updatedAt: workflow.updatedAt,
+    };
+    let requestPayload: unknown;
+    const adapters = createStoryLlmNodeAdapters({
+      completeChat: async (request) => {
+        const content = request.messages[1]?.content;
+        requestPayload = typeof content === "string" ? JSON.parse(content) : {};
+        return chatResponse(JSON.stringify({
+          defaults: {
+            width: 1024,
+            height: 768,
+            steps: 28,
+            cfg: 5.5,
+            samplerName: "dpmpp_2m",
+            scheduler: "karras",
+            denoise: 1,
+          },
+          perShotOverrides: [],
+          warnings: [],
+        }));
+      },
+      samplerOptions: {
+        samplers: ["uni_pc"],
+        schedulers: ["sgm_uniform"],
+      },
+    });
+
+    const result = await adapters["parameter-plan"]?.({
+      nodeId: "parameter-plan",
+      workflow,
+      dependencies: [workflow.nodes["resource-plan"], workflow.nodes["storyboard-shots"]],
+    });
+    const parameterPlan = (result as { value: StoryParameterPlan } | undefined)?.value;
+
+    expect(requestPayload).toMatchObject({
+      availableSamplers: ["uni_pc"],
+      availableSchedulers: ["sgm_uniform"],
+    });
+    expect(parameterPlan).toMatchObject({
+      defaults: {
+        samplerName: "uni_pc",
+        scheduler: "sgm_uniform",
+      },
+    });
+  });
+
+  it("passes model-family sampler defaults into the parameter-plan LLM prompt", async () => {
+    const animaInput = {
+      ...input,
+      settingsSnapshot: {
+        resourceCandidates: {
+          checkpoints: [
+            {
+              id: "checkpoint-anima",
+              name: "Anima Checkpoint",
+              baseModel: "Anima",
+              modelBaseModel: "Anima",
+              modelFileName: "anima.safetensors",
+            },
+          ],
+          loras: [],
+        },
+      },
+    } satisfies StoryInput;
+    const workflow = createStoryWorkflowState({ storyId: "story-1", workflowId: "workflow-1" });
+    workflow.nodes["story-input"] = {
+      nodeId: "story-input",
+      result: animaInput,
+      source: "manual",
+      status: "manual",
+      updatedAt: workflow.updatedAt,
+    };
+    workflow.nodes["storyboard-shots"] = {
+      nodeId: "storyboard-shots",
+      result: shots,
+      source: "ai",
+      status: "done",
+      updatedAt: workflow.updatedAt,
+    };
+    workflow.nodes["resource-plan"] = {
+      nodeId: "resource-plan",
+      result: normalizeStoryResourcePlan(
+        {
+          checkpoint: { resource: { id: "checkpoint-anima" }, reason: "Local Anima checkpoint." },
+          loras: [],
+          recommendationReason: "Use real resources.",
+          overallEffect: "Anime continuity.",
+          warnings: [],
+        },
+        animaInput,
+      ),
+      source: "ai",
+      status: "done",
+      updatedAt: workflow.updatedAt,
+    };
+    let requestPayload: unknown;
+    const adapters = createStoryLlmNodeAdapters({
+      completeChat: async (request) => {
+        const content = request.messages[1]?.content;
+        requestPayload = typeof content === "string" ? JSON.parse(content) : {};
+        return chatResponse(JSON.stringify({
+          defaults: {},
+          perShotOverrides: [],
+          warnings: [],
+        }));
+      },
+      samplerOptions: {
+        samplers: ["euler", "dpmpp_2m"],
+        schedulers: ["normal", "karras"],
+      },
+    });
+
+    const result = await adapters["parameter-plan"]?.({
+      nodeId: "parameter-plan",
+      workflow,
+      dependencies: [workflow.nodes["resource-plan"], workflow.nodes["storyboard-shots"]],
+    });
+    const parameterPlan = (result as { value: StoryParameterPlan } | undefined)?.value;
+
+    expect(requestPayload).toMatchObject({
+      modelDefaultParameters: {
+        samplerName: "euler",
+        scheduler: "normal",
+      },
+    });
+    expect(parameterPlan?.defaults).toMatchObject({
+      samplerName: "euler",
+      scheduler: "normal",
+    });
+  });
+
+  it("normalizes raw parameter plans to supplied sampler and scheduler options", () => {
+    const plan = normalizeStoryParameterPlan(
+      {
+        defaults: {
+          width: 1024,
+          height: 768,
+          steps: 28,
+          cfg: 5.5,
+          samplerName: "invented_sampler",
+          scheduler: "invented_scheduler",
+          denoise: 1,
+        },
+        perShotOverrides: [],
+        warnings: [],
+      },
+      input,
+      shots,
+      {
+        samplers: ["uni_pc"],
+        schedulers: ["sgm_uniform"],
+      },
+    );
+
+    expect(plan.defaults).toMatchObject({
+      samplerName: "uni_pc",
+      scheduler: "sgm_uniform",
+    });
+  });
+
+  it("normalizes raw per-shot override numbers before render planning uses toFixed", () => {
+    const plan = normalizeStoryParameterPlan(
+      {
+        defaults: {
+          width: 1024,
+          height: 768,
+          steps: 28,
+          cfg: 5.5,
+          samplerName: "dpmpp_2m",
+          scheduler: "karras",
+          denoise: 1,
+        },
+        perShotOverrides: [
+          {
+            shotId: "shot-2",
+            parameters: {
+              cfg: "6",
+              denoise: "0.7",
+              steps: "12",
+            },
+          },
+          {
+            shotId: "shot-1",
+            parameters: {
+              cfg: "bad",
+              denoise: "bad",
+            },
+          },
+        ],
+        warnings: [],
+      },
+      input,
+      shots,
+    );
+
+    expect(plan.perShotOverrides[0]?.parameters).toMatchObject({
+      cfg: 6,
+      denoise: 0.7,
+      steps: 12,
+    });
+    expect(plan.perShotOverrides[1]?.parameters).toMatchObject({
+      cfg: 5.5,
+      denoise: 1,
     });
   });
 
