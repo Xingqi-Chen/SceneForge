@@ -45,6 +45,10 @@ export async function POST(request: Request) {
     return errorResponse("A valid timeline workflow is required.", 400);
   }
 
+  if (workflow.workflowMode !== "single-image") {
+    return errorResponse("Single-image generation requires a single-image timeline workflow.", 400);
+  }
+
   if (!areTimelineNodeDependenciesSatisfied(workflow, "generation-gate")) {
     return errorResponse("Generation cannot be confirmed until all gate dependencies are complete.", 400, {
       dependencies: getTimelineNodeDependencies("generation-gate").map((nodeId) => ({

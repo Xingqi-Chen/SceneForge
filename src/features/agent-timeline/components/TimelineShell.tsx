@@ -124,6 +124,7 @@ import type {
   TimelineWorkflowRecord,
   TimelineWorkflowRecordInput,
 } from "@/features/agent-timeline/timeline-workflow-persistence";
+import { isSingleImageTimelineWorkflowRecord } from "@/features/agent-timeline/timeline-workflow-persistence";
 import type { CharacterPromptTagTarget } from "@/features/prompt-engine/prompt-library/character-image-prompt-tags";
 import {
   defaultSceneForgeUserSettings,
@@ -1461,6 +1462,12 @@ export function TimelineShell() {
   }
 
   function applyTimelineWorkflowRecord(record: TimelineWorkflowRecord, message: string, options: { saveActive?: boolean } = {}) {
+    if (!isSingleImageTimelineWorkflowRecord(record)) {
+      setAutosaveStatus("idle");
+      setAutosaveMessage("Story Graph workflow records open from the Story page.");
+      return;
+    }
+
     const restoredImageCount = normalizeTimelineImageCount(record.selectedImageCount);
     const projectId = record.projectId ?? null;
     const projectName = record.name ?? "";
@@ -2869,6 +2876,7 @@ export function TimelineShell() {
               onDeleteCurrentProject={handleCurrentNamedWorkflowDeleted}
               onRecordOpened={handleNamedWorkflowOpened}
               onRecordSaved={handleNamedWorkflowSaved}
+              workflowMode="single-image"
             />
             <span
               className={cn(
@@ -3021,6 +3029,7 @@ export function TimelineShell() {
             onDeleteCurrentProject={handleCurrentNamedWorkflowDeleted}
             onRecordOpened={handleNamedWorkflowOpened}
             onRecordSaved={handleNamedWorkflowSaved}
+            workflowMode="single-image"
           />
           <span
             className={cn(

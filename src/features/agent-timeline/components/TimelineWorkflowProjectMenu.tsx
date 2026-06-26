@@ -35,6 +35,7 @@ type TimelineWorkflowProjectMenuProps = {
   onDeleteCurrentProject: () => void;
   onRecordOpened: (record: TimelineWorkflowRecord) => void;
   onRecordSaved: (record: TimelineWorkflowRecord) => void;
+  workflowMode?: TimelineWorkflowSummary["workflowMode"];
 };
 
 export function TimelineWorkflowProjectMenu({
@@ -45,6 +46,7 @@ export function TimelineWorkflowProjectMenu({
   onDeleteCurrentProject,
   onRecordOpened,
   onRecordSaved,
+  workflowMode,
 }: TimelineWorkflowProjectMenuProps) {
   const [open, setOpen] = useState(false);
   const [nameDraft, setNameDraft] = useState(currentProjectName);
@@ -61,14 +63,15 @@ export function TimelineWorkflowProjectMenu({
     setListError(null);
     setLoadingList(true);
     try {
-      setSummaries(await listTimelineWorkflowSummaries());
+      const listed = await listTimelineWorkflowSummaries();
+      setSummaries(workflowMode ? listed.filter((summary) => summary.workflowMode === workflowMode) : listed);
     } catch (error) {
       console.warn("[SceneForge] [timeline] failed to list workflow projects", { error });
       setListError(error instanceof Error ? error.message : "Unable to list timeline workflows.");
     } finally {
       setLoadingList(false);
     }
-  }, []);
+  }, [workflowMode]);
 
   useEffect(() => {
     if (!open) {

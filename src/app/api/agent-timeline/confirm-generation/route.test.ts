@@ -160,4 +160,26 @@ describe("POST /api/agent-timeline/confirm-generation", () => {
       },
     });
   });
+
+  it("rejects Story Graph workflow payloads on the single-image confirmation endpoint", async () => {
+    const response = await POST(new Request("http://localhost/api/agent-timeline/confirm-generation", {
+      body: JSON.stringify({
+        workflow: {
+          workflowId: "story-confirm-route",
+          workflowMode: "story-graph",
+          storyId: "story-confirm-route",
+          createdAt: "2026-06-15T00:00:00.000Z",
+          updatedAt: "2026-06-15T00:00:00.000Z",
+          generationConfirmed: false,
+          nodes: {},
+        },
+      }),
+      method: "POST",
+    }));
+    const payload = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(payload.error.message).toBe("Single-image generation requires a single-image timeline workflow.");
+    expect(comfyUiMocks.createComfyUiClient).not.toHaveBeenCalled();
+  });
 });

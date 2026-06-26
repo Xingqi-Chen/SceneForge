@@ -262,6 +262,7 @@ export async function listNamedTimelineWorkflowSummariesFromDisk(): Promise<Time
         name: getTimelineWorkflowName(record),
         createdAt: record.createdAt,
         updatedAt: record.updatedAt,
+        workflowMode: record.workflow.workflowMode,
       });
     } catch (error) {
       console.warn("[SceneForge] [agent-timeline] skipped unreadable workflow file", { entry, error });

@@ -67,6 +67,7 @@ export async function PUT(request: Request) {
         name: savedRecord.name ?? "",
         createdAt: savedRecord.createdAt,
         updatedAt: savedRecord.updatedAt,
+        workflowMode: savedRecord.workflow.workflowMode,
       },
     });
   } catch (error) {

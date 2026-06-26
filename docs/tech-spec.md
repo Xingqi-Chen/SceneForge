@@ -169,7 +169,7 @@ type TimelineNodeResult<T> = {
 - `src/features/agent-timeline/story-execution.ts` owns Story Graph shot scheduling and scoped regeneration. It uses `StoryExecutionRequestBatch` inputs, exposes per-shot status, queue metadata, result references, and recoverable errors, runs independent source-ready shots together through an injected execution adapter, waits for img2img/source and multi-reference shot results, blocks dependents when sources fail or are unavailable, and marks only selected shots plus downstream dependents stale for regeneration.
 - `src/features/agent-timeline/story-comfyui-execution.ts` owns the server-side Story Graph ComfyUI execution adapter. It reuses existing text-to-image validation, `object_info` compatibility validation, queueing, history polling, ComfyUI view reads, and generated-image storage helpers while keeping the scheduler itself pure and testable.
 - `src/features/agent-timeline/story-state.ts` owns Story Graph runtime mutation helpers for story-scoped and shot-scoped manual edits plus generation confirmation state. It reuses common workflow stale propagation for node dependencies and records downstream shot ids for shot dependency graph edits without staling unrelated shot branches.
-- `src/features/agent-timeline/components/StoryPlanningWorkspace.tsx` owns Story Graph planning workspaces for storyboard shots, story safety, shot dependencies, plot state, character continuity, and story-scoped shared JSON nodes. `src/features/agent-timeline/components/StoryPlanningPreview.tsx` mounts those workspaces at `/story`, exposes only story request and optional shots as start inputs, routes request suggest/rewrite through `/api/llm/chat`, asks `/api/llm/chat` to choose shot count when users leave shots blank, starts an in-memory user-driven Story Graph workflow, keeps static sample content only as a fallback action, and displays the confirmation-gated shot execution state until execution controls are wired.
+- `src/features/agent-timeline/components/StoryPlanningWorkspace.tsx` owns Story Graph planning workspaces for storyboard shots, story safety, shot dependencies, plot state, character continuity, and story-scoped shared JSON nodes. `src/features/agent-timeline/components/StoryPlanningPreview.tsx` mounts those workspaces at `/story`, exposes only story request and optional shots as start inputs, routes request suggest/rewrite through `/api/llm/chat`, asks `/api/llm/chat` to choose shot count when users leave shots blank, starts a user-driven Story Graph workflow, keeps static sample content only as a fallback action, displays confirmation-gated shot execution, and autosaves/restores `story-graph` workflow records through the shared timeline workflow persistence APIs.
 
 ## LLM and AI Node Adapter Rules
 
@@ -205,7 +205,9 @@ The active timeline workflow is autosaved separately from the editor project-man
 
 Named timeline workflow records use the same versioned record shape with optional `projectId` and `name` metadata. They are stored as separate JSON files under `data/timeline-workflows/` and exposed through `/api/agent-timeline/workflows` for list/save plus `/api/agent-timeline/workflows/item?id=...` for open/rename/delete. Named workflow ids must be simple local ids and storage code must reject malformed ids, path traversal, and the reserved `active-workflow` id.
 
-The active record includes workflow id, created/updated timestamps, selected node, display mode, scene request, prompt profile, image count, timeline node statuses, node outputs, node errors, manual/stale state, selected resources, generation parameters, generation gate state, ComfyUI execution metadata when present, result references, and canvas binding state needed to restore the current timeline view.
+The active record includes workflow id, workflow mode, definition version, created/updated timestamps, selected node, display mode, scene request, prompt profile, image count or story shot count, node statuses, node outputs, node errors, manual/stale state, selected resources, generation parameters, generation gate state, execution metadata when present, result references, and canvas binding or story planning state needed to restore the current workflow view.
+
+Story Graph records use the same `sceneforge-timeline-workflow` envelope with `workflow.workflowMode: "story-graph"`. They persist story input, planning artifacts, selected Story node, selected shot id, visual/raw JSON display modes, generation gate state, shot execution statuses, safe queue/history metadata references, preview result references, and final result references. Preview references and final result references must remain separate. Generated image bytes, downloaded model files, cache payloads, logs, SQLite/resource database contents, and secret-like fields are not valid persisted workflow data.
 
 Restore rules:
 
@@ -213,11 +215,12 @@ Restore rules:
 - Page reload should restore the active workflow when the record exists.
 - Autosave should run after meaningful workflow state changes without requiring project list/open/save UI.
 - The Run header should expose saved workflow project management: save the current active workflow, open another saved workflow, rename the current named workflow, refresh the list, and delete saved workflow records.
+- The Story header should expose the same local workflow project management for `story-graph` records while filtering out `single-image` records. The Run header should filter out `story-graph` records.
 - `Save` updates the current named workflow when one is open. If the active workflow is unnamed, `Save` creates a named workflow using the scene request or a timestamp fallback.
 - Deleting the current named workflow must keep the active in-memory and autosaved workflow open as an unnamed draft.
-- Persisted `running` nodes must restore as visible recoverable errors so the UI does not imply that interrupted background work continued reliably.
+- Persisted `running` nodes and `running` or `queued` Story Graph shots must restore as visible recoverable errors so the UI does not imply that interrupted background work continued reliably.
 - Restored generation gate state must not trigger ComfyUI execution without explicit user confirmation unless the record already represents a completed confirmed execution.
-- Persistence must redact secret-like fields and must not store `.env.local` values, API keys, generated cache payloads, downloaded model files, or local logs.
+- Persistence must redact secret-like fields and must not store `.env.local` values, API keys, generated cache payloads, downloaded model files, generated bytes, local resource databases, or local logs.
 
 ## Settings Contract
 

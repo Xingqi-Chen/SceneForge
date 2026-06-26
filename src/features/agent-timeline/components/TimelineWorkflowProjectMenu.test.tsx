@@ -138,6 +138,47 @@ describe("TimelineWorkflowProjectMenu", () => {
     expect(container.textContent).not.toContain("C:\\Users\\Brandon");
   });
 
+  it("filters saved workflows to the requested workflow mode", async () => {
+    storageMocks.listTimelineWorkflowSummaries.mockResolvedValue([
+      {
+        id: "workflow-run",
+        name: "Run workflow",
+        createdAt: "2026-06-05T00:00:00.000Z",
+        updatedAt: "2026-06-05T00:01:00.000Z",
+        workflowMode: "single-image",
+      },
+      {
+        id: "workflow-story",
+        name: "Story workflow",
+        createdAt: "2026-06-15T00:00:00.000Z",
+        updatedAt: "2026-06-15T00:01:00.000Z",
+        workflowMode: "story-graph",
+      },
+    ]);
+
+    act(() => {
+      root.render(
+        <TimelineWorkflowProjectMenu
+          currentProjectId={null}
+          currentProjectName=""
+          getCurrentRecordInput={() => null}
+          onDeleteCurrentProject={vi.fn()}
+          onRecordOpened={vi.fn()}
+          onRecordSaved={vi.fn()}
+          workflowMode="story-graph"
+        />,
+      );
+    });
+
+    act(() => {
+      getButtonByText("Unnamed draft").click();
+    });
+    await flushAsyncWork();
+
+    expect(container.textContent).toContain("Story workflow");
+    expect(container.textContent).not.toContain("Run workflow");
+  });
+
   it("renames the active named workflow and refreshes the saved workflow list", async () => {
     const renamedRecord = createRecord("Renamed workflow");
     const onRecordSaved = vi.fn();
@@ -147,6 +188,7 @@ describe("TimelineWorkflowProjectMenu", () => {
         name: "Renamed workflow",
         createdAt: "2026-06-05T00:00:00.000Z",
         updatedAt: "2026-06-05T00:01:00.000Z",
+        workflowMode: "single-image",
       },
     ]);
     storageMocks.renameTimelineWorkflowRecord.mockResolvedValue(renamedRecord);
