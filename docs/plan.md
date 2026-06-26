@@ -12,7 +12,7 @@ Story Graph planning tracks `T16` through `T22` were added in PR `#60`.
 
 `T20A` / Issue `#77` was added after `T20` to fill the Story Graph input/start-workflow gap. Implement `T20A` before `T21` so shot graph execution has real user-started story workflow state instead of static `/story` sample artifacts.
 
-Story Graph prompt-planning refinements are tracked in follow-up PR `#83`.
+Story Graph prompt-planning refinements were merged in follow-up PR `#83`.
 
 ## Status Values
 
