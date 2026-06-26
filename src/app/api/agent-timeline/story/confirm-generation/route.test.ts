@@ -96,7 +96,7 @@ function planningResponses(shotCount = 2) {
     }),
     response({
       nodes: shots.map((shot) => ({ shotId: shot.id, label: shot.title })),
-      edges: [{ fromShotId: "shot-1", toShotId: "shot-2", reason: "continuity" }],
+      edges: [{ fromShotId: "shot-1", toShotId: "shot-2", reason: "img2img-source" }],
     }),
     response({
       states: shots.map((shot) => ({

@@ -301,12 +301,14 @@ function collectResourceTriggerSections(resources: SelectedCivitaiResourcesPrevi
 
 export function renderAnimaPrompt({
   includeDefaultQualityTags = true,
+  qualityMetaTags = ANIMA_DEFAULT_QUALITY_META_TAGS,
   resources = { checkpoint: null, loras: [] },
   sections = {},
   sourcePrompt,
   supportsNsfw = false,
 }: {
   includeDefaultQualityTags?: boolean;
+  qualityMetaTags?: string[];
   resources?: SelectedCivitaiResourcesPreview;
   sections?: AnimaPromptSections;
   sourcePrompt?: string;
@@ -324,7 +326,7 @@ export function renderAnimaPrompt({
 
   if (includeDefaultQualityTags) {
     merged.qualityMetaSafety = [
-      ...ANIMA_DEFAULT_QUALITY_META_TAGS,
+      ...qualityMetaTags,
       ...(!supportsNsfw && !hasSafeTag(merged.qualityMetaSafety) ? ["safe"] : []),
       ...merged.qualityMetaSafety,
     ];

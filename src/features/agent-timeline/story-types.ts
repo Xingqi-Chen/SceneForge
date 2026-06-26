@@ -36,11 +36,23 @@ export type PlotStateId = string;
 
 export type StoryAudienceRating = "safe" | "suggestive" | "mature" | "explicit";
 
+export type StorySegmentKind = "opening-image" | "beat" | "final-image";
+
+export type StorySegment = {
+  id: string;
+  title: string;
+  sourceText: string;
+  order: number;
+  kind: StorySegmentKind;
+};
+
 export type StoryInput = {
   storyId: StoryId;
   rawIntent: string;
   title?: string;
   targetShotCount?: number;
+  storyContext?: string;
+  storySegments?: StorySegment[];
   audienceRating?: StoryAudienceRating;
   nsfwContext?: StoryNsfwContext;
   settingsSnapshot?: unknown;

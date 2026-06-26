@@ -10,6 +10,9 @@ import {
   parseComfyUiAiGenerationParameters,
   resolveComfyUiGenerationSettings,
 } from "@/features/editor/ai-prompt/comfyui-generation-params";
+import {
+  splitPromptParts,
+} from "@/features/editor/ai-prompt/illustrious-prompt";
 import type { CivitaiAiPromptResult } from "@/features/editor/ai-prompt/civitai-ai-context";
 import {
   type PromptProfileId,
@@ -27,6 +30,7 @@ import type {
   StorySafetyPlan,
   StoryShot,
   StoryShotId,
+  StoryInput,
 } from "./story-types";
 import {
   buildTimelineFinalPositivePrompt,
@@ -125,6 +129,7 @@ export type StoryRenderPlanShot = {
   title: string;
   positivePrompt: string;
   negativePrompt: string;
+  outputAnchors: StoryOutputAnchors;
   sourceShotIds: StoryShotId[];
   parameters: StoryGenerationParameters;
   resources: {
@@ -158,6 +163,15 @@ export type StoryExecutionRequestBatch = {
   requests: StoryExecutionRequest[];
 };
 
+export type StoryOutputAnchors = Record<StoryPromptBucket, string[]> & {
+  negative: string[];
+  source: {
+    mode: "none" | "source-image";
+    sourceShotIds: StoryShotId[];
+    reason: string;
+  };
+};
+
 type StoryResourcePlanError = {
   message: string;
   details?: unknown;
@@ -180,13 +194,23 @@ const defaultPreviewExecutionOptions: StoryPreviewExecutionOptions = {
 };
 const defaultStoryGenerationParameters = {
   width: 1024,
-  height: 768,
+  height: 1024,
   steps: 28,
   cfg: 5.5,
   samplerName: "dpmpp_2m",
   scheduler: "karras",
   denoise: 1,
 } satisfies StoryGenerationParameters;
+const storyAnimaQualityMetaTags = ["masterpiece", "best quality", "score_7"];
+const storySafeMinorNegativeTags = [
+  "nsfw",
+  "sexualized minor",
+  "revealing clothes",
+  "fetishized",
+  "voyeurism",
+  "gore",
+  "severe injury",
+];
 
 function failStoryResourcePlan(message: string, details?: unknown): never {
   throw new StoryResourcePlanValidationError({ message, details });
@@ -198,6 +222,166 @@ function isCompatibleStoryLora(lora: StoryLocalResource, checkpoint: StoryLocalR
 
 function normalizeDimension(value: number) {
   return Math.max(8, Math.round(value / 8) * 8);
+}
+
+function readExplicitDimensions(text: string) {
+  const match = text.match(/\b(\d{3,5})\s*[x×]\s*(\d{3,5})\b/i);
+  if (!match) {
+    return null;
+  }
+
+  return {
+    width: normalizeDimension(Number(match[1])),
+    height: normalizeDimension(Number(match[2])),
+  };
+}
+
+function getStoryDimensionText({
+  input,
+  shots,
+}: {
+  input?: StoryInput;
+  shots?: readonly StoryShot[];
+}) {
+  return [
+    input?.rawIntent,
+    input?.storyContext,
+    ...(input?.storySegments?.flatMap((segment) => [segment.title, segment.sourceText]) ?? []),
+    ...(shots?.flatMap((shot) => [
+      shot.title,
+      shot.description,
+      shot.promptIntent,
+      shot.camera,
+      ...shot.continuityNotes,
+    ]) ?? []),
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLocaleLowerCase();
+}
+
+function getStoryRecommendationDimensionText(recommendation: CivitaiResourceRecommendation) {
+  return [
+    recommendation.condition,
+    recommendation.baseModel,
+    recommendation.checkpoint,
+    recommendation.sampler,
+    recommendation.notes,
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
+function getStoryResourceDimensionText(resourcePlan?: StoryResourcePlan) {
+  if (!resourcePlan) {
+    return "";
+  }
+
+  const resources = [
+    resourcePlan.checkpoint.resource,
+    ...resourcePlan.loras.map((lora) => lora.resource),
+  ];
+
+  return resources.flatMap((resource) => [
+    resource.name,
+    resource.versionName,
+    resource.baseModel,
+    resource.modelBaseModel,
+    resource.modelFileName,
+    ...(resource.modelFileNameAliases ?? []),
+    ...(resource.tags ?? []),
+    ...(resource.categories ?? []),
+    resource.usageGuide,
+    resource.descriptionSnippet,
+    ...(resource.recommendations ?? []).map(getStoryRecommendationDimensionText),
+  ])
+    .filter(Boolean)
+    .join(" ")
+    .toLocaleLowerCase();
+}
+
+function hasSquareAspect(text: string) {
+  return /\b(?:square|1\s*:\s*1)\b/.test(text);
+}
+
+function hasPortraitAspect(text: string) {
+  return /\b(?:portrait|vertical|full body|full-body|phone wallpaper|character sheet|9\s*:\s*16|2\s*:\s*3|3\s*:\s*4)\b/.test(text);
+}
+
+function hasLandscapeAspect(text: string) {
+  return /\b(?:landscape|widescreen|panorama|panoramic|establishing|16\s*:\s*9|3\s*:\s*2|4\s*:\s*3)\b/.test(text) ||
+    /\bwide\b/.test(text) && !/\b(?:medium-wide|medium wide)\b/.test(text);
+}
+
+function hasSoloCharacterFraming(text: string) {
+  return /\b(?:1girl|1boy|solo|single character|only visible character|seated|sitting|chair|medium full|medium-full|medium close|medium-close|close intimate|frontal medium|half body|upper body|bare shoulders)\b/.test(text);
+}
+
+function inferStoryGenerationDimensions({
+  input,
+  resourcePlan,
+  shots,
+}: {
+  input?: StoryInput;
+  resourcePlan?: StoryResourcePlan;
+  shots?: readonly StoryShot[];
+}) {
+  const inputText = getStoryDimensionText({ input });
+  const shotText = getStoryDimensionText({ shots });
+  const resourceText = getStoryResourceDimensionText(resourcePlan);
+  const explicitDimensions =
+    readExplicitDimensions(inputText)
+    ?? readExplicitDimensions(resourceText)
+    ?? readExplicitDimensions(shotText);
+
+  if (explicitDimensions) {
+    return explicitDimensions;
+  }
+
+  if (hasSquareAspect(inputText)) {
+    return { width: 1024, height: 1024 };
+  }
+
+  if (hasPortraitAspect(inputText)) {
+    return { width: 832, height: 1216 };
+  }
+
+  if (hasLandscapeAspect(inputText)) {
+    return { width: 1216, height: 832 };
+  }
+
+  if (hasSquareAspect(resourceText)) {
+    return { width: 1024, height: 1024 };
+  }
+
+  if (hasPortraitAspect(resourceText)) {
+    return { width: 832, height: 1216 };
+  }
+
+  if (hasLandscapeAspect(resourceText)) {
+    return { width: 1216, height: 832 };
+  }
+
+  if (hasSoloCharacterFraming(shotText)) {
+    return { width: 832, height: 1216 };
+  }
+
+  if (hasSquareAspect(shotText)) {
+    return { width: 1024, height: 1024 };
+  }
+
+  if (hasPortraitAspect(shotText)) {
+    return { width: 832, height: 1216 };
+  }
+
+  if (hasLandscapeAspect(shotText)) {
+    return { width: 1216, height: 832 };
+  }
+
+  return {
+    width: defaultStoryGenerationParameters.width,
+    height: defaultStoryGenerationParameters.height,
+  };
 }
 
 function readFiniteNumber(value: unknown, fallback: number) {
@@ -234,25 +418,42 @@ function getStoryModelFamilyText(resourcePlan: StoryResourcePlan) {
 function getModelFamilySamplerDefaults(resourcePlan: StoryResourcePlan) {
   const family = getStoryModelFamilyText(resourcePlan);
 
-  if (/\b(?:anima|anime|flux|qwen|z\s*image|lumina)\b/.test(family)) {
+  if (/\banima\b/.test(family)) {
     return {
+      steps: 36,
+      cfg: 4.5,
+      samplerName: "er_sde",
+      scheduler: "simple",
+    };
+  }
+
+  if (/\b(?:anime|flux|qwen|z\s*image|lumina)\b/.test(family)) {
+    return {
+      steps: defaultStoryGenerationParameters.steps,
+      cfg: defaultStoryGenerationParameters.cfg,
       samplerName: "euler",
       scheduler: "normal",
     };
   }
 
   return {
+    steps: defaultStoryGenerationParameters.steps,
+    cfg: defaultStoryGenerationParameters.cfg,
     samplerName: defaultStoryGenerationParameters.samplerName,
     scheduler: defaultStoryGenerationParameters.scheduler,
   };
 }
 
 export function createStoryDefaultGenerationParameters({
+  input,
   resourcePlan,
   samplerOptions,
+  shots,
 }: {
+  input?: StoryInput;
   resourcePlan: StoryResourcePlan;
   samplerOptions?: TimelineSamplerOptions;
+  shots?: readonly StoryShot[];
 }): StoryGenerationParameters {
   const referenceSampler = getReferenceSampler(resourcePlan.checkpoint.resource)
     ?? resourcePlan.loras.map((lora) => getReferenceSampler(lora.resource)).find(Boolean);
@@ -260,9 +461,14 @@ export function createStoryDefaultGenerationParameters({
     sampler: referenceSampler,
   });
   const familyDefaults = getModelFamilySamplerDefaults(resourcePlan);
+  const dimensionDefaults = inferStoryGenerationDimensions({ input, resourcePlan, shots });
 
   return normalizeParameters({
     ...defaultStoryGenerationParameters,
+    width: dimensionDefaults.width,
+    height: dimensionDefaults.height,
+    steps: familyDefaults.steps,
+    cfg: familyDefaults.cfg,
     samplerName: parsedSampler?.samplerName ?? familyDefaults.samplerName,
     scheduler: parsedSampler?.scheduler ?? familyDefaults.scheduler,
   }, samplerOptions);
@@ -369,18 +575,572 @@ function getNsfwContext(safetyPlan: StorySafetyPlan): StoryNsfwContext {
 }
 
 function getBasePositivePrompt(shot: StoryShot) {
-  return [shot.promptIntent, shot.camera]
-    .map((part) => part.trim())
-    .filter(Boolean)
+  return compactStoryVisualPrompt([
+    shot.promptIntent,
+    shot.description,
+    ...shot.continuityNotes,
+    shot.camera,
+  ]);
+}
+
+function getShotSafetyText(shot: StoryShot) {
+  return [
+    shot.description,
+    shot.promptIntent,
+    ...shot.continuityNotes,
+    ...shot.characterIds,
+  ].join(" ");
+}
+
+function hasMinorSubject(shot: StoryShot, safetyPlan: StorySafetyPlan) {
+  return /\b(?:minor|under\s*18|underage|teen|teenage|child|children|kid|little\s+girl|little\s+boy|schoolgirl|schoolboy)\b/i
+    .test([
+      getShotSafetyText(shot),
+      ...safetyPlan.contentWarnings,
+    ].join(" "));
+}
+
+function hasSexualViolenceStoryRisk(shot: StoryShot, safetyPlan: StorySafetyPlan) {
+  const shotNotes = safetyPlan.perShotNotes
+    .filter((note) => note.shotId === shot.id)
+    .flatMap((note) => [...note.risks, ...note.mitigations]);
+  return /\b(?:non-consensual|nonconsensual|sexual violence|coercion|forced sexual|assault)\b/i
+    .test([
+      getShotSafetyText(shot),
+      ...safetyPlan.contentWarnings,
+      ...shotNotes,
+    ].join(" "));
+}
+
+function allowsAdultIntimateContent(safetyPlan: StorySafetyPlan) {
+  const nsfwEnabled = safetyPlan.nsfwContext?.enabled ?? safetyPlan.audienceRating === "explicit";
+  return nsfwEnabled && /\b(?:nudity|nude|sexualized self-touch|intimate adult|adult intimacy|explicit adult)\b/i
+    .test([
+      safetyPlan.audienceRating,
+      ...safetyPlan.contentWarnings,
+      safetyPlan.nsfwContext?.rationale ?? "",
+    ].join(" "));
+}
+
+function getBaseNegativePrompt(safetyPlan: StorySafetyPlan, shot: StoryShot) {
+  const nsfwEnabled = safetyPlan.nsfwContext?.enabled ?? safetyPlan.audienceRating === "explicit";
+  const minorSubject = hasMinorSubject(shot, safetyPlan);
+  const safeMinor = !nsfwEnabled && minorSubject;
+  const adultNsfwSubject = nsfwEnabled && !minorSubject;
+  const sexualViolenceRisk = hasSexualViolenceStoryRisk(shot, safetyPlan);
+  const adultIntimacyAllowed = allowsAdultIntimateContent(safetyPlan);
+  const normalized = [
+    ...(safeMinor ? storySafeMinorNegativeTags : []),
+    ...safetyPlan.blockedContent.flatMap(normalizeStorySafetyNegativePart),
+  ]
+    .flatMap(normalizeStorySafetyNegativePart)
+    .filter((part, index, parts) => parts.findIndex((candidate) => candidate.toLocaleLowerCase() === part.toLocaleLowerCase()) === index)
+    .filter((part) => !safeMinor || part !== "childlike face")
+    .filter((part) => sexualViolenceRisk || !["non-consensual", "sexual violence", "coercion"].includes(part))
+    .filter((part) => !(adultNsfwSubject && adultIntimacyAllowed && part === "explicit depiction of genitals or nipples"))
+    .slice(0, 14);
+  const order = [
+    "nsfw",
+    "sexualized minor",
+    "age-gap romantic framing",
+    "revealing clothes",
+    "nude",
+    "fetishized",
+    "voyeurism",
+    "non-consensual",
+    "sexual violence",
+    "coercion",
+    "gore",
+    "severe injury",
+    "childlike face",
+  ];
+
+  return [
+    ...order.filter((tag) => normalized.includes(tag)),
+    ...normalized.filter((tag) => !order.includes(tag)),
+  ]
     .join(", ");
 }
 
-function getBaseNegativePrompt(safetyPlan: StorySafetyPlan, shotId: StoryShotId) {
-  const shotNotes = safetyPlan.perShotNotes.find((note) => note.shotId === shotId);
-  return [...safetyPlan.blockedContent, ...(shotNotes?.mitigations ?? [])]
-    .map((part) => part.trim())
-    .filter(Boolean)
-    .join(", ");
+function normalizeStorySafetyNegativePart(value: string) {
+  const text = value.trim();
+  const key = text.toLocaleLowerCase();
+  const tags: string[] = [];
+
+  if (!key) {
+    return [];
+  }
+
+  if (/\b(?:sexualized|sexualization)\b/.test(key) && /\b(?:minors?|teen|teenage|teen-coded|child|children|girl|boy|under\s*16|underage)\b/.test(key)) {
+    tags.push("sexualized minor", "childlike face");
+  }
+
+  if (/\b(?:romantic|sexual)\b/.test(key) && /\b(?:teen|teenage|child|children|minor|underage)\b/.test(key)) {
+    tags.push("age-gap romantic framing");
+  }
+
+  if (/\bunder\s*16\b|\bunderage\b/.test(key)) {
+    tags.push("sexualized minor", "childlike face");
+  }
+
+  if (/\bnudity\b|\bnude\b/.test(key)) {
+    tags.push("nude");
+  }
+
+  if (/\bfetish\b|\bvoyeur/.test(key)) {
+    tags.push("fetishized", "voyeurism");
+  }
+
+  if (/\bnon-consensual\b|\bnonconsensual\b/.test(key)) {
+    tags.push("non-consensual");
+  }
+
+  if (/\bsexual violence\b|\bcoercion\b/.test(key)) {
+    tags.push("sexual violence", "coercion");
+  }
+
+  if (/\bage-ambiguous\b|\bappear younger\b|\byounger than intended\b|\bchildlike\b/.test(key)) {
+    tags.push("childlike face");
+  }
+
+  if (/\bgraphic\b|\bgore\b|\bsevere accident\b|\bbodily injury\b/.test(key)) {
+    tags.push("gore", "severe injury");
+  }
+
+  if (/\bcriminal misconduct\b|\bcrime\b|\bcriminal\b/.test(key)) {
+    tags.push("crime");
+  }
+
+  if (/\bdemeaning\b|\bstereotyped\b|\bstereotype\b/.test(key)) {
+    tags.push("stereotype");
+  }
+
+  if (/\baging up\b|\baged up\b|\bportraying\b.*\badult\b.*\bbypass\b|\badult\b.*\bbypass\b/.test(key)) {
+    tags.push("aged-up minor");
+  }
+
+  return tags.length > 0
+    ? tags.filter((tag, index, allTags) => allTags.indexOf(tag) === index)
+    : splitPromptParts(text).map(normalizeStoryAnchorPhrase).filter(Boolean).slice(0, 2);
+}
+
+type StoryPromptBucket =
+  | "subject"
+  | "appearance"
+  | "clothing"
+  | "action"
+  | "environment"
+  | "composition"
+  | "camera"
+  | "lighting"
+  | "detail";
+
+const storyPromptBucketOrder: StoryPromptBucket[] = [
+  "subject",
+  "appearance",
+  "clothing",
+  "action",
+  "environment",
+  "composition",
+  "camera",
+  "lighting",
+  "detail",
+];
+
+const storyPromptBucketLimits: Record<StoryPromptBucket, number> = {
+  subject: 4,
+  appearance: 2,
+  clothing: 2,
+  action: 4,
+  environment: 3,
+  composition: 2,
+  camera: 2,
+  lighting: 2,
+  detail: 2,
+};
+
+function getStoryPromptBucket(value: string): StoryPromptBucket {
+  const key = value.toLocaleLowerCase();
+
+  if (/\bforced calm expression\b/.test(key)) {
+    return "action";
+  }
+
+  if (/\b(?:eye level|street-level|low angle|high angle|medium(?:-| )?full|medium(?:-| )?close|close-up|wide|shot|angle|camera|handheld|desk height)\b/.test(key)) {
+    return "camera";
+  }
+
+  if (/\b(?:rainy evening\b.*\bwarm interior contrast|warm low-key room lighting|soft warm amber lighting|light|lighting|daylight|fluorescent|sodium|overcast|reflections?|shadow|neutral)\b/.test(key)) {
+    return "lighting";
+  }
+
+  if (/\b(?:starts? slipping|slipping|sliding off|loosened|lowered|remove|removing|undress|undressing|unveiling|revealing shoulders|more exposed|touching|hand-to-chest|brings one hand|seated|sitting|legs crossed|kneel|kneeling|ride|riding|run|running|sprint|sprinting|catch|catching|falling|snapped|jammed|locking?|sliding|return slot|abandoning?|boards?|steps?|slides?|grips?|clutch|holds?|holding|carries?|carry|carrying|tucked|lift|lifting|checks?|launches?|struggles?|trying|smooth|smoothing|knock|knocking|expression|hands?)\b/.test(key)) {
+    return "action";
+  }
+
+  if (/\b(?:rupa|teen|messenger|courier|protagonist|character|person|man|woman|boy|girl|father|mother|child|recipient|lead)\b/.test(key)) {
+    return "subject";
+  }
+
+  if (/\b(?:hair|freckles|face|eyes?|expression|drenched|soaked|wettest|disheveled|silhouette|bare shoulders|soft features)\b/.test(key)) {
+    return "appearance";
+  }
+
+  if (/\b(?:raincoat|jacket|shirt|jeans|sneakers|shoes|boots?|coat|uniform|clothing|outfit|wearing|hat|wardrobe|costume|same outfit|same clothes)\b/.test(key)) {
+    return "clothing";
+  }
+
+  if (/\bgrease\b/.test(key)) {
+    return "detail";
+  }
+
+  if (/\b(?:foreground|background|center|compose|composition|framing|depth|three-quarter|lower center|sharp focal point)\b/.test(key)) {
+    return "composition";
+  }
+
+  if (/\b(?:cinematic|illustrated|realism|texture|textures|material|materials|grit|grime|damp|wet asphalt)\b/.test(key)) {
+    return "detail";
+  }
+
+  if (/\b(?:market|street|crosswalk|bus|depot|courthouse|lobby|desk|city|alley|station|plaza|stairwell|apartment|doorway|bakery|umbrellas?|stalls?|puddles?|traffic|architecture|interior|exterior|background|environment|bridge route|barricades?)\b/.test(key)) {
+    return "environment";
+  }
+
+  return "detail";
+}
+
+function splitStoryPromptParts(value: string) {
+  return splitPromptParts(value)
+    .flatMap((part) => part.split(/(?<=[.!?])\s+/g))
+    .flatMap((part) => part.split(/\s+then\s+/gi))
+    .flatMap((part) => part.split(/\s+to\s+(?=slide|sliding)\s*/gi))
+    .flatMap((part) => part.split(/\s+(?:(?:beside|alongside)\s+(?=(?:a|an|the)?\s*(?:little|relieved|father|mother|girl|boy|child|man|woman|courier)\b)|and her|and his)\s+/gi))
+    .map((part) => part.replace(/[.!?]+$/g, "").trim())
+    .filter(Boolean);
+}
+
+function normalizeStoryAnchorPhrase(value: string) {
+  let normalized = value
+    .replace(/\b(?:around\s+)?1[0-7]\s*(?:to|-)\s*1[0-7]\s*(?:year\s*old)?\b/gi, "teenage")
+    .replace(/\b(?:age\s*)?16\s*(?:to|-)\s*18\b/gi, "older teen")
+    .replace(/\bmale-presenting teen\b/gi, "older teen male")
+    .replace(/\bteen-coded\b/gi, "older teen")
+    .replace(/\s+/g, " ")
+    .replace(/[.;:]+$/g, "")
+    .trim();
+  const key = normalized.toLocaleLowerCase();
+
+  if (!normalized || key === "safe") {
+    return "";
+  }
+
+  if (
+    /^(?:show only|this shot marks|despite crowded setting|visible human subjects?|visible human subject)\b/i.test(normalized) ||
+    /\bshould (?:look|feel|show|remain)\b/i.test(normalized) ||
+    /\b(?:must clearly signal|may still show|as only clear visible subject)\b/i.test(normalized)
+  ) {
+    return "";
+  }
+
+  if (/^extra\s+.+\s+description$/i.test(normalized)) {
+    return "";
+  }
+
+  if (/^(?:maya|hair|compose|include|show|use|place her beside glass|her visible)$/i.test(normalized)) {
+    return "";
+  }
+
+  if (/^(?:around\s+)?(?:\d{1,2}\s*(?:to|-)\s*\d{1,2}|older teen|teenage)$/i.test(normalized)) {
+    return "";
+  }
+
+  if (/\bbicycl|bike\b/.test(key) && /\bnarrow alley\b/.test(key) && /\b(?:lift|lifting|carry|carrying|grip|gripping|squeez|squeeze)\b/.test(key)) {
+    return "lifting bicycle through narrow alley";
+  }
+
+  if (/\bpolice barricades?\b/.test(key) && /\bbridge route\b/.test(key)) {
+    return "distant police barricades near bridge route";
+  }
+
+  if (/\bcatch/.test(key) && /\bfalling bakery box\b/.test(key)) {
+    return "catching falling bakery box";
+  }
+
+  if (/\bsnapped backpack strap\b/.test(key)) {
+    return "snapped backpack strap";
+  }
+
+  if (/\babandon/.test(key) && /\bbicycl|bike\b/.test(key)) {
+    return "abandoning bicycle";
+  }
+
+  if (/\bbox\b/.test(key) && /\btucked\b/.test(key) && /\brain jacket\b/.test(key)) {
+    return "box tucked under rain jacket";
+  }
+
+  if (/\bbright yellow rain jacket\b/.test(key)) {
+    return "bright yellow rain jacket";
+  }
+
+  if (/\brunning\b/.test(key) && /\bblocked crosswalk\b/.test(key)) {
+    return "running through blocked crosswalk";
+  }
+
+  if (/\bsmoothing\b/.test(key) && /\bcrushed box corner\b/.test(key)) {
+    return "smoothing crushed box corner";
+  }
+
+  if (/\bknocking\b/.test(key) && /\bapartment door\b/.test(key)) {
+    return "knocking at apartment door";
+  }
+
+  if (/\briding\b/.test(key) && /\bshaky bicycl/.test(key)) {
+    return "riding shaky bicycle";
+  }
+
+  if (/\bwheel\b/.test(key) && /\bjammed\b/.test(key)) {
+    return "wheel jammed";
+  }
+
+  if (/\blocks?\b|\blocking\b/.test(key) && /\bbicycl|bike\b/.test(key) && /\bsprint/.test(key)) {
+    return "locking bicycle then sprinting";
+  }
+
+  if (/\bslide|sliding\b/.test(key) && /\bbook\b/.test(key) && /\breturn slot\b/.test(key)) {
+    return "sliding book through return slot";
+  }
+
+  if (/\brainy evening\b/.test(key) && /\bwarm interior contrast\b/.test(key)) {
+    return "rainy evening with warm interior contrast";
+  }
+
+  if (/\bwarm low-key room lighting\b/.test(key)) {
+    return "warm low-key room lighting";
+  }
+
+  if (/\bsoft warm amber lighting\b/.test(key)) {
+    return "soft warm amber lighting";
+  }
+
+  if (/\brides?\b/.test(key) && /\bshaky bicycl/.test(key)) {
+    return "riding shaky bicycle";
+  }
+
+  if (/\b(?:touch(?:es|ing)?|hand-to-chest)\b/.test(key) && /\b(?:chest|hand-to-chest)\b/.test(key)) {
+    return "hand-to-chest gesture";
+  }
+
+  if (/\bsliding off\b/.test(key) && /\breveal(?:ing)? (?:her )?shoulders?\b/.test(key)) {
+    return "loosened clothing sliding off shoulders";
+  }
+
+  if (/\bstarts? slipping\b/.test(key) && /\breveal(?:ing)? (?:her )?shoulders?\b/.test(key)) {
+    return "slipping clothing down to reveal shoulders";
+  }
+
+  if (/\blowered further\b/.test(key) && /\bupper body more exposed\b/.test(key)) {
+    return "lowered clothing exposing upper body";
+  }
+
+  if (/\bseated\b/.test(key) && /\bsame chair\b/.test(key) && /\blegs crossed\b/.test(key)) {
+    return "seated on same chair with legs crossed";
+  }
+
+  normalized = normalized
+    .replace(/^(?:and|then|while)\s+/i, "")
+    .replace(/^(?:he|she|they)\s+should\s+(?:be\s+|look\s+|remain\s+|show\s+)?/i, "")
+    .replace(/^(?:maintain|preserve)\s+(?:the\s+)?(?:same\s+|clear\s+)?/i, "")
+    .replace(/^(?:use|show)\s+/i, "")
+    .replace(/^keep\s+(?:the\s+)?(?:same\s+)?/i, "")
+    .replace(/^any\s+/i, "")
+    .replace(/^the\s+lead\s+notices\s+(?:a\s+|the\s+)?/i, "lead noticing ")
+    .replace(/\b(?:must\s+)?remain(?:s)?\s+(?:clearly\s+)?(?:visible|readable)\b/gi, "visible")
+    .replace(/\bvisible\s+in\s+(?:every|each|the)\s+(?:frame|shot|scene)\b/gi, "visible")
+    .replace(/\b(?:must clearly signal|may still show|as only clear visible subject)\b/gi, "")
+    .replace(/\b(?:every|each)\s+(?:frame|shot|scene)\b/gi, "")
+    .replace(/\bwardrobe\s+continuity\b/gi, "consistent wardrobe")
+    .replace(/\bsame\s+bright\s+yellow\s+rain\s+jacket\b/gi, "bright yellow rain jacket")
+    .replace(/\bthe\s+same\s+bright\s+yellow\s+rain\s+jacket\b/gi, "bright yellow rain jacket")
+    .replace(/\bthe\s+/gi, "")
+    .replace(/\ba\s+/gi, "")
+    .replace(/\ban\s+/gi, "")
+    .replace(/\s+/g, " ")
+    .replace(/[.;:]+$/g, "")
+    .trim();
+
+  if (
+    /\b(?:with|and|or|as|such as|mixed|more|bright|blocked|compose|include|show|use|distant|far|from|to|subtly|toward|towards)$/i.test(normalized) ||
+    /\b(?:brings one hand|key new action(?: in this final shot)?)$/i.test(normalized) ||
+    /^(?:traffic lights to show urgency|grease on hands)$/i.test(normalized)
+  ) {
+    return "";
+  }
+
+  if (normalized.length > 96) {
+    normalized = normalized.split(/\b(?:because|so that|while|as)\b/i)[0]?.trim() ?? normalized;
+  }
+
+  const words = normalized.split(/\s+/g).filter(Boolean);
+  if (words.length > 10) {
+    normalized = words.slice(0, 10).join(" ");
+  }
+
+  return /\b(?:with|and|or|as|such as|mixed|more|bright|blocked|compose|include|show|use|distant|far|from|to|subtly|toward|towards)$/i.test(normalized)
+    ? ""
+    : normalized;
+}
+
+function removeContainedPromptParts(parts: string[]) {
+  return parts.filter((part, index) => {
+    const key = part.toLocaleLowerCase();
+    return !parts.some((candidate, candidateIndex) => {
+      if (candidateIndex === index) {
+        return false;
+      }
+
+      const candidateKey = candidate.toLocaleLowerCase();
+      return candidateKey.length > key.length && candidateKey.includes(key);
+    });
+  });
+}
+
+function compactStoryVisualPrompt(values: string[]) {
+  const buckets: Record<StoryPromptBucket, string[]> = {
+    action: [],
+    appearance: [],
+    camera: [],
+    clothing: [],
+    composition: [],
+    detail: [],
+    environment: [],
+    lighting: [],
+    subject: [],
+  };
+  const seen = new Set<string>();
+
+  for (const part of values.flatMap((value) => splitStoryPromptParts(value))) {
+    const normalized = normalizeStoryAnchorPhrase(part);
+    const key = normalized.toLocaleLowerCase();
+    if (!normalized || seen.has(key)) {
+      continue;
+    }
+
+    seen.add(key);
+    const bucket = getStoryPromptBucket(normalized);
+    if (buckets[bucket].length < storyPromptBucketLimits[bucket]) {
+      buckets[bucket].push(normalized);
+    }
+  }
+
+  return storyPromptBucketOrder.flatMap((bucket) => removeContainedPromptParts(buckets[bucket])).join(", ");
+}
+
+function getStoryPositiveAnchorBuckets(positivePrompt: string): Record<StoryPromptBucket, string[]> {
+  const buckets: Record<StoryPromptBucket, string[]> = {
+    action: [],
+    appearance: [],
+    camera: [],
+    clothing: [],
+    composition: [],
+    detail: [],
+    environment: [],
+    lighting: [],
+    subject: [],
+  };
+
+  for (const part of splitPromptParts(positivePrompt)) {
+    const bucket = getStoryPromptBucket(part);
+    buckets[bucket].push(part);
+  }
+
+  return buckets;
+}
+
+function getShotSubjectText(shot: StoryShot) {
+  return [
+    ...shot.characterIds,
+    shot.description,
+    shot.promptIntent,
+    ...shot.continuityNotes,
+  ].join(" ").toLocaleLowerCase();
+}
+
+function countSubjectMatches(text: string, pattern: RegExp) {
+  const matches = text.match(pattern) ?? [];
+  return matches.length;
+}
+
+function inferStoryAnimaSubjectCount(shot: StoryShot) {
+  const subjectCount = Math.max(1, shot.characterIds.length);
+  const text = getShotSubjectText(shot);
+  const femaleCount = Math.min(
+    subjectCount,
+    countSubjectMatches(text, /\b(?:girl|woman|female|mother|daughter|sister|heroine|maya)\b/g),
+  );
+  const maleCount = Math.min(
+    subjectCount - femaleCount,
+    countSubjectMatches(text, /\b(?:man|male|father|boy|son|brother|he|his)\b/g),
+  );
+
+  if (subjectCount === 1) {
+    if (femaleCount > 0) {
+      return ["1girl", "solo"];
+    }
+
+    if (maleCount > 0) {
+      return [/\b(?:man|father)\b/.test(text) ? "1man" : "1boy", "solo"];
+    }
+
+    return ["solo"];
+  }
+
+  if (femaleCount + maleCount === subjectCount) {
+    const maleTag = /\b(?:man|father)\b/.test(text)
+      ? `${maleCount}${maleCount === 1 ? "man" : "men"}`
+      : `${maleCount}boy${maleCount === 1 ? "" : "s"}`;
+
+    return [
+      ...(femaleCount > 0 ? [`${femaleCount}girl${femaleCount === 1 ? "" : "s"}`] : []),
+      ...(maleCount > 0 ? [maleTag] : []),
+    ];
+  }
+
+  return [`${subjectCount}people`];
+}
+
+function normalizeStoryAnimaPromptPart(part: string) {
+  const trimmed = part.trim();
+  if (/^(?:@|(?:series|source|copyright)\s*:)/i.test(trimmed)) {
+    return trimmed;
+  }
+
+  return trimmed.toLocaleLowerCase();
+}
+
+function normalizeStoryAnimaPromptParts(parts: string[]) {
+  return parts.map(normalizeStoryAnimaPromptPart);
+}
+
+function createStoryOutputAnchors({
+  baseNegativePrompt,
+  basePositivePrompt,
+  sourceShotIds,
+}: {
+  baseNegativePrompt: string;
+  basePositivePrompt: string;
+  sourceShotIds: StoryShotId[];
+}): StoryOutputAnchors {
+  return {
+    ...getStoryPositiveAnchorBuckets(basePositivePrompt),
+    negative: splitPromptParts(baseNegativePrompt),
+    source: {
+      mode: sourceShotIds.length > 0 ? "source-image" : "none",
+      sourceShotIds: [...sourceShotIds],
+      reason: sourceShotIds.length > 0
+        ? "This shot will receive previous generated image inputs from the listed source shots."
+        : "No previous generated image is injected; continuity is prompt-only for this shot.",
+    },
+  };
 }
 
 function inferPromptProfileFromCheckpoint(checkpoint: StoryLocalResource): PromptProfileId {
@@ -437,6 +1197,10 @@ function getSelectedResources(resourcePlan: StoryResourcePlan): SelectedCivitaiR
   };
 }
 
+export function getSelectedStoryResourcesForPrompting(resourcePlan: StoryResourcePlan): SelectedCivitaiResourcesPreview {
+  return getSelectedResources(resourcePlan);
+}
+
 function getResourceRecommendationResult(resourcePlan: StoryResourcePlan): ResourceRecommendationTimelineResult {
   const checkpoint = toSelectedCivitaiResourcePreview(resourcePlan.checkpoint.resource, "model");
   const loras = resourcePlan.loras.map((lora) => ({
@@ -485,6 +1249,29 @@ function getScenePromptFromStoryShot({
   shot: StoryShot;
 }): ScenePromptTimelineResult {
   const positivePrompt = getBasePositivePrompt(shot);
+  const parts = splitPromptParts(positivePrompt);
+  const subjectParts = parts.filter((part) => getStoryPromptBucket(part) === "subject");
+  const appearanceParts = parts.filter((part) => getStoryPromptBucket(part) === "appearance");
+  const clothingParts = parts.filter((part) => getStoryPromptBucket(part) === "clothing");
+  const actionParts = parts.filter((part) => getStoryPromptBucket(part) === "action");
+  const environmentParts = parts.filter((part) => getStoryPromptBucket(part) === "environment");
+  const compositionParts = parts.filter((part) => getStoryPromptBucket(part) === "composition");
+  const cameraParts = parts.filter((part) => getStoryPromptBucket(part) === "camera");
+  const lightingParts = parts.filter((part) => getStoryPromptBucket(part) === "lighting");
+  const detailParts = parts.filter((part) => getStoryPromptBucket(part) === "detail");
+  const animaCharacterParts = normalizeStoryAnimaPromptParts([
+    ...subjectParts,
+    ...appearanceParts,
+    ...clothingParts,
+    ...actionParts,
+  ]);
+  const animaGeneralParts = normalizeStoryAnimaPromptParts([
+    ...environmentParts,
+    ...compositionParts,
+    ...cameraParts,
+    ...lightingParts,
+    ...detailParts,
+  ]);
 
   return {
     promptProfile,
@@ -502,6 +1289,30 @@ function getScenePromptFromStoryShot({
     style: [],
     camera: shot.camera ? [{ label: "Camera", prompt: shot.camera }] : [],
     lighting: [],
+    animaSections: promptProfile === "anima"
+      ? {
+          subjectCount: inferStoryAnimaSubjectCount(shot),
+          character: animaCharacterParts,
+          general: animaGeneralParts,
+        }
+      : undefined,
+    animaPromptOptions: promptProfile === "anima"
+      ? {
+          qualityMetaTags: storyAnimaQualityMetaTags,
+        }
+      : undefined,
+    illustriousSections: promptProfile === "illustrious"
+      ? {
+          subjectIdentity: subjectParts,
+          appearancePhysicalTraits: appearanceParts,
+          clothingAccessories: clothingParts,
+          poseActionExpression: actionParts,
+          backgroundEnvironmentObjects: [...environmentParts, ...detailParts],
+          spatialComposition: compositionParts,
+          cameraFraming: cameraParts,
+          lightingFocus: lightingParts,
+        }
+      : undefined,
   };
 }
 
@@ -734,7 +1545,8 @@ export function assembleStoryRenderPlan({
         getPerShotOverride(parameterPlan, shot.id),
         samplerOptions,
       );
-      const baseNegativePrompt = getBaseNegativePrompt(safetyPlan, shot.id);
+      const baseNegativePrompt = getBaseNegativePrompt(safetyPlan, shot);
+      const basePositivePrompt = getBasePositivePrompt(shot);
       const positivePrompt = createFormattedStoryPositivePrompt({
         baseNegativePrompt,
         resourcePlan,
@@ -755,6 +1567,11 @@ export function assembleStoryRenderPlan({
         title: shot.title,
         positivePrompt: settings.request.positivePrompt,
         negativePrompt: settings.request.negativePrompt ?? "",
+        outputAnchors: createStoryOutputAnchors({
+          baseNegativePrompt,
+          basePositivePrompt,
+          sourceShotIds: shot.sourceShotIds,
+        }),
         sourceShotIds: [...shot.sourceShotIds],
         parameters,
         resources: {

@@ -14,6 +14,10 @@ import type { AnimaPromptSections } from "@/features/editor/ai-prompt/anima-prom
 import type { IllustriousPromptSections } from "@/features/editor/ai-prompt/illustrious-prompt";
 import type { TimelineWorkflowMode } from "./workflow-definitions";
 
+export type AnimaPromptProfileOptions = {
+  qualityMetaTags?: string[];
+};
+
 export const timelineNodeStatuses = [
   "blocked",
   "ready",
@@ -148,6 +152,7 @@ export type ScenePromptTimelineResult = {
   lighting: TimelinePromptFragment[];
   illustriousSections?: IllustriousPromptSections;
   animaSections?: AnimaPromptSections;
+  animaPromptOptions?: AnimaPromptProfileOptions;
 };
 
 type CharacterPromptTagBase = Omit<PromptTag, "id">;

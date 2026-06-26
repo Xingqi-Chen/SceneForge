@@ -608,9 +608,13 @@ function buildSceneInputAiRequest({
       ]
     : [
         sceneRequest
-          ? "Suggest one stronger alternate scene request inspired by the current draft."
-          : "Suggest one concise, visually rich scene request for a single image.",
-        "Make it specific enough to start the SceneForge timeline.",
+          ? "Suggest one stronger alternate scene request inspired by the current draft, with the main character as the clear focus."
+          : "Suggest one concise, visually rich single-image scene request centered on one clearly described main character.",
+        "Use Japanese illustration / anime-inspired style only as the rendering style: clean character design, expressive eyes, readable silhouette, polished linework, and painterly color accents.",
+        "Do not add Japanese cultural content unless the user asks for it; avoid inventing shrine, kimono, school uniform, samurai, archer, yokai, torii, katana, or other Japan-themed setting, clothing, action, or props just because of the style.",
+        "Prioritize character details over environment: identity or role, visible appearance, clothing, expression, pose/action, and how the character relates to the scene.",
+        "Keep the setting brief and supportive; avoid long background, atmosphere, prop, or lighting lists that can dilute character detail.",
+        "Make it specific enough to start the SceneForge timeline while preserving the character as the dominant subject.",
         "Avoid file paths, model names, checkpoint names, LoRA names, render parameters, and implementation details.",
       ];
 
