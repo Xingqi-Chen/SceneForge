@@ -2059,11 +2059,17 @@ describe("TimelineShell", () => {
     const originalFetch = globalThis.fetch;
     const t5FetchMock = mockT5Fetch();
     const sceneInputRequests: Array<{ action?: unknown; currentSceneRequest?: unknown }> = [];
+    const sceneInputSystemPrompts: string[] = [];
     const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
       const url = getFetchUrl(input);
       const sceneInputAction = getSceneInputAiAction(init);
 
       if (url === "/api/llm/chat" && sceneInputAction) {
+        const body = getFetchBody(init);
+        const systemContent = body?.messages?.[0]?.content;
+        if (typeof systemContent === "string") {
+          sceneInputSystemPrompts.push(systemContent);
+        }
         sceneInputRequests.push(sceneInputAction);
 
         return createJsonResponse({
@@ -2099,6 +2105,10 @@ describe("TimelineShell", () => {
       expect((container.querySelector("#scene-request") as HTMLTextAreaElement | null)?.value).toBe(
         "A suggested pre-run moonlit observatory command",
       );
+      expect(sceneInputSystemPrompts[0]).toContain("Japanese illustration / anime-inspired style only");
+      expect(sceneInputSystemPrompts[0]).toContain("Do not add Japanese cultural content unless the user asks for it");
+      expect(sceneInputSystemPrompts[0]).toContain("Prioritize character details over environment");
+      expect(sceneInputSystemPrompts[0]).toContain("Keep the setting brief and supportive");
       expect(getSectionByHeading("Scene input").textContent).toContain("Run the timeline when ready.");
 
       act(() => {

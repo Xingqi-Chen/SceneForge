@@ -6,6 +6,7 @@ import {
   createStoryResourcePlan,
   type StoryGenerationParameters,
   type StoryLocalResource,
+  type StoryOutputAnchors,
   type StoryParameterPlan,
   type StoryRenderPlan,
   type StoryResourcePlan,
@@ -28,6 +29,8 @@ import type {
   StoryConsistencyCheck,
   StoryConsistencyIssue,
   StoryInput,
+  StorySegment,
+  StorySegmentKind,
   StoryNsfwContext,
   StoryOutline,
   StorySafetyPlan,
@@ -78,6 +81,7 @@ export type StoryGenerationGatePreview = {
     sourceShotIds: string[];
     positivePrompt: string;
     negativePrompt: string;
+    outputAnchors: StoryOutputAnchors;
     parameters: StoryGenerationParameters;
   }>;
 };
@@ -126,6 +130,137 @@ function normalizeTargetShotCount(value: number | undefined) {
   }
 
   return Math.min(maxTargetShotCount, Math.max(1, Math.round(value as number)));
+}
+
+const explicitShotCountWords: Record<string, number> = {
+  one: 1,
+  two: 2,
+  three: 3,
+  four: 4,
+  five: 5,
+  six: 6,
+  seven: 7,
+  eight: 8,
+  nine: 9,
+};
+
+function normalizeStoryShotEstimate(value: number) {
+  return Math.min(6, Math.max(1, Math.round(value)));
+}
+
+function normalizeExplicitStoryShotCount(value: number) {
+  return Math.min(maxTargetShotCount, Math.max(1, Math.round(value)));
+}
+
+function normalizeExplicitStorySegmentTitle(value: string) {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+function getExplicitStorySegmentKind(title: string): StorySegmentKind {
+  const key = title.toLocaleLowerCase();
+
+  if (key.startsWith("opening")) {
+    return "opening-image";
+  }
+
+  if (key.startsWith("final")) {
+    return "final-image";
+  }
+
+  return "beat";
+}
+
+function getExplicitStorySegmentId(title: string, order: number, kind: StorySegmentKind) {
+  const slug = title
+    .trim()
+    .toLocaleLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+
+  if (slug) {
+    return slug;
+  }
+
+  return kind === "final-image"
+    ? "final-image"
+    : kind === "opening-image"
+      ? "opening-image"
+      : `beat-${order}`;
+}
+
+export function parseExplicitStorySegments(rawIntent: string): {
+  context: string;
+  segments: StorySegment[];
+} {
+  const text = rawIntent.trim();
+  const labelPattern = /(^|\n)\s*((?:Beat\s+\d+)|(?:Final\s+(?:image|shot))|(?:Opening\s+(?:image|shot)))\s*[:\-]\s*/gi;
+  const matches = Array.from(text.matchAll(labelPattern));
+
+  if (matches.length === 0) {
+    return {
+      context: "",
+      segments: [],
+    };
+  }
+
+  const context = text.slice(0, matches[0]?.index ?? 0).trim();
+  const segments = matches.map((match, index) => {
+    const title = normalizeExplicitStorySegmentTitle(match[2] ?? `Beat ${index + 1}`);
+    const sourceStart = (match.index ?? 0) + match[0].length;
+    const sourceEnd = matches[index + 1]?.index ?? text.length;
+    const sourceText = text.slice(sourceStart, sourceEnd).trim();
+    const order = index + 1;
+    const kind = getExplicitStorySegmentKind(title);
+
+    return {
+      id: getExplicitStorySegmentId(title, order, kind),
+      title,
+      sourceText: sourceText || title,
+      order,
+      kind,
+    };
+  });
+
+  return {
+    context,
+    segments,
+  };
+}
+
+export function estimateStoryShotCount(rawIntent: string) {
+  const text = rawIntent.trim();
+  const explicitSegments = parseExplicitStorySegments(text).segments;
+
+  if (explicitSegments.length > 0) {
+    return normalizeExplicitStoryShotCount(explicitSegments.length);
+  }
+
+  const explicitMatch = text.match(/\b(?:(\d+)|(one|two|three|four|five|six|seven|eight|nine))[-\s]*(?:shot|shots|panel|panels|frame|frames)\b/i);
+  const explicitValue = explicitMatch?.[1]
+    ? Number(explicitMatch[1])
+    : explicitMatch?.[2]
+      ? explicitShotCountWords[explicitMatch[2].toLocaleLowerCase()]
+      : undefined;
+
+  if (Number.isFinite(explicitValue)) {
+    return normalizeExplicitStoryShotCount(explicitValue as number);
+  }
+
+  const eventClauses = text
+    .replace(/\b(?:first|next|then|finally|afterward|meanwhile)\b/gi, ".")
+    .split(/[.!?;\n]+|,(?=\s*(?:then|next|finally|but|and|she|he|they|maya|the\s+\w+)\b)/gi)
+    .map((part) => part.trim())
+    .filter((part) => part.split(/\s+/g).length >= 3);
+  const actionPattern = /\b(?:arrives?|enters?|leaves?|waits?|misses?|delays?|decides?|runs?|rushes?|cuts?|crosses?|finds?|discovers?|returns?|delivers?|opens?|closes?|climbs?|falls?|escapes?|hides?|confronts?|notices?|sees?|reaches?|hands?|places?|protects?|loses?|recovers?)\b/i;
+  const actionMentionPattern = /\b(?:arrives?|enters?|leaves?|waits?|misses?|delays?|decides?|runs?|rushes?|cuts?|crosses?|finds?|discovers?|returns?|delivers?|opens?|closes?|climbs?|falls?|escapes?|hides?|confronts?|notices?|sees?|reaches?|hands?|places?|protects?|loses?|recovers?)\b/gi;
+  const eventCount = eventClauses.filter((part) => actionPattern.test(part)).length;
+
+  if (eventCount > 1) {
+    return normalizeStoryShotEstimate(eventCount);
+  }
+
+  const actionMentions = text.match(actionMentionPattern) ?? [];
+  return normalizeStoryShotEstimate(actionMentions.length > 1 ? actionMentions.length : 1);
 }
 
 function slugifyIdPart(value: string) {
@@ -194,6 +329,7 @@ export function createStoryInputFromStartRequest(request: StoryGraphStartRequest
   const nsfwEnabled = request.nsfwEnabled ?? request.settingsSnapshot?.nsfwEnabled ?? false;
   const audienceRating: StoryAudienceRating = nsfwEnabled ? "explicit" : "safe";
   const targetShotCount = normalizeTargetShotCount(request.targetShotCount);
+  const explicitSegments = parseExplicitStorySegments(rawIntent);
   const now = request.now ?? defaultNow;
   const timestamp = now();
   const storyId = request.storyId ?? `story-${slugifyIdPart(rawIntent)}-${timestamp.replace(/[^0-9]/g, "").slice(0, 14)}`;
@@ -203,6 +339,8 @@ export function createStoryInputFromStartRequest(request: StoryGraphStartRequest
     rawIntent,
     title: undefined,
     targetShotCount,
+    storyContext: explicitSegments.context || undefined,
+    storySegments: explicitSegments.segments.length > 0 ? explicitSegments.segments : undefined,
     audienceRating,
     nsfwContext: createNsfwContext({
       audienceRating,
@@ -256,25 +394,30 @@ function createBible(input: StoryInput): StoryBible {
 }
 
 function getPlanningShotCount(input: StoryInput) {
-  return input.targetShotCount ?? 3;
+  return input.targetShotCount ?? input.storySegments?.length ?? estimateStoryShotCount(input.rawIntent);
 }
 
 function createOutline(input: StoryInput): StoryOutline {
   const shotCount = getPlanningShotCount(input);
+  const segments = input.targetShotCount === undefined ? input.storySegments ?? [] : input.storySegments ?? [];
 
   return {
     storyId: input.storyId,
-    beats: Array.from({ length: shotCount }, (_, index) => ({
-      id: `beat-${index + 1}`,
-      title: index === 0 ? "Opening image" : index === shotCount - 1 ? "Closing image" : `Story beat ${index + 1}`,
-      summary: index === 0
-        ? `Establish the story request: ${input.rawIntent}`
-        : index === shotCount - 1
-          ? "Resolve the visual moment while preserving continuity."
-          : "Advance the action and keep visual continuity clear.",
-      order: index + 1,
-      characterIds: ["main-character"],
-    })),
+    beats: Array.from({ length: shotCount }, (_, index) => {
+      const segment = segments[index];
+
+      return {
+        id: segment?.id ?? `beat-${index + 1}`,
+        title: segment?.title ?? (index === 0 ? "Opening image" : index === shotCount - 1 ? "Closing image" : `Story beat ${index + 1}`),
+        summary: segment?.sourceText ?? (index === 0
+          ? `Establish the story request: ${input.rawIntent}`
+          : index === shotCount - 1
+            ? "Resolve the visual moment while preserving continuity."
+            : "Advance the action and keep visual continuity clear."),
+        order: index + 1,
+        characterIds: ["main-character"],
+      };
+    }),
   };
 }
 
@@ -296,8 +439,9 @@ function createShots(input: StoryInput, outline: StoryOutline): StoryShot[] {
       characterIds: ["main-character"],
       sourceShotIds: [],
       camera: order === 1 ? "Wide establishing frame" : order === shotCount ? "Resolved closing frame" : "Medium continuity frame",
-      promptIntent: `${input.rawIntent}, storyboard shot ${order} of ${shotCount}`,
+      promptIntent: `${beat?.summary ?? input.rawIntent}, storyboard shot ${order} of ${shotCount}`,
       continuityNotes: [
+        ...(input.storyContext ? [input.storyContext] : []),
         "Keep main character identity consistent.",
         order > 1 ? `Preserve visual anchors from shot ${order - 1}.` : "Establish reusable visual anchors.",
       ],
@@ -441,10 +585,10 @@ function createResourcePlan(input: StoryInput): StoryResourcePlan {
   });
 }
 
-function createParameterPlan(input: StoryInput, resourcePlan: StoryResourcePlan): StoryParameterPlan {
+function createParameterPlan(input: StoryInput, resourcePlan: StoryResourcePlan, shots: readonly StoryShot[]): StoryParameterPlan {
   return createStoryParameterPlan({
     storyId: input.storyId,
-    defaults: createStoryDefaultGenerationParameters({ resourcePlan }),
+    defaults: createStoryDefaultGenerationParameters({ input, resourcePlan, shots }),
     warnings: ["Parameters are planning defaults and remain editable before execution is implemented."],
   });
 }
@@ -495,6 +639,7 @@ function createGenerationGate(renderPlan: StoryRenderPlan): StoryGenerationGateP
       sourceShotIds: [...shot.sourceShotIds],
       positivePrompt: shot.positivePrompt,
       negativePrompt: shot.negativePrompt,
+      outputAnchors: shot.outputAnchors,
       parameters: { ...shot.parameters },
     })),
   };
@@ -509,7 +654,7 @@ export function createStoryPlanningArtifacts(input: StoryInput, timestamp = defa
   const plotStateGraph = createPlotStateGraph(input, outline, shots);
   const characterContinuityGraph = createCharacterContinuityGraph(input, bible, shots);
   const resourcePlan = createResourcePlan(input);
-  const parameterPlan = createParameterPlan(input, resourcePlan);
+  const parameterPlan = createParameterPlan(input, resourcePlan, shots);
   const renderPlan = assembleStoryRenderPlan({
     parameterPlan,
     resourcePlan,

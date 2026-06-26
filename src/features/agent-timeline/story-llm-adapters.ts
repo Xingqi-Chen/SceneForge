@@ -1,16 +1,19 @@
 import { isLlmChatResponse, LiteLlmError, type LlmChatRequest, type LlmChatResponse } from "@/features/llm";
+import { formatSelectedCivitaiResourcesForAi } from "@/features/editor/ai-prompt/civitai-ai-context";
 
 import {
   assembleStoryRenderPlan,
   createStoryDefaultGenerationParameters,
   createStoryParameterPlan,
   createStoryResourcePlan,
+  getSelectedStoryResourcesForPrompting,
   type StoryGenerationParameters,
   type StoryLocalResource,
   type StoryParameterPlan,
   type StoryRenderPlan,
   type StoryResourcePlan,
 } from "./story-planning";
+import { estimateStoryShotCount } from "./story-input";
 import { createTimelineNodeError } from "./state";
 import type { StoryWorkflowState } from "./story-state";
 import { validateShotDependencyGraph } from "./story-workflow";
@@ -231,7 +234,25 @@ function getParameterPlan(workflow: StoryWorkflowState) {
 
 function getTargetShotCount(input: StoryInput) {
   const parsed = Number(input.targetShotCount);
-  return Number.isFinite(parsed) ? Math.min(24, Math.max(1, Math.round(parsed))) : 3;
+  if (Number.isFinite(parsed)) {
+    return Math.min(24, Math.max(1, Math.round(parsed)));
+  }
+
+  if (input.storySegments && input.storySegments.length > 0) {
+    return Math.min(24, Math.max(1, input.storySegments.length));
+  }
+
+  return estimateStoryShotCount(input.rawIntent);
+}
+
+function getShotCountMode(input: StoryInput) {
+  if (input.targetShotCount !== undefined) {
+    return "user-requested";
+  }
+
+  return input.storySegments && input.storySegments.length > 0
+    ? "explicit-structure"
+    : "content-estimated";
 }
 
 function getAudienceRating(input: StoryInput): StoryAudienceRating {
@@ -319,17 +340,37 @@ export function normalizeStoryOutline(raw: unknown, input: StoryInput, bible: St
   }
 
   const characterIds = new Set(bible.characters.map((character) => character.id));
-  const beats = beatsRaw.map((beat, index) => {
+  const fallbackCharacterId = bible.characters[0]?.id;
+  let beats = beatsRaw.map((beat, index) => {
     const rawBeat = isRecord(beat) ? beat : {};
+    const beatCharacterIds = normalizeStringList(rawBeat.characterIds ?? rawBeat.character_ids, 12)
+      .filter((characterId) => characterIds.has(characterId));
+
     return {
       id: compactText(rawBeat.id, 80) || `beat-${index + 1}`,
       title: compactText(rawBeat.title, 120) || `Beat ${index + 1}`,
       summary: compactText(rawBeat.summary ?? rawBeat.description, 800) || input.rawIntent,
       order: Number.isFinite(Number(rawBeat.order)) ? Number(rawBeat.order) : index + 1,
-      characterIds: normalizeStringList(rawBeat.characterIds ?? rawBeat.character_ids, 12)
-        .filter((characterId) => characterIds.has(characterId)),
+      characterIds: beatCharacterIds.length > 0
+        ? beatCharacterIds
+        : fallbackCharacterId ? [fallbackCharacterId] : [],
     };
   });
+
+  if (input.targetShotCount === undefined && input.storySegments && input.storySegments.length > 0) {
+    beats = input.storySegments.map((segment, index) => {
+      const beat = beats.find((candidate) => candidate.id === segment.id) ?? beats[index];
+      return {
+        id: segment.id,
+        title: segment.title,
+        summary: compactText(beat?.summary, 800) || segment.sourceText,
+        order: index + 1,
+        characterIds: beat?.characterIds.length
+          ? beat.characterIds
+          : fallbackCharacterId ? [fallbackCharacterId] : [],
+      };
+    });
+  }
 
   if (beats.length === 0) {
     throw malformedResponse("Story outline must include at least one beat.", { raw });
@@ -361,10 +402,13 @@ export function normalizeStoryShots(
   const characterIds = new Set(bible.characters.map((character) => character.id));
   const locationIds = new Set(bible.locations.map((location) => location.id));
   const beatIds = new Set(outline.beats.map((beat) => beat.id));
+  const fallbackCharacterId = bible.characters[0]?.id;
+  const fallbackLocationId = bible.locations[0]?.id;
   const ids = new Set<string>();
   const shots = shotsRaw.map((shot, index) => {
     const rawShot = isRecord(shot) ? shot : {};
     const order = Number.isFinite(Number(rawShot.order)) ? Math.max(1, Math.round(Number(rawShot.order))) : index + 1;
+    const fallbackBeat = outline.beats.find((beat) => beat.order === order) ?? outline.beats[index];
     const fallbackId = `shot-${order}`;
     let id = normalizeId(rawShot.id, fallbackId);
     if (ids.has(id)) {
@@ -374,6 +418,8 @@ export function normalizeStoryShots(
 
     const beatId = compactText(rawShot.beatId ?? rawShot.beat_id, 80);
     const locationId = compactText(rawShot.locationId ?? rawShot.location_id, 80);
+    const shotCharacterIds = normalizeStringList(rawShot.characterIds ?? rawShot.character_ids, 16)
+      .filter((characterId) => characterIds.has(characterId));
 
     return {
       id,
@@ -381,10 +427,17 @@ export function normalizeStoryShots(
       order,
       title: compactText(rawShot.title, 120) || `Shot ${order}`,
       description: compactText(rawShot.description ?? rawShot.summary, 1000) || input.rawIntent,
-      ...(beatId && beatIds.has(beatId) ? { beatId } : {}),
-      ...(locationId && locationIds.has(locationId) ? { locationId } : {}),
-      characterIds: normalizeStringList(rawShot.characterIds ?? rawShot.character_ids, 16)
-        .filter((characterId) => characterIds.has(characterId)),
+      ...(beatId && beatIds.has(beatId)
+        ? { beatId }
+        : fallbackBeat ? { beatId: fallbackBeat.id } : {}),
+      ...(locationId && locationIds.has(locationId)
+        ? { locationId }
+        : fallbackLocationId ? { locationId: fallbackLocationId } : {}),
+      characterIds: shotCharacterIds.length > 0
+        ? shotCharacterIds
+        : fallbackBeat?.characterIds.length
+          ? [...fallbackBeat.characterIds]
+          : fallbackCharacterId ? [fallbackCharacterId] : [],
       sourceShotIds: normalizeStringList(rawShot.sourceShotIds ?? rawShot.source_shot_ids, 12),
       camera: compactText(rawShot.camera, 400) || "Storyboard frame",
       promptIntent: compactText(rawShot.promptIntent ?? rawShot.prompt_intent ?? rawShot.prompt, 1200) || input.rawIntent,
@@ -464,7 +517,6 @@ export function normalizeShotDependencyGraph(raw: unknown, input: StoryInput, sh
     throw malformedResponse("Shot dependency response must be a JSON object.", { raw });
   }
 
-  const shotIds = new Set(shots.map((shot) => shot.id));
   const nodes = (Array.isArray(parsed.nodes) ? parsed.nodes : shots)
     .map((node) => {
       const rawNode = isRecord(node) ? node : {};
@@ -485,23 +537,10 @@ export function normalizeShotDependencyGraph(raw: unknown, input: StoryInput, sh
       };
     })
     .filter((edge) => edge.fromShotId && edge.toShotId);
-  const edgeKeys = new Set(edges.map((edge) => `${edge.fromShotId}->${edge.toShotId}`));
 
   for (const shot of shots) {
     if (!nodes.some((node) => node.shotId === shot.id)) {
       nodes.push({ shotId: shot.id, label: shot.title });
-    }
-
-    for (const sourceShotId of shot.sourceShotIds) {
-      const key = `${sourceShotId}->${shot.id}`;
-      if (shotIds.has(sourceShotId) && !edgeKeys.has(key)) {
-        edgeKeys.add(key);
-        edges.push({
-          fromShotId: sourceShotId,
-          toShotId: shot.id,
-          reason: "img2img-source",
-        });
-      }
     }
   }
 
@@ -524,12 +563,15 @@ export function syncStoryShotsWithDependencyGraph(
 ): StoryShot[] {
   const dependenciesByShot = new Map<StoryShotId, StoryShotId[]>();
   for (const edge of graph.edges) {
+    if (edge.reason !== "img2img-source") {
+      continue;
+    }
     dependenciesByShot.set(edge.toShotId, [...(dependenciesByShot.get(edge.toShotId) ?? []), edge.fromShotId]);
   }
 
   return shots.map((shot) => ({
     ...shot,
-    sourceShotIds: [...new Set(dependenciesByShot.get(shot.id) ?? shot.sourceShotIds)],
+    sourceShotIds: [...new Set(dependenciesByShot.get(shot.id) ?? [])],
   }));
 }
 
@@ -713,6 +755,12 @@ export function normalizeStoryParameterPlan(
   }
 
   const defaultsRaw = isRecord(parsed.defaults) ? parsed.defaults : parsed;
+  const rawWidth = Number(defaultsRaw.width);
+  const rawHeight = Number(defaultsRaw.height);
+  const legacyFixedDimensions =
+    rawWidth === 1024 &&
+    rawHeight === 768 &&
+    (fallbackDefaults.width !== 1024 || fallbackDefaults.height !== 768);
   const shotIds = new Set(shots.map((shot) => shot.id));
   const perShotOverridesRaw = Array.isArray(parsed.perShotOverrides)
     ? parsed.perShotOverrides
@@ -723,8 +771,8 @@ export function normalizeStoryParameterPlan(
   return createStoryParameterPlan({
     storyId: input.storyId,
     defaults: {
-      width: Number(defaultsRaw.width) || fallbackDefaults.width,
-      height: Number(defaultsRaw.height) || fallbackDefaults.height,
+      width: legacyFixedDimensions ? fallbackDefaults.width : rawWidth || fallbackDefaults.width,
+      height: legacyFixedDimensions ? fallbackDefaults.height : rawHeight || fallbackDefaults.height,
       steps: Number(defaultsRaw.steps) || fallbackDefaults.steps,
       cfg: Number(defaultsRaw.cfg) || fallbackDefaults.cfg,
       samplerName: compactText(defaultsRaw.samplerName ?? defaultsRaw.sampler_name, 80) ||
@@ -865,6 +913,7 @@ export function createStoryGenerationGateFromWorkflow(
       sourceShotIds: [...shot.sourceShotIds],
       positivePrompt: shot.positivePrompt,
       negativePrompt: shot.negativePrompt,
+      outputAnchors: shot.outputAnchors,
       parameters: { ...shot.parameters },
     })),
   };
@@ -963,8 +1012,12 @@ export function createStoryLlmNodeAdapters({
       return makeJsonRequest({
         input,
         instruction:
-          'Create a typed StoryBible. Required shape: {"title":"","logline":"","genre":[""],"themes":[""],"worldSummary":"","visualStyle":"","characters":[{"id":"","name":"","role":"","description":"","continuityNotes":[""],"visualAnchors":[""]}],"locations":[{"id":"","name":"","description":"","visualAnchors":[""]}],"continuityRules":[""]}.',
-        payload: { input },
+          'Create a typed StoryBible with concrete visual anchors. Treat storySegments as the visual sequence and storyContext as global continuity, not as an extra shot. Create characters only for people or creatures explicitly present in the user story or storySegments; do not invent visible supporting people from implied locations or occupations. Character descriptions must include visible role/age range, silhouette, clothing, key prop, and emotional baseline when inferable. Location descriptions must include visible set pieces, materials, color accents, and recurring background anchors. visualStyle must describe renderable camera/lighting/color style, not abstract theme. Required shape: {"title":"","logline":"","genre":[""],"themes":[""],"worldSummary":"","visualStyle":"","characters":[{"id":"","name":"","role":"","description":"","continuityNotes":[""],"visualAnchors":[""]}],"locations":[{"id":"","name":"","description":"","visualAnchors":[""]}],"continuityRules":[""]}.',
+        payload: {
+          input,
+          storyContext: input.storyContext ?? "",
+          storySegments: input.storySegments ?? [],
+        },
       });
     },
     parseResponse: (response, context) => normalizeStoryBible(response.content, getStoryInput(context.workflow)),
@@ -975,10 +1028,13 @@ export function createStoryLlmNodeAdapters({
       return makeJsonRequest({
         input,
         instruction:
-          'Create a typed StoryOutline with exactly the requested shot count when practical. Required shape: {"beats":[{"id":"","title":"","summary":"","order":1,"characterIds":[""]}]}.',
+          'Create a typed StoryOutline. If storySegments are supplied and input.targetShotCount is unset, create exactly one beat per storySegment in the same order and do not create a beat for storyContext. If input.targetShotCount is set, use exactly that count when practical. If it is unset and no storySegments are supplied, use the story events in rawIntent and do not pad to three shots; use only as many beats as the text needs. Required shape: {"beats":[{"id":"","title":"","summary":"","order":1,"characterIds":[""]}]}.',
         payload: {
           input,
           targetShotCount: getTargetShotCount(input),
+          shotCountMode: getShotCountMode(input),
+          storyContext: input.storyContext ?? "",
+          storySegments: input.storySegments ?? [],
           bible: getBible(context.workflow),
         },
       });
@@ -995,10 +1051,13 @@ export function createStoryLlmNodeAdapters({
       return makeJsonRequest({
         input,
         instruction:
-          'Create typed storyboard shots with stable ids, order, camera, promptIntent, continuityNotes, characterIds, locationId, and sourceShotIds. Required shape: {"shots":[{"id":"shot-1","order":1,"title":"","description":"","beatId":"","locationId":"","characterIds":[""],"sourceShotIds":[""],"camera":"","promptIntent":"","continuityNotes":[""]}]}.',
+          'Create typed storyboard shots with stable ids, order, camera, promptIntent, continuityNotes, characterIds, locationId, and sourceShotIds. If storySegments are supplied and input.targetShotCount is unset, create exactly one shot per storySegment in the same order and do not add filler shots or a separate context/setup shot. If input.targetShotCount is unset and no storySegments are supplied, use the estimated target only as the event count from rawIntent; do not add filler shots. Each promptIntent must be an image-generation-ready visual brief with short comma-separated tag phrases: visible character identities/appearance, the same wardrobe and key prop continuity, one clear action, location/obstacle, composition, lighting, and visible emotional state. Visible subjects must match current segment explicitly named characters: do not invent extra visible people from a location or job role, and do not remove explicitly requested people. Partial/background interactions are acceptable when the segment explicitly requests them. Do not use abstract summaries, meta planning instructions, dangling clauses, or purely atmospheric prose. sourceShotIds must be empty unless this shot truly needs a previous generated image as an img2img/reference source; ordinary story order and continuity do not need sourceShotIds. Required shape: {"shots":[{"id":"shot-1","order":1,"title":"","description":"","beatId":"","locationId":"","characterIds":[""],"sourceShotIds":[""],"camera":"","promptIntent":"","continuityNotes":[""]}]}.',
         payload: {
           input,
           targetShotCount: getTargetShotCount(input),
+          shotCountMode: getShotCountMode(input),
+          storyContext: input.storyContext ?? "",
+          storySegments: input.storySegments ?? [],
           bible: getBible(context.workflow),
           outline: getOutline(context.workflow),
         },
@@ -1037,7 +1096,7 @@ export function createStoryLlmNodeAdapters({
       return makeJsonRequest({
         input,
         instruction:
-          'Create a shot dependency graph. Use only supplied shot ids. Return dependencies as edges from source shot to dependent shot. Required shape: {"nodes":[{"shotId":"","label":""}],"edges":[{"fromShotId":"","toShotId":"","reason":"img2img-source|reference|continuity|story-order|manual"}]}.',
+          'Create a shot dependency graph. Use only supplied shot ids. Return dependencies as edges from source shot to dependent shot. Use story-order or continuity for planning-only relationships. Use img2img-source or reference only when the later shot should receive the earlier generated image during ComfyUI execution. Do not mark ordinary sequential story beats as img2img-source. Required shape: {"nodes":[{"shotId":"","label":""}],"edges":[{"fromShotId":"","toShotId":"","reason":"img2img-source|reference|continuity|story-order|manual"}]}.',
         payload: {
           input,
           shots: getShots(context.workflow),
@@ -1113,21 +1172,28 @@ export function createStoryLlmNodeAdapters({
   const parameterPlan = createLlmStoryNodeAdapter<StoryParameterPlan>({
     buildRequest: (context) => {
       const input = getStoryInput(context.workflow);
+      const resourcePlan = getResourcePlan(context.workflow);
       const parameterDefaults = createStoryDefaultGenerationParameters({
-        resourcePlan: getResourcePlan(context.workflow),
+        input,
+        resourcePlan,
         samplerOptions,
+        shots: getShots(context.workflow),
       });
+      const selectedResourceParameterContext = formatSelectedCivitaiResourcesForAi(
+        getSelectedStoryResourcesForPrompting(resourcePlan),
+      );
 
       return makeJsonRequest({
         input,
         instruction:
-          `Create a typed StoryParameterPlan. Width and height must be positive image dimensions; steps/cfg/denoise should be conservative. samplerName must be one of availableSamplers and scheduler must be one of availableSchedulers. Start from supplied modelDefaultParameters unless a shot has a strong reason to override. Required shape: {"defaults":{"width":${parameterDefaults.width},"height":${parameterDefaults.height},"steps":${parameterDefaults.steps},"cfg":${parameterDefaults.cfg},"samplerName":"${parameterDefaults.samplerName}","scheduler":"${parameterDefaults.scheduler}","denoise":${parameterDefaults.denoise}},"perShotOverrides":[{"shotId":"","parameters":{},"reason":""}],"warnings":[""]}.`,
+          `Create a typed StoryParameterPlan. Width and height must be positive image dimensions. Use supplied selectedResourceParameterContext as model-specific context, so checkpoint and all selected LoRAs jointly determine resolution, sampler, scheduler, steps, CFG, and LoRA-safe generation constraints. Use supplied modelDefaultParameters width and height as the checkpoint/LoRA-aware aspect defaults; only override them for an explicit resolution/aspect request, a stronger selected resource recommendation, or a strong shot-specific composition reason. Preserve supplied modelDefaultParameters for steps, cfg, samplerName, scheduler, and denoise unless a shot has a strong visual reason to override; do not lower steps/cfg/denoise just for speed. samplerName must be one of availableSamplers and scheduler must be one of availableSchedulers. Required shape: {"defaults":{"width":${parameterDefaults.width},"height":${parameterDefaults.height},"steps":${parameterDefaults.steps},"cfg":${parameterDefaults.cfg},"samplerName":"${parameterDefaults.samplerName}","scheduler":"${parameterDefaults.scheduler}","denoise":${parameterDefaults.denoise}},"perShotOverrides":[{"shotId":"","parameters":{},"reason":""}],"warnings":[""]}.`,
         payload: {
           availableSamplers: samplerOptions.samplers,
           availableSchedulers: samplerOptions.schedulers,
           input,
           modelDefaultParameters: parameterDefaults,
-          resourcePlan: getResourcePlan(context.workflow),
+          resourcePlan,
+          selectedResourceParameterContext,
           shots: getShots(context.workflow),
         },
       });
@@ -1138,8 +1204,10 @@ export function createStoryLlmNodeAdapters({
       getShots(context.workflow),
       samplerOptions,
       createStoryDefaultGenerationParameters({
+        input: getStoryInput(context.workflow),
         resourcePlan: getResourcePlan(context.workflow),
         samplerOptions,
+        shots: getShots(context.workflow),
       }),
     ),
   })(completeChat);

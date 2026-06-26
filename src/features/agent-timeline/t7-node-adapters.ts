@@ -368,6 +368,7 @@ export function buildTimelineFinalPositivePrompt({
       ...(hasPromptSectionContent(scenePrompt.animaSections)
         ? { sections: scenePrompt.animaSections }
         : { sourcePrompt }),
+      qualityMetaTags: scenePrompt.animaPromptOptions?.qualityMetaTags,
       supportsNsfw,
     });
   }

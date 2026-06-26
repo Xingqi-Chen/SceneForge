@@ -568,6 +568,8 @@ describe("StoryPlanningPreview", () => {
   });
 
   it("supports Story request suggest and rewrite through the LLM chat boundary", async () => {
+    const storyInputSystemPrompts: string[] = [];
+    const storyInputPayloads: Array<{ action?: string; currentStoryRequest?: string }> = [];
     const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
       const target = typeof url === "string" ? url : url instanceof Request ? url.url : url.toString();
 
@@ -586,8 +588,13 @@ describe("StoryPlanningPreview", () => {
 
       if (target === "/api/llm/chat") {
         const body = JSON.parse(String(init?.body ?? "{}")) as { messages?: Array<{ content?: string }> };
+        const systemContent = body.messages?.[0]?.content;
+        if (typeof systemContent === "string") {
+          storyInputSystemPrompts.push(systemContent);
+        }
         const userContent = body.messages?.[1]?.content ?? "{}";
-        const payload = JSON.parse(userContent) as { action?: string };
+        const payload = JSON.parse(userContent) as { action?: string; currentStoryRequest?: string };
+        storyInputPayloads.push(payload);
 
         return {
           ok: true,
@@ -617,6 +624,15 @@ describe("StoryPlanningPreview", () => {
     const textarea = container.querySelector("textarea") as HTMLTextAreaElement | null;
 
     expect(textarea?.value).toBe("A suggested observatory story request with three escalating visual beats.");
+    expect(storyInputPayloads[0]).toMatchObject({
+      action: "suggest",
+      currentStoryRequest: "",
+    });
+    expect(storyInputSystemPrompts[0]).toContain("concrete, storyboard-ready Story Graph request");
+    expect(storyInputSystemPrompts[0]).toContain("visible age range or role, appearance, clothing");
+    expect(storyInputSystemPrompts[0]).toContain("3 to 5 sequential visual beats");
+    expect(storyInputSystemPrompts[0]).toContain("Avoid abstract summaries");
+    expect(storyInputSystemPrompts[0]).toContain("Prefer compact storyboard-brief prose");
 
     await clickButtonAsync("Rewrite");
 

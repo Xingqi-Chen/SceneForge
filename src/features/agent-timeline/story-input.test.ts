@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
   createStoryInputFromStartRequest,
   createStoryPlanningArtifacts,
+  estimateStoryShotCount,
+  parseExplicitStorySegments,
   startStoryGraphWorkflow,
 } from "./story-input";
 import { confirmStoryGeneration, setStoryNodeManualResult } from "./story-state";
@@ -10,6 +12,14 @@ import { canRunCommonWorkflowNode } from "./workflow-definition";
 import { storyWorkflowDefinition } from "./story-workflow";
 
 const now = () => "2026-06-14T00:00:00.000Z";
+const courierStory = [
+  "Characters: teenage courier in a yellow rain jacket, carrying a cake box.",
+  "Beat 1: The courier pedals into a wet market alley with the cake box strapped to his backpack.",
+  "Beat 2: The backpack strap snaps and he catches the falling bakery box in the wet market alley.",
+  "Beat 3: He abandons the bicycle, tucks the box under his rain jacket, runs through a blocked crosswalk, and reaches the apartment stairwell.",
+  "Beat 4: He smooths the crushed box corner and knocks at the apartment door with a forced calm expression.",
+  "Final image: The courier holds the battered cake box beside a little girl in a party hat and her relieved father.",
+].join("\n");
 
 describe("story input workflow start", () => {
   it("normalizes user input into typed StoryInput with settings and NSFW context", () => {
@@ -62,8 +72,66 @@ describe("story input workflow start", () => {
       audienceRating: "safe",
       rationale: "NSFW is disabled in SceneForge settings.",
     });
-    expect(artifacts.outline.beats).toHaveLength(3);
-    expect(artifacts.shots).toHaveLength(3);
+    expect(artifacts.outline.beats).toHaveLength(1);
+    expect(artifacts.shots).toHaveLength(1);
+  });
+
+  it("estimates automatic shot count from explicit events instead of defaulting to three", () => {
+    expect(estimateStoryShotCount("A moody station encounter.")).toBe(1);
+    expect(estimateStoryShotCount("A courier waits for a bus, then rushes through an alley, finally returns a book.")).toBe(3);
+    expect(estimateStoryShotCount("A courier crosses a neon market and finds a hidden map.")).toBe(2);
+    expect(estimateStoryShotCount("A four-shot gothic chapel sequence.")).toBe(4);
+    expect(estimateStoryShotCount("A 12-shot gothic chapel sequence.")).toBe(12);
+    expect(estimateStoryShotCount("A 12 panels gothic chapel sequence.")).toBe(12);
+    expect(estimateStoryShotCount("A 30-shot gothic chapel sequence.")).toBe(24);
+  });
+
+  it("uses explicit Beat and Final image labels as visual segments when shot count is automatic", () => {
+    const parsed = parseExplicitStorySegments(courierStory);
+    const input = createStoryInputFromStartRequest({
+      rawIntent: courierStory,
+      storyId: "story-explicit-beats",
+      now,
+    });
+    const artifacts = createStoryPlanningArtifacts(input, now());
+
+    expect(parsed.context).toContain("teenage courier in a yellow rain jacket");
+    expect(parsed.segments.map((segment) => segment.title)).toEqual([
+      "Beat 1",
+      "Beat 2",
+      "Beat 3",
+      "Beat 4",
+      "Final image",
+    ]);
+    expect(estimateStoryShotCount(courierStory)).toBe(5);
+    expect(input.targetShotCount).toBeUndefined();
+    expect(input.storySegments).toHaveLength(5);
+    expect(artifacts.outline.beats.map((beat) => beat.title)).toEqual([
+      "Beat 1",
+      "Beat 2",
+      "Beat 3",
+      "Beat 4",
+      "Final image",
+    ]);
+    expect(artifacts.shots).toHaveLength(5);
+    expect(artifacts.generationGate.renderPlanShotCount).toBe(5);
+    expect(artifacts.generationGate.requestPreview[4]?.positivePrompt).toContain("little girl");
+    expect(artifacts.generationGate.requestPreview[4]?.positivePrompt).toContain("relieved father");
+  });
+
+  it("lets an explicit target shot count override detected story segments", () => {
+    const input = createStoryInputFromStartRequest({
+      rawIntent: courierStory,
+      targetShotCount: 2,
+      storyId: "story-explicit-target",
+      now,
+    });
+    const artifacts = createStoryPlanningArtifacts(input, now());
+
+    expect(input.storySegments).toHaveLength(5);
+    expect(artifacts.outline.beats).toHaveLength(2);
+    expect(artifacts.shots).toHaveLength(2);
+    expect(artifacts.generationGate.renderPlanShotCount).toBe(2);
   });
 
   it("creates inspectable planning artifacts from a user-started story input", () => {
@@ -174,13 +242,93 @@ describe("story input workflow start", () => {
     const artifacts = createStoryPlanningArtifacts(input, now());
 
     expect(artifacts.parameterPlan.defaults).toMatchObject({
-      samplerName: "euler",
-      scheduler: "normal",
+      steps: 36,
+      cfg: 4.5,
+      samplerName: "er_sde",
+      scheduler: "simple",
     });
     expect(artifacts.generationGate.requestPreview[0]?.parameters).toMatchObject({
-      samplerName: "euler",
-      scheduler: "normal",
+      steps: 36,
+      cfg: 4.5,
+      samplerName: "er_sde",
+      scheduler: "simple",
     });
+    expect(artifacts.generationGate.requestPreview[0]?.outputAnchors).toMatchObject({
+      source: {
+        mode: "none",
+        sourceShotIds: [],
+      },
+    });
+    expect(artifacts.generationGate.requestPreview[0]?.outputAnchors.subject.length).toBeGreaterThan(0);
+  });
+
+  it("infers local Story planning dimensions from the requested aspect", () => {
+    const portraitInput = createStoryInputFromStartRequest({
+      rawIntent: "A vertical full body anime courier portrait sequence.",
+      targetShotCount: 1,
+      storyId: "story-portrait-dimensions",
+      now,
+      settingsSnapshot: {
+        resourceCandidates: {
+          checkpoints: [
+            {
+              id: "anima-checkpoint",
+              name: "Anima Checkpoint",
+              baseModel: "Anima",
+              modelBaseModel: "Anima",
+              modelFileName: "anima.safetensors",
+            },
+          ],
+          loras: [],
+        },
+      },
+    });
+    const landscapeInput = createStoryInputFromStartRequest({
+      rawIntent: "A wide cinematic chase through a rainy market.",
+      targetShotCount: 1,
+      storyId: "story-landscape-dimensions",
+      now,
+    });
+    const portraitArtifacts = createStoryPlanningArtifacts(portraitInput, now());
+    const landscapeArtifacts = createStoryPlanningArtifacts(landscapeInput, now());
+
+    expect(portraitArtifacts.generationGate.requestPreview[0]?.parameters).toMatchObject({
+      width: 832,
+      height: 1216,
+    });
+    expect(landscapeArtifacts.generationGate.requestPreview[0]?.parameters).toMatchObject({
+      width: 1216,
+      height: 832,
+    });
+    expect(portraitArtifacts.renderPlan.shots[0]?.parameters).toMatchObject({
+      width: 832,
+      height: 1216,
+    });
+    expect(landscapeArtifacts.renderPlan.shots[0]?.parameters).toMatchObject({
+      width: 1216,
+      height: 832,
+    });
+  });
+
+  it("puts compact output anchors into the generation gate request preview", () => {
+    const input = createStoryInputFromStartRequest({
+      rawIntent:
+        "One hand gripping the bike frame as he squeezes past market crates, lifting the bicycle through a narrow alley, with distant police barricades along the bridge route.",
+      targetShotCount: 1,
+      storyId: "story-compact-anchors",
+      now,
+      nsfwEnabled: true,
+    });
+    const artifacts = createStoryPlanningArtifacts(input, now());
+    const preview = artifacts.generationGate.requestPreview[0];
+
+    expect(preview?.outputAnchors.action).toContain("lifting bicycle through narrow alley");
+    expect(preview?.outputAnchors.environment).toContain("distant police barricades near bridge route");
+    expect(preview?.outputAnchors.negative).not.toEqual(
+      expect.arrayContaining(["non-consensual", "sexualized minor", "childlike face"]),
+    );
+    expect(JSON.stringify(preview?.outputAnchors)).not.toContain("One hand gripping the bike frame as he squeezes past");
+    expect(JSON.stringify(preview?.outputAnchors)).not.toContain("sexualized minors");
   });
 
   it("starts a story-graph workflow with confirmation-gated shot execution", () => {

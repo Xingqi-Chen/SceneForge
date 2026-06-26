@@ -4,8 +4,8 @@ export type TimelineSamplerOptions = {
 };
 
 export const defaultTimelineSamplerOptions: TimelineSamplerOptions = {
-  samplers: ["euler", "euler_ancestral", "dpmpp_2m", "dpmpp_2m_sde"],
-  schedulers: ["normal", "karras"],
+  samplers: ["er_sde", "euler", "euler_ancestral", "dpmpp_2m", "dpmpp_2m_sde"],
+  schedulers: ["simple", "normal", "karras"],
 };
 
 export function normalizeTimelineSamplerOptions(

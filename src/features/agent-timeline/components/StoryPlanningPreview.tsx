@@ -137,7 +137,15 @@ function buildStoryInputAiRequest({
     : [
         storyRequest
           ? "Suggest one stronger alternate Story Graph request inspired by the current draft."
-          : "Suggest one concise, visually rich Story Graph request for a short storyboard sequence.",
+          : "Suggest one concrete, storyboard-ready Story Graph request for a short sequence.",
+        storyRequest
+          ? "Keep the alternate request grounded in visible character actions, concrete locations, and clear story causality."
+          : "The request must name or clearly define one main protagonist, their visible age range or role, appearance, clothing, immediate goal, key prop or obstacle, and emotional state.",
+        storyRequest
+          ? "Preserve the current draft's core premise while replacing vague atmosphere with specific visual beats."
+          : "Include 3 to 5 sequential visual beats with distinct shootable locations, observable actions, changing character intent, and a clear final image or ending state.",
+        "Avoid abstract summaries, purely atmospheric mood writing, hidden meanings, symbolic-only stakes, and vague phrases such as subtle signs, mysterious journey, or hidden reunion unless they are shown through concrete visible events.",
+        "Prefer compact storyboard-brief prose over a single poetic sentence.",
         "Make it specific enough to start story planning while leaving shot count optional.",
         "Do not include title, content warnings, model names, checkpoint names, LoRA names, or render parameters.",
       ];
