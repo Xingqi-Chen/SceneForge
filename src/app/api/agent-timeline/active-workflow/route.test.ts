@@ -10,6 +10,7 @@ vi.mock("@/features/agent-timeline/timeline-workflow-local-disk", () => diskMock
 
 import { createTimelineWorkflowRecord } from "@/features/agent-timeline/timeline-workflow-persistence";
 import { createTimelineWorkflowState } from "@/features/agent-timeline/state";
+import { startStoryGraphWorkflow } from "@/features/agent-timeline/story-input";
 
 import { DELETE, GET, PUT } from "./route";
 
@@ -24,6 +25,26 @@ function createRecord() {
     selectedPromptProfile: "illustrious",
     selectedImageCount: 1,
     selectedNodeId: "scene-input",
+  });
+}
+
+function createStoryRecord() {
+  return createTimelineWorkflowRecord({
+    projectId: "story-api-record",
+    name: "Story API record",
+    workflow: startStoryGraphWorkflow({
+      rawIntent: "A restored Story Graph",
+      targetShotCount: 2,
+      now: () => "2026-06-15T00:00:00.000Z",
+    }),
+    sceneRequest: "A restored Story Graph",
+    selectedPromptProfile: "illustrious",
+    selectedImageCount: 2,
+    selectedNodeId: "story-input",
+    selectedStoryShotId: "shot-1",
+    outputDisplayModes: {
+      "story-input": "visual",
+    },
   });
 }
 
@@ -71,6 +92,39 @@ describe("/api/agent-timeline/active-workflow", () => {
 
     expect(response.status).toBe(200);
     expect(payload.workflow.workflowId).toBe("timeline-api-record");
+  });
+
+  it("loads and saves Story Graph active workflow records", async () => {
+    const record = createStoryRecord();
+    diskMocks.loadActiveTimelineWorkflowFromDisk.mockResolvedValue(record);
+
+    const getResponse = await GET();
+    const getPayload = await getResponse.json();
+
+    expect(getResponse.status).toBe(200);
+    expect(getPayload.workflow.workflowMode).toBe("story-graph");
+    expect(getPayload.selectedNodeId).toBe("story-input");
+    expect(getPayload.selectedStoryShotId).toBe("shot-1");
+
+    const putResponse = await PUT(
+      new Request("http://localhost/api/agent-timeline/active-workflow", {
+        method: "PUT",
+        body: JSON.stringify(record),
+      }),
+    );
+    const putPayload = await putResponse.json();
+
+    expect(putResponse.status).toBe(200);
+    expect(putPayload.ok).toBe(true);
+    expect(diskMocks.saveActiveTimelineWorkflowToDisk).toHaveBeenCalledWith(
+      expect.objectContaining({
+        selectedNodeId: "story-input",
+        selectedStoryShotId: "shot-1",
+        workflow: expect.objectContaining({
+          workflowMode: "story-graph",
+        }),
+      }),
+    );
   });
 
   it("saves a valid active workflow record", async () => {

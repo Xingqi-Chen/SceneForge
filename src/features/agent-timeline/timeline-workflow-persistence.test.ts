@@ -7,10 +7,13 @@ import {
 } from "./state";
 import {
   createTimelineWorkflowRecord,
+  isStoryGraphTimelineWorkflowRecord,
+  isSingleImageTimelineWorkflowRecord,
   parseTimelineWorkflowRecordJson,
   sanitizeTimelineWorkflowRecord,
   serializeTimelineWorkflowRecord,
 } from "./timeline-workflow-persistence";
+import { startStoryGraphWorkflow } from "./story-input";
 
 describe("timeline workflow persistence", () => {
   it("round-trips an active workflow record without preserving secrets", () => {
@@ -57,6 +60,11 @@ describe("timeline workflow persistence", () => {
     expect(serialized).toContain("[redacted]");
 
     const parsed = parseTimelineWorkflowRecordJson(serialized);
+    expect(parsed && isSingleImageTimelineWorkflowRecord(parsed)).toBe(true);
+
+    if (!parsed || !isSingleImageTimelineWorkflowRecord(parsed)) {
+      throw new Error("Expected a single-image timeline record.");
+    }
 
     expect(parsed).toMatchObject({
       kind: "sceneforge-timeline-workflow",
@@ -125,6 +133,11 @@ describe("timeline workflow persistence", () => {
     });
     const serialized = serializeTimelineWorkflowRecord(record);
     const parsed = parseTimelineWorkflowRecordJson(serialized);
+    expect(parsed && isSingleImageTimelineWorkflowRecord(parsed)).toBe(true);
+
+    if (!parsed || !isSingleImageTimelineWorkflowRecord(parsed)) {
+      throw new Error("Expected a single-image timeline record.");
+    }
 
     expect(serialized.match(/data:image\/png;base64,aGVsbG8=/g) ?? []).toHaveLength(1);
     expect(parsed?.workflow.nodes["scene-input"].result).toMatchObject({
@@ -174,6 +187,11 @@ describe("timeline workflow persistence", () => {
       createdAt: "2026-06-05T00:00:00.000Z",
       updatedAt: "2026-06-05T00:02:00.000Z",
     });
+    expect(parsed && isSingleImageTimelineWorkflowRecord(parsed)).toBe(true);
+
+    if (!parsed || !isSingleImageTimelineWorkflowRecord(parsed)) {
+      throw new Error("Expected a single-image timeline record.");
+    }
 
     expect(parsed?.workflow.nodes["scene-prompt"]).toMatchObject({
       status: "error",
@@ -181,6 +199,262 @@ describe("timeline workflow persistence", () => {
         code: "timeline_node_failed",
         message: "This node was interrupted while the workflow was away. Rerun it to continue.",
       },
+    });
+  });
+
+  it("round-trips story graph records with result references and recoverable shot errors", () => {
+    const workflow = startStoryGraphWorkflow({
+      rawIntent: "A courier follows a signal through a neon market.",
+      targetShotCount: 2,
+      now: () => "2026-06-15T00:00:00.000Z",
+      settingsSnapshot: {
+        promptProfile: "anima",
+      },
+    });
+    const storyWorkflow = {
+      ...workflow,
+      generationConfirmed: true,
+      nodes: {
+        ...workflow.nodes,
+        "shot-graph-execution": {
+          nodeId: "shot-graph-execution",
+          status: "running",
+          source: "system",
+          updatedAt: "2026-06-15T00:02:00.000Z",
+          result: {
+            storyId: workflow.storyId,
+            mode: "final",
+            status: "running",
+            readyShotIds: [],
+            staleShotIds: ["shot-2"],
+            errors: [],
+            updatedAt: "2026-06-15T00:02:00.000Z",
+            shots: [
+              {
+                shotId: "shot-1",
+                sourceShotIds: [],
+                status: "running",
+                updatedAt: "2026-06-15T00:02:00.000Z",
+                queueMetadata: {
+                  promptId: "prompt-shot-1",
+                  warnings: [],
+                  apiKey: "secret-shot-key",
+                  cachePath: "C:/Users/Brandon/Workspace/SceneForge/data/civitai-lora-library/cache/model.json",
+                  logPath: "C:/Users/Brandon/Workspace/SceneForge/data/logs/llm-chat.jsonl",
+                  sqliteFile: "C:/Users/Brandon/Workspace/SceneForge/data/sceneforge.sqlite",
+                  downloadedModelPath: "C:/Users/Brandon/Workspace/SceneForge/data/civitai-lora-library/models/downloaded-model.safetensors",
+                },
+                resultReference: {
+                  completed: true,
+                  image: {
+                    filename: "shot-1.png",
+                    nodeId: "9",
+                    type: "output",
+                    url: "data:image/png;base64,SHOULD_NOT_PERSIST",
+                  },
+                  promptId: "prompt-shot-1",
+                  shotId: "shot-1",
+                  storedImage: {
+                    byteLength: 12,
+                    contentType: "image/png",
+                    filename: "shot-1.png",
+                    url: "/api/comfyui/generated-images/shot-1.png",
+                  },
+                  warnings: [],
+                },
+              },
+              {
+                shotId: "shot-2",
+                sourceShotIds: ["shot-1"],
+                status: "stale",
+                updatedAt: "2026-06-15T00:02:00.000Z",
+              },
+              {
+                shotId: "shot-queued",
+                sourceShotIds: [],
+                status: "queued",
+                updatedAt: "2026-06-15T00:02:00.000Z",
+                queueMetadata: {
+                  promptId: "prompt-queued",
+                  warnings: [],
+                },
+              },
+            ],
+          },
+        },
+        "story-result-display": {
+          nodeId: "story-result-display",
+          status: "done",
+          source: "system",
+          updatedAt: "2026-06-15T00:02:00.000Z",
+          result: {
+            storyId: workflow.storyId,
+            status: "partial",
+            nsfwContext: {
+              audienceRating: "safe",
+              contentWarnings: [],
+              enabled: false,
+              rationale: "Safe test context.",
+            },
+            previewReferences: [
+              {
+                promptId: "preview-prompt",
+                shotId: "shot-1",
+                image: {
+                  filename: "preview-shot-1.png",
+                  nodeId: "9",
+                  url: "/api/comfyui/generated-images/preview-shot-1.png",
+                },
+                warnings: [],
+              },
+            ],
+            finalReferences: [
+              {
+                completed: true,
+                promptId: "final-prompt",
+                shotId: "shot-1",
+                image: {
+                  filename: "final-shot-1.png",
+                  nodeId: "9",
+                  url: "/api/comfyui/generated-images/final-shot-1.png",
+                },
+                warnings: [],
+              },
+            ],
+            errors: [],
+            envLocal: "should-not-persist",
+          },
+        },
+      },
+    } satisfies typeof workflow;
+
+    const record = createTimelineWorkflowRecord({
+      projectId: "story-workflow-project",
+      name: "Story workflow",
+      workflow: storyWorkflow,
+      sceneRequest: "A courier follows a signal through a neon market.",
+      selectedPromptProfile: "anima",
+      selectedImageCount: 2,
+      selectedNodeId: "shot-graph-execution",
+      selectedStoryShotId: "shot-1",
+      outputDisplayModes: {
+        "shot-graph-execution": "visual",
+        "story-result-display": "json",
+      },
+    });
+    const serialized = serializeTimelineWorkflowRecord(record);
+
+    expect(serialized).not.toContain("secret-shot-key");
+    expect(serialized).not.toContain("SHOULD_NOT_PERSIST");
+    expect(serialized).not.toContain("should-not-persist");
+    expect(serialized).not.toContain("sceneforge.sqlite");
+    expect(serialized).not.toContain("downloaded-model.safetensors");
+    expect(serialized).not.toContain("llm-chat.jsonl");
+    expect(serialized).toContain("[redacted]");
+
+    const parsed = parseTimelineWorkflowRecordJson(serialized);
+    expect(parsed && isStoryGraphTimelineWorkflowRecord(parsed)).toBe(true);
+
+    if (!parsed || !isStoryGraphTimelineWorkflowRecord(parsed)) {
+      throw new Error("Expected a Story Graph timeline record.");
+    }
+
+    expect(parsed).toMatchObject({
+      kind: "sceneforge-timeline-workflow",
+      version: 1,
+      definitionVersion: 1,
+      projectId: "story-workflow-project",
+      name: "Story workflow",
+      sceneRequest: "A courier follows a signal through a neon market.",
+      selectedPromptProfile: "anima",
+      selectedImageCount: 2,
+      selectedNodeId: "shot-graph-execution",
+      selectedStoryShotId: "shot-1",
+      outputDisplayModes: {
+        "shot-graph-execution": "visual",
+        "story-result-display": "json",
+      },
+      workflow: {
+        workflowMode: "story-graph",
+        storyId: workflow.storyId,
+      },
+    });
+    expect(parsed.workflow.nodes["story-input"].result).toMatchObject({
+      rawIntent: "A courier follows a signal through a neon market.",
+      targetShotCount: 2,
+    });
+    expect(parsed.workflow.nodes["story-bible"].result).toMatchObject({
+      logline: "A courier follows a signal through a neon market.",
+    });
+    expect((parsed.workflow.nodes["shot-graph-execution"].result as { errors?: unknown[] }).errors).toHaveLength(2);
+    expect(parsed.workflow.nodes["shot-graph-execution"]).toMatchObject({
+      status: "error",
+      error: {
+        code: "timeline_node_failed",
+      },
+      result: {
+        status: "error",
+        staleShotIds: ["shot-2"],
+        shots: [
+          {
+            shotId: "shot-1",
+            status: "error",
+            error: {
+              code: "shot_execution_failed",
+              details: {
+                interruptedStatus: "running",
+                recoverable: true,
+              },
+            },
+            queueMetadata: {
+              apiKey: "[redacted]",
+              cachePath: "[redacted]",
+              downloadedModelPath: "[redacted]",
+              logPath: "[redacted]",
+              sqliteFile: "[redacted]",
+            },
+            resultReference: {
+              image: {
+                url: "[redacted]",
+              },
+              storedImage: {
+                filename: "shot-1.png",
+                url: "/api/comfyui/generated-images/shot-1.png",
+              },
+            },
+          },
+          {
+            shotId: "shot-2",
+            status: "stale",
+          },
+          {
+            shotId: "shot-queued",
+            status: "error",
+            error: {
+              code: "shot_execution_failed",
+              details: {
+                interruptedStatus: "queued",
+                recoverable: true,
+              },
+            },
+          },
+        ],
+      },
+    });
+    expect(parsed.workflow.nodes["story-result-display"].result).toMatchObject({
+      previewReferences: [
+        {
+          promptId: "preview-prompt",
+          shotId: "shot-1",
+        },
+      ],
+      finalReferences: [
+        {
+          promptId: "final-prompt",
+          shotId: "shot-1",
+        },
+      ],
+      envLocal: "[redacted]",
     });
   });
 
@@ -256,6 +530,11 @@ describe("timeline workflow persistence", () => {
       createdAt: "2026-06-05T00:00:00.000Z",
       updatedAt: "2026-06-05T00:00:00.000Z",
     });
+    expect(parsed && isSingleImageTimelineWorkflowRecord(parsed)).toBe(true);
+
+    if (!parsed || !isSingleImageTimelineWorkflowRecord(parsed)) {
+      throw new Error("Expected a single-image timeline record.");
+    }
 
     expect(parsed?.workflow.workflowMode).toBe("single-image");
     expect(parsed?.workflow.nodes["scene-prompt"].status).toBe("ready");

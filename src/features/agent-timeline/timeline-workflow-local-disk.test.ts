@@ -3,7 +3,12 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { completeTimelineNode, createTimelineWorkflowState } from "./state";
-import { createTimelineWorkflowRecord } from "./timeline-workflow-persistence";
+import {
+  createTimelineWorkflowRecord,
+  isStoryGraphTimelineWorkflowRecord,
+  isSingleImageTimelineWorkflowRecord,
+} from "./timeline-workflow-persistence";
+import { startStoryGraphWorkflow } from "./story-input";
 
 const fsMocks = vi.hoisted(() => ({
   mkdir: vi.fn(),
@@ -64,6 +69,28 @@ function createRecord() {
   });
 }
 
+function createStoryRecord() {
+  const workflow = startStoryGraphWorkflow({
+    rawIntent: "A disk-restored story graph",
+    targetShotCount: 2,
+    now: () => "2026-06-15T00:00:00.000Z",
+  });
+
+  return createTimelineWorkflowRecord({
+    projectId: "story-disk-record",
+    name: "Story disk record",
+    workflow,
+    sceneRequest: "A disk-restored story graph",
+    selectedPromptProfile: "illustrious",
+    selectedImageCount: 2,
+    selectedNodeId: "story-input",
+    selectedStoryShotId: "shot-1",
+    outputDisplayModes: {
+      "story-input": "json",
+    },
+  });
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
   Object.values(fsMocks).forEach((mock) => mock.mockReset());
@@ -96,6 +123,11 @@ describe("timeline workflow local disk storage", () => {
     fsMocks.readFile.mockResolvedValue(JSON.stringify(record));
 
     const loaded = await loadActiveTimelineWorkflowFromDisk();
+    expect(loaded && isSingleImageTimelineWorkflowRecord(loaded)).toBe(true);
+
+    if (!loaded || !isSingleImageTimelineWorkflowRecord(loaded)) {
+      throw new Error("Expected a single-image timeline record.");
+    }
 
     expect(fsMocks.readFile).toHaveBeenCalledWith(
       path.join(process.cwd(), "data", "timeline-workflows", "active-workflow.json"),
@@ -113,6 +145,40 @@ describe("timeline workflow local disk storage", () => {
         resource: {
           apiKey: "[redacted]",
         },
+      },
+    });
+  });
+
+  it("saves and loads active Story Graph records through the shared disk storage", async () => {
+    const record = createStoryRecord();
+    fsMocks.mkdir.mockResolvedValue(undefined);
+    fsMocks.writeFile.mockResolvedValue(undefined);
+    fsMocks.readFile.mockResolvedValue(JSON.stringify(record));
+
+    await saveActiveTimelineWorkflowToDisk(record);
+    const serialized = String(fsMocks.writeFile.mock.calls[0]?.[1]);
+
+    expect(serialized).toContain('"workflowMode": "story-graph"');
+    expect(serialized).toContain('"selectedNodeId": "story-input"');
+    expect(serialized).toContain('"selectedStoryShotId": "shot-1"');
+
+    const loaded = await loadActiveTimelineWorkflowFromDisk();
+    expect(loaded && isStoryGraphTimelineWorkflowRecord(loaded)).toBe(true);
+
+    if (!loaded || !isStoryGraphTimelineWorkflowRecord(loaded)) {
+      throw new Error("Expected a Story Graph timeline record.");
+    }
+
+    expect(loaded).toMatchObject({
+      kind: "sceneforge-timeline-workflow",
+      projectId: "story-disk-record",
+      selectedNodeId: "story-input",
+      selectedStoryShotId: "shot-1",
+      outputDisplayModes: {
+        "story-input": "json",
+      },
+      workflow: {
+        workflowMode: "story-graph",
       },
     });
   });

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import Link from "next/link";
 import { Bot, CheckCircle2, CircleDot, GitBranch, ImageIcon, LoaderCircle, Play, RefreshCw, RotateCcw, Settings } from "lucide-react";
 
@@ -19,6 +19,17 @@ import {
 import {
   storyWorkflowDefinition,
 } from "@/features/agent-timeline/story-workflow";
+import {
+  deleteActiveTimelineWorkflowRecord,
+  loadActiveTimelineWorkflowRecord,
+  saveActiveTimelineWorkflowRecord,
+} from "@/features/agent-timeline/timeline-workflow-storage";
+import {
+  isStoryGraphTimelineWorkflowRecord,
+  type TimelineOutputDisplayMode,
+  type TimelineWorkflowRecord,
+  type TimelineWorkflowRecordInput,
+} from "@/features/agent-timeline/timeline-workflow-persistence";
 import type {
   StoryWorkflowNodeId,
 } from "@/features/agent-timeline/story-types";
@@ -43,6 +54,7 @@ import {
 import { cn } from "@/shared/utils/cn";
 
 import { StoryPlanningWorkspace } from "./StoryPlanningWorkspace";
+import { TimelineWorkflowProjectMenu } from "./TimelineWorkflowProjectMenu";
 
 const headerLinkClassName =
   "inline-flex h-8 items-center justify-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-xs font-medium text-slate-900 transition-colors hover:bg-slate-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-400";
@@ -50,6 +62,9 @@ const headerLinkClassName =
 const planningNodeIds = storyWorkflowDefinition.nodeIds;
 
 type StoryInputAiAction = "rewrite" | "suggest";
+type StoryAutosaveStatus = "idle" | "loading" | "saved" | "error";
+type StoryOutputDisplayMode = TimelineOutputDisplayMode;
+type StoryOutputDisplayModeMap = Partial<Record<StoryWorkflowNodeId, StoryOutputDisplayMode>>;
 
 const fallbackRequest = {
   rawIntent: "A traveler in a blue raincoat enters a rain-washed elevated station, notices a red signal reflected in a puddle, then turns toward a shadowed stairwell.",
@@ -477,6 +492,29 @@ function getGenerationGateReady(workflow: StoryWorkflowState | null) {
   return gate?.status === "done" && isRecord(gate.result) && gate.result.ready === true;
 }
 
+function getStoryWorkflowRequest(workflow: StoryWorkflowState) {
+  const input = workflow.nodes["story-input"].result;
+  return isRecord(input) && typeof input.rawIntent === "string" ? input.rawIntent : "";
+}
+
+function getStoryWorkflowPromptProfile(workflow: StoryWorkflowState): PromptProfileId {
+  const input = workflow.nodes["story-input"].result;
+  const settingsSnapshot = isRecord(input) ? input.settingsSnapshot : undefined;
+
+  return normalizePromptProfileId(
+    isRecord(settingsSnapshot) && typeof settingsSnapshot.promptProfile === "string"
+      ? settingsSnapshot.promptProfile
+      : undefined,
+  );
+}
+
+function getStoryWorkflowShotCount(workflow: StoryWorkflowState) {
+  const input = workflow.nodes["story-input"].result;
+  const targetShotCount = isRecord(input) ? input.targetShotCount : undefined;
+
+  return typeof targetShotCount === "number" && Number.isFinite(targetShotCount) ? targetShotCount : 1;
+}
+
 function StartPanel({
   nsfwEnabled,
   onStart,
@@ -641,10 +679,14 @@ function StoryExecutionPanel({
   busy,
   execution,
   onRegenerateShot,
+  onSelectShot,
+  selectedShotId,
 }: {
   busy: boolean;
   execution: StoryShotGraphExecutionState;
   onRegenerateShot: (shotId: string) => void;
+  onSelectShot: (shotId: string) => void;
+  selectedShotId: string | null;
 }) {
   return (
     <section className="rounded-md border border-slate-200 bg-slate-50 p-3" data-testid="story-execution-panel">
@@ -660,50 +702,70 @@ function StoryExecutionPanel({
         </span>
       </div>
       <div className="grid gap-2">
-        {execution.shots.map((shot) => (
-          <article className="rounded-md border border-slate-200 bg-white p-3" key={shot.shotId}>
-            <div className="flex flex-wrap items-start justify-between gap-2">
-              <div className="min-w-0">
-                <p className="text-xs font-semibold text-slate-900">{shot.shotId}</p>
-                <p className="mt-1 text-[11px] text-slate-500">
-                  Sources: {shot.sourceShotIds.join(", ") || "none"}
+        {execution.shots.map((shot) => {
+          const selected = shot.shotId === selectedShotId;
+
+          return (
+            <article
+              className={cn(
+                "rounded-md border bg-white p-3",
+                selected ? "border-blue-300 ring-2 ring-blue-100" : "border-slate-200",
+              )}
+              data-selected={selected ? "true" : "false"}
+              key={shot.shotId}
+            >
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <button
+                    className="text-left text-xs font-semibold text-slate-900 underline-offset-2 hover:underline"
+                    onClick={() => onSelectShot(shot.shotId)}
+                    type="button"
+                  >
+                    {shot.shotId}
+                  </button>
+                  <p className="mt-1 text-[11px] text-slate-500">
+                    Sources: {shot.sourceShotIds.join(", ") || "none"}
+                  </p>
+                </div>
+                <span className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] font-medium uppercase text-slate-500">
+                  {shot.status}
+                </span>
+              </div>
+              {shot.queueMetadata?.promptId || shot.resultReference?.promptId ? (
+                <p className="mt-2 break-all text-[11px] text-slate-500">
+                  Prompt: {shot.resultReference?.promptId ?? shot.queueMetadata?.promptId}
                 </p>
+              ) : null}
+              {shot.resultReference?.image ? (
+                <div className="mt-2 flex items-center gap-2 text-[11px] text-slate-600">
+                  <ImageIcon className="size-3.5" />
+                  <a className="break-all text-blue-700 underline-offset-2 hover:underline" href={getStoryExecutionImageUrl(shot.resultReference)} target="_blank" rel="noreferrer">
+                    {shot.resultReference.image.filename}
+                  </a>
+                </div>
+              ) : null}
+              {shot.error ? (
+                <div className="mt-2 rounded-md border border-rose-200 bg-rose-50 p-2 text-[11px] text-rose-700">
+                  {shot.error.message}
+                </div>
+              ) : null}
+              <div className="mt-3 flex justify-end">
+                <button
+                  className="inline-flex h-8 items-center justify-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                  disabled={busy}
+                  onClick={() => {
+                    onSelectShot(shot.shotId);
+                    onRegenerateShot(shot.shotId);
+                  }}
+                  type="button"
+                >
+                  <RefreshCw className="size-3.5" />
+                  Regenerate shot
+                </button>
               </div>
-              <span className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] font-medium uppercase text-slate-500">
-                {shot.status}
-              </span>
-            </div>
-            {shot.queueMetadata?.promptId || shot.resultReference?.promptId ? (
-              <p className="mt-2 break-all text-[11px] text-slate-500">
-                Prompt: {shot.resultReference?.promptId ?? shot.queueMetadata?.promptId}
-              </p>
-            ) : null}
-            {shot.resultReference?.image ? (
-              <div className="mt-2 flex items-center gap-2 text-[11px] text-slate-600">
-                <ImageIcon className="size-3.5" />
-                <a className="break-all text-blue-700 underline-offset-2 hover:underline" href={getStoryExecutionImageUrl(shot.resultReference)} target="_blank" rel="noreferrer">
-                  {shot.resultReference.image.filename}
-                </a>
-              </div>
-            ) : null}
-            {shot.error ? (
-              <div className="mt-2 rounded-md border border-rose-200 bg-rose-50 p-2 text-[11px] text-rose-700">
-                {shot.error.message}
-              </div>
-            ) : null}
-            <div className="mt-3 flex justify-end">
-              <button
-                className="inline-flex h-8 items-center justify-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
-                disabled={busy}
-                onClick={() => onRegenerateShot(shot.shotId)}
-                type="button"
-              >
-                <RefreshCw className="size-3.5" />
-                Regenerate shot
-              </button>
-            </div>
-          </article>
-        ))}
+            </article>
+          );
+        })}
       </div>
     </section>
   );
@@ -754,18 +816,259 @@ function StoryResultGrid({ result }: { result: StoryResultDisplay }) {
 
 export function StoryPlanningPreview() {
   const [workflow, setWorkflow] = useState<StoryWorkflowState | null>(null);
+  const [workflowProjectId, setWorkflowProjectId] = useState<string | null>(null);
+  const [workflowProjectName, setWorkflowProjectName] = useState("");
   const [selectedNodeId, setSelectedNodeId] = useState<StoryWorkflowNodeId>("story-input");
+  const [selectedStoryShotId, setSelectedStoryShotId] = useState<string | null>(null);
+  const [outputDisplayModes, setOutputDisplayModes] = useState<StoryOutputDisplayModeMap>({});
   const [settingsNsfwEnabled, setSettingsNsfwEnabled] = useState(false);
   const [planningError, setPlanningError] = useState("");
   const [planningStatus, setPlanningStatus] = useState<"idle" | "planning" | "generating" | "regenerating">("idle");
+  const [autosaveStatus, setAutosaveStatus] = useState<StoryAutosaveStatus>("idle");
+  const [autosaveMessage, setAutosaveMessage] = useState("");
+  const autosaveTimeoutRef = useRef<number | null>(null);
+  const autosaveVersionRef = useRef(0);
+  const restoreVersionRef = useRef(0);
+  const latestAutosaveInputRef = useRef<TimelineWorkflowRecordInput | null>(null);
+  const isMountedRef = useRef(true);
   const selectedNode = workflow?.nodes[selectedNodeId];
   const metadata = storyWorkflowDefinition.metadata[selectedNodeId];
+  const selectedOutputDisplayMode: StoryOutputDisplayMode = outputDisplayModes[selectedNodeId] ?? "visual";
   const rawJson = useMemo(
     () => JSON.stringify(selectedNode?.result ?? selectedNode?.error ?? {}, null, 2),
     [selectedNode],
   );
   const selectedIndex = planningNodeIds.indexOf(selectedNodeId) + 1;
   const selectedDependencies = storyWorkflowDefinition.dependencyDag[selectedNodeId];
+  const autosaveLabel = autosaveStatus === "loading"
+    ? "Saving"
+    : autosaveStatus === "error"
+      ? "Save error"
+      : autosaveStatus === "saved"
+        ? "Autosaved"
+        : "";
+
+  const getCurrentStoryWorkflowRecordInput = useCallback((
+    overrides: Partial<Omit<TimelineWorkflowRecordInput, "workflow">> = {},
+  ): TimelineWorkflowRecordInput | null => {
+    if (!workflow) {
+      return null;
+    }
+
+    const nextProjectId = "projectId" in overrides ? overrides.projectId : workflowProjectId;
+    const nextProjectName = "name" in overrides ? overrides.name : workflowProjectName;
+
+    return {
+      ...(nextProjectId ? { projectId: nextProjectId } : {}),
+      ...(nextProjectName ? { name: nextProjectName } : {}),
+      workflow,
+      sceneRequest: overrides.sceneRequest ?? getStoryWorkflowRequest(workflow),
+      selectedPromptProfile: overrides.selectedPromptProfile ?? getStoryWorkflowPromptProfile(workflow),
+      selectedImageCount: overrides.selectedImageCount ?? getStoryWorkflowShotCount(workflow),
+      selectedNodeId: overrides.selectedNodeId ?? selectedNodeId,
+      selectedStoryShotId: overrides.selectedStoryShotId ?? selectedStoryShotId,
+      outputDisplayModes: overrides.outputDisplayModes ?? outputDisplayModes,
+    };
+  }, [
+    outputDisplayModes,
+    selectedNodeId,
+    selectedStoryShotId,
+    workflow,
+    workflowProjectId,
+    workflowProjectName,
+  ]);
+
+  function applyStoryWorkflowRecord(
+    record: TimelineWorkflowRecord,
+    message: string,
+    options: { saveActive?: boolean } = {},
+  ) {
+    if (!isStoryGraphTimelineWorkflowRecord(record)) {
+      setPlanningError("Open single-image workflow records from the Run page.");
+      return;
+    }
+
+    const recordInput: TimelineWorkflowRecordInput = {
+      ...(record.projectId ? { projectId: record.projectId } : {}),
+      ...(record.name ? { name: record.name } : {}),
+      workflow: record.workflow,
+      sceneRequest: record.sceneRequest,
+      selectedPromptProfile: record.selectedPromptProfile,
+      selectedImageCount: record.selectedImageCount,
+      selectedNodeId: record.selectedNodeId,
+      selectedStoryShotId: record.selectedStoryShotId ?? null,
+      outputDisplayModes: record.outputDisplayModes,
+    };
+
+    latestAutosaveInputRef.current = recordInput;
+    setWorkflow(record.workflow);
+    setWorkflowProjectId(record.projectId ?? null);
+    setWorkflowProjectName(record.name ?? "");
+    setSelectedNodeId(record.selectedNodeId);
+    setSelectedStoryShotId(record.selectedStoryShotId ?? null);
+    setOutputDisplayModes(record.outputDisplayModes as StoryOutputDisplayModeMap);
+    setPlanningError("");
+    setAutosaveStatus("saved");
+    setAutosaveMessage(message || (record.name ? `Restored ${record.name}.` : `Restored ${record.workflow.workflowId}.`));
+
+    if (options.saveActive) {
+      void saveActiveTimelineWorkflowRecord(recordInput).catch((error) => {
+        console.error("[SceneForge] [story] failed to update active workflow after opening named workflow", { error });
+        setAutosaveStatus("error");
+        setAutosaveMessage(error instanceof Error ? error.message : "Unable to save the active Story Graph workflow.");
+      });
+    }
+  }
+
+  function flushLatestStoryAutosave() {
+    const input = latestAutosaveInputRef.current;
+    if (!input) {
+      return;
+    }
+
+    void saveActiveTimelineWorkflowRecord(input).catch((error) => {
+      console.error("[SceneForge] [story] failed to flush active workflow autosave", { error });
+    });
+  }
+
+  function clearPendingStoryAutosave() {
+    autosaveVersionRef.current += 1;
+    if (autosaveTimeoutRef.current) {
+      window.clearTimeout(autosaveTimeoutRef.current);
+      autosaveTimeoutRef.current = null;
+    }
+  }
+
+  function handleCurrentNamedWorkflowDeleted() {
+    const autosaveInput = getCurrentStoryWorkflowRecordInput({
+      projectId: null,
+      name: null,
+    });
+
+    setWorkflowProjectId(null);
+    setWorkflowProjectName("");
+    setAutosaveStatus("saved");
+    setAutosaveMessage("Current Story Graph workflow is now an unnamed autosaved draft.");
+
+    if (autosaveInput) {
+      latestAutosaveInputRef.current = autosaveInput;
+      clearPendingStoryAutosave();
+      void saveActiveTimelineWorkflowRecord(autosaveInput).catch((error) => {
+        console.error("[SceneForge] [story] failed to save unnamed active workflow after named delete", { error });
+        setAutosaveStatus("error");
+        setAutosaveMessage(error instanceof Error ? error.message : "Unable to save the active Story Graph workflow.");
+      });
+    }
+  }
+
+  function handleNewStoryWorkflow() {
+    clearPendingStoryAutosave();
+    restoreVersionRef.current += 1;
+    latestAutosaveInputRef.current = null;
+    setWorkflow(null);
+    setWorkflowProjectId(null);
+    setWorkflowProjectName("");
+    setSelectedNodeId("story-input");
+    setSelectedStoryShotId(null);
+    setOutputDisplayModes({});
+    setPlanningError("");
+    setAutosaveStatus("idle");
+    setAutosaveMessage("");
+
+    void deleteActiveTimelineWorkflowRecord().catch((error) => {
+      console.error("[SceneForge] [story] failed to clear active workflow", { error });
+      setAutosaveStatus("error");
+      setAutosaveMessage(error instanceof Error ? error.message : "Unable to clear the active Story Graph workflow.");
+    });
+  }
+
+  useEffect(() => {
+    return () => {
+      isMountedRef.current = false;
+      if (autosaveTimeoutRef.current) {
+        window.clearTimeout(autosaveTimeoutRef.current);
+      }
+      flushLatestStoryAutosave();
+    };
+  }, []);
+
+  useEffect(() => {
+    let canceled = false;
+    const restoreVersion = restoreVersionRef.current;
+
+    void loadActiveTimelineWorkflowRecord()
+      .then((record) => {
+        if (
+          canceled ||
+          restoreVersionRef.current !== restoreVersion ||
+          !record ||
+          !isStoryGraphTimelineWorkflowRecord(record)
+        ) {
+          return;
+        }
+
+        applyStoryWorkflowRecord(record, "Restored the autosaved Story Graph workflow.");
+      })
+      .catch((error) => {
+        if (canceled || restoreVersionRef.current !== restoreVersion) {
+          return;
+        }
+
+        console.error("[SceneForge] [story] failed to restore active workflow", { error });
+        setAutosaveStatus("error");
+        setAutosaveMessage(error instanceof Error ? error.message : "Unable to restore the autosaved Story Graph workflow.");
+      });
+
+    return () => {
+      canceled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!workflow) {
+      return;
+    }
+
+    const autosaveInput = getCurrentStoryWorkflowRecordInput();
+    if (!autosaveInput) {
+      return;
+    }
+
+    clearPendingStoryAutosave();
+    latestAutosaveInputRef.current = autosaveInput;
+
+    const autosaveVersion = autosaveVersionRef.current + 1;
+    autosaveVersionRef.current = autosaveVersion;
+    autosaveTimeoutRef.current = window.setTimeout(() => {
+      setAutosaveStatus("loading");
+      setAutosaveMessage("Saving Story Graph workflow...");
+
+      void saveActiveTimelineWorkflowRecord(autosaveInput)
+        .then((record) => {
+          if (autosaveVersionRef.current !== autosaveVersion || !isMountedRef.current) {
+            return;
+          }
+
+          setAutosaveStatus("saved");
+          setAutosaveMessage(`Autosaved ${record.workflow.workflowId}.`);
+        })
+        .catch((error) => {
+          if (autosaveVersionRef.current !== autosaveVersion || !isMountedRef.current) {
+            return;
+          }
+
+          console.error("[SceneForge] [story] autosave failed", { error });
+          setAutosaveStatus("error");
+          setAutosaveMessage(error instanceof Error ? error.message : "Unable to autosave the Story Graph workflow.");
+        });
+    }, 250);
+
+    return () => {
+      if (autosaveTimeoutRef.current) {
+        window.clearTimeout(autosaveTimeoutRef.current);
+      }
+    };
+  }, [getCurrentStoryWorkflowRecordInput, workflow]);
 
   useEffect(() => {
     if (typeof fetch !== "function") {
@@ -797,7 +1100,12 @@ export function StoryPlanningPreview() {
 
   async function handleStart(request: StoryGraphStartRequest) {
     setPlanningError("");
+    restoreVersionRef.current += 1;
+    setWorkflowProjectId(null);
+    setWorkflowProjectName("");
     setSelectedNodeId("story-input");
+    setSelectedStoryShotId(null);
+    setOutputDisplayModes({});
     setPlanningStatus("planning");
 
     try {
@@ -848,8 +1156,12 @@ export function StoryPlanningPreview() {
       const generated = await postStoryWorkflow("/api/agent-timeline/story/confirm-generation", {
         workflow,
       }, "Story Graph generation failed.");
+      const execution = isStoryExecutionState(generated.nodes["shot-graph-execution"].result)
+        ? generated.nodes["shot-graph-execution"].result
+        : null;
       setWorkflow(generated);
       setSelectedNodeId("shot-graph-execution");
+      setSelectedStoryShotId(execution?.shots[0]?.shotId ?? selectedStoryShotId);
     } catch (error) {
       setPlanningError(error instanceof Error ? error.message : "Story Graph generation failed.");
     } finally {
@@ -863,6 +1175,7 @@ export function StoryPlanningPreview() {
     }
 
     setPlanningError("");
+    setSelectedStoryShotId(shotId);
     setPlanningStatus("regenerating");
 
     try {
@@ -923,6 +1236,36 @@ export function StoryPlanningPreview() {
         </div>
 
         <div className="flex shrink-0 items-center gap-2">
+          {workflow ? (
+            <TimelineWorkflowProjectMenu
+              currentProjectId={workflowProjectId}
+              currentProjectName={workflowProjectName}
+              disabled={actionBusy}
+              getCurrentRecordInput={getCurrentStoryWorkflowRecordInput}
+              onDeleteCurrentProject={handleCurrentNamedWorkflowDeleted}
+              onRecordOpened={(record) => {
+                restoreVersionRef.current += 1;
+                applyStoryWorkflowRecord(record, "Opened saved Story Graph workflow.", { saveActive: true });
+              }}
+              onRecordSaved={(record) => applyStoryWorkflowRecord(record, "Saved Story Graph workflow.")}
+              workflowMode="story-graph"
+            />
+          ) : null}
+          <span
+            className={cn(
+              "hidden h-7 w-28 items-center justify-center truncate rounded-md border px-2 text-[11px] font-medium md:inline-flex",
+              autosaveStatus === "idle"
+                ? "invisible border-transparent bg-transparent text-transparent"
+                : autosaveStatus === "error"
+                  ? "border-rose-200 bg-rose-50 text-rose-700"
+                  : autosaveStatus === "loading"
+                    ? "border-blue-200 bg-blue-50 text-blue-700"
+                    : "border-emerald-200 bg-emerald-50 text-emerald-700",
+            )}
+            title={autosaveMessage || autosaveLabel}
+          >
+            {autosaveLabel || "Autosaved"}
+          </span>
           {workflow && generationReady ? (
             <button
               className={headerLinkClassName}
@@ -935,7 +1278,7 @@ export function StoryPlanningPreview() {
             </button>
           ) : null}
           {workflow ? (
-            <button className={headerLinkClassName} onClick={() => setWorkflow(null)} type="button">
+            <button className={headerLinkClassName} onClick={handleNewStoryWorkflow} type="button">
               <RotateCcw className="size-3.5" />
               New
             </button>
@@ -1069,32 +1412,61 @@ export function StoryPlanningPreview() {
                     ) : null}
                     <div className="mb-2 flex items-center justify-between gap-3">
                       <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Step output</p>
-                      <span className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] font-medium uppercase text-slate-500">
-                        Visual + Raw JSON
-                      </span>
+                      <div className="flex rounded-md border border-slate-200 bg-slate-50 p-0.5">
+                        {(["visual", "json"] as const).map((mode) => (
+                          <button
+                            className={cn(
+                              "h-7 rounded px-2 text-[11px] font-medium uppercase transition-colors",
+                              selectedOutputDisplayMode === mode
+                                ? "bg-white text-slate-900 shadow-sm"
+                                : "text-slate-500 hover:text-slate-800",
+                            )}
+                            key={mode}
+                            onClick={() =>
+                              setOutputDisplayModes((current) => ({
+                                ...current,
+                                [selectedNodeId]: mode,
+                              }))
+                            }
+                            type="button"
+                          >
+                            {mode === "visual" ? "Visual" : "Raw JSON"}
+                          </button>
+                        ))}
+                      </div>
                     </div>
-                    <StoryPlanningWorkspace
-                      editable
-                      emptyState="This story artifact has not been generated yet."
-                      key={`${selectedNodeId}:${selectedNode.updatedAt}`}
-                      node={selectedNode}
-                      onSave={handleSave}
-                      storyId={workflow.storyId}
-                    />
-                    {selectedNodeId === "shot-graph-execution" && executionResult ? (
-                      <div className="mt-4">
-                        <StoryExecutionPanel
-                          busy={actionBusy}
-                          execution={executionResult}
-                          onRegenerateShot={(shotId) => void handleRegenerateShot(shotId)}
+                    {selectedOutputDisplayMode === "json" ? (
+                      <pre className="min-h-96 flex-1 overflow-auto whitespace-pre-wrap rounded-md border border-slate-200 bg-slate-50 p-3 font-mono text-xs leading-relaxed text-slate-700">
+                        {rawJson}
+                      </pre>
+                    ) : (
+                      <>
+                        <StoryPlanningWorkspace
+                          editable
+                          emptyState="This story artifact has not been generated yet."
+                          key={`${selectedNodeId}:${selectedNode.updatedAt}`}
+                          node={selectedNode}
+                          onSave={handleSave}
+                          storyId={workflow.storyId}
                         />
-                      </div>
-                    ) : null}
-                    {selectedNodeId === "story-result-display" && storyResult ? (
-                      <div className="mt-4">
-                        <StoryResultGrid result={storyResult} />
-                      </div>
-                    ) : null}
+                        {selectedNodeId === "shot-graph-execution" && executionResult ? (
+                          <div className="mt-4">
+                            <StoryExecutionPanel
+                              busy={actionBusy}
+                              execution={executionResult}
+                              onRegenerateShot={(shotId) => void handleRegenerateShot(shotId)}
+                              onSelectShot={setSelectedStoryShotId}
+                              selectedShotId={selectedStoryShotId}
+                            />
+                          </div>
+                        ) : null}
+                        {selectedNodeId === "story-result-display" && storyResult ? (
+                          <div className="mt-4">
+                            <StoryResultGrid result={storyResult} />
+                          </div>
+                        ) : null}
+                      </>
+                    )}
                   </div>
                 </div>
 

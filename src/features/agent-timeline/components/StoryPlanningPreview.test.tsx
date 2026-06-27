@@ -3,6 +3,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  createTimelineWorkflowRecord,
   startStoryGraphWorkflow,
   type StoryWorkflowState,
 } from "@/features/agent-timeline";
@@ -247,6 +248,172 @@ afterEach(() => {
 });
 
 describe("StoryPlanningPreview", () => {
+  it("does not let a late active restore overwrite a newly started Story Graph workflow", async () => {
+    let resolveActiveWorkflow: ((response: Response) => void) | null = null;
+    const activeWorkflowResponse = new Promise<Response>((resolve) => {
+      resolveActiveWorkflow = resolve;
+    });
+    const oldWorkflow = createPlannedWorkflow("An old autosaved story request.");
+    const oldRecord = createTimelineWorkflowRecord({
+      workflow: oldWorkflow,
+      sceneRequest: "An old autosaved story request.",
+      selectedPromptProfile: "illustrious",
+      selectedImageCount: 2,
+      selectedNodeId: "story-input",
+    });
+    const newWorkflow = createPlannedWorkflow("A brand new story request.");
+    const fetchMock = vi.fn<typeof fetch>(async (url) => {
+      const target = typeof url === "string" ? url : url instanceof Request ? url.url : url.toString();
+      const resourceResponse = handleStoryResourceListFetch(target);
+      if (resourceResponse) {
+        return resourceResponse;
+      }
+
+      if (target === "/api/settings") {
+        return {
+          ok: true,
+          json: async () => ({}),
+        } as Response;
+      }
+
+      if (target === "/api/agent-timeline/active-workflow") {
+        return activeWorkflowResponse;
+      }
+
+      if (target === "/api/agent-timeline/story/run-planning") {
+        return {
+          ok: true,
+          json: async () => ({
+            workflow: newWorkflow,
+          }),
+        } as Response;
+      }
+
+      throw new Error(`Unexpected fetch ${target}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await act(async () => {
+      root.render(<StoryPlanningPreview />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const textarea = container.querySelector("textarea") as HTMLTextAreaElement | null;
+
+    act(() => {
+      setNativeInputValue(textarea as HTMLTextAreaElement, "A brand new story request.");
+    });
+    await clickButtonAsync("Start planning");
+
+    expect(container.textContent).toContain("A brand new story request.");
+
+    await act(async () => {
+      resolveActiveWorkflow?.({
+        ok: true,
+        json: async () => oldRecord,
+      } as Response);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(container.textContent).toContain("A brand new story request.");
+    expect(container.textContent).not.toContain("An old autosaved story request.");
+  });
+
+  it("restores an active Story Graph workflow and autosaves selected shot display state", async () => {
+    vi.useFakeTimers();
+    const plannedWorkflow = createPlannedWorkflow("A courier follows a restored signal.");
+    const restoredWorkflow = withExecution(plannedWorkflow, "restored");
+    const activeRecord = createTimelineWorkflowRecord({
+      projectId: "story-workflow-restored",
+      name: "Restored story workflow",
+      workflow: restoredWorkflow,
+      sceneRequest: "A courier follows a restored signal.",
+      selectedPromptProfile: "illustrious",
+      selectedImageCount: 2,
+      selectedNodeId: "shot-graph-execution",
+      selectedStoryShotId: "shot-2",
+      outputDisplayModes: {
+        "shot-graph-execution": "visual",
+      },
+    });
+    const activeSaveBodies: unknown[] = [];
+    const fetchMock = vi.fn<typeof fetch>(async (url, init) => {
+      const target = typeof url === "string" ? url : url instanceof Request ? url.url : url.toString();
+
+      if (target === "/api/settings") {
+        return {
+          ok: true,
+          json: async () => ({}),
+        } as Response;
+      }
+
+      if (target === "/api/agent-timeline/active-workflow") {
+        if (init?.method === "PUT") {
+          activeSaveBodies.push(typeof init.body === "string" ? JSON.parse(init.body) : null);
+          return {
+            ok: true,
+            json: async () => ({
+              ok: true,
+              record: activeSaveBodies.at(-1),
+            }),
+          } as Response;
+        }
+
+        return {
+          ok: true,
+          json: async () => activeRecord,
+        } as Response;
+      }
+
+      throw new Error(`Unexpected fetch ${target}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      await act(async () => {
+        root.render(<StoryPlanningPreview />);
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(container.textContent).toContain("User-started planning workflow");
+      expect(container.textContent).toContain("Restored story workflow");
+      expect(container.textContent).toContain("restored-shot-1");
+      expect(container.querySelector('article[data-selected="true"]')?.textContent).toContain("shot-2");
+
+      const rawJsonButton = Array.from(container.querySelectorAll("button")).find(
+        (button) => button.textContent?.replace(/\s+/g, " ").trim() === "Raw JSON",
+      ) as HTMLButtonElement | undefined;
+      expect(rawJsonButton).toBeDefined();
+
+      await act(async () => {
+        rawJsonButton?.click();
+        await Promise.resolve();
+        await vi.advanceTimersByTimeAsync(300);
+      });
+
+      expect(activeSaveBodies.at(-1)).toMatchObject({
+        kind: "sceneforge-timeline-workflow",
+        projectId: "story-workflow-restored",
+        name: "Restored story workflow",
+        selectedNodeId: "shot-graph-execution",
+        selectedStoryShotId: "shot-2",
+        outputDisplayModes: {
+          "shot-graph-execution": "json",
+        },
+        workflow: {
+          workflowMode: "story-graph",
+          workflowId: restoredWorkflow.workflowId,
+        },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("starts empty and initializes a user-started story graph workflow from request and optional shots", async () => {
     const plannedWorkflow = createPlannedWorkflow("A detective follows a signal through a storm-lit city.");
     const fetchMock = vi.fn<typeof fetch>(async (url) => {

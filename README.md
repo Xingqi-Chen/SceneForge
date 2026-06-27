@@ -25,7 +25,7 @@ npm run dev
 
 Open [http://localhost:3000](http://localhost:3000) with your browser. The timeline MVP is the root route.
 The legacy visual editor remains available at [http://localhost:3000/editor](http://localhost:3000/editor).
-The Story Graph planning surface is available at [http://localhost:3000/story](http://localhost:3000/story). It accepts a story request and optional shot count, supports AI suggest/rewrite for the request, and asks AI to choose the shot count when the field is left blank. It then creates an in-memory planning workflow with inspectable story artifacts. Audience rating is derived internally from the Settings NSFW switch. Shot execution and durable Story Graph persistence are still reserved for later tracks.
+The Story Graph planning surface is available at [http://localhost:3000/story](http://localhost:3000/story). It accepts a story request and optional shot count, supports AI suggest/rewrite for the request, and asks AI to choose the shot count when the field is left blank. It creates an inspectable `story-graph` workflow, supports confirmation-gated shot execution, and autosaves Story Graph state through the same local workflow record storage used by Run. Audience rating is derived internally from the Settings NSFW switch.
 
 After importing or changing local Civitai model/LoRA metadata, rebuild the derived FTS search index and then the derived sqlite-vec embedding index used by recommendation ranking:
 
@@ -107,7 +107,7 @@ Runtime data is stored under `data/` by default or in configured absolute paths.
 
 SQLite-backed settings and Civitai metadata use `data/sceneforge.sqlite` by default. Set `SCENEFORGE_SQLITE_FILE` to an absolute path to override the database location. `npm run civitai:reindex` and `npm run civitai:reindex-embeddings` use the same value from the shell, `.env.local`, or `.env`.
 
-Timeline workflow records are stored under `data/timeline-workflows/` by default. The active autosave record remains `active-workflow.json`; named workflow records are separate JSON files in the same directory. They contain local workflow state and references needed to restore progress; they must not contain API keys or `.env.local` secret values. Deleting a named workflow removes only that workflow JSON record and does not delete generated images or external assets referenced by the workflow.
+Timeline workflow records are stored under `data/timeline-workflows/` by default. The active autosave record remains `active-workflow.json`; named workflow records are separate JSON files in the same directory. Records can hold either `single-image` Run workflows or `story-graph` workflows. They contain local workflow state and references needed to restore progress; they must not contain API keys, `.env.local` secret values, generated image bytes, downloaded models, caches, logs, or local resource databases. Deleting a named workflow removes only that workflow JSON record and does not delete generated images or external assets referenced by the workflow.
 
 Important environment variables are documented in `.env.example`.
 

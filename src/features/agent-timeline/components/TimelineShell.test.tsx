@@ -10,6 +10,7 @@ import {
   createTimelineWorkflowRecord,
   createTimelineWorkflowState,
   failTimelineNode,
+  startStoryGraphWorkflow,
   type TimelineWorkflowState,
 } from "@/features/agent-timeline";
 import type { PromptTag } from "@/shared/types";
@@ -865,6 +866,56 @@ describe("TimelineShell", () => {
     }
   });
 
+  it("does not restore Story Graph active workflow records on the Run page", async () => {
+    const originalFetch = globalThis.fetch;
+    const storyRecord = createTimelineWorkflowRecord({
+      projectId: "story-active-run-page",
+      name: "Story active record",
+      workflow: startStoryGraphWorkflow({
+        rawIntent: "A Story Graph belongs on the Story page",
+        targetShotCount: 2,
+        now: () => "2026-06-15T00:00:00.000Z",
+      }),
+      sceneRequest: "A Story Graph belongs on the Story page",
+      selectedPromptProfile: "illustrious",
+      selectedImageCount: 2,
+      selectedNodeId: "story-input",
+      selectedStoryShotId: "shot-1",
+    });
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = getFetchUrl(input);
+
+      if (url === "/api/settings") {
+        return createTimelineSettingsResponse();
+      }
+
+      if (url === "/api/agent-timeline/active-workflow") {
+        if (init?.method === "PUT") {
+          throw new Error("Run page should not resave Story Graph active records.");
+        }
+
+        return createJsonResponse(storyRecord);
+      }
+
+      return createJsonResponse({ role: "assistant", content: "{}" });
+    });
+    globalThis.fetch = fetchMock;
+
+    try {
+      act(() => {
+        root.render(<TimelineShell />);
+      });
+      await flushAsyncWork();
+
+      expect((container.querySelector("#scene-request") as HTMLTextAreaElement | null)?.value).toBe("");
+      expect(
+        container.querySelector('[title="Story Graph workflow records open from the Story page."]'),
+      ).not.toBeNull();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("saves an unnamed active workflow as a named timeline workflow", async () => {
     const originalFetch = globalThis.fetch;
     const workflow = createTimelineWorkflowState({
@@ -995,6 +1046,7 @@ describe("TimelineShell", () => {
               name: "Opened workflow",
               createdAt: "2026-06-05T00:00:00.000Z",
               updatedAt: "2026-06-05T00:01:00.000Z",
+              workflowMode: "single-image",
             },
           ],
         });
@@ -1092,6 +1144,7 @@ describe("TimelineShell", () => {
               name: "Current named workflow",
               createdAt: "2026-06-05T00:00:00.000Z",
               updatedAt: "2026-06-05T00:01:00.000Z",
+              workflowMode: "single-image",
             },
           ],
         });

@@ -44,6 +44,7 @@ describe("/api/agent-timeline/workflows", () => {
         name: "Newest",
         createdAt: "2026-06-05T00:00:00.000Z",
         updatedAt: "2026-06-05T00:02:00.000Z",
+        workflowMode: "story-graph",
       },
     ]);
 
@@ -53,6 +54,7 @@ describe("/api/agent-timeline/workflows", () => {
     expect(response.status).toBe(200);
     expect(payload.workflows).toHaveLength(1);
     expect(payload.workflows[0].id).toBe("workflow-newest");
+    expect(payload.workflows[0].workflowMode).toBe("story-graph");
   });
 
   it("saves a named workflow record", async () => {
@@ -80,6 +82,7 @@ describe("/api/agent-timeline/workflows", () => {
     expect(response.status).toBe(200);
     expect(payload.ok).toBe(true);
     expect(payload.record.projectId).toBe("workflow-api-save");
+    expect(payload.summary.workflowMode).toBe("single-image");
     expect(diskMocks.saveNamedTimelineWorkflowToDisk).toHaveBeenCalledWith({
       id: "workflow-api-save",
       name: "Named API workflow",
