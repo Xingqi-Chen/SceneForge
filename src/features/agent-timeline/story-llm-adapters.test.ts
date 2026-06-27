@@ -838,7 +838,9 @@ describe("story LLM adapters", () => {
             parameters: {
               cfg: "6",
               denoise: "0.7",
+              height: "512",
               steps: "12",
+              width: "512",
             },
           },
           {
@@ -860,6 +862,8 @@ describe("story LLM adapters", () => {
       denoise: 0.7,
       steps: 12,
     });
+    expect(plan.perShotOverrides[0]?.parameters).not.toHaveProperty("width");
+    expect(plan.perShotOverrides[0]?.parameters).not.toHaveProperty("height");
     expect(plan.perShotOverrides[1]?.parameters).toMatchObject({
       cfg: 5.5,
       denoise: 1,

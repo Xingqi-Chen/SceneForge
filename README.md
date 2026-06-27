@@ -25,7 +25,7 @@ npm run dev
 
 Open [http://localhost:3000](http://localhost:3000) with your browser. The timeline MVP is the root route.
 The legacy visual editor remains available at [http://localhost:3000/editor](http://localhost:3000/editor).
-The Story Graph planning surface is available at [http://localhost:3000/story](http://localhost:3000/story). It accepts a story request and optional shot count, supports AI suggest/rewrite for the request, and asks AI to choose the shot count when the field is left blank. It creates an inspectable `story-graph` workflow, supports confirmation-gated shot execution, and autosaves Story Graph state through the same local workflow record storage used by Run. Audience rating is derived internally from the Settings NSFW switch.
+The Story Graph planning surface is available at [http://localhost:3000/story](http://localhost:3000/story). It accepts a story request and optional shot count, supports AI suggest/rewrite for the request, and asks AI to choose the shot count when the field is left blank. It creates an inspectable `story-graph` workflow, supports confirmation-gated shot execution, and autosaves Story Graph state through the same local workflow record storage used by Run. The Story header includes a workflow project menu for opening saved Story Graph workflows before entering a node and for saving named workflows after planning starts. Audience rating is derived internally from the Settings NSFW switch.
 
 After importing or changing local Civitai model/LoRA metadata, rebuild the derived FTS search index and then the derived sqlite-vec embedding index used by recommendation ranking:
 

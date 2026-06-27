@@ -10,6 +10,7 @@ import {
   StoryResourcePlanValidationError,
   type StoryGenerationParameters,
   type StoryLocalResource,
+  type StoryParameterPlan,
   type StoryPreviewExecutionOptions,
 } from "./story-planning";
 import type { StorySafetyPlan, StoryShot } from "./story-types";
@@ -333,7 +334,7 @@ describe("story planning", () => {
     });
   });
 
-  it("normalizes string per-shot parameter overrides and falls back invalid numeric values", () => {
+  it("normalizes string per-shot parameter overrides while keeping resolution story-level", () => {
     const parameterPlan = createStoryParameterPlan({
       storyId,
       defaults,
@@ -367,16 +368,52 @@ describe("story planning", () => {
     expect(parameterPlan.perShotOverrides[0]?.parameters).toMatchObject({
       cfg: 6.25,
       denoise: 0.7,
-      height: 384,
       samplerName: "uni_pc",
       scheduler: "sgm_uniform",
       steps: 12,
-      width: 512,
     });
+    expect(parameterPlan.perShotOverrides[0]?.parameters).not.toHaveProperty("width");
+    expect(parameterPlan.perShotOverrides[0]?.parameters).not.toHaveProperty("height");
     expect(parameterPlan.perShotOverrides[1]?.parameters).toMatchObject({
       cfg: defaults.cfg,
       denoise: defaults.denoise,
     });
+  });
+
+  it("keeps every Story shot on the same resolution even when old per-shot overrides include dimensions", () => {
+    const parameterPlan = {
+      defaults,
+      perShotOverrides: [
+        {
+          shotId: "shot-2",
+          parameters: {
+            height: 512,
+            steps: 12,
+            width: 512,
+          },
+          reason: "Legacy per-shot dimension override.",
+        },
+      ],
+      storyId,
+      warnings: [],
+    } satisfies StoryParameterPlan;
+    const renderPlan = assembleStoryRenderPlan({
+      parameterPlan,
+      resourcePlan: createResourcePlan(),
+      safetyPlan,
+      shots,
+    });
+    const finalBatch = createStoryExecutionRequestBatch({ mode: "final", renderPlan });
+
+    expect(renderPlan.shots.map((shot) => `${shot.parameters.width}x${shot.parameters.height}`)).toEqual([
+      "1024x768",
+      "1024x768",
+    ]);
+    expect(renderPlan.shots[1]?.parameters.steps).toBe(12);
+    expect(finalBatch.requests.map((request) => `${request.request.width}x${request.request.height}`)).toEqual([
+      "1024x768",
+      "1024x768",
+    ]);
   });
 
   it("uses model-family sampler defaults for Anima Story resources", () => {

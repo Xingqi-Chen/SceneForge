@@ -1,7 +1,20 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { ChevronLeft, ChevronRight, Layers, ShieldAlert, SlidersHorizontal, Trash2, X } from "lucide-react";
+import Link from "next/link";
+import {
+  ChevronLeft,
+  ChevronRight,
+  GitBranch,
+  Layers,
+  Paintbrush,
+  Settings,
+  ShieldAlert,
+  SlidersHorizontal,
+  Trash2,
+  Workflow,
+  X,
+} from "lucide-react";
 import { createPortal } from "react-dom";
 
 import { Button } from "@/components/ui/button";
@@ -32,6 +45,17 @@ type TabletDrawer = "left" | "right";
 type EditorShellProps = {
   showNsfwButton?: boolean;
 };
+
+const editorHeaderClassName =
+  "relative z-50 flex min-h-14 shrink-0 flex-wrap items-center justify-between gap-3 border-b border-slate-200 bg-white px-3 py-2 sm:flex-nowrap sm:px-4";
+const editorHeaderPrimaryClassName = "flex min-w-0 flex-1 items-center gap-3";
+const editorHeaderIdentityClassName = "flex min-w-0 flex-1 items-center gap-3";
+const editorHeaderActionsClassName = "flex min-w-0 shrink-0 flex-wrap items-center justify-end gap-2 sm:flex-nowrap sm:gap-3";
+const editorHeaderNavClassName = "flex h-9 shrink-0 items-center gap-1 rounded-md border border-slate-200 bg-slate-50 p-1";
+const editorHeaderNavLinkClassName =
+  "inline-flex h-7 items-center justify-center gap-1.5 rounded px-2.5 text-xs font-medium text-slate-600 transition-colors hover:bg-white hover:text-slate-950";
+const editorHeaderNavCurrentClassName =
+  "inline-flex h-7 items-center justify-center gap-1.5 rounded bg-white px-2.5 text-xs font-semibold text-slate-950 shadow-sm";
 
 function TabletEditorDrawer({
   children,
@@ -177,14 +201,23 @@ export function EditorShell({ showNsfwButton = false }: EditorShellProps = {}) {
   return (
     <main className="sf-app-shell flex overflow-hidden bg-slate-50 font-sans text-slate-950 selection:bg-blue-100 selection:text-blue-900">
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-      <header className="relative z-50 flex h-14 shrink-0 items-center justify-between border-b border-slate-200 bg-white px-3 sm:px-4">
-        <div className="flex min-w-0 flex-1 items-center gap-4">
-          <h1 className="shrink-0 text-sm font-bold tracking-tight text-slate-900">
+      <header className={editorHeaderClassName}>
+        <div className={editorHeaderPrimaryClassName}>
+          <div className={editorHeaderIdentityClassName}>
+            <div className="flex size-8 shrink-0 items-center justify-center rounded-md border border-slate-200 bg-slate-50 text-slate-700">
+              <Paintbrush className="size-4" />
+            </div>
+            <div className="min-w-0">
+              <h1 className="truncate text-sm font-bold tracking-tight text-slate-900">SceneForge</h1>
+              <p className="truncate text-[11px] text-slate-500">Visual prompt editor</p>
+            </div>
+          </div>
+          <h1 className="hidden">
             SceneForge | 提示词工作台
           </h1>
           <ProjectMenu />
         </div>
-        <div className="flex items-center gap-2 sm:gap-3">
+        <div className={editorHeaderActionsClassName}>
           {isTabletEditor ? (
             <div className="flex items-center gap-2">
               <Button
@@ -213,6 +246,24 @@ export function EditorShell({ showNsfwButton = false }: EditorShellProps = {}) {
             <span className="mr-1.5 inline-block h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
             {loadState === "loading" ? "加载中..." : "已就绪"}
           </span>
+          <nav aria-label="Workspace mode" className={editorHeaderNavClassName}>
+            <Link aria-label="Open Run workspace" className={editorHeaderNavLinkClassName} href="/" title="Open Run workspace">
+              <Workflow className="size-3.5" />
+              <span className="hidden sm:inline">Run</span>
+            </Link>
+            <Link aria-label="Open Story Graph planning" className={editorHeaderNavLinkClassName} href="/story" title="Open Story Graph planning">
+              <GitBranch className="size-3.5" />
+              <span className="hidden sm:inline">Story</span>
+            </Link>
+            <span aria-current="page" className={editorHeaderNavCurrentClassName}>
+              <Paintbrush className="size-3.5" />
+              <span className="hidden sm:inline">Editor</span>
+            </span>
+            <Link aria-label="Open settings" className={editorHeaderNavLinkClassName} href="/settings" title="Open settings">
+              <Settings className="size-3.5" />
+              <span className="hidden sm:inline">Settings</span>
+            </Link>
+          </nav>
           {showNsfwButton ? (
             <Button
               aria-pressed={supportsNsfw}

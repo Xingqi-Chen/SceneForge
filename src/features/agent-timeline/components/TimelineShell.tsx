@@ -239,8 +239,22 @@ const stepDisplay: Record<TimelineNodeId, StepDisplay> = {
   },
 };
 
-const settingsLinkClassName =
-  "inline-flex h-9 items-center justify-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-xs font-medium text-slate-700 transition-colors hover:border-slate-300 hover:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-400";
+const timelineHeaderClassName =
+  "grid min-h-14 shrink-0 grid-cols-1 items-center gap-3 border-b border-slate-200 bg-white px-3 py-2 sm:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] sm:px-4";
+const timelineHeaderPrimaryClassName = "flex min-w-0 items-center gap-3";
+const timelineHeaderIdentityClassName =
+  "flex min-w-0 max-w-[min(38rem,50vw)] items-center gap-3";
+const timelineHeaderProjectClassName = "flex min-w-0 justify-center";
+const timelineHeaderContextClassName =
+  "hidden h-9 min-w-0 max-w-[28rem] grid-cols-[auto_minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 text-xs text-slate-600 xl:grid";
+const timelineHeaderActionsClassName =
+  "flex min-w-0 flex-wrap items-center justify-start gap-2 sm:justify-end sm:flex-nowrap";
+const timelineHeaderNavClassName =
+  "flex h-9 shrink-0 items-center gap-1 rounded-md border border-slate-200 bg-slate-50 p-1";
+const timelineHeaderNavCurrentClassName =
+  "inline-flex h-7 items-center justify-center gap-1.5 rounded px-2.5 text-xs font-semibold text-slate-950 shadow-sm";
+const timelineHeaderNavLinkClassName =
+  "inline-flex h-7 items-center justify-center gap-1.5 rounded px-2.5 text-xs font-medium text-slate-600 transition-colors hover:bg-white hover:text-slate-950";
 const rawEditableNodeIds = new Set<TimelineNodeId>(["scene-input", "scene-prompt"]);
 const timelineImageCountOptions = [1, 2, 3, 4] as const;
 const visualOutputNodeIds = new Set<TimelineNodeId>([
@@ -1383,8 +1397,8 @@ export function TimelineShell() {
   const restoreVersionRef = useRef(0);
   const shouldClearActiveWorkflowRef = useRef(false);
   const isMountedRef = useRef(true);
-  const [autosaveStatus, setAutosaveStatus] = useState<TimelineAutosaveStatus>("idle");
-  const [autosaveMessage, setAutosaveMessage] = useState("");
+  const [, setAutosaveStatus] = useState<TimelineAutosaveStatus>("idle");
+  const [, setAutosaveMessage] = useState("");
 
   const previewWorkflow = useMemo(() => createTimelineWorkflowState({ workflowId: "draft-workflow" }), []);
   const activeWorkflow = workflow ?? previewWorkflow;
@@ -1414,15 +1428,6 @@ export function TimelineShell() {
   const workflowTitle = workflow ? workflowProjectName.trim() || sceneRequest || "Unnamed workflow" : "Untitled workflow";
   const workflowMode = workflow ? "Run shell" : "Draft setup";
   const sceneInputAiSource = sceneRequest.trim() || getSceneInputRawIntent(workflow).trim();
-  const autosaveLabel =
-    autosaveStatus === "loading"
-      ? "Saving"
-      : autosaveStatus === "saved"
-        ? "Autosaved"
-        : autosaveStatus === "error"
-          ? "Save failed"
-          : "";
-
   function clearPendingPromptTagReview() {
     pendingPromptTagReviewRef.current = null;
     setPendingPromptTagReview(null);
@@ -2856,18 +2861,19 @@ export function TimelineShell() {
 
     return (
       <main className="sf-app-shell flex min-h-0 flex-col overflow-hidden bg-slate-100 font-sans text-slate-950 selection:bg-blue-100 selection:text-blue-900">
-        <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-slate-200 bg-white px-4">
-          <div className="flex min-w-0 flex-1 items-center gap-3">
-            <div className="flex size-8 shrink-0 items-center justify-center rounded-md border border-slate-200 bg-slate-50 text-slate-700">
-              <Workflow className="size-4" />
-            </div>
-            <div className="min-w-0">
-              <h1 className="text-sm font-bold text-slate-900">SceneForge</h1>
-              <p className="truncate text-[11px] text-slate-500">{workflowTitle}</p>
+        <header className={timelineHeaderClassName}>
+          <div className={timelineHeaderPrimaryClassName}>
+            <div className={timelineHeaderIdentityClassName}>
+              <div className="flex size-8 shrink-0 items-center justify-center rounded-md border border-slate-200 bg-slate-50 text-slate-700">
+                <Workflow className="size-4" />
+              </div>
+              <div className="min-w-0">
+                <h1 className="text-sm font-bold text-slate-900">SceneForge</h1>
+                <p className="truncate text-[11px] text-slate-500">{workflowTitle}</p>
+              </div>
             </div>
           </div>
-
-          <div className="flex shrink-0 items-center gap-2">
+          <div className={timelineHeaderProjectClassName}>
             <TimelineWorkflowProjectMenu
               currentProjectId={workflowProjectId}
               currentProjectName={workflowProjectName}
@@ -2878,32 +2884,27 @@ export function TimelineShell() {
               onRecordSaved={handleNamedWorkflowSaved}
               workflowMode="single-image"
             />
-            <span
-              className={cn(
-                "hidden h-7 w-28 items-center justify-center truncate rounded-md border px-2 text-[11px] font-medium md:inline-flex",
-                autosaveStatus === "idle"
-                  ? "invisible border-transparent bg-transparent text-transparent"
-                  : autosaveStatus === "error"
-                    ? "border-rose-200 bg-rose-50 text-rose-700"
-                    : autosaveStatus === "loading"
-                      ? "border-blue-200 bg-blue-50 text-blue-700"
-                      : "border-emerald-200 bg-emerald-50 text-emerald-700",
-              )}
-              title={autosaveMessage || autosaveLabel}
-            >
-              {autosaveLabel || "Autosaved"}
-            </span>
-            <Button className="h-9 px-3 text-xs shadow-none" onClick={handleNewScene} type="button" variant="secondary">
+          </div>
+
+          <div className={timelineHeaderActionsClassName}>
+            <Button className="h-9 shrink-0 gap-2 px-2.5 text-xs shadow-none sm:px-3" onClick={handleNewScene} type="button" variant="secondary">
+              <RefreshCw className="size-3.5" />
               New scene
             </Button>
-            <Link aria-label="Open Story Graph planning" className={settingsLinkClassName} href="/story" title="Open Story Graph planning">
-              <GitBranch className="size-3.5" />
-              Story
-            </Link>
-            <Link aria-label="Open settings" className={settingsLinkClassName} href="/settings" title="Open settings">
-              <Settings className="size-3.5" />
-              Settings
-            </Link>
+            <nav aria-label="Workspace mode" className={timelineHeaderNavClassName}>
+              <span aria-current="page" className={cn(timelineHeaderNavCurrentClassName, "bg-white")}>
+                <Workflow className="size-3.5" />
+                <span className="hidden sm:inline">Run</span>
+              </span>
+              <Link aria-label="Open Story Graph planning" className={timelineHeaderNavLinkClassName} href="/story" title="Open Story Graph planning">
+                <GitBranch className="size-3.5" />
+                <span className="hidden sm:inline">Story</span>
+              </Link>
+              <Link aria-label="Open settings" className={timelineHeaderNavLinkClassName} href="/settings" title="Open settings">
+                <Settings className="size-3.5" />
+                <span className="hidden sm:inline">Settings</span>
+              </Link>
+            </nav>
           </div>
         </header>
 
@@ -3000,27 +3001,25 @@ export function TimelineShell() {
 
   return (
     <main className="sf-app-shell flex min-h-0 flex-col overflow-hidden bg-slate-100 font-sans text-slate-950 selection:bg-blue-100 selection:text-blue-900">
-      <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-slate-200 bg-white px-4">
-        <div className="flex min-w-0 flex-1 items-center gap-3">
-          <div className="flex size-8 shrink-0 items-center justify-center rounded-md border border-slate-200 bg-slate-50 text-slate-700">
-            <Workflow className="size-4" />
+      <header className={timelineHeaderClassName}>
+        <div className={timelineHeaderPrimaryClassName}>
+          <div className={timelineHeaderIdentityClassName}>
+            <div className="flex size-8 shrink-0 items-center justify-center rounded-md border border-slate-200 bg-slate-50 text-slate-700">
+              <Workflow className="size-4" />
+            </div>
+            <div className="min-w-0">
+              <h1 className="text-sm font-bold text-slate-900">SceneForge</h1>
+              <p className="truncate text-[11px] text-slate-500">{workflowTitle}</p>
+            </div>
           </div>
-          <div className="min-w-0">
-            <h1 className="text-sm font-bold text-slate-900">SceneForge</h1>
-            <p className="truncate text-[11px] text-slate-500">{workflowTitle}</p>
-          </div>
-        </div>
-
-        <div className="hidden min-w-0 flex-1 justify-center px-4 xl:flex">
-          <div className="grid h-8 w-80 max-w-full grid-cols-[auto_minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 text-xs text-slate-600">
+          <div className={timelineHeaderContextClassName}>
             <CircleDot className="size-3.5 text-blue-600" />
             <span className="truncate text-right">{workflowMode}</span>
             <span className="text-slate-300">/</span>
             <span className="truncate">{selectedContent.title}</span>
           </div>
         </div>
-
-        <div className="flex shrink-0 items-center gap-2">
+        <div className={timelineHeaderProjectClassName}>
           <TimelineWorkflowProjectMenu
             currentProjectId={workflowProjectId}
             currentProjectName={workflowProjectName}
@@ -3031,41 +3030,36 @@ export function TimelineShell() {
             onRecordSaved={handleNamedWorkflowSaved}
             workflowMode="single-image"
           />
-          <span
-            className={cn(
-              "hidden h-7 w-28 items-center justify-center truncate rounded-md border px-2 text-[11px] font-medium md:inline-flex",
-              autosaveStatus === "idle"
-                ? "invisible border-transparent bg-transparent text-transparent"
-                : autosaveStatus === "error"
-                  ? "border-rose-200 bg-rose-50 text-rose-700"
-                  : autosaveStatus === "loading"
-                    ? "border-blue-200 bg-blue-50 text-blue-700"
-                    : "border-emerald-200 bg-emerald-50 text-emerald-700",
-            )}
-            title={autosaveMessage || autosaveLabel}
-          >
-            {autosaveLabel || "Autosaved"}
-          </span>
-          <Button className="h-9 px-3 text-xs shadow-none" onClick={handleNewScene} type="button" variant="secondary">
+        </div>
+
+        <div className={timelineHeaderActionsClassName}>
+          <Button className="h-9 shrink-0 gap-2 px-2.5 text-xs shadow-none sm:px-3" onClick={handleNewScene} type="button" variant="secondary">
+            <RefreshCw className="size-3.5" />
             New scene
           </Button>
           <Button
-            className="h-9 px-3 text-xs shadow-none"
+            className="h-9 shrink-0 px-2.5 text-xs shadow-none sm:px-3"
             disabled={workflow ? selectedNodeAiDisabled : !sceneRequestIsUsable || isRunning}
             onClick={workflow ? () => handleRequestAi(selectedNodeId) : startWorkflow}
             type="button"
           >
             <Play className="size-3.5" />
-            Run
+            {workflow ? "Run node" : "Start"}
           </Button>
-          <Link aria-label="Open Story Graph planning" className={settingsLinkClassName} href="/story" title="Open Story Graph planning">
-            <GitBranch className="size-3.5" />
-            Story
-          </Link>
-          <Link aria-label="Open settings" className={settingsLinkClassName} href="/settings" title="Open settings">
-            <Settings className="size-3.5" />
-            Settings
-          </Link>
+          <nav aria-label="Workspace mode" className={timelineHeaderNavClassName}>
+            <span aria-current="page" className={cn(timelineHeaderNavCurrentClassName, "bg-white")}>
+              <Workflow className="size-3.5" />
+              <span className="hidden sm:inline">Run</span>
+            </span>
+            <Link aria-label="Open Story Graph planning" className={timelineHeaderNavLinkClassName} href="/story" title="Open Story Graph planning">
+              <GitBranch className="size-3.5" />
+              <span className="hidden sm:inline">Story</span>
+            </Link>
+            <Link aria-label="Open settings" className={timelineHeaderNavLinkClassName} href="/settings" title="Open settings">
+              <Settings className="size-3.5" />
+              <span className="hidden sm:inline">Settings</span>
+            </Link>
+          </nav>
         </div>
       </header>
 
