@@ -232,6 +232,12 @@ async function clickButtonAsync(label: string) {
   });
 }
 
+async function flushAsyncWork() {
+  await act(async () => {
+    await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+  });
+}
+
 beforeEach(() => {
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   container = document.createElement("div");
@@ -248,6 +254,127 @@ afterEach(() => {
 });
 
 describe("StoryPlanningPreview", () => {
+  it("opens a saved Story Graph workflow from the empty Story toolbar project menu", async () => {
+    const savedWorkflow = createPlannedWorkflow("A saved Story Graph project opens from the toolbar.");
+    const savedRecord = createTimelineWorkflowRecord({
+      projectId: "story-workflow-opened",
+      name: "Opened story workflow",
+      workflow: savedWorkflow,
+      sceneRequest: "A saved Story Graph project opens from the toolbar.",
+      selectedPromptProfile: "illustrious",
+      selectedImageCount: 2,
+      selectedNodeId: "story-input",
+    });
+    const activeSaveBodies: unknown[] = [];
+    const fetchMock = vi.fn<typeof fetch>(async (url, init) => {
+      const target = typeof url === "string" ? url : url instanceof Request ? url.url : url.toString();
+
+      if (target === "/api/settings") {
+        return {
+          ok: true,
+          json: async () => ({}),
+        } as Response;
+      }
+
+      if (target === "/api/agent-timeline/active-workflow") {
+        if (init?.method === "PUT") {
+          activeSaveBodies.push(typeof init.body === "string" ? JSON.parse(init.body) : null);
+          return {
+            ok: true,
+            json: async () => ({
+              ok: true,
+              record: activeSaveBodies.at(-1),
+            }),
+          } as Response;
+        }
+
+        return {
+          ok: false,
+          status: 404,
+          statusText: "Not Found",
+          text: async () => "",
+        } as Response;
+      }
+
+      if (target === "/api/agent-timeline/workflows") {
+        return {
+          ok: true,
+          json: async () => ({
+            workflows: [
+              {
+                id: "run-workflow",
+                name: "Run workflow",
+                createdAt: "2026-06-05T00:00:00.000Z",
+                updatedAt: "2026-06-05T00:01:00.000Z",
+                workflowMode: "single-image",
+              },
+              {
+                id: "story-workflow-opened",
+                name: "Opened story workflow",
+                createdAt: "2026-06-15T00:00:00.000Z",
+                updatedAt: "2026-06-15T00:01:00.000Z",
+                workflowMode: "story-graph",
+              },
+            ],
+          }),
+        } as Response;
+      }
+
+      if (target === "/api/agent-timeline/workflows/item?id=story-workflow-opened") {
+        return {
+          ok: true,
+          json: async () => savedRecord,
+        } as Response;
+      }
+
+      throw new Error(`Unexpected fetch ${target}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await act(async () => {
+      root.render(<StoryPlanningPreview />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(container.textContent).toContain("Start Story Graph");
+    expect(container.textContent).toContain("New story");
+    expect(container.textContent).toContain("Unnamed draft");
+    expect(container.textContent).not.toContain("Opened story workflow");
+
+    await clickButtonAsync("Unnamed draft");
+    await flushAsyncWork();
+
+    expect(container.textContent).toContain("Opened story workflow");
+    expect(container.textContent).not.toContain("Run workflow");
+
+    const openedWorkflowButton = Array.from(container.querySelectorAll("button")).find((button) =>
+      button.textContent?.includes("Opened story workflow"),
+    ) as HTMLButtonElement | undefined;
+    expect(openedWorkflowButton).not.toBeUndefined();
+
+    await act(async () => {
+      openedWorkflowButton?.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await flushAsyncWork();
+
+    expect(container.textContent).toContain("User-started planning workflow");
+    expect(container.textContent).toContain("A saved Story Graph project opens from the toolbar.");
+    expect(container.textContent).toContain("New story");
+    expect(activeSaveBodies.at(-1)).toMatchObject({
+      kind: "sceneforge-timeline-workflow",
+      projectId: "story-workflow-opened",
+      name: "Opened story workflow",
+      selectedNodeId: "story-input",
+      workflow: {
+        workflowId: savedWorkflow.workflowId,
+        workflowMode: "story-graph",
+      },
+    });
+  });
+
   it("does not let a late active restore overwrite a newly started Story Graph workflow", async () => {
     let resolveActiveWorkflow: ((response: Response) => void) | null = null;
     const activeWorkflowResponse = new Promise<Response>((resolve) => {
@@ -306,7 +433,8 @@ describe("StoryPlanningPreview", () => {
     });
     await clickButtonAsync("Start planning");
 
-    expect(container.textContent).toContain("A brand new story request.");
+    expect(container.textContent).toContain("Step 13 / 15");
+    expect(container.textContent).toContain("brand new story request");
 
     await act(async () => {
       resolveActiveWorkflow?.({
@@ -317,7 +445,8 @@ describe("StoryPlanningPreview", () => {
       await Promise.resolve();
     });
 
-    expect(container.textContent).toContain("A brand new story request.");
+    expect(container.textContent).toContain("Step 13 / 15");
+    expect(container.textContent).toContain("brand new story request");
     expect(container.textContent).not.toContain("An old autosaved story request.");
   });
 
@@ -456,6 +585,7 @@ describe("StoryPlanningPreview", () => {
     });
 
     expect(container.textContent).toContain("Story input / start workflow");
+    expect(container.textContent).toContain("New story");
     expect(container.textContent).toContain("Start Story Graph");
     expect(container.textContent).not.toContain("Rain Station Signal");
     expect(container.textContent).not.toContain("Audience rating follows Settings NSFW");
@@ -482,8 +612,10 @@ describe("StoryPlanningPreview", () => {
     await clickButtonAsync("Start planning");
 
     expect(container.textContent).toContain("User-started planning workflow");
+    expect(container.textContent).toContain("New story");
     expect(container.textContent).toContain("15 steps");
-    expect(container.textContent).toContain("story-input");
+    expect(container.textContent).toContain("Step 13 / 15");
+    expect(container.textContent).toContain("Start shot generation");
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/agent-timeline/story/run-planning",
       expect.objectContaining({
@@ -983,6 +1115,7 @@ describe("StoryPlanningPreview", () => {
     });
     await clickButtonAsync("Start planning");
 
+    expect(container.textContent).toContain("Step 13 / 15");
     expect(container.textContent).toContain("Start shot generation");
 
     await clickButtonAsync("Start shot generation");
@@ -998,6 +1131,9 @@ describe("StoryPlanningPreview", () => {
     const resultImage = container.querySelector('img[alt="Generated shot-1"]') as HTMLImageElement | null;
     expect(resultImage?.getAttribute("src")).toBe("/api/comfyui/generated-images/first-shot-1.png");
     expect(resultImage?.getAttribute("src")).not.toContain("comfyui.test/view");
+    expect(resultImage?.className).toContain("object-contain");
+    expect(resultImage?.className).not.toContain("object-cover");
+    expect(resultImage?.closest("a")?.getAttribute("href")).toBe("/api/comfyui/generated-images/first-shot-1.png");
 
     const executionButton = container.querySelector('button[data-node-id="shot-graph-execution"]') as HTMLButtonElement | null;
     act(() => {
@@ -1012,5 +1148,75 @@ describe("StoryPlanningPreview", () => {
         method: "POST",
       }),
     );
+  });
+
+  it("auto-confirms Story shot generation when workflow auto review is enabled", async () => {
+    const plannedWorkflow = createPlannedWorkflow("A courier auto-renders a market sequence.");
+    const generatedWorkflow = withExecution(plannedWorkflow, "auto");
+    const confirmPayloads: Array<{ workflow?: StoryWorkflowState }> = [];
+    const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const target = typeof url === "string" ? url : url instanceof Request ? url.url : url.toString();
+      const resourceResponse = handleStoryResourceListFetch(target);
+      if (resourceResponse) {
+        return resourceResponse;
+      }
+
+      if (target === "/api/settings") {
+        return {
+          ok: true,
+          json: async () => ({
+            general: {
+              nsfw: {
+                supportsNsfw: false,
+              },
+            },
+            workflow: {
+              autoReview: true,
+            },
+          }),
+        } as Response;
+      }
+
+      if (target === "/api/agent-timeline/story/run-planning") {
+        return {
+          ok: true,
+          json: async () => ({
+            workflow: plannedWorkflow,
+          }),
+        } as Response;
+      }
+
+      if (target === "/api/agent-timeline/story/confirm-generation") {
+        confirmPayloads.push(JSON.parse(String(init?.body ?? "{}")) as { workflow?: StoryWorkflowState });
+        return {
+          ok: true,
+          json: async () => ({
+            workflow: generatedWorkflow,
+          }),
+        } as Response;
+      }
+
+      throw new Error(`Unexpected fetch ${target}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await act(async () => {
+      root.render(<StoryPlanningPreview />);
+      await Promise.resolve();
+    });
+    await flushAsyncWork();
+
+    const textarea = container.querySelector("textarea") as HTMLTextAreaElement | null;
+    act(() => {
+      setNativeInputValue(textarea as HTMLTextAreaElement, "A courier auto-renders a market sequence.");
+    });
+    await clickButtonAsync("Start planning");
+    await flushAsyncWork();
+
+    expect(confirmPayloads).toHaveLength(1);
+    expect(confirmPayloads[0]?.workflow?.workflowId).toBe(plannedWorkflow.workflowId);
+    expect(container.textContent).not.toContain("Start shot generation");
+    expect(container.textContent).toContain("Shot execution");
+    expect(container.textContent).toContain("auto-shot-1");
   });
 });

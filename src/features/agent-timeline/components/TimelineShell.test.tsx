@@ -908,9 +908,8 @@ describe("TimelineShell", () => {
       await flushAsyncWork();
 
       expect((container.querySelector("#scene-request") as HTMLTextAreaElement | null)?.value).toBe("");
-      expect(
-        container.querySelector('[title="Story Graph workflow records open from the Story page."]'),
-      ).not.toBeNull();
+      expect(container.textContent).not.toContain("A Story Graph belongs on the Story page");
+      expect(container.querySelector('a[href="/story"]')).not.toBeNull();
     } finally {
       globalThis.fetch = originalFetch;
     }

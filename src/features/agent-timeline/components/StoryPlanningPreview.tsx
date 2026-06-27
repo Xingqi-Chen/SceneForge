@@ -2,7 +2,20 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import Link from "next/link";
-import { Bot, CheckCircle2, CircleDot, GitBranch, ImageIcon, LoaderCircle, Play, RefreshCw, RotateCcw, Settings } from "lucide-react";
+import {
+  Bot,
+  CheckCircle2,
+  CircleDot,
+  GitBranch,
+  ImageIcon,
+  LoaderCircle,
+  LockKeyhole,
+  Play,
+  RefreshCw,
+  RotateCcw,
+  Settings,
+  Workflow,
+} from "lucide-react";
 
 import {
   createStoryGraphInputWorkflow,
@@ -57,7 +70,23 @@ import { StoryPlanningWorkspace } from "./StoryPlanningWorkspace";
 import { TimelineWorkflowProjectMenu } from "./TimelineWorkflowProjectMenu";
 
 const headerLinkClassName =
-  "inline-flex h-8 items-center justify-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-xs font-medium text-slate-900 transition-colors hover:bg-slate-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-400";
+  "inline-flex h-9 shrink-0 items-center justify-center gap-2 rounded-md border border-slate-200 bg-white px-2.5 text-xs font-medium text-slate-700 transition-colors hover:border-slate-300 hover:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-400 sm:px-3";
+const storyHeaderClassName =
+  "grid min-h-14 shrink-0 grid-cols-1 items-center gap-3 border-b border-slate-200 bg-white px-3 py-2 sm:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] sm:px-4";
+const storyHeaderPrimaryClassName = "flex min-w-0 items-center gap-3";
+const storyHeaderIdentityClassName =
+  "flex min-w-0 max-w-[min(38rem,50vw)] items-center gap-3";
+const storyHeaderProjectClassName = "flex min-w-0 justify-center";
+const storyHeaderActionsClassName =
+  "flex min-w-0 flex-wrap items-center justify-start gap-2 sm:justify-end sm:flex-nowrap";
+const storyHeaderNavClassName =
+  "flex h-9 shrink-0 items-center gap-1 rounded-md border border-slate-200 bg-slate-50 p-1";
+const storyHeaderNavCurrentClassName =
+  "inline-flex h-7 items-center justify-center gap-1.5 rounded bg-white px-2.5 text-xs font-semibold text-slate-950 shadow-sm";
+const storyHeaderNavLinkClassName =
+  "inline-flex h-7 items-center justify-center gap-1.5 rounded px-2.5 text-xs font-medium text-slate-600 transition-colors hover:bg-white hover:text-slate-950";
+const storyGateConfirmButtonClassName =
+  "inline-flex h-8 shrink-0 items-center justify-center gap-2 rounded-md bg-slate-900 px-3 text-xs font-semibold text-white transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-500";
 
 const planningNodeIds = storyWorkflowDefinition.nodeIds;
 
@@ -492,6 +521,16 @@ function getGenerationGateReady(workflow: StoryWorkflowState | null) {
   return gate?.status === "done" && isRecord(gate.result) && gate.result.ready === true;
 }
 
+function canConfirmStoryGeneration(workflow: StoryWorkflowState | null) {
+  if (!workflow || workflow.generationConfirmed || !getGenerationGateReady(workflow)) {
+    return false;
+  }
+
+  const executionNode = workflow.nodes["shot-graph-execution"];
+
+  return executionNode.status === "blocked" && executionNode.error?.code === "confirmation_required";
+}
+
 function getStoryWorkflowRequest(workflow: StoryWorkflowState) {
   const input = workflow.nodes["story-input"].result;
   return isRecord(input) && typeof input.rawIntent === "string" ? input.rawIntent : "";
@@ -785,17 +824,28 @@ function StoryResultGrid({ result }: { result: StoryResultDisplay }) {
           {result.nsfwContext.enabled ? "nsfw enabled" : "safe context"}
         </span>
       </div>
-      <div className="grid gap-3 sm:grid-cols-2">
+      <div className={cn("grid gap-3", result.finalReferences.length > 1 ? "2xl:grid-cols-2" : "")}>
         {result.finalReferences.map((reference) => {
           const imageUrl = getStoryResultImageUrl(reference);
 
           return (
-            <article className="rounded-md border border-slate-200 bg-white p-2" key={reference.shotId}>
+            <article className="rounded-md border border-slate-200 bg-white p-3" key={reference.shotId}>
               {imageUrl ? (
-              // eslint-disable-next-line @next/next/no-img-element
-                <img alt={`Generated ${reference.shotId}`} className="aspect-video w-full rounded object-cover" src={imageUrl} />
+                <a
+                  className="flex h-72 items-center justify-center rounded-md border border-slate-200 bg-slate-100 p-2 transition-colors hover:bg-slate-50 sm:h-80 xl:h-[26rem]"
+                  href={imageUrl}
+                  rel="noreferrer"
+                  target="_blank"
+                >
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    alt={`Generated ${reference.shotId}`}
+                    className="max-h-full max-w-full rounded object-contain"
+                    src={imageUrl}
+                  />
+                </a>
               ) : (
-                <div className="flex aspect-video items-center justify-center rounded bg-slate-100 text-xs text-slate-500">
+                <div className="flex h-72 items-center justify-center rounded-md border border-slate-200 bg-slate-100 text-xs text-slate-500 sm:h-80 xl:h-[26rem]">
                   No image
                 </div>
               )}
@@ -822,10 +872,11 @@ export function StoryPlanningPreview() {
   const [selectedStoryShotId, setSelectedStoryShotId] = useState<string | null>(null);
   const [outputDisplayModes, setOutputDisplayModes] = useState<StoryOutputDisplayModeMap>({});
   const [settingsNsfwEnabled, setSettingsNsfwEnabled] = useState(false);
+  const [settingsAutoReviewEnabled, setSettingsAutoReviewEnabled] = useState(false);
   const [planningError, setPlanningError] = useState("");
   const [planningStatus, setPlanningStatus] = useState<"idle" | "planning" | "generating" | "regenerating">("idle");
-  const [autosaveStatus, setAutosaveStatus] = useState<StoryAutosaveStatus>("idle");
-  const [autosaveMessage, setAutosaveMessage] = useState("");
+  const [, setAutosaveStatus] = useState<StoryAutosaveStatus>("idle");
+  const [, setAutosaveMessage] = useState("");
   const autosaveTimeoutRef = useRef<number | null>(null);
   const autosaveVersionRef = useRef(0);
   const restoreVersionRef = useRef(0);
@@ -840,14 +891,6 @@ export function StoryPlanningPreview() {
   );
   const selectedIndex = planningNodeIds.indexOf(selectedNodeId) + 1;
   const selectedDependencies = storyWorkflowDefinition.dependencyDag[selectedNodeId];
-  const autosaveLabel = autosaveStatus === "loading"
-    ? "Saving"
-    : autosaveStatus === "error"
-      ? "Save error"
-      : autosaveStatus === "saved"
-        ? "Autosaved"
-        : "";
-
   const getCurrentStoryWorkflowRecordInput = useCallback((
     overrides: Partial<Omit<TimelineWorkflowRecordInput, "workflow">> = {},
   ): TimelineWorkflowRecordInput | null => {
@@ -1084,12 +1127,18 @@ export function StoryPlanningPreview() {
           return;
         }
 
-        const nsfw = (payload as { general?: { nsfw?: { supportsNsfw?: boolean } } }).general?.nsfw;
+        const settingsPayload = payload as {
+          general?: { nsfw?: { supportsNsfw?: boolean } };
+          workflow?: { autoReview?: boolean };
+        };
+        const nsfw = settingsPayload.general?.nsfw;
         setSettingsNsfwEnabled(nsfw?.supportsNsfw === true);
+        setSettingsAutoReviewEnabled(settingsPayload.workflow?.autoReview === true);
       })
       .catch(() => {
         if (active) {
           setSettingsNsfwEnabled(false);
+          setSettingsAutoReviewEnabled(false);
         }
       });
 
@@ -1137,6 +1186,12 @@ export function StoryPlanningPreview() {
         },
       });
       setWorkflow(planned);
+      if (canConfirmStoryGeneration(planned)) {
+        setSelectedNodeId(settingsAutoReviewEnabled ? "shot-graph-execution" : "generation-gate");
+        if (settingsAutoReviewEnabled) {
+          await handleConfirmGeneration(planned);
+        }
+      }
     } catch (error) {
       setPlanningError(error instanceof Error ? error.message : "Story Graph planning failed.");
     } finally {
@@ -1144,8 +1199,8 @@ export function StoryPlanningPreview() {
     }
   }
 
-  async function handleConfirmGeneration() {
-    if (!workflow) {
+  async function handleConfirmGeneration(targetWorkflow: StoryWorkflowState | null = workflow) {
+    if (!targetWorkflow || !canConfirmStoryGeneration(targetWorkflow)) {
       return;
     }
 
@@ -1154,7 +1209,7 @@ export function StoryPlanningPreview() {
 
     try {
       const generated = await postStoryWorkflow("/api/agent-timeline/story/confirm-generation", {
-        workflow,
+        workflow: targetWorkflow,
       }, "Story Graph generation failed.");
       const execution = isStoryExecutionState(generated.nodes["shot-graph-execution"].result)
         ? generated.nodes["shot-graph-execution"].result
@@ -1202,7 +1257,7 @@ export function StoryPlanningPreview() {
     );
   }
 
-  const generationReady = getGenerationGateReady(workflow);
+  const generationCanBeConfirmed = canConfirmStoryGeneration(workflow);
   const executionResult = isStoryExecutionState(workflow?.nodes["shot-graph-execution"].result)
     ? workflow?.nodes["shot-graph-execution"].result
     : null;
@@ -1213,81 +1268,55 @@ export function StoryPlanningPreview() {
 
   return (
     <main className="flex h-screen min-h-screen flex-col overflow-hidden bg-slate-50 text-slate-950">
-      <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-slate-200 bg-white px-4">
-        <div className="flex min-w-0 items-center gap-3">
-          <span className="flex size-9 shrink-0 items-center justify-center rounded-md border border-slate-200 bg-slate-50 text-slate-600">
-            <GitBranch className="size-4" />
-          </span>
-          <div className="min-w-0">
-            <h1 className="truncate text-sm font-semibold text-slate-950">Story Graph planning</h1>
-            <p className="truncate text-[11px] text-slate-500">
-              {workflow ? "User-started planning workflow" : "Story input / start workflow"}
-            </p>
+      <header className={storyHeaderClassName}>
+        <div className={storyHeaderPrimaryClassName}>
+          <div className={storyHeaderIdentityClassName}>
+            <span className="flex size-8 shrink-0 items-center justify-center rounded-md border border-slate-200 bg-slate-50 text-slate-700">
+              <Workflow className="size-4" />
+            </span>
+            <div className="min-w-0">
+              <h1 className="truncate text-sm font-bold text-slate-900">SceneForge</h1>
+              <p className="truncate text-[11px] text-slate-500">
+                {workflow ? "User-started planning workflow" : "Story input / start workflow"}
+              </p>
+            </div>
           </div>
         </div>
-
-        <div className="hidden min-w-0 flex-1 justify-center px-4 xl:flex">
-          <div className="grid h-8 w-96 max-w-full grid-cols-[auto_minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 text-xs text-slate-600">
-            <CircleDot className="size-3.5 text-blue-600" />
-            <span className="truncate text-right">story-graph</span>
-            <span className="text-slate-300">/</span>
-            <span className="truncate">{metadata.title}</span>
-          </div>
+        <div className={storyHeaderProjectClassName}>
+          <TimelineWorkflowProjectMenu
+            currentProjectId={workflowProjectId}
+            currentProjectName={workflowProjectName}
+            disabled={actionBusy}
+            getCurrentRecordInput={getCurrentStoryWorkflowRecordInput}
+            onDeleteCurrentProject={handleCurrentNamedWorkflowDeleted}
+            onRecordOpened={(record) => {
+              restoreVersionRef.current += 1;
+              applyStoryWorkflowRecord(record, "Opened saved Story Graph workflow.", { saveActive: true });
+            }}
+            onRecordSaved={(record) => applyStoryWorkflowRecord(record, "Saved Story Graph workflow.")}
+            workflowMode="story-graph"
+          />
         </div>
 
-        <div className="flex shrink-0 items-center gap-2">
-          {workflow ? (
-            <TimelineWorkflowProjectMenu
-              currentProjectId={workflowProjectId}
-              currentProjectName={workflowProjectName}
-              disabled={actionBusy}
-              getCurrentRecordInput={getCurrentStoryWorkflowRecordInput}
-              onDeleteCurrentProject={handleCurrentNamedWorkflowDeleted}
-              onRecordOpened={(record) => {
-                restoreVersionRef.current += 1;
-                applyStoryWorkflowRecord(record, "Opened saved Story Graph workflow.", { saveActive: true });
-              }}
-              onRecordSaved={(record) => applyStoryWorkflowRecord(record, "Saved Story Graph workflow.")}
-              workflowMode="story-graph"
-            />
-          ) : null}
-          <span
-            className={cn(
-              "hidden h-7 w-28 items-center justify-center truncate rounded-md border px-2 text-[11px] font-medium md:inline-flex",
-              autosaveStatus === "idle"
-                ? "invisible border-transparent bg-transparent text-transparent"
-                : autosaveStatus === "error"
-                  ? "border-rose-200 bg-rose-50 text-rose-700"
-                  : autosaveStatus === "loading"
-                    ? "border-blue-200 bg-blue-50 text-blue-700"
-                    : "border-emerald-200 bg-emerald-50 text-emerald-700",
-            )}
-            title={autosaveMessage || autosaveLabel}
-          >
-            {autosaveLabel || "Autosaved"}
-          </span>
-          {workflow && generationReady ? (
-            <button
-              className={headerLinkClassName}
-              disabled={actionBusy}
-              onClick={() => void handleConfirmGeneration()}
-              type="button"
-            >
-              <Play className="size-3.5" />
-              {planningStatus === "generating" ? "Generating" : "Start shot generation"}
-            </button>
-          ) : null}
-          {workflow ? (
-            <button className={headerLinkClassName} onClick={handleNewStoryWorkflow} type="button">
-              <RotateCcw className="size-3.5" />
-              New
-            </button>
-          ) : null}
-          <Link className={headerLinkClassName} href="/">Run</Link>
-          <Link className={headerLinkClassName} href="/settings">
-            <Settings className="size-3.5" />
-            Settings
-          </Link>
+        <div className={storyHeaderActionsClassName}>
+          <button className={headerLinkClassName} onClick={handleNewStoryWorkflow} type="button">
+            <RefreshCw className="size-3.5" />
+            New story
+          </button>
+          <nav aria-label="Workspace mode" className={storyHeaderNavClassName}>
+            <Link aria-label="Open Run workspace" className={storyHeaderNavLinkClassName} href="/" title="Open Run workspace">
+              <Workflow className="size-3.5" />
+              <span className="hidden sm:inline">Run</span>
+            </Link>
+            <span aria-current="page" className={storyHeaderNavCurrentClassName}>
+              <GitBranch className="size-3.5" />
+              <span className="hidden sm:inline">Story</span>
+            </span>
+            <Link aria-label="Open settings" className={storyHeaderNavLinkClassName} href="/settings" title="Open settings">
+              <Settings className="size-3.5" />
+              <span className="hidden sm:inline">Settings</span>
+            </Link>
+          </nav>
         </div>
       </header>
 
@@ -1403,6 +1432,27 @@ export function StoryPlanningPreview() {
                       <p className="mt-2 text-xs leading-relaxed text-slate-700">{metadata.workspace.key}</p>
                     </div>
                   </div>
+
+                  {selectedNodeId === "generation-gate" ? (
+                    <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-amber-200 bg-amber-50 p-3 text-xs leading-relaxed text-amber-800">
+                      <div className="flex min-w-0 gap-2">
+                        <LockKeyhole className="mt-0.5 size-4 shrink-0" />
+                        <p>
+                          Shot graph execution requires confirmation. The Story workflow stops here until you start shot
+                          generation.
+                        </p>
+                      </div>
+                      <button
+                        className={storyGateConfirmButtonClassName}
+                        disabled={!generationCanBeConfirmed || actionBusy}
+                        onClick={() => void handleConfirmGeneration()}
+                        type="button"
+                      >
+                        <Play className="size-3.5" />
+                        {planningStatus === "generating" ? "Generating" : "Start shot generation"}
+                      </button>
+                    </div>
+                  ) : null}
 
                   <div className="flex min-h-[36rem] flex-1 flex-col rounded-md border border-slate-200 bg-white p-3">
                     {planningError ? (

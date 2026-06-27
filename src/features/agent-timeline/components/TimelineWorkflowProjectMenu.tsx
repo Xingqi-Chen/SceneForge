@@ -214,11 +214,11 @@ export function TimelineWorkflowProjectMenu({
   }
 
   return (
-    <div className="relative flex items-center gap-2">
+    <div className="relative flex w-[min(14rem,42vw)] shrink-0 items-center gap-2 sm:w-56">
       <Button
         aria-expanded={open}
         aria-haspopup="listbox"
-        className="h-9 max-w-[240px] justify-between gap-2 border-slate-200 px-2 font-normal shadow-none"
+        className="h-9 w-full min-w-0 justify-between gap-2 border-slate-200 px-2 font-normal shadow-none"
         disabled={disabled}
         onClick={handleToggleOpen}
         size="sm"

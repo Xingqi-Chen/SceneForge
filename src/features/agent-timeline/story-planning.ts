@@ -515,14 +515,6 @@ function normalizeParameterOverride(
   }, samplerOptions, defaults);
   const override: Partial<StoryGenerationParameters> = {};
 
-  if (hasOverrideValue(parameters, "width")) {
-    override.width = normalized.width;
-  }
-
-  if (hasOverrideValue(parameters, "height")) {
-    override.height = normalized.height;
-  }
-
   if (hasOverrideValue(parameters, "steps")) {
     override.steps = normalized.steps;
   }
@@ -548,6 +540,19 @@ function normalizeParameterOverride(
   }
 
   return override;
+}
+
+function enforceStoryResolution(
+  parameters: StoryGenerationParameters,
+  resolution: Pick<StoryGenerationParameters, "width" | "height">,
+): StoryGenerationParameters {
+  return parameters.width === resolution.width && parameters.height === resolution.height
+    ? parameters
+    : {
+        ...parameters,
+        width: resolution.width,
+        height: resolution.height,
+      };
 }
 
 function applyParameterOverride(
@@ -1499,8 +1504,14 @@ export function createStoryPreviewParameters(
   shotId: StoryShotId,
   samplerOptions?: TimelineSamplerOptions,
 ): StoryGenerationParameters {
+  const defaults = normalizeParameters(parameterPlan.defaults, samplerOptions);
+  const shotParameters = enforceStoryResolution(
+    applyParameterOverride(defaults, getPerShotOverride(parameterPlan, shotId), samplerOptions),
+    defaults,
+  );
+
   return applyParameterOverride(
-    applyParameterOverride(parameterPlan.defaults, getPerShotOverride(parameterPlan, shotId), samplerOptions),
+    shotParameters,
     options.parameterOverrides,
     samplerOptions,
   );
@@ -1524,6 +1535,7 @@ export function assembleStoryRenderPlan({
   shots: readonly StoryShot[];
 }): StoryRenderPlan {
   const nsfwContext = getNsfwContext(safetyPlan);
+  const defaultParameters = normalizeParameters(parameterPlan.defaults, samplerOptions);
 
   return {
     storyId: resourcePlan.storyId,
@@ -1540,10 +1552,13 @@ export function assembleStoryRenderPlan({
       })),
     },
     shots: shots.map((shot) => {
-      const parameters = applyParameterOverride(
-        parameterPlan.defaults,
-        getPerShotOverride(parameterPlan, shot.id),
-        samplerOptions,
+      const parameters = enforceStoryResolution(
+        applyParameterOverride(
+          defaultParameters,
+          getPerShotOverride(parameterPlan, shot.id),
+          samplerOptions,
+        ),
+        defaultParameters,
       );
       const baseNegativePrompt = getBaseNegativePrompt(safetyPlan, shot);
       const basePositivePrompt = getBasePositivePrompt(shot);
@@ -1599,6 +1614,9 @@ export function createStoryExecutionRequestBatch({
   const selectedShots = selectedShotIds
     ? renderPlan.shots.filter((shot) => selectedShotIds.has(shot.shotId))
     : renderPlan.shots;
+  const storyResolution = mode === "final" && renderPlan.shots[0]
+    ? normalizeParameters(renderPlan.shots[0].parameters, samplerOptions)
+    : null;
 
   return {
     mode,
@@ -1617,9 +1635,12 @@ export function createStoryExecutionRequestBatch({
             samplerOptions,
           )
         : normalizeParameters(shot.parameters, samplerOptions);
+      const requestParameters = storyResolution
+        ? enforceStoryResolution(parameters, storyResolution)
+        : parameters;
       const requestShot = {
         ...shot,
-        parameters,
+        parameters: requestParameters,
       };
 
       return {
