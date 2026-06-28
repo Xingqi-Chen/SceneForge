@@ -136,10 +136,29 @@ export type ShotDependencyGraphNode = {
   label?: string;
 };
 
+export type StorySourceImageRiskLevel = "low" | "medium" | "high";
+
+export type StorySourceImageRiskMetadata = {
+  level: StorySourceImageRiskLevel;
+  reason: string;
+  factors: string[];
+};
+
+export type StorySourceImageEdgeSummary = {
+  executable: boolean;
+  riskFactors: string[];
+  riskLevel: StorySourceImageRiskLevel;
+  riskReason: string;
+  sourceChain: StoryShotId[];
+  sourceShotId: StoryShotId;
+  targetShotId: StoryShotId;
+};
+
 export type ShotDependencyGraphEdge = {
   fromShotId: StoryShotId;
   toShotId: StoryShotId;
   reason: "img2img-source" | "reference" | "continuity" | "story-order" | "manual";
+  sourceImageRisk?: StorySourceImageRiskMetadata;
 };
 
 export type ShotDependencyGraph = {

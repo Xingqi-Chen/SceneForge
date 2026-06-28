@@ -3,8 +3,6 @@ import { describe, expect, it } from "vitest";
 import {
   createStoryInputFromStartRequest,
   createStoryPlanningArtifacts,
-  estimateStoryShotCount,
-  parseExplicitStorySegments,
   startStoryGraphWorkflow,
 } from "./story-input";
 import { confirmStoryGeneration, setStoryNodeManualResult } from "./story-state";
@@ -31,6 +29,17 @@ describe("story input workflow start", () => {
       now,
       settingsSnapshot: {
         promptProfile: "anima",
+        resourceCandidates: {
+          checkpoints: [
+            {
+              id: "local-checkpoint",
+              name: "Local Checkpoint",
+              baseModel: "Anima",
+              modelFileName: "local.safetensors",
+            },
+          ],
+          loras: [],
+        },
       },
     });
 
@@ -49,11 +58,45 @@ describe("story input workflow start", () => {
       settingsSnapshot: {
         source: "story-form",
         planningMode: "deterministic-local",
+        img2imgDenoise: 0.9,
         promptProfile: "anima",
+        resourceCandidateCounts: {
+          checkpoints: 1,
+          loras: 0,
+        },
         targetShotCount: 4,
         audienceRating: "explicit",
         nsfwEnabled: true,
       },
+    });
+    expect(JSON.stringify(input.settingsSnapshot)).not.toContain("resourceCandidates");
+  });
+
+  it("normalizes Story img2img denoise from start settings", () => {
+    const input = createStoryInputFromStartRequest({
+      rawIntent: "A two-shot chase using a source image handoff.",
+      storyId: "story-img2img-denoise",
+      now,
+      settingsSnapshot: {
+        img2imgDenoise: 0.73,
+      },
+    });
+
+    expect(input.settingsSnapshot).toMatchObject({
+      img2imgDenoise: 0.73,
+    });
+
+    const fallbackInput = createStoryInputFromStartRequest({
+      rawIntent: "A second two-shot chase using a source image handoff.",
+      storyId: "story-img2img-denoise-default",
+      now,
+      settingsSnapshot: {
+        img2imgDenoise: "bad" as never,
+      },
+    });
+
+    expect(fallbackInput.settingsSnapshot).toMatchObject({
+      img2imgDenoise: 0.9,
     });
   });
 
@@ -76,18 +119,21 @@ describe("story input workflow start", () => {
     expect(artifacts.shots).toHaveLength(1);
   });
 
-  it("estimates automatic shot count from explicit events instead of defaulting to three", () => {
-    expect(estimateStoryShotCount("A moody station encounter.")).toBe(1);
-    expect(estimateStoryShotCount("A courier waits for a bus, then rushes through an alley, finally returns a book.")).toBe(3);
-    expect(estimateStoryShotCount("A courier crosses a neon market and finds a hidden map.")).toBe(2);
-    expect(estimateStoryShotCount("A four-shot gothic chapel sequence.")).toBe(4);
-    expect(estimateStoryShotCount("A 12-shot gothic chapel sequence.")).toBe(12);
-    expect(estimateStoryShotCount("A 12 panels gothic chapel sequence.")).toBe(12);
-    expect(estimateStoryShotCount("A 30-shot gothic chapel sequence.")).toBe(24);
+  it("leaves raw story structure for LLM judgment instead of estimating automatic shot count", () => {
+    const input = createStoryInputFromStartRequest({
+      rawIntent: "A courier waits for a bus, then rushes through an alley, finally returns a book.",
+      storyId: "story-llm-count",
+      now,
+    });
+    const artifacts = createStoryPlanningArtifacts(input, now());
+
+    expect(input.targetShotCount).toBeUndefined();
+    expect(input.storySegments).toBeUndefined();
+    expect(artifacts.outline.beats).toHaveLength(1);
+    expect(artifacts.shots).toHaveLength(1);
   });
 
-  it("uses explicit Beat and Final image labels as visual segments when shot count is automatic", () => {
-    const parsed = parseExplicitStorySegments(courierStory);
+  it("keeps explicit Beat and Final image labels in rawIntent for the LLM instead of parsing storySegments", () => {
     const input = createStoryInputFromStartRequest({
       rawIntent: courierStory,
       storyId: "story-explicit-beats",
@@ -95,31 +141,36 @@ describe("story input workflow start", () => {
     });
     const artifacts = createStoryPlanningArtifacts(input, now());
 
-    expect(parsed.context).toContain("teenage courier in a yellow rain jacket");
-    expect(parsed.segments.map((segment) => segment.title)).toEqual([
-      "Beat 1",
-      "Beat 2",
-      "Beat 3",
-      "Beat 4",
-      "Final image",
-    ]);
-    expect(estimateStoryShotCount(courierStory)).toBe(5);
+    expect(input.rawIntent).toContain("Beat 1:");
+    expect(input.rawIntent).toContain("Final image:");
     expect(input.targetShotCount).toBeUndefined();
-    expect(input.storySegments).toHaveLength(5);
-    expect(artifacts.outline.beats.map((beat) => beat.title)).toEqual([
-      "Beat 1",
-      "Beat 2",
-      "Beat 3",
-      "Beat 4",
-      "Final image",
-    ]);
-    expect(artifacts.shots).toHaveLength(5);
-    expect(artifacts.generationGate.renderPlanShotCount).toBe(5);
-    expect(artifacts.generationGate.requestPreview[4]?.positivePrompt).toContain("little girl");
-    expect(artifacts.generationGate.requestPreview[4]?.positivePrompt).toContain("relieved father");
+    expect(input.storyContext).toBeUndefined();
+    expect(input.storySegments).toBeUndefined();
+    expect(artifacts.outline.beats).toHaveLength(1);
+    expect(artifacts.shots).toHaveLength(1);
+    expect(artifacts.generationGate.renderPlanShotCount).toBe(1);
   });
 
-  it("lets an explicit target shot count override detected story segments", () => {
+  it("keeps inline Beat labels in rawIntent for the LLM instead of parsing storySegments", () => {
+    const inlineStory = "Context before the labeled sequence. Beat 1: The student finds the missing photo at her desk. Beat 2: The student reprints the photo at the copy shop. Beat 3: The student finishes the collage at a cafe table. Beat 4: The student offers the wrapped collage on a side street. Final image: Her friend opens the collage in sunset light.";
+    const input = createStoryInputFromStartRequest({
+      rawIntent: inlineStory,
+      storyId: "story-inline-beats",
+      now,
+    });
+    const artifacts = createStoryPlanningArtifacts(input, now());
+
+    expect(input.rawIntent).toContain("Beat 1:");
+    expect(input.rawIntent).toContain("Final image:");
+    expect(input.targetShotCount).toBeUndefined();
+    expect(input.storyContext).toBeUndefined();
+    expect(input.storySegments).toBeUndefined();
+    expect(artifacts.outline.beats).toHaveLength(1);
+    expect(artifacts.shots).toHaveLength(1);
+    expect(artifacts.generationGate.renderPlanShotCount).toBe(1);
+  });
+
+  it("uses explicit target shot count without parsing labeled story text", () => {
     const input = createStoryInputFromStartRequest({
       rawIntent: courierStory,
       targetShotCount: 2,
@@ -128,7 +179,7 @@ describe("story input workflow start", () => {
     });
     const artifacts = createStoryPlanningArtifacts(input, now());
 
-    expect(input.storySegments).toHaveLength(5);
+    expect(input.storySegments).toBeUndefined();
     expect(artifacts.outline.beats).toHaveLength(2);
     expect(artifacts.shots).toHaveLength(2);
     expect(artifacts.generationGate.renderPlanShotCount).toBe(2);
@@ -162,38 +213,39 @@ describe("story input workflow start", () => {
   });
 
   it("uses supplied local resource candidates from the settings snapshot without model NSFW metadata", () => {
+    const resourceCandidates = {
+      checkpoints: [
+        {
+          id: "local-checkpoint",
+          name: "Local Arcade Checkpoint",
+          baseModel: "Illustrious",
+          modelFileName: "arcade.safetensors",
+          nsfw: true,
+          modelNsfw: true,
+        },
+      ],
+      loras: [
+        {
+          id: "local-lora",
+          name: "Neon Cabinet LoRA",
+          baseModel: "Illustrious",
+          modelFileName: "neon-cabinet.safetensors",
+          trainedWords: ["neon arcade"],
+          aiNsfwLevel: "explicit",
+          nsfwLevel: 5,
+        },
+      ],
+    };
     const input = createStoryInputFromStartRequest({
       rawIntent: "A two-shot neon arcade conversation.",
       targetShotCount: 2,
       storyId: "story-resources",
       now,
       settingsSnapshot: {
-        resourceCandidates: {
-          checkpoints: [
-            {
-              id: "local-checkpoint",
-              name: "Local Arcade Checkpoint",
-              baseModel: "Illustrious",
-              modelFileName: "arcade.safetensors",
-              nsfw: true,
-              modelNsfw: true,
-            },
-          ],
-          loras: [
-            {
-              id: "local-lora",
-              name: "Neon Cabinet LoRA",
-              baseModel: "Illustrious",
-              modelFileName: "neon-cabinet.safetensors",
-              trainedWords: ["neon arcade"],
-              aiNsfwLevel: "explicit",
-              nsfwLevel: 5,
-            },
-          ],
-        },
+        resourceCandidates,
       },
     });
-    const artifacts = createStoryPlanningArtifacts(input, now());
+    const artifacts = createStoryPlanningArtifacts(input, now(), resourceCandidates);
     const resourcePlanJson = JSON.stringify(artifacts.resourcePlan);
     const renderPlanJson = JSON.stringify(artifacts.renderPlan);
 
@@ -212,34 +264,44 @@ describe("story input workflow start", () => {
     });
     expect(artifacts.resourcePlan.recommendationReason).toBe("Use validated local candidates from the Story Graph settings snapshot.");
     expect(artifacts.resourcePlan.warnings).toEqual([]);
+    expect(input.settingsSnapshot).toMatchObject({
+      resourceCandidateCounts: {
+        checkpoints: 1,
+        loras: 1,
+      },
+    });
+    expect(JSON.stringify(input.settingsSnapshot)).not.toContain("resourceCandidates");
     expect(resourcePlanJson).not.toContain("nsfw");
     expect(resourcePlanJson).not.toContain("Nsfw");
+    expect(renderPlanJson).not.toContain("\"resources\"");
+    expect(renderPlanJson).toContain("\"resourceRefs\"");
     expect(renderPlanJson).not.toContain("modelNsfw");
     expect(renderPlanJson).not.toContain("aiNsfwLevel");
   });
 
   it("uses Anima sampler defaults for local Story planning artifacts", () => {
+    const resourceCandidates = {
+      checkpoints: [
+        {
+          id: "anima-checkpoint",
+          name: "Anima Checkpoint",
+          baseModel: "Anima",
+          modelBaseModel: "Anima",
+          modelFileName: "anima.safetensors",
+        },
+      ],
+      loras: [],
+    };
     const input = createStoryInputFromStartRequest({
       rawIntent: "A two-shot anime rooftop conversation.",
       targetShotCount: 2,
       storyId: "story-anima-resources",
       now,
       settingsSnapshot: {
-        resourceCandidates: {
-          checkpoints: [
-            {
-              id: "anima-checkpoint",
-              name: "Anima Checkpoint",
-              baseModel: "Anima",
-              modelBaseModel: "Anima",
-              modelFileName: "anima.safetensors",
-            },
-          ],
-          loras: [],
-        },
+        resourceCandidates,
       },
     });
-    const artifacts = createStoryPlanningArtifacts(input, now());
+    const artifacts = createStoryPlanningArtifacts(input, now(), resourceCandidates);
 
     expect(artifacts.parameterPlan.defaults).toMatchObject({
       steps: 36,
@@ -253,34 +315,39 @@ describe("story input workflow start", () => {
       samplerName: "er_sde",
       scheduler: "simple",
     });
-    expect(artifacts.generationGate.requestPreview[0]?.outputAnchors).toMatchObject({
+    expect(artifacts.generationGate.requestPreview[0]).toMatchObject({
+      sourceMode: "none",
+      sourceShotIds: [],
+    });
+    expect(artifacts.renderPlan.shots[0]?.outputAnchors).toMatchObject({
       source: {
         mode: "none",
         sourceShotIds: [],
       },
     });
-    expect(artifacts.generationGate.requestPreview[0]?.outputAnchors.subject.length).toBeGreaterThan(0);
+    expect(artifacts.renderPlan.shots[0]?.outputAnchors.subject.length).toBeGreaterThan(0);
   });
 
-  it("infers local Story planning dimensions from the requested aspect", () => {
+  it("keeps local Story planning dimensions neutral for aspect keywords", () => {
+    const animaResourceCandidates = {
+      checkpoints: [
+        {
+          id: "anima-checkpoint",
+          name: "Anima Checkpoint",
+          baseModel: "Anima",
+          modelBaseModel: "Anima",
+          modelFileName: "anima.safetensors",
+        },
+      ],
+      loras: [],
+    };
     const portraitInput = createStoryInputFromStartRequest({
       rawIntent: "A vertical full body anime courier portrait sequence.",
       targetShotCount: 1,
       storyId: "story-portrait-dimensions",
       now,
       settingsSnapshot: {
-        resourceCandidates: {
-          checkpoints: [
-            {
-              id: "anima-checkpoint",
-              name: "Anima Checkpoint",
-              baseModel: "Anima",
-              modelBaseModel: "Anima",
-              modelFileName: "anima.safetensors",
-            },
-          ],
-          loras: [],
-        },
+        resourceCandidates: animaResourceCandidates,
       },
     });
     const landscapeInput = createStoryInputFromStartRequest({
@@ -289,28 +356,28 @@ describe("story input workflow start", () => {
       storyId: "story-landscape-dimensions",
       now,
     });
-    const portraitArtifacts = createStoryPlanningArtifacts(portraitInput, now());
+    const portraitArtifacts = createStoryPlanningArtifacts(portraitInput, now(), animaResourceCandidates);
     const landscapeArtifacts = createStoryPlanningArtifacts(landscapeInput, now());
 
     expect(portraitArtifacts.generationGate.requestPreview[0]?.parameters).toMatchObject({
-      width: 832,
-      height: 1216,
+      width: 1024,
+      height: 1024,
     });
     expect(landscapeArtifacts.generationGate.requestPreview[0]?.parameters).toMatchObject({
-      width: 1216,
-      height: 832,
+      width: 1024,
+      height: 1024,
     });
     expect(portraitArtifacts.renderPlan.shots[0]?.parameters).toMatchObject({
-      width: 832,
-      height: 1216,
+      width: 1024,
+      height: 1024,
     });
     expect(landscapeArtifacts.renderPlan.shots[0]?.parameters).toMatchObject({
-      width: 1216,
-      height: 832,
+      width: 1024,
+      height: 1024,
     });
   });
 
-  it("puts compact output anchors into the generation gate request preview", () => {
+  it("keeps full output anchors in the render plan and compact prompt previews in the generation gate", () => {
     const input = createStoryInputFromStartRequest({
       rawIntent:
         "One hand gripping the bike frame as he squeezes past market crates, lifting the bicycle through a narrow alley, with distant police barricades along the bridge route.",
@@ -321,14 +388,20 @@ describe("story input workflow start", () => {
     });
     const artifacts = createStoryPlanningArtifacts(input, now());
     const preview = artifacts.generationGate.requestPreview[0];
+    const anchors = artifacts.renderPlan.shots[0]?.outputAnchors;
 
-    expect(preview?.outputAnchors.action).toContain("lifting bicycle through narrow alley");
-    expect(preview?.outputAnchors.environment).toContain("distant police barricades near bridge route");
-    expect(preview?.outputAnchors.negative).not.toEqual(
+    expect(preview?.positivePromptPreview.length).toBeLessThanOrEqual(180);
+    expect(preview?.positivePromptLength).toBeGreaterThan(preview?.positivePromptPreview.length ?? 0);
+    expect(preview).not.toHaveProperty("positivePrompt");
+    expect(preview).not.toHaveProperty("negativePrompt");
+    expect(preview).not.toHaveProperty("outputAnchors");
+    expect(JSON.stringify(anchors)).toContain("lifting the bicycle through a narrow alley");
+    expect(JSON.stringify(anchors)).toContain("distant police barricades along the bridge route");
+    expect(anchors?.negative).not.toEqual(
       expect.arrayContaining(["non-consensual", "sexualized minor", "childlike face"]),
     );
-    expect(JSON.stringify(preview?.outputAnchors)).not.toContain("One hand gripping the bike frame as he squeezes past");
-    expect(JSON.stringify(preview?.outputAnchors)).not.toContain("sexualized minors");
+    expect(JSON.stringify(anchors)).toContain("One hand gripping the bike frame as he squeezes past");
+    expect(JSON.stringify(anchors)).not.toContain("sexualized minors");
   });
 
   it("starts a story-graph workflow with confirmation-gated shot execution", () => {

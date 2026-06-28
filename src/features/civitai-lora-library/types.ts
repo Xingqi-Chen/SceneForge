@@ -309,6 +309,7 @@ export type SelectedCivitaiResourcePreview = {
   modelFileNameAliases?: string[];
   modelStorageKind?: CivitaiModelStorageKind;
   promptReferences?: CivitaiPromptReference[];
+  exampleImageDimensions?: string[];
 };
 
 export type SelectedCivitaiResourcesPreview = {

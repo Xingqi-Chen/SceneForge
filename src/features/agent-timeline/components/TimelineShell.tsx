@@ -68,6 +68,7 @@ import type {
   SelectedCivitaiResourcePreview,
   SelectedCivitaiResourcesPreview,
 } from "@/features/civitai-lora-library/types";
+import { extractCivitaiExampleImageDimensions } from "@/features/civitai-lora-library/image-dimensions";
 import {
   getCivitaiModelStorageKind,
   makeCivitaiResourceFileNameAliases,
@@ -379,6 +380,7 @@ function toSelectedCivitaiResourcePreview(resource: CivitaiResourceListItem): Se
     previewImage: resource.previewImage,
     modelFileName,
     modelFileNameAliases: makeCivitaiResourceFileNameAliases(resource),
+    exampleImageDimensions: extractCivitaiExampleImageDimensions(resource.officialImagesJson),
     ...(resource.resourceType === "model" ? { modelStorageKind: getCivitaiModelStorageKind(resource) } : {}),
   };
 }

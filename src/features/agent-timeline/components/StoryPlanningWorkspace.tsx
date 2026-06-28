@@ -33,6 +33,17 @@ type StoryPlanningWorkspaceProps = {
 
 type StoryWorkspaceSave = (result: unknown, scope: StoryManualEditScope) => void;
 
+const shotDependencyReasonOptions: Array<{
+  label: string;
+  value: ShotDependencyGraphEdge["reason"];
+}> = [
+  { label: "Img2img source", value: "img2img-source" },
+  { label: "Reference", value: "reference" },
+  { label: "Continuity", value: "continuity" },
+  { label: "Story order", value: "story-order" },
+  { label: "Manual", value: "manual" },
+];
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -455,11 +466,9 @@ function ShotDependencyWorkspace({
               onChange={(event) => updateEdge(index, { reason: event.target.value as ShotDependencyGraphEdge["reason"] })}
               value={edge.reason}
             >
-              <option value="img2img-source">Img2img source</option>
-              <option value="reference">Reference</option>
-              <option value="continuity">Continuity</option>
-              <option value="story-order">Story order</option>
-              <option value="manual">Manual</option>
+              {shotDependencyReasonOptions.map((option) => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
             </select>
           </label>
           <div className="flex items-end justify-end">

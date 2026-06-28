@@ -1751,7 +1751,7 @@ describe("TimelineShell", () => {
       expect(container.textContent).toContain("Denoise");
       const denoiseInput = container.querySelector('input[type="number"]') as HTMLInputElement | null;
       expect(denoiseInput).not.toBeNull();
-      expect(denoiseInput?.value).toBe("0.6");
+      expect(denoiseInput?.value).toBe("0.9");
 
       act(() => {
         setNativeInputValue(denoiseInput as HTMLInputElement, "0.35");

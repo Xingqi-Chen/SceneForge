@@ -66,6 +66,13 @@ function createCivitaiResourceItem(resourceType: "lora" | "model", id: string, n
     recommendations: [],
     previewImage: null,
     description: null,
+    officialImagesJson: resourceType === "model"
+      ? [
+          { width: 896, height: 1152 },
+          { width: 896, height: 1152 },
+          { width: 1152, height: 896 },
+        ]
+      : null,
     importedImageCount: 1,
     downloadUrl: null,
     filesJson: [
@@ -434,7 +441,8 @@ describe("StoryPlanningPreview", () => {
     await clickButtonAsync("Start planning");
 
     expect(container.textContent).toContain("Step 13 / 15");
-    expect(container.textContent).toContain("brand new story request");
+    expect(container.textContent).toContain("Generation gate summary");
+    expect(container.textContent).not.toContain("old autosaved story request");
 
     await act(async () => {
       resolveActiveWorkflow?.({
@@ -446,7 +454,8 @@ describe("StoryPlanningPreview", () => {
     });
 
     expect(container.textContent).toContain("Step 13 / 15");
-    expect(container.textContent).toContain("brand new story request");
+    expect(container.textContent).toContain("Generation gate summary");
+    expect(container.textContent).not.toContain("old autosaved story request");
     expect(container.textContent).not.toContain("An old autosaved story request.");
   });
 
@@ -510,7 +519,9 @@ describe("StoryPlanningPreview", () => {
 
       expect(container.textContent).toContain("User-started planning workflow");
       expect(container.textContent).toContain("Restored story workflow");
-      expect(container.textContent).toContain("restored-shot-1");
+      expect(Array.from(container.querySelectorAll("img")).some((image) =>
+        image.getAttribute("src") === "/api/comfyui/generated-images/restored-shot-1.png",
+      )).toBe(true);
       expect(container.querySelector('article[data-selected="true"]')?.textContent).toContain("shot-2");
 
       const rawJsonButton = Array.from(container.querySelectorAll("button")).find(
@@ -594,12 +605,13 @@ describe("StoryPlanningPreview", () => {
     expect(container.textContent).not.toContain("NSFW context");
 
     const textarea = container.querySelector("textarea") as HTMLTextAreaElement | null;
-    const shotsInput = Array.from(container.querySelectorAll("input")).find(
-      (input) => input.getAttribute("type") === "number",
-    ) as HTMLInputElement | undefined;
+    const shotsInput = container.querySelector("#story-target-shot-count") as HTMLInputElement | null;
+    const img2imgDenoiseInput = container.querySelector("#story-img2img-denoise") as HTMLInputElement | null;
 
     expect(textarea).not.toBeNull();
-    expect(shotsInput).toBeDefined();
+    expect(shotsInput).not.toBeNull();
+    expect(img2imgDenoiseInput).not.toBeNull();
+    expect(img2imgDenoiseInput?.value).toBe("0.9");
     const baseModelSelect = container.querySelector("select") as HTMLSelectElement | null;
 
     expect(baseModelSelect).not.toBeNull();
@@ -608,6 +620,7 @@ describe("StoryPlanningPreview", () => {
     act(() => {
       setNativeInputValue(textarea as HTMLTextAreaElement, "A detective follows a signal through a storm-lit city.");
       setNativeInputValue(shotsInput as HTMLInputElement, "4");
+      setNativeInputValue(img2imgDenoiseInput as HTMLInputElement, "0.72");
     });
     await clickButtonAsync("Start planning");
 
@@ -626,16 +639,19 @@ describe("StoryPlanningPreview", () => {
       fetchMock.mock.calls.find(([input]) => input === "/api/agent-timeline/story/run-planning")?.[1]?.body ?? "{}",
     )) as {
       settingsSnapshot?: {
+        img2imgDenoise?: number;
         resourceCandidates?: {
-          checkpoints?: Array<{ id: string; modelFileName?: string }>;
+          checkpoints?: Array<{ id: string; modelFileName?: string; exampleImageDimensions?: string[] }>;
           loras?: Array<{ id: string; modelFileName?: string; trainedWords?: string[] }>;
         };
       };
     };
+    expect(planningBody.settingsSnapshot?.img2imgDenoise).toBe(0.72);
     expect(planningBody.settingsSnapshot?.resourceCandidates?.checkpoints).toEqual([
       expect.objectContaining({
         id: "checkpoint-local",
         modelFileName: "Local Checkpoint__v1__mv101__101.safetensors",
+        exampleImageDimensions: ["896x1152 (2 examples)", "1152x896"],
       }),
     ]);
     expect(planningBody.settingsSnapshot?.resourceCandidates?.loras).toEqual([
@@ -649,6 +665,67 @@ describe("StoryPlanningPreview", () => {
     const executionButton = container.querySelector('button[data-node-id="shot-graph-execution"]') as HTMLButtonElement | null;
 
     expect(executionButton?.textContent).toContain("blocked");
+  });
+
+  it("shows compact Visual output by default and keeps Raw JSON available", async () => {
+    const plannedWorkflow = createPlannedWorkflow("A detective follows a signal through a storm-lit city.");
+    const fetchMock = vi.fn<typeof fetch>(async (url) => {
+      const target = typeof url === "string" ? url : url instanceof Request ? url.url : url.toString();
+      const resourceResponse = handleStoryResourceListFetch(target);
+      if (resourceResponse) {
+        return resourceResponse;
+      }
+
+      if (target === "/api/settings") {
+        return {
+          ok: true,
+          json: async () => ({}),
+        } as Response;
+      }
+
+      if (target === "/api/agent-timeline/story/run-planning") {
+        return {
+          ok: true,
+          json: async () => ({
+            workflow: plannedWorkflow,
+          }),
+        } as Response;
+      }
+
+      throw new Error(`Unexpected fetch ${target}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await act(async () => {
+      root.render(<StoryPlanningPreview />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const textarea = container.querySelector("textarea") as HTMLTextAreaElement | null;
+
+    act(() => {
+      setNativeInputValue(textarea as HTMLTextAreaElement, "A detective follows a signal through a storm-lit city.");
+    });
+    await clickButtonAsync("Start planning");
+
+    expect(container.querySelector('[data-testid="story-node-output-summary"]')?.textContent).toContain(
+      "Generation gate summary",
+    );
+    expect(container.textContent).toContain("Edit artifact");
+    expect(container.textContent).not.toContain('"requestPreview"');
+
+    const rawJsonButton = Array.from(container.querySelectorAll("button")).find(
+      (button) => button.textContent?.replace(/\s+/g, " ").trim() === "Raw JSON",
+    ) as HTMLButtonElement | undefined;
+
+    await act(async () => {
+      rawJsonButton?.click();
+      await Promise.resolve();
+    });
+
+    expect(container.querySelector('[data-testid="story-node-output-summary"]')).toBeNull();
+    expect(container.textContent).toContain('"requestPreview"');
   });
 
   it("uses the selected Story input base model to scope checkpoint and LoRA candidates", async () => {
@@ -814,61 +891,34 @@ describe("StoryPlanningPreview", () => {
     });
   });
 
-  it("keeps sample content behind a fallback start action", async () => {
-    const fallbackWorkflow = createPlannedWorkflow("A traveler in a blue raincoat enters a rain-washed elevated station.");
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (url: string | URL | Request) => {
-        const target = typeof url === "string" ? url : url instanceof Request ? url.url : url.toString();
-        const resourceResponse = handleStoryResourceListFetch(target);
-        if (resourceResponse) {
-          return resourceResponse;
-        }
+  it("does not expose a sample fallback start action", async () => {
+    const fetchMock = vi.fn(async (url: string | URL | Request) => {
+      const target = typeof url === "string" ? url : url instanceof Request ? url.url : url.toString();
 
-        if (target === "/api/settings") {
-          return {
-            ok: true,
-            json: async () => ({}),
-          } as Response;
-        }
+      if (target === "/api/settings") {
+        return {
+          ok: true,
+          json: async () => ({}),
+        } as Response;
+      }
 
-        if (target === "/api/agent-timeline/story/run-planning") {
-          return {
-            ok: true,
-            json: async () => ({
-              workflow: fallbackWorkflow,
-            }),
-          } as Response;
-        }
-
-        throw new Error(`Unexpected fetch ${target}`);
-      }),
-    );
+      throw new Error(`Unexpected fetch ${target}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
 
     await act(async () => {
       root.render(<StoryPlanningPreview />);
       await Promise.resolve();
     });
 
-    await clickButtonAsync("Load fallback");
-
-    expect(container.textContent).toContain("User-started planning workflow");
-    expect(container.textContent).toContain("blue raincoat");
-
-    const resourceButton = container.querySelector('button[data-node-id="resource-plan"]') as HTMLButtonElement | null;
-
-    expect(resourceButton).not.toBeNull();
-
-    act(() => {
-      (resourceButton as HTMLButtonElement).click();
-    });
-
-    expect(container.textContent).toContain("Local Checkpoint");
+    expect(container.textContent).not.toContain("Load fallback");
+    expect(fetchMock).not.toHaveBeenCalledWith("/api/agent-timeline/story/run-planning", expect.anything());
   });
 
   it("supports Story request suggest and rewrite through the LLM chat boundary", async () => {
     const storyInputSystemPrompts: string[] = [];
-    const storyInputPayloads: Array<{ action?: string; currentStoryRequest?: string }> = [];
+    const storyInputRequests: Array<{ temperature?: number }> = [];
+    const storyInputPayloads: Array<{ action?: string; currentStoryRequest?: string; promptProfile?: string }> = [];
     const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
       const target = typeof url === "string" ? url : url instanceof Request ? url.url : url.toString();
 
@@ -886,13 +936,14 @@ describe("StoryPlanningPreview", () => {
       }
 
       if (target === "/api/llm/chat") {
-        const body = JSON.parse(String(init?.body ?? "{}")) as { messages?: Array<{ content?: string }> };
+        const body = JSON.parse(String(init?.body ?? "{}")) as { messages?: Array<{ content?: string }>; temperature?: number };
+        storyInputRequests.push(body);
         const systemContent = body.messages?.[0]?.content;
         if (typeof systemContent === "string") {
           storyInputSystemPrompts.push(systemContent);
         }
         const userContent = body.messages?.[1]?.content ?? "{}";
-        const payload = JSON.parse(userContent) as { action?: string; currentStoryRequest?: string };
+        const payload = JSON.parse(userContent) as { action?: string; currentStoryRequest?: string; promptProfile?: string };
         storyInputPayloads.push(payload);
 
         return {
@@ -926,16 +977,41 @@ describe("StoryPlanningPreview", () => {
     expect(storyInputPayloads[0]).toMatchObject({
       action: "suggest",
       currentStoryRequest: "",
+      promptProfile: "illustrious",
     });
+    expect(storyInputRequests[0]).toMatchObject({
+      temperature: 0.75,
+    });
+    expect(storyInputSystemPrompts[0]).toContain("Selected prompt profile: Illustrious (illustrious)");
+    expect(storyInputSystemPrompts[0]).toContain("Japanese illustration / anime-inspired style only");
+    expect(storyInputSystemPrompts[0]).toContain("must explicitly include anime-style or Japanese-illustration");
+    expect(storyInputSystemPrompts[0]).toContain("Do not add Japanese cultural content unless the user asks");
     expect(storyInputSystemPrompts[0]).toContain("concrete, storyboard-ready Story Graph request");
     expect(storyInputSystemPrompts[0]).toContain("visible age range or role, appearance, clothing");
+    expect(storyInputSystemPrompts[0]).toContain("female-led everyday slice-of-life story");
+    expect(storyInputSystemPrompts[0]).toContain("school, campus, home, cafe");
+    expect(storyInputSystemPrompts[0]).toContain("keep it wholesome and non-sexual by default");
     expect(storyInputSystemPrompts[0]).toContain("3 to 5 sequential visual beats");
+    expect(storyInputSystemPrompts[0]).toContain("Do not introduce default rain");
+    expect(storyInputSystemPrompts[0]).toContain("yellow raincoats");
+    expect(storyInputSystemPrompts[0]).toContain("yellow rain jackets");
+    expect(storyInputSystemPrompts[0]).toContain("yellow jackets or coats");
+    expect(storyInputSystemPrompts[0]).toContain("rainy courier template");
     expect(storyInputSystemPrompts[0]).toContain("Avoid abstract summaries");
     expect(storyInputSystemPrompts[0]).toContain("Prefer compact storyboard-brief prose");
 
     await clickButtonAsync("Rewrite");
 
     expect(textarea?.value).toBe("A rewritten observatory story request with clearer continuity.");
+    expect(storyInputPayloads[1]).toMatchObject({
+      action: "rewrite",
+      currentStoryRequest: "A suggested observatory story request with three escalating visual beats.",
+      promptProfile: "illustrious",
+    });
+    expect(storyInputRequests[1]).toMatchObject({
+      temperature: 0.25,
+    });
+    expect(storyInputSystemPrompts[1]).toContain("keep the request aligned to Japanese illustration / anime-inspired rendering");
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/llm/chat",
       expect.objectContaining({
@@ -996,7 +1072,7 @@ describe("StoryPlanningPreview", () => {
     await clickButtonAsync("Start planning");
 
     expect(container.textContent).toContain("User-started planning workflow");
-    expect(container.textContent).toContain("impossible doorway");
+    expect(container.textContent).toContain("Generation gate summary");
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/agent-timeline/story/run-planning",
       expect.objectContaining({
@@ -1121,7 +1197,9 @@ describe("StoryPlanningPreview", () => {
     await clickButtonAsync("Start shot generation");
 
     expect(container.textContent).toContain("Shot execution");
-    expect(container.textContent).toContain("first-shot-1");
+    expect(Array.from(container.querySelectorAll("img")).some((image) =>
+      image.getAttribute("src") === "/api/comfyui/generated-images/first-shot-1.png",
+    )).toBe(true);
 
     const resultButton = container.querySelector('button[data-node-id="story-result-display"]') as HTMLButtonElement | null;
     act(() => {
@@ -1141,7 +1219,9 @@ describe("StoryPlanningPreview", () => {
     });
     await clickButtonAsync("Regenerate shot");
 
-    expect(container.textContent).toContain("regen-shot-1");
+    expect(Array.from(container.querySelectorAll("img")).some((image) =>
+      image.getAttribute("src") === "/api/comfyui/generated-images/regen-shot-1.png",
+    )).toBe(true);
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/agent-timeline/story/regenerate-shot",
       expect.objectContaining({
@@ -1217,6 +1297,8 @@ describe("StoryPlanningPreview", () => {
     expect(confirmPayloads[0]?.workflow?.workflowId).toBe(plannedWorkflow.workflowId);
     expect(container.textContent).not.toContain("Start shot generation");
     expect(container.textContent).toContain("Shot execution");
-    expect(container.textContent).toContain("auto-shot-1");
+    expect(Array.from(container.querySelectorAll("img")).some((image) =>
+      image.getAttribute("src") === "/api/comfyui/generated-images/auto-shot-1.png",
+    )).toBe(true);
   });
 });

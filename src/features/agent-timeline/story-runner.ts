@@ -133,6 +133,7 @@ export async function runStoryPlanning(
   const adapters = options.adapters ?? createStoryLlmNodeAdapters({
     completeChat: options.completeChat ?? createDefaultStoryCompleteChat(),
     now,
+    resourceCandidates: request.settingsSnapshot?.resourceCandidates,
     samplerOptions,
   });
   let progressed = true;

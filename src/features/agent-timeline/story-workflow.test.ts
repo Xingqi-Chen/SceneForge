@@ -70,6 +70,12 @@ describe("story workflow definition", () => {
     expect(storyWorkflowDefinition.nodeIds).toEqual(storyWorkflowNodeIds);
     expect(storyWorkflowDefinition.dependencyDag["story-bible"]).toEqual(["story-input"]);
     expect(storyWorkflowDefinition.dependencyDag["storyboard-shots"]).toEqual(["story-outline"]);
+    expect(storyWorkflowDefinition.dependencyDag["story-render-plan"]).toEqual(expect.arrayContaining([
+      "character-continuity-graph",
+      "shot-dependency-graph",
+      "resource-plan",
+      "parameter-plan",
+    ]));
     expect(storyWorkflowDefinition.dependencyDag["shot-graph-execution"]).toEqual(["generation-gate"]);
     expect(storyWorkflowDefinition.dependencyDag["story-result-display"]).toEqual(["shot-graph-execution"]);
     expect(storyWorkflowDefinition.reservedNodeIds).toEqual([]);

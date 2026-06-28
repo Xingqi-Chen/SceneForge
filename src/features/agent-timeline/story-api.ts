@@ -18,7 +18,7 @@ import {
 } from "./story-state";
 import {
   createStoryConsistencyCheckFromWorkflow,
-  createStoryRenderPlanFromWorkflow,
+  getStoryRenderPlanFromWorkflow,
   isStoryResourcePlanExecutable,
 } from "./story-llm-adapters";
 import { storyGraphWorkflowMode, storyWorkflowDefinition } from "./story-workflow";
@@ -94,14 +94,17 @@ function getSubmittedExecutionStateForRegeneration(workflow: StoryWorkflowState)
     : undefined;
 }
 
-function assertGateReady(workflow: StoryWorkflowState): StoryRenderPlan {
+function assertGateReady(workflow: StoryWorkflowState): {
+  renderPlan: StoryRenderPlan;
+  resourcePlan: StoryResourcePlan;
+} {
   if (workflow.workflowMode !== storyGraphWorkflowMode) {
     throw new StoryApiValidationError("Story generation requires workflowMode story-graph.");
   }
 
   const gate = workflow.nodes["generation-gate"];
   const gateResult = gate.result;
-  const renderPlan = createStoryRenderPlanFromWorkflow(workflow);
+  const renderPlan = getStoryRenderPlanFromWorkflow(workflow);
   const consistency = createStoryConsistencyCheckFromWorkflow(workflow, () => workflow.updatedAt);
 
   if (!isRecord(gateResult) || gateResult.ready !== true || gate.status !== "done") {
@@ -126,7 +129,10 @@ function assertGateReady(workflow: StoryWorkflowState): StoryRenderPlan {
     throw new StoryApiValidationError("Story render plan does not contain any shots.", 400);
   }
 
-  return renderPlan;
+  return {
+    renderPlan,
+    resourcePlan: resourcePlan as StoryResourcePlan,
+  };
 }
 
 function createStoryResultDisplayFromExecution({
@@ -163,8 +169,8 @@ export async function confirmAndExecuteStoryGeneration({
   now?: () => string;
   workflow: StoryWorkflowState;
 }) {
-  const renderPlan = assertGateReady(workflow);
-  const batch = createStoryExecutionRequestBatch({ mode: "final", renderPlan });
+  const { renderPlan, resourcePlan } = assertGateReady(workflow);
+  const batch = createStoryExecutionRequestBatch({ mode: "final", renderPlan, resourcePlan });
   let nextWorkflow = confirmStoryGeneration(workflow, { now });
   nextWorkflow = markStoryNodeRunning(nextWorkflow, "shot-graph-execution", { now });
   // Confirmation starts a fresh server-side execution. The submitted workflow may
@@ -195,8 +201,8 @@ export async function regenerateStoryShot({
   shotId: StoryShotId;
   workflow: StoryWorkflowState;
 }) {
-  const renderPlan = assertGateReady(workflow);
-  const batch = createStoryExecutionRequestBatch({ mode: "final", renderPlan });
+  const { renderPlan, resourcePlan } = assertGateReady(workflow);
+  const batch = createStoryExecutionRequestBatch({ mode: "final", renderPlan, resourcePlan });
   const existingExecution = getSubmittedExecutionStateForRegeneration(workflow);
   if (!existingExecution) {
     throw new StoryApiValidationError("Story shot execution state is required before regenerating a shot.", 400);

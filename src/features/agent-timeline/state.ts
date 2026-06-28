@@ -42,7 +42,7 @@ type TimelineMutationOptions = {
 export const MIN_TIMELINE_IMAGE_COUNT = 1;
 export const MAX_TIMELINE_IMAGE_COUNT = 4;
 export const DEFAULT_TIMELINE_IMAGE_COUNT = 1;
-export const DEFAULT_TIMELINE_SOURCE_DENOISE = 0.6;
+export const DEFAULT_TIMELINE_SOURCE_DENOISE = 0.9;
 
 function defaultNow() {
   return new Date().toISOString();

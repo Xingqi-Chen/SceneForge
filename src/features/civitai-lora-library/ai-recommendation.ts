@@ -32,6 +32,7 @@ import {
   type PromptProfileId,
 } from "@/shared/prompt-profile";
 import { isCivitaiBaseModelCompatibleWithPromptProfile } from "./base-model";
+import { extractCivitaiExampleImageDimensions } from "./image-dimensions";
 
 import type {
   CivitaiAiRecommendationResponse,
@@ -83,6 +84,7 @@ type LlmRecommendationCandidate = {
   trainedWords: string[];
   usageGuide: string | null;
   description: string | null;
+  exampleImageDimensions: string[];
   recommendations: Array<{
     condition: string | null;
     baseModel: string | null;
@@ -305,6 +307,7 @@ function toPreviewResource(resource: CivitaiResourceDetail): SelectedCivitaiReso
     previewImage: resource.previewImage,
     modelFileName,
     modelFileNameAliases: makeCivitaiResourceFileNameAliases(resource),
+    exampleImageDimensions: extractCivitaiExampleImageDimensions(resource.officialImagesJson),
     ...(resource.resourceType === "model" ? { modelStorageKind: getCivitaiModelStorageKind(resource) } : {}),
   };
 }
@@ -599,6 +602,7 @@ export function toLlmCivitaiRecommendationCandidate(
     trainedWords: resource.trainedWords.slice(0, 8),
     usageGuide: truncate(resource.usageGuide, LLM_TEXT_FIELD_MAX_LENGTH),
     description: truncate(resource.descriptionSnippet, LLM_TEXT_FIELD_MAX_LENGTH),
+    exampleImageDimensions: resource.exampleImageDimensions?.slice(0, 6) ?? [],
     recommendations: resource.recommendations.slice(0, 3).map(normalizeRecommendationForLlm),
     observedWeight: {
       average: resource.averageWeight,
