@@ -14,7 +14,7 @@ Story Graph planning tracks `T16` through `T22` were added in PR `#60`.
 
 Story Graph prompt-planning refinements were merged in follow-up PR `#83`.
 
-Story Graph refinement tracks `T23A` through `T23D` were added after saved-workflow review found redundant node outputs, overly tag-like Anima Story prompts, risky source-image inheritance for major pose/composition changes, and Visual Output that still exposes implementation details. Implement them in order: `T23A`, `T23B`, `T23C`, then `T23D`. Follow-up reviewer fixes for Story Visual diagnostics and server-ranked resource planning are tracked in PR `#95`.
+Story Graph refinement tracks `T23A` through `T23D` were added after saved-workflow review found redundant node outputs, overly tag-like Anima Story prompts, risky source-image inheritance for major pose/composition changes, and Visual Output that still exposes implementation details. Implement them in order: `T23A`, `T23B`, `T23C`, then `T23D`. Follow-up reviewer fixes for Story Visual diagnostics and server-ranked resource planning are tracked in PR `#95`; Story prompt-health warning cleanup is tracked in PR `#96`.
 
 ## Status Values
 
