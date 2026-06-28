@@ -103,11 +103,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function compactText(value: unknown, maxLength = 1200) {
+  void maxLength;
   if (typeof value !== "string") {
     return "";
   }
 
-  return value.replace(/\s+/g, " ").trim().slice(0, maxLength);
+  return value.replace(/\s+/g, " ").trim();
 }
 
 function invalidTimelineInput(message: string, details?: unknown): never {
@@ -254,7 +255,7 @@ function buildDesiredEffect(context: TimelineNodeExecutionContext) {
   const scenePrompt = getScenePromptResult(context.workflow);
   const characterTags = getCharacterTagsResult(context.workflow);
   const action = getCharacterActionResult(context.workflow);
-  const tagPrompts = characterTags.items.map((item) => item.prompt).filter(Boolean).slice(0, 12);
+  const tagPrompts = characterTags.items.map((item) => item.prompt).filter(Boolean);
   const promptProfile = getTimelinePromptProfile(context.workflow);
 
   return [

@@ -73,11 +73,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function compactText(value: unknown, maxLength = 1200) {
+  void maxLength;
   if (typeof value !== "string") {
     return "";
   }
 
-  return value.replace(/\s+/g, " ").trim().slice(0, maxLength);
+  return value.replace(/\s+/g, " ").trim();
 }
 
 function parseJsonObjectFromText(text: string): unknown | null {
@@ -121,8 +122,9 @@ function invalidTimelineInput(message: string, details?: unknown): never {
 }
 
 function normalizeStringList(value: unknown, maxItems = 8) {
+  void maxItems;
   if (Array.isArray(value)) {
-    return value.map((item) => compactText(item, 300)).filter(Boolean).slice(0, maxItems);
+    return value.map((item) => compactText(item, 300)).filter(Boolean);
   }
 
   const text = compactText(value, 600);
@@ -130,9 +132,10 @@ function normalizeStringList(value: unknown, maxItems = 8) {
 }
 
 function normalizePromptFragments(value: unknown, maxItems = 5): TimelinePromptFragment[] {
+  void maxItems;
   if (typeof value === "string") {
     const prompt = compactText(value, 500);
-    return prompt ? [{ label: prompt.slice(0, 48), prompt }] : [];
+    return prompt ? [{ label: prompt, prompt }] : [];
   }
 
   if (!Array.isArray(value)) {
@@ -143,7 +146,7 @@ function normalizePromptFragments(value: unknown, maxItems = 5): TimelinePromptF
     .map((item): TimelinePromptFragment | null => {
       if (typeof item === "string") {
         const prompt = compactText(item, 500);
-        return prompt ? { label: prompt.slice(0, 48), prompt } : null;
+        return prompt ? { label: prompt, prompt } : null;
       }
 
       if (!isRecord(item)) {
@@ -155,11 +158,10 @@ function normalizePromptFragments(value: unknown, maxItems = 5): TimelinePromptF
         return null;
       }
 
-      const label = compactText(item.label, 80) || prompt.slice(0, 48);
+      const label = compactText(item.label, 80) || prompt;
       return { label, prompt };
     })
-    .filter((item): item is TimelinePromptFragment => Boolean(item))
-    .slice(0, maxItems);
+    .filter((item): item is TimelinePromptFragment => Boolean(item));
 }
 
 function normalizeProfileSections<SectionMap>(
@@ -339,8 +341,7 @@ export function normalizeCharacterTagsTimelineResult(raw: unknown): CharacterTag
 
   const items = parsed.items
     .map(toTimelineCharacterPromptTag)
-    .filter((item): item is CharacterPromptTag => Boolean(item))
-    .slice(0, 24);
+    .filter((item): item is CharacterPromptTag => Boolean(item));
 
   if (items.length === 0) {
     malformedResponse("Character tags response must include at least one character or body-part item.", {

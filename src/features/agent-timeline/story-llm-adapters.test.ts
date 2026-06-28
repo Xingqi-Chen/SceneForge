@@ -25,6 +25,7 @@ import {
   type StoryRenderPlan,
 } from "./story-planning";
 import type {
+  StoryBible,
   StoryInput,
   StoryShot,
 } from "./story-types";
@@ -106,6 +107,36 @@ const shots = [
     continuityNotes: [],
   },
 ] satisfies StoryShot[];
+
+const bible = {
+  storyId: "story-1",
+  title: "Neon Market Signal",
+  logline: "A courier follows a signal through a neon market.",
+  genre: ["visual story"],
+  themes: ["signal", "rain"],
+  worldSummary: "A rain-soaked neon market with a courier tracking a signal.",
+  visualStyle: "Cinematic anime storyboard panels with wet neon reflections.",
+  characters: [
+    {
+      id: "courier",
+      name: "Courier",
+      role: "Lead",
+      description: "A courier in a yellow rain jacket.",
+      continuityNotes: ["Keep the rain jacket consistent."],
+      visualAnchors: ["yellow rain jacket", "messenger bag"],
+    },
+  ],
+  locations: [
+    {
+      id: "market",
+      name: "Neon market",
+      description: "A crowded wet market alley under neon signs.",
+      visualAnchors: ["wet pavement", "neon signage"],
+    },
+  ],
+  continuityRules: ["Keep the courier identity stable."],
+} satisfies StoryBible;
+
 const courierStory = [
   "Characters: teenage courier in a yellow rain jacket, carrying a cake box.",
   "Beat 1: The courier pedals into a wet market alley with the cake box strapped to his backpack.",
@@ -561,7 +592,7 @@ describe("story LLM adapters", () => {
     expect(normalized[0]?.title).toBe("Wait");
   });
 
-  it("truncates filler shots for explicit segments and preserves final image subjects", () => {
+  it("limits filler shots for explicit segments and preserves final image subjects", () => {
     const segmentedInput = {
       ...input,
       rawIntent: courierStory,
@@ -713,6 +744,35 @@ describe("story LLM adapters", () => {
     });
   });
 
+  it("preserves full resource-plan reasons and warnings for node summaries", () => {
+    const checkpointTail = "checkpoint reason tail visible in resource plan summary";
+    const loraTail = "lora reason tail visible in resource plan summary";
+    const recommendationTail = "recommendation reason tail visible in resource plan summary";
+    const warningTail = "warning tail visible in resource plan summary";
+    const makeLongText = (tail: string) => [
+      ...Array.from({ length: 30 }, (_, index) =>
+        `Detailed resource-selection rationale segment ${index + 1} with candidate metadata, tags, preview dimensions, and story fit.`,
+      ),
+      tail,
+    ].join(" ");
+
+    const plan = normalizeStoryResourcePlan(
+      {
+        checkpoint: { resource: { id: "checkpoint-local" }, reason: makeLongText(checkpointTail) },
+        loras: [{ resource: { id: "lora-local" }, reason: makeLongText(loraTail), suggestedWeight: 0.6 }],
+        recommendationReason: makeLongText(recommendationTail),
+        overallEffect: "Neon continuity.",
+        warnings: [makeLongText(warningTail)],
+      },
+      input,
+    );
+
+    expect(plan.checkpoint.reason).toContain(checkpointTail);
+    expect(plan.loras[0]?.reason).toContain(loraTail);
+    expect(plan.recommendationReason).toContain(recommendationTail);
+    expect(plan.warnings[0]).toContain(warningTail);
+  });
+
   it("uses transient resource candidates when Story input stores only candidate counts", async () => {
     const lightInput = {
       ...input,
@@ -729,6 +789,13 @@ describe("story LLM adapters", () => {
       result: lightInput,
       source: "manual",
       status: "manual",
+      updatedAt: workflow.updatedAt,
+    };
+    workflow.nodes["story-bible"] = {
+      nodeId: "story-bible",
+      result: bible,
+      source: "ai",
+      status: "done",
       updatedAt: workflow.updatedAt,
     };
     workflow.nodes["storyboard-shots"] = {
@@ -807,6 +874,247 @@ describe("story LLM adapters", () => {
     expect(JSON.stringify(requestPayload)).not.toContain("resourceCandidates");
     expect((result as { value?: { checkpoint?: { resource?: { id?: string } } } } | undefined)?.value?.checkpoint?.resource?.id)
       .toBe("checkpoint-local");
+  });
+
+  it("loads ranked Story resource candidates before asking the LLM to choose", async () => {
+    const rankedInput = {
+      ...input,
+      settingsSnapshot: {
+        promptProfile: "anima",
+        resourceCandidateCounts: {
+          checkpoints: 1,
+          loras: 1,
+        },
+      },
+    } satisfies StoryInput;
+    const workflow = createStoryWorkflowState({ storyId: "story-1", workflowId: "workflow-1" });
+    workflow.nodes["story-input"] = {
+      nodeId: "story-input",
+      result: rankedInput,
+      source: "manual",
+      status: "manual",
+      updatedAt: workflow.updatedAt,
+    };
+    workflow.nodes["story-bible"] = {
+      nodeId: "story-bible",
+      result: bible,
+      source: "ai",
+      status: "done",
+      updatedAt: workflow.updatedAt,
+    };
+    workflow.nodes["storyboard-shots"] = {
+      nodeId: "storyboard-shots",
+      result: shots,
+      source: "ai",
+      status: "done",
+      updatedAt: workflow.updatedAt,
+    };
+    workflow.nodes["story-safety-plan"] = {
+      nodeId: "story-safety-plan",
+      result: {
+        storyId: "story-1",
+        audienceRating: "safe",
+        contentWarnings: [],
+        blockedContent: [],
+        perShotNotes: [],
+        nsfwContext: {
+          enabled: false,
+          rationale: "Safe test context.",
+        },
+      },
+      source: "ai",
+      status: "done",
+      updatedAt: workflow.updatedAt,
+    };
+    let loadRequest: unknown;
+    let requestPayload: unknown;
+    const adapters = createStoryLlmNodeAdapters({
+      completeChat: async (request) => {
+        const content = request.messages[1]?.content;
+        requestPayload = typeof content === "string" ? JSON.parse(content) : {};
+        return chatResponse(JSON.stringify({
+          checkpoint: { resource: { id: "checkpoint-ranked" }, reason: "Ranked Anima checkpoint." },
+          loras: [{ resource: { id: "lora-ranked" }, reason: "Ranked Anima LoRA.", suggestedWeight: 0.62 }],
+          recommendationReason: "Use ranked resources.",
+          overallEffect: "Anima neon continuity.",
+          warnings: [],
+        }));
+      },
+      loadResourceCandidates: async (request) => {
+        loadRequest = request;
+        return {
+          checkpoints: [
+            {
+              id: "checkpoint-ranked",
+              name: "Ranked Anima Checkpoint",
+              baseModel: "Anima",
+              modelFileName: "ranked-anima.safetensors",
+              recommendationRank: 1,
+              recommendationScore: 0.032,
+              importedImageCount: 7,
+              commonLoras: [{ resourceId: "lora-ranked", name: "Ranked Anima LoRA", count: 4 }],
+            },
+          ],
+          loras: [
+            {
+              id: "lora-ranked",
+              name: "Ranked Anima LoRA",
+              baseModel: "Anima",
+              modelFileName: "ranked-lora.safetensors",
+              trainedWords: ["anima_neon"],
+              recommendationRank: 1,
+              recommendationScore: 0.029,
+              importedImageCount: 5,
+              commonCheckpoints: [{ resourceId: "checkpoint-ranked", name: "Ranked Anima Checkpoint", count: 4 }],
+            },
+          ],
+        };
+      },
+    });
+
+    const result = await adapters["resource-plan"]?.({
+      nodeId: "resource-plan",
+      workflow,
+      dependencies: [workflow.nodes["story-safety-plan"], workflow.nodes["storyboard-shots"]],
+    });
+
+    expect(loadRequest).toMatchObject({
+      promptProfile: "anima",
+      desiredEffect: expect.stringContaining("Prompt profile: Anima (anima)"),
+    });
+    expect(loadRequest).toMatchObject({
+      desiredEffect: expect.stringContaining("neon market arrival"),
+    });
+    expect(requestPayload).toMatchObject({
+      desiredEffect: expect.stringContaining("neon market arrival"),
+      promptProfile: "anima",
+      candidates: {
+        checkpoints: [
+          expect.objectContaining({
+            id: "checkpoint-ranked",
+            recommendationRank: 1,
+            recommendationScore: 0.032,
+            importedImageCount: 7,
+            commonLoras: [{ resourceId: "lora-ranked", name: "Ranked Anima LoRA", count: 4 }],
+          }),
+        ],
+        loras: [
+          expect.objectContaining({
+            id: "lora-ranked",
+            recommendationRank: 1,
+            recommendationScore: 0.029,
+            trainedWords: ["anima_neon"],
+            commonCheckpoints: [{ resourceId: "checkpoint-ranked", name: "Ranked Anima Checkpoint", count: 4 }],
+          }),
+        ],
+      },
+    });
+    expect((result as { value?: { checkpoint?: { resource?: { id?: string } } } } | undefined)?.value?.checkpoint?.resource?.id)
+      .toBe("checkpoint-ranked");
+  });
+
+  it("caps Story resource desiredEffect at the external candidate-ranking boundary", async () => {
+    const tailMarker = "desired effect tail marker beyond compact boundary";
+    const longInput = {
+      ...input,
+      rawIntent: [
+        ...Array.from({ length: 900 }, (_, index) =>
+          `Detailed storyboard planning clause ${index + 1} with visible character action, setting, lighting, and continuity.`,
+        ),
+        tailMarker,
+      ].join(" "),
+      settingsSnapshot: {
+        promptProfile: "anima",
+        resourceCandidateCounts: {
+          checkpoints: 1,
+          loras: 0,
+        },
+      },
+    } satisfies StoryInput;
+    const workflow = createStoryWorkflowState({ storyId: "story-1", workflowId: "workflow-long-desired-effect" });
+    workflow.nodes["story-input"] = {
+      nodeId: "story-input",
+      result: longInput,
+      source: "manual",
+      status: "manual",
+      updatedAt: workflow.updatedAt,
+    };
+    workflow.nodes["story-bible"] = {
+      nodeId: "story-bible",
+      result: bible,
+      source: "ai",
+      status: "done",
+      updatedAt: workflow.updatedAt,
+    };
+    workflow.nodes["storyboard-shots"] = {
+      nodeId: "storyboard-shots",
+      result: shots,
+      source: "ai",
+      status: "done",
+      updatedAt: workflow.updatedAt,
+    };
+    workflow.nodes["story-safety-plan"] = {
+      nodeId: "story-safety-plan",
+      result: {
+        storyId: "story-1",
+        audienceRating: "safe",
+        contentWarnings: [],
+        blockedContent: [],
+        perShotNotes: [],
+        nsfwContext: {
+          enabled: false,
+          rationale: "Safe test context.",
+        },
+      },
+      source: "ai",
+      status: "done",
+      updatedAt: workflow.updatedAt,
+    };
+    let loadRequest: unknown;
+    let requestPayload: unknown;
+    const adapters = createStoryLlmNodeAdapters({
+      completeChat: async (request) => {
+        const content = request.messages[1]?.content;
+        requestPayload = typeof content === "string" ? JSON.parse(content) : {};
+
+        return chatResponse(JSON.stringify({
+          checkpoint: { resource: { id: "checkpoint-ranked" }, reason: "Ranked Anima checkpoint." },
+          loras: [],
+          recommendationReason: "Use ranked resources.",
+          overallEffect: "Anima continuity.",
+          warnings: [],
+        }));
+      },
+      loadResourceCandidates: async (request) => {
+        loadRequest = request;
+        return {
+          checkpoints: [
+            {
+              id: "checkpoint-ranked",
+              name: "Ranked Anima Checkpoint",
+              baseModel: "Anima",
+              modelFileName: "ranked-anima.safetensors",
+            },
+          ],
+          loras: [],
+        };
+      },
+    });
+
+    await adapters["resource-plan"]?.({
+      nodeId: "resource-plan",
+      workflow,
+      dependencies: [workflow.nodes["story-safety-plan"], workflow.nodes["storyboard-shots"]],
+    });
+
+    const desiredEffect = (loadRequest as { desiredEffect?: string }).desiredEffect ?? "";
+    const payloadDesiredEffect = (requestPayload as { desiredEffect?: string }).desiredEffect ?? "";
+
+    expect(desiredEffect.length).toBeLessThanOrEqual(6000);
+    expect(payloadDesiredEffect.length).toBeLessThanOrEqual(6000);
+    expect(desiredEffect).toContain("Prompt profile: Anima (anima)");
+    expect(desiredEffect).not.toContain(tailMarker);
+    expect(desiredEffect).not.toContain("...");
   });
 
   it("constrains parameter planning to live sampler and scheduler options", async () => {

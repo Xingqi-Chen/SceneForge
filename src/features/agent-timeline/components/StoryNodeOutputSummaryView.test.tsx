@@ -22,7 +22,7 @@ afterEach(() => {
 });
 
 describe("StoryNodeOutputSummaryView", () => {
-  it("renders Story render-plan shot cards with prompt health, risk, and readiness fields", () => {
+  it("renders Story render-plan shot cards with prompt, LLM, and source risk diagnostics", () => {
     act(() => {
       root.render(
         <StoryNodeOutputSummaryView
@@ -107,10 +107,71 @@ describe("StoryNodeOutputSummaryView", () => {
     expect(container.textContent).toContain("Caption");
     expect(container.textContent).toContain("Visual prompt");
     expect(container.textContent).toContain("adult courier with cropped black hair");
+    expect(container.textContent).toContain("Warnings");
+    expect(container.textContent).toContain("removed negative addition");
     expect(container.textContent).toContain("Prompt health");
+    expect(container.textContent).toContain("Negative conflict");
+    expect(container.textContent).toContain("Negative conflicts");
     expect(container.textContent).toContain("Removed negatives");
     expect(container.textContent).toContain("Source-image risk");
     expect(container.textContent).toContain("standing to kneeling");
+  });
+
+  it("renders generation-gate shot cards with prompt diagnostics even when the gate is ready", () => {
+    act(() => {
+      root.render(
+        <StoryNodeOutputSummaryView
+          nodeId="generation-gate"
+          result={{
+            storyId: "story-summary",
+            ready: true,
+            executionAvailable: true,
+            confirmationRequired: true,
+            nsfwContext: { enabled: false },
+            renderPlanShotCount: 1,
+            previewEnabled: false,
+            requestPreview: [
+              {
+                shotId: "shot-2",
+                title: "Parcel Recovery",
+                sourceMode: "source-image",
+                sourceShotIds: ["shot-1"],
+                sourceImageEdges: [
+                  {
+                    riskLevel: "high",
+                    riskReason: "High source-image risk: standing to kneeling.",
+                    sourceChain: ["shot-1", "shot-2"],
+                    sourceShotId: "shot-1",
+                    targetShotId: "shot-2",
+                  },
+                ],
+                positivePromptPreview: "score_7, kneeling courier",
+                negativePromptPreview: "score_1, kneeling courier, bad_hands",
+                parameters: {
+                  width: 1024,
+                  height: 1024,
+                  steps: 28,
+                  cfg: 5,
+                  samplerName: "euler",
+                  scheduler: "normal",
+                  denoise: 0.9,
+                },
+              },
+            ],
+          }}
+        />,
+      );
+    });
+
+    expect(container.querySelectorAll('[data-testid="story-shot-card"]')).toHaveLength(1);
+    expect(container.textContent).toContain("Generation gate summary");
+    expect(container.textContent).toContain("Ready");
+    expect(container.textContent).toContain("Source-image risk");
+    expect(container.textContent).toContain("standing to kneeling");
+    expect(container.textContent).toContain("Prompt health");
+    expect(container.textContent).toContain("Negative conflicts");
+    expect(container.textContent).toContain("Negative conflict");
+    expect(container.textContent).not.toContain("Removed negatives");
   });
 
   it("renders stored result thumbnails without exposing prompt ids or ComfyUI temp URLs", () => {

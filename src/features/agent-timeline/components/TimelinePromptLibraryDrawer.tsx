@@ -301,7 +301,7 @@ export function TimelinePromptLibraryDrawer() {
           <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
             Prompt library
           </p>
-          <p className="truncate text-xs text-slate-500">{targetLabel}</p>
+          <p className="break-words text-xs text-slate-500">{targetLabel}</p>
         </div>
         <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] font-medium text-slate-500">
           <Tags className="size-3" />

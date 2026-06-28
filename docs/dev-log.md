@@ -4,6 +4,22 @@ This log records dated implementation and documentation work. Keep entries conci
 
 ## 2026-06-28
 
+### Story Visual Diagnostics Reviewer Fixes
+
+Summary:
+
+- Restored Story Visual prompt diagnostics for render-plan and generation-gate shot cards, including prompt health, negative conflicts, removed negatives, and source-image risk readiness.
+- Added a selected-node error notice so Story Visual mode shows node failures returned inside a successful planning workflow response.
+- Restored the Story resource-planning `desiredEffect` compact length boundary before candidate ranking and LLM payload use.
+- Clarified shot dependency risk summaries so planning-only continuity/story-order edges are labeled separately from injected source-image edges.
+
+Validation:
+
+- `npm test -- src/features/agent-timeline/story-node-output-summary.test.ts src/features/agent-timeline/components/StoryNodeOutputSummaryView.test.tsx src/features/agent-timeline/components/StoryPlanningPreview.test.tsx src/features/agent-timeline/story-llm-adapters.test.ts` passed with 4 files and 55 tests.
+- `npm test -- src/features/agent-timeline` passed with 27 files and 256 tests.
+- `npm run typecheck` passed.
+- `npm run lint` passed with 23 existing warnings.
+
 ### T23B / Issue #90 Story Render Plan Anima Prompt Parts
 
 Summary:

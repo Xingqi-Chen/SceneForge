@@ -102,7 +102,7 @@ function fragmentsToLines(value: ScenePromptTimelineResult["style"]) {
 
 function linesToFragments(value: string) {
   return linesToList(value).map((prompt) => ({
-    label: prompt.slice(0, 48),
+    label: prompt,
     prompt,
   }));
 }
@@ -213,10 +213,10 @@ export function TimelineScenePromptWorkspace({
           <div className="flex min-w-0 items-center gap-2">
             <TableProperties className="size-4 shrink-0 text-blue-600" />
             <div className="min-w-0">
-              <h3 className="truncate text-xs font-semibold uppercase tracking-wide text-slate-500">
+              <h3 className="break-words text-xs font-semibold uppercase tracking-wide text-slate-500">
                 Scene context table
               </h3>
-              <p className="truncate text-[11px] text-slate-500">
+              <p className="break-words text-[11px] text-slate-500">
                 Canonical shared context for tags, action, and layout.
               </p>
             </div>

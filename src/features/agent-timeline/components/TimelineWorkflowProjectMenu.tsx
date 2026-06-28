@@ -226,7 +226,7 @@ export function TimelineWorkflowProjectMenu({
         variant="secondary"
       >
         <FolderOpen className="size-3.5 shrink-0 text-slate-500" />
-        <span className="truncate text-left text-xs font-medium text-slate-800">{displayName}</span>
+        <span className="break-words text-left text-xs font-medium text-slate-800">{displayName}</span>
         <ChevronDown className={cn("size-3.5 shrink-0 text-slate-400 transition-transform", open && "rotate-180")} />
       </Button>
 

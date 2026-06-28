@@ -25,11 +25,11 @@ import type { StoryShotGraphExecutionState } from "@/features/agent-timeline/sto
 import {
   DEFAULT_STORY_IMG2IMG_DENOISE,
   normalizeStoryImg2ImgDenoise,
-  type StoryLocalResource,
 } from "@/features/agent-timeline/story-planning";
 import {
   setStoryNodeManualResult,
   type StoryManualEditScope,
+  type StoryWorkflowNodeResult,
   type StoryWorkflowState,
 } from "@/features/agent-timeline/story-state";
 import {
@@ -54,13 +54,6 @@ import {
   isLlmChatResponse,
   type LlmChatRequest,
 } from "@/features/llm";
-import type { CivitaiResourceListItem } from "@/features/civitai-lora-library";
-import { extractCivitaiExampleImageDimensions } from "@/features/civitai-lora-library/image-dimensions";
-import {
-  getCivitaiModelStorageKind,
-  makeCivitaiResourceFileNameAliases,
-  makeCivitaiResourceTargetFileName,
-} from "@/features/civitai-lora-library/resource-files";
 import {
   defaultPromptProfileId,
   formatPromptProfileLabel,
@@ -315,71 +308,29 @@ function getApiErrorMessage(payload: unknown, fallback: string) {
     : fallback;
 }
 
-function toStoryLocalResource(resource: CivitaiResourceListItem): StoryLocalResource {
-  const modelFileName = makeCivitaiResourceTargetFileName(resource);
-
-  return {
-    id: resource.id,
-    name: resource.name,
-    versionName: resource.versionName,
-    baseModel: resource.baseModel,
-    creator: resource.creator,
-    modelBaseModel: resource.baseModel ?? undefined,
-    modelFileName,
-    modelFileNameAliases: makeCivitaiResourceFileNameAliases(resource),
-    modelStorageKind: resource.resourceType === "model" ? getCivitaiModelStorageKind(resource) : undefined,
-    tags: resource.tags,
-    categories: resource.categories,
-    usageGuide: resource.usageGuide,
-    descriptionSnippet: resource.description?.slice(0, 800) ?? null,
-    averageWeight: resource.averageWeight,
-    minWeight: resource.minWeight,
-    maxWeight: resource.maxWeight,
-    recommendations: resource.recommendations,
-    previewImage: resource.previewImage,
-    trainedWords: resource.trainedWords,
-    exampleImageDimensions: extractCivitaiExampleImageDimensions(resource.officialImagesJson),
-  };
-}
-
-async function loadStoryResourceItems(resourceType: "lora" | "model", promptProfile: PromptProfileId) {
-  const params = new URLSearchParams({
-    resourceType,
-    category: "all",
-    downloaded: "ready",
-    promptProfile,
-  });
-  const response = await fetch(`/api/civitai-lora-library/resources?${params.toString()}`);
-  const payload: unknown = await response.json().catch(() => null);
-
-  if (!response.ok) {
-    throw new Error(getApiErrorMessage(payload, "Unable to load local Civitai resources for Story Graph planning."));
+function StoryNodeErrorNotice({ node }: { node: StoryWorkflowNodeResult }) {
+  if (!node.error && node.status !== "error") {
+    return null;
   }
 
-  if (!isRecord(payload) || !Array.isArray(payload.items)) {
-    throw new Error("Civitai resource response did not include an item list.");
-  }
+  const isBlocked = node.status === "blocked";
+  const title = node.status === "error" ? "Node failed" : isBlocked ? "Node blocked" : "Node status needs review";
+  const message = node.error?.message ?? `This node is currently ${formatStatusLabel(node.status)}.`;
+  const code = node.error?.code;
 
-  return payload.items as CivitaiResourceListItem[];
-}
-
-async function loadStoryResourceCandidates(promptProfile: PromptProfileId) {
-  const [checkpoints, loras] = await Promise.all([
-    loadStoryResourceItems("model", promptProfile),
-    loadStoryResourceItems("lora", promptProfile),
-  ]);
-  const resourceCandidates = {
-    checkpoints: checkpoints.map(toStoryLocalResource),
-    loras: loras.map(toStoryLocalResource),
-  };
-
-  if (resourceCandidates.checkpoints.length === 0) {
-    throw new Error(
-      "Story Graph needs at least one downloaded local checkpoint before planning can reach generation. Import or download a compatible Civitai checkpoint first.",
-    );
-  }
-
-  return resourceCandidates;
+  return (
+    <div
+      className={cn(
+        "mb-3 rounded-md border p-3 text-xs leading-relaxed",
+        isBlocked ? "border-amber-200 bg-amber-50 text-amber-800" : "border-rose-200 bg-rose-50 text-rose-700",
+      )}
+      data-testid="story-node-error"
+    >
+      <p className="font-semibold">{title}</p>
+      <p className="mt-1">{message}</p>
+      {code ? <p className="mt-1 font-mono text-[11px] uppercase opacity-80">{code}</p> : null}
+    </div>
+  );
 }
 
 async function postStoryWorkflow(
@@ -1188,11 +1139,9 @@ export function StoryPlanningPreview() {
       const initialStart = createStoryGraphInputWorkflow(request);
       setWorkflow(initialStart.workflow);
       const promptProfile = normalizePromptProfileId(request.settingsSnapshot?.promptProfile);
-      const resourceCandidates = await loadStoryResourceCandidates(promptProfile);
       const settingsSnapshot = {
         ...(isRecord(request.settingsSnapshot) ? request.settingsSnapshot : {}),
         promptProfile,
-        resourceCandidates,
       };
       const planned = await postStoryWorkflowStream({
         url: "/api/agent-timeline/story/run-planning",
@@ -1302,8 +1251,8 @@ export function StoryPlanningPreview() {
               <Workflow className="size-4" />
             </span>
             <div className="min-w-0">
-              <h1 className="truncate text-sm font-bold text-slate-900">SceneForge</h1>
-              <p className="truncate text-[11px] text-slate-500">
+              <h1 className="break-words text-sm font-bold text-slate-900">SceneForge</h1>
+              <p className="break-words text-[11px] text-slate-500">
                 {workflow ? "User-started planning workflow" : "Story input / start workflow"}
               </p>
             </div>
@@ -1400,10 +1349,10 @@ export function StoryPlanningPreview() {
                     <span className="min-w-0 flex-1">
                       <span className="flex items-center gap-1.5">
                         <GitBranch className="size-3.5 shrink-0 text-slate-400" />
-                        <span className="truncate text-xs font-semibold text-slate-900">{nodeMetadata.title}</span>
+                        <span className="break-words text-xs font-semibold text-slate-900">{nodeMetadata.title}</span>
                       </span>
                       <span className="mt-0.5 flex items-center justify-between gap-2">
-                        <span className="truncate text-[11px] text-slate-500">{nodeMetadata.manualEdit.label}</span>
+                        <span className="break-words text-[11px] text-slate-500">{nodeMetadata.manualEdit.label}</span>
                         <span className="shrink-0 text-[10px] font-medium uppercase text-slate-400">
                           {formatStatusLabel(node.status)}
                         </span>
@@ -1487,6 +1436,7 @@ export function StoryPlanningPreview() {
                         {planningError}
                       </div>
                     ) : null}
+                    <StoryNodeErrorNotice node={selectedNode} />
                     <div className="mb-2 flex items-center justify-between gap-3">
                       <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Step output</p>
                       <div className="flex rounded-md border border-slate-200 bg-slate-50 p-0.5">
@@ -1587,7 +1537,7 @@ export function StoryPlanningPreview() {
                   <dt className="text-slate-500">Source</dt>
                   <dd className="text-right font-medium text-slate-800">{selectedNode.source}</dd>
                   <dt className="text-slate-500">Workflow</dt>
-                  <dd className="truncate text-right font-medium text-slate-800">{workflow.workflowId}</dd>
+                  <dd className="break-all text-right font-medium text-slate-800">{workflow.workflowId}</dd>
                   <dt className="text-slate-500">Mode</dt>
                   <dd className="text-right font-medium text-slate-800">{workflow.workflowMode}</dd>
                 </dl>

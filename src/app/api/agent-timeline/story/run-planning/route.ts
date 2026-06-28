@@ -6,6 +6,11 @@ import {
   type RunStoryPlanningRequest,
 } from "@/features/agent-timeline/story-runner";
 import type {
+  StoryResourceCandidateLoadRequest,
+  StoryResourceCandidateSet,
+} from "@/features/agent-timeline/story-llm-adapters";
+import type { StoryLocalResource } from "@/features/agent-timeline/story-planning";
+import type {
   StoryWorkflowState,
 } from "@/features/agent-timeline/story-state";
 import type {
@@ -30,6 +35,16 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function sanitizeSettingsSnapshot(value: unknown): RunStoryPlanningRequest["settingsSnapshot"] {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  return Object.fromEntries(
+    Object.entries(value).filter(([key]) => key !== "resourceCandidates"),
+  ) as RunStoryPlanningRequest["settingsSnapshot"];
+}
+
 function parseRequest(payload: unknown): RunStoryPlanningRequest | null {
   if (!isRecord(payload) || typeof payload.rawIntent !== "string") {
     return null;
@@ -40,7 +55,7 @@ function parseRequest(payload: unknown): RunStoryPlanningRequest | null {
     storyId: typeof payload.storyId === "string" ? payload.storyId : undefined,
     targetShotCount: typeof payload.targetShotCount === "number" ? payload.targetShotCount : undefined,
     nsfwEnabled: typeof payload.nsfwEnabled === "boolean" ? payload.nsfwEnabled : undefined,
-    settingsSnapshot: isRecord(payload.settingsSnapshot) ? payload.settingsSnapshot : undefined,
+    settingsSnapshot: sanitizeSettingsSnapshot(payload.settingsSnapshot),
     workflowId: typeof payload.workflowId === "string" ? payload.workflowId : undefined,
   };
 }
@@ -48,6 +63,76 @@ function parseRequest(payload: unknown): RunStoryPlanningRequest | null {
 function wantsStreamingResponse(request: Request) {
   const accept = request.headers.get("accept") ?? "";
   return accept.includes("application/x-ndjson");
+}
+
+type RankedCivitaiCandidate = {
+  resource: StoryLocalResource;
+  importedImageCount: number;
+  commonCheckpoints: NonNullable<StoryLocalResource["commonCheckpoints"]>;
+  commonLoras: NonNullable<StoryLocalResource["commonLoras"]>;
+  score: number;
+};
+
+function toStoryLocalResourceFromRankedCandidate(
+  candidate: RankedCivitaiCandidate,
+  index: number,
+): StoryLocalResource {
+  const resource = candidate.resource;
+
+  return {
+    id: resource.id,
+    name: resource.name,
+    versionName: resource.versionName,
+    baseModel: resource.baseModel,
+    creator: resource.creator,
+    trainedWords: resource.trainedWords,
+    tags: resource.tags,
+    categories: resource.categories,
+    usageGuide: resource.usageGuide,
+    descriptionSnippet: resource.descriptionSnippet,
+    averageWeight: resource.averageWeight,
+    minWeight: resource.minWeight,
+    maxWeight: resource.maxWeight,
+    recommendations: resource.recommendations,
+    previewImage: resource.previewImage,
+    modelFileName: resource.modelFileName,
+    modelFileNameAliases: resource.modelFileNameAliases,
+    modelBaseModel: resource.baseModel ?? undefined,
+    modelStorageKind: resource.modelStorageKind,
+    promptReferences: resource.promptReferences,
+    exampleImageDimensions: resource.exampleImageDimensions,
+    importedImageCount: candidate.importedImageCount,
+    commonCheckpoints: candidate.commonCheckpoints,
+    commonLoras: candidate.commonLoras,
+    recommendationScore: candidate.score,
+    recommendationRank: index + 1,
+  };
+}
+
+async function loadStoryResourceCandidatesFromCivitai(
+  request: StoryResourceCandidateLoadRequest,
+): Promise<StoryResourceCandidateSet> {
+  const [
+    { loadCivitaiRecommendationCandidates },
+    { openSceneForgeSqliteDatabase },
+  ] = await Promise.all([
+    import("@/features/civitai-lora-library/ai-recommendation"),
+    import("@/features/persistence/sqlite-storage"),
+  ]);
+  const db = await openSceneForgeSqliteDatabase(undefined, { allowExtensions: true });
+
+  try {
+    const candidates = await loadCivitaiRecommendationCandidates(db, request.desiredEffect, {
+      promptProfile: request.promptProfile,
+    });
+
+    return {
+      checkpoints: candidates.checkpoints.map(toStoryLocalResourceFromRankedCandidate),
+      loras: candidates.loras.map(toStoryLocalResourceFromRankedCandidate),
+    };
+  } finally {
+    db.close();
+  }
 }
 
 function createPlanningStream(planningRequest: RunStoryPlanningRequest) {
@@ -61,6 +146,7 @@ function createPlanningStream(planningRequest: RunStoryPlanningRequest) {
     async start(controller) {
       try {
         const workflow = await runStoryPlanning(planningRequest, {
+          loadResourceCandidates: loadStoryResourceCandidatesFromCivitai,
           loadSamplerOptions: loadStorySamplerOptionsFromComfyUi,
           onWorkflowUpdate: (updatedWorkflow: StoryWorkflowState, nodeId: StoryWorkflowNodeId) => {
             controller.enqueue(encode({
@@ -116,6 +202,7 @@ export async function POST(request: Request) {
 
   try {
     const workflow = await runStoryPlanning(planningRequest, {
+      loadResourceCandidates: loadStoryResourceCandidatesFromCivitai,
       loadSamplerOptions: loadStorySamplerOptionsFromComfyUi,
     });
 

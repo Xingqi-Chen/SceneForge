@@ -65,6 +65,11 @@ export type StoryLocalResource = ResourcePlanLocalResource & {
   aiNsfwLevel?: string | null;
   modelNsfw?: boolean | null;
   exampleImageDimensions?: string[];
+  importedImageCount?: number;
+  commonCheckpoints?: Array<{ resourceId: string; name: string; count: number }>;
+  commonLoras?: Array<{ resourceId: string; name: string; count: number }>;
+  recommendationScore?: number;
+  recommendationRank?: number;
 };
 
 export type StoryResourcePlan = ResourcePlanResult<StoryLocalResource> & {
@@ -932,7 +937,7 @@ function normalizeStorySafetyNegativePart(value: string) {
 
   return tags.length > 0
     ? tags.filter((tag, index, allTags) => allTags.indexOf(tag) === index)
-    : splitPromptParts(text).map(normalizeStoryAnchorPhrase).filter(Boolean).slice(0, 2);
+    : splitPromptParts(text).map(normalizeStoryAnchorPhrase).filter(Boolean);
 }
 
 type StoryPromptBucket =
@@ -1167,15 +1172,6 @@ function normalizeStoryAnchorPhrase(value: string) {
     return "";
   }
 
-  if (normalized.length > 96) {
-    normalized = normalized.split(/\b(?:because|so that|while|as)\b/i)[0]?.trim() ?? normalized;
-  }
-
-  const words = normalized.split(/\s+/g).filter(Boolean);
-  if (words.length > 10) {
-    normalized = words.slice(0, 10).join(" ");
-  }
-
   return /\b(?:with|and|or|as|such as|mixed|more|bright|blocked|compose|include|show|use|distant|far|from|to|subtly|toward|towards)$/i.test(normalized)
     ? ""
     : normalized;
@@ -1403,9 +1399,8 @@ function createStoryRenderPlanResourceRefs(resourcePlan: StoryResourcePlan): Sto
   };
 }
 
-function compactRequestPromptPreview(value: string, maxLength = 180) {
-  const compacted = value.replace(/\s+/g, " ").trim();
-  return compacted.length > maxLength ? `${compacted.slice(0, maxLength - 3).trim()}...` : compacted;
+function compactRequestPromptPreview(value: string) {
+  return value.replace(/\s+/g, " ").trim();
 }
 
 export function createStoryGenerationRequestPreview(

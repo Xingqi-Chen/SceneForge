@@ -142,7 +142,7 @@ function slugifyIdPart(value: string) {
 
 function deriveTitle(rawIntent: string) {
   const sentence = rawIntent.split(/[.!?]/)[0]?.trim() ?? rawIntent.trim();
-  return sentence.length > 64 ? `${sentence.slice(0, 61).trim()}...` : sentence;
+  return sentence;
 }
 
 function createSettingsSnapshot({
