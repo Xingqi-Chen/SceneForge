@@ -55,6 +55,11 @@ import type {
   CommonWorkflowNodeAdapter,
   CommonWorkflowNodeExecutionContext,
 } from "./workflow-definition";
+import {
+  formatPromptProfileLabel,
+  normalizePromptProfileId,
+  type PromptProfileId,
+} from "@/shared/prompt-profile";
 
 export type StoryCompleteChat = (request: LlmChatRequest) => Promise<LlmChatResponse>;
 
@@ -71,13 +76,24 @@ export type StoryNodeAdapter<T = unknown> = CommonWorkflowNodeAdapter<
 
 export type StoryNodeAdapters = Partial<Record<StoryWorkflowNodeId, StoryNodeAdapter>>;
 
+export type StoryResourceCandidateSet = {
+  checkpoints: StoryLocalResource[];
+  loras: StoryLocalResource[];
+};
+
+export type StoryResourceCandidateLoadRequest = {
+  desiredEffect: string;
+  promptProfile: PromptProfileId;
+};
+
 export type StoryLlmNodeAdapterOptions = {
   completeChat: StoryCompleteChat;
+  loadResourceCandidates?: (
+    request: StoryResourceCandidateLoadRequest,
+    context: StoryNodeExecutionContext,
+  ) => Promise<StoryResourceCandidateSet> | StoryResourceCandidateSet;
   now?: () => string;
-  resourceCandidates?: {
-    checkpoints: StoryLocalResource[];
-    loras: StoryLocalResource[];
-  };
+  resourceCandidates?: StoryResourceCandidateSet;
   samplerOptions?: TimelineSamplerOptions;
 };
 
@@ -98,21 +114,40 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function compactText(value: unknown, maxLength = 1200) {
+function displayText(value: unknown) {
   if (typeof value !== "string") {
     return "";
   }
 
-  return value.replace(/\s+/g, " ").trim().slice(0, maxLength);
+  return value.replace(/\s+/g, " ").trim();
+}
+
+function compactText(value: unknown, maxLength = 1200) {
+  const text = displayText(value);
+
+  if (maxLength <= 0) {
+    return "";
+  }
+
+  if (text.length <= maxLength) {
+    return text;
+  }
+
+  const minSemanticCutoff = Math.floor(maxLength * 0.75);
+  const wordBoundary = text.lastIndexOf(" ", maxLength);
+  const cutoff = wordBoundary >= minSemanticCutoff ? wordBoundary : maxLength;
+
+  return text.slice(0, cutoff).trim();
 }
 
 function normalizeStringList(value: unknown, maxItems = 8) {
+  void maxItems;
   if (!Array.isArray(value)) {
-    const single = compactText(value, 400);
+    const single = displayText(value);
     return single ? [single] : [];
   }
 
-  return value.map((item) => compactText(item, 400)).filter(Boolean).slice(0, maxItems);
+  return value.map(displayText).filter(Boolean);
 }
 
 function parseJsonObjectFromText(text: string): unknown {
@@ -307,7 +342,7 @@ function normalizeCharacter(value: unknown, index: number): StoryBibleCharacter 
     id,
     name,
     role: compactText(raw.role, 120) || "Supporting story character",
-    description: compactText(raw.description ?? raw.summary, 800) || name,
+    description: displayText(raw.description ?? raw.summary) || name,
     continuityNotes: normalizeStringList(raw.continuityNotes ?? raw.continuity_notes, 8),
     visualAnchors: normalizeStringList(raw.visualAnchors ?? raw.visual_anchors, 8),
   };
@@ -321,7 +356,7 @@ function normalizeLocation(value: unknown, index: number): StoryBibleLocation {
   return {
     id,
     name,
-    description: compactText(raw.description ?? raw.summary, 800) || name,
+    description: displayText(raw.description ?? raw.summary) || name,
     visualAnchors: normalizeStringList(raw.visualAnchors ?? raw.visual_anchors, 8),
   };
 }
@@ -342,11 +377,11 @@ export function normalizeStoryBible(raw: unknown, input: StoryInput): StoryBible
   return {
     storyId: compactText(parsed.storyId, 120) || input.storyId,
     title: compactText(parsed.title, 120) || compactText(input.rawIntent, 80) || "Story Graph",
-    logline: compactText(parsed.logline ?? parsed.summary, 800) || input.rawIntent,
+    logline: displayText(parsed.logline ?? parsed.summary) || input.rawIntent,
     genre: normalizeStringList(parsed.genre, 6),
     themes: normalizeStringList(parsed.themes, 8),
-    worldSummary: compactText(parsed.worldSummary ?? parsed.world_summary, 1200) || input.rawIntent,
-    visualStyle: compactText(parsed.visualStyle ?? parsed.visual_style, 800) || "Cinematic storyboard continuity.",
+    worldSummary: displayText(parsed.worldSummary ?? parsed.world_summary) || input.rawIntent,
+    visualStyle: displayText(parsed.visualStyle ?? parsed.visual_style) || "Cinematic storyboard continuity.",
     characters: characters.length > 0
       ? characters
       : [normalizeCharacter({ id: "main-character", name: "Main character", description: input.rawIntent }, 0)],
@@ -379,7 +414,7 @@ export function normalizeStoryOutline(raw: unknown, input: StoryInput, bible: St
     return {
       id: compactText(rawBeat.id, 80) || `beat-${index + 1}`,
       title: compactText(rawBeat.title, 120) || `Beat ${index + 1}`,
-      summary: compactText(rawBeat.summary ?? rawBeat.description, 800) || input.rawIntent,
+      summary: displayText(rawBeat.summary ?? rawBeat.description) || input.rawIntent,
       order: Number.isFinite(Number(rawBeat.order)) ? Number(rawBeat.order) : index + 1,
       characterIds: beatCharacterIds.length > 0
         ? beatCharacterIds
@@ -393,7 +428,7 @@ export function normalizeStoryOutline(raw: unknown, input: StoryInput, bible: St
       return {
         id: segment.id,
         title: segment.title,
-        summary: compactText(beat?.summary, 800) || segment.sourceText,
+        summary: displayText(beat?.summary) || segment.sourceText,
         order: index + 1,
         characterIds: beat?.characterIds.length
           ? beat.characterIds
@@ -456,7 +491,7 @@ export function normalizeStoryShots(
       storyId: input.storyId,
       order,
       title: compactText(rawShot.title, 120) || `Shot ${order}`,
-      description: compactText(rawShot.description ?? rawShot.summary, 1000) || input.rawIntent,
+      description: displayText(rawShot.description ?? rawShot.summary) || input.rawIntent,
       ...(beatId && beatIds.has(beatId)
         ? { beatId }
         : fallbackBeat ? { beatId: fallbackBeat.id } : {}),
@@ -469,8 +504,8 @@ export function normalizeStoryShots(
           ? [...fallbackBeat.characterIds]
           : fallbackCharacterId ? [fallbackCharacterId] : [],
       sourceShotIds: normalizeStringList(rawShot.sourceShotIds ?? rawShot.source_shot_ids, 12),
-      camera: compactText(rawShot.camera, 400) || "Storyboard frame",
-      promptIntent: compactText(rawShot.promptIntent ?? rawShot.prompt_intent ?? rawShot.prompt, 1200) || input.rawIntent,
+      camera: displayText(rawShot.camera) || "Storyboard frame",
+      promptIntent: displayText(rawShot.promptIntent ?? rawShot.prompt_intent ?? rawShot.prompt) || input.rawIntent,
       continuityNotes: normalizeStringList(rawShot.continuityNotes ?? rawShot.continuity_notes, 12),
     };
   });
@@ -524,10 +559,9 @@ export function normalizeStorySafetyPlan(raw: unknown, input: StoryInput, shots:
       .filter((note) => shotIds.has(note.shotId)),
     nsfwContext: {
       enabled: input.nsfwContext?.enabled ?? resolvedRating === "explicit",
-      rationale: compactText(
-        isRecord(parsed.nsfwContext) ? parsed.nsfwContext.rationale : parsed.nsfw_rationale,
-        500,
-      ) || input.nsfwContext?.rationale || "",
+      rationale: displayText(isRecord(parsed.nsfwContext) ? parsed.nsfwContext.rationale : parsed.nsfw_rationale) ||
+        input.nsfwContext?.rationale ||
+        "",
     },
   };
 }
@@ -622,7 +656,7 @@ export function normalizePlotStateGraph(raw: unknown, input: StoryInput, shots: 
     return {
       id: compactText(rawState.id, 80) || `state-${index + 1}`,
       title: compactText(rawState.title, 120) || `State ${index + 1}`,
-      summary: compactText(rawState.summary ?? rawState.description, 800) || input.rawIntent,
+      summary: displayText(rawState.summary ?? rawState.description) || input.rawIntent,
       shotIds: normalizeStringList(rawState.shotIds ?? rawState.shot_ids, 16).filter((shotId) => shotIds.has(shotId)),
     };
   });
@@ -637,7 +671,7 @@ export function normalizePlotStateGraph(raw: unknown, input: StoryInput, shots: 
         return {
           fromStateId: compactText(rawTransition.fromStateId ?? rawTransition.from_state_id ?? rawTransition.from, 80),
           toStateId: compactText(rawTransition.toStateId ?? rawTransition.to_state_id ?? rawTransition.to, 80),
-          reason: compactText(rawTransition.reason, 300) || "Story progression.",
+          reason: displayText(rawTransition.reason) || "Story progression.",
         };
       })
       .filter((transition) => stateIds.has(transition.fromStateId) && stateIds.has(transition.toStateId)),
@@ -673,8 +707,8 @@ export function normalizeCharacterContinuityGraph(
           shotId: compactText(rawAppearance.shotId ?? rawAppearance.shot_id, 80),
           characterId: compactText(rawAppearance.characterId ?? rawAppearance.character_id, 80),
           wardrobe: normalizeStringList(rawAppearance.wardrobe, 8),
-          poseOrAction: compactText(rawAppearance.poseOrAction ?? rawAppearance.pose_or_action, 400),
-          expression: compactText(rawAppearance.expression, 200),
+          poseOrAction: displayText(rawAppearance.poseOrAction ?? rawAppearance.pose_or_action),
+          expression: displayText(rawAppearance.expression),
           continuityNotes: normalizeStringList(rawAppearance.continuityNotes ?? rawAppearance.continuity_notes, 8),
         };
       })
@@ -696,6 +730,121 @@ function getSettingsResourceCandidates(
   return {
     checkpoints: checkpoints.filter(isRecord).map((resource) => resource as StoryLocalResource),
     loras: loras.filter(isRecord).map((resource) => resource as StoryLocalResource),
+  };
+}
+
+function getStoryPromptProfile(input: StoryInput): PromptProfileId {
+  const snapshot = isRecord(input.settingsSnapshot) ? input.settingsSnapshot : {};
+
+  return normalizePromptProfileId(snapshot.promptProfile);
+}
+
+function buildStoryResourceDesiredEffect({
+  bible,
+  input,
+  shots,
+}: {
+  bible: StoryBible;
+  input: StoryInput;
+  shots: readonly StoryShot[];
+}) {
+  const promptProfile = getStoryPromptProfile(input);
+  const characterText = bible.characters
+    .map((character) =>
+      [
+        character.name,
+        character.role,
+        character.description,
+        ...character.visualAnchors,
+      ].filter(Boolean).join(", "),
+    )
+    .join("\n");
+  const locationText = bible.locations
+    .map((location) =>
+      [
+        location.name,
+        location.description,
+        ...location.visualAnchors,
+      ].filter(Boolean).join(", "),
+    )
+    .join("\n");
+  const shotText = shots
+    .map((shot) =>
+      [
+        `Shot ${shot.order}: ${shot.title}`,
+        shot.description,
+        shot.promptIntent,
+        shot.camera ? `Camera: ${shot.camera}` : "",
+        shot.continuityNotes.length > 0 ? `Continuity: ${shot.continuityNotes.join(", ")}` : "",
+      ].filter(Boolean).join(". "),
+    )
+    .join("\n");
+
+  return compactText([
+    `Prompt profile: ${formatPromptProfileLabel(promptProfile)} (${promptProfile})`,
+    input.rawIntent,
+    input.storyContext,
+    bible.logline,
+    bible.visualStyle,
+    bible.worldSummary,
+    bible.genre.length > 0 ? `Genre: ${bible.genre.join(", ")}` : "",
+    bible.themes.length > 0 ? `Themes: ${bible.themes.join(", ")}` : "",
+    characterText ? `Characters:\n${characterText}` : "",
+    locationText ? `Locations:\n${locationText}` : "",
+    shotText ? `Storyboard shots:\n${shotText}` : "",
+  ].filter(Boolean).join("\n"), 6000);
+}
+
+async function resolveStoryResourceCandidates({
+  context,
+  input,
+  loadResourceCandidates,
+  resourceCandidates,
+}: {
+  context: StoryNodeExecutionContext;
+  input: StoryInput;
+  loadResourceCandidates?: StoryLlmNodeAdapterOptions["loadResourceCandidates"];
+  resourceCandidates?: StoryLlmNodeAdapterOptions["resourceCandidates"];
+}): Promise<{
+  candidates: StoryResourceCandidateSet;
+  desiredEffect: string;
+  promptProfile: PromptProfileId;
+}> {
+  const promptProfile = getStoryPromptProfile(input);
+  const desiredEffect = buildStoryResourceDesiredEffect({
+    bible: getBible(context.workflow),
+    input,
+    shots: getShots(context.workflow),
+  });
+
+  if (resourceCandidates) {
+    return {
+      candidates: getSettingsResourceCandidates(input, resourceCandidates),
+      desiredEffect,
+      promptProfile,
+    };
+  }
+
+  if (loadResourceCandidates) {
+    const loaded = await loadResourceCandidates({
+      desiredEffect,
+      promptProfile,
+    }, context);
+
+    return {
+      candidates: {
+        checkpoints: loaded.checkpoints.filter(isRecord).map((resource) => resource as StoryLocalResource),
+        loras: loaded.loras.filter(isRecord).map((resource) => resource as StoryLocalResource),
+      },
+      desiredEffect,
+      promptProfile,
+    };
+  }
+
+  return {
+    candidates: getSettingsResourceCandidates(input),
+    desiredEffect,
+    promptProfile,
   };
 }
 
@@ -758,7 +907,7 @@ export function normalizeStoryResourcePlan(
         suggestedWeight: Number.isFinite(Number(isRecord(lora) ? lora.suggestedWeight : undefined))
           ? Number((lora as { suggestedWeight?: unknown }).suggestedWeight)
           : null,
-        reason: compactText(isRecord(lora) ? lora.reason : undefined, 300) || "Selected from local Story Graph candidates.",
+        reason: displayText(isRecord(lora) ? lora.reason : undefined) || "Selected from local Story Graph candidates.",
       };
     })
     .slice(0, 3);
@@ -772,13 +921,13 @@ export function normalizeStoryResourcePlan(
     recommendation: {
       checkpoint: {
         resource: selectedCheckpoint,
-        reason: compactText(isRecord(parsed.checkpoint) ? parsed.checkpoint.reason : undefined, 300) ||
+        reason: displayText(isRecord(parsed.checkpoint) ? parsed.checkpoint.reason : undefined) ||
           "Selected from local Story Graph candidates.",
       },
       loras: selectedLoras,
-      recommendationReason: compactText(parsed.recommendationReason ?? parsed.recommendation_reason, 500) ||
+      recommendationReason: displayText(parsed.recommendationReason ?? parsed.recommendation_reason) ||
         "Selected Story Graph resources from real local candidates.",
-      overallEffect: compactText(parsed.overallEffect ?? parsed.overall_effect, 500) ||
+      overallEffect: displayText(parsed.overallEffect ?? parsed.overall_effect) ||
         "Storyboard-ready continuity.",
       warnings: normalizeStringList(parsed.warnings, maxWarnings),
     },
@@ -829,7 +978,7 @@ export function normalizeStoryParameterPlan(
       .map((override) => ({
         shotId: compactText(override.shotId ?? override.shot_id, 80),
         parameters: isRecord(override.parameters) ? override.parameters as Partial<StoryGenerationParameters> : {},
-        reason: compactText(override.reason, 300),
+        reason: displayText(override.reason),
       }))
       .filter((override) => shotIds.has(override.shotId)),
     warnings: normalizeStringList(parsed.warnings, maxWarnings),
@@ -898,7 +1047,7 @@ export function normalizeStoryRenderPromptPlan(
         return {
           shotId,
           animaPromptParts,
-          rationale: compactText(rawShot.rationale ?? rawShot.reason, 400) || undefined,
+          rationale: displayText(rawShot.rationale ?? rawShot.reason) || undefined,
           warnings,
         };
       })
@@ -1091,13 +1240,11 @@ function createLlmStoryNodeAdapter<T>({
   };
 }
 
-function buildResourceCandidatePayload(
-  input: StoryInput,
-  resourceCandidates?: StoryLlmNodeAdapterOptions["resourceCandidates"],
-) {
-  const candidates = getSettingsResourceCandidates(input, resourceCandidates);
-  const serializeCandidate = (resource: StoryLocalResource) => ({
+function buildResourceCandidatePayload(candidates: StoryResourceCandidateSet) {
+  const serializeCandidate = (resource: StoryLocalResource, index: number) => ({
     id: resource.id,
+    recommendationRank: resource.recommendationRank ?? index + 1,
+    recommendationScore: resource.recommendationScore,
     name: resource.name,
     versionName: resource.versionName,
     baseModel: resource.baseModel,
@@ -1113,6 +1260,9 @@ function buildResourceCandidatePayload(
     maxWeight: resource.maxWeight,
     recommendations: resource.recommendations,
     exampleImageDimensions: resource.exampleImageDimensions,
+    importedImageCount: resource.importedImageCount,
+    commonCheckpoints: resource.commonCheckpoints,
+    commonLoras: resource.commonLoras,
   });
 
   return {
@@ -1123,6 +1273,7 @@ function buildResourceCandidatePayload(
 
 export function createStoryLlmNodeAdapters({
   completeChat,
+  loadResourceCandidates,
   now = () => new Date().toISOString(),
   resourceCandidates,
   samplerOptions: rawSamplerOptions,
@@ -1273,28 +1424,53 @@ export function createStoryLlmNodeAdapters({
       getShots(context.workflow),
     ),
   })(completeChat);
-  const resourcePlan = createLlmStoryNodeAdapter<StoryResourcePlan>({
-    buildRequest: (context) => {
+  const resourcePlan: StoryNodeAdapter<StoryResourcePlan> = async (context) => {
+    try {
       const input = getStoryInput(context.workflow);
-      return makeJsonRequest({
+      const {
+        candidates,
+        desiredEffect,
+        promptProfile,
+      } = await resolveStoryResourceCandidates({
+        context,
+        input,
+        loadResourceCandidates,
+        resourceCandidates,
+      });
+
+      if (candidates.checkpoints.length === 0) {
+        invalidResourceSelection(
+          `No ranked local ${formatPromptProfileLabel(promptProfile)} checkpoint candidates are available. Import or configure matching Civitai checkpoints first.`,
+        );
+      }
+
+      const response = await completeChat(makeJsonRequest({
         input,
         instruction:
-          'Choose resources only from the supplied checkpoint and LoRA candidate ids. Do not invent ids. Use checkpoint and LoRA names, descriptions, tags, categories, trainedWords, usageGuide, observed weight ranges, and parameter recommendations to choose LoRA suggestedWeight values and explain tradeoffs. Do not apply generic local caps by style, lighting, or resource type; if metadata conflicts, choose a finite sane weight from the selected resource evidence and explain it in reason or warnings. Required shape: {"checkpoint":{"resource":{"id":""},"reason":""},"loras":[{"resource":{"id":""},"suggestedWeight":0.7,"reason":""}],"recommendationReason":"","overallEffect":"","warnings":[""]}.',
+          'Choose resources only from the supplied checkpoint and LoRA candidate ids. Do not invent ids. Candidates are ordered by BM25/embedding recommendation rank when recommendationRank and recommendationScore are present; treat higher-ranked candidates as stronger evidence, but still use metadata and story context to choose the best compatible combination. Use checkpoint and LoRA names, descriptions, tags, categories, trainedWords, usageGuide, observed weight ranges, common pairings, and parameter recommendations to choose LoRA suggestedWeight values and explain tradeoffs. Do not apply generic local caps by style, lighting, or resource type; if metadata conflicts, choose a finite sane weight from the selected resource evidence and explain it in reason or warnings. Required shape: {"checkpoint":{"resource":{"id":""},"reason":""},"loras":[{"resource":{"id":""},"suggestedWeight":0.7,"reason":""}],"recommendationReason":"","overallEffect":"","warnings":[""]}.',
         payload: {
           input,
+          desiredEffect,
+          promptProfile,
           safetyPlan: getSafetyPlan(context.workflow),
           shots: getShots(context.workflow),
-          candidates: buildResourceCandidatePayload(input, resourceCandidates),
+          candidates: buildResourceCandidatePayload(candidates),
         },
         maxTokens: 900,
-      });
-    },
-    parseResponse: (response, context) => normalizeStoryResourcePlan(
-      response.content,
-      getStoryInput(context.workflow),
-      resourceCandidates,
-    ),
-  })(completeChat);
+      }));
+
+      if (!isLlmChatResponse(response) || response.content.trim().length === 0) {
+        throw malformedResponse("LLM response did not include usable text content.", { response });
+      }
+
+      return {
+        value: normalizeStoryResourcePlan(response.content, input, candidates),
+        source: "ai",
+      };
+    } catch (error) {
+      throw new TimelineNodeExecutionError(normalizeLlmAdapterError(error));
+    }
+  };
   const parameterPlan = createLlmStoryNodeAdapter<StoryParameterPlan>({
     buildRequest: (context) => {
       const input = getStoryInput(context.workflow);

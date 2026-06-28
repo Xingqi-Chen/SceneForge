@@ -68,7 +68,86 @@ describe("story node output summaries", () => {
       .toBeGreaterThan(0);
   });
 
-  it("formats render-plan Visual output as shot cards with full prompt and negative health details", () => {
+  it("keeps long summary text readable without ellipsis truncation", () => {
+    const tailMarker = "tail marker visible without opening edit artifact";
+    const longIntent = [
+      ...Array.from({ length: 40 }, (_, index) =>
+        `Detailed story request segment ${index + 1} with character continuity, setting, camera, and lighting notes.`,
+      ),
+      tailMarker,
+    ].join(" ");
+    const summary = createStoryNodeOutputSummary("story-input", {
+      audienceRating: "safe",
+      rawIntent: longIntent,
+      settingsSnapshot: {
+        promptProfile: "anima",
+        resourceCandidates,
+      },
+      storyId: "story-long-text",
+      targetShotCount: 3,
+    });
+    const request = summary.sections
+      .find((section) => section.title === "Story request")
+      ?.fields
+      ?.find((field) => field.label === "Request")
+      ?.value;
+
+    expect(request).toContain(tailMarker);
+    expect(request).not.toContain("...");
+  });
+
+  it("labels planning-only dependency risk decisions separately from injected source images", () => {
+    const summary = createStoryNodeOutputSummary("shot-dependency-graph", {
+      storyId: "story-dependencies",
+      nodes: [
+        { shotId: "shot-1", label: "Opening" },
+        { shotId: "shot-2", label: "Continuation" },
+        { shotId: "shot-3", label: "Img2img carry-over" },
+      ],
+      edges: [
+        {
+          fromShotId: "shot-1",
+          toShotId: "shot-2",
+          reason: "continuity",
+          sourceImageRisk: {
+            factors: [],
+            level: "low",
+            reason: "Source shot appears compatible with loose img2img continuity.",
+          },
+        },
+        {
+          fromShotId: "shot-2",
+          toShotId: "shot-3",
+          reason: "img2img-source",
+          sourceImageRisk: {
+            factors: [],
+            level: "low",
+            reason: "Source shot appears compatible with loose img2img continuity.",
+          },
+        },
+      ],
+    });
+    const riskRows = summary.sections.find((section) => section.title === "Source-image risk decisions")?.rows;
+
+    expect(summary.metrics).toEqual(expect.arrayContaining([
+      { label: "Injected source edges", value: "1" },
+      { label: "Risk checks", value: "2" },
+    ]));
+    expect(riskRows?.[0]).toMatchObject({
+      "edge reason": "continuity",
+      mode: "Prompt-only continuity",
+      "source image injected": "No",
+      risk: "low",
+    });
+    expect(riskRows?.[1]).toMatchObject({
+      "edge reason": "img2img-source",
+      mode: "Source image injected",
+      "source image injected": "Yes",
+      risk: "low",
+    });
+  });
+
+  it("formats render-plan Visual output as shot cards with prompt diagnostics and LLM warnings", () => {
     const longPositivePrompt = [
       "masterpiece",
       "best quality",
@@ -87,6 +166,9 @@ describe("story node output summaries", () => {
       img2imgDenoise: 0.95,
       nsfwContext: { enabled: false },
       warnings: [
+        "Using 1024x1536 because selected resource examples favor portrait composition.",
+        "Keep continuity on Mara's mint cardigan and sketchbook.",
+        'Shot "shot-1" uses high-risk source image "shot-0": High source-image risk: major pose/action change.',
         'Shot "shot-1" removed negative addition "borrowed paperback" because it conflicts with positive prompt anchor "one borrowed paperback on the small exchange shelf".',
       ],
       shots: [
@@ -95,8 +177,17 @@ describe("story node output summaries", () => {
           order: 1,
           title: "Book Swap Begins",
           positivePrompt: longPositivePrompt,
-          negativePrompt: "worst quality, bad anatomy, borrowed paperback, cropped flyer tail marker",
-          sourceShotIds: [],
+          negativePrompt: "worst quality, bad anatomy, score_1, score_2, score_3, bad_hands, borrowed paperback, cropped flyer tail marker",
+          sourceShotIds: ["shot-0"],
+          sourceImageEdges: [
+            {
+              riskLevel: "high",
+              riskReason: "High source-image risk: major pose/action change.",
+              sourceChain: ["shot-0", "shot-1"],
+              sourceShotId: "shot-0",
+              targetShotId: "shot-1",
+            },
+          ],
           parameters: {
             width: 1024,
             height: 1024,
@@ -130,7 +221,7 @@ describe("story node output summaries", () => {
     const card = summary.shotCards?.[0];
 
     expect(card).toMatchObject({
-      dependencies: "Text-to-image",
+      dependencies: "source-image from shot-0",
       negativePrompt: expect.stringContaining("cropped flyer tail marker"),
       readinessLabel: "Warning",
       resources: "Resource plan",
@@ -139,6 +230,10 @@ describe("story node output summaries", () => {
       shotNumber: "1",
       title: "Book Swap Begins",
       visualPrompt: longPositivePrompt,
+      warningDisplayMode: "llm-only",
+      warnings: [
+        'Shot "shot-1" removed negative addition "borrowed paperback" because it conflicts with positive prompt anchor "one borrowed paperback on the small exchange shelf".',
+      ],
     });
     expect(card?.animaPromptParts).toEqual(expect.arrayContaining([
       { label: "Subject", value: "1girl, solo" },
@@ -149,8 +244,36 @@ describe("story node output summaries", () => {
     ]));
     expect(card?.visualPrompt).toContain("final prompt tail marker for inspection");
     expect(card?.visualPrompt).not.toContain("...");
-    expect(card?.negativeConflicts.join("\n")).toContain("borrowed paperback");
-    expect(card?.removedNegatives.join("\n")).toContain("Removed \"borrowed paperback\"");
+    expect(card?.negativeConflicts).toEqual(expect.arrayContaining([
+      '"borrowed paperback" conflicts with positive prompt anchor "one borrowed paperback on the small exchange shelf".',
+    ]));
+    expect(card?.removedNegatives).toEqual([
+      'Removed "borrowed paperback" because it conflicts with "one borrowed paperback on the small exchange shelf".',
+    ]);
+    expect(card?.promptHealth).toMatchObject({
+      label: "Warnings",
+      tone: "warning",
+      issues: expect.arrayContaining([
+        expect.objectContaining({ label: "Negative conflict" }),
+        expect.objectContaining({ label: "Removed negative conflict" }),
+        expect.objectContaining({ label: "High source-image risk" }),
+      ]),
+    });
+    expect(JSON.stringify(summary)).toContain("Negative conflict");
+    expect(summary.metrics).toEqual(expect.arrayContaining([
+      { label: "Warnings", value: "2" },
+      { label: "Decision notes", value: "1" },
+    ]));
+    expect(summary.sections.find((section) => section.title === "Plan warnings")?.notes).toEqual([
+      "Keep continuity on Mara's mint cardigan and sketchbook.",
+      'Shot "shot-1" removed negative addition "borrowed paperback" because it conflicts with positive prompt anchor "one borrowed paperback on the small exchange shelf".',
+    ]);
+    expect(summary.sections.find((section) => section.title === "Decision notes")?.notes).toEqual([
+      "Using 1024x1536 because selected resource examples favor portrait composition.",
+    ]);
+    expect(summary.sections.find((section) => section.title === "System diagnostics")?.notes).toEqual([
+      'Shot "shot-1" uses high-risk source image "shot-0": High source-image risk: major pose/action change.',
+    ]);
     expect(summary.sections.some((section) => section.title === "Final prompts")).toBe(false);
     expect(summary.sections.some((section) => section.title === "Prompt sections")).toBe(false);
   });
@@ -207,7 +330,7 @@ describe("story node output summaries", () => {
           sourceImageEdges: [],
           positivePromptPreview: "standing courier",
           positivePromptLength: 16,
-          negativePromptPreview: "",
+          negativePromptPreview: "standing courier, bad_hands",
           negativePromptLength: 0,
           parameters: { width: 1024, height: 1024, steps: 28, cfg: 5.5, samplerName: "euler", scheduler: "normal", denoise: 1 },
         },
@@ -227,9 +350,9 @@ describe("story node output summaries", () => {
               targetShotId: "shot-2",
             },
           ],
-          positivePromptPreview: "kneeling courier",
+          positivePromptPreview: "score_7, kneeling courier",
           positivePromptLength: 16,
-          negativePromptPreview: "",
+          negativePromptPreview: "score_1, kneeling courier, bad_hands",
           negativePromptLength: 0,
           parameters: { width: 1024, height: 1024, steps: 28, cfg: 5.5, samplerName: "euler", scheduler: "normal", denoise: 0.9 },
         },
@@ -240,6 +363,14 @@ describe("story node output summaries", () => {
     expect(summary.metrics).toEqual(expect.arrayContaining([{ label: "Source risks", value: "1" }]));
     expect(summary.shotCards?.[1]).toMatchObject({
       dependencies: "source-image from shot-1",
+      promptHealth: {
+        label: "Warnings",
+        tone: "warning",
+        issues: expect.arrayContaining([
+          expect.objectContaining({ label: "Negative conflict" }),
+          expect.objectContaining({ label: "High source-image risk" }),
+        ]),
+      },
       readinessLabel: "Warning",
       sourceRisks: [
         expect.objectContaining({
@@ -247,7 +378,11 @@ describe("story node output summaries", () => {
           level: "high",
         }),
       ],
+      warningDisplayMode: "llm-only",
     });
+    expect(summary.shotCards?.[1]?.negativeConflicts).toEqual(expect.arrayContaining([
+      expect.stringContaining("kneeling courier"),
+    ]));
     expect(sourceRisk?.rows?.[0]).toMatchObject({
       source: "shot-1",
       target: "shot-2",

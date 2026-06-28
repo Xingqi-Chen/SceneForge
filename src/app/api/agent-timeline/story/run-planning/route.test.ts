@@ -3,6 +3,7 @@ import { describe, expect, it, vi, afterEach } from "vitest";
 const runStoryPlanningMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@/features/agent-timeline/story-runner", () => ({
+  loadStoryResourceCandidatesFromCivitai: vi.fn(),
   loadStorySamplerOptionsFromComfyUi: vi.fn(),
   runStoryPlanning: runStoryPlanningMock,
 }));
@@ -49,14 +50,10 @@ describe("POST /api/agent-timeline/story/run-planning", () => {
         rawIntent: "A courier follows a signal.",
         targetShotCount: 3,
         nsfwEnabled: false,
-        settingsSnapshot: {
-          resourceCandidates: {
-            checkpoints: [{ id: "checkpoint-local", name: "Local", modelFileName: "local.safetensors" }],
-            loras: [],
-          },
-        },
+        settingsSnapshot: {},
       },
       expect.objectContaining({
+        loadResourceCandidates: expect.any(Function),
         loadSamplerOptions: expect.any(Function),
       }),
     );
@@ -151,6 +148,7 @@ describe("POST /api/agent-timeline/story/run-planning", () => {
         workflowId: "story-workflow-1",
       },
       expect.objectContaining({
+        loadResourceCandidates: expect.any(Function),
         loadSamplerOptions: expect.any(Function),
         onWorkflowUpdate: expect.any(Function),
       }),

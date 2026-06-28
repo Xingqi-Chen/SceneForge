@@ -196,7 +196,7 @@ export function TimelineResourceRecommendationWorkspace({
                     type="checkbox"
                   />
                   <span className="min-w-0">
-                    <span className="block truncate">{candidate.resource.name}</span>
+                    <span className="block break-words">{candidate.resource.name}</span>
                     <span className="mt-0.5 block text-[11px] font-normal text-slate-500">
                       {candidate.resource.baseModel ?? "Unknown base"} / score {candidate.score.toFixed(1)}
                     </span>

@@ -640,27 +640,13 @@ describe("StoryPlanningPreview", () => {
     )) as {
       settingsSnapshot?: {
         img2imgDenoise?: number;
-        resourceCandidates?: {
-          checkpoints?: Array<{ id: string; modelFileName?: string; exampleImageDimensions?: string[] }>;
-          loras?: Array<{ id: string; modelFileName?: string; trainedWords?: string[] }>;
-        };
+        promptProfile?: string;
+        resourceCandidates?: unknown;
       };
     };
     expect(planningBody.settingsSnapshot?.img2imgDenoise).toBe(0.72);
-    expect(planningBody.settingsSnapshot?.resourceCandidates?.checkpoints).toEqual([
-      expect.objectContaining({
-        id: "checkpoint-local",
-        modelFileName: "Local Checkpoint__v1__mv101__101.safetensors",
-        exampleImageDimensions: ["896x1152 (2 examples)", "1152x896"],
-      }),
-    ]);
-    expect(planningBody.settingsSnapshot?.resourceCandidates?.loras).toEqual([
-      expect.objectContaining({
-        id: "lora-local",
-        modelFileName: "Local LoRA__v1__mv202__202.safetensors",
-        trainedWords: ["neon market"],
-      }),
-    ]);
+    expect(planningBody.settingsSnapshot?.promptProfile).toBe("illustrious");
+    expect(planningBody.settingsSnapshot?.resourceCandidates).toBeUndefined();
 
     const executionButton = container.querySelector('button[data-node-id="shot-graph-execution"]') as HTMLButtonElement | null;
 
@@ -728,7 +714,7 @@ describe("StoryPlanningPreview", () => {
     expect(container.textContent).toContain('"requestPreview"');
   });
 
-  it("uses the selected Story input base model to scope checkpoint and LoRA candidates", async () => {
+  it("passes the selected Story input base model to server-side ranked resource planning", async () => {
     const plannedWorkflow = createPlannedWorkflow("A detective follows a signal through a storm-lit city.");
     const fetchMock = vi.fn<typeof fetch>(async (url) => {
       const target = typeof url === "string" ? url : url instanceof Request ? url.url : url.toString();
@@ -779,12 +765,7 @@ describe("StoryPlanningPreview", () => {
       typeof input === "string" ? input : input instanceof Request ? input.url : input.toString(),
     );
 
-    expect(fetchTargets).toContain(
-      "/api/civitai-lora-library/resources?resourceType=model&category=all&downloaded=ready&promptProfile=anima",
-    );
-    expect(fetchTargets).toContain(
-      "/api/civitai-lora-library/resources?resourceType=lora&category=all&downloaded=ready&promptProfile=anima",
-    );
+    expect(fetchTargets.some((target) => target.includes("/api/civitai-lora-library/resources"))).toBe(false);
 
     const planningBody = JSON.parse(String(
       fetchMock.mock.calls.find(([input]) => input === "/api/agent-timeline/story/run-planning")?.[1]?.body ?? "{}",
@@ -1081,7 +1062,7 @@ describe("StoryPlanningPreview", () => {
     );
   });
 
-  it("shows a clear error and skips planning when no downloaded checkpoint candidates exist", async () => {
+  it("shows a clear server planning error when no ranked checkpoint candidates exist", async () => {
     const fetchMock = vi.fn(async (url: string | URL | Request) => {
       const target = typeof url === "string" ? url : url instanceof Request ? url.url : url.toString();
 
@@ -1092,20 +1073,14 @@ describe("StoryPlanningPreview", () => {
         } as Response;
       }
 
-      if (target.includes("/api/civitai-lora-library/resources?resourceType=model")) {
+      if (target === "/api/agent-timeline/story/run-planning") {
         return {
-          ok: true,
+          ok: false,
+          status: 500,
           json: async () => ({
-            items: [],
-          }),
-        } as Response;
-      }
-
-      if (target.includes("/api/civitai-lora-library/resources?resourceType=lora")) {
-        return {
-          ok: true,
-          json: async () => ({
-            items: [downloadedLoraItem],
+            error: {
+              message: "No ranked local Illustrious checkpoint candidates are available.",
+            },
           }),
         } as Response;
       }
@@ -1125,8 +1100,74 @@ describe("StoryPlanningPreview", () => {
     });
     await clickButtonAsync("Start planning");
 
-    expect(container.textContent).toContain("Story Graph needs at least one downloaded local checkpoint");
-    expect(fetchMock.mock.calls.some(([input]) => input === "/api/agent-timeline/story/run-planning")).toBe(false);
+    expect(container.textContent).toContain("No ranked local Illustrious checkpoint candidates are available.");
+    expect(fetchMock.mock.calls.some(([input]) => input === "/api/agent-timeline/story/run-planning")).toBe(true);
+  });
+
+  it("shows a selected Story node error in Visual mode when planning returns a 200 workflow with a failed node", async () => {
+    const plannedWorkflow = createPlannedWorkflow("A courier follows a signal but resource planning fails.");
+    const failedWorkflow: StoryWorkflowState = {
+      ...plannedWorkflow,
+      nodes: {
+        ...plannedWorkflow.nodes,
+        "resource-plan": {
+          ...plannedWorkflow.nodes["resource-plan"],
+          error: {
+            code: "resource_selection_invalid",
+            message: "No ranked local Illustrious checkpoint candidates are available.",
+          },
+          nodeId: "resource-plan",
+          source: "ai",
+          status: "error",
+          updatedAt: "2026-06-15T00:00:02.000Z",
+        },
+      },
+      updatedAt: "2026-06-15T00:00:02.000Z",
+    };
+    const fetchMock = vi.fn(async (url: string | URL | Request) => {
+      const target = typeof url === "string" ? url : url instanceof Request ? url.url : url.toString();
+
+      if (target === "/api/settings") {
+        return {
+          ok: true,
+          json: async () => ({}),
+        } as Response;
+      }
+
+      if (target === "/api/agent-timeline/story/run-planning") {
+        return {
+          ok: true,
+          json: async () => ({
+            workflow: failedWorkflow,
+          }),
+        } as Response;
+      }
+
+      throw new Error(`Unexpected fetch ${target}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await act(async () => {
+      root.render(<StoryPlanningPreview />);
+      await Promise.resolve();
+    });
+
+    const textarea = container.querySelector("textarea") as HTMLTextAreaElement | null;
+    act(() => {
+      setNativeInputValue(textarea as HTMLTextAreaElement, "A courier follows a signal but resource planning fails.");
+    });
+    await clickButtonAsync("Start planning");
+
+    const resourcePlanButton = container.querySelector('button[data-node-id="resource-plan"]') as HTMLButtonElement | null;
+    act(() => {
+      resourcePlanButton?.click();
+    });
+
+    const errorNotice = container.querySelector('[data-testid="story-node-error"]');
+    expect(errorNotice?.textContent).toContain("Node failed");
+    expect(errorNotice?.textContent).toContain("No ranked local Illustrious checkpoint candidates are available.");
+    expect(errorNotice?.textContent).toContain("resource_selection_invalid");
+    expect(container.textContent).not.toContain("Story Graph planning failed.");
   });
 
   it("starts generation, renders execution/results, and regenerates a shot", async () => {

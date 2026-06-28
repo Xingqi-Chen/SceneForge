@@ -21,6 +21,8 @@ import {
   createStoryLlmNodeAdapters,
   type StoryCompleteChat,
   type StoryNodeAdapters,
+  type StoryResourceCandidateLoadRequest,
+  type StoryResourceCandidateSet,
 } from "./story-llm-adapters";
 import type { TimelineSamplerOptions } from "./timeline-sampler-options";
 import { storyWorkflowDefinition } from "./story-workflow";
@@ -41,6 +43,9 @@ export type RunStoryPlanningRequest = {
 export type RunStoryPlanningOptions = {
   adapters?: StoryNodeAdapters;
   completeChat?: StoryCompleteChat;
+  loadResourceCandidates?: (
+    request: StoryResourceCandidateLoadRequest,
+  ) => Promise<StoryResourceCandidateSet> | StoryResourceCandidateSet;
   loadSamplerOptions?: () => Promise<TimelineSamplerOptions> | TimelineSamplerOptions;
   now?: () => string;
   onWorkflowUpdate?: (workflow: StoryWorkflowState, nodeId: StoryWorkflowNodeId) => void;
@@ -132,8 +137,9 @@ export async function runStoryPlanning(
     ?? (options.loadSamplerOptions ? await options.loadSamplerOptions() : undefined);
   const adapters = options.adapters ?? createStoryLlmNodeAdapters({
     completeChat: options.completeChat ?? createDefaultStoryCompleteChat(),
+    loadResourceCandidates: options.loadResourceCandidates,
     now,
-    resourceCandidates: request.settingsSnapshot?.resourceCandidates,
+    resourceCandidates: options.loadResourceCandidates ? undefined : request.settingsSnapshot?.resourceCandidates,
     samplerOptions,
   });
   let progressed = true;

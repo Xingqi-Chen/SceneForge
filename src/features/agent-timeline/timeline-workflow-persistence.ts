@@ -136,7 +136,7 @@ function sanitizeDateString(value: unknown, fallback: string) {
 }
 
 export function sanitizeTimelineWorkflowProjectName(value: unknown): string {
-  return typeof value === "string" ? value.replace(/\s+/g, " ").trim().slice(0, 120) : "";
+  return typeof value === "string" ? value.replace(/\s+/g, " ").trim() : "";
 }
 
 function sanitizeStringArray(value: unknown): string[] {

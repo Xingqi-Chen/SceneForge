@@ -43,6 +43,8 @@ export type StoryShotSourceRiskSummary = {
   level: string;
 };
 
+export type StoryShotWarningDisplayMode = "all" | "llm-only";
+
 export type StoryShotSummaryCard = {
   animaPromptParts?: StoryShotAnimaPromptPartGroup[];
   dependencies: string;
@@ -64,6 +66,7 @@ export type StoryShotSummaryCard = {
   status?: string;
   title: string;
   visualPrompt?: string;
+  warningDisplayMode?: StoryShotWarningDisplayMode;
   warnings?: string[];
 };
 
@@ -86,7 +89,7 @@ function compactText(value: unknown, maxLength = maxPreviewLength) {
   }
 
   const compacted = value.replace(/\s+/g, " ").trim();
-  return compacted.length > maxLength ? `${compacted.slice(0, maxLength - 3).trim()}...` : compacted;
+  return maxLength > 0 ? compacted : "";
 }
 
 function fullText(value: unknown) {
@@ -98,8 +101,9 @@ function asRecordArray(value: unknown): Record<string, unknown>[] {
 }
 
 function asStringArray(value: unknown, maxItems = 6) {
+  void maxItems;
   return Array.isArray(value)
-    ? value.map((item) => compactText(item, 80)).filter(Boolean).slice(0, maxItems)
+    ? value.map((item) => compactText(item, 80)).filter(Boolean)
     : [];
 }
 
@@ -341,7 +345,7 @@ function getNegativeConflictIssues(positivePrompt: string, negativePrompt: strin
         : [];
     });
 
-  return conflicts.slice(0, 5);
+  return conflicts;
 }
 
 function getRemovedNegativeSummaries(warnings: string[]) {
@@ -361,6 +365,48 @@ function getWarningsForShot(shotId: string, shotWarnings: unknown, globalWarning
     ...fullStringArray(shotWarnings),
     ...fullStringArray(globalWarnings).filter((warning) => !shotId || warning.includes(`"${shotId}"`) || warning.includes(shotId)),
   ];
+}
+
+function isRenderPlanDecisionNote(warning: string) {
+  return [
+    /^Using \d+x\d+\b/i,
+    /^Kept the default\b/i,
+    /^No per-shot overrides\b/i,
+    /^The selected .*?\b(?:so|because)\b/i,
+    /^Avoid .*? unless\b/i,
+    /^.*? may be tempting\b/i,
+  ].some((pattern) => pattern.test(warning));
+}
+
+function isRenderPlanSystemDiagnostic(warning: string) {
+  return /^Shot "[^"]+" uses high-risk source image\b/i.test(warning)
+    || /^Shot "[^"]+" did not receive LLM Anima prompt parts\b/i.test(warning);
+}
+
+function getRenderPlanWarningSections(warnings: unknown): {
+  decisionNotes: string[];
+  systemDiagnostics: string[];
+  warningNotes: string[];
+} {
+  const warningNotes: string[] = [];
+  const decisionNotes: string[] = [];
+  const systemDiagnostics: string[] = [];
+
+  for (const warning of fullStringArray(warnings)) {
+    if (isRenderPlanSystemDiagnostic(warning)) {
+      systemDiagnostics.push(warning);
+    } else if (isRenderPlanDecisionNote(warning)) {
+      decisionNotes.push(warning);
+    } else {
+      warningNotes.push(warning);
+    }
+  }
+
+  return {
+    decisionNotes,
+    systemDiagnostics,
+    warningNotes,
+  };
 }
 
 function getSourceRiskSummaries(value: unknown): StoryShotSourceRiskSummary[] {
@@ -457,6 +503,38 @@ function getReadinessFromHealth(
     label: health.tone === "review" ? "Needs review" : "Warning",
     tone: health.tone,
   };
+}
+
+function getReadinessFromLlmWarnings(warnings: string[]) {
+  return warnings.length > 0
+    ? {
+        detail: "Review LLM render-plan warnings before generation.",
+        label: "Warning",
+        tone: "warning" as const,
+      }
+    : {
+        detail: undefined,
+        label: "Ready",
+        tone: "ready" as const,
+      };
+}
+
+function getPromptShotReadiness({
+  health,
+  warningDisplayMode,
+  warnings,
+}: {
+  health: StoryShotPromptHealth;
+  warningDisplayMode: StoryShotWarningDisplayMode;
+  warnings: string[];
+}) {
+  if (health.tone !== "ready") {
+    return getReadinessFromHealth(health);
+  }
+
+  return warningDisplayMode === "llm-only"
+    ? getReadinessFromLlmWarnings(warnings)
+    : getReadinessFromHealth(health);
 }
 
 function getStoryId(result: unknown) {
@@ -657,7 +735,7 @@ function summarizeShotDependencyGraph(result: unknown): StoryNodeOutputSummary {
     title: "Shot dependency summary",
     metrics: [
       { label: "Shots", value: String(nodes.length) },
-      { label: "Source edges", value: String(sourceEdges.length) },
+      { label: "Injected source edges", value: String(sourceEdges.length) },
       { label: "Risk checks", value: String(riskEdges.length) },
     ],
     sections: [
@@ -676,12 +754,15 @@ function summarizeShotDependencyGraph(result: unknown): StoryNodeOutputSummary {
         emptyState: "No source-image risk decisions.",
         rows: riskEdges.map((edge) => {
           const risk = isRecord(edge.sourceImageRisk) ? edge.sourceImageRisk : {};
+          const executable = edge.reason === "img2img-source";
           return {
             from: compactText(edge.fromShotId, 80),
             to: compactText(edge.toShotId, 80),
-            executable: edge.reason === "img2img-source" ? "Yes" : "No",
+            "edge reason": compactText(edge.reason, 80) || "unknown",
+            "source image injected": executable ? "Yes" : "No",
+            mode: executable ? "Source image injected" : "Prompt-only continuity",
             risk: compactText(risk.level, 40) || "unknown",
-            reason: compactText(risk.reason, 180) || "No risk reason.",
+            "risk reason": compactText(risk.reason, 180) || "No risk reason.",
           };
         }),
       },
@@ -738,7 +819,7 @@ function summarizeCharacterContinuity(result: unknown): StoryNodeOutputSummary {
       {
         title: "Appearances",
         emptyState: "No shot appearances.",
-        rows: appearances.slice(0, 12).map((appearance) => ({
+        rows: appearances.map((appearance) => ({
           shot: compactText(appearance.shotId, 80),
           character: compactText(appearance.characterId, 80),
           action: compactText(appearance.poseOrAction, 120),
@@ -913,6 +994,7 @@ function createPromptShotCard({
   shot,
   sourceImageEdges,
   sourceMode,
+  warningDisplayMode = "all",
 }: {
   animaPromptParts?: unknown;
   globalWarnings?: unknown;
@@ -925,6 +1007,7 @@ function createPromptShotCard({
   shot: Record<string, unknown>;
   sourceImageEdges?: unknown;
   sourceMode?: unknown;
+  warningDisplayMode?: StoryShotWarningDisplayMode;
 }): StoryShotSummaryCard {
   const shotId = compactText(shot.shotId, 80) || compactText(shot.id, 80) || `shot-${index + 1}`;
   const promptWarnings = getWarningsForShot(shotId, shot.promptWarnings, globalWarnings);
@@ -935,9 +1018,14 @@ function createPromptShotCard({
     promptWarnings,
     sourceImageEdges,
   });
-  const readiness = getReadinessFromHealth(promptHealth);
+  const readiness = getPromptShotReadiness({
+    health: promptHealth,
+    warningDisplayMode,
+    warnings: promptWarnings,
+  });
   const removedNegatives = getRemovedNegativeSummaries(promptWarnings);
-  const negativeConflicts = getNegativeConflictIssues(fullText(positivePrompt), fullText(negativePrompt)).map((issue) => issue.detail);
+  const negativeConflicts = getNegativeConflictIssues(fullText(positivePrompt), fullText(negativePrompt))
+    .map((issue) => issue.detail);
 
   return {
     animaPromptParts: formatAnimaPromptPartGroups(animaPromptParts),
@@ -957,6 +1045,7 @@ function createPromptShotCard({
     sourceRisks: getSourceRiskSummaries(sourceImageEdges),
     title: getShotTitle(shot),
     visualPrompt: fullText(positivePrompt),
+    warningDisplayMode,
     warnings: promptWarnings,
   };
 }
@@ -964,17 +1053,37 @@ function createPromptShotCard({
 function summarizeRenderPlan(result: unknown): StoryNodeOutputSummary {
   const plan = isRecord(result) ? result : {};
   const shots = asRecordArray(plan.shots);
+  const {
+    decisionNotes,
+    systemDiagnostics,
+    warningNotes,
+  } = getRenderPlanWarningSections(plan.warnings);
+  const supplementalSections: StoryNodeSummarySection[] = [
+    ...(decisionNotes.length > 0
+      ? [{
+          title: "Decision notes",
+          notes: decisionNotes,
+        }]
+      : []),
+    ...(systemDiagnostics.length > 0
+      ? [{
+          title: "System diagnostics",
+          notes: systemDiagnostics,
+        }]
+      : []),
+  ];
 
   return {
     title: "Story render plan summary",
     metrics: [
       { label: "Shots", value: String(shots.length) },
       { label: "NSFW", value: formatBoolean(isRecord(plan.nsfwContext) ? plan.nsfwContext.enabled : undefined) },
-      { label: "Warnings", value: String(asStringArray(plan.warnings, 20).length) },
+      { label: "Warnings", value: String(warningNotes.length) },
+      { label: "Decision notes", value: String(decisionNotes.length) },
     ],
     shotCards: shots.map((shot, index) =>
       createPromptShotCard({
-        globalWarnings: plan.warnings,
+        globalWarnings: warningNotes,
         index,
         animaPromptParts: shot.animaPromptParts,
         negativePrompt: shot.negativePrompt,
@@ -984,14 +1093,16 @@ function summarizeRenderPlan(result: unknown): StoryNodeOutputSummary {
         shot,
         sourceImageEdges: shot.sourceImageEdges,
         sourceMode: asStringArray(shot.sourceShotIds).length > 0 ? "source-image" : "none",
+        warningDisplayMode: "llm-only",
       }),
     ),
     sections: [
       {
         title: "Plan warnings",
         emptyState: "No render-plan warnings.",
-        notes: fullStringArray(plan.warnings),
+        notes: warningNotes,
       },
+      ...supplementalSections,
     ],
   };
 }
@@ -1100,19 +1211,25 @@ function summarizeGenerationGate(result: unknown): StoryNodeOutputSummary {
         },
         sourceImageEdges: preview.sourceImageEdges,
         sourceMode: preview.sourceMode,
+        warningDisplayMode: "llm-only",
       });
-      const hasCardWarnings = baseCard.promptHealth.tone !== "ready";
-      const readiness = gateReady && !hasCardWarnings
-        ? getReadinessFromHealth(baseCard.promptHealth, {
-            detail: "Gate preview is ready for explicit generation confirmation.",
-            label: "Ready",
-            tone: "ready",
-          })
-        : getReadinessFromHealth(baseCard.promptHealth, {
-            detail: gateBlockingReason || baseCard.readinessDetail || "Review gate warnings before generation.",
-            label: gateReady ? "Warning" : "Needs review",
-            tone: gateReady ? "warning" : "review",
-          });
+      const readiness = gateReady
+        ? baseCard.readinessTone === "ready"
+          ? {
+              detail: "Gate preview is ready for explicit generation confirmation.",
+              label: "Ready",
+              tone: "ready",
+            } as const
+          : {
+              detail: baseCard.readinessDetail,
+              label: baseCard.readinessLabel,
+              tone: baseCard.readinessTone,
+            }
+        : {
+            detail: gateBlockingReason || "Review gate state before generation.",
+            label: "Needs review",
+            tone: "review",
+          } as const;
 
       return {
         ...baseCard,

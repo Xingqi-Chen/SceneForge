@@ -354,8 +354,7 @@ function sanitizeDescriptionSnippet(value: string | null) {
   return value
     ?.replace(/<[^>]*>/g, " ")
     .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 800) || null;
+    .trim() || null;
 }
 
 function toSelectedCivitaiResourcePreview(resource: CivitaiResourceListItem): SelectedCivitaiResourcePreview {
@@ -570,8 +569,7 @@ function normalizeSceneInputAiText(value: string) {
   return value
     .replace(/\s+/g, " ")
     .trim()
-    .replace(/^["']|["']$/g, "")
-    .slice(0, 1200);
+    .replace(/^["']|["']$/g, "");
 }
 
 function getSceneInputRawIntent(workflow: TimelineWorkflowState | null) {
@@ -2786,7 +2784,7 @@ export function TimelineShell() {
               width={64}
             />
             <div className="min-w-0 flex-1 text-xs leading-relaxed text-slate-600">
-              <p className="truncate font-medium text-slate-800">{selectedSourceImage.filename}</p>
+              <p className="break-all font-medium text-slate-800">{selectedSourceImage.filename}</p>
               <p>
                 {selectedSourceImage.width}x{selectedSourceImage.height} source image. Img2img uses one
                 output.
@@ -2871,7 +2869,7 @@ export function TimelineShell() {
               </div>
               <div className="min-w-0">
                 <h1 className="text-sm font-bold text-slate-900">SceneForge</h1>
-                <p className="truncate text-[11px] text-slate-500">{workflowTitle}</p>
+                <p className="break-words text-[11px] text-slate-500">{workflowTitle}</p>
               </div>
             </div>
           </div>
@@ -2939,7 +2937,7 @@ export function TimelineShell() {
                 <div className="mt-3 grid gap-2 text-xs sm:grid-cols-3">
                   <div className="rounded-md border border-slate-200 bg-slate-50 p-2">
                     <span className="font-semibold text-slate-700">Scene</span>
-                    <p className="mt-1 line-clamp-2 text-slate-500">{sceneRequest}</p>
+                    <p className="mt-1 whitespace-pre-wrap break-words text-slate-500">{sceneRequest}</p>
                   </div>
                   <div className="rounded-md border border-slate-200 bg-slate-50 p-2">
                     <span className="font-semibold text-slate-700">Current task</span>
@@ -3011,14 +3009,14 @@ export function TimelineShell() {
             </div>
             <div className="min-w-0">
               <h1 className="text-sm font-bold text-slate-900">SceneForge</h1>
-              <p className="truncate text-[11px] text-slate-500">{workflowTitle}</p>
+              <p className="break-words text-[11px] text-slate-500">{workflowTitle}</p>
             </div>
           </div>
           <div className={timelineHeaderContextClassName}>
             <CircleDot className="size-3.5 text-blue-600" />
-            <span className="truncate text-right">{workflowMode}</span>
+            <span className="break-words text-right">{workflowMode}</span>
             <span className="text-slate-300">/</span>
-            <span className="truncate">{selectedContent.title}</span>
+            <span className="break-words">{selectedContent.title}</span>
           </div>
         </div>
         <div className={timelineHeaderProjectClassName}>
@@ -3113,10 +3111,10 @@ export function TimelineShell() {
                   <span className="min-w-0 flex-1">
                     <span className="flex items-center gap-1.5">
                       <StepIcon className="size-3.5 shrink-0 text-slate-400" />
-                      <span className="truncate text-xs font-semibold text-slate-900">{content.title}</span>
+                      <span className="break-words text-xs font-semibold text-slate-900">{content.title}</span>
                     </span>
                     <span className="mt-0.5 flex items-center justify-between gap-2">
-                      <span className="truncate text-[11px] text-slate-500">{content.shellState}</span>
+                      <span className="break-words text-[11px] text-slate-500">{content.shellState}</span>
                       <span className="shrink-0 text-[10px] font-medium uppercase text-slate-400">
                         {getCompactStatusLabel(node.status)}
                       </span>
@@ -3263,7 +3261,7 @@ export function TimelineShell() {
                           width={64}
                         />
                         <div className="min-w-0 flex-1 text-xs leading-relaxed text-slate-600">
-                          <p className="truncate font-medium text-slate-800">{selectedSourceImage.filename}</p>
+                          <p className="break-all font-medium text-slate-800">{selectedSourceImage.filename}</p>
                           <p>
                             {selectedSourceImage.width}x{selectedSourceImage.height} source image. Img2img uses one
                             output.
@@ -3548,7 +3546,7 @@ export function TimelineShell() {
                 <dt className="text-slate-500">Source</dt>
                 <dd className="text-right font-medium text-slate-800">{selectedNode.source}</dd>
                 <dt className="text-slate-500">Workflow</dt>
-                <dd className="truncate text-right font-medium text-slate-800">{activeWorkflow.workflowId}</dd>
+                <dd className="break-all text-right font-medium text-slate-800">{activeWorkflow.workflowId}</dd>
                 <dt className="text-slate-500">Tokens</dt>
                 <dd className="text-right font-medium text-slate-800">Reserved</dd>
               </dl>

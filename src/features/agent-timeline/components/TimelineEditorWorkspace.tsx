@@ -167,11 +167,11 @@ export function TimelineEditorWorkspace({
           <div className="flex min-w-0 items-center gap-2">
             <Box className="size-4 shrink-0 text-indigo-600" />
             <div className="min-w-0">
-              <h3 className="truncate text-xs font-semibold uppercase tracking-wide text-slate-500">
+              <h3 className="break-words text-xs font-semibold uppercase tracking-wide text-slate-500">
                 3D editor canvas
               </h3>
-              <p className="truncate text-[11px] text-slate-500">{summary.label}</p>
-              <p className="truncate text-[11px] text-slate-400">{summary.detail}</p>
+              <p className="break-words text-[11px] text-slate-500">{summary.label}</p>
+              <p className="break-words text-[11px] text-slate-400">{summary.detail}</p>
             </div>
           </div>
           <div className="flex shrink-0 items-center gap-2">

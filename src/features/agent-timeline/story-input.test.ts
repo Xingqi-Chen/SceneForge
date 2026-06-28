@@ -377,7 +377,7 @@ describe("story input workflow start", () => {
     });
   });
 
-  it("keeps full output anchors in the render plan and compact prompt previews in the generation gate", () => {
+  it("keeps full output anchors in the render plan and full prompt previews in the generation gate", () => {
     const input = createStoryInputFromStartRequest({
       rawIntent:
         "One hand gripping the bike frame as he squeezes past market crates, lifting the bicycle through a narrow alley, with distant police barricades along the bridge route.",
@@ -390,8 +390,10 @@ describe("story input workflow start", () => {
     const preview = artifacts.generationGate.requestPreview[0];
     const anchors = artifacts.renderPlan.shots[0]?.outputAnchors;
 
-    expect(preview?.positivePromptPreview.length).toBeLessThanOrEqual(180);
-    expect(preview?.positivePromptLength).toBeGreaterThan(preview?.positivePromptPreview.length ?? 0);
+    expect(preview?.positivePromptPreview.length).toBe(
+      artifacts.renderPlan.shots[0]?.positivePrompt.replace(/\s+/g, " ").trim().length,
+    );
+    expect(preview?.positivePromptPreview).toContain("distant police barricades along the bridge route");
     expect(preview).not.toHaveProperty("positivePrompt");
     expect(preview).not.toHaveProperty("negativePrompt");
     expect(preview).not.toHaveProperty("outputAnchors");
