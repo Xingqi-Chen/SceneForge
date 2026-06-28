@@ -137,6 +137,7 @@ export type StoryRenderPlanResourceRefs = {
 };
 
 export type StoryGenerationRequestPreview = {
+  animaPromptParts: StoryAnimaPromptParts;
   negativePromptLength: number;
   negativePromptPreview: string;
   parameters: StoryGenerationParameters;
@@ -1410,6 +1411,21 @@ export function createStoryGenerationRequestPreview(
   const normalizedImg2ImgDenoise = normalizeStoryImg2ImgDenoise(img2imgDenoise);
 
   return {
+    animaPromptParts: {
+      ...shot.animaPromptParts,
+      actionTags: [...shot.animaPromptParts.actionTags],
+      artistTags: [...shot.animaPromptParts.artistTags],
+      cameraTags: [...shot.animaPromptParts.cameraTags],
+      characterTags: [...shot.animaPromptParts.characterTags],
+      lightingTags: [...shot.animaPromptParts.lightingTags],
+      negativeAdditions: [...shot.animaPromptParts.negativeAdditions],
+      outfitTags: [...shot.animaPromptParts.outfitTags],
+      propTags: [...shot.animaPromptParts.propTags],
+      settingTags: [...shot.animaPromptParts.settingTags],
+      styleTags: [...shot.animaPromptParts.styleTags],
+      subjectTags: [...shot.animaPromptParts.subjectTags],
+      seriesTags: [...shot.animaPromptParts.seriesTags],
+    },
     negativePromptLength: shot.negativePrompt.length,
     negativePromptPreview: compactRequestPromptPreview(shot.negativePrompt),
     parameters: {

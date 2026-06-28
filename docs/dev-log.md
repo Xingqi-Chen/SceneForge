@@ -8,7 +8,8 @@ This log records dated implementation and documentation work. Keep entries conci
 
 Summary:
 
-- Restored Story Visual prompt diagnostics for render-plan and generation-gate shot cards, including prompt health, negative conflicts, removed negatives, and source-image risk readiness.
+- Restored Story Visual prompt diagnostics for render-plan and generation-gate shot cards, including prompt health, removed negative diagnostics, and source-image risk readiness.
+- Removed the deprecated `negativeConflicts` summary-card field and the unused `negativePrompt` prompt-health input after structured prompt-health diagnostics replaced string overlap checks.
 - Added a selected-node error notice so Story Visual mode shows node failures returned inside a successful planning workflow response.
 - Restored the Story resource-planning `desiredEffect` compact length boundary before candidate ranking and LLM payload use.
 - Clarified shot dependency risk summaries so planning-only continuity/story-order edges are labeled separately from injected source-image edges.
@@ -16,6 +17,7 @@ Summary:
 Validation:
 
 - `npm test -- src/features/agent-timeline/story-node-output-summary.test.ts src/features/agent-timeline/components/StoryNodeOutputSummaryView.test.tsx src/features/agent-timeline/components/StoryPlanningPreview.test.tsx src/features/agent-timeline/story-llm-adapters.test.ts` passed with 4 files and 55 tests.
+- `npm test -- src/features/agent-timeline/story-input.test.ts src/features/agent-timeline/story-node-output-summary.test.ts src/features/agent-timeline/components/StoryNodeOutputSummaryView.test.tsx` passed with 3 files and 27 tests after reviewer cleanup.
 - `npm test -- src/features/agent-timeline` passed with 27 files and 256 tests.
 - `npm run typecheck` passed.
 - `npm run lint` passed with 23 existing warnings.

@@ -249,7 +249,6 @@ function StoryShotCard({ card }: { card: StoryShotSummaryCard }) {
               title="Prompt health"
             />
             <WarningList items={card.warnings} title="Warnings" />
-            <WarningList items={card.negativeConflicts} title="Negative conflicts" />
             <WarningList items={card.removedNegatives} title="Removed negatives" />
             <WarningList
               items={card.sourceRisks.map((risk) => `${risk.label}: ${risk.detail}`)}
