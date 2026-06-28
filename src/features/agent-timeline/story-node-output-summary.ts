@@ -50,7 +50,6 @@ export type StoryShotSummaryCard = {
   dependencies: string;
   imageLabel?: string;
   imageUrl?: string;
-  negativeConflicts: string[];
   negativePrompt?: string;
   parameters?: string;
   promptHealth: StoryShotPromptHealth;
@@ -185,10 +184,6 @@ function hasAnimaPromptPartOrPattern({
   return getAnimaPromptPartValues(animaPromptParts, keys).length > 0 || pattern.test(prompt);
 }
 
-function compactIssueText(value: string, maxLength = 120) {
-  return compactText(value, maxLength);
-}
-
 function getMissingPromptInfoIssues(positivePrompt: string, animaPromptParts: unknown): StoryShotPromptHealthIssue[] {
   const checks = [
     {
@@ -302,52 +297,6 @@ function getHardcodedPromptIssues(positivePrompt: string): StoryShotPromptHealth
     }));
 }
 
-function normalizePromptTokens(value: string) {
-  return value
-    .toLocaleLowerCase()
-    .replace(/[^a-z0-9\s-]/g, " ")
-    .split(/\s+/)
-    .map((token) => token.replace(/s$/, ""))
-    .filter((token) => token.length >= 4);
-}
-
-function isGenericNegativePart(value: string) {
-  return /\b(?:artifact|bad|blurry|cropped|deformed|duplicate|extra|jpeg|low|missing|mutated|poor|text|watermark|worst)\b/i.test(value);
-}
-
-function getNegativeConflictIssues(positivePrompt: string, negativePrompt: string): StoryShotPromptHealthIssue[] {
-  const positiveParts = splitPromptParts(positivePrompt)
-    .map((part) => ({
-      original: part,
-      tokens: normalizePromptTokens(part),
-    }))
-    .filter((part) => part.tokens.length > 0);
-
-  const conflicts = splitPromptParts(negativePrompt)
-    .filter((part) => !isGenericNegativePart(part))
-    .flatMap((negativePart) => {
-      const negativeTokens = normalizePromptTokens(negativePart);
-      if (negativeTokens.length === 0) {
-        return [];
-      }
-
-      const positiveMatch = positiveParts.find((positivePart) =>
-        negativeTokens.every((token) => positivePart.tokens.includes(token)) ||
-        positivePart.tokens.every((token) => negativeTokens.includes(token)),
-      );
-
-      return positiveMatch
-        ? [{
-            detail: `"${compactIssueText(negativePart)}" conflicts with positive prompt anchor "${compactIssueText(positiveMatch.original)}".`,
-            label: "Negative conflict",
-            severity: "warning" as const,
-          }]
-        : [];
-    });
-
-  return conflicts;
-}
-
 function getRemovedNegativeSummaries(warnings: string[]) {
   return warnings.flatMap((warning) => {
     const match = warning.match(/removed negative addition "([^"]+)" because it conflicts with positive prompt anchor "([^"]+)"/i);
@@ -428,19 +377,16 @@ function getSourceRiskSummaries(value: unknown): StoryShotSourceRiskSummary[] {
 
 export function createStoryPromptHealth({
   animaPromptParts,
-  negativePrompt,
   positivePrompt,
   promptWarnings = [],
   sourceImageEdges = [],
 }: {
   animaPromptParts?: unknown;
-  negativePrompt?: unknown;
   positivePrompt?: unknown;
   promptWarnings?: string[];
   sourceImageEdges?: unknown;
 }): StoryShotPromptHealth {
   const positive = fullText(positivePrompt);
-  const negative = fullText(negativePrompt);
   const sourceRiskIssues = getSourceRiskSummaries(sourceImageEdges)
     .filter((risk) => risk.level === "high")
     .map((risk) => ({
@@ -457,7 +403,6 @@ export function createStoryPromptHealth({
     getTooShortPromptIssue(positive),
     ...getMissingPromptInfoIssues(positive, animaPromptParts),
     ...getHardcodedPromptIssues(positive),
-    ...getNegativeConflictIssues(positive, negative),
     ...removedNegativeIssues,
     ...sourceRiskIssues,
   ].filter((issue): issue is StoryShotPromptHealthIssue => Boolean(issue));
@@ -1013,7 +958,6 @@ function createPromptShotCard({
   const promptWarnings = getWarningsForShot(shotId, shot.promptWarnings, globalWarnings);
   const promptHealth = createStoryPromptHealth({
     animaPromptParts,
-    negativePrompt,
     positivePrompt,
     promptWarnings,
     sourceImageEdges,
@@ -1024,13 +968,10 @@ function createPromptShotCard({
     warnings: promptWarnings,
   });
   const removedNegatives = getRemovedNegativeSummaries(promptWarnings);
-  const negativeConflicts = getNegativeConflictIssues(fullText(positivePrompt), fullText(negativePrompt))
-    .map((issue) => issue.detail);
 
   return {
     animaPromptParts: formatAnimaPromptPartGroups(animaPromptParts),
     dependencies: getShotDependencies(shot.sourceShotIds, sourceMode),
-    negativeConflicts,
     negativePrompt: fullText(negativePrompt),
     parameters: parameters ? formatParameters(parameters) : undefined,
     promptHealth,
@@ -1200,6 +1141,7 @@ function summarizeGenerationGate(result: unknown): StoryNodeOutputSummary {
     ],
     shotCards: previews.map((preview, index) => {
       const baseCard = createPromptShotCard({
+        animaPromptParts: preview.animaPromptParts,
         index,
         negativePrompt: preview.negativePromptPreview,
         parameters: preview.parameters,
@@ -1283,7 +1225,6 @@ function summarizeExecution(result: unknown): StoryNodeOutputSummary {
         dependencies: getShotDependencies(shot.sourceShotIds),
         imageLabel: getResultImageLabel(resultReference),
         imageUrl: getStoredImageUrl(resultReference),
-        negativeConflicts: [],
         promptHealth: {
           issues: [],
           label: "Execution status",
@@ -1351,7 +1292,6 @@ function summarizeResultDisplay(result: unknown): StoryNodeOutputSummary {
         dependencies: type === "Preview" ? "Preview reference" : "Final render reference",
         imageLabel: getResultImageLabel(reference),
         imageUrl: getStoredImageUrl(reference),
-        negativeConflicts: [],
         promptHealth: {
           issues: [],
           label: type,

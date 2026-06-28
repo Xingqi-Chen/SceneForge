@@ -316,6 +316,7 @@ describe("story input workflow start", () => {
       scheduler: "simple",
     });
     expect(artifacts.generationGate.requestPreview[0]).toMatchObject({
+      animaPromptParts: artifacts.renderPlan.shots[0]?.animaPromptParts,
       sourceMode: "none",
       sourceShotIds: [],
     });
@@ -394,6 +395,7 @@ describe("story input workflow start", () => {
       artifacts.renderPlan.shots[0]?.positivePrompt.replace(/\s+/g, " ").trim().length,
     );
     expect(preview?.positivePromptPreview).toContain("distant police barricades along the bridge route");
+    expect(preview?.animaPromptParts).toEqual(artifacts.renderPlan.shots[0]?.animaPromptParts);
     expect(preview).not.toHaveProperty("positivePrompt");
     expect(preview).not.toHaveProperty("negativePrompt");
     expect(preview).not.toHaveProperty("outputAnchors");

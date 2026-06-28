@@ -110,8 +110,7 @@ describe("StoryNodeOutputSummaryView", () => {
     expect(container.textContent).toContain("Warnings");
     expect(container.textContent).toContain("removed negative addition");
     expect(container.textContent).toContain("Prompt health");
-    expect(container.textContent).toContain("Negative conflict");
-    expect(container.textContent).toContain("Negative conflicts");
+    expect(container.textContent).toContain("Removed negative conflict");
     expect(container.textContent).toContain("Removed negatives");
     expect(container.textContent).toContain("Source-image risk");
     expect(container.textContent).toContain("standing to kneeling");
@@ -169,8 +168,7 @@ describe("StoryNodeOutputSummaryView", () => {
     expect(container.textContent).toContain("Source-image risk");
     expect(container.textContent).toContain("standing to kneeling");
     expect(container.textContent).toContain("Prompt health");
-    expect(container.textContent).toContain("Negative conflicts");
-    expect(container.textContent).toContain("Negative conflict");
+    expect(container.textContent).not.toContain("Negative conflict");
     expect(container.textContent).not.toContain("Removed negatives");
   });
 

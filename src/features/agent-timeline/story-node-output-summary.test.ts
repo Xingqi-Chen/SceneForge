@@ -244,9 +244,6 @@ describe("story node output summaries", () => {
     ]));
     expect(card?.visualPrompt).toContain("final prompt tail marker for inspection");
     expect(card?.visualPrompt).not.toContain("...");
-    expect(card?.negativeConflicts).toEqual(expect.arrayContaining([
-      '"borrowed paperback" conflicts with positive prompt anchor "one borrowed paperback on the small exchange shelf".',
-    ]));
     expect(card?.removedNegatives).toEqual([
       'Removed "borrowed paperback" because it conflicts with "one borrowed paperback on the small exchange shelf".',
     ]);
@@ -254,12 +251,14 @@ describe("story node output summaries", () => {
       label: "Warnings",
       tone: "warning",
       issues: expect.arrayContaining([
-        expect.objectContaining({ label: "Negative conflict" }),
         expect.objectContaining({ label: "Removed negative conflict" }),
         expect.objectContaining({ label: "High source-image risk" }),
       ]),
     });
-    expect(JSON.stringify(summary)).toContain("Negative conflict");
+    expect(card?.promptHealth.issues).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ label: "Negative conflict" }),
+    ]));
+    expect(JSON.stringify(summary)).not.toContain('"label":"Negative conflict"');
     expect(summary.metrics).toEqual(expect.arrayContaining([
       { label: "Warnings", value: "2" },
       { label: "Decision notes", value: "1" },
@@ -278,10 +277,84 @@ describe("story node output summaries", () => {
     expect(summary.sections.some((section) => section.title === "Prompt sections")).toBe(false);
   });
 
-  it("flags prompt health edge cases for short prompts, missing details, conflicts, debug fragments, and source risk", () => {
+  it("keeps prompt health healthy when render-plan LLM warnings only affect readiness", () => {
+    const llmWarning = 'Shot "shot-1" LLM noted the hand prop may need visual emphasis.';
+    const summary = createStoryNodeOutputSummary("story-render-plan", {
+      storyId: "story-summary",
+      img2imgDenoise: 1,
+      nsfwContext: { enabled: false },
+      warnings: [llmWarning],
+      shots: [
+        {
+          shotId: "shot-1",
+          order: 1,
+          title: "Leaving the Kitchen",
+          positivePrompt: [
+            "masterpiece",
+            "best quality",
+            "score_7",
+            "safe",
+            "1girl",
+            "adult art student with short black hair and round glasses",
+            "holding a rolled poster while stepping through the doorway",
+            "small apartment kitchen with a window-side table",
+            "medium-wide shot from a slight low angle",
+            "soft morning window light",
+            "hand-painted anime illustration with clean silhouettes",
+          ].join(", "),
+          negativePrompt: "score_1, score_2, bad_hands",
+          sourceShotIds: [],
+          sourceImageEdges: [],
+          parameters: {
+            width: 896,
+            height: 1152,
+            steps: 28,
+            cfg: 5,
+            samplerName: "er_sde",
+            scheduler: "simple",
+            denoise: 1,
+          },
+          resourceRefs: {
+            checkpointResourceId: "checkpoint-local",
+            loraResourceIds: [],
+          },
+          animaPromptParts: {
+            subjectTags: ["1girl, solo"],
+            characterTags: ["adult art student with short black hair and round glasses"],
+            seriesTags: [],
+            artistTags: [],
+            outfitTags: ["mint cardigan and white T-shirt"],
+            propTags: ["rolled poster and canvas tote"],
+            actionTags: ["holding a rolled poster while stepping through the doorway"],
+            settingTags: ["small apartment kitchen with a window-side table"],
+            cameraTags: ["medium-wide shot from a slight low angle"],
+            lightingTags: ["soft morning window light"],
+            styleTags: ["hand-painted anime illustration with clean silhouettes"],
+            singleFrameCaption: "She leaves the kitchen carrying the poster.",
+            negativeAdditions: [],
+          },
+        },
+      ],
+    });
+    const card = summary.shotCards?.[0];
+
+    expect(summary.sections.find((section) => section.title === "Plan warnings")?.notes).toEqual([llmWarning]);
+    expect(card).toMatchObject({
+      promptHealth: {
+        issues: [],
+        label: "Healthy",
+        tone: "ready",
+      },
+      readinessDetail: "Review LLM render-plan warnings before generation.",
+      readinessLabel: "Warning",
+      readinessTone: "warning",
+      warnings: [llmWarning],
+    });
+  });
+
+  it("flags prompt health edge cases for short prompts, missing details, debug fragments, and source risk", () => {
     const health = createStoryPromptHealth({
       positivePrompt: 'girl, badge, shot-2, {"promptId":"debug"}, <lora:test:1>',
-      negativePrompt: "badge",
       animaPromptParts: {},
       sourceImageEdges: [
         {
@@ -307,9 +380,9 @@ describe("story node output summaries", () => {
       "Debug field fragment",
       "Shot id fragment",
       "JSON fragment",
-      "Negative conflict",
       "High source-image risk",
     ]));
+    expect(labels).not.toContain("Negative conflict");
   });
 
   it("summarizes source-image risk metadata at the generation gate", () => {
@@ -367,7 +440,6 @@ describe("story node output summaries", () => {
         label: "Warnings",
         tone: "warning",
         issues: expect.arrayContaining([
-          expect.objectContaining({ label: "Negative conflict" }),
           expect.objectContaining({ label: "High source-image risk" }),
         ]),
       },
@@ -380,8 +452,8 @@ describe("story node output summaries", () => {
       ],
       warningDisplayMode: "llm-only",
     });
-    expect(summary.shotCards?.[1]?.negativeConflicts).toEqual(expect.arrayContaining([
-      expect.stringContaining("kneeling courier"),
+    expect(summary.shotCards?.[1]?.promptHealth.issues).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ label: "Negative conflict" }),
     ]));
     expect(sourceRisk?.rows?.[0]).toMatchObject({
       source: "shot-1",
@@ -390,6 +462,68 @@ describe("story node output summaries", () => {
       reason: expect.stringContaining("standing to kneeling"),
       chain: "shot-1, shot-2",
     });
+  });
+
+  it("uses generation-gate anima prompt parts for prompt health instead of brittle preview text matching", () => {
+    const summary = createStoryNodeOutputSummary("generation-gate", {
+      storyId: "story-summary",
+      ready: true,
+      executionAvailable: true,
+      confirmationRequired: true,
+      renderPlanShotCount: 1,
+      previewEnabled: false,
+      requestPreview: [
+        {
+          animaPromptParts: {
+            actionTags: ["hands wrapping the poster while body angles toward the doorway"],
+            artistTags: [],
+            cameraTags: ["medium-wide shot, slight low angle"],
+            characterTags: ["adult college-age woman with short black bob and round glasses"],
+            lightingTags: ["soft morning daylight through the kitchen window"],
+            negativeAdditions: [],
+            outfitTags: ["mint green cardigan, white T-shirt"],
+            propTags: ["rolled poster, sketch tube, canvas tote"],
+            settingTags: ["small apartment kitchen, window-side table"],
+            styleTags: ["hand-painted anime illustration"],
+            subjectTags: ["1girl, solo"],
+            seriesTags: [],
+            singleFrameCaption: "She pauses at the kitchen table with a sudden rush in her posture.",
+          },
+          shotId: "shot-1",
+          title: "Rushing Out the Door",
+          sourceMode: "source-image",
+          sourceShotIds: ["shot-0"],
+          sourceImageEdges: [
+            {
+              executable: true,
+              riskFactors: [],
+              riskLevel: "low",
+              riskReason: "Source shot appears compatible with loose img2img continuity.",
+              sourceChain: ["shot-0", "shot-1"],
+              sourceShotId: "shot-0",
+              targetShotId: "shot-1",
+            },
+          ],
+          positivePromptPreview: "masterpiece, best quality, score_7, safe, adult college-age woman, hands wrapping the poster, eyes on the phone screen, body angled toward the doorway, small apartment kitchen, window-side table, student clutter, cream walls, hand-painted anime illustration, clean character silhouettes",
+          positivePromptLength: 278,
+          negativePromptPreview: "score_1, score_2, bad_hands",
+          negativePromptLength: 28,
+          parameters: { width: 896, height: 1152, steps: 28, cfg: 5, samplerName: "er_sde", scheduler: "simple", denoise: 0.9 },
+        },
+      ],
+    });
+
+    expect(summary.shotCards?.[0]).toMatchObject({
+      promptHealth: {
+        issues: [],
+        label: "Healthy",
+        tone: "ready",
+      },
+      readinessLabel: "Ready",
+    });
+    expect(summary.shotCards?.[0]?.sourceRisks).toEqual([
+      expect.objectContaining({ level: "low" }),
+    ]);
   });
 
   it("omits ComfyUI node ids and temporary URLs from visual execution summaries", () => {
