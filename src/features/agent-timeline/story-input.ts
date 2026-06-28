@@ -2,11 +2,13 @@ import {
   assembleStoryRenderPlan,
   createStoryExecutionRequestBatch,
   createStoryDefaultGenerationParameters,
+  createStoryGenerationRequestPreview,
   createStoryParameterPlan,
   createStoryResourcePlan,
-  type StoryGenerationParameters,
+  getStoryInputImg2ImgDenoise,
+  normalizeStoryImg2ImgDenoise,
+  type StoryGenerationRequestPreview,
   type StoryLocalResource,
-  type StoryOutputAnchors,
   type StoryParameterPlan,
   type StoryRenderPlan,
   type StoryResourcePlan,
@@ -29,8 +31,6 @@ import type {
   StoryConsistencyCheck,
   StoryConsistencyIssue,
   StoryInput,
-  StorySegment,
-  StorySegmentKind,
   StoryNsfwContext,
   StoryOutline,
   StorySafetyPlan,
@@ -48,8 +48,13 @@ export type StoryGraphStartSettingsSnapshot = {
   source: "story-form";
   targetShotCount?: number;
   audienceRating: StoryAudienceRating;
+  img2imgDenoise: number;
   planningMode: "deterministic-local";
   promptProfile?: PromptProfileId;
+  resourceCandidateCounts?: {
+    checkpoints: number;
+    loras: number;
+  };
   resourceCandidates?: {
     checkpoints: StoryLocalResource[];
     loras: StoryLocalResource[];
@@ -75,15 +80,7 @@ export type StoryGenerationGatePreview = {
   nsfwContext: StoryNsfwContext;
   renderPlanShotCount: number;
   previewEnabled: boolean;
-  requestPreview: Array<{
-    shotId: string;
-    title: string;
-    sourceShotIds: string[];
-    positivePrompt: string;
-    negativePrompt: string;
-    outputAnchors: StoryOutputAnchors;
-    parameters: StoryGenerationParameters;
-  }>;
+  requestPreview: StoryGenerationRequestPreview[];
 };
 
 export type StoryResultDisplayPending = {
@@ -132,137 +129,6 @@ function normalizeTargetShotCount(value: number | undefined) {
   return Math.min(maxTargetShotCount, Math.max(1, Math.round(value as number)));
 }
 
-const explicitShotCountWords: Record<string, number> = {
-  one: 1,
-  two: 2,
-  three: 3,
-  four: 4,
-  five: 5,
-  six: 6,
-  seven: 7,
-  eight: 8,
-  nine: 9,
-};
-
-function normalizeStoryShotEstimate(value: number) {
-  return Math.min(6, Math.max(1, Math.round(value)));
-}
-
-function normalizeExplicitStoryShotCount(value: number) {
-  return Math.min(maxTargetShotCount, Math.max(1, Math.round(value)));
-}
-
-function normalizeExplicitStorySegmentTitle(value: string) {
-  return value.replace(/\s+/g, " ").trim();
-}
-
-function getExplicitStorySegmentKind(title: string): StorySegmentKind {
-  const key = title.toLocaleLowerCase();
-
-  if (key.startsWith("opening")) {
-    return "opening-image";
-  }
-
-  if (key.startsWith("final")) {
-    return "final-image";
-  }
-
-  return "beat";
-}
-
-function getExplicitStorySegmentId(title: string, order: number, kind: StorySegmentKind) {
-  const slug = title
-    .trim()
-    .toLocaleLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-
-  if (slug) {
-    return slug;
-  }
-
-  return kind === "final-image"
-    ? "final-image"
-    : kind === "opening-image"
-      ? "opening-image"
-      : `beat-${order}`;
-}
-
-export function parseExplicitStorySegments(rawIntent: string): {
-  context: string;
-  segments: StorySegment[];
-} {
-  const text = rawIntent.trim();
-  const labelPattern = /(^|\n)\s*((?:Beat\s+\d+)|(?:Final\s+(?:image|shot))|(?:Opening\s+(?:image|shot)))\s*[:\-]\s*/gi;
-  const matches = Array.from(text.matchAll(labelPattern));
-
-  if (matches.length === 0) {
-    return {
-      context: "",
-      segments: [],
-    };
-  }
-
-  const context = text.slice(0, matches[0]?.index ?? 0).trim();
-  const segments = matches.map((match, index) => {
-    const title = normalizeExplicitStorySegmentTitle(match[2] ?? `Beat ${index + 1}`);
-    const sourceStart = (match.index ?? 0) + match[0].length;
-    const sourceEnd = matches[index + 1]?.index ?? text.length;
-    const sourceText = text.slice(sourceStart, sourceEnd).trim();
-    const order = index + 1;
-    const kind = getExplicitStorySegmentKind(title);
-
-    return {
-      id: getExplicitStorySegmentId(title, order, kind),
-      title,
-      sourceText: sourceText || title,
-      order,
-      kind,
-    };
-  });
-
-  return {
-    context,
-    segments,
-  };
-}
-
-export function estimateStoryShotCount(rawIntent: string) {
-  const text = rawIntent.trim();
-  const explicitSegments = parseExplicitStorySegments(text).segments;
-
-  if (explicitSegments.length > 0) {
-    return normalizeExplicitStoryShotCount(explicitSegments.length);
-  }
-
-  const explicitMatch = text.match(/\b(?:(\d+)|(one|two|three|four|five|six|seven|eight|nine))[-\s]*(?:shot|shots|panel|panels|frame|frames)\b/i);
-  const explicitValue = explicitMatch?.[1]
-    ? Number(explicitMatch[1])
-    : explicitMatch?.[2]
-      ? explicitShotCountWords[explicitMatch[2].toLocaleLowerCase()]
-      : undefined;
-
-  if (Number.isFinite(explicitValue)) {
-    return normalizeExplicitStoryShotCount(explicitValue as number);
-  }
-
-  const eventClauses = text
-    .replace(/\b(?:first|next|then|finally|afterward|meanwhile)\b/gi, ".")
-    .split(/[.!?;\n]+|,(?=\s*(?:then|next|finally|but|and|she|he|they|maya|the\s+\w+)\b)/gi)
-    .map((part) => part.trim())
-    .filter((part) => part.split(/\s+/g).length >= 3);
-  const actionPattern = /\b(?:arrives?|enters?|leaves?|waits?|misses?|delays?|decides?|runs?|rushes?|cuts?|crosses?|finds?|discovers?|returns?|delivers?|opens?|closes?|climbs?|falls?|escapes?|hides?|confronts?|notices?|sees?|reaches?|hands?|places?|protects?|loses?|recovers?)\b/i;
-  const actionMentionPattern = /\b(?:arrives?|enters?|leaves?|waits?|misses?|delays?|decides?|runs?|rushes?|cuts?|crosses?|finds?|discovers?|returns?|delivers?|opens?|closes?|climbs?|falls?|escapes?|hides?|confronts?|notices?|sees?|reaches?|hands?|places?|protects?|loses?|recovers?)\b/gi;
-  const eventCount = eventClauses.filter((part) => actionPattern.test(part)).length;
-
-  if (eventCount > 1) {
-    return normalizeStoryShotEstimate(eventCount);
-  }
-
-  const actionMentions = text.match(actionMentionPattern) ?? [];
-  return normalizeStoryShotEstimate(actionMentions.length > 1 ? actionMentions.length : 1);
-}
-
 function slugifyIdPart(value: string) {
   const slug = value
     .trim()
@@ -292,14 +158,25 @@ function createSettingsSnapshot({
   targetShotCount?: number;
   timestamp: string;
 }): StoryGraphStartSettingsSnapshot {
+  const {
+    resourceCandidates,
+    ...settingsSnapshot
+  } = request.settingsSnapshot ?? {};
+
   return {
-    capturedAt: request.settingsSnapshot?.capturedAt ?? timestamp,
+    capturedAt: settingsSnapshot.capturedAt ?? timestamp,
     source: "story-form",
     planningMode: "deterministic-local",
-    resourceCandidates: request.settingsSnapshot?.resourceCandidates,
-    ...request.settingsSnapshot,
+    ...settingsSnapshot,
     audienceRating,
+    img2imgDenoise: normalizeStoryImg2ImgDenoise(settingsSnapshot.img2imgDenoise),
     nsfwEnabled,
+    resourceCandidateCounts: resourceCandidates
+      ? {
+          checkpoints: resourceCandidates.checkpoints.length,
+          loras: resourceCandidates.loras.length,
+        }
+      : settingsSnapshot.resourceCandidateCounts,
     targetShotCount,
   } as StoryGraphStartSettingsSnapshot;
 }
@@ -329,7 +206,6 @@ export function createStoryInputFromStartRequest(request: StoryGraphStartRequest
   const nsfwEnabled = request.nsfwEnabled ?? request.settingsSnapshot?.nsfwEnabled ?? false;
   const audienceRating: StoryAudienceRating = nsfwEnabled ? "explicit" : "safe";
   const targetShotCount = normalizeTargetShotCount(request.targetShotCount);
-  const explicitSegments = parseExplicitStorySegments(rawIntent);
   const now = request.now ?? defaultNow;
   const timestamp = now();
   const storyId = request.storyId ?? `story-${slugifyIdPart(rawIntent)}-${timestamp.replace(/[^0-9]/g, "").slice(0, 14)}`;
@@ -339,8 +215,6 @@ export function createStoryInputFromStartRequest(request: StoryGraphStartRequest
     rawIntent,
     title: undefined,
     targetShotCount,
-    storyContext: explicitSegments.context || undefined,
-    storySegments: explicitSegments.segments.length > 0 ? explicitSegments.segments : undefined,
     audienceRating,
     nsfwContext: createNsfwContext({
       audienceRating,
@@ -388,13 +262,13 @@ function createBible(input: StoryInput): StoryBible {
     continuityRules: [
       "Preserve the main character identity across all shots.",
       "Carry important props and environmental details forward when referenced.",
-      "Use source-shot dependencies only as planning metadata until execution is implemented.",
+      "Use source-shot dependencies only when a later shot must receive an earlier generated image during execution.",
     ],
   };
 }
 
 function getPlanningShotCount(input: StoryInput) {
-  return input.targetShotCount ?? input.storySegments?.length ?? estimateStoryShotCount(input.rawIntent);
+  return input.targetShotCount ?? input.storySegments?.length ?? 1;
 }
 
 function createOutline(input: StoryInput): StoryOutline {
@@ -525,10 +399,13 @@ function createCharacterContinuityGraph(input: StoryInput, bible: StoryBible, sh
   };
 }
 
-function getStartResourceCandidates(input: StoryInput) {
+function getStartResourceCandidates(
+  input: StoryInput,
+  resourceCandidates?: StoryGraphStartSettingsSnapshot["resourceCandidates"],
+) {
   const snapshot = input.settingsSnapshot as StoryGraphStartSettingsSnapshot | undefined;
-  const checkpoints = snapshot?.resourceCandidates?.checkpoints ?? [];
-  const loras = snapshot?.resourceCandidates?.loras ?? [];
+  const checkpoints = resourceCandidates?.checkpoints ?? snapshot?.resourceCandidates?.checkpoints ?? [];
+  const loras = resourceCandidates?.loras ?? snapshot?.resourceCandidates?.loras ?? [];
 
   if (checkpoints.length > 0) {
     return {
@@ -552,8 +429,11 @@ function getStartResourceCandidates(input: StoryInput) {
   };
 }
 
-function createResourcePlan(input: StoryInput): StoryResourcePlan {
-  const candidates = getStartResourceCandidates(input);
+function createResourcePlan(
+  input: StoryInput,
+  resourceCandidates?: StoryGraphStartSettingsSnapshot["resourceCandidates"],
+): StoryResourcePlan {
+  const candidates = getStartResourceCandidates(input, resourceCandidates);
   const checkpoint = candidates.checkpoints[0];
 
   return createStoryResourcePlan({
@@ -589,7 +469,7 @@ function createParameterPlan(input: StoryInput, resourcePlan: StoryResourcePlan,
   return createStoryParameterPlan({
     storyId: input.storyId,
     defaults: createStoryDefaultGenerationParameters({ input, resourcePlan, shots }),
-    warnings: ["Parameters are planning defaults and remain editable before execution is implemented."],
+    warnings: ["Parameters are planning defaults and remain editable before execution starts."],
   });
 }
 
@@ -633,19 +513,15 @@ function createGenerationGate(renderPlan: StoryRenderPlan): StoryGenerationGateP
     nsfwContext: renderPlan.nsfwContext,
     renderPlanShotCount: renderPlan.shots.length,
     previewEnabled: renderPlan.preview.options.enabled,
-    requestPreview: renderPlan.shots.map((shot) => ({
-      shotId: shot.shotId,
-      title: shot.title,
-      sourceShotIds: [...shot.sourceShotIds],
-      positivePrompt: shot.positivePrompt,
-      negativePrompt: shot.negativePrompt,
-      outputAnchors: shot.outputAnchors,
-      parameters: { ...shot.parameters },
-    })),
+    requestPreview: renderPlan.shots.map((shot) => createStoryGenerationRequestPreview(shot, renderPlan.img2imgDenoise)),
   };
 }
 
-export function createStoryPlanningArtifacts(input: StoryInput, timestamp = defaultTimestamp): StoryPlanningArtifacts {
+export function createStoryPlanningArtifacts(
+  input: StoryInput,
+  timestamp = defaultTimestamp,
+  resourceCandidates?: StoryGraphStartSettingsSnapshot["resourceCandidates"],
+): StoryPlanningArtifacts {
   const bible = createBible(input);
   const outline = createOutline(input);
   const shots = createShots(input, outline);
@@ -653,9 +529,10 @@ export function createStoryPlanningArtifacts(input: StoryInput, timestamp = defa
   const dependencyGraph = createDependencyGraph(input, shots);
   const plotStateGraph = createPlotStateGraph(input, outline, shots);
   const characterContinuityGraph = createCharacterContinuityGraph(input, bible, shots);
-  const resourcePlan = createResourcePlan(input);
+  const resourcePlan = createResourcePlan(input, resourceCandidates);
   const parameterPlan = createParameterPlan(input, resourcePlan, shots);
   const renderPlan = assembleStoryRenderPlan({
+    img2imgDenoise: getStoryInputImg2ImgDenoise(input),
     parameterPlan,
     resourcePlan,
     safetyPlan,
@@ -664,6 +541,7 @@ export function createStoryPlanningArtifacts(input: StoryInput, timestamp = defa
   const executionBatch = createStoryExecutionRequestBatch({
     mode: "final",
     renderPlan,
+    resourcePlan,
   });
   const consistencyCheck = createConsistencyCheck({
     dependencyGraph,
@@ -756,7 +634,11 @@ export function startStoryGraphWorkflow(request: StoryGraphStartRequest): StoryW
   const timestamp = input.settingsSnapshot && typeof input.settingsSnapshot === "object" && "capturedAt" in input.settingsSnapshot
     ? String((input.settingsSnapshot as { capturedAt: string }).capturedAt)
     : defaultNow();
-  const artifacts = createStoryPlanningArtifacts(input, timestamp);
+  const artifacts = createStoryPlanningArtifacts(
+    input,
+    timestamp,
+    request.settingsSnapshot?.resourceCandidates,
+  );
   const nodes = { ...workflow.nodes };
 
   for (const [nodeId, artifactKey] of Object.entries(artifactNodeMap) as Array<[StoryWorkflowNodeId, keyof StoryPlanningArtifacts]>) {

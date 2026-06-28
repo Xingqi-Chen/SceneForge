@@ -39,6 +39,11 @@ function formatWeightRange(resource: SelectedCivitaiResourcePreview) {
   return weights.length > 0 ? `- observedWeight: ${weights.join(", ")}` : null;
 }
 
+function formatExampleImageDimensions(resource: SelectedCivitaiResourcePreview) {
+  const dimensions = resource.exampleImageDimensions?.map((value) => value.trim()).filter(Boolean) ?? [];
+  return dimensions.length > 0 ? `- exampleImageDimensions: ${dimensions.join(", ")}` : null;
+}
+
 function formatRecommendation(recommendation: CivitaiResourceRecommendation) {
   const parts = [
     recommendation.condition ? `condition=${recommendation.condition}` : null,
@@ -66,6 +71,7 @@ function formatResourceForAi(resource: SelectedCivitaiResourcePreview, label: st
     `- tags: ${joinList(resource.tags)}`,
     `- categories: ${joinList(resource.categories)}`,
     formatWeightRange(resource),
+    formatExampleImageDimensions(resource),
     resource.usageGuide ? `- usageGuide: ${resource.usageGuide}` : null,
     resource.descriptionSnippet ? `- description: ${resource.descriptionSnippet}` : null,
     resource.recommendations.length > 0

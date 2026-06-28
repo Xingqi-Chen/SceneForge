@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LlmChatResponse } from "@/features/llm";
 import { confirmAndExecuteStoryGeneration } from "@/features/agent-timeline/story-api";
 import type { StoryShotExecutionAdapter } from "@/features/agent-timeline/story-execution";
+import type { StoryRenderPlan } from "@/features/agent-timeline/story-planning";
 import { runStoryPlanning } from "@/features/agent-timeline/story-runner";
 import type { StoryShotId } from "@/features/agent-timeline/story-types";
 
@@ -59,7 +60,7 @@ function planningResponses() {
       beatId: "beat-2",
       locationId: "market",
       characterIds: ["courier"],
-      sourceShotIds: ["shot-1"],
+      sourceShotIds: [],
       camera: "close",
       promptIntent: "dependent prompt",
       continuityNotes: [],
@@ -229,7 +230,7 @@ describe("POST /api/agent-timeline/story/regenerate-shot", () => {
   it("reruns only the selected shot and downstream dependent shots", async () => {
     const workflow = await createExecutedWorkflow();
     const executed = workflow.nodes["shot-graph-execution"].result as {
-      shots: Array<{ shotId: string; resultReference?: { promptId: string } }>;
+      shots: Array<{ shotId: string; resultReference?: { promptId: string }; sourceShotIds: string[] }>;
     };
 
     expect(executed.shots.map((shot) => shot.resultReference?.promptId)).toEqual([
@@ -237,10 +238,16 @@ describe("POST /api/agent-timeline/story/regenerate-shot", () => {
       "first-shot-2",
       "first-shot-3",
     ]);
+    executed.shots = executed.shots.map((shot) =>
+      shot.shotId === "shot-2"
+        ? { ...shot, sourceShotIds: [] }
+        : shot,
+    );
 
-    const calls: Array<{ shotId: string; sourcePromptIds: string[] }> = [];
+    const calls: Array<{ requestSourceShotIds: string[]; shotId: string; sourcePromptIds: string[] }> = [];
     comfyMocks.adapter.mockImplementation(({ request, sourceResults }: Parameters<StoryShotExecutionAdapter>[0]) => {
       calls.push({
+        requestSourceShotIds: [...request.sourceShotIds],
         shotId: request.shotId,
         sourcePromptIds: Object.values(sourceResults).map((reference) => reference.promptId),
       });
@@ -257,8 +264,8 @@ describe("POST /api/agent-timeline/story/regenerate-shot", () => {
     expect(response.status).toBe(200);
     expect(comfyMocks.adapter).toHaveBeenCalledTimes(2);
     expect(calls).toEqual([
-      { shotId: "shot-1", sourcePromptIds: [] },
-      { shotId: "shot-2", sourcePromptIds: ["regen-shot-1"] },
+      { requestSourceShotIds: [], shotId: "shot-1", sourcePromptIds: [] },
+      { requestSourceShotIds: ["shot-1"], shotId: "shot-2", sourcePromptIds: ["regen-shot-1"] },
     ]);
     expect(nextExecution.shots.map((shot: { resultReference?: { promptId: string } }) => shot.resultReference?.promptId)).toEqual([
       "regen-shot-1",
@@ -269,6 +276,44 @@ describe("POST /api/agent-timeline/story/regenerate-shot", () => {
       expect.objectContaining({ shotId: "shot-1", promptId: "regen-shot-1" }),
       expect.objectContaining({ shotId: "shot-2", promptId: "regen-shot-2" }),
       expect.objectContaining({ shotId: "shot-3", promptId: "first-shot-3" }),
+    ]);
+  });
+
+  it("uses the approved Story render plan prompts during scoped regeneration", async () => {
+    const workflow = await createExecutedWorkflow();
+    const renderPlan = workflow.nodes["story-render-plan"].result as StoryRenderPlan;
+    renderPlan.shots = renderPlan.shots.map((shot, index) => ({
+      ...shot,
+      positivePrompt: `approved regeneration positive prompt ${index + 1}`,
+      negativePrompt: `approved regeneration negative prompt ${index + 1}`,
+    }));
+    const prompts: Array<{ negativePrompt?: string; positivePrompt: string; shotId: string }> = [];
+    comfyMocks.adapter.mockImplementation(({ request }: Parameters<StoryShotExecutionAdapter>[0]) => {
+      prompts.push({
+        negativePrompt: request.request.negativePrompt,
+        positivePrompt: request.request.positivePrompt,
+        shotId: request.shotId,
+      });
+      return adapterResult(request.shotId, "regen");
+    });
+
+    const response = await POST(new Request("http://localhost/api/agent-timeline/story/regenerate-shot", {
+      method: "POST",
+      body: JSON.stringify({ workflow, shotId: "shot-1" }),
+    }));
+
+    expect(response.status).toBe(200);
+    expect(prompts).toEqual([
+      {
+        negativePrompt: "approved regeneration negative prompt 1",
+        positivePrompt: "approved regeneration positive prompt 1",
+        shotId: "shot-1",
+      },
+      {
+        negativePrompt: "approved regeneration negative prompt 2",
+        positivePrompt: "approved regeneration positive prompt 2",
+        shotId: "shot-2",
+      },
     ]);
   });
 

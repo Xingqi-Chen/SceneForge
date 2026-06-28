@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { LlmChatResponse } from "@/features/llm";
 import type { StoryShotExecutionAdapter } from "@/features/agent-timeline/story-execution";
+import type { StoryRenderPlan } from "@/features/agent-timeline/story-planning";
 import { runStoryPlanning } from "@/features/agent-timeline/story-runner";
 import type { StoryShotId } from "@/features/agent-timeline/story-types";
 
@@ -46,7 +47,7 @@ function planningResponses(shotCount = 2) {
       beatId: `beat-${order}`,
       locationId: "market",
       characterIds: ["courier"],
-      sourceShotIds: order === 2 ? ["shot-1"] : [],
+      sourceShotIds: [],
       camera: order === 1 ? "wide" : "close",
       promptIntent: `prompt ${order}`,
       continuityNotes: [],
@@ -242,6 +243,44 @@ describe("POST /api/agent-timeline/story/confirm-generation", () => {
     });
   });
 
+  it("executes the approved Story render plan prompts", async () => {
+    const workflow = await createReadyWorkflow();
+    const renderPlan = workflow.nodes["story-render-plan"].result as StoryRenderPlan;
+    renderPlan.shots = renderPlan.shots.map((shot, index) => ({
+      ...shot,
+      positivePrompt: `approved positive prompt ${index + 1}`,
+      negativePrompt: `approved negative prompt ${index + 1}`,
+    }));
+    const prompts: Array<{ negativePrompt?: string; positivePrompt: string; shotId: string }> = [];
+    comfyMocks.adapter.mockImplementation(({ request }: Parameters<StoryShotExecutionAdapter>[0]) => {
+      prompts.push({
+        negativePrompt: request.request.negativePrompt,
+        positivePrompt: request.request.positivePrompt,
+        shotId: request.shotId,
+      });
+      return adapterResult(request.shotId);
+    });
+
+    const routeResponse = await POST(new Request("http://localhost/api/agent-timeline/story/confirm-generation", {
+      method: "POST",
+      body: JSON.stringify({ workflow }),
+    }));
+
+    expect(routeResponse.status).toBe(200);
+    expect(prompts).toEqual([
+      {
+        negativePrompt: "approved negative prompt 1",
+        positivePrompt: "approved positive prompt 1",
+        shotId: "shot-1",
+      },
+      {
+        negativePrompt: "approved negative prompt 2",
+        positivePrompt: "approved positive prompt 2",
+        shotId: "shot-2",
+      },
+    ]);
+  });
+
   it("does not reuse forged submitted execution state when confirming generation", async () => {
     const workflow = await createReadyWorkflow();
     workflow.nodes["shot-graph-execution"] = {
@@ -270,7 +309,7 @@ describe("POST /api/agent-timeline/story/confirm-generation", () => {
           },
           {
             shotId: "shot-2",
-            sourceShotIds: ["shot-1"],
+            sourceShotIds: [],
             status: "blocked",
           },
         ],
@@ -280,9 +319,10 @@ describe("POST /api/agent-timeline/story/confirm-generation", () => {
       },
       status: "done",
     };
-    const calls: Array<{ shotId: string; sourcePromptIds: string[] }> = [];
+    const calls: Array<{ requestSourceShotIds: string[]; shotId: string; sourcePromptIds: string[] }> = [];
     comfyMocks.adapter.mockImplementation(({ request, sourceResults }: Parameters<StoryShotExecutionAdapter>[0]) => {
       calls.push({
+        requestSourceShotIds: [...request.sourceShotIds],
         shotId: request.shotId,
         sourcePromptIds: Object.values(sourceResults).map((reference) => reference.promptId),
       });
@@ -297,8 +337,8 @@ describe("POST /api/agent-timeline/story/confirm-generation", () => {
 
     expect(routeResponse.status).toBe(200);
     expect(calls).toEqual([
-      { shotId: "shot-1", sourcePromptIds: [] },
-      { shotId: "shot-2", sourcePromptIds: ["fresh-shot-1"] },
+      { requestSourceShotIds: [], shotId: "shot-1", sourcePromptIds: [] },
+      { requestSourceShotIds: ["shot-1"], shotId: "shot-2", sourcePromptIds: ["fresh-shot-1"] },
     ]);
     expect(payload.workflow.nodes["story-result-display"].result.finalReferences).toEqual([
       expect.objectContaining({ shotId: "shot-1", promptId: "fresh-shot-1" }),

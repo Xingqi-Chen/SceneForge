@@ -2,6 +2,173 @@
 
 This log records dated implementation and documentation work. Keep entries concise and evidence-oriented.
 
+## 2026-06-28
+
+### T23B / Issue #90 Story Render Plan Anima Prompt Parts
+
+Summary:
+
+- Replaced Story render-plan LLM `promptSections` with per-shot `animaPromptParts`.
+- Added deterministic Story Anima prompt compilation with the recommended Anima prefix, Anima-style subject/character/series/artist/general order, caption inclusion, and negative additions merged only into the negative prompt.
+- Strengthened render-plan LLM guidance to avoid repeating the same visible object, action, setting, camera, lighting, or style wording across tag arrays and the single-frame caption.
+- Tightened Story render LLM guidance so `actionTags` and `singleFrameCaption` describe a frozen single-frame tableau instead of ongoing motion or transition phrases.
+- Removed Story start label parsing and event-count estimation from automatic shot count; blank shot count now leaves `Beat 1:` / `Final image:` text in `rawIntent` for the LLM outline step to interpret.
+- Fixed Story generation confirmation and scoped regeneration to execute the approved `story-render-plan` prompts instead of rebuilding prompts from upstream storyboard nodes.
+- Hardened Anima render prompt parsing for snake_case LLM output and empty prompt-part responses, with storyboard fallback warnings instead of prefix-only prompts.
+- Restored Civitai AI prompt instruction and response parser regression coverage.
+- Updated Story Visual shot cards to display Anima prompt parts alongside final prompts and prompt health.
+
+Validation:
+
+- `npm test -- src/features/agent-timeline/story-input.test.ts src/features/agent-timeline/story-llm-adapters.test.ts` passed with 2 files and 42 tests.
+- `npm test -- src/app/api/agent-timeline/story/confirm-generation/route.test.ts src/app/api/agent-timeline/story/regenerate-shot/route.test.ts src/features/agent-timeline/story-llm-adapters.test.ts src/features/agent-timeline/story-planning.test.ts src/features/editor/ai-prompt/civitai-ai-context.test.ts` passed with 5 files and 77 tests.
+- `npm test -- src/features/agent-timeline src/app/api/agent-timeline/story` passed with 30 files and 262 tests.
+- `npm test -- src/features/civitai-lora-library src/features/editor/ai-prompt/civitai-ai-context.test.ts` passed with 11 files and 52 tests.
+- `npm test` passed with 120 files and 928 tests.
+- `npm run typecheck` passed.
+- `npm run lint` passed with 23 existing warnings.
+- tester-agent returned PASS and reviewer-agent returned APPROVE during merge-prep review.
+
+### T23D / Issue #92 Story Visual Output Shot Cards
+
+Summary:
+
+- Redesigned Story render plan, generation gate, shot execution, and result Visual summaries around compact shot cards.
+- Added prompt health indicators for missing identity/action/setting/camera/lighting, empty or short tag-list prompts, hardcoded-looking prompt fragments, positive/negative conflicts, removed negative conflicts, and high-risk source-image inheritance.
+- Kept Raw JSON as the complete debug/artifact view while Visual hides ComfyUI node ids, queue prompt ids, temporary view URLs, and workflow internals.
+- Updated Story execution/result Visual panels to prefer stored image URLs and avoid displaying prompt ids.
+
+Validation:
+
+- `npm test -- src/features/agent-timeline/story-node-output-summary.test.ts src/features/agent-timeline/components/StoryNodeOutputSummaryView.test.tsx` passed with 2 files and 7 tests.
+- `npm test -- src/features/agent-timeline/components/StoryPlanningPreview.test.tsx` passed with 1 file and 13 tests.
+- `npm test -- src/features/agent-timeline` passed with 27 files and 243 tests.
+- `npm run typecheck` passed.
+- `npm run lint` passed with 23 existing warnings.
+
+### T23C / Issue #91 Story Source-image Risk Decisions
+
+Summary:
+
+- Added deterministic Story source-image risk metadata for major pose/action, camera, composition, and scene reset transitions.
+- Downgraded automatic high-risk `img2img-source` dependency output to planning-only continuity while preserving manual high-risk source edges with warnings.
+- Added generation-gate and visual-summary source risk metadata including risk level, reason, factors, and source chain.
+
+Validation:
+
+- `npm test -- --run src/features/agent-timeline/story-llm-adapters.test.ts src/features/agent-timeline/story-planning.test.ts src/features/agent-timeline/story-node-output-summary.test.ts` passed with 3 files and 61 tests.
+- `npm test -- --run src/features/agent-timeline` passed with 26 files and 240 tests.
+- `npm run typecheck` passed.
+- `npm run lint` passed with 23 existing warnings.
+
+### T23B / Issue #90 Story Anima Natural Visual Clauses
+
+Summary:
+
+- Updated Story render LLM instructions so Anima sections ask for compact comma-separated English visual clauses instead of 1-6 word tag fragments.
+- Strengthened Story Anima prompt guidance for adult/age context, distinct multi-character visible descriptions, wardrobe, pose/action, props, location, camera, and lighting.
+- Added deterministic negative-addition conflict filtering and warnings when render-plan negatives undermine positive key props, actions, clothing, or environments.
+
+Validation:
+
+- `npm test -- --run src/features/agent-timeline/story-llm-adapters.test.ts src/features/agent-timeline/story-planning.test.ts` passed with 2 files and 53 tests.
+- `npm run typecheck` passed.
+- `npm run lint` passed with 23 existing warnings.
+
+### T23A / Issue #89 Story Graph Output Contracts
+
+Summary:
+
+- Tightened Story result visual summaries so stored image locations or filenames are shown without falling back to ComfyUI temporary view URLs.
+- Added regression coverage for compact Story render plans, authoritative `resource-plan` execution assembly, legacy per-shot resource compatibility, and Visual-vs-Raw debug boundaries.
+- Documented that Story visual summaries hide ComfyUI node ids, temporary URLs, and workflow internals while Raw JSON remains available.
+
+Validation:
+
+- `npm test -- --run src/features/agent-timeline/story-planning.test.ts src/features/agent-timeline/story-node-output-summary.test.ts` passed with 2 files and 32 tests.
+- `npm test -- --run src/app/api/agent-timeline/story/confirm-generation/route.test.ts src/app/api/agent-timeline/story/regenerate-shot/route.test.ts` passed with 2 files and 8 tests.
+- `npm run typecheck` passed.
+- `npm run lint` passed with existing warnings only.
+
+### Story Graph Code-node Optimization
+
+Summary:
+
+- Added anchor-aware Story render prompt compaction so required shot identity, wardrobe, props, action, environment, camera, and lighting anchors are inserted before optional prompt details and missing-anchor coverage is surfaced as non-blocking warnings.
+- Reversed the Shot Dependency Graph LLM/UI behavior so `img2img-source` is used only for executable source-image inheritance while `reference`, `continuity`, `story-order`, and `manual` reasons remain editable and non-executable.
+- Removed local content-keyword Story resolution inference; local defaults now use explicit numeric dimensions from the request or selected resource metadata, otherwise the neutral story default, leaving Anima/story aspect choices to the LLM parameter-plan node.
+- Expanded resource and parameter planning prompts/payloads with selected resource metadata so the LLM can choose LoRA weights and one story-level resolution from checkpoint/LoRA guidance without local style/type caps.
+
+Validation:
+
+- `npm test -- --run src/features/agent-timeline/story-planning.test.ts src/features/agent-timeline/story-llm-adapters.test.ts src/features/agent-timeline/components/StoryPlanningWorkspace.test.tsx` passed with 3 files and 50 tests.
+- `npm test -- --run src/features/agent-timeline` passed with 26 files and 224 tests.
+- `npm test -- --run src/app/api/agent-timeline/story` passed with 3 files and 11 tests.
+- `npm run typecheck` passed.
+- `npm run lint` passed with existing warnings only.
+
+## 2026-06-27
+
+### Story Node Output Slimming
+
+Summary:
+
+- Added compact Story node summaries for all 15 Story workflow nodes and wired `/story` Visual Step output to summary-first rendering with collapsible artifact editing.
+- Removed new-workflow persistence of full `settingsSnapshot.resourceCandidates`; Story input now keeps candidate counts while Story planning passes candidates transiently to resource planning.
+- Slimmed Story render plans and generation gate previews by replacing per-shot full resource objects with lightweight resource references and replacing full gate prompt/anchor copies with prompt preview text and prompt lengths.
+- Kept execution correctness by assembling ComfyUI requests from the authoritative `resource-plan` result, with legacy per-shot render-plan resources still tolerated for old workflow records.
+
+Validation:
+
+- `npm test -- --run src/features/agent-timeline` passed with 26 files and 220 tests.
+- `npm test -- --run src/app/api/agent-timeline/story` passed with 3 files and 11 tests.
+- `npm run typecheck` passed.
+- `npm run lint` passed with existing warnings only.
+
+### Story Graph Fallback Start Removal
+
+Summary:
+
+- Removed the `/story` `Load fallback` sample start action so Story Graph planning starts only from user-entered or AI-suggested story requests.
+- Updated the Story Planning Preview regression coverage and technical spec to match the simplified start surface.
+
+Validation:
+
+- `npm test -- --run src/features/agent-timeline/components/StoryPlanningPreview.test.tsx` passed with 12 tests.
+
+### T21 / Issue #66 Story Source-shot img2img Regression
+
+Summary:
+
+- Verified the Story Graph execution path already rebuilds render plans from `img2img-source` dependency edges and injects source shot results into downstream execution.
+- Strengthened confirmation and scoped-regeneration regressions so graph-only `img2img-source` edges, even when storyboard `sourceShotIds` are empty, must reach `StoryExecutionRequest.sourceShotIds` and downstream source results.
+- Updated deterministic Story planning copy to describe executable source-shot dependencies now that Story execution exists.
+
+Validation:
+
+- `npm test -- --run src/features/agent-timeline/story-input.test.ts src/features/agent-timeline/story-llm-adapters.test.ts src/features/agent-timeline/story-execution.test.ts src/features/agent-timeline/story-comfyui-execution.test.ts src/app/api/agent-timeline/story/confirm-generation/route.test.ts src/app/api/agent-timeline/story/regenerate-shot/route.test.ts` passed with 6 files and 55 tests.
+- `npm run typecheck` passed.
+- `npm run lint` passed with existing warnings only.
+- `npm test` passed with 117 files and 894 tests.
+
+### Story Dependency Reason Optimization
+
+Summary:
+
+- Scoped the Story Graph shot dependency node to executable source-image dependencies only, so new LLM output and manual UI edits use `img2img-source` instead of planning-only `reference`, `continuity`, or `story-order` reasons.
+- Refined the dependency graph LLM instruction so consecutive shots with the same main character, same location, or continuous action normally produce `img2img-source` edges unless the later shot intentionally resets scene/composition or is prompt-only continuity.
+- Set Story source-image execution requests to denoise `0.9` while leaving prompt-only txt2img shots on their planned denoise value.
+- Kept legacy non-action reasons parseable for old workflow records while coercing saved Shot Dependency workspace edits to `img2img-source`.
+- Updated product and technical specs to document that prompt-only continuity belongs in shot notes, plot state, or character continuity rather than shot dependency edges.
+
+Validation:
+
+- `npm test -- --run src/features/agent-timeline/story-llm-adapters.test.ts src/features/agent-timeline/components/StoryPlanningWorkspace.test.tsx src/features/agent-timeline/story-workflow.test.ts src/features/agent-timeline/story-state.test.ts` passed with 4 files and 35 tests.
+- `npm test -- --run src/features/agent-timeline/story-planning.test.ts` passed with 1 file and 22 tests.
+- `npm test -- --run src/app/api/agent-timeline/story/confirm-generation/route.test.ts src/app/api/agent-timeline/story/regenerate-shot/route.test.ts` passed with 2 files and 8 tests.
+- `npm run typecheck` passed.
+- `npm run lint` passed with existing warnings only.
+
 ## 2026-06-26
 
 ### Issue #85 Story Graph Workflow Persistence

@@ -528,7 +528,7 @@ describe("T7 timeline adapters", () => {
     });
   });
 
-  it("defaults img2img parameter recommendations to denoise 0.6 with source image metadata", () => {
+  it("defaults img2img parameter recommendations to denoise 0.9 with source image metadata", () => {
     const checkpoint = makeResource("model", "checkpoint-local", "Local Checkpoint");
     const resourceResult: ResourceRecommendationTimelineResult = {
       checkpoint: {
@@ -563,12 +563,12 @@ describe("T7 timeline adapters", () => {
       },
     });
 
-    expect(result.denoise).toBe(0.6);
+    expect(result.denoise).toBe(0.9);
     expect(result.width).toBe(1024);
     expect(result.height).toBe(768);
     expect(result.requestPreview).toMatchObject({
       batchSize: 1,
-      denoise: 0.6,
+      denoise: 0.9,
       width: 1024,
       height: 768,
       imageWidth: 1025,

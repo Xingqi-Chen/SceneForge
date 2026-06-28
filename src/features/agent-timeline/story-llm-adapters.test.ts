@@ -3,8 +3,11 @@ import { describe, expect, it } from "vitest";
 import { LiteLlmError, type LlmChatResponse } from "@/features/llm";
 
 import {
+  createStoryGenerationGateFromWorkflow,
+  createStoryRenderPlanFromWorkflow,
   createStoryLlmNodeAdapters,
   normalizeStoryParameterPlan,
+  normalizeStoryRenderPromptPlan,
   normalizeShotDependencyGraph,
   normalizeStoryBible,
   normalizeStoryResourcePlan,
@@ -15,7 +18,12 @@ import { createStoryWorkflowState } from "./story-state";
 import {
   TimelineNodeExecutionError,
 } from "./types";
-import type { StoryParameterPlan } from "./story-planning";
+import {
+  createStoryParameterPlan,
+  createStoryResourcePlan,
+  type StoryParameterPlan,
+  type StoryRenderPlan,
+} from "./story-planning";
 import type {
   StoryInput,
   StoryShot,
@@ -49,6 +57,23 @@ const input = {
           baseModel: "Illustrious",
           modelFileName: "local-lora.safetensors",
           trainedWords: ["neon market"],
+          usageGuide: "Use around 0.65 for neon signage without overpowering characters.",
+          averageWeight: 0.65,
+          minWeight: 0.45,
+          maxWeight: 0.85,
+          recommendations: [
+            {
+              condition: "Neon story continuity",
+              baseModel: "Illustrious",
+              checkpoint: "Local Checkpoint",
+              sampler: null,
+              loraWeightMin: 0.45,
+              loraWeightMax: 0.85,
+              loraWeight: 0.65,
+              hdRedrawRate: null,
+              notes: "Use lower weights when character identity is more important than signage.",
+            },
+          ],
         },
       ],
     },
@@ -174,7 +199,7 @@ describe("story LLM adapters", () => {
     });
   });
 
-  it("asks Story planning nodes for concrete visual anchors and executable source semantics", async () => {
+  it("asks Story planning nodes for concrete visual anchors and selective source semantics", async () => {
     const workflow = createStoryWorkflowState({ storyId: "story-1", workflowId: "workflow-1" });
     const bible = normalizeStoryBible(
       {
@@ -263,7 +288,14 @@ describe("story LLM adapters", () => {
     expect(systemPrompts.join("\n")).toContain("do not invent extra visible people");
     expect(systemPrompts.join("\n")).not.toContain("Show only");
     expect(systemPrompts.join("\n")).toContain("ordinary story order and continuity do not need sourceShotIds");
-    expect(systemPrompts.join("\n")).toContain("Do not mark ordinary sequential story beats as img2img-source");
+    expect(systemPrompts.join("\n")).toContain("standing to kneeling");
+    expect(systemPrompts.join("\n")).toContain("close-up to wide shot");
+    expect(systemPrompts.join("\n")).toContain("Create a shot dependency graph using only supplied shot ids");
+    expect(systemPrompts.join("\n")).toContain('Use reason "img2img-source" only when the later shot should receive the earlier generated image');
+    expect(systemPrompts.join("\n")).toContain("Never use img2img-source for high-risk source-image transitions");
+    expect(systemPrompts.join("\n")).toContain("planning-only reasons must remain non-executable");
+    expect(systemPrompts.join("\n")).toContain('"reason":"img2img-source|reference|continuity|story-order|manual"');
+    expect(systemPrompts.join("\n")).not.toContain('Every returned edge must use reason "img2img-source"');
   });
 
   it("passes explicit storySegments to outline and storyboard LLM payloads", async () => {
@@ -352,18 +384,125 @@ describe("story LLM adapters", () => {
     });
 
     expect(payloads[0]).toMatchObject({
-      targetShotCount: 2,
-      shotCountMode: "explicit-structure",
+      shotCountMode: "provided-story-segments",
       storySegments: segmentedInput.storySegments,
     });
+    expect(payloads[0]).not.toHaveProperty("targetShotCount");
     expect(payloads[1]).toMatchObject({
-      targetShotCount: 2,
-      shotCountMode: "explicit-structure",
+      shotCountMode: "provided-story-segments",
       storySegments: segmentedInput.storySegments,
     });
+    expect(payloads[1]).not.toHaveProperty("targetShotCount");
   });
 
-  it("limits auto-count Story shots to content-estimated beats instead of padding to three", () => {
+  it("does not pass a local estimated target shot count when the user leaves shots blank", async () => {
+    const inlineStory = "Context before the labeled sequence. Beat 1: The student finds the missing photo at her desk. Beat 2: The student reprints the photo at the copy shop. Beat 3: The student finishes the collage at a cafe table. Beat 4: The student offers the wrapped collage on a side street. Final image: Her friend opens the collage in sunset light.";
+    const autoInput = {
+      ...input,
+      rawIntent: inlineStory,
+      targetShotCount: undefined,
+      storyContext: undefined,
+      storySegments: undefined,
+    } satisfies StoryInput;
+    const workflow = createStoryWorkflowState({ storyId: "story-1", workflowId: "workflow-llm-count" });
+    const bible = normalizeStoryBible(
+      {
+        title: "Photo Collage",
+        logline: "A student completes a collage.",
+        characters: [{ id: "student", name: "Student", description: "A college student with a collage." }],
+        locations: [{ id: "campus", name: "Campus", description: "A campus sequence." }],
+      },
+      autoInput,
+    );
+    const outline = {
+      storyId: autoInput.storyId,
+      beats: [
+        { id: "beat-1", title: "Beat 1", summary: "The student finds the missing photo.", order: 1, characterIds: ["student"] },
+        { id: "beat-2", title: "Beat 2", summary: "The student reprints the photo.", order: 2, characterIds: ["student"] },
+        { id: "beat-3", title: "Beat 3", summary: "The student finishes the collage.", order: 3, characterIds: ["student"] },
+        { id: "beat-4", title: "Beat 4", summary: "The student offers the wrapped collage.", order: 4, characterIds: ["student"] },
+        { id: "final-image", title: "Final image", summary: "Her friend opens the collage.", order: 5, characterIds: ["student"] },
+      ],
+    };
+    const payloads: Array<Record<string, unknown>> = [];
+    const systemPrompts: string[] = [];
+    const adapters = createStoryLlmNodeAdapters({
+      completeChat: async (request) => {
+        const systemContent = request.messages[0]?.content;
+        const userContent = request.messages[1]?.content;
+        systemPrompts.push(typeof systemContent === "string" ? systemContent : "");
+        payloads.push(typeof userContent === "string" ? JSON.parse(userContent) as Record<string, unknown> : {});
+        return chatResponse(JSON.stringify({
+          beats: outline.beats,
+          shots: outline.beats.map((beat) => ({
+            id: beat.id.replace("beat", "shot"),
+            order: beat.order,
+            title: beat.title,
+            description: beat.summary,
+            beatId: beat.id,
+            locationId: "campus",
+            characterIds: ["student"],
+            sourceShotIds: [],
+            camera: "medium frame",
+            promptIntent: beat.summary,
+            continuityNotes: [],
+          })),
+          title: "Photo Collage",
+          logline: "A student completes a collage.",
+          characters: bible.characters,
+          locations: bible.locations,
+        }));
+      },
+    });
+    workflow.nodes["story-input"] = {
+      nodeId: "story-input",
+      result: autoInput,
+      source: "manual",
+      status: "manual",
+      updatedAt: workflow.updatedAt,
+    };
+    workflow.nodes["story-bible"] = {
+      nodeId: "story-bible",
+      result: bible,
+      source: "ai",
+      status: "done",
+      updatedAt: workflow.updatedAt,
+    };
+    workflow.nodes["story-outline"] = {
+      nodeId: "story-outline",
+      result: outline,
+      source: "ai",
+      status: "done",
+      updatedAt: workflow.updatedAt,
+    };
+
+    await adapters["story-outline"]?.({
+      nodeId: "story-outline",
+      workflow,
+      dependencies: [workflow.nodes["story-bible"]],
+    });
+    await adapters["storyboard-shots"]?.({
+      nodeId: "storyboard-shots",
+      workflow,
+      dependencies: [workflow.nodes["story-outline"]],
+    });
+
+    expect(payloads[0]).toMatchObject({
+      shotCountMode: "llm-decides",
+      storySegments: [],
+    });
+    expect(payloads[0]).not.toHaveProperty("targetShotCount");
+    expect(payloads[1]).toMatchObject({
+      shotCountMode: "llm-decides",
+      storySegments: [],
+    });
+    expect(payloads[1]).not.toHaveProperty("targetShotCount");
+    expect(systemPrompts.join("\n")).toContain("local code has not parsed labels");
+    expect(systemPrompts.join("\n")).toContain("Beat 1:");
+    expect(systemPrompts.join("\n")).not.toContain("estimated target");
+  });
+
+  it("limits LLM-decided Story shots to outline beats instead of padding to three", () => {
     const autoInput = {
       ...input,
       rawIntent: "Maya waits at a rainy bus stop.",
@@ -574,6 +713,102 @@ describe("story LLM adapters", () => {
     });
   });
 
+  it("uses transient resource candidates when Story input stores only candidate counts", async () => {
+    const lightInput = {
+      ...input,
+      settingsSnapshot: {
+        resourceCandidateCounts: {
+          checkpoints: 1,
+          loras: 1,
+        },
+      },
+    } satisfies StoryInput;
+    const workflow = createStoryWorkflowState({ storyId: "story-1", workflowId: "workflow-1" });
+    workflow.nodes["story-input"] = {
+      nodeId: "story-input",
+      result: lightInput,
+      source: "manual",
+      status: "manual",
+      updatedAt: workflow.updatedAt,
+    };
+    workflow.nodes["storyboard-shots"] = {
+      nodeId: "storyboard-shots",
+      result: shots,
+      source: "ai",
+      status: "done",
+      updatedAt: workflow.updatedAt,
+    };
+    workflow.nodes["story-safety-plan"] = {
+      nodeId: "story-safety-plan",
+      result: {
+        storyId: "story-1",
+        audienceRating: "safe",
+        contentWarnings: [],
+        blockedContent: [],
+        perShotNotes: [],
+        nsfwContext: {
+          enabled: false,
+          rationale: "Safe test context.",
+        },
+      },
+      source: "ai",
+      status: "done",
+      updatedAt: workflow.updatedAt,
+    };
+    let requestPayload: unknown;
+    const resourceCandidates = input.settingsSnapshot.resourceCandidates;
+    const adapters = createStoryLlmNodeAdapters({
+      completeChat: async (request) => {
+        const content = request.messages[1]?.content;
+        requestPayload = typeof content === "string" ? JSON.parse(content) : {};
+        return chatResponse(JSON.stringify({
+          checkpoint: { resource: { id: "checkpoint-local" }, reason: "Local checkpoint." },
+          loras: [{ resource: { id: "lora-local" }, reason: "Local LoRA.", suggestedWeight: 0.6 }],
+          recommendationReason: "Use real resources.",
+          overallEffect: "Neon continuity.",
+          warnings: [],
+        }));
+      },
+      resourceCandidates,
+    });
+
+    const result = await adapters["resource-plan"]?.({
+      nodeId: "resource-plan",
+      workflow,
+      dependencies: [workflow.nodes["story-safety-plan"], workflow.nodes["storyboard-shots"]],
+    });
+
+    expect(requestPayload).toMatchObject({
+      candidates: {
+        checkpoints: [expect.objectContaining({ id: "checkpoint-local" })],
+        loras: [
+          expect.objectContaining({
+            id: "lora-local",
+            averageWeight: 0.65,
+            usageGuide: "Use around 0.65 for neon signage without overpowering characters.",
+            recommendations: [
+              expect.objectContaining({
+                loraWeight: 0.65,
+                notes: "Use lower weights when character identity is more important than signage.",
+              }),
+            ],
+          }),
+        ],
+      },
+      input: {
+        settingsSnapshot: {
+          resourceCandidateCounts: {
+            checkpoints: 1,
+            loras: 1,
+          },
+        },
+      },
+    });
+    expect(JSON.stringify(requestPayload)).not.toContain("resourceCandidates");
+    expect((result as { value?: { checkpoint?: { resource?: { id?: string } } } } | undefined)?.value?.checkpoint?.resource?.id)
+      .toBe("checkpoint-local");
+  });
+
   it("constrains parameter planning to live sampler and scheduler options", async () => {
     const workflow = createStoryWorkflowState({ storyId: "story-1", workflowId: "workflow-1" });
     workflow.nodes["story-input"] = {
@@ -650,7 +885,7 @@ describe("story LLM adapters", () => {
     });
   });
 
-  it("passes model-family sampler defaults into the parameter-plan LLM prompt", async () => {
+  it("passes selected resource context and one story-level resolution requirements into parameter planning", async () => {
     const animaInput = {
       ...input,
       settingsSnapshot: {
@@ -663,6 +898,7 @@ describe("story LLM adapters", () => {
               modelBaseModel: "Anima",
               modelFileName: "anima.safetensors",
               usageGuide: "Use 768x1152 for portrait story panels with this checkpoint.",
+              exampleImageDimensions: ["768x1152 (4 examples)", "1152x768"],
             },
           ],
           loras: [],
@@ -701,8 +937,10 @@ describe("story LLM adapters", () => {
       updatedAt: workflow.updatedAt,
     };
     let requestPayload: unknown;
+    let requestSystemPrompt = "";
     const adapters = createStoryLlmNodeAdapters({
       completeChat: async (request) => {
+        requestSystemPrompt = typeof request.messages[0]?.content === "string" ? request.messages[0].content : "";
         const content = request.messages[1]?.content;
         requestPayload = typeof content === "string" ? JSON.parse(content) : {};
         return chatResponse(JSON.stringify({
@@ -734,10 +972,26 @@ describe("story LLM adapters", () => {
         scheduler: "simple",
       },
       selectedResourceParameterContext: expect.stringContaining("Checkpoint:"),
+      selectedResources: {
+        checkpoint: expect.objectContaining({
+          id: "checkpoint-anima",
+          usageGuide: "Use 768x1152 for portrait story panels with this checkpoint.",
+          exampleImageDimensions: ["768x1152 (4 examples)", "1152x768"],
+        }),
+      },
     });
     expect(requestPayload).toMatchObject({
       selectedResourceParameterContext: expect.stringContaining("Use 768x1152"),
     });
+    expect(requestPayload).toMatchObject({
+      selectedResourceParameterContext: expect.stringContaining("exampleImageDimensions: 768x1152 (4 examples), 1152x768"),
+    });
+    expect(requestSystemPrompt).toContain("one story-level generation resolution");
+    expect(requestSystemPrompt).toContain("exampleImageDimensions");
+    expect(requestSystemPrompt).toContain("stronger evidence than modelDefaultParameters");
+    expect(requestSystemPrompt).toContain("put resolution only in defaults and never include width or height in perShotOverrides");
+    expect(requestSystemPrompt).toContain("local code will not infer resolution from scene keywords");
+    expect(requestSystemPrompt).toContain("Put a brief resolution rationale in warnings");
     expect(parameterPlan?.defaults).toMatchObject({
       width: 768,
       height: 1152,
@@ -746,6 +1000,329 @@ describe("story LLM adapters", () => {
       samplerName: "er_sde",
       scheduler: "simple",
     });
+  });
+
+  it("normalizes structured render Anima prompt parts from LLM output without truncating tags", () => {
+    const longVisibleTag = "very long but still atomic visible tag describing a reflective courier jacket with exact badge stitching and wet fabric folds";
+    const plan = normalizeStoryRenderPromptPlan(
+      {
+        shots: [
+          {
+            shot_id: "shot-1",
+            anima_prompt_parts: {
+              subject_tags: ["1boy", "solo", "solo"],
+              character_tags: [" courier in reflective jacket ", "", longVisibleTag],
+              prop_tags: ["red signal card"],
+              negative_additions: ["cropped signal"],
+              single_frame_caption: " The courier studies the red signal card in rain. ",
+            },
+          },
+          {
+            shot_id: "shot-2",
+            anima_prompt_parts: {
+              action_tags: ["leans toward reflected signal"],
+              camera_tags: ["low close view"],
+              single_frame_caption: "The courier leans toward the reflected signal.",
+            },
+          },
+          {
+            shotId: "shot-missing",
+            animaPromptParts: {
+              characterTags: ["unknown subject"],
+            },
+          },
+        ],
+        warnings: ["Use naturalized visual anchors."],
+      },
+      input,
+      shots,
+    );
+
+    expect(plan).toMatchObject({
+      storyId: "story-1",
+      warnings: ["Use naturalized visual anchors."],
+      shots: [
+        {
+          shotId: "shot-1",
+          animaPromptParts: {
+            subjectTags: ["1boy", "solo"],
+            characterTags: ["courier in reflective jacket", longVisibleTag],
+            propTags: ["red signal card"],
+            singleFrameCaption: "The courier studies the red signal card in rain.",
+            negativeAdditions: ["cropped signal"],
+          },
+        },
+        {
+          shotId: "shot-2",
+          animaPromptParts: {
+            actionTags: ["leans toward reflected signal"],
+            cameraTags: ["low close view"],
+            singleFrameCaption: "The courier leans toward the reflected signal.",
+          },
+        },
+      ],
+    });
+  });
+
+  it("falls back when an LLM returns empty Anima prompt parts for a matched shot", () => {
+    const plan = normalizeStoryRenderPromptPlan(
+      {
+        shots: [
+          {
+            shotId: "shot-1",
+            animaPromptParts: {},
+          },
+        ],
+      },
+      input,
+      shots,
+    );
+
+    expect(plan.shots[0]).toMatchObject({
+      shotId: "shot-1",
+      animaPromptParts: {
+        actionTags: ["neon market arrival"],
+        cameraTags: ["wide"],
+        singleFrameCaption: "The courier enters the market.",
+      },
+      warnings: ["LLM returned empty animaPromptParts; used storyboard prompt fallback."],
+    });
+  });
+
+  it("asks the LLM for structured Anima prompt parts before assembling render plans", async () => {
+    const workflow = createStoryWorkflowState({ storyId: "story-1", workflowId: "workflow-render-prompt" });
+    const updatedAt = workflow.updatedAt;
+    const resourcePlan = normalizeStoryResourcePlan(
+      {
+        checkpoint: { resource: { id: "checkpoint-local" }, reason: "Local checkpoint." },
+        loras: [{ resource: { id: "lora-local" }, reason: "Local LoRA.", suggestedWeight: 0.6 }],
+        recommendationReason: "Use real resources.",
+        overallEffect: "Neon continuity.",
+        warnings: [],
+      },
+      input,
+    );
+    let requestSystemPrompt = "";
+    let requestPayload: unknown;
+    const adapters = createStoryLlmNodeAdapters({
+      completeChat: async (request) => {
+        requestSystemPrompt = typeof request.messages[0]?.content === "string" ? request.messages[0].content : "";
+        const content = request.messages[1]?.content;
+        requestPayload = typeof content === "string" ? JSON.parse(content) : {};
+
+        return chatResponse(JSON.stringify({
+          shots: [
+            {
+              shotId: "shot-1",
+              animaPromptParts: {
+                subjectTags: ["1boy", "solo"],
+                characterTags: ["courier in reflective yellow jacket"],
+                outfitTags: ["reflective yellow rain jacket"],
+                propTags: ["red signal card"],
+                actionTags: ["studies the signal reflection"],
+                settingTags: ["wet neon market aisle"],
+                cameraTags: ["close view"],
+                lightingTags: ["rainy neon light"],
+                styleTags: ["teal theme"],
+                singleFrameCaption: "The courier studies the red signal reflection in a wet neon market aisle.",
+                negativeAdditions: ["cropped signal"],
+              },
+              rationale: "Keep the signal readable.",
+            },
+            {
+              shotId: "shot-2",
+              animaPromptParts: {
+                subjectTags: ["1boy", "solo"],
+                characterTags: ["courier in reflective yellow jacket"],
+                actionTags: ["leans toward the reflected signal"],
+                settingTags: ["wet neon market puddle"],
+                cameraTags: ["low close view"],
+                lightingTags: ["red neon reflection"],
+                singleFrameCaption: "The courier leans toward the red signal reflected in a puddle.",
+              },
+            },
+          ],
+          warnings: ["Structured Anima prompt parts returned."],
+        }));
+      },
+    });
+
+    workflow.nodes["story-input"] = {
+      nodeId: "story-input",
+      result: input,
+      source: "manual",
+      status: "manual",
+      updatedAt,
+    };
+    workflow.nodes["story-bible"] = {
+      nodeId: "story-bible",
+      result: normalizeStoryBible(
+        {
+          title: "Signal Market",
+          logline: "A courier follows a signal.",
+          characters: [{ id: "courier", name: "Courier", description: "A courier in a reflective yellow jacket." }],
+          locations: [{ id: "market", name: "Market", description: "A wet neon market." }],
+        },
+        input,
+      ),
+      source: "ai",
+      status: "done",
+      updatedAt,
+    };
+    workflow.nodes["storyboard-shots"] = {
+      nodeId: "storyboard-shots",
+      result: shots.map((shot) => ({ ...shot, sourceShotIds: [] })),
+      source: "ai",
+      status: "done",
+      updatedAt,
+    };
+    workflow.nodes["character-continuity-graph"] = {
+      nodeId: "character-continuity-graph",
+      result: {
+        storyId: "story-1",
+        characters: [
+          {
+            characterId: "courier",
+            name: "Courier",
+            canonicalDescription: "A courier in a reflective yellow jacket.",
+            visualAnchors: ["reflective yellow jacket"],
+          },
+        ],
+        appearances: shots.map((shot) => ({
+          shotId: shot.id,
+          characterId: "courier",
+          wardrobe: ["reflective yellow jacket"],
+          poseOrAction: shot.id === "shot-1" ? "studies the signal reflection" : "leans toward the signal",
+          expression: "focused",
+          continuityNotes: ["Keep reflective yellow jacket visible."],
+        })),
+      },
+      source: "ai",
+      status: "done",
+      updatedAt,
+    };
+    workflow.nodes["shot-dependency-graph"] = {
+      nodeId: "shot-dependency-graph",
+      result: {
+        storyId: "story-1",
+        nodes: shots.map((shot) => ({ shotId: shot.id, label: shot.title })),
+        edges: [],
+      },
+      source: "ai",
+      status: "done",
+      updatedAt,
+    };
+    workflow.nodes["story-safety-plan"] = {
+      nodeId: "story-safety-plan",
+      result: {
+        storyId: "story-1",
+        audienceRating: "safe",
+        contentWarnings: [],
+        blockedContent: [],
+        perShotNotes: [],
+        nsfwContext: {
+          enabled: false,
+          rationale: "Safe story.",
+        },
+      },
+      source: "ai",
+      status: "done",
+      updatedAt,
+    };
+    workflow.nodes["resource-plan"] = {
+      nodeId: "resource-plan",
+      result: resourcePlan,
+      source: "ai",
+      status: "done",
+      updatedAt,
+    };
+    workflow.nodes["parameter-plan"] = {
+      nodeId: "parameter-plan",
+      result: createStoryParameterPlan({
+        storyId: "story-1",
+        defaults: {
+          width: 1024,
+          height: 768,
+          steps: 28,
+          cfg: 5.5,
+          samplerName: "dpmpp_2m",
+          scheduler: "karras",
+          denoise: 1,
+        },
+      }),
+      source: "ai",
+      status: "done",
+      updatedAt,
+    };
+
+    const result = await adapters["story-render-plan"]?.({
+      nodeId: "story-render-plan",
+      workflow,
+      dependencies: [
+        workflow.nodes["character-continuity-graph"],
+        workflow.nodes["shot-dependency-graph"],
+        workflow.nodes["resource-plan"],
+        workflow.nodes["parameter-plan"],
+      ],
+    });
+    const renderResult = result as { source: string; value: StoryRenderPlan } | undefined;
+    const renderPlan = renderResult?.value;
+
+    expect(renderResult?.source).toBe("ai");
+    expect(requestSystemPrompt).toContain("Do not output a raw final prompt string");
+    expect(requestSystemPrompt).toContain("animaPromptParts");
+    expect(requestSystemPrompt).toContain("subjectTags");
+    expect(requestSystemPrompt).toContain("seriesTags");
+    expect(requestSystemPrompt).toContain("artistTags");
+    expect(requestSystemPrompt).toContain("Follow Anima tag order semantics");
+    expect(requestSystemPrompt).toContain("singleFrameCaption");
+    expect(requestSystemPrompt).toContain("Prefer 3-8 tags per category");
+    expect(requestSystemPrompt).toContain("Avoid repeating the same visible object");
+    expect(requestSystemPrompt).toContain("one complete English sentence");
+    expect(requestSystemPrompt).toContain("one frozen tableau");
+    expect(requestSystemPrompt).toContain("Action tags must be static visible poses");
+    expect(requestSystemPrompt).toContain("Avoid video-like wording such as stepping");
+    expect(requestSystemPrompt).toContain("singleFrameCaption must also describe a static held instant");
+    expect(requestSystemPrompt).toContain("Background people should be described as visible figures or paused observers");
+    expect(requestSystemPrompt).not.toContain("Each section item should usually be 1-6 words");
+    expect(requestSystemPrompt).not.toContain("never a full sentence");
+    expect(requestSystemPrompt).not.toContain('"sections"');
+    expect(requestSystemPrompt).toContain("Do not include story intent");
+    expect(requestSystemPrompt).toContain("teal theme");
+    expect(requestSystemPrompt).toContain("Do not use original-story character names as prompt tags");
+    expect(requestSystemPrompt).toContain("Do not include <lora:...> syntax");
+    expect(requestSystemPrompt).toContain("Translate structural ids");
+    expect(requestSystemPrompt).toContain("adult/age context");
+    expect(requestSystemPrompt).toContain("each visible person must get a distinct clause");
+    expect(requestSystemPrompt).toContain("hairstyle, clothing, pose/action, spatial position");
+    expect(requestSystemPrompt).toContain("For subjectTags use conservative tags");
+    expect(requestSystemPrompt).toContain("prefix each item with @");
+    expect(requestSystemPrompt).toContain("must not negate positive key characters, actions, props, clothing, or environments");
+    expect(requestSystemPrompt).toContain("sketchbook or visible sketch pages");
+    expect(requestPayload).toMatchObject({
+      characterContinuityGraph: expect.objectContaining({
+        storyId: "story-1",
+      }),
+      parameterPlan: expect.objectContaining({
+        storyId: "story-1",
+      }),
+      selectedResourcePromptContext: expect.stringContaining("Checkpoint:"),
+    });
+    expect(renderPlan?.shots[0]?.animaPromptParts).toMatchObject({
+      subjectTags: ["1boy", "solo"],
+      characterTags: ["courier in reflective yellow jacket"],
+      propTags: ["red signal card"],
+      singleFrameCaption: "The courier studies the red signal reflection in a wet neon market aisle.",
+      negativeAdditions: ["cropped signal"],
+    });
+    expect(renderPlan?.shots[0]).not.toHaveProperty("promptSections");
+    expect(renderPlan?.shots[0]?.positivePrompt).toContain("courier in reflective yellow jacket");
+    expect(renderPlan?.shots[0]?.positivePrompt).toContain("red signal card");
+    expect(renderPlan?.shots[0]?.positivePrompt).toContain("The courier studies the red signal reflection");
+    expect(renderPlan?.shots[0]?.positivePrompt).not.toContain("cropped signal");
+    expect(renderPlan?.shots[0]?.negativePrompt).toContain("cropped signal");
+    expect(renderPlan?.shots[0]?.promptRationale).toBe("Keep the signal readable.");
+    expect(renderPlan?.warnings).toContain("Structured Anima prompt parts returned.");
   });
 
   it("normalizes raw parameter plans to supplied sampler and scheduler options", () => {
@@ -923,6 +1500,349 @@ describe("story LLM adapters", () => {
     const synced = syncStoryShotsWithDependencyGraph(shots, graph);
 
     expect(synced.find((shot) => shot.id === "shot-2")?.sourceShotIds).toEqual(["shot-1"]);
+  });
+
+  it("downgrades automatic standing-to-kneeling source edges to planning-only continuity", () => {
+    const poseShots = [
+      {
+        ...shots[0],
+        camera: "medium frame",
+        description: "The courier is standing upright in the same alley.",
+        promptIntent: "courier standing with yellow jacket",
+      },
+      {
+        ...shots[1],
+        camera: "medium frame",
+        description: "The courier is kneeling on one knee beside the dropped box.",
+        promptIntent: "courier kneeling to pick up the bakery box",
+        sourceShotIds: [],
+      },
+    ] satisfies StoryShot[];
+    const graph = normalizeShotDependencyGraph(
+      {
+        nodes: poseShots.map((shot) => ({ shotId: shot.id })),
+        edges: [{ fromShotId: "shot-1", toShotId: "shot-2", reason: "img2img-source" }],
+      },
+      input,
+      poseShots,
+    );
+    const synced = syncStoryShotsWithDependencyGraph(poseShots, graph);
+
+    expect(graph.edges[0]).toMatchObject({
+      reason: "continuity",
+      sourceImageRisk: {
+        level: "high",
+        reason: expect.stringContaining("standing to kneeling"),
+      },
+    });
+    expect(synced.find((shot) => shot.id === "shot-2")?.sourceShotIds).toEqual([]);
+  });
+
+  it("downgrades automatic close-up to wide camera reset source edges", () => {
+    const cameraShots = [
+      {
+        ...shots[0],
+        camera: "tight close-up on the courier face",
+        description: "Close-up of the courier checking the signal.",
+        promptIntent: "close-up courier expression",
+      },
+      {
+        ...shots[1],
+        camera: "wide establishing shot of the whole station plaza",
+        description: "Wide shot resets the camera to reveal the whole plaza.",
+        promptIntent: "wide establishing plaza reset",
+        sourceShotIds: [],
+      },
+    ] satisfies StoryShot[];
+    const graph = normalizeShotDependencyGraph(
+      {
+        nodes: cameraShots.map((shot) => ({ shotId: shot.id })),
+        edges: [{ fromShotId: "shot-1", toShotId: "shot-2", reason: "img2img-source" }],
+      },
+      input,
+      cameraShots,
+    );
+    const synced = syncStoryShotsWithDependencyGraph(cameraShots, graph);
+
+    expect(graph.edges[0]).toMatchObject({
+      reason: "continuity",
+      sourceImageRisk: {
+        level: "high",
+        reason: expect.stringContaining("close-up to wide"),
+      },
+    });
+    expect(synced.find((shot) => shot.id === "shot-2")?.sourceShotIds).toEqual([]);
+  });
+
+  it("downgrades automatic scene reset source edges", () => {
+    const sceneShots = [
+      {
+        ...shots[0],
+        camera: "medium frame",
+        description: "The courier waits inside a neon market.",
+        locationId: "market",
+        promptIntent: "courier inside neon market",
+      },
+      {
+        ...shots[1],
+        camera: "medium frame",
+        description: "Large scene reset to a quiet mountain overlook.",
+        locationId: "mountain-overlook",
+        promptIntent: "new location mountain overlook",
+        sourceShotIds: [],
+      },
+    ] satisfies StoryShot[];
+    const graph = normalizeShotDependencyGraph(
+      {
+        nodes: sceneShots.map((shot) => ({ shotId: shot.id })),
+        edges: [{ fromShotId: "shot-1", toShotId: "shot-2", reason: "img2img-source" }],
+      },
+      input,
+      sceneShots,
+    );
+    const synced = syncStoryShotsWithDependencyGraph(sceneShots, graph);
+
+    expect(graph.edges[0]).toMatchObject({
+      reason: "continuity",
+      sourceImageRisk: {
+        level: "high",
+      },
+    });
+    expect(graph.edges[0]?.sourceImageRisk?.reason).toMatch(/scene changes|scene reset/i);
+    expect(synced.find((shot) => shot.id === "shot-2")?.sourceShotIds).toEqual([]);
+  });
+
+  it("carries Story input img2img denoise into workflow render plans", () => {
+    const workflow = createStoryWorkflowState({ storyId: "story-1", workflowId: "workflow-img2img-denoise" });
+    const updatedAt = workflow.updatedAt;
+    const checkpoint = input.settingsSnapshot.resourceCandidates.checkpoints[0]!;
+
+    workflow.nodes["story-input"] = {
+      nodeId: "story-input",
+      result: {
+        ...input,
+        settingsSnapshot: {
+          ...input.settingsSnapshot,
+          img2imgDenoise: 0.72,
+        },
+      },
+      source: "manual",
+      status: "manual",
+      updatedAt,
+    };
+    workflow.nodes["storyboard-shots"] = {
+      nodeId: "storyboard-shots",
+      result: shots.map((shot) => ({ ...shot, sourceShotIds: [] })),
+      source: "ai",
+      status: "done",
+      updatedAt,
+    };
+    workflow.nodes["shot-dependency-graph"] = {
+      nodeId: "shot-dependency-graph",
+      result: {
+        storyId: "story-1",
+        nodes: shots.map((shot) => ({ shotId: shot.id, label: shot.title })),
+        edges: [{ fromShotId: "shot-1", toShotId: "shot-2", reason: "img2img-source" }],
+      },
+      source: "ai",
+      status: "done",
+      updatedAt,
+    };
+    workflow.nodes["story-safety-plan"] = {
+      nodeId: "story-safety-plan",
+      result: {
+        storyId: "story-1",
+        audienceRating: "safe",
+        contentWarnings: [],
+        blockedContent: [],
+        perShotNotes: [],
+        nsfwContext: { enabled: false, rationale: "Safe story." },
+      },
+      source: "ai",
+      status: "done",
+      updatedAt,
+    };
+    workflow.nodes["resource-plan"] = {
+      nodeId: "resource-plan",
+      result: createStoryResourcePlan({
+        storyId: "story-1",
+        candidates: {
+          checkpoints: [{ resource: checkpoint }],
+          loras: [],
+        },
+        recommendation: {
+          checkpoint: { resource: checkpoint, reason: "Local checkpoint." },
+          loras: [],
+          recommendationReason: "Use local checkpoint.",
+          overallEffect: "Continuity test.",
+          warnings: [],
+        },
+      }),
+      source: "ai",
+      status: "done",
+      updatedAt,
+    };
+    workflow.nodes["parameter-plan"] = {
+      nodeId: "parameter-plan",
+      result: createStoryParameterPlan({
+        storyId: "story-1",
+        defaults: {
+          width: 1024,
+          height: 768,
+          steps: 28,
+          cfg: 5.5,
+          samplerName: "dpmpp_2m",
+          scheduler: "karras",
+          denoise: 1,
+        },
+      }),
+      source: "ai",
+      status: "done",
+      updatedAt,
+    };
+
+    const renderPlan = createStoryRenderPlanFromWorkflow(workflow);
+
+    expect(renderPlan.img2imgDenoise).toBe(0.72);
+    expect(renderPlan.shots[1]?.sourceShotIds).toEqual(["shot-1"]);
+  });
+
+  it("preserves manual high-risk source edges and exposes gate risk metadata", () => {
+    const workflow = createStoryWorkflowState({ storyId: "story-1", workflowId: "workflow-manual-source-risk" });
+    const updatedAt = workflow.updatedAt;
+    const checkpoint = input.settingsSnapshot.resourceCandidates.checkpoints[0]!;
+    const manualShots = [
+      {
+        ...shots[0],
+        camera: "medium frame",
+        description: "The courier is standing upright in the market.",
+        promptIntent: "courier standing upright",
+        sourceShotIds: [],
+      },
+      {
+        ...shots[1],
+        camera: "medium frame",
+        description: "The courier is kneeling on one knee beside the package.",
+        promptIntent: "courier kneeling beside package",
+        sourceShotIds: [],
+      },
+    ] satisfies StoryShot[];
+
+    workflow.nodes["story-input"] = {
+      nodeId: "story-input",
+      result: input,
+      source: "manual",
+      status: "manual",
+      updatedAt,
+    };
+    workflow.nodes["storyboard-shots"] = {
+      nodeId: "storyboard-shots",
+      result: manualShots,
+      source: "ai",
+      status: "done",
+      updatedAt,
+    };
+    workflow.nodes["shot-dependency-graph"] = {
+      nodeId: "shot-dependency-graph",
+      result: {
+        storyId: "story-1",
+        nodes: manualShots.map((shot) => ({ shotId: shot.id, label: shot.title })),
+        edges: [{ fromShotId: "shot-1", toShotId: "shot-2", reason: "img2img-source" }],
+      },
+      source: "manual",
+      status: "manual",
+      updatedAt,
+    };
+    workflow.nodes["story-safety-plan"] = {
+      nodeId: "story-safety-plan",
+      result: {
+        storyId: "story-1",
+        audienceRating: "safe",
+        contentWarnings: [],
+        blockedContent: [],
+        perShotNotes: [],
+        nsfwContext: { enabled: false, rationale: "Safe story." },
+      },
+      source: "ai",
+      status: "done",
+      updatedAt,
+    };
+    workflow.nodes["resource-plan"] = {
+      nodeId: "resource-plan",
+      result: createStoryResourcePlan({
+        storyId: "story-1",
+        candidates: {
+          checkpoints: [{ resource: checkpoint }],
+          loras: [],
+        },
+        recommendation: {
+          checkpoint: { resource: checkpoint, reason: "Local checkpoint." },
+          loras: [],
+          recommendationReason: "Use local checkpoint.",
+          overallEffect: "Manual source risk test.",
+          warnings: [],
+        },
+      }),
+      source: "ai",
+      status: "done",
+      updatedAt,
+    };
+    workflow.nodes["parameter-plan"] = {
+      nodeId: "parameter-plan",
+      result: createStoryParameterPlan({
+        storyId: "story-1",
+        defaults: {
+          width: 1024,
+          height: 768,
+          steps: 28,
+          cfg: 5.5,
+          samplerName: "dpmpp_2m",
+          scheduler: "karras",
+          denoise: 1,
+        },
+      }),
+      source: "ai",
+      status: "done",
+      updatedAt,
+    };
+    workflow.nodes["story-consistency-check"] = {
+      nodeId: "story-consistency-check",
+      result: {
+        storyId: "story-1",
+        passed: true,
+        checkedAt: updatedAt,
+        issues: [],
+        warnings: [],
+      },
+      source: "system",
+      status: "done",
+      updatedAt,
+    };
+
+    const renderPlan = createStoryRenderPlanFromWorkflow(workflow);
+    workflow.nodes["story-render-plan"] = {
+      nodeId: "story-render-plan",
+      result: renderPlan,
+      source: "system",
+      status: "done",
+      updatedAt,
+    };
+    const gate = createStoryGenerationGateFromWorkflow(workflow);
+
+    expect(renderPlan.shots[1]?.sourceShotIds).toEqual(["shot-1"]);
+    expect(renderPlan.shots[1]?.sourceImageEdges[0]).toMatchObject({
+      riskLevel: "high",
+      riskReason: expect.stringContaining("standing to kneeling"),
+      sourceChain: ["shot-1", "shot-2"],
+    });
+    expect(renderPlan.warnings).toEqual(expect.arrayContaining([
+      expect.stringContaining('Shot "shot-2" uses high-risk source image "shot-1"'),
+    ]));
+    expect(gate.requestPreview[1]?.sourceImageEdges[0]).toMatchObject({
+      riskLevel: "high",
+      riskReason: expect.stringContaining("standing to kneeling"),
+      sourceChain: ["shot-1", "shot-2"],
+    });
   });
 
   it("keeps non-img2img reference dependencies out of render source shots", () => {

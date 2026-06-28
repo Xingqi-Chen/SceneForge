@@ -2,11 +2,13 @@ import { describe, expect, it } from "vitest";
 
 import {
   assembleStoryRenderPlan,
+  compileStoryAnimaPrompt,
   createStoryExecutionRequestBatch,
   createStoryDefaultGenerationParameters,
   createStoryParameterPlan,
   createStoryPreviewParameters,
   createStoryResourcePlan,
+  normalizeStoryAnimaPromptParts,
   StoryResourcePlanValidationError,
   type StoryGenerationParameters,
   type StoryLocalResource,
@@ -182,7 +184,96 @@ function createAnimaResourcePlan() {
   });
 }
 
+function animaParts(overrides: Partial<ReturnType<typeof normalizeStoryAnimaPromptParts>>) {
+  return normalizeStoryAnimaPromptParts(overrides);
+}
+
 describe("story planning", () => {
+  it("normalizes Story Anima prompt parts without semantic cleanup or caps", () => {
+    const longTag = "long visible tag with many words that must stay intact because the LLM owns prompt specificity";
+    const parts = normalizeStoryAnimaPromptParts({
+      subjectTags: [" 1girl ", "", "solo", "solo"],
+      characterTags: [longTag],
+      actionTags: ["holding a red signal card"],
+      settingTags: "not an array",
+      singleFrameCaption: " The courier holds a red signal card in the rain. ",
+      negativeAdditions: ["cropped signal", "cropped signal"],
+    });
+
+    expect(parts).toMatchObject({
+      subjectTags: ["1girl", "solo"],
+      characterTags: [longTag],
+      seriesTags: [],
+      artistTags: [],
+      actionTags: ["holding a red signal card"],
+      settingTags: [],
+      singleFrameCaption: "The courier holds a red signal card in the rain.",
+      negativeAdditions: ["cropped signal"],
+    });
+  });
+
+  it("compiles Story Anima prompt parts in fixed order with the full caption", () => {
+    const prompt = compileStoryAnimaPrompt({
+      subjectTags: ["1girl", "solo"],
+      characterTags: ["adult courier with cropped black hair"],
+      seriesTags: ["original"],
+      artistTags: ["@storyboarder"],
+      outfitTags: ["yellow reflective jacket"],
+      propTags: ["red signal card"],
+      actionTags: ["studying the reflection"],
+      settingTags: ["wet neon market aisle"],
+      cameraTags: ["close view"],
+      lightingTags: ["rainy neon light"],
+      styleTags: ["teal theme"],
+      singleFrameCaption: "The courier studies the red signal card reflected in a puddle.",
+      negativeAdditions: ["cropped signal"],
+    });
+
+    expect(prompt).toBe([
+      "masterpiece",
+      "best quality",
+      "score_7",
+      "safe",
+      "1girl",
+      "solo",
+      "adult courier with cropped black hair",
+      "original",
+      "@storyboarder",
+      "yellow reflective jacket",
+      "red signal card",
+      "studying the reflection",
+      "wet neon market aisle",
+      "close view",
+      "rainy neon light",
+      "teal theme",
+      "The courier studies the red signal card reflected in a puddle.",
+    ].join(", "));
+    expect(prompt).not.toContain("cropped signal");
+  });
+
+  it("does not semantically rewrite overlapping Story Anima prompt parts", () => {
+    const prompt = compileStoryAnimaPrompt({
+      subjectTags: ["1girl", "solo"],
+      characterTags: ["adult courier with cropped black hair"],
+      seriesTags: [],
+      artistTags: [],
+      outfitTags: [],
+      propTags: ["red signal card"],
+      actionTags: ["studying the red signal card"],
+      settingTags: ["wet neon market aisle"],
+      cameraTags: [],
+      lightingTags: [],
+      styleTags: [],
+      singleFrameCaption: "The adult courier with cropped black hair studies the red signal card in a wet neon market aisle.",
+      negativeAdditions: [],
+    });
+
+    expect(prompt).toContain("The adult courier with cropped black hair studies the red signal card in a wet neon market aisle.");
+    expect(prompt).toContain("adult courier with cropped black hair");
+    expect(prompt).toContain("studying the red signal card");
+    expect(prompt).toContain("wet neon market aisle");
+  });
+
   it("selects only validated local resources and strips model NSFW markers", () => {
     const resourcePlan = createResourcePlan();
 
@@ -294,24 +385,48 @@ describe("story planning", () => {
       enabled: true,
       rationale: "User enabled mature story execution context.",
     });
+    expect(renderPlan.resourceRefs).toMatchObject({
+      sourceNodeId: "resource-plan",
+      checkpoint: {
+        resourceId: "checkpoint-local",
+        name: "Local Checkpoint",
+      },
+      loras: [
+        {
+          resourceId: "lora-local",
+          name: "Local LoRA",
+          suggestedWeight: 0.6,
+        },
+      ],
+    });
+    expect(renderPlan.shots[0]?.resourceRefs).toEqual({
+      checkpointResourceId: "checkpoint-local",
+      loraResourceIds: ["lora-local"],
+    });
     expect(renderPlan.preview.resultReferences).toHaveLength(1);
     expect(renderPlan.shots[1]).toMatchObject({
       shotId: "shot-2",
       negativePrompt: "gore, severe injury",
       parameters: defaults,
     });
-    expect(renderPlan.shots[1]?.positivePrompt).toContain("red signal reflected in puddle");
-    expect(renderPlan.shots[1]?.positivePrompt).toContain("lead noticing red signal");
-    expect(renderPlan.shots[1]?.positivePrompt).toContain("raincoat visible");
+    expect(renderPlan.shots[1]?.positivePrompt).toContain("red signal reflected in a puddle");
+    expect(renderPlan.shots[1]?.positivePrompt).toContain("The lead notices a red signal.");
+    expect(renderPlan.shots[1]?.positivePrompt).toContain("Keep the raincoat visible.");
     expect(renderPlan.shots[1]?.negativePrompt).not.toContain("Keep the scene symbolic.");
-    expect(renderPlan.shots[1]?.outputAnchors.environment).toContain("red signal reflected in puddle");
-    expect(renderPlan.shots[1]?.outputAnchors.clothing).toContain("raincoat visible");
+    expect(JSON.stringify(renderPlan.shots[1]?.outputAnchors)).toContain("red signal reflected in a puddle");
+    expect(renderPlan.shots[1]?.outputAnchors.clothing).toEqual(expect.arrayContaining([
+      expect.stringContaining("raincoat visible"),
+    ]));
     expect(renderPlan.shots[1]?.outputAnchors.camera).toContain("low close-up");
     expect(renderPlan.shots[1]?.outputAnchors.negative).toEqual(["gore", "severe injury"]);
     expect(renderPlan.shots[1]?.outputAnchors.source).toMatchObject({
       mode: "source-image",
       sourceShotIds: ["shot-1"],
     });
+    expect(renderPlan.shots[1]).not.toHaveProperty("resources");
+    expect(JSON.stringify(renderPlan.shots)).not.toContain("\"resources\"");
+    expect(JSON.stringify(renderPlan.shots)).not.toContain("\"checkpoint\"");
+    expect(JSON.stringify(renderPlan.shots)).not.toContain("\"loras\"");
   });
 
   it("normalizes Story parameter plans against live sampler and scheduler options", () => {
@@ -381,6 +496,7 @@ describe("story planning", () => {
   });
 
   it("keeps every Story shot on the same resolution even when old per-shot overrides include dimensions", () => {
+    const resourcePlan = createResourcePlan();
     const parameterPlan = {
       defaults,
       perShotOverrides: [
@@ -399,11 +515,11 @@ describe("story planning", () => {
     } satisfies StoryParameterPlan;
     const renderPlan = assembleStoryRenderPlan({
       parameterPlan,
-      resourcePlan: createResourcePlan(),
+      resourcePlan,
       safetyPlan,
       shots,
     });
-    const finalBatch = createStoryExecutionRequestBatch({ mode: "final", renderPlan });
+    const finalBatch = createStoryExecutionRequestBatch({ mode: "final", renderPlan, resourcePlan });
 
     expect(renderPlan.shots.map((shot) => `${shot.parameters.width}x${shot.parameters.height}`)).toEqual([
       "1024x768",
@@ -433,8 +549,8 @@ describe("story planning", () => {
     });
   });
 
-  it("infers Story generation dimensions from requested framing instead of fixed 1024x768", () => {
-    const portraitDefaults = createStoryDefaultGenerationParameters({
+  it("uses explicit Story dimensions or neutral defaults instead of content-keyword aspect heuristics", () => {
+    const neutralPortraitWordsDefaults = createStoryDefaultGenerationParameters({
       input: {
         storyId,
         rawIntent: "A vertical full body portrait sequence of a courier.",
@@ -455,7 +571,7 @@ describe("story planning", () => {
         },
       ],
     });
-    const landscapeDefaults = createStoryDefaultGenerationParameters({
+    const neutralLandscapeWordsDefaults = createStoryDefaultGenerationParameters({
       input: {
         storyId,
         rawIntent: "A wide cinematic market chase.",
@@ -484,21 +600,50 @@ describe("story planning", () => {
       resourcePlan: createResourcePlan(),
     });
 
-    expect(portraitDefaults).toMatchObject({
-      width: 832,
-      height: 1216,
+    expect(neutralPortraitWordsDefaults).toMatchObject({
+      width: 1024,
+      height: 1024,
     });
-    expect(landscapeDefaults).toMatchObject({
-      width: 1216,
-      height: 832,
+    expect(neutralLandscapeWordsDefaults).toMatchObject({
+      width: 1024,
+      height: 1024,
     });
     expect(explicitDefaults).toMatchObject({
       width: 1536,
       height: 1024,
     });
-    expect(portraitDefaults).not.toMatchObject({
+    expect(neutralPortraitWordsDefaults).not.toMatchObject({
       width: 1024,
       height: 768,
+    });
+  });
+
+  it("does not choose Anima Story dimensions from local scene keywords", () => {
+    const animaKeywordDefaults = createStoryDefaultGenerationParameters({
+      input: {
+        storyId,
+        rawIntent: "Solo character on a sidewalk, then in a narrow hallway.",
+      },
+      resourcePlan: createAnimaResourcePlan(),
+      shots: [
+        {
+          id: "keyword-shot",
+          storyId,
+          order: 1,
+          title: "Keyword shot",
+          description: "Solo courier waits on a sidewalk outside a hallway.",
+          characterIds: ["courier"],
+          sourceShotIds: [],
+          camera: "medium solo frame",
+          promptIntent: "sidewalk hallway solo courier",
+          continuityNotes: [],
+        },
+      ],
+    });
+
+    expect(animaKeywordDefaults).toMatchObject({
+      width: 1024,
+      height: 1024,
     });
   });
 
@@ -562,7 +707,7 @@ describe("story planning", () => {
     });
   });
 
-  it("keeps solo seated adult Story shots portrait-oriented and filters adult NSFW safety boilerplate", () => {
+  it("keeps solo seated adult Story shots on uniform neutral resolution and filters adult NSFW safety boilerplate", () => {
     const rupaShots: StoryShot[] = [
       {
         id: "shot-1",
@@ -671,13 +816,13 @@ describe("story planning", () => {
     const finalAnchors = renderPlan.shots[3]?.outputAnchors;
 
     expect(parameterDefaults).toMatchObject({
-      width: 832,
-      height: 1216,
+      width: 1024,
+      height: 1024,
     });
     for (const shot of renderPlan.shots) {
       expect(shot.parameters).toMatchObject({
-        width: 832,
-        height: 1216,
+        width: 1024,
+        height: 1024,
       });
       expect(shot.negativePrompt).toContain("sexualized minor");
       expect(shot.negativePrompt).toContain("age-gap romantic framing");
@@ -688,35 +833,34 @@ describe("story planning", () => {
       expect(shot.negativePrompt).not.toContain("coercion");
       expect(shot.negativePrompt).not.toContain("explicit depiction of genitals or nipples");
     }
-    expect(prompts).not.toMatch(/\b(?:sliding off to|torso subtly|bare shoulders with|brings one hand)(?:,|$)/i);
-    expect(renderPlan.shots[1]?.positivePrompt).toContain("loosened clothing sliding off shoulders");
-    expect(renderPlan.shots[2]?.positivePrompt).toContain("lowered clothing exposing upper body");
-    expect(firstAnchors?.camera).toEqual(expect.arrayContaining(["straight-on eye level"]));
-    expect(firstAnchors?.lighting).toEqual(expect.arrayContaining(["warm low-key room lighting"]));
-    expect(firstAnchors?.subject).toEqual(expect.arrayContaining(["Rupa is only visible character"]));
+    expect(prompts).toContain("same soft indoor clothing partly loosened and sliding off to reveal shoulders");
+    expect(renderPlan.shots[2]?.positivePrompt).toContain("same indoor clothing lowered further");
+    expect(firstAnchors?.camera).toEqual(expect.arrayContaining([expect.stringContaining("straight-on eye level")]));
+    expect(firstAnchors?.lighting).toEqual(expect.arrayContaining([expect.stringContaining("warm low-key room lighting")]));
     expect(finalAnchors?.action).toEqual(expect.arrayContaining([
-      "hand-to-chest gesture",
+      expect.stringContaining("touches her chest with one hand"),
     ]));
   });
 
-  it("reuses the base-model-aware ComfyUI prompt resolver for Story render prompts", () => {
+  it("assembles Story Anima prompts while preserving ComfyUI Anima resource settings", () => {
+    const resourcePlan = createAnimaResourcePlan();
     const renderPlan = assembleStoryRenderPlan({
       parameterPlan: createStoryParameterPlan({ storyId, defaults }),
-      resourcePlan: createAnimaResourcePlan(),
+      resourcePlan,
       safetyPlan,
       shots,
     });
-    const finalBatch = createStoryExecutionRequestBatch({ mode: "final", renderPlan });
+    const finalBatch = createStoryExecutionRequestBatch({ mode: "final", renderPlan, resourcePlan });
     const firstShot = renderPlan.shots[0];
     const firstRequest = finalBatch.requests[0]?.request;
 
     expect(firstShot.positivePrompt).toContain("masterpiece");
     expect(firstShot.positivePrompt).toContain("score_7");
+    expect(firstShot.positivePrompt).toContain("safe");
     expect(firstShot.positivePrompt).not.toContain("score_9");
     expect(firstShot.positivePrompt).not.toContain("score_8");
-    expect(firstShot.positivePrompt).toContain("anima_style");
-    expect(firstShot.negativePrompt).toContain("worst quality");
-    expect(firstShot.negativePrompt).toContain("score_1");
+    expect(firstShot.positivePrompt).not.toContain("year 2025");
+    expect(firstShot.positivePrompt).not.toContain("anima_style");
     expect(firstShot.negativePrompt).toContain("gore");
     expect(firstShot.negativePrompt).toContain("severe injury");
     expect(firstRequest).toMatchObject({
@@ -774,8 +918,6 @@ describe("story planning", () => {
     const shot = renderPlan.shots[0];
 
     expect(shot?.positivePrompt.startsWith("masterpiece, best quality, score_7, safe, 1girl, solo")).toBe(true);
-    expect(shot?.positivePrompt).not.toContain("score_9");
-    expect(shot?.positivePrompt).not.toContain("score_8");
     expect(shot?.negativePrompt).toContain("nsfw");
     expect(shot?.negativePrompt).toContain("sexualized minor");
     expect(shot?.negativePrompt).toContain("revealing clothes");
@@ -786,7 +928,364 @@ describe("story planning", () => {
     expect(shot?.negativePrompt).not.toContain("coercion");
   });
 
-  it("compacts Story shot prompts while preserving Illustrious base-model section order", () => {
+  it("uses LLM-authored Anima prompt parts without adding negative additions to the positive prompt", () => {
+    const renderPlan = assembleStoryRenderPlan({
+      parameterPlan: createStoryParameterPlan({ storyId, defaults }),
+      renderPromptPlan: {
+        storyId,
+        warnings: ["LLM prompt draft used naturalized character descriptions."],
+        shots: [
+          {
+            shotId: "shot-poster",
+            animaPromptParts: animaParts({
+              subjectTags: ["3people"],
+              characterTags: [
+                "young woman with round glasses and cream cardigan",
+                "two apartment residents reading the poster",
+              ],
+              propTags: ["hand-drawn book swap poster", "orange sketchbook"],
+              actionTags: ["young woman points to the handwritten swap note"],
+              settingTags: ["shared apartment hallway notice board", "poster centered and readable"],
+              cameraTags: ["eye-level medium shot"],
+              lightingTags: ["warm hallway light"],
+              styleTags: ["gentle painterly texture"],
+              singleFrameCaption: "A young woman points at a readable book swap poster while two residents study it.",
+              negativeAdditions: ["cropped poster", "<lora:bad:1>"],
+            }),
+            rationale: "Keep the final poster action explicit.",
+            warnings: ["Poster readability is critical."],
+          },
+        ],
+      },
+      resourcePlan: createAnimaResourcePlan(),
+      safetyPlan: {
+        storyId,
+        audienceRating: "safe",
+        contentWarnings: [],
+        blockedContent: [],
+        perShotNotes: [],
+        nsfwContext: {
+          enabled: false,
+          rationale: "Safe story.",
+        },
+      },
+      shots: [
+        {
+          id: "shot-poster",
+          storyId,
+          order: 1,
+          title: "Poster",
+          description: "Maya shares a book swap poster with two residents.",
+          characterIds: ["maya", "elderly-neighbor", "teen-resident"],
+          sourceShotIds: [],
+          camera: "medium shot",
+          promptIntent: "book swap poster, residents reading, Maya points",
+          continuityNotes: ["Keep Maya's cream cardigan and round glasses."],
+        },
+      ],
+    });
+    const shot = renderPlan.shots[0];
+
+    expect(shot?.positivePrompt).toContain("3people");
+    expect(shot?.positivePrompt).toContain("young woman with round glasses and cream cardigan");
+    expect(shot?.positivePrompt).toContain("two apartment residents reading the poster");
+    expect(shot?.positivePrompt).toContain("hand-drawn book swap poster");
+    expect(shot?.positivePrompt).toContain("poster centered and readable");
+    expect(shot?.positivePrompt).toContain("A young woman points at a readable book swap poster");
+    expect(shot?.positivePrompt).not.toContain("cropped poster");
+    expect(shot?.positivePrompt).not.toContain("<lora:bad:1>");
+    expect(shot?.positivePrompt).not.toContain("teen-resident");
+    expect(shot?.negativePrompt).toContain("cropped poster");
+    expect(shot?.negativePrompt).not.toContain("<lora:");
+    expect(shot?.animaPromptParts.characterTags).toEqual(expect.arrayContaining([
+      "young woman with round glasses and cream cardigan",
+    ]));
+    expect(shot?.promptRationale).toBe("Keep the final poster action explicit.");
+    expect(renderPlan.warnings).toContain("LLM prompt draft used naturalized character descriptions.");
+  });
+
+  it("preserves distinct adult multi-character Anima visual clauses", () => {
+    const renderPlan = assembleStoryRenderPlan({
+      parameterPlan: createStoryParameterPlan({ storyId, defaults }),
+      renderPromptPlan: {
+        storyId,
+        warnings: [],
+        shots: [
+          {
+            shotId: "shot-campus",
+            animaPromptParts: animaParts({
+              subjectTags: ["2people"],
+              characterTags: [
+                "Lena, college-age woman with curly auburn hair and cropped denim jacket",
+                "Priya, college-age woman with short silver hair and long green coat",
+              ],
+              propTags: ["shared orange sketchbook open between them"],
+              actionTags: [
+                "Lena stands left pointing at a sketch page",
+                "Priya kneels right holding a pencil case",
+              ],
+              settingTags: ["university art studio with paint-splattered tables"],
+              cameraTags: ["two-person medium shot with sketchbook centered", "eye-level camera"],
+              lightingTags: ["soft window light"],
+              singleFrameCaption: "Two college-age women compare a shared orange sketchbook in an art studio.",
+            }),
+          },
+        ],
+      },
+      resourcePlan: createAnimaResourcePlan(),
+      safetyPlan: {
+        storyId,
+        audienceRating: "safe",
+        contentWarnings: [],
+        blockedContent: [],
+        perShotNotes: [],
+        nsfwContext: {
+          enabled: false,
+          rationale: "Safe college-age story.",
+        },
+      },
+      shots: [
+        {
+          id: "shot-campus",
+          storyId,
+          order: 1,
+          title: "Campus Sketchbook",
+          description: "Two college-age women compare a sketchbook in an art studio.",
+          characterIds: ["lena", "priya"],
+          sourceShotIds: [],
+          camera: "eye-level camera",
+          promptIntent:
+            "college-age women, orange sketchbook, university art studio, distinct poses",
+          continuityNotes: [],
+        },
+      ],
+    });
+    const prompt = renderPlan.shots[0]?.positivePrompt ?? "";
+
+    expect(prompt.startsWith("masterpiece, best quality, score_7, safe, 2people")).toBe(true);
+    expect(prompt).toContain("college-age woman with curly auburn hair and cropped denim jacket");
+    expect(prompt).toContain("college-age woman with short silver hair and long green coat");
+    expect(prompt).toContain("shared orange sketchbook open between them");
+    expect(prompt).toContain("stands left pointing at a sketch page");
+    expect(prompt).toContain("kneels right holding a pencil case");
+    expect(prompt).toContain("university art studio with paint-splattered tables");
+    expect(prompt).not.toContain("two young women");
+    expect(prompt).not.toContain("lena");
+    expect(prompt).not.toContain("priya");
+  });
+
+  it("merges negative additions into the negative prompt without adding them to the positive prompt", () => {
+    const renderPlan = assembleStoryRenderPlan({
+      parameterPlan: createStoryParameterPlan({ storyId, defaults }),
+      renderPromptPlan: {
+        storyId,
+        warnings: [],
+        shots: [
+          {
+            shotId: "shot-sketchbook",
+            animaPromptParts: animaParts({
+              subjectTags: ["1girl", "solo"],
+              characterTags: ["college-age young woman with round glasses and cream cardigan"],
+              propTags: ["orange sketchbook", "loose sketch pages", "sunflower keychain"],
+              actionTags: ["kneeling to gather sketch pages"],
+              settingTags: ["library hallway with fallen books"],
+              cameraTags: ["eye-level camera"],
+              lightingTags: ["soft window lighting"],
+              singleFrameCaption: "A college-age woman kneels to gather sketch pages in a library hallway.",
+              negativeAdditions: ["sketch page", "drawings", "cropped poster", "bad hands"],
+            }),
+          },
+        ],
+      },
+      resourcePlan: createAnimaResourcePlan(),
+      safetyPlan: {
+        storyId,
+        audienceRating: "safe",
+        contentWarnings: [],
+        blockedContent: [],
+        perShotNotes: [],
+        nsfwContext: {
+          enabled: false,
+          rationale: "Safe story.",
+        },
+      },
+      shots: [
+        {
+          id: "shot-sketchbook",
+          storyId,
+          order: 1,
+          title: "Sketchbook Rescue",
+          description: "A college-age young woman gathers loose sketch pages in a library hallway.",
+          characterIds: ["mira"],
+          sourceShotIds: [],
+          camera: "eye-level camera",
+          promptIntent: "orange sketchbook, loose sketch pages, kneeling to gather sketch pages",
+          continuityNotes: ["Keep the sunflower keychain readable."],
+        },
+      ],
+    });
+    const shot = renderPlan.shots[0];
+
+    expect(shot?.positivePrompt).toContain("orange sketchbook");
+    expect(shot?.positivePrompt).toContain("loose sketch pages");
+    expect(shot?.positivePrompt).toContain("kneeling to gather sketch pages");
+    expect(shot?.positivePrompt).toContain("A college-age woman kneels to gather sketch pages in a library hallway.");
+    expect(shot?.positivePrompt).not.toContain("cropped poster");
+    expect(shot?.negativePrompt).toContain("sketch page");
+    expect(shot?.negativePrompt).toContain("drawings");
+    expect(shot?.negativePrompt).toContain("cropped poster");
+    expect(shot?.negativePrompt).toContain("bad hands");
+    expect(renderPlan.warnings).toEqual([]);
+    expect(shot?.promptWarnings).toBeUndefined();
+  });
+
+  it("preserves LLM-authored Anima parts without word truncation or semantic rewriting", () => {
+    const renderPlan = assembleStoryRenderPlan({
+      parameterPlan: createStoryParameterPlan({ storyId, defaults }),
+      renderPromptPlan: {
+        storyId,
+        warnings: [],
+        shots: [
+          {
+            shotId: "shot-hallway",
+            animaPromptParts: animaParts({
+              subjectTags: ["1girl", "solo"],
+              characterTags: [
+                "college-age young woman with chin-length black bob",
+              ],
+              outfitTags: ["white sneakers"],
+              propTags: [
+                "handmade book swap flyer",
+                "single paperback book",
+                "magnetic clip frame",
+              ],
+              actionTags: [
+                "stepping back beside newly mounted flyer with deliberate hand pose and readable face direction",
+              ],
+              settingTags: [
+                "shared apartment hallway notice board",
+              ],
+              cameraTags: [
+                "flyer centered on cork board",
+              ],
+              lightingTags: [
+                "soft corridor light",
+              ],
+              styleTags: [
+                "teal theme",
+                "gentle anime illustration",
+              ],
+              singleFrameCaption: "The college-age woman steps back from the newly mounted flyer in the shared hallway.",
+            }),
+          },
+        ],
+      },
+      resourcePlan: createAnimaResourcePlan(),
+      safetyPlan,
+      shots: [
+        {
+          id: "shot-hallway",
+          storyId,
+          order: 1,
+          title: "Hallway Swap",
+          description: "Maya pins a book swap flyer in the shared hallway.",
+          characterIds: ["maya"],
+          sourceShotIds: [],
+          camera: "medium shot",
+          promptIntent: "book swap flyer, hallway notice board",
+          continuityNotes: [],
+        },
+      ],
+    });
+    const prompt = renderPlan.shots[0]?.positivePrompt ?? "";
+
+    expect(prompt).toContain("college-age young woman with chin-length black bob");
+    expect(prompt).toContain("white sneakers");
+    expect(prompt).toContain("handmade book swap flyer");
+    expect(prompt).toContain("magnetic clip frame");
+    expect(prompt).toContain("stepping back beside newly mounted flyer with deliberate hand pose and readable face direction");
+    expect(prompt).not.toContain("maya");
+    expect(prompt).toContain("shared apartment hallway notice board");
+    expect(prompt).toContain("soft corridor light");
+    expect(prompt).toContain("teal theme");
+    expect(prompt).toContain("The college-age woman steps back from the newly mounted flyer in the shared hallway.");
+  });
+
+  it("falls back to local Story Anima parts when an LLM draft omits a shot", () => {
+    const renderPlan = assembleStoryRenderPlan({
+      parameterPlan: createStoryParameterPlan({ storyId, defaults }),
+      renderPromptPlan: {
+        storyId,
+        warnings: [],
+        shots: [
+          {
+            shotId: "shot-1",
+            animaPromptParts: animaParts({
+              characterTags: ["lead in raincoat"],
+              actionTags: ["entering rainy station"],
+              singleFrameCaption: "The lead enters the rainy station.",
+            }),
+          },
+        ],
+      },
+      resourcePlan: createAnimaResourcePlan(),
+      safetyPlan,
+      shots,
+    });
+
+    expect(renderPlan.shots[0]?.positivePrompt).toContain("lead in raincoat");
+    expect(renderPlan.shots[1]?.positivePrompt).toContain("red signal reflected in a puddle");
+    expect(renderPlan.warnings).toContain('Shot "shot-2" did not receive LLM Anima prompt parts; using local prompt fallback.');
+  });
+
+  it("preserves required current-shot anchors in final Anima render prompts", () => {
+    const renderPlan = assembleStoryRenderPlan({
+      parameterPlan: createStoryParameterPlan({ storyId, defaults }),
+      resourcePlan: createAnimaResourcePlan(),
+      safetyPlan: {
+        storyId,
+        audienceRating: "safe",
+        contentWarnings: [],
+        blockedContent: [],
+        perShotNotes: [],
+        nsfwContext: {
+          enabled: false,
+          rationale: "Safe story.",
+        },
+      },
+      shots: [
+        {
+          id: "shot-required-anchors",
+          storyId,
+          order: 1,
+          title: "Sketchbook Rescue",
+          description:
+            "Mira is a young woman with round glasses kneeling beside fallen books blocking the library hallway.",
+          characterIds: ["mira"],
+          sourceShotIds: [],
+          camera: "eye-level three-quarter frame with soft window lighting",
+          promptIntent:
+            "cream cardigan, orange sketchbook, sunflower keychain, kneeling to gather loose pages, fallen books blocking library hallway, extra shelf detail, extra wall poster detail",
+          continuityNotes: [
+            "Keep the round glasses visible.",
+            "Keep the cream cardigan, orange sketchbook, and sunflower keychain readable.",
+          ],
+        },
+      ],
+    });
+    const prompt = renderPlan.shots[0]?.positivePrompt ?? "";
+    expect(prompt.startsWith("masterpiece, best quality, score_7, safe, 1girl, solo")).toBe(true);
+    expect(prompt).toContain("round glasses");
+    expect(prompt).toContain("cream cardigan");
+    expect(prompt).toContain("orange sketchbook");
+    expect(prompt).toContain("sunflower keychain");
+    expect(prompt).toContain("kneeling to gather loose pages");
+    expect(prompt).toContain("fallen books blocking library hallway");
+    expect(prompt).toContain("eye-level three-quarter frame");
+    expect(prompt).toContain("soft window lighting");
+  });
+
+  it("builds local fallback Anima parts from Story shot fields without profile-specific compacting", () => {
     const renderPlan = assembleStoryRenderPlan({
       parameterPlan: createStoryParameterPlan({ storyId, defaults }),
       resourcePlan: createResourcePlan(),
@@ -811,33 +1310,24 @@ describe("story planning", () => {
       ],
     });
     const prompt = renderPlan.shots[0]?.positivePrompt ?? "";
-    const subjectIndex = prompt.indexOf("older teen bike messenger");
-    const clothingIndex = prompt.indexOf("red rain jacket");
-    const actionIndex = prompt.indexOf("kneeling beside greasy broken chain");
-    const environmentIndex = prompt.indexOf("umbrellas and produce stalls");
-    const cameraIndex = prompt.indexOf("medium-wide slightly low angle");
-    const lightingIndex = prompt.indexOf("overcast rainy daylight");
-
-    expect(prompt.startsWith("masterpiece, best quality, amazing quality, very aesthetic, newest")).toBe(true);
-    expect(subjectIndex).toBeGreaterThan(-1);
-    expect(clothingIndex).toBeGreaterThan(subjectIndex);
-    expect(actionIndex).toBeGreaterThan(clothingIndex);
-    expect(environmentIndex).toBeGreaterThan(actionIndex);
-    expect(cameraIndex).toBeGreaterThan(environmentIndex);
-    expect(lightingIndex).toBeGreaterThan(cameraIndex);
-    expect(prompt).not.toContain("extra storefront description");
-    expect(renderPlan.shots[0]?.outputAnchors.subject).toContain("older teen bike messenger with freckles");
-    expect(renderPlan.shots[0]?.outputAnchors.clothing).toContain("red rain jacket");
-    expect(renderPlan.shots[0]?.outputAnchors.action).toContain("kneeling beside greasy broken chain");
-    expect(renderPlan.shots[0]?.outputAnchors.environment).toContain("umbrellas and produce stalls");
-    expect(renderPlan.shots[0]?.outputAnchors.lighting).toContain("overcast rainy daylight");
+    expect(prompt.startsWith("masterpiece, best quality, score_7, safe")).toBe(true);
+    expect(prompt).toContain("lead");
+    expect(prompt).toContain("red rain jacket");
+    expect(prompt).toContain("older teen bike messenger with freckles");
+    expect(prompt).toContain("kneeling beside a greasy broken chain");
+    expect(prompt).toContain("umbrellas and produce stalls");
+    expect(prompt).toContain("medium-wide slightly low angle");
+    expect(prompt).toContain("extra storefront description");
+    expect(renderPlan.shots[0]?.animaPromptParts.actionTags).toEqual([
+      "red rain jacket, older teen bike messenger with freckles, kneeling beside a greasy broken chain, umbrellas and produce stalls, centered composition, overcast rainy daylight, loose background detail, extra crowd description, extra storefront description",
+    ]);
     expect(renderPlan.shots[0]?.outputAnchors.source).toMatchObject({
       mode: "none",
       sourceShotIds: [],
     });
   });
 
-  it("prioritizes camera composition and lighting buckets while compacting long Story anchors", () => {
+  it("keeps camera, lighting, and source metadata available in local fallback render plans", () => {
     const renderPlan = assembleStoryRenderPlan({
       parameterPlan: createStoryParameterPlan({ storyId, defaults }),
       resourcePlan: createResourcePlan(),
@@ -863,22 +1353,18 @@ describe("story planning", () => {
     });
     const anchors = renderPlan.shots[0]?.outputAnchors;
 
-    expect(anchors?.camera).toContain("Medium-wide street-level view with centered bridge approach composition");
-    expect(anchors?.environment).not.toEqual(
-      expect.arrayContaining([
-        expect.stringContaining("Medium-wide"),
-      ]),
-    );
-    expect(anchors?.action).toContain("lifting bicycle through narrow alley");
-    expect(anchors?.environment).toContain("distant police barricades near bridge route");
+    expect(renderPlan.shots[0]?.positivePrompt).toContain("Medium-wide street-level view with centered bridge approach composition.");
+    expect(renderPlan.shots[0]?.positivePrompt).toContain("distant police barricades along the bridge route");
+    expect(renderPlan.shots[0]?.positivePrompt).toContain("same bright yellow rain jacket");
     expect(anchors?.lighting).toContain("cool rainy street lighting");
     expect(anchors?.detail).toEqual(expect.arrayContaining(["cinematic illustrated realism", "damp urban textures"]));
-    expect(anchors?.clothing).toContain("bright yellow rain jacket");
-    expect(JSON.stringify(anchors)).not.toContain("One hand gripping the bike frame as he squeezes past");
-    expect(JSON.stringify(anchors)).not.toContain("Keep wardrobe continuity");
+    expect(anchors?.source).toMatchObject({
+      mode: "none",
+      sourceShotIds: [],
+    });
   });
 
-  it("removes Story meta instructions while preserving beat actions and final subjects", () => {
+  it("preserves raw Story shot intent across local fallback render prompts", () => {
     const renderPlan = assembleStoryRenderPlan({
       parameterPlan: createStoryParameterPlan({ storyId, defaults }),
       resourcePlan: createResourcePlan(),
@@ -941,7 +1427,7 @@ describe("story planning", () => {
     });
     const prompts = renderPlan.shots.map((shot) => shot.positivePrompt).join("\n");
 
-    expect(prompts).not.toMatch(/Show only|He should|This shot marks|visible human subject/i);
+    expect(prompts).toMatch(/Show only|He should|This shot marks|visible human subject/i);
     expect(renderPlan.shots[0]?.positivePrompt).toContain("catching falling bakery box");
     expect(renderPlan.shots[0]?.positivePrompt).toContain("snapped backpack strap");
     expect(renderPlan.shots[0]?.positivePrompt).toContain("wet market alley");
@@ -960,7 +1446,7 @@ describe("story planning", () => {
     }
   });
 
-  it("cleans Anima Story meta instructions, dangling fragments, and action buckets", () => {
+  it("keeps verbose fallback Story intent available in Anima prompt parts", () => {
     const renderPlan = assembleStoryRenderPlan({
       parameterPlan: createStoryParameterPlan({ storyId, defaults }),
       resourcePlan: createAnimaResourcePlan(),
@@ -1000,21 +1486,17 @@ describe("story planning", () => {
 
     expect(prompt).toContain("riding shaky bicycle");
     expect(prompt).toContain("wheel jammed");
-    expect(prompt).toContain("locking bicycle then sprinting");
+    expect(prompt).toContain("then locks the bicycle and sprints");
     expect(prompt).toContain("sliding book through return slot");
     expect(prompt).toContain("rainy evening with warm interior contrast");
     expect(prompt).toContain("medium-wide low angle composition");
-    expect(prompt).not.toContain("medium-wide low angle,");
-    expect(prompt).not.toMatch(/Maintain|Preserve|Use traffic|Show grease|must clearly signal|as only clear visible subject/i);
-    expect(prompt).not.toMatch(/\b(?:and distant|far|from)(?:,|$)/i);
-    expect(shot?.outputAnchors.action).toEqual(
-      expect.arrayContaining([
-        "riding shaky bicycle",
-        "wheel jammed",
-        "locking bicycle then sprinting",
-        "sliding book through return slot",
-      ]),
-    );
+    expect(prompt).toMatch(/Maintain|Preserve|Use traffic|Show grease|must clearly signal|as only clear visible subject/i);
+    expect(shot?.animaPromptParts.actionTags).toEqual([
+      "Maintain Maya as only clear visible subject, Preserve yellow rain jacket, Use traffic lights to show urgency, Show grease on hands, must clearly signal late library return, rainy evening with warm interior contrast, and distant",
+    ]);
+    expect(shot?.animaPromptParts.settingTags).toEqual(expect.arrayContaining([
+      expect.stringContaining("riding shaky bicycle"),
+    ]));
     expect(shot?.outputAnchors.lighting).toContain("rainy evening with warm interior contrast");
   });
 
@@ -1081,9 +1563,10 @@ describe("story planning", () => {
   });
 
   it("preserves manually edited Story render prompts when creating execution requests", () => {
+    const resourcePlan = createAnimaResourcePlan();
     const renderPlan = assembleStoryRenderPlan({
       parameterPlan: createStoryParameterPlan({ storyId, defaults }),
-      resourcePlan: createAnimaResourcePlan(),
+      resourcePlan,
       safetyPlan,
       shots,
     });
@@ -1099,7 +1582,7 @@ describe("story planning", () => {
           : shot,
       ),
     };
-    const finalBatch = createStoryExecutionRequestBatch({ mode: "final", renderPlan: editedRenderPlan });
+    const finalBatch = createStoryExecutionRequestBatch({ mode: "final", renderPlan: editedRenderPlan, resourcePlan });
     const firstRequest = finalBatch.requests[0]?.request;
 
     expect(firstRequest?.positivePrompt).toBe("manual edited anima prompt, anima_style");
@@ -1107,22 +1590,67 @@ describe("story planning", () => {
     expect(firstRequest?.negativePrompt).toContain("worst quality");
   });
 
-  it("assembles final and preview execution requests without model NSFW resource filtering", () => {
+  it("tolerates legacy render plans that still carry per-shot resource objects", () => {
+    const resourcePlan = createResourcePlan();
     const renderPlan = assembleStoryRenderPlan({
+      parameterPlan: createStoryParameterPlan({ storyId, defaults }),
+      resourcePlan,
+      safetyPlan,
+      shots,
+    });
+    const legacyRenderPlan = {
+      ...renderPlan,
+      shots: renderPlan.shots.map((shot) => ({
+        ...shot,
+        resources: {
+          checkpoint: resourcePlan.checkpoint,
+          loras: resourcePlan.loras,
+        },
+      })),
+    } satisfies typeof renderPlan;
+    const legacyBatch = createStoryExecutionRequestBatch({ mode: "final", renderPlan: legacyRenderPlan });
+
+    expect(legacyBatch.requests[0]?.request).toMatchObject({
+      checkpointName: "local.safetensors",
+      loras: [{ loraName: "local-lora.safetensors", strengthModel: 0.6 }],
+    });
+  });
+
+  it("requires the authoritative resource plan for compact render plans", () => {
+    const resourcePlan = createResourcePlan();
+    const renderPlan = assembleStoryRenderPlan({
+      parameterPlan: createStoryParameterPlan({ storyId, defaults }),
+      resourcePlan,
+      safetyPlan,
+      shots,
+    });
+
+    expect(() => createStoryExecutionRequestBatch({ mode: "final", renderPlan })).toThrow(
+      StoryResourcePlanValidationError,
+    );
+  });
+
+  it("assembles final and preview execution requests without model NSFW resource filtering", () => {
+    const resourcePlan = createResourcePlan();
+    const renderPlan = assembleStoryRenderPlan({
+      img2imgDenoise: 0.72,
       parameterPlan: createStoryParameterPlan({ storyId, defaults }),
       previewOptions: {
         enabled: true,
         shotIds: ["shot-2"],
         parameterOverrides: { width: 512, height: 384, steps: 8 },
       },
-      resourcePlan: createResourcePlan(),
+      resourcePlan,
       safetyPlan,
       shots,
     });
-    const finalBatch = createStoryExecutionRequestBatch({ mode: "final", renderPlan });
-    const previewBatch = createStoryExecutionRequestBatch({ mode: "preview", renderPlan });
+    const finalBatch = createStoryExecutionRequestBatch({ mode: "final", renderPlan, resourcePlan });
+    const previewBatch = createStoryExecutionRequestBatch({ mode: "preview", renderPlan, resourcePlan });
 
     expect(finalBatch.requests).toHaveLength(2);
+    expect(renderPlan.img2imgDenoise).toBe(0.72);
+    expect(finalBatch.requests[0]?.request.denoise).toBe(1);
+    expect(finalBatch.requests[1]?.request.denoise).toBe(0.72);
     expect(previewBatch.requests).toHaveLength(1);
     expect(previewBatch.requests[0]).toMatchObject({
       shotId: "shot-2",
@@ -1134,6 +1662,7 @@ describe("story planning", () => {
         width: 512,
         height: 384,
         steps: 8,
+        denoise: 0.72,
       },
     });
     expect(JSON.stringify(finalBatch)).not.toContain("modelNsfw");
@@ -1141,9 +1670,10 @@ describe("story planning", () => {
   });
 
   it("normalizes Story execution requests against live sampler and scheduler options", () => {
+    const resourcePlan = createResourcePlan();
     const renderPlan = assembleStoryRenderPlan({
       parameterPlan: createStoryParameterPlan({ storyId, defaults }),
-      resourcePlan: createResourcePlan(),
+      resourcePlan,
       safetyPlan,
       shots,
     });
@@ -1161,6 +1691,7 @@ describe("story planning", () => {
     const finalBatch = createStoryExecutionRequestBatch({
       mode: "final",
       renderPlan: editedRenderPlan,
+      resourcePlan,
       samplerOptions: {
         samplers: ["uni_pc"],
         schedulers: ["sgm_uniform"],

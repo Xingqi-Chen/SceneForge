@@ -12,7 +12,6 @@ import {
   LockKeyhole,
   Play,
   RefreshCw,
-  RotateCcw,
   Settings,
   Workflow,
 } from "lucide-react";
@@ -23,7 +22,11 @@ import {
 } from "@/features/agent-timeline/story-input";
 import type { StoryResultDisplay } from "@/features/agent-timeline/story-api";
 import type { StoryShotGraphExecutionState } from "@/features/agent-timeline/story-execution";
-import type { StoryLocalResource } from "@/features/agent-timeline/story-planning";
+import {
+  DEFAULT_STORY_IMG2IMG_DENOISE,
+  normalizeStoryImg2ImgDenoise,
+  type StoryLocalResource,
+} from "@/features/agent-timeline/story-planning";
 import {
   setStoryNodeManualResult,
   type StoryManualEditScope,
@@ -52,6 +55,7 @@ import {
   type LlmChatRequest,
 } from "@/features/llm";
 import type { CivitaiResourceListItem } from "@/features/civitai-lora-library";
+import { extractCivitaiExampleImageDimensions } from "@/features/civitai-lora-library/image-dimensions";
 import {
   getCivitaiModelStorageKind,
   makeCivitaiResourceFileNameAliases,
@@ -66,6 +70,7 @@ import {
 } from "@/shared/prompt-profile";
 import { cn } from "@/shared/utils/cn";
 
+import { StoryNodeOutputSummaryView } from "./StoryNodeOutputSummaryView";
 import { StoryPlanningWorkspace } from "./StoryPlanningWorkspace";
 import { TimelineWorkflowProjectMenu } from "./TimelineWorkflowProjectMenu";
 
@@ -94,17 +99,6 @@ type StoryInputAiAction = "rewrite" | "suggest";
 type StoryAutosaveStatus = "idle" | "loading" | "saved" | "error";
 type StoryOutputDisplayMode = TimelineOutputDisplayMode;
 type StoryOutputDisplayModeMap = Partial<Record<StoryWorkflowNodeId, StoryOutputDisplayMode>>;
-
-const fallbackRequest = {
-  rawIntent: "A traveler in a blue raincoat enters a rain-washed elevated station, notices a red signal reflected in a puddle, then turns toward a shadowed stairwell.",
-  targetShotCount: 3,
-  workflowId: "story-planning-fallback",
-  storyId: "story-fallback",
-  nsfwEnabled: false,
-  settingsSnapshot: {
-    promptProfile: defaultPromptProfileId,
-  },
-} satisfies StoryGraphStartRequest;
 
 function formatStatusLabel(status: string) {
   return status.replace(/-/g, " ");
@@ -166,28 +160,39 @@ function parseStoryInputAiText(content: string) {
 function buildStoryInputAiRequest({
   action,
   nsfwEnabled,
+  promptProfile,
   storyRequest,
 }: {
   action: StoryInputAiAction;
   nsfwEnabled: boolean;
+  promptProfile: PromptProfileId;
   storyRequest: string;
 }): LlmChatRequest {
   const actionInstruction = action === "rewrite"
     ? [
         "Rewrite the provided story request into a clearer storyboard-generation command.",
         "Preserve the user's premise, characters, setting, mood, sequence intent, and constraints.",
+        "Preserve explicit style constraints; if none are present, keep the request aligned to Japanese illustration / anime-inspired rendering.",
         "Do not add title, content warning, model, LoRA, checkpoint, or render-parameter instructions.",
       ]
     : [
         storyRequest
           ? "Suggest one stronger alternate Story Graph request inspired by the current draft."
           : "Suggest one concrete, storyboard-ready Story Graph request for a short sequence.",
+        "Use Japanese illustration / anime-inspired style only as the rendering style: clean character design, expressive eyes, readable silhouettes, polished linework, and painterly color accents.",
+        "The returned storyRequest must explicitly include anime-style or Japanese-illustration visual direction without turning the premise into Japanese cultural content by default.",
+        "Do not add Japanese cultural content unless the user asks for it; avoid inventing shrine, kimono, school uniform, samurai, archer, yokai, torii, katana, or other Japan-themed setting, clothing, action, or props just because of the style.",
         storyRequest
           ? "Keep the alternate request grounded in visible character actions, concrete locations, and clear story causality."
           : "The request must name or clearly define one main protagonist, their visible age range or role, appearance, clothing, immediate goal, key prop or obstacle, and emotional state.",
         storyRequest
+          ? "Keep any protagonist changes consistent with the current draft instead of forcing a new default archetype."
+          : "Bias the default premise toward a female-led everyday slice-of-life story: school, campus, home, cafe, bookstore, studio, neighborhood errand, commute, hobby practice, friendship, self-care, chores, or a small personal goal; keep it wholesome and non-sexual by default.",
+        storyRequest
           ? "Preserve the current draft's core premise while replacing vague atmosphere with specific visual beats."
           : "Include 3 to 5 sequential visual beats with distinct shootable locations, observable actions, changing character intent, and a clear final image or ending state.",
+        "Do not introduce default rain, rainy streets, raincoats, yellow raincoats, yellow rain jackets, yellow jackets or coats, couriers, delivery riders, cake boxes, wet markets, bus stops, train platforms, or stations unless the current draft explicitly asks for them.",
+        "Vary protagonist archetypes, wardrobe colors, locations, key props, obstacles, and ending states instead of reusing a rainy courier template.",
         "Avoid abstract summaries, purely atmospheric mood writing, hidden meanings, symbolic-only stakes, and vague phrases such as subtle signs, mysterious journey, or hidden reunion unless they are shown through concrete visible events.",
         "Prefer compact storyboard-brief prose over a single poetic sentence.",
         "Make it specific enough to start story planning while leaving shot count optional.",
@@ -205,6 +210,7 @@ function buildStoryInputAiRequest({
           "Return only valid JSON. No markdown, comments, or prose.",
           "All natural-language fields must be English.",
           "Keep the result as a story planning request, not a single-image prompt.",
+          `Selected prompt profile: ${formatPromptProfileLabel(promptProfile)} (${promptProfile}).`,
           `NSFW setting: ${nsfwEnabled ? "enabled / explicit audience" : "disabled / safe audience"}.`,
           ...actionInstruction,
           'Required shape: {"storyRequest":"..."}',
@@ -217,13 +223,14 @@ function buildStoryInputAiRequest({
             action,
             currentStoryRequest: storyRequest,
             nsfwEnabled,
+            promptProfile,
           },
           null,
           2,
         ),
       },
     ],
-    temperature: action === "rewrite" ? 0.25 : 0.6,
+    temperature: action === "rewrite" ? 0.25 : storyRequest ? 0.55 : 0.75,
     maxTokens: 400,
   };
 }
@@ -231,10 +238,12 @@ function buildStoryInputAiRequest({
 async function completeStoryInputAi({
   action,
   nsfwEnabled,
+  promptProfile,
   storyRequest,
 }: {
   action: StoryInputAiAction;
   nsfwEnabled: boolean;
+  promptProfile: PromptProfileId;
   storyRequest: string;
 }) {
   const response = await fetch("/api/llm/chat", {
@@ -246,6 +255,7 @@ async function completeStoryInputAi({
       buildStoryInputAiRequest({
         action,
         nsfwEnabled,
+        promptProfile,
         storyRequest,
       }),
     ),
@@ -270,11 +280,13 @@ async function completeStoryInputAi({
 }
 
 function createClientStartRequest({
+  img2imgDenoise,
   nsfwEnabled,
   promptProfile,
   rawIntent,
   targetShotCount,
 }: {
+  img2imgDenoise: string;
   nsfwEnabled: boolean;
   promptProfile: PromptProfileId;
   rawIntent: string;
@@ -289,6 +301,7 @@ function createClientStartRequest({
     targetShotCount: Number.isFinite(normalizedShotCount) ? normalizedShotCount : undefined,
     settingsSnapshot: {
       audienceRating,
+      img2imgDenoise: normalizeStoryImg2ImgDenoise(img2imgDenoise),
       nsfwEnabled,
       promptProfile,
       targetShotCount: Number.isFinite(normalizedShotCount) ? normalizedShotCount : undefined,
@@ -325,6 +338,7 @@ function toStoryLocalResource(resource: CivitaiResourceListItem): StoryLocalReso
     recommendations: resource.recommendations,
     previewImage: resource.previewImage,
     trainedWords: resource.trainedWords,
+    exampleImageDimensions: extractCivitaiExampleImageDimensions(resource.officialImagesJson),
   };
 }
 
@@ -509,11 +523,15 @@ function isStoryResultDisplay(value: unknown): value is StoryResultDisplay {
 }
 
 function getStoryResultImageUrl(reference: StoryResultDisplay["finalReferences"][number]) {
-  return reference.storedImage?.url ?? reference.image?.url ?? "";
+  return reference.storedImage?.url ?? reference.storedImages?.[0]?.url ?? "";
 }
 
 function getStoryExecutionImageUrl(reference: StoryShotGraphExecutionState["shots"][number]["resultReference"]) {
-  return reference?.storedImage?.url ?? reference?.image?.url ?? "";
+  return reference?.storedImage?.url ?? reference?.storedImages?.[0]?.url ?? "";
+}
+
+function getStoryReferenceImageLabel(reference: StoryShotGraphExecutionState["shots"][number]["resultReference"]) {
+  return reference?.storedImage?.filename ?? reference?.storedImages?.[0]?.filename ?? reference?.image?.filename ?? "No stored image";
 }
 
 function getGenerationGateReady(workflow: StoryWorkflowState | null) {
@@ -563,6 +581,7 @@ function StartPanel({
 }) {
   const [rawIntent, setRawIntent] = useState("");
   const [targetShotCount, setTargetShotCount] = useState("");
+  const [img2imgDenoise, setImg2ImgDenoise] = useState(String(DEFAULT_STORY_IMG2IMG_DENOISE));
   const [promptProfile, setPromptProfile] = useState<PromptProfileId>(defaultPromptProfileId);
   const [aiStatus, setAiStatus] = useState<StoryInputAiAction | null>(null);
   const [error, setError] = useState("");
@@ -582,6 +601,7 @@ function StartPanel({
       const nextStoryRequest = await completeStoryInputAi({
         action,
         nsfwEnabled,
+        promptProfile,
         storyRequest: currentStoryRequest,
       });
       setRawIntent(nextStoryRequest);
@@ -603,6 +623,7 @@ function StartPanel({
     setError("");
     onStart(
       createClientStartRequest({
+        img2imgDenoise,
         nsfwEnabled,
         promptProfile,
         rawIntent,
@@ -619,22 +640,6 @@ function StartPanel({
             <h2 className="text-base font-semibold text-slate-950">Start Story Graph</h2>
             <p className="mt-1 text-xs text-slate-500">Create an inspectable in-memory story planning workflow.</p>
           </div>
-          <button
-            className="inline-flex h-8 items-center justify-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-100"
-            onClick={() =>
-              onStart({
-                ...fallbackRequest,
-                settingsSnapshot: {
-                  ...fallbackRequest.settingsSnapshot,
-                  promptProfile,
-                },
-              })
-            }
-            type="button"
-          >
-            <RotateCcw className="size-3.5" />
-            Load fallback
-          </button>
         </div>
 
         <label className="flex flex-col gap-1 text-xs font-medium text-slate-700">
@@ -669,7 +674,7 @@ function StartPanel({
           />
         </label>
 
-        <div className="grid gap-3 md:grid-cols-[minmax(0,12rem)_8rem]">
+        <div className="grid gap-3 md:grid-cols-[minmax(0,12rem)_8rem_10rem]">
           <label className="flex flex-col gap-1 text-xs font-medium text-slate-700">
             Base model
             <select
@@ -687,6 +692,7 @@ function StartPanel({
           <label className="flex flex-col gap-1 text-xs font-medium text-slate-700">
             Shots
             <input
+              id="story-target-shot-count"
               className="h-9 rounded-md border border-slate-200 px-3 text-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
               min={1}
               max={24}
@@ -694,6 +700,20 @@ function StartPanel({
               placeholder="Auto"
               type="number"
               value={targetShotCount}
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-xs font-medium text-slate-700">
+            Img2img denoise
+            <input
+              id="story-img2img-denoise"
+              className="h-9 rounded-md border border-slate-200 px-3 text-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+              max={1}
+              min={0}
+              onBlur={(event) => setImg2ImgDenoise(String(normalizeStoryImg2ImgDenoise(event.target.value)))}
+              onChange={(event) => setImg2ImgDenoise(event.target.value)}
+              step={0.01}
+              type="number"
+              value={img2imgDenoise}
             />
           </label>
         </div>
@@ -743,6 +763,8 @@ function StoryExecutionPanel({
       <div className="grid gap-2">
         {execution.shots.map((shot) => {
           const selected = shot.shotId === selectedShotId;
+          const imageUrl = getStoryExecutionImageUrl(shot.resultReference);
+          const imageLabel = getStoryReferenceImageLabel(shot.resultReference);
 
           return (
             <article
@@ -770,17 +792,16 @@ function StoryExecutionPanel({
                   {shot.status}
                 </span>
               </div>
-              {shot.queueMetadata?.promptId || shot.resultReference?.promptId ? (
-                <p className="mt-2 break-all text-[11px] text-slate-500">
-                  Prompt: {shot.resultReference?.promptId ?? shot.queueMetadata?.promptId}
-                </p>
-              ) : null}
               {shot.resultReference?.image ? (
                 <div className="mt-2 flex items-center gap-2 text-[11px] text-slate-600">
                   <ImageIcon className="size-3.5" />
-                  <a className="break-all text-blue-700 underline-offset-2 hover:underline" href={getStoryExecutionImageUrl(shot.resultReference)} target="_blank" rel="noreferrer">
-                    {shot.resultReference.image.filename}
-                  </a>
+                  {imageUrl ? (
+                    <a className="break-all text-blue-700 underline-offset-2 hover:underline" href={imageUrl} target="_blank" rel="noreferrer">
+                      {imageLabel}
+                    </a>
+                  ) : (
+                    <span className="break-all">{imageLabel}</span>
+                  )}
                 </div>
               ) : null}
               {shot.error ? (
@@ -850,7 +871,9 @@ function StoryResultGrid({ result }: { result: StoryResultDisplay }) {
                 </div>
               )}
               <p className="mt-2 text-xs font-semibold text-slate-900">{reference.shotId}</p>
-              <p className="mt-1 break-all text-[11px] text-slate-500">{reference.promptId}</p>
+              <p className="mt-1 break-all text-[11px] text-slate-500">
+                {reference.storedImage?.filename ?? reference.storedImages?.[0]?.filename ?? reference.image?.filename ?? "No stored image"}
+              </p>
             </article>
           );
         })}
@@ -871,6 +894,7 @@ export function StoryPlanningPreview() {
   const [selectedNodeId, setSelectedNodeId] = useState<StoryWorkflowNodeId>("story-input");
   const [selectedStoryShotId, setSelectedStoryShotId] = useState<string | null>(null);
   const [outputDisplayModes, setOutputDisplayModes] = useState<StoryOutputDisplayModeMap>({});
+  const [artifactEditorState, setArtifactEditorState] = useState({ key: "", open: false });
   const [settingsNsfwEnabled, setSettingsNsfwEnabled] = useState(false);
   const [settingsAutoReviewEnabled, setSettingsAutoReviewEnabled] = useState(false);
   const [planningError, setPlanningError] = useState("");
@@ -885,12 +909,15 @@ export function StoryPlanningPreview() {
   const selectedNode = workflow?.nodes[selectedNodeId];
   const metadata = storyWorkflowDefinition.metadata[selectedNodeId];
   const selectedOutputDisplayMode: StoryOutputDisplayMode = outputDisplayModes[selectedNodeId] ?? "visual";
+  const artifactEditorKey = `${selectedNodeId}:${selectedOutputDisplayMode}`;
+  const artifactEditorOpen = artifactEditorState.key === artifactEditorKey && artifactEditorState.open;
   const rawJson = useMemo(
     () => JSON.stringify(selectedNode?.result ?? selectedNode?.error ?? {}, null, 2),
     [selectedNode],
   );
   const selectedIndex = planningNodeIds.indexOf(selectedNodeId) + 1;
   const selectedDependencies = storyWorkflowDefinition.dependencyDag[selectedNodeId];
+
   const getCurrentStoryWorkflowRecordInput = useCallback((
     overrides: Partial<Omit<TimelineWorkflowRecordInput, "workflow">> = {},
   ): TimelineWorkflowRecordInput | null => {
@@ -1491,14 +1518,33 @@ export function StoryPlanningPreview() {
                       </pre>
                     ) : (
                       <>
-                        <StoryPlanningWorkspace
-                          editable
-                          emptyState="This story artifact has not been generated yet."
-                          key={`${selectedNodeId}:${selectedNode.updatedAt}`}
-                          node={selectedNode}
-                          onSave={handleSave}
-                          storyId={workflow.storyId}
-                        />
+                        <StoryNodeOutputSummaryView nodeId={selectedNodeId} result={selectedNode.result} />
+                        <details
+                          className="mt-4 rounded-md border border-slate-200 bg-slate-50 p-3"
+                          onToggle={(event) =>
+                            setArtifactEditorState({
+                              key: artifactEditorKey,
+                              open: event.currentTarget.open,
+                            })
+                          }
+                          open={artifactEditorOpen}
+                        >
+                          <summary className="cursor-pointer text-xs font-semibold text-slate-700">
+                            Edit artifact
+                          </summary>
+                          {artifactEditorOpen ? (
+                            <div className="mt-3">
+                              <StoryPlanningWorkspace
+                                editable
+                                emptyState="This story artifact has not been generated yet."
+                                key={`${selectedNodeId}:${selectedNode.updatedAt}`}
+                                node={selectedNode}
+                                onSave={handleSave}
+                                storyId={workflow.storyId}
+                              />
+                            </div>
+                          ) : null}
+                        </details>
                         {selectedNodeId === "shot-graph-execution" && executionResult ? (
                           <div className="mt-4">
                             <StoryExecutionPanel
@@ -1547,16 +1593,18 @@ export function StoryPlanningPreview() {
                 </dl>
               </section>
 
-              <section className="rounded-md border border-slate-200 bg-white">
-                <header className="border-b border-slate-100 px-3 py-2">
-                  <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Raw JSON</h2>
-                </header>
-                <div className="p-3">
-                  <pre className="max-h-96 overflow-auto whitespace-pre-wrap rounded-md border border-slate-200 bg-slate-50 p-3 font-mono text-xs leading-relaxed text-slate-700">
-                    {rawJson}
-                  </pre>
-                </div>
-              </section>
+              {selectedOutputDisplayMode === "json" ? (
+                <section className="rounded-md border border-slate-200 bg-white">
+                  <header className="border-b border-slate-100 px-3 py-2">
+                    <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Raw JSON</h2>
+                  </header>
+                  <div className="p-3">
+                    <pre className="max-h-96 overflow-auto whitespace-pre-wrap rounded-md border border-slate-200 bg-slate-50 p-3 font-mono text-xs leading-relaxed text-slate-700">
+                      {rawJson}
+                    </pre>
+                  </div>
+                </section>
+              ) : null}
 
               <section className="rounded-md border border-slate-200 bg-white">
                 <header className="border-b border-slate-100 px-3 py-2">

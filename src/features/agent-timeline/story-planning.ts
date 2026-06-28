@@ -15,10 +15,6 @@ import {
 } from "@/features/editor/ai-prompt/illustrious-prompt";
 import type { CivitaiAiPromptResult } from "@/features/editor/ai-prompt/civitai-ai-context";
 import {
-  type PromptProfileId,
-} from "@/shared/prompt-profile";
-
-import {
   validateLocalResourcePlan,
   type ResourcePlanCandidates,
   type ResourcePlanLocalResource,
@@ -31,19 +27,16 @@ import type {
   StoryShot,
   StoryShotId,
   StoryInput,
+  StorySourceImageEdgeSummary,
 } from "./story-types";
 import {
-  buildTimelineFinalPositivePrompt,
-} from "./t7-node-adapters";
+  createStorySourceImageEdgeSummaries,
+} from "./story-source-image-risk";
 import {
   normalizeTimelineSamplerOptions,
   pickSupportedValue,
   type TimelineSamplerOptions,
 } from "./timeline-sampler-options";
-import type {
-  ResourceRecommendationTimelineResult,
-  ScenePromptTimelineResult,
-} from "./types";
 
 export type StoryLocalResource = ResourcePlanLocalResource & {
   versionName?: string | null;
@@ -71,6 +64,7 @@ export type StoryLocalResource = ResourcePlanLocalResource & {
   nsfwLevel?: number | null;
   aiNsfwLevel?: string | null;
   modelNsfw?: boolean | null;
+  exampleImageDimensions?: string[];
 };
 
 export type StoryResourcePlan = ResourcePlanResult<StoryLocalResource> & {
@@ -123,24 +117,90 @@ export type StoryPreviewResultReference = {
   parameters: StoryGenerationParameters;
 };
 
+export type StoryRenderPlanResourceRefs = {
+  sourceNodeId: "resource-plan";
+  checkpoint: {
+    modelFileName?: string;
+    name: string;
+    resourceId: string;
+  };
+  loras: Array<{
+    name: string;
+    resourceId: string;
+    suggestedWeight: number | null;
+  }>;
+};
+
+export type StoryGenerationRequestPreview = {
+  negativePromptLength: number;
+  negativePromptPreview: string;
+  parameters: StoryGenerationParameters;
+  positivePromptLength: number;
+  positivePromptPreview: string;
+  sourceImageEdges: StorySourceImageEdgeSummary[];
+  shotId: StoryShotId;
+  sourceMode: "none" | "source-image";
+  sourceShotIds: StoryShotId[];
+  title: string;
+};
+
+export type StoryAnimaPromptParts = {
+  subjectTags: string[];
+  characterTags: string[];
+  seriesTags: string[];
+  artistTags: string[];
+  outfitTags: string[];
+  propTags: string[];
+  actionTags: string[];
+  settingTags: string[];
+  cameraTags: string[];
+  lightingTags: string[];
+  styleTags: string[];
+  singleFrameCaption: string;
+  negativeAdditions: string[];
+};
+
+export type StoryRenderPromptDraftShot = {
+  shotId: StoryShotId;
+  animaPromptParts: StoryAnimaPromptParts;
+  rationale?: string;
+  warnings?: string[];
+};
+
+export type StoryRenderPromptPlan = {
+  storyId: string;
+  shots: StoryRenderPromptDraftShot[];
+  warnings: string[];
+};
+
 export type StoryRenderPlanShot = {
   shotId: StoryShotId;
   order: number;
   title: string;
+  animaPromptParts: StoryAnimaPromptParts;
   positivePrompt: string;
   negativePrompt: string;
   outputAnchors: StoryOutputAnchors;
+  sourceImageEdges: StorySourceImageEdgeSummary[];
   sourceShotIds: StoryShotId[];
   parameters: StoryGenerationParameters;
-  resources: {
+  resourceRefs: {
+    checkpointResourceId: string;
+    loraResourceIds: string[];
+  };
+  resources?: {
     checkpoint: StoryResourcePlan["checkpoint"];
     loras: StoryResourcePlan["loras"];
   };
+  promptRationale?: string;
+  promptWarnings?: string[];
 };
 
 export type StoryRenderPlan = {
   storyId: string;
+  img2imgDenoise: number;
   nsfwContext: StoryNsfwContext;
+  resourceRefs: StoryRenderPlanResourceRefs;
   shots: StoryRenderPlanShot[];
   preview: {
     options: StoryPreviewExecutionOptions;
@@ -167,6 +227,7 @@ export type StoryOutputAnchors = Record<StoryPromptBucket, string[]> & {
   negative: string[];
   source: {
     mode: "none" | "source-image";
+    risks: StorySourceImageEdgeSummary[];
     sourceShotIds: StoryShotId[];
     reason: string;
   };
@@ -201,7 +262,13 @@ const defaultStoryGenerationParameters = {
   scheduler: "karras",
   denoise: 1,
 } satisfies StoryGenerationParameters;
-const storyAnimaQualityMetaTags = ["masterpiece", "best quality", "score_7"];
+export const DEFAULT_STORY_IMG2IMG_DENOISE = 0.9;
+const storyAnimaPromptPrefix = [
+  "masterpiece",
+  "best quality",
+  "score_7",
+  "safe",
+] as const;
 const storySafeMinorNegativeTags = [
   "nsfw",
   "sexualized minor",
@@ -300,82 +367,22 @@ function getStoryResourceDimensionText(resourcePlan?: StoryResourcePlan) {
     .toLocaleLowerCase();
 }
 
-function hasSquareAspect(text: string) {
-  return /\b(?:square|1\s*:\s*1)\b/.test(text);
-}
-
-function hasPortraitAspect(text: string) {
-  return /\b(?:portrait|vertical|full body|full-body|phone wallpaper|character sheet|9\s*:\s*16|2\s*:\s*3|3\s*:\s*4)\b/.test(text);
-}
-
-function hasLandscapeAspect(text: string) {
-  return /\b(?:landscape|widescreen|panorama|panoramic|establishing|16\s*:\s*9|3\s*:\s*2|4\s*:\s*3)\b/.test(text) ||
-    /\bwide\b/.test(text) && !/\b(?:medium-wide|medium wide)\b/.test(text);
-}
-
-function hasSoloCharacterFraming(text: string) {
-  return /\b(?:1girl|1boy|solo|single character|only visible character|seated|sitting|chair|medium full|medium-full|medium close|medium-close|close intimate|frontal medium|half body|upper body|bare shoulders)\b/.test(text);
-}
-
 function inferStoryGenerationDimensions({
   input,
   resourcePlan,
-  shots,
 }: {
   input?: StoryInput;
   resourcePlan?: StoryResourcePlan;
   shots?: readonly StoryShot[];
 }) {
   const inputText = getStoryDimensionText({ input });
-  const shotText = getStoryDimensionText({ shots });
   const resourceText = getStoryResourceDimensionText(resourcePlan);
   const explicitDimensions =
     readExplicitDimensions(inputText)
-    ?? readExplicitDimensions(resourceText)
-    ?? readExplicitDimensions(shotText);
+    ?? readExplicitDimensions(resourceText);
 
   if (explicitDimensions) {
     return explicitDimensions;
-  }
-
-  if (hasSquareAspect(inputText)) {
-    return { width: 1024, height: 1024 };
-  }
-
-  if (hasPortraitAspect(inputText)) {
-    return { width: 832, height: 1216 };
-  }
-
-  if (hasLandscapeAspect(inputText)) {
-    return { width: 1216, height: 832 };
-  }
-
-  if (hasSquareAspect(resourceText)) {
-    return { width: 1024, height: 1024 };
-  }
-
-  if (hasPortraitAspect(resourceText)) {
-    return { width: 832, height: 1216 };
-  }
-
-  if (hasLandscapeAspect(resourceText)) {
-    return { width: 1216, height: 832 };
-  }
-
-  if (hasSoloCharacterFraming(shotText)) {
-    return { width: 832, height: 1216 };
-  }
-
-  if (hasSquareAspect(shotText)) {
-    return { width: 1024, height: 1024 };
-  }
-
-  if (hasPortraitAspect(shotText)) {
-    return { width: 832, height: 1216 };
-  }
-
-  if (hasLandscapeAspect(shotText)) {
-    return { width: 1216, height: 832 };
   }
 
   return {
@@ -396,6 +403,24 @@ function readString(value: unknown, fallback: string) {
 function readSeed(value: unknown) {
   const parsed = Number(value);
   return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : undefined;
+}
+
+export function normalizeStoryImg2ImgDenoise(value: unknown) {
+  const parsed = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(parsed)) {
+    return DEFAULT_STORY_IMG2IMG_DENOISE;
+  }
+
+  return Math.min(1, Math.max(0, Number(parsed.toFixed(2))));
+}
+
+export function getStoryInputImg2ImgDenoise(input?: StoryInput) {
+  const settingsSnapshot = input?.settingsSnapshot;
+  if (settingsSnapshot && typeof settingsSnapshot === "object" && !Array.isArray(settingsSnapshot)) {
+    return normalizeStoryImg2ImgDenoise((settingsSnapshot as { img2imgDenoise?: unknown }).img2imgDenoise);
+  }
+
+  return DEFAULT_STORY_IMG2IMG_DENOISE;
 }
 
 function getReferenceSampler(resource: StoryLocalResource) {
@@ -579,13 +604,194 @@ function getNsfwContext(safetyPlan: StorySafetyPlan): StoryNsfwContext {
   };
 }
 
-function getBasePositivePrompt(shot: StoryShot) {
-  return compactStoryVisualPrompt([
-    shot.promptIntent,
-    shot.description,
-    ...shot.continuityNotes,
-    shot.camera,
-  ]);
+const storyAnimaPromptPartArrayKeys = [
+  "subjectTags",
+  "characterTags",
+  "seriesTags",
+  "artistTags",
+  "outfitTags",
+  "propTags",
+  "actionTags",
+  "settingTags",
+  "cameraTags",
+  "lightingTags",
+  "styleTags",
+  "negativeAdditions",
+] as const satisfies readonly (keyof StoryAnimaPromptParts)[];
+
+const storyAnimaPromptPositivePartKeys = [
+  "subjectTags",
+  "characterTags",
+  "seriesTags",
+  "artistTags",
+  "outfitTags",
+  "propTags",
+  "actionTags",
+  "settingTags",
+  "cameraTags",
+  "lightingTags",
+  "styleTags",
+] as const satisfies readonly (keyof StoryAnimaPromptParts)[];
+
+const storyAnimaPromptPartAliases = {
+  actionTags: "action_tags",
+  artistTags: "artist_tags",
+  cameraTags: "camera_tags",
+  characterTags: "character_tags",
+  lightingTags: "lighting_tags",
+  negativeAdditions: "negative_additions",
+  outfitTags: "outfit_tags",
+  propTags: "prop_tags",
+  seriesTags: "series_tags",
+  settingTags: "setting_tags",
+  singleFrameCaption: "single_frame_caption",
+  styleTags: "style_tags",
+  subjectTags: "subject_tags",
+} as const satisfies Record<keyof StoryAnimaPromptParts, string>;
+
+function createEmptyStoryAnimaPromptParts(): StoryAnimaPromptParts {
+  return {
+    subjectTags: [],
+    characterTags: [],
+    seriesTags: [],
+    artistTags: [],
+    outfitTags: [],
+    propTags: [],
+    actionTags: [],
+    settingTags: [],
+    cameraTags: [],
+    lightingTags: [],
+    styleTags: [],
+    singleFrameCaption: "",
+    negativeAdditions: [],
+  };
+}
+
+function dedupeExactPromptParts(parts: string[]) {
+  const seen = new Set<string>();
+
+  return parts.filter((part) => {
+    if (!part || seen.has(part)) {
+      return false;
+    }
+
+    seen.add(part);
+    return true;
+  });
+}
+
+function normalizeStoryAnimaPromptPart(value: unknown) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function getStoryAnimaPromptPartSourceValue(
+  source: Record<string, unknown>,
+  key: keyof StoryAnimaPromptParts,
+) {
+  return source[key] ?? source[storyAnimaPromptPartAliases[key]];
+}
+
+export function normalizeStoryAnimaPromptParts(raw: unknown): StoryAnimaPromptParts {
+  const source = typeof raw === "object" && raw !== null && !Array.isArray(raw)
+    ? raw as Record<string, unknown>
+    : {};
+  const parts = createEmptyStoryAnimaPromptParts();
+
+  for (const key of storyAnimaPromptPartArrayKeys) {
+    const value = getStoryAnimaPromptPartSourceValue(source, key);
+    parts[key] = Array.isArray(value)
+      ? dedupeExactPromptParts(value.map(normalizeStoryAnimaPromptPart).filter(Boolean))
+      : [];
+  }
+
+  parts.singleFrameCaption = normalizeStoryAnimaPromptPart(
+    getStoryAnimaPromptPartSourceValue(source, "singleFrameCaption"),
+  );
+
+  return parts;
+}
+
+export function compileStoryAnimaPrompt(parts: StoryAnimaPromptParts): string {
+  const normalized = normalizeStoryAnimaPromptParts(parts);
+
+  return [
+    ...storyAnimaPromptPrefix,
+    ...storyAnimaPromptPositivePartKeys.flatMap((key) => normalized[key]),
+    normalized.singleFrameCaption,
+  ].filter(Boolean).join(", ");
+}
+
+function dedupeStoryPromptParts(parts: string[]) {
+  const seen = new Set<string>();
+
+  return parts.filter((part) => {
+    const key = part.toLocaleLowerCase();
+    if (!part || seen.has(key)) {
+      return false;
+    }
+
+    seen.add(key);
+    return true;
+  });
+}
+
+function getStoryRenderPromptDraft(shotId: StoryShotId, renderPromptPlan?: StoryRenderPromptPlan) {
+  const draft = renderPromptPlan?.shots.find((candidate) => candidate.shotId === shotId);
+  if (!draft) {
+    return undefined;
+  }
+
+  return {
+    ...draft,
+    animaPromptParts: normalizeStoryAnimaPromptParts(draft.animaPromptParts),
+    warnings: draft.warnings ? [...draft.warnings] : undefined,
+  };
+}
+
+function normalizeStoryNegativePromptPart(value: string) {
+  return value
+    .replace(/<lora:[^>]+>/gi, " ")
+    .replace(/\s+/g, " ")
+    .replace(/[.;:]+$/g, "")
+    .trim();
+}
+
+function mergeStoryNegativePrompts(...values: string[]) {
+  return dedupeStoryPromptParts(
+    values
+      .flatMap((value) => splitPromptParts(value))
+      .map(normalizeStoryNegativePromptPart)
+      .filter(Boolean),
+  ).join(", ");
+}
+
+function getStoryRenderPromptDraftNegativeParts(renderPromptDraft?: StoryRenderPromptDraftShot) {
+  return renderPromptDraft?.animaPromptParts.negativeAdditions ?? [];
+}
+
+function createFallbackStoryAnimaPromptParts(shot: StoryShot): StoryAnimaPromptParts {
+  return normalizeStoryAnimaPromptParts({
+    subjectTags: inferStoryAnimaSubjectCount(shot),
+    characterTags: shot.characterIds,
+    actionTags: [shot.promptIntent],
+    settingTags: shot.continuityNotes,
+    cameraTags: [shot.camera],
+    singleFrameCaption: shot.description,
+    negativeAdditions: [],
+  });
+}
+
+function getStoryAnimaPromptPartsForShot(
+  shot: StoryShot,
+  renderPromptDraft?: StoryRenderPromptDraftShot,
+): StoryAnimaPromptParts {
+  return renderPromptDraft
+    ? normalizeStoryAnimaPromptParts(renderPromptDraft.animaPromptParts)
+    : createFallbackStoryAnimaPromptParts(shot);
+}
+
+function getBasePositivePrompt(parts: StoryAnimaPromptParts) {
+  return compileStoryAnimaPrompt(parts);
 }
 
 function getShotSafetyText(shot: StoryShot) {
@@ -740,29 +946,19 @@ type StoryPromptBucket =
   | "lighting"
   | "detail";
 
-const storyPromptBucketOrder: StoryPromptBucket[] = [
-  "subject",
-  "appearance",
-  "clothing",
-  "action",
-  "environment",
-  "composition",
-  "camera",
-  "lighting",
-  "detail",
-];
-
-const storyPromptBucketLimits: Record<StoryPromptBucket, number> = {
-  subject: 4,
-  appearance: 2,
-  clothing: 2,
-  action: 4,
-  environment: 3,
-  composition: 2,
-  camera: 2,
-  lighting: 2,
-  detail: 2,
-};
+function createEmptyStoryPromptBuckets(): Record<StoryPromptBucket, string[]> {
+  return {
+    action: [],
+    appearance: [],
+    camera: [],
+    clothing: [],
+    composition: [],
+    detail: [],
+    environment: [],
+    lighting: [],
+    subject: [],
+  };
+}
 
 function getStoryPromptBucket(value: string): StoryPromptBucket {
   const key = value.toLocaleLowerCase();
@@ -787,11 +983,11 @@ function getStoryPromptBucket(value: string): StoryPromptBucket {
     return "subject";
   }
 
-  if (/\b(?:hair|freckles|face|eyes?|expression|drenched|soaked|wettest|disheveled|silhouette|bare shoulders|soft features)\b/.test(key)) {
+  if (/\b(?:hair|freckles|face|eyes?|glasses|expression|drenched|soaked|wettest|disheveled|silhouette|bare shoulders|soft features)\b/.test(key)) {
     return "appearance";
   }
 
-  if (/\b(?:raincoat|jacket|shirt|jeans|sneakers|shoes|boots?|coat|uniform|clothing|outfit|wearing|hat|wardrobe|costume|same outfit|same clothes)\b/.test(key)) {
+  if (/\b(?:raincoat|jacket|cardigan|sweater|shirt|jeans|sneakers|shoes|boots?|coat|uniform|clothing|outfit|wearing|hat|wardrobe|costume|same outfit|same clothes)\b/.test(key)) {
     return "clothing";
   }
 
@@ -807,21 +1003,11 @@ function getStoryPromptBucket(value: string): StoryPromptBucket {
     return "detail";
   }
 
-  if (/\b(?:market|street|crosswalk|bus|depot|courthouse|lobby|desk|city|alley|station|plaza|stairwell|apartment|doorway|bakery|umbrellas?|stalls?|puddles?|traffic|architecture|interior|exterior|background|environment|bridge route|barricades?)\b/.test(key)) {
+  if (/\b(?:market|street|sidewalk|crosswalk|bus|depot|courthouse|lobby|desk|city|alley|station|plaza|hallway|library|stairwell|apartment|doorway|bakery|umbrellas?|stalls?|puddles?|traffic|architecture|interior|exterior|background|environment|bridge route|barricades?)\b/.test(key)) {
     return "environment";
   }
 
   return "detail";
-}
-
-function splitStoryPromptParts(value: string) {
-  return splitPromptParts(value)
-    .flatMap((part) => part.split(/(?<=[.!?])\s+/g))
-    .flatMap((part) => part.split(/\s+then\s+/gi))
-    .flatMap((part) => part.split(/\s+to\s+(?=slide|sliding)\s*/gi))
-    .flatMap((part) => part.split(/\s+(?:(?:beside|alongside)\s+(?=(?:a|an|the)?\s*(?:little|relieved|father|mother|girl|boy|child|man|woman|courier)\b)|and her|and his)\s+/gi))
-    .map((part) => part.replace(/[.!?]+$/g, "").trim())
-    .filter(Boolean);
 }
 
 function normalizeStoryAnchorPhrase(value: string) {
@@ -995,63 +1181,8 @@ function normalizeStoryAnchorPhrase(value: string) {
     : normalized;
 }
 
-function removeContainedPromptParts(parts: string[]) {
-  return parts.filter((part, index) => {
-    const key = part.toLocaleLowerCase();
-    return !parts.some((candidate, candidateIndex) => {
-      if (candidateIndex === index) {
-        return false;
-      }
-
-      const candidateKey = candidate.toLocaleLowerCase();
-      return candidateKey.length > key.length && candidateKey.includes(key);
-    });
-  });
-}
-
-function compactStoryVisualPrompt(values: string[]) {
-  const buckets: Record<StoryPromptBucket, string[]> = {
-    action: [],
-    appearance: [],
-    camera: [],
-    clothing: [],
-    composition: [],
-    detail: [],
-    environment: [],
-    lighting: [],
-    subject: [],
-  };
-  const seen = new Set<string>();
-
-  for (const part of values.flatMap((value) => splitStoryPromptParts(value))) {
-    const normalized = normalizeStoryAnchorPhrase(part);
-    const key = normalized.toLocaleLowerCase();
-    if (!normalized || seen.has(key)) {
-      continue;
-    }
-
-    seen.add(key);
-    const bucket = getStoryPromptBucket(normalized);
-    if (buckets[bucket].length < storyPromptBucketLimits[bucket]) {
-      buckets[bucket].push(normalized);
-    }
-  }
-
-  return storyPromptBucketOrder.flatMap((bucket) => removeContainedPromptParts(buckets[bucket])).join(", ");
-}
-
 function getStoryPositiveAnchorBuckets(positivePrompt: string): Record<StoryPromptBucket, string[]> {
-  const buckets: Record<StoryPromptBucket, string[]> = {
-    action: [],
-    appearance: [],
-    camera: [],
-    clothing: [],
-    composition: [],
-    detail: [],
-    environment: [],
-    lighting: [],
-    subject: [],
-  };
+  const buckets = createEmptyStoryPromptBuckets();
 
   for (const part of splitPromptParts(positivePrompt)) {
     const bucket = getStoryPromptBucket(part);
@@ -1073,6 +1204,10 @@ function getShotSubjectText(shot: StoryShot) {
 function countSubjectMatches(text: string, pattern: RegExp) {
   const matches = text.match(pattern) ?? [];
   return matches.length;
+}
+
+function hasAdultSubjectContext(text: string) {
+  return /\b(?:adult|college|college-age|university|woman|women|man|men|mother|father)\b/.test(text);
 }
 
 function inferStoryAnimaSubjectCount(shot: StoryShot) {
@@ -1099,6 +1234,10 @@ function inferStoryAnimaSubjectCount(shot: StoryShot) {
     return ["solo"];
   }
 
+  if (hasAdultSubjectContext(text)) {
+    return [`${subjectCount}people`];
+  }
+
   if (femaleCount + maleCount === subjectCount) {
     const maleTag = /\b(?:man|father)\b/.test(text)
       ? `${maleCount}${maleCount === 1 ? "man" : "men"}`
@@ -1113,26 +1252,15 @@ function inferStoryAnimaSubjectCount(shot: StoryShot) {
   return [`${subjectCount}people`];
 }
 
-function normalizeStoryAnimaPromptPart(part: string) {
-  const trimmed = part.trim();
-  if (/^(?:@|(?:series|source|copyright)\s*:)/i.test(trimmed)) {
-    return trimmed;
-  }
-
-  return trimmed.toLocaleLowerCase();
-}
-
-function normalizeStoryAnimaPromptParts(parts: string[]) {
-  return parts.map(normalizeStoryAnimaPromptPart);
-}
-
 function createStoryOutputAnchors({
   baseNegativePrompt,
   basePositivePrompt,
+  sourceImageEdges,
   sourceShotIds,
 }: {
   baseNegativePrompt: string;
   basePositivePrompt: string;
+  sourceImageEdges: StorySourceImageEdgeSummary[];
   sourceShotIds: StoryShotId[];
 }): StoryOutputAnchors {
   return {
@@ -1140,31 +1268,17 @@ function createStoryOutputAnchors({
     negative: splitPromptParts(baseNegativePrompt),
     source: {
       mode: sourceShotIds.length > 0 ? "source-image" : "none",
+      risks: sourceImageEdges.map((edge) => ({
+        ...edge,
+        riskFactors: [...edge.riskFactors],
+        sourceChain: [...edge.sourceChain],
+      })),
       sourceShotIds: [...sourceShotIds],
       reason: sourceShotIds.length > 0
         ? "This shot will receive previous generated image inputs from the listed source shots."
         : "No previous generated image is injected; continuity is prompt-only for this shot.",
     },
   };
-}
-
-function inferPromptProfileFromCheckpoint(checkpoint: StoryLocalResource): PromptProfileId {
-  const family = [
-    checkpoint.modelBaseModel,
-    checkpoint.baseModel,
-    checkpoint.name,
-    checkpoint.modelFileName,
-  ].filter(Boolean).join(" ").toLocaleLowerCase();
-
-  if (family.includes("anima")) {
-    return "anima";
-  }
-
-  if (family.includes("illustrious")) {
-    return "illustrious";
-  }
-
-  return "generic";
 }
 
 function toSelectedCivitaiResourcePreview(
@@ -1192,6 +1306,7 @@ function toSelectedCivitaiResourcePreview(
     modelFileNameAliases: resource.modelFileNameAliases,
     modelStorageKind: resourceType === "model" ? resource.modelStorageKind : undefined,
     promptReferences: resource.promptReferences,
+    exampleImageDimensions: resource.exampleImageDimensions,
   };
 }
 
@@ -1204,121 +1319,6 @@ function getSelectedResources(resourcePlan: StoryResourcePlan): SelectedCivitaiR
 
 export function getSelectedStoryResourcesForPrompting(resourcePlan: StoryResourcePlan): SelectedCivitaiResourcesPreview {
   return getSelectedResources(resourcePlan);
-}
-
-function getResourceRecommendationResult(resourcePlan: StoryResourcePlan): ResourceRecommendationTimelineResult {
-  const checkpoint = toSelectedCivitaiResourcePreview(resourcePlan.checkpoint.resource, "model");
-  const loras = resourcePlan.loras.map((lora) => ({
-    resource: toSelectedCivitaiResourcePreview(lora.resource, "lora"),
-    suggestedWeight: lora.suggestedWeight,
-    reason: lora.reason,
-  }));
-
-  return {
-    checkpoint: {
-      resource: checkpoint,
-      reason: resourcePlan.checkpoint.reason,
-    },
-    loras,
-    candidates: {
-      checkpoints: [
-        {
-          resource: checkpoint,
-          importedImageCount: 1,
-          commonCheckpoints: [],
-          commonLoras: [],
-          score: 1,
-        },
-      ],
-      loras: loras.map((lora) => ({
-        resource: lora.resource,
-        importedImageCount: 1,
-        commonCheckpoints: [],
-        commonLoras: [],
-        score: 1,
-      })),
-    },
-    recommendationReason: resourcePlan.recommendationReason,
-    overallEffect: resourcePlan.overallEffect,
-    warnings: [...resourcePlan.warnings],
-  };
-}
-
-function getScenePromptFromStoryShot({
-  baseNegativePrompt,
-  promptProfile,
-  shot,
-}: {
-  baseNegativePrompt: string;
-  promptProfile: PromptProfileId;
-  shot: StoryShot;
-}): ScenePromptTimelineResult {
-  const positivePrompt = getBasePositivePrompt(shot);
-  const parts = splitPromptParts(positivePrompt);
-  const subjectParts = parts.filter((part) => getStoryPromptBucket(part) === "subject");
-  const appearanceParts = parts.filter((part) => getStoryPromptBucket(part) === "appearance");
-  const clothingParts = parts.filter((part) => getStoryPromptBucket(part) === "clothing");
-  const actionParts = parts.filter((part) => getStoryPromptBucket(part) === "action");
-  const environmentParts = parts.filter((part) => getStoryPromptBucket(part) === "environment");
-  const compositionParts = parts.filter((part) => getStoryPromptBucket(part) === "composition");
-  const cameraParts = parts.filter((part) => getStoryPromptBucket(part) === "camera");
-  const lightingParts = parts.filter((part) => getStoryPromptBucket(part) === "lighting");
-  const detailParts = parts.filter((part) => getStoryPromptBucket(part) === "detail");
-  const animaCharacterParts = normalizeStoryAnimaPromptParts([
-    ...subjectParts,
-    ...appearanceParts,
-    ...clothingParts,
-    ...actionParts,
-  ]);
-  const animaGeneralParts = normalizeStoryAnimaPromptParts([
-    ...environmentParts,
-    ...compositionParts,
-    ...cameraParts,
-    ...lightingParts,
-    ...detailParts,
-  ]);
-
-  return {
-    promptProfile,
-    primaryCharacter: {
-      name: shot.characterIds[0] ?? "Primary character",
-      identity: positivePrompt,
-      publicFacts: [...shot.continuityNotes],
-    },
-    sceneIntent: shot.description || shot.promptIntent,
-    styleTone: "",
-    setting: "",
-    sharedFacts: [...shot.continuityNotes],
-    positivePrompt,
-    negativeSuggestions: baseNegativePrompt ? [baseNegativePrompt] : [],
-    style: [],
-    camera: shot.camera ? [{ label: "Camera", prompt: shot.camera }] : [],
-    lighting: [],
-    animaSections: promptProfile === "anima"
-      ? {
-          subjectCount: inferStoryAnimaSubjectCount(shot),
-          character: animaCharacterParts,
-          general: animaGeneralParts,
-        }
-      : undefined,
-    animaPromptOptions: promptProfile === "anima"
-      ? {
-          qualityMetaTags: storyAnimaQualityMetaTags,
-        }
-      : undefined,
-    illustriousSections: promptProfile === "illustrious"
-      ? {
-          subjectIdentity: subjectParts,
-          appearancePhysicalTraits: appearanceParts,
-          clothingAccessories: clothingParts,
-          poseActionExpression: actionParts,
-          backgroundEnvironmentObjects: [...environmentParts, ...detailParts],
-          spatialComposition: compositionParts,
-          cameraFraming: cameraParts,
-          lightingFocus: lightingParts,
-        }
-      : undefined,
-  };
 }
 
 function createStoryAiAdvice({
@@ -1380,41 +1380,70 @@ function createStoryComfyUiSettings({
 }
 
 function createFormattedStoryPositivePrompt({
-  baseNegativePrompt,
-  resourcePlan,
-  shot,
-  supportsNsfw,
+  animaPromptParts,
 }: {
-  baseNegativePrompt: string;
-  resourcePlan: StoryResourcePlan;
-  shot: StoryShot;
-  supportsNsfw: boolean;
+  animaPromptParts: StoryAnimaPromptParts;
 }) {
-  const promptProfile = inferPromptProfileFromCheckpoint(resourcePlan.checkpoint.resource);
-  const resourceResult = getResourceRecommendationResult(resourcePlan);
-  const scenePrompt = getScenePromptFromStoryShot({
-    baseNegativePrompt,
-    promptProfile,
-    shot,
-  });
-
-  return buildTimelineFinalPositivePrompt({
-    promptProfile,
-    resourceResult,
-    scenePrompt,
-    supportsNsfw,
-  });
+  return compileStoryAnimaPrompt(animaPromptParts);
 }
 
-function createShotComfyUiRequest(
+function createStoryRenderPlanResourceRefs(resourcePlan: StoryResourcePlan): StoryRenderPlanResourceRefs {
+  return {
+    sourceNodeId: "resource-plan",
+    checkpoint: {
+      resourceId: resourcePlan.checkpoint.resource.id,
+      name: resourcePlan.checkpoint.resource.name,
+      modelFileName: resourcePlan.checkpoint.resource.modelFileName ?? undefined,
+    },
+    loras: resourcePlan.loras.map((lora) => ({
+      resourceId: lora.resource.id,
+      name: lora.resource.name,
+      suggestedWeight: lora.suggestedWeight,
+    })),
+  };
+}
+
+function compactRequestPromptPreview(value: string, maxLength = 180) {
+  const compacted = value.replace(/\s+/g, " ").trim();
+  return compacted.length > maxLength ? `${compacted.slice(0, maxLength - 3).trim()}...` : compacted;
+}
+
+export function createStoryGenerationRequestPreview(
+  shot: StoryRenderPlanShot,
+  img2imgDenoise = DEFAULT_STORY_IMG2IMG_DENOISE,
+): StoryGenerationRequestPreview {
+  const normalizedImg2ImgDenoise = normalizeStoryImg2ImgDenoise(img2imgDenoise);
+
+  return {
+    negativePromptLength: shot.negativePrompt.length,
+    negativePromptPreview: compactRequestPromptPreview(shot.negativePrompt),
+    parameters: {
+      ...shot.parameters,
+      ...(shot.sourceShotIds.length > 0 ? { denoise: normalizedImg2ImgDenoise } : {}),
+    },
+    positivePromptLength: shot.positivePrompt.length,
+    positivePromptPreview: compactRequestPromptPreview(shot.positivePrompt),
+    sourceImageEdges: (shot.sourceImageEdges ?? []).map((edge) => ({
+      ...edge,
+      riskFactors: [...edge.riskFactors],
+      sourceChain: [...edge.sourceChain],
+    })),
+    shotId: shot.shotId,
+    sourceMode: shot.sourceShotIds.length > 0 ? "source-image" : "none",
+    sourceShotIds: [...shot.sourceShotIds],
+    title: shot.title,
+  };
+}
+
+function getLegacyResourcePlanFromShot(
   shot: StoryRenderPlanShot,
   storyId: string,
-  nsfwContext: StoryNsfwContext,
-  samplerOptions?: TimelineSamplerOptions,
-): ComfyUiTextToImageRequest {
-  const checkpoint = shot.resources.checkpoint.resource;
-  const parameters = normalizeParameters(shot.parameters, samplerOptions);
-  const resourcePlan = {
+): StoryResourcePlan | null {
+  if (!shot.resources) {
+    return null;
+  }
+
+  return {
     storyId,
     checkpoint: shot.resources.checkpoint,
     loras: shot.resources.loras,
@@ -1422,6 +1451,17 @@ function createShotComfyUiRequest(
     overallEffect: "",
     warnings: [],
   };
+}
+
+function createShotComfyUiRequest(
+  shot: StoryRenderPlanShot,
+  storyId: string,
+  nsfwContext: StoryNsfwContext,
+  resourcePlan: StoryResourcePlan,
+  samplerOptions?: TimelineSamplerOptions,
+): ComfyUiTextToImageRequest {
+  const checkpoint = resourcePlan.checkpoint.resource;
+  const parameters = normalizeParameters(shot.parameters, samplerOptions);
   const settings = createStoryComfyUiSettings({
     baseNegativePrompt: shot.negativePrompt,
     formattedPositivePrompt: shot.positivePrompt,
@@ -1518,28 +1558,109 @@ export function createStoryPreviewParameters(
 }
 
 export function assembleStoryRenderPlan({
+  img2imgDenoise = DEFAULT_STORY_IMG2IMG_DENOISE,
   parameterPlan,
   previewOptions = defaultPreviewExecutionOptions,
   previewResultReferences = [],
   resourcePlan,
+  renderPromptPlan,
   samplerOptions,
   safetyPlan,
   shots,
 }: {
+  img2imgDenoise?: number;
   parameterPlan: StoryParameterPlan;
   previewOptions?: StoryPreviewExecutionOptions;
   previewResultReferences?: StoryPreviewResultReference[];
   resourcePlan: StoryResourcePlan;
+  renderPromptPlan?: StoryRenderPromptPlan;
   samplerOptions?: TimelineSamplerOptions;
   safetyPlan: StorySafetyPlan;
   shots: readonly StoryShot[];
 }): StoryRenderPlan {
   const nsfwContext = getNsfwContext(safetyPlan);
   const defaultParameters = normalizeParameters(parameterPlan.defaults, samplerOptions);
+  const normalizedImg2ImgDenoise = normalizeStoryImg2ImgDenoise(img2imgDenoise);
+  const renderWarnings: string[] = [];
+  const sourceImageEdges = createStorySourceImageEdgeSummaries(shots);
+  renderWarnings.push(
+    ...sourceImageEdges
+      .filter((edge) => edge.riskLevel === "high")
+      .map((edge) =>
+        `Shot "${edge.targetShotId}" uses high-risk source image "${edge.sourceShotId}": ${edge.riskReason}`,
+      ),
+  );
+  const renderShots = shots.map((shot) => {
+    const shotSourceImageEdges = sourceImageEdges.filter((edge) => edge.targetShotId === shot.id);
+    const parameters = enforceStoryResolution(
+      applyParameterOverride(
+        defaultParameters,
+        getPerShotOverride(parameterPlan, shot.id),
+        samplerOptions,
+      ),
+      defaultParameters,
+    );
+    const renderPromptDraft = getStoryRenderPromptDraft(shot.id, renderPromptPlan);
+    if (renderPromptPlan && !renderPromptDraft) {
+      renderWarnings.push(`Shot "${shot.id}" did not receive LLM Anima prompt parts; using local prompt fallback.`);
+    }
+    const animaPromptParts = getStoryAnimaPromptPartsForShot(shot, renderPromptDraft);
+    const basePositivePrompt = getBasePositivePrompt(animaPromptParts);
+    const baseNegativePrompt = mergeStoryNegativePrompts(
+      getBaseNegativePrompt(safetyPlan, shot),
+      getStoryRenderPromptDraftNegativeParts(renderPromptDraft).join(", "),
+    );
+    const formattedPositivePrompt = createFormattedStoryPositivePrompt({
+      animaPromptParts,
+    });
+    const settings = createStoryComfyUiSettings({
+      baseNegativePrompt,
+      formattedPositivePrompt,
+      parameters,
+      resourcePlan,
+      supportsNsfw: nsfwContext.enabled,
+    });
+
+    const promptWarnings = renderPromptDraft?.warnings ?? [];
+
+    return {
+      shotId: shot.id,
+      order: shot.order,
+      title: shot.title,
+      animaPromptParts,
+      positivePrompt: settings.request.positivePrompt,
+      negativePrompt: settings.request.negativePrompt ?? "",
+      outputAnchors: createStoryOutputAnchors({
+        baseNegativePrompt,
+        basePositivePrompt,
+        sourceImageEdges: shotSourceImageEdges,
+        sourceShotIds: shot.sourceShotIds,
+      }),
+      sourceImageEdges: shotSourceImageEdges.map((edge) => ({
+        ...edge,
+        riskFactors: [...edge.riskFactors],
+        sourceChain: [...edge.sourceChain],
+      })),
+      sourceShotIds: [...shot.sourceShotIds],
+      parameters,
+      resourceRefs: {
+        checkpointResourceId: resourcePlan.checkpoint.resource.id,
+        loraResourceIds: resourcePlan.loras.map((lora) => lora.resource.id),
+      },
+      ...(renderPromptDraft
+        ? {
+            promptRationale: renderPromptDraft.rationale,
+            ...(promptWarnings.length > 0 ? { promptWarnings } : {}),
+          }
+        : {}),
+    };
+  });
 
   return {
     storyId: resourcePlan.storyId,
+    img2imgDenoise: normalizedImg2ImgDenoise,
     nsfwContext,
+    resourceRefs: createStoryRenderPlanResourceRefs(resourcePlan),
     preview: {
       options: {
         ...previewOptions,
@@ -1551,61 +1672,25 @@ export function assembleStoryRenderPlan({
         parameters: { ...reference.parameters },
       })),
     },
-    shots: shots.map((shot) => {
-      const parameters = enforceStoryResolution(
-        applyParameterOverride(
-          defaultParameters,
-          getPerShotOverride(parameterPlan, shot.id),
-          samplerOptions,
-        ),
-        defaultParameters,
-      );
-      const baseNegativePrompt = getBaseNegativePrompt(safetyPlan, shot);
-      const basePositivePrompt = getBasePositivePrompt(shot);
-      const positivePrompt = createFormattedStoryPositivePrompt({
-        baseNegativePrompt,
-        resourcePlan,
-        shot,
-        supportsNsfw: nsfwContext.enabled,
-      });
-      const settings = createStoryComfyUiSettings({
-        baseNegativePrompt,
-        formattedPositivePrompt: positivePrompt,
-        parameters,
-        resourcePlan,
-        supportsNsfw: nsfwContext.enabled,
-      });
-
-      return {
-        shotId: shot.id,
-        order: shot.order,
-        title: shot.title,
-        positivePrompt: settings.request.positivePrompt,
-        negativePrompt: settings.request.negativePrompt ?? "",
-        outputAnchors: createStoryOutputAnchors({
-          baseNegativePrompt,
-          basePositivePrompt,
-          sourceShotIds: shot.sourceShotIds,
-        }),
-        sourceShotIds: [...shot.sourceShotIds],
-        parameters,
-        resources: {
-          checkpoint: resourcePlan.checkpoint,
-          loras: resourcePlan.loras,
-        },
-      };
-    }),
-    warnings: [...parameterPlan.warnings, ...resourcePlan.warnings],
+    shots: renderShots,
+    warnings: [
+      ...parameterPlan.warnings,
+      ...resourcePlan.warnings,
+      ...(renderPromptPlan?.warnings ?? []),
+      ...renderWarnings,
+    ],
   };
 }
 
 export function createStoryExecutionRequestBatch({
   mode,
   renderPlan,
+  resourcePlan,
   samplerOptions,
 }: {
   mode: "preview" | "final";
   renderPlan: StoryRenderPlan;
+  resourcePlan?: StoryResourcePlan;
   samplerOptions?: TimelineSamplerOptions;
 }): StoryExecutionRequestBatch {
   const selectedShotIds = mode === "preview"
@@ -1642,11 +1727,29 @@ export function createStoryExecutionRequestBatch({
         ...shot,
         parameters: requestParameters,
       };
+      const requestResourcePlan = resourcePlan ?? getLegacyResourcePlanFromShot(shot, renderPlan.storyId);
+
+      if (!requestResourcePlan) {
+        throw new StoryResourcePlanValidationError({
+          message: "Story execution requires the resource-plan result to assemble ComfyUI requests.",
+          details: {
+            shotId: shot.shotId,
+            renderPlanResourceRefs: renderPlan.resourceRefs,
+          },
+        });
+      }
 
       return {
         nsfwContext: renderPlan.nsfwContext,
         request: {
-          ...createShotComfyUiRequest(requestShot, renderPlan.storyId, renderPlan.nsfwContext, samplerOptions),
+          ...createShotComfyUiRequest(
+            requestShot,
+            renderPlan.storyId,
+            renderPlan.nsfwContext,
+            requestResourcePlan,
+            samplerOptions,
+          ),
+          denoise: shot.sourceShotIds.length > 0 ? renderPlan.img2imgDenoise : requestParameters.denoise,
           preview: mode === "preview",
         },
         shotId: shot.shotId,

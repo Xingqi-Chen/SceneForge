@@ -203,6 +203,55 @@ describe("StoryPlanningWorkspace", () => {
     });
   });
 
+  it("preserves saved shot dependency edge reasons and exposes all reason options", () => {
+    const graph = {
+      storyId: "story-1",
+      nodes: [
+        { shotId: "shot-1", label: "Arrival" },
+        { shotId: "shot-2", label: "Signal" },
+      ],
+      edges: [{ fromShotId: "shot-1", toShotId: "shot-2", reason: "continuity" }],
+    } satisfies ShotDependencyGraph;
+    const onSave = renderWorkspace({
+      node: makeNode("shot-dependency-graph", graph),
+    });
+    const reasonSelect = Array.from(container.querySelectorAll("select")).find(
+      (select) => Array.from(select.options).some((option) => option.value === "img2img-source"),
+    ) as HTMLSelectElement | undefined;
+
+    expect(reasonSelect?.value).toBe("continuity");
+    expect(Array.from(reasonSelect?.options ?? []).map((option) => option.value)).toEqual([
+      "img2img-source",
+      "reference",
+      "continuity",
+      "story-order",
+      "manual",
+    ]);
+
+    act(() => {
+      if (!reasonSelect) {
+        throw new Error("Unable to find dependency reason select.");
+      }
+      reasonSelect.value = "story-order";
+      reasonSelect.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+
+    clickButton("Save edge");
+
+    expect(onSave).toHaveBeenCalledWith(
+      "shot-dependency-graph",
+      expect.objectContaining({
+        edges: [{ fromShotId: "shot-1", toShotId: "shot-2", reason: "story-order" }],
+      }),
+      {
+        artifactType: "shot-dependency-graph",
+        kind: "shot",
+        shotId: "shot-2",
+        storyId: "story-1",
+      },
+    );
+  });
+
   it("rejects invalid shared JSON drafts without saving", () => {
     const resourcePlan = {
       storyId: "story-1",

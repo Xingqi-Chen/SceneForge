@@ -89,6 +89,7 @@ export const storyWorkflowEdges = [
   { from: "storyboard-shots", to: "resource-plan" },
   { from: "resource-plan", to: "parameter-plan" },
   { from: "storyboard-shots", to: "parameter-plan" },
+  { from: "character-continuity-graph", to: "story-render-plan" },
   { from: "shot-dependency-graph", to: "story-render-plan" },
   { from: "resource-plan", to: "story-render-plan" },
   { from: "parameter-plan", to: "story-render-plan" },
