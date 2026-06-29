@@ -24,6 +24,7 @@ const requiredBlockingStates = new Set<StoryReferenceResolutionState>([
   "generated",
   "uploaded",
   "failed",
+  "stale",
   "rejected",
 ]);
 
@@ -260,20 +261,27 @@ export function applyStoryReferenceGenerationSuccess({
 }): StoryReferenceAssetPlan {
   const generatedAt = now();
 
-  return mapReferenceAsset(plan, referenceId, (asset) => ({
-    ...clearResolvedDecisionFields(asset),
-    candidateAssetReferences: [
-      ...asset.candidateAssetReferences.map(cloneAssetReference),
-      normalizeAssetReference({
-        createdAt: generatedAt,
-        reference: assetReference,
-        referenceId,
-        source: "generated",
-      }),
-    ],
-    failure: undefined,
-    resolutionState: "generated",
-  }));
+  return mapReferenceAsset(plan, referenceId, (asset) => {
+    const generatedReference = normalizeAssetReference({
+      createdAt: generatedAt,
+      reference: assetReference,
+      referenceId,
+      source: "generated",
+    });
+
+    return {
+      ...clearResolvedDecisionFields(asset),
+      candidateAssetReferences: [
+        ...asset.candidateAssetReferences.map(cloneAssetReference),
+        {
+          ...generatedReference,
+          canonicalPromptRevision: asset.canonicalPromptRevision ?? 0,
+        },
+      ],
+      failure: undefined,
+      resolutionState: "generated",
+    };
+  });
 }
 
 function normalizeFailureSummary(error: unknown, failedAt: string): StoryReferenceGenerationFailureSummary {
@@ -341,21 +349,25 @@ export function applyStoryReferenceUpload({
       referenceId,
       source: "uploaded",
     });
+    const uploadedReferenceWithRevision = {
+      ...uploadedReference,
+      canonicalPromptRevision: asset.canonicalPromptRevision ?? 0,
+    };
 
     return {
       ...clearResolvedDecisionFields(asset),
       approval: approve
         ? {
-            approvedAssetReferenceId: uploadedReference.id,
+            approvedAssetReferenceId: uploadedReferenceWithRevision.id,
             approvedAt: uploadedAt,
             approvedBy: "user",
             source: "uploaded",
           }
         : undefined,
-      approvedAssetReference: approve ? cloneAssetReference(uploadedReference) : undefined,
+      approvedAssetReference: approve ? cloneAssetReference(uploadedReferenceWithRevision) : undefined,
       candidateAssetReferences: [
         ...asset.candidateAssetReferences.map(cloneAssetReference),
-        uploadedReference,
+        uploadedReferenceWithRevision,
       ],
       failure: undefined,
       resolutionState: approve ? "approved" : "uploaded",
@@ -377,9 +389,19 @@ export function applyStoryReferenceApproval({
   const approvedAt = now();
 
   return mapReferenceAsset(plan, referenceId, (asset) => {
+    if (asset.resolutionState === "stale") {
+      throw new Error(`Story reference "${referenceId}" has a stale candidate and must be regenerated, uploaded, or set to prompt-only before approval.`);
+    }
+
     const candidate = findCandidate(asset, assetReferenceId);
     if (!candidate) {
       throw new Error(`Story reference "${referenceId}" does not have a generated or uploaded candidate to approve.`);
+    }
+    if (
+      typeof asset.canonicalPromptRevision === "number" &&
+      (candidate.canonicalPromptRevision ?? 0) !== asset.canonicalPromptRevision
+    ) {
+      throw new Error(`Story reference "${referenceId}" candidate was created before the latest canonical prompt edit and must be regenerated or uploaded again before approval.`);
     }
 
     return {
@@ -395,6 +417,47 @@ export function applyStoryReferenceApproval({
       promptOnlyFallback: undefined,
       rejection: undefined,
       resolutionState: "approved",
+    };
+  });
+}
+
+function hasStaleableReferenceState(asset: StoryReferenceAsset) {
+  return asset.resolutionState !== "missing" ||
+    asset.candidateAssetReferences.length > 0 ||
+    Boolean(asset.approval || asset.approvedAssetReference || asset.failure || asset.promptOnlyFallback || asset.rejection);
+}
+
+export function applyStoryReferenceCanonicalPromptEdit({
+  canonicalPrompt,
+  plan,
+  referenceId,
+}: {
+  canonicalPrompt: string;
+  plan: StoryReferenceAssetPlan;
+  referenceId: string;
+}): StoryReferenceAssetPlan {
+  const normalizedPrompt = compactText(canonicalPrompt);
+  if (!normalizedPrompt) {
+    throw new Error("Story reference canonical prompt cannot be empty.");
+  }
+
+  return mapReferenceAsset(plan, referenceId, (asset) => {
+    if (asset.canonicalPrompt === normalizedPrompt) {
+      return asset;
+    }
+
+    const resolutionState: StoryReferenceResolutionState = hasStaleableReferenceState(asset)
+      ? "stale"
+      : "missing";
+    const canonicalPromptRevision = (asset.canonicalPromptRevision ?? 0) + 1;
+
+    return {
+      ...clearResolvedDecisionFields(asset),
+      canonicalPromptRevision,
+      candidateAssetReferences: asset.candidateAssetReferences.map(cloneAssetReference),
+      canonicalPrompt: normalizedPrompt,
+      failure: undefined,
+      resolutionState,
     };
   });
 }
@@ -709,6 +772,8 @@ function getRequiredReferenceBlock(asset: StoryReferenceAsset): StoryReferenceAs
 
   const reason = asset.resolutionState === "prompt-only"
     ? "Required reference is prompt-only without an explicit user fallback decision."
+    : asset.resolutionState === "stale"
+      ? "Required reference prompt changed and needs regeneration, upload approval, or explicit prompt-only fallback."
     : asset.resolutionState === "generated"
       ? "Required reference has a generated candidate but still needs approval."
       : asset.resolutionState === "uploaded"

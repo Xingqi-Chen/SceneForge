@@ -337,6 +337,7 @@ export const storyReferenceResolutionStateValues = [
   "uploaded",
   "approved",
   "failed",
+  "stale",
   "rejected",
   "prompt-only",
 ] as const;
@@ -354,6 +355,7 @@ export type StoryReferenceEntityType = "character" | "outfit" | "prop" | "locati
 
 export type StoryReferenceAssetReference = {
   byteLength?: number;
+  canonicalPromptRevision?: number;
   contentType?: string;
   createdAt?: string;
   filename?: string;
@@ -409,6 +411,7 @@ export type StoryReferenceAsset = {
   referenceType: StoryReferenceAssetType;
   importance: StoryReferenceImportance;
   resolutionState: StoryReferenceResolutionState;
+  canonicalPromptRevision?: number;
   canonicalPrompt: string;
   rationale: string;
   sourceEntity: {

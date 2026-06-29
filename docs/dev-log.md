@@ -4,6 +4,26 @@ This log records dated implementation and documentation work. Keep entries conci
 
 ## 2026-06-29
 
+### T28 / Issue #108 Story Reference Review Workspace
+
+Summary:
+
+- Added a richer `/story` Story Reference workspace with per-reference review cards, visual importance/state labels, preview images, canonical prompt editing, rationale, valid actions, stale candidate warnings, and prompt-only degraded-mode messaging.
+- Added `stale` as a Story reference resolution state for image-backed canonical prompt edits; stale required references block the freeze gate and old stale candidates cannot be approved until regenerated, uploaded-approved, or converted to explicit prompt-only fallback.
+- Locked candidate approval to the current canonical prompt revision so pre-edit candidates remain preview history only after a later regenerate or upload.
+- Routed canonical prompt edits through the existing Story reference decision route, preserving thin API handlers while marking the reference plan manual and downstream render, consistency, and generation-gate nodes stale.
+- Preserved existing T27 generation, upload, approval, rejection, and prompt-only routes and left final-shot execution reference injection unchanged.
+
+Validation:
+
+- `npm test -- --run src/features/agent-timeline/components/StoryPlanningPreview.test.tsx` passed with 21 tests.
+- `npm test -- --run src/features/agent-timeline/story-reference-assets.test.ts src/features/agent-timeline/story-api.test.ts src/app/api/agent-timeline/story/reference-assets/decision/route.test.ts src/features/agent-timeline/components/StoryPlanningPreview.test.tsx` passed with 47 tests.
+- `npm test -- --run src/features/agent-timeline src/app/api/agent-timeline/story` passed with 36 files and 336 tests.
+- `npm run typecheck` passed.
+- `npm run lint` passed with 23 existing warnings.
+- `npm run build` passed.
+- tester-agent PASS.
+
 ### T27 / Issue #106 Story Reference Plate Generation and Upload
 
 Summary:
