@@ -4,6 +4,30 @@ This log records dated implementation and documentation work. Keep entries conci
 
 ## 2026-06-29
 
+### T30 / Issue #112 Approved Anima Character References in Story Execution
+
+Summary:
+
+- Injected approved Story `character-face`, `character-bust`, and `outfit` reference assets into final Anima-compatible Story execution requests as ComfyUI `characterReferences`.
+- Kept prompt-only, missing, generated-but-unapproved, uploaded-but-unapproved, failed, stale, rejected, prop, and location references out of execution request injection.
+- Preserved T29 source-image continuity as separate img2img/source-image inputs while leaving approved Story reference injection on the ComfyUI character-reference path.
+- Added Story ComfyUI adapter handling that uploads SceneForge-managed approved reference images to ComfyUI input, strips character references when Anima IPAdapter nodes are missing, continues prompt-only execution when otherwise valid, and surfaces install guidance warnings.
+- Exposed Story character-reference degradation warnings in Visual execution summaries so prompt-only fallback guidance is visible outside raw JSON.
+- Updated the Story Reference technical contract for final request assembly, local reference-image upload, and object_info degradation.
+
+Validation:
+
+- `npm test -- --run src/features/agent-timeline/story-planning.test.ts src/features/agent-timeline/story-comfyui-execution.test.ts src/features/agent-timeline/story-api.test.ts src/features/agent-timeline/story-node-output-summary.test.ts src/features/agent-timeline/components/StoryNodeOutputSummaryView.test.tsx` passed with 5 files and 77 tests.
+- `npm test -- --run src/features/agent-timeline/story-planning.test.ts` passed with 43 tests.
+- `npm test -- --run src/features/agent-timeline/story-comfyui-execution.test.ts` passed with 12 tests.
+- `npm test -- --run src/features/agent-timeline/story-api.test.ts` passed with 9 tests.
+- `npm test -- --run src/features/agent-timeline` passed with 30 files and 320 tests.
+- `npm test -- --run src/app/api/agent-timeline/story` passed with 6 files and 28 tests.
+- `npm test -- --run src/features/agent-timeline src/app/api/agent-timeline/story` passed with 36 files and 348 tests.
+- `npm run typecheck` passed.
+- `npm run lint` passed with 23 existing warnings.
+- `npm run build` passed.
+
 ### T29 / Issue #110 Render Reference Recipes and Location Continuity Modes
 
 Summary:

@@ -1,4 +1,8 @@
-import type { ComfyUiTextToImageRequest } from "@/features/comfyui";
+import {
+  isComfyUiAnimaTextToImageRequest,
+  type ComfyUiCharacterReferenceConfig,
+  type ComfyUiTextToImageRequest,
+} from "@/features/comfyui";
 import type {
   CivitaiPromptReference,
   CivitaiResourceRecommendation,
@@ -257,6 +261,8 @@ export type StoryExecutionRequestBatch = {
   requests: StoryExecutionRequest[];
 };
 
+export const STORY_CHARACTER_REFERENCE_ID_PREFIX = "story-reference:";
+
 export type StoryOutputAnchors = Record<StoryPromptBucket, string[]> & {
   negative: string[];
   source: {
@@ -312,6 +318,11 @@ const storySafeMinorNegativeTags = [
   "gore",
   "severe injury",
 ];
+const storyInjectableReferenceTypes = new Set<StoryReferenceAsset["referenceType"]>([
+  "character-face",
+  "character-bust",
+  "outfit",
+]);
 
 function failStoryResourcePlan(message: string, details?: unknown): never {
   throw new StoryResourcePlanValidationError({ message, details });
@@ -1488,7 +1499,7 @@ function createDefaultStoryReferenceRecipe({
 
   return {
     summary: assets.length > 0
-      ? "Use the listed Story reference assets as visible prompt-review anchors only; final image reference injection is not enabled in v1."
+      ? "Use the listed Story reference assets as visible prompt-review anchors; approved character and outfit references may be injected for Anima final generation when supported."
       : "Use prompt text only; no reference assets are attached to this shot.",
     referenceIds,
     approvedReferenceIds,
@@ -1502,6 +1513,115 @@ function createDefaultStoryReferenceRecipe({
 
 function getReferenceAssetIds(referenceAssetPlan: StoryReferenceAssetPlan | undefined) {
   return new Set(referenceAssetPlan?.assets.map((asset) => asset.id) ?? []);
+}
+
+function isCurrentApprovedReference(asset: StoryReferenceAsset) {
+  if (asset.resolutionState !== "approved" || !asset.approvedAssetReference?.filename) {
+    return false;
+  }
+
+  if (typeof asset.canonicalPromptRevision === "number") {
+    return asset.approvedAssetReference.canonicalPromptRevision === asset.canonicalPromptRevision;
+  }
+
+  return true;
+}
+
+function getStoryCharacterReferenceMode(referenceType: StoryReferenceAsset["referenceType"]) {
+  return referenceType === "character-face" ? "face" : "ipadapter";
+}
+
+function getStoryCharacterReferenceWeight(referenceType: StoryReferenceAsset["referenceType"]) {
+  if (referenceType === "character-face") {
+    return 0.45;
+  }
+
+  if (referenceType === "character-bust") {
+    return 0.4;
+  }
+
+  return 0.35;
+}
+
+function createStoryCharacterReferenceConfig(asset: StoryReferenceAsset): ComfyUiCharacterReferenceConfig | null {
+  const filename = asset.approvedAssetReference?.filename?.trim();
+  if (!filename) {
+    return null;
+  }
+
+  return {
+    id: `${STORY_CHARACTER_REFERENCE_ID_PREFIX}${asset.id}`,
+    name: `${asset.sourceEntity.name} ${asset.referenceType} reference`,
+    prompt: asset.canonicalPrompt,
+    mode: getStoryCharacterReferenceMode(asset.referenceType),
+    images: [
+      {
+        id: `${STORY_CHARACTER_REFERENCE_ID_PREFIX}${asset.id}:approved`,
+        imageName: filename,
+      },
+    ],
+    weight: getStoryCharacterReferenceWeight(asset.referenceType),
+    startPercent: 0,
+    endPercent: 1,
+  };
+}
+
+function createApprovedStoryCharacterReferencesForShot({
+  referenceAssetPlan,
+  shot,
+}: {
+  referenceAssetPlan?: StoryReferenceAssetPlan;
+  shot: StoryRenderPlanShot;
+}) {
+  const listedReferenceIds = new Set([
+    ...shot.referenceRecipe.referenceIds,
+    ...shot.referenceRecipe.approvedReferenceIds,
+  ]);
+  if (!referenceAssetPlan || listedReferenceIds.size === 0) {
+    return [];
+  }
+
+  return referenceAssetPlan.assets
+    .filter((asset) =>
+      listedReferenceIds.has(asset.id) &&
+      asset.sourceShotIds.includes(shot.shotId) &&
+      storyInjectableReferenceTypes.has(asset.referenceType) &&
+      isCurrentApprovedReference(asset),
+    )
+    .map(createStoryCharacterReferenceConfig)
+    .filter((reference): reference is ComfyUiCharacterReferenceConfig => Boolean(reference));
+}
+
+function withApprovedStoryCharacterReferences({
+  enabled,
+  referenceAssetPlan,
+  request,
+  shot,
+}: {
+  enabled: boolean;
+  referenceAssetPlan?: StoryReferenceAssetPlan;
+  request: ComfyUiTextToImageRequest;
+  shot: StoryRenderPlanShot;
+}): ComfyUiTextToImageRequest {
+  if (!enabled || !isComfyUiAnimaTextToImageRequest(request)) {
+    return request;
+  }
+
+  const references = createApprovedStoryCharacterReferencesForShot({
+    referenceAssetPlan,
+    shot,
+  });
+  if (references.length === 0) {
+    return request;
+  }
+
+  return {
+    ...request,
+    characterReferences: [
+      ...(request.characterReferences ?? []),
+      ...references,
+    ],
+  };
 }
 
 function createStoryOutputAnchors({
@@ -2083,11 +2203,13 @@ export function assembleStoryRenderPlan({
 
 export function createStoryExecutionRequestBatch({
   mode,
+  referenceAssetPlan,
   renderPlan,
   resourcePlan,
   samplerOptions,
 }: {
   mode: "preview" | "final";
+  referenceAssetPlan?: StoryReferenceAssetPlan;
   renderPlan: StoryRenderPlan;
   resourcePlan?: StoryResourcePlan;
   samplerOptions?: TimelineSamplerOptions;
@@ -2142,17 +2264,24 @@ export function createStoryExecutionRequestBatch({
         shot,
         getStoryRenderPlanEligibleSourceShotIds(renderPlan.shots, shot.shotId),
       );
+      const baseRequest = createShotComfyUiRequest(
+        requestShot,
+        renderPlan.storyId,
+        renderPlan.nsfwContext,
+        requestResourcePlan,
+        samplerOptions,
+      );
+      const requestWithReferences = withApprovedStoryCharacterReferences({
+        enabled: mode === "final",
+        referenceAssetPlan,
+        request: baseRequest,
+        shot,
+      });
 
       return {
         nsfwContext: renderPlan.nsfwContext,
         request: {
-          ...createShotComfyUiRequest(
-            requestShot,
-            renderPlan.storyId,
-            renderPlan.nsfwContext,
-            requestResourcePlan,
-            samplerOptions,
-          ),
+          ...requestWithReferences,
           denoise: executableSourceShotIds.length > 0 ? renderPlan.img2imgDenoise : requestParameters.denoise,
           preview: mode === "preview",
         },

@@ -17,7 +17,7 @@ import {
   type StoryParameterPlan,
   type StoryPreviewExecutionOptions,
 } from "./story-planning";
-import type { StoryReferenceAssetPlan, StorySafetyPlan, StoryShot } from "./story-types";
+import type { StoryReferenceAsset, StoryReferenceAssetPlan, StorySafetyPlan, StoryShot } from "./story-types";
 
 const storyId = "story-1";
 
@@ -253,6 +253,140 @@ function createAnimaResourcePlan() {
       warnings: [],
     },
   });
+}
+
+function storyReferenceAsset(
+  overrides: Partial<StoryReferenceAsset> & Pick<StoryReferenceAsset, "id" | "referenceType" | "sourceEntity">,
+): StoryReferenceAsset {
+  const resolutionState = overrides.resolutionState ?? "approved";
+  const filename = overrides.approvedAssetReference?.filename ?? `${overrides.id.replace(/[^a-z0-9]+/gi, "-")}.png`;
+
+  return {
+    storyId,
+    importance: "recommended",
+    resolutionState,
+    canonicalPromptRevision: 0,
+    canonicalPrompt: `${overrides.sourceEntity.name} ${overrides.referenceType} reference`,
+    rationale: "Test reference.",
+    sourceShotIds: ["shot-1", "shot-2"],
+    candidateAssetReferences: [],
+    ...(resolutionState === "approved"
+      ? {
+          approval: {
+            approvedAssetReferenceId: `asset-${overrides.id}`,
+            approvedAt: "2026-06-29T00:00:00.000Z",
+            approvedBy: "user" as const,
+            source: "uploaded" as const,
+          },
+          approvedAssetReference: {
+            canonicalPromptRevision: 0,
+            filename,
+            id: `asset-${overrides.id}`,
+            source: "uploaded" as const,
+            url: `/api/comfyui/sequence-references/${filename}`,
+          },
+        }
+      : {}),
+    ...overrides,
+  };
+}
+
+function createApprovedStoryReferenceAssetPlan(): StoryReferenceAssetPlan {
+  return {
+    storyId,
+    planningNotes: [],
+    assets: [
+      storyReferenceAsset({
+        id: "character-face:lead",
+        referenceType: "character-face",
+        importance: "required",
+        sourceEntity: {
+          id: "lead",
+          name: "Lead",
+          type: "character",
+        },
+      }),
+      storyReferenceAsset({
+        id: "character-bust:lead",
+        referenceType: "character-bust",
+        importance: "required",
+        sourceEntity: {
+          id: "lead",
+          name: "Lead",
+          type: "character",
+        },
+        sourceShotIds: ["shot-1"],
+      }),
+      storyReferenceAsset({
+        id: "outfit:raincoat",
+        referenceType: "outfit",
+        sourceEntity: {
+          id: "raincoat",
+          name: "Raincoat",
+          type: "outfit",
+        },
+        sourceShotIds: ["shot-2"],
+      }),
+      storyReferenceAsset({
+        id: "prop:signal-card",
+        referenceType: "prop",
+        sourceEntity: {
+          id: "signal-card",
+          name: "Signal Card",
+          type: "prop",
+        },
+      }),
+      storyReferenceAsset({
+        id: "location:station",
+        referenceType: "location",
+        sourceEntity: {
+          id: "station",
+          name: "Station",
+          type: "location",
+        },
+      }),
+      storyReferenceAsset({
+        id: "character-face:unapproved",
+        referenceType: "character-face",
+        resolutionState: "generated",
+        sourceEntity: {
+          id: "unapproved",
+          name: "Unapproved",
+          type: "character",
+        },
+        approvedAssetReference: undefined,
+        approval: undefined,
+      }),
+      storyReferenceAsset({
+        id: "character-face:old-revision",
+        referenceType: "character-face",
+        canonicalPromptRevision: 1,
+        sourceEntity: {
+          id: "old-revision",
+          name: "Old Revision",
+          type: "character",
+        },
+        approvedAssetReference: {
+          filename: "old-revision.png",
+          id: "asset-character-face-old-revision",
+          source: "uploaded",
+          url: "/api/comfyui/sequence-references/old-revision.png",
+        },
+      }),
+      storyReferenceAsset({
+        id: "outfit:prompt-only",
+        referenceType: "outfit",
+        resolutionState: "prompt-only",
+        sourceEntity: {
+          id: "prompt-only",
+          name: "Prompt-only Coat",
+          type: "outfit",
+        },
+        approvedAssetReference: undefined,
+        approval: undefined,
+      }),
+    ],
+  };
 }
 
 function animaParts(overrides: Partial<ReturnType<typeof normalizeStoryAnimaPromptParts>>) {
@@ -1945,6 +2079,112 @@ describe("story planning", () => {
     expect(firstRequest?.positivePrompt).toBe("manual edited anima prompt, anima_style");
     expect(firstRequest?.negativePrompt).toContain("manual edited negative");
     expect(firstRequest?.negativePrompt).toContain("worst quality");
+  });
+
+  it("injects only approved character and outfit references into final Anima execution requests", () => {
+    const resourcePlan = createAnimaResourcePlan();
+    const referenceAssetPlan = createApprovedStoryReferenceAssetPlan();
+    const renderPlan = assembleStoryRenderPlan({
+      parameterPlan: createStoryParameterPlan({ storyId, defaults }),
+      referenceAssetPlan,
+      resourcePlan,
+      safetyPlan,
+      shots,
+    });
+    const finalBatch = createStoryExecutionRequestBatch({
+      mode: "final",
+      referenceAssetPlan,
+      renderPlan,
+      resourcePlan,
+    });
+    const previewBatch = createStoryExecutionRequestBatch({
+      mode: "preview",
+      referenceAssetPlan,
+      renderPlan,
+      resourcePlan,
+    });
+
+    expect(finalBatch.requests.find((request) => request.shotId === "shot-1")?.request.characterReferences).toEqual([
+      expect.objectContaining({
+        id: "story-reference:character-face:lead",
+        images: [{ id: "story-reference:character-face:lead:approved", imageName: "character-face-lead.png" }],
+        mode: "face",
+        name: "Lead character-face reference",
+      }),
+      expect.objectContaining({
+        id: "story-reference:character-bust:lead",
+        images: [{ id: "story-reference:character-bust:lead:approved", imageName: "character-bust-lead.png" }],
+        mode: "ipadapter",
+        name: "Lead character-bust reference",
+      }),
+    ]);
+    expect(finalBatch.requests.find((request) => request.shotId === "shot-2")?.request.characterReferences).toEqual([
+      expect.objectContaining({
+        id: "story-reference:character-face:lead",
+      }),
+      expect.objectContaining({
+        id: "story-reference:outfit:raincoat",
+        images: [{ id: "story-reference:outfit:raincoat:approved", imageName: "outfit-raincoat.png" }],
+        mode: "ipadapter",
+        name: "Raincoat outfit reference",
+      }),
+    ]);
+    expect(JSON.stringify(finalBatch.requests)).not.toContain("prop:signal-card");
+    expect(JSON.stringify(finalBatch.requests)).not.toContain("location:station");
+    expect(JSON.stringify(finalBatch.requests)).not.toContain("character-face:unapproved");
+    expect(JSON.stringify(finalBatch.requests)).not.toContain("character-face:old-revision");
+    expect(JSON.stringify(finalBatch.requests)).not.toContain("outfit:prompt-only");
+    expect(previewBatch.requests[0]?.request.characterReferences).toBeUndefined();
+  });
+
+  it("does not inject Anima character references into non-Anima execution requests", () => {
+    const resourcePlan = createResourcePlan();
+    const referenceAssetPlan = createApprovedStoryReferenceAssetPlan();
+    const renderPlan = assembleStoryRenderPlan({
+      parameterPlan: createStoryParameterPlan({ storyId, defaults }),
+      referenceAssetPlan,
+      resourcePlan,
+      safetyPlan,
+      shots,
+    });
+    const finalBatch = createStoryExecutionRequestBatch({
+      mode: "final",
+      referenceAssetPlan,
+      renderPlan,
+      resourcePlan,
+    });
+
+    expect(finalBatch.requests[0]?.request.characterReferences).toBeUndefined();
+    expect(finalBatch.requests[1]?.request.characterReferences).toBeUndefined();
+  });
+
+  it("keeps source-image continuity separate from approved Story character reference injection", () => {
+    const resourcePlan = createAnimaResourcePlan();
+    const referenceAssetPlan = createApprovedStoryReferenceAssetPlan();
+    const renderPlan = assembleStoryRenderPlan({
+      img2imgDenoise: 0.73,
+      parameterPlan: createStoryParameterPlan({ storyId, defaults }),
+      referenceAssetPlan,
+      resourcePlan,
+      safetyPlan,
+      shots,
+    });
+    const finalBatch = createStoryExecutionRequestBatch({
+      mode: "final",
+      referenceAssetPlan,
+      renderPlan,
+      resourcePlan,
+    });
+    const shotTwo = finalBatch.requests.find((request) => request.shotId === "shot-2");
+
+    expect(shotTwo?.sourceShotIds).toEqual(["shot-1"]);
+    expect(shotTwo?.request.denoise).toBe(0.73);
+    expect(shotTwo?.request.imageName).toBeUndefined();
+    expect(shotTwo?.request.characterReferences?.map((reference) => reference.id)).toEqual([
+      "story-reference:character-face:lead",
+      "story-reference:outfit:raincoat",
+    ]);
+    expect(JSON.stringify(shotTwo?.request.characterReferences)).not.toContain("source-shot");
   });
 
   it("filters invalid stored source-image continuity at the execution boundary", () => {

@@ -1448,6 +1448,15 @@ function summarizeGenerationGate(result: unknown): StoryNodeOutputSummary {
 function summarizeExecution(result: unknown): StoryNodeOutputSummary {
   const execution = isRecord(result) ? result : {};
   const shots = asRecordArray(execution.shots);
+  const getExecutionWarnings = (shot: Record<string, unknown>) => {
+    const queueMetadata = isRecord(shot.queueMetadata) ? shot.queueMetadata : {};
+    const resultReference = isRecord(shot.resultReference) ? shot.resultReference : {};
+
+    return [
+      ...fullStringArray(queueMetadata.warnings),
+      ...fullStringArray(resultReference.warnings),
+    ].filter((warning, index, allWarnings) => allWarnings.indexOf(warning) === index);
+  };
 
   return {
     title: "Shot graph execution summary",
@@ -1460,6 +1469,7 @@ function summarizeExecution(result: unknown): StoryNodeOutputSummary {
       const resultReference = isRecord(shot.resultReference) ? shot.resultReference : {};
       const error = isRecord(shot.error) ? shot.error : {};
       const status = compactText(shot.status, 40) || "unknown";
+      const warnings = getExecutionWarnings(shot);
       const readiness = getReadinessForExecutionStatus(status, compactText(error.message, 220));
 
       return {
@@ -1481,6 +1491,7 @@ function summarizeExecution(result: unknown): StoryNodeOutputSummary {
         sourceRisks: [],
         status,
         title: compactText(shot.shotId, 80) || `Shot ${index + 1}`,
+        warnings,
       } satisfies StoryShotSummaryCard;
     }),
     sections: [
@@ -1489,13 +1500,23 @@ function summarizeExecution(result: unknown): StoryNodeOutputSummary {
         emptyState: "No execution records.",
         rows: shots.map((shot) => {
           const error = isRecord(shot.error) ? shot.error : {};
+          const warnings = getExecutionWarnings(shot);
           return {
             shot: compactText(shot.shotId, 80),
             status: compactText(shot.status, 40),
             source: formatList(shot.sourceShotIds),
             error: compactText(error.message, 180),
+            warnings: formatList(warnings),
           };
         }),
+      },
+      {
+        title: "Execution warnings",
+        emptyState: "No execution warnings.",
+        notes: shots.flatMap((shot) =>
+          getExecutionWarnings(shot).map((warning) =>
+            `${compactText(shot.shotId, 80) || "Unknown shot"}: ${warning}`,
+          )),
       },
     ],
   };

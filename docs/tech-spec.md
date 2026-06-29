@@ -213,6 +213,8 @@ Render and execution contracts:
 - Approved character identity and outfit references may become Anima `characterReferences` only when selected resources are Anima-compatible and required IPAdapter nodes are available.
 - Missing IPAdapter support must visibly degrade to prompt-only with install guidance and must omit reference injection rather than silently failing.
 - Prop and location references remain visible anchors and are not injected into full-image generation by default in v1.
+- Final Story execution request assembly uses the current reference asset plan as the approval source of truth and the render-plan `referenceRecipe` as the per-shot listing source. It injects only approved `character-face`, `character-bust`, and `outfit` references into final Anima-compatible requests. Preview requests, non-Anima requests, prompt-only fallbacks, unresolved/stale/failed/rejected/generated-or-uploaded-but-unapproved references, and approved prop/location anchors do not receive Anima `characterReferences`.
+- The Story ComfyUI execution adapter uploads SceneForge-managed approved reference images to ComfyUI input before queueing. If current ComfyUI `object_info` lacks required Anima IPAdapter character-reference nodes, the adapter strips `characterReferences`, continues prompt-only execution when the rest of the request is valid, and returns install/setup warnings that Visual execution summaries expose on the affected shot. Source-image continuity remains separate: executable `locationContinuity.mode === "source-image"` still uses img2img source inputs and is not inferred from reference recipes.
 
 Persistence contracts:
 

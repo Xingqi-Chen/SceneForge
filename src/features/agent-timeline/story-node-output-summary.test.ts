@@ -614,7 +614,9 @@ describe("story node output summaries", () => {
             nodeIds: { sampler: "debug-node-9" },
             outputNodeId: "debug-node-9",
             promptId: "prompt-shot-1",
-            warnings: [],
+            warnings: [
+              "Story character references were omitted because ComfyUI is missing Anima IPAdapter character-reference nodes.",
+            ],
           },
           resultReference: {
             completed: true,
@@ -627,7 +629,9 @@ describe("story node output summaries", () => {
               filename: "shot-1.png",
               url: "/api/comfyui/generated-images/shot-1.png",
             },
-            warnings: [],
+            warnings: [
+              "Story character references were omitted because ComfyUI is missing Anima IPAdapter character-reference nodes.",
+            ],
           },
           shotId: "shot-1",
           sourceShotIds: [],
@@ -667,8 +671,9 @@ describe("story node output summaries", () => {
       storyId: "story-summary",
     };
     const rawJson = JSON.stringify({ execution, resultDisplay });
+    const executionSummary = createStoryNodeOutputSummary("shot-graph-execution", execution);
     const visualJson = JSON.stringify([
-      createStoryNodeOutputSummary("shot-graph-execution", execution),
+      executionSummary,
       createStoryNodeOutputSummary("story-result-display", resultDisplay),
     ]);
 
@@ -680,5 +685,11 @@ describe("story node output summaries", () => {
     expect(visualJson).not.toContain("type=temp");
     expect(visualJson).toContain("temp-preview.png");
     expect(visualJson).toContain("/api/comfyui/generated-images/shot-2.png");
+    expect(executionSummary.shotCards?.[0]?.warnings).toEqual([
+      "Story character references were omitted because ComfyUI is missing Anima IPAdapter character-reference nodes.",
+    ]);
+    expect(executionSummary.sections.find((section) => section.title === "Execution warnings")?.notes).toEqual([
+      "shot-1: Story character references were omitted because ComfyUI is missing Anima IPAdapter character-reference nodes.",
+    ]);
   });
 });

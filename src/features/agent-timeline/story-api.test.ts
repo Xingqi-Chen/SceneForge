@@ -375,7 +375,7 @@ describe("story API workflow sanitizer", () => {
     });
   });
 
-  it("does not inject approved Story references into final shot execution", async () => {
+  it("injects approved Story character references into final Anima shot execution", async () => {
     const workflow = approveAllRequiredReferences(createReferenceWorkflow());
     const requests: unknown[] = [];
     const executeShot: StoryShotExecutionAdapter = vi.fn(({ request }) => {
@@ -392,7 +392,34 @@ describe("story API workflow sanitizer", () => {
     expect(executed.nodes["story-result-display"].result).toMatchObject({
       status: "complete",
     });
-    expect(requests).toEqual([undefined, undefined]);
+    expect(requests).toEqual([
+      [
+        expect.objectContaining({
+          id: "story-reference:character-face:main-character",
+          images: [
+            expect.objectContaining({
+              imageName: "character-face-main-character.png",
+            }),
+          ],
+        }),
+        expect.objectContaining({
+          id: "story-reference:character-bust:main-character",
+          images: [
+            expect.objectContaining({
+              imageName: "character-bust-main-character.png",
+            }),
+          ],
+        }),
+      ],
+      [
+        expect.objectContaining({
+          id: "story-reference:character-face:main-character",
+        }),
+        expect.objectContaining({
+          id: "story-reference:character-bust:main-character",
+        }),
+      ],
+    ]);
   });
 
   it("rejects stored render plans with self or future source-image continuity before execution", async () => {
