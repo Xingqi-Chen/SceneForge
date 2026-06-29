@@ -70,6 +70,8 @@ export type StoryLocalResource = ResourcePlanLocalResource & {
   commonLoras?: Array<{ resourceId: string; name: string; count: number }>;
   recommendationScore?: number;
   recommendationRank?: number;
+  storyInputStrengthModel?: number;
+  storyInputStrengthClip?: number;
 };
 
 export type StoryResourcePlan = ResourcePlanResult<StoryLocalResource> & {
@@ -1362,7 +1364,7 @@ function createStoryComfyUiSettings({
   resourcePlan: StoryResourcePlan;
   supportsNsfw: boolean;
 }) {
-  return resolveComfyUiGenerationSettings({
+  const settings = resolveComfyUiGenerationSettings({
     activePrompt: formattedPositivePrompt,
     activePromptAlreadyFormatted: true,
     aiAdvice: createStoryAiAdvice({
@@ -1374,6 +1376,36 @@ function createStoryComfyUiSettings({
     selectedResources: getSelectedResources(resourcePlan),
     supportsNsfw,
   });
+  const storyInputLoraWeights = new Map(
+    resourcePlan.loras
+      .filter((lora) =>
+        lora.resource.storyInputStrengthModel !== undefined ||
+        lora.resource.storyInputStrengthClip !== undefined,
+      )
+      .map((lora) => [lora.resource.modelFileName ?? lora.resource.name, lora.resource]),
+  );
+
+  if (storyInputLoraWeights.size === 0) {
+    return settings;
+  }
+
+  return {
+    ...settings,
+    request: {
+      ...settings.request,
+      loras: (settings.request.loras ?? []).map((lora) => {
+        const weights = storyInputLoraWeights.get(lora.loraName);
+
+        return weights
+          ? {
+              ...lora,
+              strengthModel: weights.storyInputStrengthModel ?? lora.strengthModel,
+              strengthClip: weights.storyInputStrengthClip ?? lora.strengthClip,
+            }
+          : lora;
+      }),
+    },
+  };
 }
 
 function createFormattedStoryPositivePrompt({

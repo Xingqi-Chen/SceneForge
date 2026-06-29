@@ -39,6 +39,11 @@ import type {
 } from "./story-types";
 import { createStoryWorkflowState } from "./story-state";
 import type { PromptProfileId } from "@/shared/prompt-profile";
+import {
+  sanitizeStoryStylePaletteSnapshot,
+  type StoryStylePaletteLoraSnapshot,
+  type StoryStylePaletteSnapshot,
+} from "./story-style-palette";
 
 type StoryClock = () => string;
 
@@ -59,6 +64,7 @@ export type StoryGraphStartSettingsSnapshot = {
     checkpoints: StoryLocalResource[];
     loras: StoryLocalResource[];
   };
+  stylePalette?: StoryStylePaletteSnapshot;
 };
 
 export type StoryGraphStartRequest = {
@@ -160,8 +166,10 @@ function createSettingsSnapshot({
 }): StoryGraphStartSettingsSnapshot {
   const {
     resourceCandidates,
+    stylePalette,
     ...settingsSnapshot
   } = request.settingsSnapshot ?? {};
+  const sanitizedStylePalette = sanitizeStoryStylePaletteSnapshot(stylePalette);
 
   return {
     capturedAt: settingsSnapshot.capturedAt ?? timestamp,
@@ -177,6 +185,7 @@ function createSettingsSnapshot({
           loras: resourceCandidates.loras.length,
         }
       : settingsSnapshot.resourceCandidateCounts,
+    ...(sanitizedStylePalette ? { stylePalette: sanitizedStylePalette } : {}),
     targetShotCount,
   } as StoryGraphStartSettingsSnapshot;
 }
@@ -429,36 +438,119 @@ function getStartResourceCandidates(
   };
 }
 
+function getInputStylePalette(input: StoryInput): StoryStylePaletteSnapshot | undefined {
+  const snapshot = input.settingsSnapshot as StoryGraphStartSettingsSnapshot | undefined;
+  return sanitizeStoryStylePaletteSnapshot(snapshot?.stylePalette);
+}
+
+function findStartResourceById(candidates: StoryLocalResource[], id: string) {
+  return candidates.find((candidate) => candidate.id === id) ?? null;
+}
+
+function getStartResourceBaseModel(resource: StoryLocalResource) {
+  return (resource.modelBaseModel ?? resource.baseModel ?? "").trim().toLocaleLowerCase();
+}
+
+function areStartResourcesCompatible(lora: StoryLocalResource, checkpoint: StoryLocalResource) {
+  const checkpointBaseModel = getStartResourceBaseModel(checkpoint);
+  const loraBaseModel = getStartResourceBaseModel(lora);
+
+  return !checkpointBaseModel || !loraBaseModel || checkpointBaseModel === loraBaseModel;
+}
+
+function getStyleLoraSuggestedWeight(
+  loraSnapshot: StoryStylePaletteLoraSnapshot,
+  resource: StoryLocalResource,
+) {
+  if (Number.isFinite(loraSnapshot.strengthModel)) {
+    return Number(loraSnapshot.strengthModel);
+  }
+
+  return resource.averageWeight ?? null;
+}
+
+function applyStyleLoraWeights(
+  resource: StoryLocalResource,
+  loraSnapshot: StoryStylePaletteLoraSnapshot,
+): StoryLocalResource {
+  return {
+    ...resource,
+    ...(loraSnapshot.strengthModel !== undefined ? { storyInputStrengthModel: loraSnapshot.strengthModel } : {}),
+    ...(loraSnapshot.strengthClip !== undefined ? { storyInputStrengthClip: loraSnapshot.strengthClip } : {}),
+  };
+}
+
 function createResourcePlan(
   input: StoryInput,
   resourceCandidates?: StoryGraphStartSettingsSnapshot["resourceCandidates"],
 ): StoryResourcePlan {
   const candidates = getStartResourceCandidates(input, resourceCandidates);
-  const checkpoint = candidates.checkpoints[0];
+  const stylePalette = getInputStylePalette(input);
+  const enabledStyleLoras = stylePalette?.loras.filter((lora) => lora.enabled) ?? [];
+  const enabledStyleLoraById = new Map(enabledStyleLoras.map((lora) => [lora.id, lora]));
+  const candidateLoras = stylePalette?.checkpointId
+    ? candidates.loras.map((resource) => {
+        const loraSnapshot = enabledStyleLoraById.get(resource.id);
+        return loraSnapshot ? applyStyleLoraWeights(resource, loraSnapshot) : resource;
+      })
+    : candidates.loras;
+  const checkpoint = stylePalette?.checkpointId
+    ? findStartResourceById(candidates.checkpoints, stylePalette.checkpointId)
+    : candidates.checkpoints[0];
+
+  if (!checkpoint) {
+    throw new Error(`Selected Story checkpoint "${stylePalette?.checkpointId ?? ""}" is not in the supplied local candidates.`);
+  }
+
+  const loras = stylePalette?.checkpointId
+    ? enabledStyleLoras.map((loraSnapshot) => {
+        const resource = findStartResourceById(candidates.loras, loraSnapshot.id);
+        if (!resource) {
+          throw new Error(`Selected Story LoRA "${loraSnapshot.id}" is not in the supplied local candidates.`);
+        }
+
+        if (!areStartResourcesCompatible(resource, checkpoint)) {
+          throw new Error(`Selected Story LoRA "${resource.name}" is incompatible with checkpoint "${checkpoint.name}".`);
+        }
+        const weightedResource = applyStyleLoraWeights(resource, loraSnapshot);
+
+        return {
+          resource: weightedResource,
+          suggestedWeight: getStyleLoraSuggestedWeight(loraSnapshot, weightedResource),
+          reason: "Selected from Story input style resources.",
+        };
+      })
+    : candidates.loras.slice(0, 2).map((resource) => ({
+        resource,
+        suggestedWeight: 0.6,
+        reason: "Selected from the supplied local Story Graph settings snapshot.",
+      }));
 
   return createStoryResourcePlan({
     storyId: input.storyId,
     candidates: {
       checkpoints: candidates.checkpoints.map((resource) => ({ resource })),
-      loras: candidates.loras.map((resource) => ({ resource })),
+      loras: candidateLoras.map((resource) => ({ resource })),
     },
     recommendation: {
       checkpoint: {
         resource: checkpoint,
-        reason: candidates.usedFallback
+        reason: stylePalette?.checkpointId
+          ? "Selected from Story input style resources."
+          : candidates.usedFallback
           ? "Planning fallback keeps the story render preview inspectable until local resource selection is connected."
           : "Selected from the supplied local Story Graph settings snapshot.",
       },
-      loras: candidates.loras.slice(0, 2).map((resource) => ({
-        resource,
-        suggestedWeight: 0.6,
-        reason: "Selected from the supplied local Story Graph settings snapshot.",
-      })),
-      recommendationReason: candidates.usedFallback
+      loras,
+      recommendationReason: stylePalette?.checkpointId
+        ? "Use the checkpoint and enabled LoRAs saved in the Story input style palette."
+        : candidates.usedFallback
         ? "No local resource snapshot was supplied to /story, so a planning-only fallback candidate was validated."
         : "Use validated local candidates from the Story Graph settings snapshot.",
-      overallEffect: "Storyboard-ready visual continuity across planned shots.",
-      warnings: candidates.usedFallback
+      overallEffect: stylePalette?.checkpointId
+        ? "User-selected Story input style resources."
+        : "Storyboard-ready visual continuity across planned shots.",
+      warnings: candidates.usedFallback && !stylePalette?.checkpointId
         ? ["Resource plan is a planning fallback and must be replaced by real local resources before execution."]
         : [],
     },
@@ -466,6 +558,15 @@ function createResourcePlan(
 }
 
 function createParameterPlan(input: StoryInput, resourcePlan: StoryResourcePlan, shots: readonly StoryShot[]): StoryParameterPlan {
+  const stylePalette = getInputStylePalette(input);
+  if (stylePalette?.parameters) {
+    return createStoryParameterPlan({
+      storyId: input.storyId,
+      defaults: stylePalette.parameters,
+      warnings: ["Using generation parameters saved in the Story input style palette."],
+    });
+  }
+
   return createStoryParameterPlan({
     storyId: input.storyId,
     defaults: createStoryDefaultGenerationParameters({ input, resourcePlan, shots }),

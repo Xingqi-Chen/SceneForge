@@ -4836,6 +4836,7 @@ export type ComfyUiGenerationDialogProps = {
   onSaveParameters?: (parameters: SavedComfyUiGenerationParams) => void;
   onClose: () => void;
   open: boolean;
+  parametersOnly?: boolean;
   positivePromptLocked?: boolean;
   /** Prompt fields are reset from active/base prompts only when this key changes. */
   promptRefreshKey?: string;
@@ -4859,6 +4860,7 @@ export function ComfyUiGenerationDialog({
   onSaveParameters,
   onClose,
   open,
+  parametersOnly = false,
   positivePromptLocked = false,
   promptRefreshKey,
   savedParameters = null,
@@ -5034,7 +5036,7 @@ export function ComfyUiGenerationDialog({
       const resources = query
         ? await fetchJson<SelectedCivitaiResourcesPreview>(`/api/civitai-lora-library/selected-resources?${query}`)
         : EMPTY_SELECTED_RESOURCES;
-      if (!resources.checkpoint) {
+      if (!resources.checkpoint && !parametersOnly) {
         throw new Error("请先选择一个 Civitai checkpoint。");
       }
 
@@ -6020,7 +6022,9 @@ export function ComfyUiGenerationDialog({
                   <div className="min-w-0 flex-1">
                     <h3 className="text-base font-bold text-slate-900">{title}</h3>
                     <p className="mt-1 text-xs leading-relaxed text-slate-500">
-                      {description ?? <>参数来源：{formatSource(parameterSource)}。提交后会等待 ComfyUI 完成，并在这里显示生成图片。</>}
+                      {description ?? (parametersOnly
+                        ? <>Parameter source: {formatSource(parameterSource)}. Save to reuse these settings without submitting ComfyUI generation.</>
+                        : <>参数来源：{formatSource(parameterSource)}。提交后会等待 ComfyUI 完成，并在这里显示生成图片。</>)}
                     </p>
                   </div>
                   <button
@@ -6049,8 +6053,10 @@ export function ComfyUiGenerationDialog({
                   ) : null}
 
                   {loadStatus === "success" && draft && workflowPreview ? (
-                    <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_360px]">
+                    <div className={parametersOnly ? "grid gap-5" : "grid gap-5 lg:grid-cols-[minmax(0,1fr)_360px]"}>
                       <div className="space-y-5">
+                        {!parametersOnly ? (
+                          <>
                         <div>
                           <p className="mb-2 text-[11px] font-bold uppercase tracking-wider text-slate-500">Active Prompt</p>
                           <textarea
@@ -6077,6 +6083,9 @@ export function ComfyUiGenerationDialog({
                             value={draft.negativePrompt}
                           />
                         </div>
+                          </>
+                        ) : null}
+                        {!parametersOnly ? (
                         <div>
                           <p className="mb-2 text-[11px] font-bold uppercase tracking-wider text-slate-500">Prompt Wrapper</p>
                           <div className="mb-3 flex flex-wrap gap-2">
@@ -6116,6 +6125,7 @@ export function ComfyUiGenerationDialog({
                             />
                           </div>
                         </div>
+                        ) : null}
 
                         <div>
                           <p className="mb-2 text-[11px] font-bold uppercase tracking-wider text-slate-500">Checkpoint / LoRA</p>
@@ -6300,6 +6310,7 @@ export function ComfyUiGenerationDialog({
                             <NumberInput label="steps" min={1} onChange={(value) => patchDraft({ steps: Math.round(value) })} value={draft.steps} />
                             <NumberInput label="cfg" min={0} onChange={(value) => patchDraft({ cfg: value })} step={0.5} value={draft.cfg} />
                             <NumberInput label="denoise" max={1} min={0} onChange={(value) => patchDraft({ denoise: value })} step={0.05} value={draft.denoise} />
+                            {!parametersOnly ? (
                             <NumberInput
                               label="images"
                               max={MAX_COMFYUI_GENERATION_IMAGE_COUNT}
@@ -6307,6 +6318,7 @@ export function ComfyUiGenerationDialog({
                               onChange={(value) => patchDraft({ imageCount: normalizeComfyUiGenerationImageCount(value) })}
                               value={draft.imageCount}
                             />
+                            ) : null}
                             <SelectInput
                               label="sampler"
                               onChange={(value) => patchDraft({ samplerName: value })}
@@ -6319,14 +6331,18 @@ export function ComfyUiGenerationDialog({
                               options={schedulerOptions}
                               value={draft.scheduler}
                             />
+                            {!parametersOnly ? (
                             <SelectInput
                               label="latent"
                               onChange={(value) => patchDraft({ latentImageNode: value as GenerationDraft["latentImageNode"] })}
                               options={COMFYUI_LATENT_IMAGE_NODE_OPTIONS}
                               value={draft.latentImageNode}
                             />
+                            ) : null}
+                            {!parametersOnly ? (
                             <TextInput label="output" onChange={(value) => patchDraft({ outputPrefix: value })} value={draft.outputPrefix} />
-                            {allowControlNet ? (
+                            ) : null}
+                            {allowControlNet && !parametersOnly ? (
                               <ControlNetOpenPoseFoldout
                                 controlNets={draft.controlNets}
                                 expanded={Boolean(controlNetOpenPosePreview?.available && controlNetExpanded)}
@@ -6337,6 +6353,7 @@ export function ComfyUiGenerationDialog({
                                 preview={controlNetOpenPosePreview}
                               />
                             ) : null}
+                            {!parametersOnly ? (
                             <DetailerFoldout
                               detailer={draft.handDetailer}
                               label="HandDetailer"
@@ -6345,6 +6362,8 @@ export function ComfyUiGenerationDialog({
                               samplerOptions={samplerOptions}
                               schedulerOptions={schedulerOptions}
                             />
+                            ) : null}
+                            {!parametersOnly ? (
                             <DetailerFoldout
                               detailer={draft.faceDetailer}
                               label="FaceDetailer"
@@ -6353,7 +6372,9 @@ export function ComfyUiGenerationDialog({
                               samplerOptions={samplerOptions}
                               schedulerOptions={schedulerOptions}
                             />
+                            ) : null}
                           </div>
+                          {!parametersOnly ? (
                           <div className="mt-5">
                             <GeneratedImageResults
                               allGeneratedImageItems={generatedImageItems}
@@ -6389,7 +6410,8 @@ export function ComfyUiGenerationDialog({
                               </div>
                             ) : null}
                           </div>
-                          {allowDiagnosis && submitStatus === "success" && selectedGeneratedImage ? (
+                          ) : null}
+                          {allowDiagnosis && !parametersOnly && submitStatus === "success" && selectedGeneratedImage ? (
                             <div className="mt-5 rounded-md border border-violet-100 bg-violet-50/70 p-3">
                               <div className="flex items-center justify-between gap-3">
                                 <div className="min-w-0">
@@ -6640,6 +6662,7 @@ export function ComfyUiGenerationDialog({
                         </div>
                       </div>
 
+                      {!parametersOnly ? (
                       <div className="space-y-3">
                         {false && generatedImages.length > 0 ? (
                           <div>
@@ -6711,6 +6734,7 @@ export function ComfyUiGenerationDialog({
                           ))}
                         </div>
                       </div>
+                      ) : null}
                     </div>
                   ) : null}
                 </div>
@@ -6754,12 +6778,14 @@ export function ComfyUiGenerationDialog({
                     >
                       关闭
                     </Button>
-                    <BooleanInput
-                      checked={previewGenerationEnabled}
-                      label="Preview"
-                      onChange={setPreviewGenerationEnabled}
-                    />
-                    <Button
+                    {!parametersOnly ? (
+                      <>
+                        <BooleanInput
+                          checked={previewGenerationEnabled}
+                          label="Preview"
+                          onChange={setPreviewGenerationEnabled}
+                        />
+                        <Button
                       className="h-10 rounded-md bg-sky-600 text-white hover:bg-sky-700"
                       disabled={!canSubmitGeneration}
                       onClick={() => void submitGeneration(previewGenerationEnabled ? "preview" : "full")}
@@ -6771,11 +6797,13 @@ export function ComfyUiGenerationDialog({
                         <Play className="size-4" />
                       )}
                       开始生图
-                    </Button>
+                        </Button>
+                      </>
+                    ) : null}
                   </div>
                 </div>
               </div>
-              {allowInpaint && draft && inpaintImageItem ? (
+              {!parametersOnly && allowInpaint && draft && inpaintImageItem ? (
                 <InpaintMaskDialog
                   busy={submitStatus === "loading"}
                   draft={draft}

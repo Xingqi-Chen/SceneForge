@@ -33,6 +33,11 @@ import {
   normalizeTimelineSamplerOptions,
   type TimelineSamplerOptions,
 } from "./timeline-sampler-options";
+import {
+  sanitizeStoryStylePaletteSnapshot,
+  type StoryStylePaletteLoraSnapshot,
+  type StoryStylePaletteSnapshot,
+} from "./story-style-palette";
 import type {
   CharacterContinuityGraph,
   PlotStateGraph,
@@ -84,6 +89,8 @@ export type StoryResourceCandidateSet = {
 export type StoryResourceCandidateLoadRequest = {
   desiredEffect: string;
   promptProfile: PromptProfileId;
+  selectedCheckpointId?: string;
+  selectedLoraIds?: string[];
 };
 
 export type StoryLlmNodeAdapterOptions = {
@@ -100,6 +107,11 @@ export type StoryLlmNodeAdapterOptions = {
 const maxCharacters = 12;
 const maxLocations = 12;
 const maxWarnings = 12;
+const storyNsfwModelExcludedNodeIds = new Set<StoryWorkflowNodeId>([
+  "shot-dependency-graph",
+  "resource-plan",
+  "parameter-plan",
+]);
 const fallbackParameters = {
   width: 1024,
   height: 768,
@@ -811,6 +823,7 @@ async function resolveStoryResourceCandidates({
   promptProfile: PromptProfileId;
 }> {
   const promptProfile = getStoryPromptProfile(input);
+  const stylePalette = getStoryStylePalette(input);
   const desiredEffect = buildStoryResourceDesiredEffect({
     bible: getBible(context.workflow),
     input,
@@ -829,6 +842,8 @@ async function resolveStoryResourceCandidates({
     const loaded = await loadResourceCandidates({
       desiredEffect,
       promptProfile,
+      selectedCheckpointId: stylePalette?.checkpointId,
+      selectedLoraIds: getEnabledStoryStyleLoras(stylePalette).map((lora) => lora.id),
     }, context);
 
     return {
@@ -983,6 +998,161 @@ export function normalizeStoryParameterPlan(
       .filter((override) => shotIds.has(override.shotId)),
     warnings: normalizeStringList(parsed.warnings, maxWarnings),
     samplerOptions,
+  });
+}
+
+function getStoryStylePalette(input: StoryInput): StoryStylePaletteSnapshot | undefined {
+  const settingsSnapshot = input.settingsSnapshot;
+
+  if (!isRecord(settingsSnapshot)) {
+    return undefined;
+  }
+
+  return sanitizeStoryStylePaletteSnapshot(settingsSnapshot.stylePalette);
+}
+
+function getEnabledStoryStyleLoras(stylePalette: StoryStylePaletteSnapshot | undefined) {
+  return stylePalette?.loras.filter((lora) => lora.enabled) ?? [];
+}
+
+function getStoryResourceBaseModel(resource: StoryLocalResource) {
+  return compactText(resource.modelBaseModel ?? resource.baseModel, 120).toLocaleLowerCase();
+}
+
+function isStoryStyleLoraCompatibleWithCheckpoint(
+  lora: StoryLocalResource,
+  checkpoint: StoryLocalResource,
+) {
+  const checkpointBaseModel = getStoryResourceBaseModel(checkpoint);
+  const loraBaseModel = getStoryResourceBaseModel(lora);
+
+  return !checkpointBaseModel || !loraBaseModel || checkpointBaseModel === loraBaseModel;
+}
+
+function findStoryResourceById(candidates: StoryLocalResource[], id: string) {
+  return candidates.find((candidate) => candidate.id === id) ?? null;
+}
+
+function getManualLoraSuggestedWeight(
+  loraSnapshot: StoryStylePaletteLoraSnapshot,
+  resource: StoryLocalResource,
+) {
+  if (Number.isFinite(loraSnapshot.strengthModel)) {
+    return Number(loraSnapshot.strengthModel);
+  }
+
+  if (resource.averageWeight !== null && resource.averageWeight !== undefined) {
+    return resource.averageWeight;
+  }
+
+  return null;
+}
+
+function applyStoryStyleLoraWeights(
+  resource: StoryLocalResource,
+  loraSnapshot: StoryStylePaletteLoraSnapshot,
+): StoryLocalResource {
+  return {
+    ...resource,
+    ...(loraSnapshot.strengthModel !== undefined ? { storyInputStrengthModel: loraSnapshot.strengthModel } : {}),
+    ...(loraSnapshot.strengthClip !== undefined ? { storyInputStrengthClip: loraSnapshot.strengthClip } : {}),
+  };
+}
+
+function createManualStoryResourcePlanFromStylePalette({
+  candidates,
+  input,
+  stylePalette,
+}: {
+  candidates: StoryResourceCandidateSet;
+  input: StoryInput;
+  stylePalette: StoryStylePaletteSnapshot | undefined;
+}): StoryResourcePlan | null {
+  if (!stylePalette?.checkpointId) {
+    return null;
+  }
+
+  const checkpoint = findStoryResourceById(candidates.checkpoints, stylePalette.checkpointId);
+  if (!checkpoint) {
+    invalidResourceSelection("Selected Story checkpoint is missing, unavailable, or not a local checkpoint.", {
+      checkpointId: stylePalette.checkpointId,
+    });
+  }
+
+  const enabledStyleLoras = getEnabledStoryStyleLoras(stylePalette);
+  const weightedLoraById = new Map(
+    enabledStyleLoras.map((loraSnapshot) => [loraSnapshot.id, loraSnapshot]),
+  );
+  const candidateLoras = candidates.loras.map((resource) => {
+    const snapshot = weightedLoraById.get(resource.id);
+
+    return snapshot ? applyStoryStyleLoraWeights(resource, snapshot) : resource;
+  });
+  const selectedLoras = enabledStyleLoras.map((loraSnapshot) => {
+    const lora = findStoryResourceById(candidates.loras, loraSnapshot.id);
+    if (!lora) {
+      invalidResourceSelection("Selected Story LoRA is missing, unavailable, or not a local LoRA.", {
+        loraId: loraSnapshot.id,
+        checkpointId: checkpoint.id,
+      });
+    }
+
+    if (!isStoryStyleLoraCompatibleWithCheckpoint(lora, checkpoint)) {
+      invalidResourceSelection("Selected Story LoRA is incompatible with the selected checkpoint base model.", {
+        loraId: lora.id,
+        loraBaseModel: lora.modelBaseModel ?? lora.baseModel ?? null,
+        checkpointId: checkpoint.id,
+        checkpointBaseModel: checkpoint.modelBaseModel ?? checkpoint.baseModel ?? null,
+      });
+    }
+    const weightedLora = applyStoryStyleLoraWeights(lora, loraSnapshot);
+
+    return {
+      resource: weightedLora,
+      suggestedWeight: getManualLoraSuggestedWeight(loraSnapshot, weightedLora),
+      reason: loraSnapshot.strengthModel !== undefined
+        ? "Selected from Story input style resources with the saved model weight."
+        : "Selected from Story input style resources.",
+    };
+  });
+
+  return createStoryResourcePlan({
+    storyId: input.storyId,
+    candidates: {
+      checkpoints: candidates.checkpoints.map((resource) => ({ resource })),
+      loras: candidateLoras.map((resource) => ({ resource })),
+    },
+    recommendation: {
+      checkpoint: {
+        resource: checkpoint,
+        reason: "Selected from Story input style resources.",
+      },
+      loras: selectedLoras,
+      recommendationReason: "Use the checkpoint and enabled LoRAs saved in the Story input style palette.",
+      overallEffect: "User-selected Story input style resources.",
+      warnings: [],
+    },
+  });
+}
+
+function createManualStoryParameterPlanFromStylePalette({
+  input,
+  samplerOptions,
+  stylePalette,
+}: {
+  input: StoryInput;
+  samplerOptions?: TimelineSamplerOptions;
+  stylePalette: StoryStylePaletteSnapshot | undefined;
+}): StoryParameterPlan | null {
+  if (!stylePalette?.parameters) {
+    return null;
+  }
+
+  return createStoryParameterPlan({
+    storyId: input.storyId,
+    defaults: stylePalette.parameters,
+    samplerOptions,
+    warnings: ["Using generation parameters saved in the Story input style palette."],
   });
 }
 
@@ -1215,6 +1385,26 @@ function makeJsonRequest({
   };
 }
 
+function getConfiguredStoryNsfwModel() {
+  return process.env.LITELLM_NSFW_MODEL?.trim() || undefined;
+}
+
+function applyStoryNsfwModelOverride(
+  request: LlmChatRequest,
+  nodeId: StoryWorkflowNodeId,
+): LlmChatRequest {
+  const nsfwModel = getConfiguredStoryNsfwModel();
+
+  if (request.nsfw !== true || !nsfwModel || storyNsfwModelExcludedNodeIds.has(nodeId)) {
+    return request;
+  }
+
+  return {
+    ...request,
+    model: nsfwModel,
+  };
+}
+
 function createLlmStoryNodeAdapter<T>({
   buildRequest,
   parseResponse,
@@ -1224,7 +1414,7 @@ function createLlmStoryNodeAdapter<T>({
 }): (completeChat: StoryCompleteChat) => StoryNodeAdapter<T> {
   return (completeChat) => async (context) => {
     try {
-      const response = await completeChat(buildRequest(context));
+      const response = await completeChat(applyStoryNsfwModelOverride(buildRequest(context), context.nodeId));
 
       if (!isLlmChatResponse(response) || response.content.trim().length === 0) {
         throw malformedResponse("LLM response did not include usable text content.", { response });
@@ -1444,6 +1634,18 @@ export function createStoryLlmNodeAdapters({
         );
       }
 
+      const manualResourcePlan = createManualStoryResourcePlanFromStylePalette({
+        candidates,
+        input,
+        stylePalette: getStoryStylePalette(input),
+      });
+      if (manualResourcePlan) {
+        return {
+          value: manualResourcePlan,
+          source: "manual",
+        };
+      }
+
       const response = await completeChat(makeJsonRequest({
         input,
         instruction:
@@ -1471,7 +1673,7 @@ export function createStoryLlmNodeAdapters({
       throw new TimelineNodeExecutionError(normalizeLlmAdapterError(error));
     }
   };
-  const parameterPlan = createLlmStoryNodeAdapter<StoryParameterPlan>({
+  const aiParameterPlan = createLlmStoryNodeAdapter<StoryParameterPlan>({
     buildRequest: (context) => {
       const input = getStoryInput(context.workflow);
       const resourcePlan = getResourcePlan(context.workflow);
@@ -1514,6 +1716,23 @@ export function createStoryLlmNodeAdapters({
       }),
     ),
   })(completeChat);
+  const parameterPlan: StoryNodeAdapter<StoryParameterPlan> = async (context) => {
+    const input = getStoryInput(context.workflow);
+    const manualParameterPlan = createManualStoryParameterPlanFromStylePalette({
+      input,
+      samplerOptions,
+      stylePalette: getStoryStylePalette(input),
+    });
+
+    if (manualParameterPlan) {
+      return {
+        value: manualParameterPlan,
+        source: "manual",
+      };
+    }
+
+    return aiParameterPlan(context);
+  };
   const renderPlan = createLlmStoryNodeAdapter<StoryRenderPlan>({
     buildRequest: (context) => {
       const input = getStoryInput(context.workflow);

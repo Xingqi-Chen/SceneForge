@@ -20,6 +20,7 @@ import {
   createStoryGraphInputWorkflow,
   type StoryGraphStartRequest,
 } from "@/features/agent-timeline/story-input";
+import { createStoryStylePaletteSnapshot } from "@/features/agent-timeline/story-style-palette";
 import type { StoryResultDisplay } from "@/features/agent-timeline/story-api";
 import type { StoryShotGraphExecutionState } from "@/features/agent-timeline/story-execution";
 import {
@@ -54,6 +55,8 @@ import {
   isLlmChatResponse,
   type LlmChatRequest,
 } from "@/features/llm";
+import type { SelectedCivitaiResourcesPreview } from "@/features/civitai-lora-library";
+import type { SavedComfyUiGenerationParams } from "@/shared/types";
 import {
   defaultPromptProfileId,
   formatPromptProfileLabel,
@@ -66,6 +69,13 @@ import { cn } from "@/shared/utils/cn";
 import { StoryNodeOutputSummaryView } from "./StoryNodeOutputSummaryView";
 import { StoryPlanningWorkspace } from "./StoryPlanningWorkspace";
 import { TimelineWorkflowProjectMenu } from "./TimelineWorkflowProjectMenu";
+import { ComfyUiGenerationDialog } from "@/features/editor/components/ImageGenerationPanel";
+import {
+  EMPTY_STYLE_PALETTE_ADVICE,
+  StylePaletteAiAdvicePanel,
+  type StylePaletteAdviceState,
+} from "@/features/editor/components/StylePaletteAiAdvicePanel";
+import { StylePaletteCivitaiResourceSelector } from "@/features/editor/components/StylePaletteCivitaiResourceSelector";
 
 const headerLinkClassName =
   "inline-flex h-9 shrink-0 items-center justify-center gap-2 rounded-md border border-slate-200 bg-white px-2.5 text-xs font-medium text-slate-700 transition-colors hover:border-slate-300 hover:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-400 sm:px-3";
@@ -85,6 +95,10 @@ const storyHeaderNavLinkClassName =
   "inline-flex h-7 items-center justify-center gap-1.5 rounded px-2.5 text-xs font-medium text-slate-600 transition-colors hover:bg-white hover:text-slate-950";
 const storyGateConfirmButtonClassName =
   "inline-flex h-8 shrink-0 items-center justify-center gap-2 rounded-md bg-slate-900 px-3 text-xs font-semibold text-white transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-500";
+const EMPTY_SELECTED_CIVITAI_RESOURCES: SelectedCivitaiResourcesPreview = {
+  checkpoint: null,
+  loras: [],
+};
 
 const planningNodeIds = storyWorkflowDefinition.nodeIds;
 
@@ -273,20 +287,31 @@ async function completeStoryInputAi({
 }
 
 function createClientStartRequest({
+  checkpointId,
   img2imgDenoise,
+  loraIds,
   nsfwEnabled,
   promptProfile,
   rawIntent,
+  savedParameters,
   targetShotCount,
 }: {
+  checkpointId?: string | null;
   img2imgDenoise: string;
+  loraIds?: readonly string[];
   nsfwEnabled: boolean;
   promptProfile: PromptProfileId;
   rawIntent: string;
+  savedParameters?: SavedComfyUiGenerationParams | null;
   targetShotCount: string;
 }): StoryGraphStartRequest {
   const normalizedShotCount = targetShotCount.trim() ? Number(targetShotCount) : undefined;
   const audienceRating = nsfwEnabled ? "explicit" : "safe";
+  const stylePalette = createStoryStylePaletteSnapshot({
+    checkpointId: checkpointId ?? null,
+    loraIds: loraIds ?? [],
+    savedParameters,
+  });
 
   return {
     nsfwEnabled,
@@ -297,6 +322,7 @@ function createClientStartRequest({
       img2imgDenoise: normalizeStoryImg2ImgDenoise(img2imgDenoise),
       nsfwEnabled,
       promptProfile,
+      ...(stylePalette ? { stylePalette } : {}),
       targetShotCount: Number.isFinite(normalizedShotCount) ? normalizedShotCount : undefined,
     } as StoryGraphStartRequest["settingsSnapshot"],
   };
@@ -534,8 +560,15 @@ function StartPanel({
   const [targetShotCount, setTargetShotCount] = useState("");
   const [img2imgDenoise, setImg2ImgDenoise] = useState(String(DEFAULT_STORY_IMG2IMG_DENOISE));
   const [promptProfile, setPromptProfile] = useState<PromptProfileId>(defaultPromptProfileId);
+  const [selectedCheckpointId, setSelectedCheckpointId] = useState<string | null>(null);
+  const [selectedLoraIds, setSelectedLoraIds] = useState<string[]>([]);
+  const [selectedResources, setSelectedResources] = useState<SelectedCivitaiResourcesPreview>(EMPTY_SELECTED_CIVITAI_RESOURCES);
+  const [savedParameters, setSavedParameters] = useState<SavedComfyUiGenerationParams | null>(null);
+  const [styleAdvice, setStyleAdvice] = useState<StylePaletteAdviceState>(EMPTY_STYLE_PALETTE_ADVICE);
+  const [parametersOpen, setParametersOpen] = useState(false);
   const [aiStatus, setAiStatus] = useState<StoryInputAiAction | null>(null);
   const [error, setError] = useState("");
+  const canEditStyleParameters = Boolean(selectedCheckpointId);
 
   async function handleStoryInputAi(action: StoryInputAiAction) {
     const currentStoryRequest = rawIntent.trim();
@@ -574,10 +607,13 @@ function StartPanel({
     setError("");
     onStart(
       createClientStartRequest({
+        checkpointId: selectedCheckpointId,
         img2imgDenoise,
+        loraIds: selectedLoraIds,
         nsfwEnabled,
         promptProfile,
         rawIntent,
+        savedParameters,
         targetShotCount,
       }),
     );
@@ -669,6 +705,53 @@ function StartPanel({
           </label>
         </div>
 
+        <section className="rounded-md border border-indigo-100 bg-indigo-50/40 p-3">
+          <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-600">
+                Style resources / parameters
+              </h3>
+              <p className="mt-1 text-xs leading-relaxed text-slate-500">
+                Optional manual checkpoint, LoRA, and generation settings for this planning run.
+              </p>
+            </div>
+            <button
+              className="inline-flex h-8 items-center justify-center gap-2 rounded-md border border-indigo-200 bg-white px-3 text-xs font-medium text-indigo-700 transition-colors hover:bg-indigo-50 disabled:cursor-not-allowed disabled:opacity-60"
+              disabled={!canEditStyleParameters}
+              onClick={() => setParametersOpen(true)}
+              title={
+                canEditStyleParameters
+                  ? "Edit Story style parameters"
+                  : "Select a checkpoint before editing Story style parameters"
+              }
+              type="button"
+            >
+              Parameters
+            </button>
+          </div>
+          <StylePaletteCivitaiResourceSelector
+            onSelectedResourcesChange={setSelectedResources}
+            onSelectionChange={(selection) => {
+              setSelectedCheckpointId(selection.checkpointId);
+              setSelectedLoraIds(selection.loraIds);
+              setSelectedResources(EMPTY_SELECTED_CIVITAI_RESOURCES);
+              setSavedParameters(null);
+              setStyleAdvice(EMPTY_STYLE_PALETTE_ADVICE);
+              setParametersOpen(false);
+            }}
+            pickerLayout="dialog"
+            selectedCheckpointId={selectedCheckpointId}
+            selectedLoraIds={selectedLoraIds}
+          />
+          {savedParameters ? (
+            <p className="mt-2 rounded-md border border-emerald-100 bg-white px-3 py-2 text-xs leading-relaxed text-emerald-700">
+              Saved parameters: {savedParameters.width}x{savedParameters.height}, {savedParameters.steps} steps, CFG{" "}
+              {savedParameters.cfg}, {savedParameters.samplerName}/{savedParameters.scheduler}
+              {savedParameters.seedMode === "fixed" ? `, fixed seed ${savedParameters.seed}` : ", random seed"}
+            </p>
+          ) : null}
+        </section>
+
         {error ? <div className="rounded-md border border-rose-200 bg-rose-50 p-3 text-xs text-rose-700">{error}</div> : null}
 
         <div className="flex justify-end">
@@ -680,6 +763,39 @@ function StartPanel({
             Start planning
           </button>
         </div>
+        <ComfyUiGenerationDialog
+          activePrompt={rawIntent || "Story Graph planning style parameter preview"}
+          advice={styleAdvice.result}
+          allowControlNet={false}
+          allowDiagnosis={false}
+          allowInpaint={false}
+          baseNegativePrompt=""
+          description="Save Story Graph generation parameters without submitting a ComfyUI test generation."
+          introContent={
+            <StylePaletteAiAdvicePanel
+              advice={styleAdvice}
+              emptyMessage="Advice uses only the selected Civitai resources for this Story planning run."
+              onAdviceChange={setStyleAdvice}
+              resources={selectedResources}
+            />
+          }
+          onClose={() => setParametersOpen(false)}
+          onSaveParameters={(parameters) => {
+            setSavedParameters(parameters);
+            setParametersOpen(false);
+          }}
+          open={parametersOpen && canEditStyleParameters}
+          parametersOnly
+          promptRefreshKey={[
+            rawIntent,
+            selectedCheckpointId ?? "",
+            selectedLoraIds.join(","),
+          ].join("\u0000")}
+          savedParameters={savedParameters}
+          selectedCheckpointId={selectedCheckpointId}
+          selectedLoraIds={selectedLoraIds}
+          title="Story style parameters"
+        />
       </form>
     </section>
   );

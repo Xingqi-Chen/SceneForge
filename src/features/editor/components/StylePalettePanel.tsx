@@ -10,24 +10,9 @@ import type {
   ArtistStringPlatformRecord,
 } from "@/features/artist-string-library";
 import { formatArtistStringForPlatform } from "@/features/artist-string-library/novelai-artist-string";
-import type {
-  CivitaiResourceListItem,
-  SelectedCivitaiResourcePreview,
-  SelectedCivitaiResourcesPreview,
-} from "@/features/civitai-lora-library";
-import { getCivitaiImageVariantUrl } from "@/features/civitai-lora-library/image-url";
-import {
-  getCivitaiModelStorageKind,
-  makeCivitaiResourceTargetFileName,
-} from "@/features/civitai-lora-library/resource-files";
-import {
-  parseCivitaiAiPromptResponse,
-  selectedCivitaiResourceCards,
-  type CivitaiAiPromptResult,
-} from "@/features/editor/ai-prompt/civitai-ai-context";
+import type { SelectedCivitaiResourcesPreview } from "@/features/civitai-lora-library";
 import {
   STYLE_PALETTE_PROMPT_PRESETS,
-  buildStylePaletteAdviceMessages,
   buildStylePaletteActivePrompt,
   buildStylePalettePositivePrompt,
   buildStylePaletteSubjectDanbooruMessages,
@@ -39,6 +24,12 @@ import { getLlmProxyErrorMessage, isLlmChatResponse } from "@/features/llm";
 import type { ArtistStringPromptRenderMode, PromptTag, SceneForgeProject } from "@/shared/types";
 
 import { ComfyUiGenerationDialog } from "./ImageGenerationPanel";
+import {
+  EMPTY_STYLE_PALETTE_ADVICE,
+  StylePaletteAiAdvicePanel,
+  type StylePaletteAdviceState,
+} from "./StylePaletteAiAdvicePanel";
+import { StylePaletteCivitaiResourceSelector } from "./StylePaletteCivitaiResourceSelector";
 
 type LoadStatus = "idle" | "loading" | "success" | "error";
 
@@ -50,18 +41,6 @@ type ArtistStringItemsResponse = {
   categories: ArtistStringCategoryCount[];
   items: ArtistStringItemRecord[];
   platforms: ArtistStringPlatformRecord[];
-};
-
-type CivitaiResourcesResponse = {
-  items: CivitaiResourceListItem[];
-};
-
-type CivitaiPickerKind = "checkpoint" | "lora";
-
-type StylePaletteAdviceState = {
-  error: string;
-  result: CivitaiAiPromptResult | null;
-  status: LoadStatus;
 };
 
 const EMPTY_SELECTED_CIVITAI_RESOURCES: SelectedCivitaiResourcesPreview = {
@@ -170,239 +149,6 @@ function compact(value: string, max = 180) {
   return text.length > max ? `${text.slice(0, max)}...` : text;
 }
 
-function weightLabel(resource: SelectedCivitaiResourcePreview) {
-  const recommendation = resource.recommendations.find((item) => item.loraWeight !== null);
-  if (recommendation?.loraWeight !== null && recommendation?.loraWeight !== undefined) {
-    return `recommended ${recommendation.loraWeight}`;
-  }
-
-  if (resource.averageWeight !== null) {
-    return `average ${resource.averageWeight}`;
-  }
-
-  if (resource.minWeight !== null || resource.maxWeight !== null) {
-    return `range ${resource.minWeight ?? "-"}-${resource.maxWeight ?? "-"}`;
-  }
-
-  return "reference weight";
-}
-
-function previewFromCivitaiListItem(resource: CivitaiResourceListItem): SelectedCivitaiResourcePreview | null {
-  if (resource.resourceType !== "model" && resource.resourceType !== "lora") {
-    return null;
-  }
-
-  return {
-    id: resource.id,
-    resourceType: resource.resourceType,
-    name: resource.name,
-    versionName: resource.versionName,
-    baseModel: resource.baseModel,
-    creator: resource.creator,
-    trainedWords: resource.trainedWords,
-    tags: resource.tags,
-    categories: resource.categories,
-    usageGuide: resource.usageGuide,
-    descriptionSnippet: resource.description ? compact(resource.description, 240) : null,
-    averageWeight: resource.averageWeight,
-    minWeight: resource.minWeight,
-    maxWeight: resource.maxWeight,
-    recommendations: resource.recommendations,
-    previewImage: resource.previewImage,
-    modelFileName: makeCivitaiResourceTargetFileName(resource),
-    ...(resource.resourceType === "model" ? { modelStorageKind: getCivitaiModelStorageKind(resource) } : {}),
-  };
-}
-
-function normalizeBaseModel(value: string | null | undefined) {
-  return value?.trim().toLocaleLowerCase() ?? "";
-}
-
-function sameBaseModel(left: string | null | undefined, right: string | null | undefined) {
-  const normalizedLeft = normalizeBaseModel(left);
-  const normalizedRight = normalizeBaseModel(right);
-  return Boolean(normalizedLeft && normalizedRight && normalizedLeft === normalizedRight);
-}
-
-function AdviceValue({ value }: { value: unknown }) {
-  if (value === null || value === undefined || value === "") {
-    return <span className="text-slate-400">none</span>;
-  }
-
-  if (Array.isArray(value)) {
-    return (
-      <div className="space-y-1">
-        {value.map((item, index) => (
-          <div className="rounded-md bg-white/70 px-2 py-1" key={index}>
-            <AdviceValue value={item} />
-          </div>
-        ))}
-      </div>
-    );
-  }
-
-  if (isRecord(value)) {
-    return (
-      <div className="grid gap-2">
-        {Object.entries(value)
-          .filter(([, item]) => item !== null && item !== undefined && item !== "")
-          .map(([key, item]) => (
-            <div className="rounded-md bg-white/70 px-2 py-1" key={key}>
-              <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">{key}</p>
-              <div className="mt-0.5 text-xs leading-relaxed text-slate-700">
-                <AdviceValue value={item} />
-              </div>
-            </div>
-          ))}
-      </div>
-    );
-  }
-
-  return <span>{typeof value === "number" ? Number(value.toFixed(3)).toString() : String(value)}</span>;
-}
-
-function CivitaiPickerResourceCard({
-  active,
-  onToggle,
-  resource,
-}: {
-  active: boolean;
-  onToggle: () => void;
-  resource: CivitaiResourceListItem;
-}) {
-  const previewImage = resource.previewImage
-    ? (getCivitaiImageVariantUrl(resource.previewImage, 256) ?? resource.previewImage)
-    : null;
-  const resourceLabel = resource.resourceType === "model" ? "Checkpoint" : "LoRA";
-
-  return (
-    <div
-      className={`grid gap-2 rounded-md border p-2 sm:grid-cols-[52px_minmax(0,1fr)_auto] ${
-        active ? "border-indigo-200 bg-indigo-50" : "border-slate-200 bg-slate-50"
-      }`}
-    >
-      <div className="flex h-[52px] w-[52px] overflow-hidden rounded-md bg-slate-100">
-        {previewImage ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            alt={`${resource.name} preview`}
-            className="h-full w-full object-cover"
-            loading="lazy"
-            src={previewImage}
-          />
-        ) : (
-          <div className="flex h-full w-full items-center justify-center text-[10px] text-slate-400">
-            {resource.resourceType === "model" ? "CKPT" : "LoRA"}
-          </div>
-        )}
-      </div>
-      <div className="min-w-0">
-        <div className="flex flex-wrap items-center gap-1">
-          <span className="rounded-full bg-white px-1.5 py-0.5 text-[10px] font-medium text-indigo-700">
-            {resourceLabel}
-          </span>
-          <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-500">
-            {resource.baseModel ?? "unknown base"}
-          </span>
-          {resource.importedImageCount > 0 ? (
-            <span className="rounded-full bg-emerald-50 px-1.5 py-0.5 text-[10px] text-emerald-700">
-              refs {resource.importedImageCount}
-            </span>
-          ) : null}
-        </div>
-        <p className="mt-1 text-xs font-semibold leading-snug text-slate-800 [overflow-wrap:anywhere]">
-          {resource.name}
-        </p>
-        <p className="mt-0.5 text-[11px] leading-relaxed text-slate-500 [overflow-wrap:anywhere]">
-          {resource.versionName ?? "Unknown version"}
-        </p>
-        {resource.trainedWords.length > 0 ? (
-          <p className="mt-1 text-[11px] leading-relaxed text-slate-500 [overflow-wrap:anywhere]">
-            {compact(resource.trainedWords.join(", "), 120)}
-          </p>
-        ) : null}
-      </div>
-      <Button
-        className={`h-8 self-center rounded-md px-2 text-[11px] ${
-          active
-            ? "border border-indigo-200 bg-white text-indigo-700 hover:bg-indigo-50"
-            : "bg-indigo-600 text-white hover:bg-indigo-700"
-        }`}
-        onClick={onToggle}
-        size="sm"
-        type="button"
-      >
-        {active ? <Check className="size-3.5" /> : <Plus className="size-3.5" />}
-        {active ? "取消" : resource.resourceType === "model" ? "选择" : "添加"}
-      </Button>
-    </div>
-  );
-}
-
-function ResourceCard({
-  onRemove,
-  resource,
-}: {
-  onRemove: () => void;
-  resource: SelectedCivitaiResourcePreview;
-}) {
-  const previewImage = resource.previewImage
-    ? (getCivitaiImageVariantUrl(resource.previewImage, 256) ?? resource.previewImage)
-    : null;
-
-  return (
-    <div className="grid gap-3 rounded-md border border-slate-200 bg-white p-3 sm:grid-cols-[64px_minmax(0,1fr)_auto]">
-      <div className="flex h-16 w-16 overflow-hidden rounded-md bg-slate-100">
-        {previewImage ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img alt={`${resource.name} preview`} className="h-full w-full object-cover" src={previewImage} />
-        ) : (
-          <div className="flex h-full w-full items-center justify-center text-[10px] text-slate-400">
-            {resource.resourceType === "model" ? "CKPT" : "LoRA"}
-          </div>
-        )}
-      </div>
-      <div className="min-w-0">
-        <div className="flex flex-wrap items-center gap-1.5">
-          <span className="rounded-full bg-indigo-50 px-2 py-0.5 text-[10px] font-medium text-indigo-700">
-            {resource.resourceType === "model" ? "Checkpoint" : "LoRA"}
-          </span>
-          {resource.resourceType === "lora" ? (
-            <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-medium text-emerald-700">
-              {weightLabel(resource)}
-            </span>
-          ) : null}
-        </div>
-        <p className="mt-1 truncate text-sm font-semibold text-slate-900" title={resource.name}>
-          {resource.name}
-        </p>
-        <p className="mt-0.5 text-[11px] text-slate-500">{resource.versionName ?? resource.baseModel ?? "unknown version"}</p>
-        {resource.trainedWords.length > 0 ? (
-          <div className="mt-2 flex flex-wrap gap-1">
-            {resource.trainedWords.map((word) => (
-              <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-600" key={word}>
-                {word}
-              </span>
-            ))}
-          </div>
-        ) : null}
-      </div>
-      <Button
-        aria-label={`Remove ${resource.resourceType === "model" ? "checkpoint" : "LoRA"} ${resource.name}`}
-        className="h-8 justify-self-end rounded-md border border-rose-100 bg-white px-2 text-[11px] text-rose-700 hover:bg-rose-50"
-        onClick={onRemove}
-        size="sm"
-        title="Remove selected resource"
-        type="button"
-        variant="secondary"
-      >
-        <X className="size-3.5" />
-        Remove
-      </Button>
-    </div>
-  );
-}
-
 function ArtistStringCard({
   item,
   onRemove,
@@ -458,14 +204,9 @@ export function StylePalettePanel() {
   const [selectedResources, setSelectedResources] = useState<SelectedCivitaiResourcesPreview>(EMPTY_SELECTED_CIVITAI_RESOURCES);
   const [selectedArtistStrings, setSelectedArtistStrings] = useState<ArtistStringItemRecord[]>([]);
   const [selectedCivitaiStatus, setSelectedCivitaiStatus] = useState<LoadStatus>("idle");
-  const [selectedCivitaiError, setSelectedCivitaiError] = useState("");
   const [selectedArtistStatus, setSelectedArtistStatus] = useState<LoadStatus>("idle");
   const [selectedArtistError, setSelectedArtistError] = useState("");
-  const [advice, setAdvice] = useState<StylePaletteAdviceState>({
-    error: "",
-    result: null,
-    status: "idle",
-  });
+  const [advice, setAdvice] = useState<StylePaletteAdviceState>(EMPTY_STYLE_PALETTE_ADVICE);
   const [artistPickerOpen, setArtistPickerOpen] = useState(false);
   const [artistPickerCategory, setArtistPickerCategory] = useState("all");
   const [artistPickerQuery, setArtistPickerQuery] = useState("");
@@ -473,12 +214,6 @@ export function StylePalettePanel() {
   const [artistPickerCategories, setArtistPickerCategories] = useState<ArtistStringCategoryCount[]>([]);
   const [artistPickerStatus, setArtistPickerStatus] = useState<LoadStatus>("idle");
   const [artistPickerError, setArtistPickerError] = useState("");
-  const [civitaiPickerOpen, setCivitaiPickerOpen] = useState(false);
-  const [civitaiPickerKind, setCivitaiPickerKind] = useState<CivitaiPickerKind>("checkpoint");
-  const [civitaiPickerQuery, setCivitaiPickerQuery] = useState("");
-  const [civitaiPickerItems, setCivitaiPickerItems] = useState<CivitaiResourceListItem[]>([]);
-  const [civitaiPickerStatus, setCivitaiPickerStatus] = useState<LoadStatus>("idle");
-  const [civitaiPickerError, setCivitaiPickerError] = useState("");
   const [artistStringsMasked, setArtistStringsMasked] = useState(false);
   const [lorasMasked, setLorasMasked] = useState(false);
   const [subjectInput, setSubjectInput] = useState("");
@@ -501,8 +236,6 @@ export function StylePalettePanel() {
   const savedParameters = project.settings.savedComfyUiGenerationParams ?? null;
   const preset = getStylePalettePromptPreset(presetId);
   const selectedArtistStringIdSet = useMemo(() => new Set(selectedArtistStringIds), [selectedArtistStringIds]);
-  const selectedLoraIdSet = useMemo(() => new Set(selectedLoraIds), [selectedLoraIds]);
-  const selectedResourceCards = useMemo(() => selectedCivitaiResourceCards(selectedResources), [selectedResources]);
   const selectedCheckpointBaseModel =
     selectedResources.checkpoint?.id === selectedCheckpointId ? (selectedResources.checkpoint.baseModel ?? null) : null;
   const animaPromptContext = isAnimaStylePaletteBaseModel(selectedCheckpointBaseModel);
@@ -552,19 +285,6 @@ export function StylePalettePanel() {
     lorasMasked ? "loras-masked" : "loras-visible",
     advice.result ? JSON.stringify(advice.result) : "",
   ].join("\u0000");
-  const loraPickerMissingBaseModel =
-    civitaiPickerKind === "lora" && Boolean(selectedCheckpointId) && !selectedCheckpointBaseModel;
-  const visibleCivitaiPickerItems = civitaiPickerItems.filter((resource) => {
-    if (civitaiPickerKind === "checkpoint") {
-      return resource.resourceType === "model";
-    }
-
-    return (
-      resource.resourceType === "lora" &&
-      Boolean(selectedCheckpointBaseModel) &&
-      sameBaseModel(resource.baseModel, selectedCheckpointBaseModel)
-    );
-  });
 
   const removeSceneArtistPrompt = useCallback((prompt: string | null) => {
     if (!prompt) {
@@ -690,12 +410,6 @@ export function StylePalettePanel() {
     setAdvice({ error: "", result: null, status: "idle" });
   }
 
-  function openCivitaiPicker(kind: CivitaiPickerKind) {
-    setCivitaiPickerKind(kind);
-    setCivitaiPickerQuery("");
-    setCivitaiPickerOpen((current) => (current && civitaiPickerKind === kind ? false : true));
-  }
-
   function toggleArtistStringsMask() {
     setArtistStringsMasked((current) => !current);
     setAdvice({ error: "", result: null, status: "idle" });
@@ -703,105 +417,6 @@ export function StylePalettePanel() {
 
   function toggleLorasMask() {
     setLorasMasked((current) => !current);
-    setAdvice({ error: "", result: null, status: "idle" });
-  }
-
-  function handleToggleCheckpoint(resource: CivitaiResourceListItem) {
-    if (resource.resourceType !== "model") {
-      return;
-    }
-
-    if (selectedCheckpointId === resource.id) {
-      updateProjectSettings({
-        selectedCivitaiCheckpointId: null,
-        selectedCivitaiLoraIds: [],
-      });
-      setSelectedResources(EMPTY_SELECTED_CIVITAI_RESOURCES);
-      setCivitaiPickerKind("checkpoint");
-      setAdvice({ error: "", result: null, status: "idle" });
-      return;
-    }
-
-    const checkpointPreview = previewFromCivitaiListItem(resource);
-    const compatibleLoraIds = selectedResources.loras
-      .filter((lora) => sameBaseModel(lora.baseModel, resource.baseModel))
-      .map((lora) => lora.id);
-    const compatibleLoras = selectedResources.loras.filter((lora) => compatibleLoraIds.includes(lora.id));
-
-    updateProjectSettings({
-      selectedCivitaiCheckpointId: resource.id,
-      selectedCivitaiLoraIds: compatibleLoraIds,
-    });
-    if (checkpointPreview) {
-      setSelectedResources({
-        checkpoint: checkpointPreview,
-        loras: compatibleLoras,
-      });
-    }
-    setCivitaiPickerKind("lora");
-    setCivitaiPickerOpen(true);
-    setCivitaiPickerQuery("");
-    setAdvice({ error: "", result: null, status: "idle" });
-  }
-
-  function removeSelectedCivitaiResource(resource: SelectedCivitaiResourcePreview) {
-    if (resource.resourceType === "model") {
-      updateProjectSettings({
-        selectedCivitaiCheckpointId: null,
-        selectedCivitaiLoraIds: [],
-      });
-      setSelectedResources(EMPTY_SELECTED_CIVITAI_RESOURCES);
-      setCivitaiPickerKind("checkpoint");
-      setAdvice({ error: "", result: null, status: "idle" });
-      return;
-    }
-
-    updateProjectSettings({
-      selectedCivitaiLoraIds: selectedLoraIds.filter((id) => id !== resource.id),
-    });
-    setSelectedResources((current) => ({
-      ...current,
-      loras: current.loras.filter((lora) => lora.id !== resource.id),
-    }));
-    setAdvice({ error: "", result: null, status: "idle" });
-  }
-
-  function handleToggleLora(resource: CivitaiResourceListItem) {
-    if (resource.resourceType !== "lora" || !selectedCheckpointBaseModel) {
-      return;
-    }
-
-    if (!sameBaseModel(resource.baseModel, selectedCheckpointBaseModel)) {
-      return;
-    }
-
-    const nextSelectedLoras = selectedLoraIdSet.has(resource.id)
-      ? selectedLoraIds.filter((id) => id !== resource.id)
-      : [...selectedLoraIds, resource.id];
-
-    updateProjectSettings({
-      selectedCivitaiLoraIds: nextSelectedLoras,
-    });
-    setSelectedResources((current) => {
-      if (selectedLoraIdSet.has(resource.id)) {
-        return {
-          ...current,
-          loras: current.loras.filter((lora) => lora.id !== resource.id),
-        };
-      }
-
-      if (current.loras.some((lora) => lora.id === resource.id)) {
-        return current;
-      }
-
-      const loraPreview = previewFromCivitaiListItem(resource);
-      return loraPreview
-        ? {
-            ...current,
-            loras: [...current.loras, loraPreview],
-          }
-        : current;
-    });
     setAdvice({ error: "", result: null, status: "idle" });
   }
 
@@ -819,12 +434,10 @@ export function StylePalettePanel() {
       if (!civitaiQuery) {
         setSelectedResources(EMPTY_SELECTED_CIVITAI_RESOURCES);
         setSelectedCivitaiStatus("success");
-        setSelectedCivitaiError("");
         return;
       }
 
       setSelectedCivitaiStatus("loading");
-      setSelectedCivitaiError("");
 
       try {
         const payload = await fetchJson<SelectedCivitaiResourcesPreview>(
@@ -840,13 +453,13 @@ export function StylePalettePanel() {
         }
         setSelectedResources(payload);
         setSelectedCivitaiStatus("success");
-      } catch (error) {
+      } catch {
         if (controller.signal.aborted) {
           return;
         }
 
+        setSelectedResources(EMPTY_SELECTED_CIVITAI_RESOURCES);
         setSelectedCivitaiStatus("error");
-        setSelectedCivitaiError(error instanceof Error ? error.message : "Unable to load selected Civitai resources.");
       }
     }
 
@@ -953,130 +566,6 @@ export function StylePalettePanel() {
     };
   }, [artistPickerCategory, artistPickerOpen, artistPickerQuery, open]);
 
-  useEffect(() => {
-    if (!open || !civitaiPickerOpen) {
-      return;
-    }
-
-    const controller = new AbortController();
-
-    async function loadCivitaiPickerItems() {
-      if (civitaiPickerKind === "lora" && !selectedCheckpointId) {
-        setCivitaiPickerItems([]);
-        setCivitaiPickerStatus("success");
-        setCivitaiPickerError("");
-        return;
-      }
-
-      if (civitaiPickerKind === "lora" && !selectedCheckpointBaseModel) {
-        setCivitaiPickerItems([]);
-        setCivitaiPickerStatus("success");
-        setCivitaiPickerError("");
-        return;
-      }
-
-      setCivitaiPickerStatus("loading");
-      setCivitaiPickerError("");
-
-      try {
-        const params = new URLSearchParams();
-        params.set("resourceType", civitaiPickerKind === "checkpoint" ? "model" : "lora");
-        params.set("nsfw", "all");
-        params.set("importedCount", "all");
-        if (civitaiPickerKind === "lora" && selectedCheckpointBaseModel) {
-          params.set("baseModel", selectedCheckpointBaseModel);
-        }
-        if (civitaiPickerQuery.trim()) {
-          params.set("query", civitaiPickerQuery.trim());
-        }
-
-        const payload = await fetchJson<CivitaiResourcesResponse>(`/api/civitai-lora-library/resources?${params.toString()}`, {
-          signal: controller.signal,
-        });
-        if (controller.signal.aborted) {
-          return;
-        }
-        setCivitaiPickerItems(payload.items);
-        setCivitaiPickerStatus("success");
-      } catch (error) {
-        if (controller.signal.aborted) {
-          return;
-        }
-
-        setCivitaiPickerItems([]);
-        setCivitaiPickerStatus("error");
-        setCivitaiPickerError(error instanceof Error ? error.message : "Unable to load Civitai resources.");
-      }
-    }
-
-    const timeout = window.setTimeout(() => {
-      void loadCivitaiPickerItems();
-    }, 160);
-
-    return () => {
-      controller.abort();
-      window.clearTimeout(timeout);
-    };
-  }, [
-    civitaiPickerKind,
-    civitaiPickerOpen,
-    civitaiPickerQuery,
-    open,
-    selectedCheckpointBaseModel,
-    selectedCheckpointId,
-  ]);
-
-  async function generateAdvice() {
-    if (!selectedResources.checkpoint) {
-      setAdvice({
-        error: "Please select a Civitai checkpoint before generating style advice.",
-        result: null,
-        status: "error",
-      });
-      return;
-    }
-
-    setAdvice({ error: "", result: null, status: "loading" });
-
-    try {
-      const response = await fetch("/api/llm/chat", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          purpose: "stable-diffusion-prompt-generation",
-          messages: buildStylePaletteAdviceMessages({
-            artistPrompts: effectiveArtistPrompts,
-            preset,
-            resources: effectiveSelectedResources,
-          }),
-          temperature: 0.25,
-          maxTokens: 900,
-        }),
-      });
-      const payload: unknown = await response.json().catch(() => null);
-
-      if (!response.ok) {
-        throw new Error(getLlmProxyErrorMessage(payload));
-      }
-
-      if (!isLlmChatResponse(payload)) {
-        throw new Error("AI style advice returned an invalid response.");
-      }
-
-      setAdvice({
-        error: "",
-        result: parseCivitaiAiPromptResponse(payload.content),
-        status: "success",
-      });
-    } catch (error) {
-      setAdvice({
-        error: error instanceof Error ? error.message : "AI style advice failed.",
-        result: null,
-        status: "error",
-      });
-    }
-  }
-
   function handleSubjectInputChange(value: string) {
     subjectInputRef.current = value;
     setSubjectInput(value);
@@ -1174,60 +663,14 @@ export function StylePalettePanel() {
             </div>
           </div>
         </div>
-        <div className="self-start rounded-md border border-teal-100 bg-white p-3">
-          <div className="flex items-center justify-between gap-3">
-            <p className="text-[11px] font-bold uppercase tracking-wider text-teal-700">AI Style Advice</p>
-            <Button
-              className="h-8 rounded-md bg-teal-600 px-3 text-xs text-white hover:bg-teal-700 disabled:opacity-60"
-              disabled={advice.status === "loading" || (selectedCivitaiStatus === "loading" && !selectedResources.checkpoint)}
-              onClick={() => void generateAdvice()}
-              size="sm"
-              type="button"
-            >
-              {advice.status === "loading" ? <Loader2 className="size-3.5 animate-spin" /> : <Sparkles className="size-3.5" />}
-              Generate
-            </Button>
-          </div>
-          {advice.status === "error" && advice.error ? (
-            <p className="mt-3 rounded-md border border-rose-100 bg-rose-50 px-3 py-2 text-xs leading-relaxed text-rose-700">
-              {advice.error}
-            </p>
-          ) : null}
-          {advice.result ? (
-            <div className="mt-3 max-h-[min(46vh,360px)] space-y-3 overflow-y-auto rounded-md border border-teal-100 bg-teal-50/60 p-3 pr-2 text-xs">
-              {advice.result.parseWarning ? (
-                <p className="rounded-md bg-amber-50 px-3 py-2 leading-relaxed text-amber-800">{advice.result.parseWarning}</p>
-              ) : null}
-              {advice.result.parameterSuggestionReason ? (
-                <div>
-                  <p className="text-[10px] font-semibold uppercase tracking-wider text-teal-700">Reason</p>
-                  <p className="mt-1 leading-relaxed text-slate-700">{advice.result.parameterSuggestionReason}</p>
-                </div>
-              ) : null}
-              {advice.result.overallEffect ? (
-                <div>
-                  <p className="text-[10px] font-semibold uppercase tracking-wider text-teal-700">Overall Effect</p>
-                  <p className="mt-1 leading-relaxed text-slate-700">{advice.result.overallEffect}</p>
-                </div>
-              ) : null}
-              <div>
-                <p className="text-[10px] font-semibold uppercase tracking-wider text-teal-700">Parameters</p>
-                <div className="mt-1">
-                  <AdviceValue value={advice.result.parameterSuggestions} />
-                </div>
-              </div>
-            </div>
-          ) : advice.status === "loading" ? (
-            <p className="mt-3 rounded-md bg-teal-50 px-3 py-2 text-xs leading-relaxed text-teal-700">
-              <Loader2 className="mr-1.5 inline size-3.5 animate-spin" />
-              Generating style-only parameter advice...
-            </p>
-          ) : (
-            <p className="mt-3 text-xs leading-relaxed text-slate-500">
-              Advice uses only the selected artist strings and Civitai resources, not the canvas prompt.
-            </p>
-          )}
-        </div>
+        <StylePaletteAiAdvicePanel
+          advice={advice}
+          artistPrompts={effectiveArtistPrompts}
+          disabled={selectedCivitaiStatus === "loading" && !selectedResources.checkpoint}
+          onAdviceChange={setAdvice}
+          preset={preset}
+          resources={effectiveSelectedResources}
+        />
       </div>
       <div className="rounded-md border border-sky-100 bg-sky-50/70 p-3">
         <div className="mb-2 flex flex-wrap items-start justify-between gap-2">
@@ -1284,7 +727,7 @@ export function StylePalettePanel() {
                 variant="secondary"
               >
                 <Search className="size-3.5" />
-                快捷选择
+                Quick Select
               </Button>
               <Button
                 className={`h-8 rounded-md px-2 text-[11px] font-medium ${
@@ -1298,10 +741,10 @@ export function StylePalettePanel() {
                 variant={artistStringsMasked ? "primary" : "secondary"}
               >
                 {artistStringsMasked ? <Eye className="size-3.5" /> : <EyeOff className="size-3.5" />}
-                {artistStringsMasked ? "恢复 Artist Strings" : "屏蔽 Artist Strings"}
+                {artistStringsMasked ? "Restore Artist Strings" : "Mask Artist Strings"}
               </Button>
               <select
-                aria-label="选择画师串 Prompt 格式"
+                aria-label="Select artist string prompt format"
                 className="h-8 max-w-[190px] rounded-md border border-fuchsia-100 bg-white px-2 text-[11px] font-medium text-slate-700 outline-none transition focus:border-fuchsia-300 focus:ring-2 focus:ring-fuchsia-100 disabled:cursor-not-allowed disabled:opacity-60"
                 disabled={
                   selectedArtistStatus === "error" ||
@@ -1310,7 +753,7 @@ export function StylePalettePanel() {
                 onChange={(event) =>
                   handleArtistStringPromptRenderModeChange(event.target.value as ArtistStringPromptRenderMode)
                 }
-                title="选择添加到 Prompt 的画师串格式"
+                title="Select the artist string format added to prompts"
                 value={effectiveArtistRenderMode}
               >
                 {visibleArtistRenderModeOptions.map((option) => (
@@ -1323,7 +766,7 @@ export function StylePalettePanel() {
           </div>
           {artistStringsMasked ? (
             <p className="mb-2 rounded-md border border-fuchsia-100 bg-fuchsia-50 px-3 py-2 text-xs leading-relaxed text-fuchsia-700">
-              Artist Strings 已临时屏蔽：锁定 positive、AI 建议和 ComfyUI 生图暂时不会使用画师串。
+              Artist strings are temporarily masked from the locked positive prompt, AI advice, and ComfyUI style test.
             </p>
           ) : null}
           <div className="flex flex-col gap-3">
@@ -1335,7 +778,7 @@ export function StylePalettePanel() {
                   <input
                     className="h-8 w-full rounded-md border border-slate-200 bg-white pl-8 pr-2 text-xs text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-fuchsia-300 focus:ring-2 focus:ring-fuchsia-100"
                     onChange={(event) => setArtistPickerQuery(event.target.value)}
-                    placeholder="搜索序号、画师、分类或 Prompt"
+                    placeholder="Search sequence, artist, category, or prompt"
                     value={artistPickerQuery}
                   />
                 </div>
@@ -1344,7 +787,7 @@ export function StylePalettePanel() {
                   onChange={(event) => setArtistPickerCategory(event.target.value)}
                   value={artistPickerCategory}
                 >
-                  <option value="all">全部分类</option>
+                  <option value="all">All categories</option>
                   {artistPickerCategories.map((entry) => (
                     <option key={entry.key} value={entry.key}>
                       {entry.name} ({entry.count})
@@ -1354,14 +797,14 @@ export function StylePalettePanel() {
               </div>
               {artistPickerStatus === "success" ? (
                 <p className="mt-2 text-[11px] leading-relaxed text-slate-500">
-                  显示 {artistPickerItems.length} 个可选画师串
+                  Showing {artistPickerItems.length} available artist strings.
                 </p>
               ) : null}
               <div className="mt-3 grid max-h-[min(45vh,560px)] grid-cols-[repeat(auto-fill,minmax(150px,1fr))] gap-3 overflow-y-auto overscroll-contain pr-1">
                 {artistPickerStatus === "loading" ? (
                   <p className="col-span-full rounded-md bg-fuchsia-50 px-3 py-2 text-xs leading-relaxed text-fuchsia-700">
                     <Loader2 className="mr-1.5 inline size-3.5 animate-spin" />
-                    正在读取画师串...
+                    Loading artist strings...
                   </p>
                 ) : null}
                 {artistPickerStatus === "error" && artistPickerError ? (
@@ -1394,7 +837,7 @@ export function StylePalettePanel() {
                         )}
                         {active ? (
                           <span className="absolute right-2 top-2 rounded-full bg-fuchsia-600 px-2 py-0.5 text-[10px] font-semibold text-white shadow-sm">
-                            已选
+                            Selected
                           </span>
                         ) : null}
                       </div>
@@ -1418,7 +861,7 @@ export function StylePalettePanel() {
                           type="button"
                         >
                           {active ? <Check className="size-3.5" /> : <Plus className="size-3.5" />}
-                          {active ? "取消" : "添加"}
+                          {active ? "Remove" : "Add"}
                         </Button>
                       </div>
                     </div>
@@ -1426,7 +869,7 @@ export function StylePalettePanel() {
                 })}
                 {artistPickerStatus === "success" && artistPickerItems.length === 0 ? (
                   <p className="col-span-full rounded-md bg-slate-50 px-3 py-2 text-xs leading-relaxed text-slate-500">
-                    当前筛选没有匹配的画师串。
+                    No artist strings match the current filters.
                   </p>
                 ) : null}
               </div>
@@ -1458,190 +901,43 @@ export function StylePalettePanel() {
           </div>
         </div>
         <div>
-          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-            <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Selected Civitai Resources</p>
-            <div className="flex flex-wrap items-center gap-2">
-              <Button
-                className="h-8 rounded-md border-indigo-100 bg-white px-2 text-[11px] font-medium text-indigo-700 hover:bg-indigo-50"
-                onClick={() => openCivitaiPicker("checkpoint")}
-                size="sm"
-                type="button"
-                variant="secondary"
-              >
-                <Search className="size-3.5" />
-                选择 Checkpoint
-              </Button>
-              <Button
-                className="h-8 rounded-md border-indigo-100 bg-white px-2 text-[11px] font-medium text-indigo-700 hover:bg-indigo-50 disabled:cursor-not-allowed disabled:opacity-60"
-                disabled={!selectedCheckpointId}
-                onClick={() => openCivitaiPicker("lora")}
-                size="sm"
-                type="button"
-                variant="secondary"
-              >
-                <Search className="size-3.5" />
-                选择 LoRA
-              </Button>
-              <Button
-                className={`h-8 rounded-md px-2 text-[11px] font-medium disabled:cursor-not-allowed disabled:opacity-60 ${
-                  lorasMasked
-                    ? "border border-indigo-200 bg-indigo-600 text-white hover:bg-indigo-700"
-                    : "border-indigo-100 bg-white text-indigo-700 hover:bg-indigo-50"
-                }`}
-                disabled={selectedLoraIds.length === 0}
-                onClick={toggleLorasMask}
-                size="sm"
-                type="button"
-                variant={lorasMasked ? "primary" : "secondary"}
-              >
-                {lorasMasked ? <Eye className="size-3.5" /> : <EyeOff className="size-3.5" />}
-                {lorasMasked ? "恢复 LoRA" : "屏蔽 LoRA"}
-              </Button>
-            </div>
+          <div className="mb-2 flex flex-wrap justify-end gap-2">
+            <Button
+              className={`h-8 rounded-md px-2 text-[11px] font-medium disabled:cursor-not-allowed disabled:opacity-60 ${
+                lorasMasked
+                  ? "border border-indigo-200 bg-indigo-600 text-white hover:bg-indigo-700"
+                  : "border-indigo-100 bg-white text-indigo-700 hover:bg-indigo-50"
+              }`}
+              disabled={selectedLoraIds.length === 0}
+              onClick={toggleLorasMask}
+              size="sm"
+              type="button"
+              variant={lorasMasked ? "primary" : "secondary"}
+            >
+              {lorasMasked ? <Eye className="size-3.5" /> : <EyeOff className="size-3.5" />}
+              {lorasMasked ? "Restore LoRA" : "Mask LoRA"}
+            </Button>
           </div>
           {lorasMasked ? (
             <p className="mb-2 rounded-md border border-indigo-100 bg-indigo-50 px-3 py-2 text-xs leading-relaxed text-indigo-700">
-              LoRA 已临时屏蔽：锁定 positive、AI 建议和 ComfyUI 生图暂时不会使用任何 LoRA 或触发词。
+              LoRAs are temporarily masked from the locked positive prompt, AI advice, and ComfyUI style test.
             </p>
           ) : null}
-          <div className="flex flex-col gap-3">
-          {civitaiPickerOpen ? (
-            <div className="rounded-md border border-indigo-100 bg-white p-3">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div>
-                  <p className="text-[11px] font-bold uppercase tracking-wider text-indigo-700">
-                    {civitaiPickerKind === "checkpoint" ? "Checkpoint Quick Select" : "LoRA Quick Select"}
-                  </p>
-                  <p className="mt-1 text-[11px] leading-relaxed text-slate-500">
-                    {civitaiPickerKind === "checkpoint"
-                      ? "先选择 checkpoint；切换 checkpoint 会保留相同 base model 的已选 LoRA。"
-                      : selectedCheckpointBaseModel
-                        ? `仅显示 base model 为 ${selectedCheckpointBaseModel} 的 LoRA。`
-                        : "请先选择带 base model 的 checkpoint。"}
-                  </p>
-                </div>
-                <div className="flex rounded-md border border-indigo-100 bg-indigo-50 p-0.5">
-                  <button
-                    className={`h-7 rounded px-2 text-[11px] font-medium ${
-                      civitaiPickerKind === "checkpoint" ? "bg-white text-indigo-700 shadow-sm" : "text-slate-500"
-                    }`}
-                    onClick={() => {
-                      setCivitaiPickerKind("checkpoint");
-                      setCivitaiPickerQuery("");
-                    }}
-                    type="button"
-                  >
-                    Checkpoint
-                  </button>
-                  <button
-                    className={`h-7 rounded px-2 text-[11px] font-medium disabled:cursor-not-allowed disabled:opacity-50 ${
-                      civitaiPickerKind === "lora" ? "bg-white text-indigo-700 shadow-sm" : "text-slate-500"
-                    }`}
-                    disabled={!selectedCheckpointId}
-                    onClick={() => {
-                      setCivitaiPickerKind("lora");
-                      setCivitaiPickerQuery("");
-                    }}
-                    type="button"
-                  >
-                    LoRA
-                  </button>
-                </div>
-              </div>
-              <div className="relative mt-3 min-w-0">
-                <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-slate-400" />
-                <input
-                  className="h-8 w-full rounded-md border border-slate-200 bg-white pl-8 pr-2 text-xs text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-indigo-300 focus:ring-2 focus:ring-indigo-100"
-                  onChange={(event) => setCivitaiPickerQuery(event.target.value)}
-                  placeholder={
-                    civitaiPickerKind === "checkpoint"
-                      ? "搜索 checkpoint 名称、版本、作者或 base model"
-                      : "搜索 LoRA 名称、触发词、版本或作者"
-                  }
-                  value={civitaiPickerQuery}
-                />
-              </div>
-              {civitaiPickerStatus === "success" ? (
-                <p className="mt-2 text-[11px] leading-relaxed text-slate-500">
-                  显示 {visibleCivitaiPickerItems.length} 个可选
-                  {civitaiPickerKind === "checkpoint" ? " checkpoint" : " LoRA"}
-                </p>
-              ) : null}
-              <div className="mt-3 min-h-[min(45vh,520px)] max-h-[min(45vh,520px)] space-y-2 overflow-y-auto overscroll-contain pr-1">
-                {civitaiPickerStatus === "loading" && visibleCivitaiPickerItems.length === 0 ? (
-                  <p className="rounded-md bg-indigo-50 px-3 py-2 text-xs leading-relaxed text-indigo-700">
-                    <Loader2 className="mr-1.5 inline size-3.5 animate-spin" />
-                    正在读取 Civitai 资源...
-                  </p>
-                ) : null}
-                {civitaiPickerStatus === "error" && civitaiPickerError ? (
-                  <p className="rounded-md bg-rose-50 px-3 py-2 text-xs leading-relaxed text-rose-700">
-                    {civitaiPickerError}
-                  </p>
-                ) : null}
-                {civitaiPickerKind === "lora" && !selectedCheckpointId ? (
-                  <p className="rounded-md bg-slate-50 px-3 py-2 text-xs leading-relaxed text-slate-500">
-                    请先选择 checkpoint，再选择同 base model 的 LoRA。
-                  </p>
-                ) : null}
-                {loraPickerMissingBaseModel ? (
-                  <p className="rounded-md bg-slate-50 px-3 py-2 text-xs leading-relaxed text-slate-500">
-                    Selected checkpoint has no base model metadata. Choose a checkpoint with a base model before selecting LoRA resources.
-                  </p>
-                ) : null}
-                {visibleCivitaiPickerItems.map((resource) => (
-                  <CivitaiPickerResourceCard
-                    active={
-                      resource.resourceType === "model"
-                        ? selectedCheckpointId === resource.id
-                        : selectedLoraIdSet.has(resource.id)
-                    }
-                    key={resource.id}
-                    onToggle={() =>
-                      resource.resourceType === "model"
-                        ? handleToggleCheckpoint(resource)
-                        : handleToggleLora(resource)
-                    }
-                    resource={resource}
-                  />
-                ))}
-                {civitaiPickerStatus === "success" &&
-                visibleCivitaiPickerItems.length === 0 &&
-                selectedCheckpointId &&
-                (civitaiPickerKind !== "lora" || Boolean(selectedCheckpointBaseModel)) ? (
-                  <p className="rounded-md bg-slate-50 px-3 py-2 text-xs leading-relaxed text-slate-500">
-                    当前筛选没有匹配的 Civitai 资源。
-                  </p>
-                ) : null}
-              </div>
-            </div>
-          ) : null}
-          <div className="space-y-2 rounded-md border border-indigo-100 bg-indigo-50/50 p-3">
-            {selectedCivitaiStatus === "loading" && selectedResourceCards.length === 0 ? (
-              <p className="text-xs leading-relaxed text-indigo-700">
-                <Loader2 className="mr-1.5 inline size-3.5 animate-spin" />
-                Loading selected resources...
-              </p>
-            ) : null}
-            {selectedCivitaiStatus === "error" && selectedCivitaiError ? (
-              <p className="text-xs leading-relaxed text-rose-700">{selectedCivitaiError}</p>
-            ) : null}
-            {selectedResourceCards.length > 0 ? (
-              selectedResourceCards.map((resource) => (
-                <div className={lorasMasked && resource.resourceType === "lora" ? "opacity-50" : ""} key={resource.id}>
-                  <ResourceCard
-                    onRemove={() => removeSelectedCivitaiResource(resource)}
-                    resource={resource}
-                  />
-                </div>
-              ))
-            ) : selectedCivitaiStatus !== "loading" ? (
-              <p className="text-xs leading-relaxed text-slate-500">No Civitai resources selected.</p>
-            ) : null}
+          <div className={lorasMasked ? "opacity-60" : ""}>
+            <StylePaletteCivitaiResourceSelector
+              onSelectionChange={(selection) => {
+                updateProjectSettings({
+                  selectedCivitaiCheckpointId: selection.checkpointId,
+                  selectedCivitaiLoraIds: selection.loraIds,
+                });
+                setAdvice({ error: "", result: null, status: "idle" });
+              }}
+              selectedCheckpointId={selectedCheckpointId}
+              selectedLoraIds={selectedLoraIds}
+            />
           </div>
-          </div>
-        </div>
       </div>
+    </div>
     </div>
   );
 
@@ -1652,9 +948,9 @@ export function StylePalettePanel() {
           <Palette className="size-4" />
         </div>
         <div className="min-w-0 flex-1">
-          <h2 className="text-[13px] font-semibold text-slate-900">风格调色板</h2>
+          <h2 className="text-[13px] font-semibold text-slate-900">Style Palette</h2>
           <p className="mt-1 text-[11px] leading-snug text-slate-500">
-            用固定预设 prompt 测试当前画师串、checkpoint 与 LoRA 的画风表现。
+            Test the current artist strings, checkpoint, and LoRAs with a fixed style prompt.
           </p>
         </div>
       </div>
@@ -1665,7 +961,7 @@ export function StylePalettePanel() {
         type="button"
       >
         <Sparkles className="size-4" />
-        打开风格调色板
+        Open Style Palette
       </Button>
       <ComfyUiGenerationDialog
         activePrompt={stylePaletteActivePrompt}
@@ -1675,7 +971,7 @@ export function StylePalettePanel() {
         allowInpaint={false}
         baseNegativePrompt={preset.negative}
         diagnosisScopes={{ parameters: true, prompt: false }}
-        description="使用固定预设 prompt 初始化风格测试；Active Prompt 可临时编辑，Locked Positive 不会被改写。"
+        description="Initialize style tests with a fixed preset prompt. Active Prompt can be edited temporarily; Locked Positive is not rewritten."
         introContent={introContent}
         onSaveParameters={(parameters) => updateProjectSettings({ savedComfyUiGenerationParams: parameters })}
         onClose={() => setOpen(false)}
@@ -1684,7 +980,7 @@ export function StylePalettePanel() {
         savedParameters={savedParameters}
         selectedCheckpointId={selectedCheckpointId}
         selectedLoraIds={effectiveSelectedLoraIds}
-        title="风格调色板"
+        title="Style Palette"
       />
     </section>
   );

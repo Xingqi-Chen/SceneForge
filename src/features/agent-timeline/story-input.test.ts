@@ -279,6 +279,133 @@ describe("story input workflow start", () => {
     expect(renderPlanJson).not.toContain("aiNsfwLevel");
   });
 
+  it("drops Story style parameters when no checkpoint is selected", () => {
+    const input = createStoryInputFromStartRequest({
+      rawIntent: "A two-shot neon arcade conversation.",
+      storyId: "story-parameter-only-style",
+      now,
+      settingsSnapshot: {
+        stylePalette: {
+          loras: [],
+          parameters: {
+            width: 832,
+            height: 1216,
+            steps: 31,
+            cfg: 4.25,
+            samplerName: "euler",
+            scheduler: "normal",
+            denoise: 0.88,
+            seed: 12345,
+          },
+        },
+      },
+    });
+
+    expect(input.settingsSnapshot).not.toHaveProperty("stylePalette");
+  });
+
+  it("uses Story input style resources and saved parameters for local planning artifacts", () => {
+    const resourceCandidates = {
+      checkpoints: [
+        {
+          id: "checkpoint-default",
+          name: "Default Checkpoint",
+          baseModel: "Illustrious",
+          modelFileName: "default.safetensors",
+        },
+        {
+          id: "checkpoint-manual",
+          name: "Manual Checkpoint",
+          baseModel: "Illustrious",
+          modelFileName: "manual.safetensors",
+        },
+      ],
+      loras: [
+        {
+          id: "lora-enabled",
+          name: "Enabled LoRA",
+          baseModel: "Illustrious",
+          modelFileName: "enabled-lora.safetensors",
+          averageWeight: 0.55,
+        },
+        {
+          id: "lora-disabled",
+          name: "Disabled LoRA",
+          baseModel: "Illustrious",
+          modelFileName: "disabled-lora.safetensors",
+          averageWeight: 0.75,
+        },
+      ],
+    };
+    const input = createStoryInputFromStartRequest({
+      rawIntent: "A two-shot neon arcade conversation.",
+      targetShotCount: 2,
+      storyId: "story-style-palette",
+      now,
+      settingsSnapshot: {
+        resourceCandidates,
+        stylePalette: {
+          checkpointId: "checkpoint-manual",
+          loras: [
+            { id: "lora-enabled", enabled: true, strengthModel: 0.82, strengthClip: 0.44 },
+            { id: "lora-disabled", enabled: false, strengthModel: 0.75, strengthClip: 0.75 },
+          ],
+          parameters: {
+            width: 832,
+            height: 1216,
+            steps: 31,
+            cfg: 4.25,
+            samplerName: "euler",
+            scheduler: "normal",
+            denoise: 0.88,
+            seed: 12345,
+          },
+        },
+      },
+    });
+    const artifacts = createStoryPlanningArtifacts(input, now(), resourceCandidates);
+
+    expect(input.settingsSnapshot).toMatchObject({
+      stylePalette: {
+        checkpointId: "checkpoint-manual",
+        loras: [
+          { id: "lora-enabled", enabled: true, strengthModel: 0.82, strengthClip: 0.44 },
+          { id: "lora-disabled", enabled: false, strengthModel: 0.75, strengthClip: 0.75 },
+        ],
+        parameters: {
+          width: 832,
+          height: 1216,
+          steps: 31,
+          cfg: 4.25,
+          samplerName: "euler",
+          scheduler: "normal",
+          denoise: 0.88,
+          seed: 12345,
+        },
+      },
+    });
+    expect(artifacts.resourcePlan.checkpoint.resource.id).toBe("checkpoint-manual");
+    expect(artifacts.resourcePlan.loras).toHaveLength(1);
+    expect(artifacts.resourcePlan.loras[0]).toMatchObject({
+      resource: {
+        id: "lora-enabled",
+        storyInputStrengthModel: 0.82,
+        storyInputStrengthClip: 0.44,
+      },
+      suggestedWeight: 0.82,
+    });
+    expect(artifacts.parameterPlan.defaults).toMatchObject({
+      width: 832,
+      height: 1216,
+      steps: 31,
+      cfg: 4.25,
+      samplerName: "euler",
+      scheduler: "normal",
+      denoise: 0.88,
+      seed: 12345,
+    });
+  });
+
   it("uses Anima sampler defaults for local Story planning artifacts", () => {
     const resourceCandidates = {
       checkpoints: [
