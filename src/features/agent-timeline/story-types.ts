@@ -8,6 +8,7 @@ export const storyWorkflowNodeIds = [
   "plot-state-graph",
   "character-continuity-graph",
   "entity-cards",
+  "reference-asset-plan",
   "resource-plan",
   "parameter-plan",
   "story-render-plan",
@@ -285,6 +286,7 @@ export type StoryEntityCardOutfit = {
   description: string;
   continuityNotes: string[];
   shotIds: StoryShotId[];
+  storyCritical?: boolean;
   visualAnchors: string[];
 };
 
@@ -319,6 +321,92 @@ export type StoryEntityCards = {
   props: StoryEntityCardProp[];
   locations: StoryEntityCardLocation[];
   planningErrors: StoryPlanningError[];
+};
+
+export const storyReferenceImportanceValues = [
+  "required",
+  "recommended",
+  "optional",
+] as const;
+
+export type StoryReferenceImportance = (typeof storyReferenceImportanceValues)[number];
+
+export const storyReferenceResolutionStateValues = [
+  "missing",
+  "generated",
+  "uploaded",
+  "approved",
+  "failed",
+  "rejected",
+  "prompt-only",
+] as const;
+
+export type StoryReferenceResolutionState = (typeof storyReferenceResolutionStateValues)[number];
+
+export type StoryReferenceAssetType =
+  | "character-face"
+  | "character-bust"
+  | "outfit"
+  | "prop"
+  | "location";
+
+export type StoryReferenceEntityType = "character" | "outfit" | "prop" | "location";
+
+export type StoryReferenceAssetReference = {
+  createdAt?: string;
+  filename?: string;
+  id?: string;
+  source: "generated" | "uploaded";
+  url?: string;
+};
+
+export type StoryReferencePromptOnlyFallbackDecision = {
+  decidedAt?: string;
+  decidedBy: "user";
+  reason: string;
+};
+
+export type StoryReferenceAsset = {
+  id: string;
+  storyId: StoryId;
+  referenceType: StoryReferenceAssetType;
+  importance: StoryReferenceImportance;
+  resolutionState: StoryReferenceResolutionState;
+  canonicalPrompt: string;
+  rationale: string;
+  sourceEntity: {
+    id: string;
+    name: string;
+    type: StoryReferenceEntityType;
+  };
+  sourceShotIds: StoryShotId[];
+  approvedAssetReference?: StoryReferenceAssetReference;
+  candidateAssetReferences: StoryReferenceAssetReference[];
+  promptOnlyFallback?: StoryReferencePromptOnlyFallbackDecision;
+};
+
+export type StoryReferenceAssetPlan = {
+  storyId: StoryId;
+  assets: StoryReferenceAsset[];
+  planningNotes: string[];
+};
+
+export type StoryReferenceAssetFreezeBlock = {
+  entityId: string;
+  entityName: string;
+  entityType: StoryReferenceEntityType;
+  importance: StoryReferenceImportance;
+  reason: string;
+  referenceId: string;
+  referenceType: StoryReferenceAssetType;
+  resolutionState: StoryReferenceResolutionState;
+};
+
+export type StoryReferenceAssetFreezeGate = {
+  blockingReferences: StoryReferenceAssetFreezeBlock[];
+  ready: boolean;
+  requiredReferenceCount: number;
+  resolvedRequiredReferenceCount: number;
 };
 
 export type StoryConsistencyIssueSeverity = "info" | "warning" | "error";

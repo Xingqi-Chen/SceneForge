@@ -76,6 +76,10 @@ function defaultNow() {
   return new Date().toISOString();
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function createWorkflowId() {
   return `story-${Math.random().toString(36).slice(2, 10)}`;
 }
@@ -370,9 +374,11 @@ export function confirmStoryGeneration(
   const updatedAt = now();
   const nodes = cloneStoryNodeMap(workflow.nodes);
   const executionNode = nodes["shot-graph-execution"];
-  const gateDone = nodes["generation-gate"].status === "done" || nodes["generation-gate"].status === "manual";
+  const gateNode = nodes["generation-gate"];
+  const gateDone = gateNode.status === "done" || gateNode.status === "manual";
+  const gateReady = isRecord(gateNode.result) && gateNode.result.ready === true;
 
-  if (!gateDone || executionNode.status !== "blocked" || executionNode.error?.code !== "confirmation_required") {
+  if (!gateDone || !gateReady || executionNode.status !== "blocked" || executionNode.error?.code !== "confirmation_required") {
     return refreshStoryWorkflowReadiness(workflow);
   }
 

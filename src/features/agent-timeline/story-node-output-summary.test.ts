@@ -64,8 +64,62 @@ describe("story node output summaries", () => {
     expect(dependencySummary.sections[0]?.emptyState).toBe("No source-image dependencies.");
     expect(JSON.stringify(createStoryNodeOutputSummary("story-render-plan", workflow.nodes["story-render-plan"].result)))
       .toContain("Local Checkpoint");
+    expect(createStoryNodeOutputSummary("reference-asset-plan", workflow.nodes["reference-asset-plan"].result)).toMatchObject({
+      metrics: expect.arrayContaining([
+        { label: "Required", value: "2" },
+      ]),
+    });
     expect(createStoryNodeOutputSummary("generation-gate", workflow.nodes["generation-gate"].result).shotCards?.length)
       .toBeGreaterThan(0);
+  });
+
+  it("summarizes reference freeze-gate blockers with entity, type, importance, state, and reason", () => {
+    const summary = createStoryNodeOutputSummary("generation-gate", {
+      storyId: "story-summary",
+      ready: false,
+      executionAvailable: false,
+      confirmationRequired: true,
+      nsfwContext: { enabled: false },
+      renderPlanShotCount: 1,
+      previewEnabled: false,
+      blockingReason: "Required reference has a generated candidate but still needs approval.",
+      assetFreezeGate: {
+        ready: false,
+        requiredReferenceCount: 2,
+        resolvedRequiredReferenceCount: 1,
+        blockingReferences: [
+          {
+            entityId: "courier",
+            entityName: "Courier",
+            entityType: "character",
+            importance: "required",
+            reason: "Required reference has a generated candidate but still needs approval.",
+            referenceId: "character-face:courier",
+            referenceType: "character-face",
+            resolutionState: "generated",
+          },
+        ],
+      },
+      requestPreview: [],
+    });
+    const blockers = summary.sections.find((section) => section.title === "Blocking required references");
+
+    expect(summary.metrics).toEqual(expect.arrayContaining([
+      { label: "Ready", value: "Warning" },
+      { label: "Reference blockers", value: "1" },
+    ]));
+    expect(summary.sections.find((section) => section.title === "Gate state")?.fields).toEqual(expect.arrayContaining([
+      { label: "Reference freeze ready", value: "No" },
+      { label: "Required references", value: "1 / 2 resolved" },
+    ]));
+    expect(blockers?.rows?.[0]).toMatchObject({
+      entity: "Courier",
+      "entity type": "character",
+      "reference type": "character-face",
+      importance: "required",
+      state: "generated",
+      reason: "Required reference has a generated candidate but still needs approval.",
+    });
   });
 
   it("keeps long summary text readable without ellipsis truncation", () => {

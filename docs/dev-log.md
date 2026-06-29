@@ -4,6 +4,32 @@ This log records dated implementation and documentation work. Keep entries conci
 
 ## 2026-06-29
 
+### T26 / Issue #104 Reference Asset Plan and Freeze Gate
+
+Summary:
+
+- Added the `reference-asset-plan` Story workflow node and typed reference importance, resolution state, asset-plan, prompt-only fallback, and freeze-gate contracts.
+- Derived main-character face/bust references as required by default, story-critical outfits as required, non-critical outfits as recommended, and prop/location references as optional.
+- Added asset-freeze gate evaluation to `generation-gate`; missing, generated, uploaded, failed, rejected, and prompt-only-without-user-decision required refs block final generation.
+- Kept `generated` and `uploaded` as unresolved candidate states until later approval behavior exists.
+- Added compact Visual summaries for reference assets and generation-gate reference blockers.
+- Preserved legacy adapter compatibility by deriving a reference plan from existing T25 entity cards when older workflow records lack the new node.
+- Updated Story planning UI selection so a blocked generation gate is selected after planning, making required reference blockers inspectable.
+- Fixed review findings so main-character identity refs are selected by shot-state-visible coverage before stale entity-card shot counts, and the entity-card LLM contract explicitly exposes `storyCritical` outfit flags.
+
+Validation:
+
+- `npm test -- --run src/features/agent-timeline/story-reference-assets.test.ts src/features/agent-timeline/story-input.test.ts src/features/agent-timeline/story-workflow.test.ts src/features/agent-timeline/story-api.test.ts` passed with 4 files and 30 tests.
+- `npm test -- --run src/features/agent-timeline/story-llm-adapters.test.ts src/features/agent-timeline/components/StoryPlanningPreview.test.tsx` passed with 2 files and 59 tests.
+- `npm test -- --run src/app/api/agent-timeline/story/confirm-generation/route.test.ts src/app/api/agent-timeline/story/regenerate-shot/route.test.ts` passed with 2 files and 10 tests.
+- `npm test -- --run src/features/agent-timeline` passed with 29 files and 283 tests.
+- tester-agent PASS: `npm test -- --run src/features/agent-timeline/story-reference-assets.test.ts src/features/agent-timeline/story-api.test.ts` passed with 9 tests; `npm test -- --run src/features/agent-timeline src/app/api/agent-timeline/story/confirm-generation/route.test.ts src/app/api/agent-timeline/story/regenerate-shot/route.test.ts` passed with 31 files and 296 tests.
+- Reviewer follow-up: `npm test -- --run src/features/agent-timeline/story-reference-assets.test.ts src/features/agent-timeline/story-llm-adapters.test.ts` passed with 2 files and 51 tests, and `npm test -- --run src/features/agent-timeline src/app/api/agent-timeline/story/confirm-generation/route.test.ts src/app/api/agent-timeline/story/regenerate-shot/route.test.ts` passed with 31 files and 298 tests.
+- reviewer-agent returned APPROVE after the main-character shot-state and `storyCritical` LLM contract fixes.
+- `npm run typecheck` passed.
+- `npm run lint` passed with 23 existing warnings.
+- `npm run build` passed.
+
 ### T25 / Issue #102 Story Entity and Shot-State Contracts
 
 Summary:

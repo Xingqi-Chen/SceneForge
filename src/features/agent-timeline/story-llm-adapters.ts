@@ -22,6 +22,10 @@ import {
   addStorySourceImageRiskToEdge,
   shouldExecuteStorySourceImageEdge,
 } from "./story-source-image-risk";
+import {
+  deriveStoryReferenceAssetPlan,
+  evaluateStoryReferenceAssetFreezeGate,
+} from "./story-reference-assets";
 import { createTimelineNodeError } from "./state";
 import type { StoryWorkflowState } from "./story-state";
 import { validateShotDependencyGraph } from "./story-workflow";
@@ -57,6 +61,7 @@ import type {
   StoryEntityCardProp,
   StoryEntityCards,
   StoryInput,
+  StoryReferenceAssetPlan,
   StoryLocationId,
   StoryOutline,
   StoryOutfitId,
@@ -1521,6 +1526,9 @@ function normalizeEntityOutfitCards({
       description: displayText(rawCard.description ?? rawCard.summary) || compactText(rawCard.name, 100) || `Outfit ${index + 1}`,
       continuityNotes: normalizeStringList(rawCard.continuityNotes ?? rawCard.continuity_notes, 12),
       shotIds: normalizeEntityShotIds(rawCard.shotIds ?? rawCard.shot_ids, shotIds, [], errors, `outfits.${index}.shotIds`),
+      ...(rawCard.storyCritical === true || rawCard.story_critical === true || rawCard.critical === true
+        ? { storyCritical: true }
+        : {}),
       visualAnchors: normalizeStringList(rawCard.visualAnchors ?? rawCard.visual_anchors, 12),
     }];
   });
@@ -2310,6 +2318,24 @@ function getOptionalEntityCards(workflow: StoryWorkflowState): StoryEntityCards 
     : null;
 }
 
+export function getStoryReferenceAssetPlanFromWorkflow(workflow: StoryWorkflowState): StoryReferenceAssetPlan {
+  const result = workflow.nodes["reference-asset-plan"]?.result;
+  if (result !== undefined) {
+    return result as StoryReferenceAssetPlan;
+  }
+
+  const entityCards = getOptionalEntityCards(workflow);
+  if (!entityCards) {
+    return getNodeResult<StoryReferenceAssetPlan>(workflow, "reference-asset-plan");
+  }
+
+  return deriveStoryReferenceAssetPlan({
+    entityCards,
+    shots: getShots(workflow),
+    storyId: getStoryInput(workflow).storyId,
+  });
+}
+
 function getPlanningErrorIssues({
   bible,
   entityCards,
@@ -2428,17 +2454,22 @@ export function createStoryGenerationGateFromWorkflow(
   const consistency = getNodeResult<StoryConsistencyCheck>(workflow, "story-consistency-check");
   const renderPlan = getStoryRenderPlanFromWorkflow(workflow, samplerOptions);
   const resourcePlan = getResourcePlan(workflow);
+  const referenceAssetPlan = getStoryReferenceAssetPlanFromWorkflow(workflow);
+  const assetFreezeGate = evaluateStoryReferenceAssetFreezeGate(referenceAssetPlan);
   const executable = isStoryResourcePlanExecutable(resourcePlan);
-  const ready = consistency.passed && executable;
+  const ready = consistency.passed && executable && assetFreezeGate.ready;
 
   return {
     storyId: renderPlan.storyId,
     ready,
     executionAvailable: ready,
+    assetFreezeGate,
     blockingReason: ready
       ? "Confirm generation to start shot graph execution."
-      : consistency.issues.find((issue) => issue.severity === "error")?.message ||
-        "Story Graph planning must pass consistency checks before generation.",
+      : assetFreezeGate.blockingReferences[0]?.reason ||
+        (!executable ? "Story resource plan does not contain an executable local checkpoint." : undefined) ||
+        consistency.issues.find((issue) => issue.severity === "error")?.message ||
+        "Resolve required Story reference assets before generation.",
     confirmationRequired: true,
     nsfwContext: renderPlan.nsfwContext,
     renderPlanShotCount: renderPlan.shots.length,
@@ -2719,7 +2750,7 @@ export function createStoryLlmNodeAdapters({
       return makeJsonRequest({
         input,
         instruction:
-          'Create typed Story entity cards derived only from the supplied Story Bible, storyboard shots, and CharacterContinuityGraph. Use Story Bible character, prop, and location ids exactly. Outfits may define stable outfit ids tied to one character. Do not plan reference assets, freeze gates, uploads, image generation, IPAdapter, ControlNet, masks, or execution behavior. Missing or uncertain details should stay in planningErrors, not invented ids. Required shape: {"characters":[{"id":"","name":"","role":"","description":"","visualAnchors":[""],"continuityNotes":[""],"shotIds":[""],"outfitIds":[""],"propIds":[""]}],"outfits":[{"id":"","characterId":"","name":"","description":"","visualAnchors":[""],"continuityNotes":[""],"shotIds":[""]}],"props":[{"id":"","name":"","description":"","visualAnchors":[""],"continuityNotes":[""],"ownerCharacterIds":[""],"shotIds":[""]}],"locations":[{"id":"","name":"","description":"","visualAnchors":[""],"shotIds":[""],"viewStates":[{"shotId":"","viewDescription":"","visibleAnchors":[""],"camera":""}]}],"planningErrors":[""]}.',
+          'Create typed Story entity cards derived only from the supplied Story Bible, storyboard shots, and CharacterContinuityGraph. Use Story Bible character, prop, and location ids exactly. Outfits may define stable outfit ids tied to one character. Set outfit storyCritical true only when the supplied story data explicitly makes that wardrobe story-critical, plot-essential, or a required continuity marker; omit or false otherwise. Do not plan reference assets, freeze gates, uploads, image generation, IPAdapter, ControlNet, masks, or execution behavior. Missing or uncertain details should stay in planningErrors, not invented ids. Required shape: {"characters":[{"id":"","name":"","role":"","description":"","visualAnchors":[""],"continuityNotes":[""],"shotIds":[""],"outfitIds":[""],"propIds":[""]}],"outfits":[{"id":"","characterId":"","name":"","description":"","storyCritical":false,"visualAnchors":[""],"continuityNotes":[""],"shotIds":[""]}],"props":[{"id":"","name":"","description":"","visualAnchors":[""],"continuityNotes":[""],"ownerCharacterIds":[""],"shotIds":[""]}],"locations":[{"id":"","name":"","description":"","visualAnchors":[""],"shotIds":[""],"viewStates":[{"shotId":"","viewDescription":"","visibleAnchors":[""],"camera":""}]}],"planningErrors":[""]}.',
         payload: {
           input,
           bible: getBible(context.workflow),
@@ -2737,6 +2768,14 @@ export function createStoryLlmNodeAdapters({
       shots: getShots(context.workflow),
     }),
   })(completeChat);
+  const referenceAssetPlan: StoryNodeAdapter<StoryReferenceAssetPlan> = (context) => ({
+    value: deriveStoryReferenceAssetPlan({
+      entityCards: getNodeResult<StoryEntityCards>(context.workflow, "entity-cards"),
+      shots: getShots(context.workflow),
+      storyId: getStoryInput(context.workflow).storyId,
+    }),
+    source: "system",
+  });
   const resourcePlan: StoryNodeAdapter<StoryResourcePlan> = async (context) => {
     try {
       const input = getStoryInput(context.workflow);
@@ -2938,6 +2977,7 @@ export function createStoryLlmNodeAdapters({
     "plot-state-graph": plotGraph,
     "character-continuity-graph": continuityGraph,
     "entity-cards": entityCards,
+    "reference-asset-plan": referenceAssetPlan,
     "resource-plan": resourcePlan,
     "parameter-plan": parameterPlan,
     "story-render-plan": renderPlan,

@@ -1283,6 +1283,8 @@ export function StoryPlanningPreview() {
         if (settingsAutoReviewEnabled) {
           await handleConfirmGeneration(planned);
         }
+      } else if (planned.nodes["generation-gate"].status === "done" || planned.nodes["generation-gate"].status === "manual") {
+        setSelectedNodeId("generation-gate");
       }
     } catch (error) {
       setPlanningError(error instanceof Error ? error.message : "Story Graph planning failed.");

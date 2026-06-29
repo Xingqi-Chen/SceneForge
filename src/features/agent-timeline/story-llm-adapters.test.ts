@@ -15,6 +15,7 @@ import {
   normalizeStoryShots,
   syncStoryShotsWithDependencyGraph,
 } from "./story-llm-adapters";
+import { deriveStoryReferenceAssetPlan } from "./story-reference-assets";
 import { createStoryWorkflowState } from "./story-state";
 import {
   TimelineNodeExecutionError,
@@ -28,7 +29,9 @@ import {
 import type {
   CharacterContinuityGraph,
   StoryBible,
+  StoryEntityCards,
   StoryInput,
+  StoryReferenceAssetPlan,
   StoryShot,
   StoryWorkflowNodeId,
 } from "./story-types";
@@ -585,6 +588,138 @@ describe("story LLM adapters", () => {
         expect.objectContaining({ code: "entity_cards_location_view_shot_ref" }),
       ]),
     );
+  });
+
+  it("asks entity-card planning for story-critical outfits and carries them into required reference assets", async () => {
+    const workflow = createStoryWorkflowState({
+      storyId: "story-1",
+      workflowId: "workflow-story-critical-outfit",
+    });
+    const storyShots = [
+      {
+        ...shots[0],
+        appearanceState: {
+          characterStates: [
+            {
+              characterId: "courier",
+              appearance: "yellow rain jacket",
+              continuityNotes: ["The yellow jacket is the story-critical wardrobe marker."],
+              outfitId: "courier-yellow-jacket",
+              visible: true,
+            },
+          ],
+          notes: [],
+          propIds: [],
+        },
+      },
+    ] satisfies StoryShot[];
+    const continuityGraph = {
+      storyId: "story-1",
+      characters: [{
+        characterId: "courier",
+        name: "Courier",
+        canonicalDescription: "A courier in a yellow rain jacket.",
+        visualAnchors: ["yellow rain jacket"],
+      }],
+      appearances: [{
+        shotId: "shot-1",
+        characterId: "courier",
+        wardrobe: ["yellow rain jacket"],
+        poseOrAction: "entering the market",
+        expression: "focused",
+        continuityNotes: ["The yellow jacket is story-critical."],
+      }],
+    } satisfies CharacterContinuityGraph;
+    let systemPrompt = "";
+    const adapters = createStoryLlmNodeAdapters({
+      completeChat: async (request) => {
+        systemPrompt = String(request.messages[0]?.content ?? "");
+
+        return chatResponse(JSON.stringify({
+          characters: [{
+            id: "courier",
+            name: "Courier",
+            role: "Lead",
+            description: "A courier in a yellow rain jacket.",
+            continuityNotes: [],
+            outfitIds: ["courier-yellow-jacket"],
+            propIds: [],
+            shotIds: ["shot-1"],
+            visualAnchors: ["yellow rain jacket"],
+          }],
+          outfits: [{
+            id: "courier-yellow-jacket",
+            characterId: "courier",
+            name: "Yellow rain jacket",
+            description: "Yellow rain jacket used as the story-critical wardrobe marker.",
+            storyCritical: true,
+            continuityNotes: ["Story-critical wardrobe marker."],
+            shotIds: ["shot-1"],
+            visualAnchors: ["yellow rain jacket"],
+          }],
+          props: [],
+          locations: [],
+          planningErrors: [],
+        }));
+      },
+    });
+
+    workflow.nodes["story-input"] = {
+      nodeId: "story-input",
+      result: input,
+      source: "manual",
+      status: "manual",
+      updatedAt: workflow.updatedAt,
+    };
+    workflow.nodes["story-bible"] = {
+      nodeId: "story-bible",
+      result: bible,
+      source: "ai",
+      status: "done",
+      updatedAt: workflow.updatedAt,
+    };
+    workflow.nodes["storyboard-shots"] = {
+      nodeId: "storyboard-shots",
+      result: storyShots,
+      source: "ai",
+      status: "done",
+      updatedAt: workflow.updatedAt,
+    };
+    workflow.nodes["character-continuity-graph"] = {
+      nodeId: "character-continuity-graph",
+      result: continuityGraph,
+      source: "ai",
+      status: "done",
+      updatedAt: workflow.updatedAt,
+    };
+
+    const result = await adapters["entity-cards"]?.({
+      nodeId: "entity-cards",
+      workflow,
+      dependencies: [
+        workflow.nodes["story-bible"],
+        workflow.nodes["storyboard-shots"],
+        workflow.nodes["character-continuity-graph"],
+      ],
+    });
+    const entityCards = (result as { value: StoryEntityCards } | undefined)?.value;
+    const referencePlan = deriveStoryReferenceAssetPlan({
+      entityCards: entityCards as StoryEntityCards,
+      shots: storyShots,
+      storyId: input.storyId,
+    });
+
+    expect(systemPrompt).toContain("storyCritical");
+    expect(systemPrompt).toContain("story-critical");
+    expect(entityCards?.outfits.find((outfit) => outfit.id === "courier-yellow-jacket")).toMatchObject({
+      id: "courier-yellow-jacket",
+      storyCritical: true,
+    });
+    expect(referencePlan.assets.find((asset) => asset.sourceEntity.id === "courier-yellow-jacket")).toMatchObject({
+      referenceType: "outfit",
+      importance: "required",
+      sourceEntity: expect.objectContaining({ id: "courier-yellow-jacket" }),
+    });
   });
 
   it("preserves derived entity cards when LLM output only returns partial sections", () => {
@@ -3540,6 +3675,37 @@ describe("story LLM adapters", () => {
       },
       source: "system",
       status: "done",
+      updatedAt,
+    };
+    workflow.nodes["reference-asset-plan"] = {
+      nodeId: "reference-asset-plan",
+      result: {
+        storyId: "story-1",
+        planningNotes: ["Test fixture explicitly uses prompt-only fallback for required references."],
+        assets: (["character-face", "character-bust"] as const).map((referenceType) => ({
+          id: `${referenceType}:courier`,
+          storyId: "story-1",
+          referenceType,
+          importance: "required",
+          resolutionState: "prompt-only",
+          canonicalPrompt: "Courier identity reference.",
+          rationale: "Required identity reference fixture.",
+          sourceEntity: {
+            id: "courier",
+            name: "Courier",
+            type: "character",
+          },
+          sourceShotIds: ["shot-1", "shot-2"],
+          candidateAssetReferences: [],
+          promptOnlyFallback: {
+            decidedAt: updatedAt,
+            decidedBy: "user",
+            reason: "Use prompt-only fallback in this source-risk adapter fixture.",
+          },
+        })),
+      } satisfies StoryReferenceAssetPlan,
+      source: "manual",
+      status: "manual",
       updatedAt,
     };
 

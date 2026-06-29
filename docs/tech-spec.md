@@ -180,6 +180,7 @@ Planning contracts:
 
 - `StoryBible` includes props as first-class story entities.
 - Entity-card planning is represented by the `entity-cards` Story workflow node. It derives characters, outfits, props, and locations from the Story Bible, storyboard shots, and character continuity graph, then feeds Story render planning and consistency checks.
+- Reference asset planning is represented by the `reference-asset-plan` Story workflow node. It derives inspectable reference assets from entity cards and storyboard shot state, then feeds render planning, consistency checks, and the generation gate.
 - Shot planning may include `appearanceState`, `interactionState`, and `locationViewState`. These fields carry per-shot character visibility/appearance, prop interactions, physical contact notes, camera/view description, and visible location anchors.
 - LLM outputs should be structured JSON. Local code validates ids, enum values, required fields, referential integrity, and recoverable error states. Missing or invalid Story Bible props, shot-state fields, and entity-card references become `StoryPlanningError` entries rather than runtime crashes.
 - Local code must not infer references from string matching, crop generated shots to create identity references, perform consistency scoring, or add ControlNet, pose, or depth requirements in v1.
@@ -197,6 +198,7 @@ Gate and review contracts:
 
 - Final Story generation is blocked when any required reference is unresolved, failed, generated but unapproved, uploaded but unapproved, or missing.
 - A required reference is resolved only when approved or explicitly set to prompt-only fallback.
+- The Story `generation-gate` artifact carries an `assetFreezeGate` summary with blocking required references, resolved/required counts, entity identity, reference type, importance, state, and reason.
 - Optional references may be rejected without blocking final generation.
 - Canonical prompt edits stale reference generation, render plans, and generation gate state.
 

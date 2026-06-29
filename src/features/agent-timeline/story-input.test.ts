@@ -5,7 +5,9 @@ import {
   createStoryPlanningArtifacts,
   startStoryGraphWorkflow,
 } from "./story-input";
+import { evaluateStoryReferenceAssetFreezeGate } from "./story-reference-assets";
 import { confirmStoryGeneration, setStoryNodeManualResult } from "./story-state";
+import type { StoryReferenceAssetPlan } from "./story-types";
 import { canRunCommonWorkflowNode } from "./workflow-definition";
 import { storyWorkflowDefinition } from "./story-workflow";
 
@@ -18,6 +20,51 @@ const courierStory = [
   "Beat 4: He smooths the crushed box corner and knocks at the apartment door with a forced calm expression.",
   "Final image: The courier holds the battered cake box beside a little girl in a party hat and her relieved father.",
 ].join("\n");
+
+function withPromptOnlyReferenceFallbacks<TWorkflow extends ReturnType<typeof startStoryGraphWorkflow>>(
+  workflow: TWorkflow,
+): TWorkflow {
+  const plan = workflow.nodes["reference-asset-plan"].result as StoryReferenceAssetPlan;
+  const referenceAssetPlan = {
+    ...plan,
+    assets: plan.assets.map((asset) =>
+      asset.importance === "required"
+        ? {
+            ...asset,
+            resolutionState: "prompt-only" as const,
+            promptOnlyFallback: {
+              decidedAt: "2026-06-14T00:00:00.000Z",
+              decidedBy: "user" as const,
+              reason: "User accepted prompt-only fallback for this reference.",
+            },
+          }
+        : asset,
+    ),
+  } satisfies StoryReferenceAssetPlan;
+  const assetFreezeGate = evaluateStoryReferenceAssetFreezeGate(referenceAssetPlan);
+  const generationGate = workflow.nodes["generation-gate"].result as Record<string, unknown>;
+
+  return {
+    ...workflow,
+    nodes: {
+      ...workflow.nodes,
+      "reference-asset-plan": {
+        ...workflow.nodes["reference-asset-plan"],
+        result: referenceAssetPlan,
+      },
+      "generation-gate": {
+        ...workflow.nodes["generation-gate"],
+        result: {
+          ...generationGate,
+          assetFreezeGate,
+          blockingReason: "Confirm generation to start shot graph execution.",
+          executionAvailable: true,
+          ready: true,
+        },
+      },
+    },
+  };
+}
 
 describe("story input workflow start", () => {
   it("normalizes user input into typed StoryInput with settings and NSFW context", () => {
@@ -199,11 +246,39 @@ describe("story input workflow start", () => {
     expect(artifacts.shots).toHaveLength(5);
     expect(artifacts.dependencyGraph.edges).toHaveLength(4);
     expect(artifacts.resourcePlan.checkpoint.resource.id).toBe("story-planning-fallback-checkpoint");
+    expect(artifacts.referenceAssetPlan.assets).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        referenceType: "character-face",
+        importance: "required",
+        resolutionState: "missing",
+      }),
+      expect.objectContaining({
+        referenceType: "character-bust",
+        importance: "required",
+        resolutionState: "missing",
+      }),
+    ]));
     expect(JSON.stringify(artifacts.resourcePlan)).not.toContain("nsfw");
     expect(artifacts.generationGate).toMatchObject({
       confirmationRequired: true,
-      ready: true,
-      executionAvailable: true,
+      ready: false,
+      executionAvailable: false,
+      assetFreezeGate: {
+        ready: false,
+        requiredReferenceCount: 2,
+        blockingReferences: [
+          expect.objectContaining({
+            importance: "required",
+            resolutionState: "missing",
+            referenceType: "character-face",
+          }),
+          expect.objectContaining({
+            importance: "required",
+            resolutionState: "missing",
+            referenceType: "character-bust",
+          }),
+        ],
+      },
       renderPlanShotCount: 5,
     });
     expect(artifacts.execution).toMatchObject({
@@ -557,11 +632,23 @@ describe("story input workflow start", () => {
       }),
     });
     expect(workflow.nodes["story-bible"].status).toBe("done");
+    expect(workflow.nodes["reference-asset-plan"]).toMatchObject({
+      status: "done",
+      result: expect.objectContaining({
+        assets: expect.arrayContaining([
+          expect.objectContaining({
+            importance: "required",
+            resolutionState: "missing",
+          }),
+        ]),
+      }),
+    });
     expect(workflow.nodes["generation-gate"]).toMatchObject({
       status: "done",
       result: expect.objectContaining({
         confirmationRequired: true,
-        executionAvailable: true,
+        ready: false,
+        executionAvailable: false,
       }),
     });
     expect(workflow.nodes["shot-graph-execution"]).toMatchObject({
@@ -583,10 +670,12 @@ describe("story input workflow start", () => {
 
     const confirmed = confirmStoryGeneration(workflow, { now });
 
-    expect(confirmed.generationConfirmed).toBe(true);
+    expect(confirmed.generationConfirmed).toBe(false);
     expect(confirmed.nodes["shot-graph-execution"]).toMatchObject({
-      status: "ready",
-      error: undefined,
+      status: "blocked",
+      error: {
+        code: "confirmation_required",
+      },
     });
     expect(
       canRunCommonWorkflowNode({
@@ -596,7 +685,7 @@ describe("story input workflow start", () => {
         nodes: confirmed.nodes,
         reservedNodeIds: storyWorkflowDefinition.reservedNodeIds,
       }),
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it("preserves shared stale propagation for manual edits on a user-started workflow", () => {
@@ -641,6 +730,7 @@ describe("story input workflow start", () => {
     });
     expect(edited.nodes["story-safety-plan"].status).toBe("stale");
     expect(edited.nodes["entity-cards"].status).toBe("stale");
+    expect(edited.nodes["reference-asset-plan"].status).toBe("stale");
     expect(edited.nodes["resource-plan"].status).toBe("stale");
     expect(edited.nodes["generation-gate"].status).toBe("stale");
     expect(edited.generationConfirmed).toBe(false);
@@ -656,12 +746,12 @@ describe("story input workflow start", () => {
   });
 
   it("requires a fresh confirmation after manual generation gate edits", () => {
-    const workflow = startStoryGraphWorkflow({
+    const workflow = withPromptOnlyReferenceFallbacks(startStoryGraphWorkflow({
       rawIntent: "A three-shot market chase.",
       storyId: "story-gate-edit",
       workflowId: "workflow-gate-edit",
       now,
-    });
+    }));
     const confirmed = confirmStoryGeneration(workflow, { now });
     const gatePreview = confirmed.nodes["generation-gate"].result;
 

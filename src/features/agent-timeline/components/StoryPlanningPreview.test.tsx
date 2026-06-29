@@ -4,7 +4,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   createTimelineWorkflowRecord,
+  evaluateStoryReferenceAssetFreezeGate,
   startStoryGraphWorkflow,
+  type StoryReferenceAssetPlan,
   type StoryWorkflowState,
 } from "@/features/agent-timeline";
 
@@ -194,6 +196,49 @@ function createPlannedWorkflow(rawIntent = "A detective follows a signal through
       resourceCandidates,
     },
   });
+}
+
+function withPromptOnlyReferenceFallbacks(workflow: StoryWorkflowState): StoryWorkflowState {
+  const plan = workflow.nodes["reference-asset-plan"].result as StoryReferenceAssetPlan;
+  const referenceAssetPlan = {
+    ...plan,
+    assets: plan.assets.map((asset) =>
+      asset.importance === "required"
+        ? {
+            ...asset,
+            resolutionState: "prompt-only" as const,
+            promptOnlyFallback: {
+              decidedAt: "2026-06-15T00:00:00.000Z",
+              decidedBy: "user" as const,
+              reason: "User accepted prompt-only fallback for this reference.",
+            },
+          }
+        : asset,
+    ),
+  } satisfies StoryReferenceAssetPlan;
+  const assetFreezeGate = evaluateStoryReferenceAssetFreezeGate(referenceAssetPlan);
+  const generationGate = workflow.nodes["generation-gate"].result as Record<string, unknown>;
+
+  return {
+    ...workflow,
+    nodes: {
+      ...workflow.nodes,
+      "reference-asset-plan": {
+        ...workflow.nodes["reference-asset-plan"],
+        result: referenceAssetPlan,
+      },
+      "generation-gate": {
+        ...workflow.nodes["generation-gate"],
+        result: {
+          ...generationGate,
+          assetFreezeGate,
+          blockingReason: "Confirm generation to start shot graph execution.",
+          executionAvailable: true,
+          ready: true,
+        },
+      },
+    },
+  };
 }
 
 function withExecution(workflow: StoryWorkflowState, promptPrefix = "prompt"): StoryWorkflowState {
@@ -520,7 +565,7 @@ describe("StoryPlanningPreview", () => {
     });
     await clickButtonAsync("Start planning");
 
-    expect(container.textContent).toContain("Step 14 / 16");
+    expect(container.textContent).toContain("Step 15 / 17");
     expect(container.textContent).toContain("Entity cards");
     expect(container.textContent).toContain("Generation gate summary");
     expect(container.textContent).not.toContain("old autosaved story request");
@@ -534,7 +579,7 @@ describe("StoryPlanningPreview", () => {
       await Promise.resolve();
     });
 
-    expect(container.textContent).toContain("Step 14 / 16");
+    expect(container.textContent).toContain("Step 15 / 17");
     expect(container.textContent).toContain("Generation gate summary");
     expect(container.textContent).not.toContain("old autosaved story request");
     expect(container.textContent).not.toContain("An old autosaved story request.");
@@ -707,8 +752,8 @@ describe("StoryPlanningPreview", () => {
 
     expect(container.textContent).toContain("User-started planning workflow");
     expect(container.textContent).toContain("New story");
-    expect(container.textContent).toContain("16 steps");
-    expect(container.textContent).toContain("Step 14 / 16");
+    expect(container.textContent).toContain("17 steps");
+    expect(container.textContent).toContain("Step 15 / 17");
     expect(container.textContent).toContain("Entity cards");
     expect(container.textContent).toContain("Start shot generation");
     expect(fetchMock).toHaveBeenCalledWith(
@@ -1551,7 +1596,7 @@ describe("StoryPlanningPreview", () => {
   });
 
   it("starts generation, renders execution/results, and regenerates a shot", async () => {
-    const plannedWorkflow = createPlannedWorkflow("A courier follows a signal through a neon market.");
+    const plannedWorkflow = withPromptOnlyReferenceFallbacks(createPlannedWorkflow("A courier follows a signal through a neon market."));
     const generatedWorkflow = withExecution(plannedWorkflow, "first");
     const regeneratedWorkflow = withExecution(plannedWorkflow, "regen");
     const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
@@ -1612,7 +1657,7 @@ describe("StoryPlanningPreview", () => {
     });
     await clickButtonAsync("Start planning");
 
-    expect(container.textContent).toContain("Step 14 / 16");
+    expect(container.textContent).toContain("Step 15 / 17");
     expect(container.textContent).toContain("Entity cards");
     expect(container.textContent).toContain("Start shot generation");
 
@@ -1653,7 +1698,7 @@ describe("StoryPlanningPreview", () => {
   });
 
   it("auto-confirms Story shot generation when workflow auto review is enabled", async () => {
-    const plannedWorkflow = createPlannedWorkflow("A courier auto-renders a market sequence.");
+    const plannedWorkflow = withPromptOnlyReferenceFallbacks(createPlannedWorkflow("A courier auto-renders a market sequence."));
     const generatedWorkflow = withExecution(plannedWorkflow, "auto");
     const confirmPayloads: Array<{ workflow?: StoryWorkflowState }> = [];
     const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
