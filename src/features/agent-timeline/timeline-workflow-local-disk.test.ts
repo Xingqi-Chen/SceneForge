@@ -9,6 +9,7 @@ import {
   isSingleImageTimelineWorkflowRecord,
 } from "./timeline-workflow-persistence";
 import { startStoryGraphWorkflow } from "./story-input";
+import type { StoryReferenceAssetPlan } from "./story-types";
 
 const fsMocks = vi.hoisted(() => ({
   mkdir: vi.fn(),
@@ -88,6 +89,58 @@ function createStoryRecord() {
     outputDisplayModes: {
       "story-input": "json",
     },
+  });
+}
+
+function createStoryReferenceRecord() {
+  const workflow = startStoryGraphWorkflow({
+    rawIntent: "A disk-restored story graph with references",
+    targetShotCount: 2,
+    now: () => "2026-06-29T00:00:00.000Z",
+  });
+  const referencePlan = workflow.nodes["reference-asset-plan"].result as StoryReferenceAssetPlan;
+  const referenceWorkflow = {
+    ...workflow,
+    nodes: {
+      ...workflow.nodes,
+      "reference-asset-plan": {
+        ...workflow.nodes["reference-asset-plan"],
+        result: {
+          ...referencePlan,
+          assets: referencePlan.assets.map((asset, index) => index === 0
+            ? {
+                ...asset,
+                resolutionState: "generated",
+                candidateAssetReferences: [
+                  {
+                    createdAt: "2026-06-29T00:01:00.000Z",
+                    filename: "disk-reference.png",
+                    id: "disk-reference",
+                    metadata: {
+                      apiKey: "disk-reference-secret",
+                      dataUrl: "data:image/png;base64,SHOULD_NOT_PERSIST",
+                      generatedBytes: "SHOULD_NOT_PERSIST_BYTES",
+                      positivePrompt: "disk reference prompt",
+                    },
+                    source: "generated",
+                    url: "/api/comfyui/generated-images/disk-reference.png",
+                  },
+                ],
+              }
+            : asset),
+        },
+      },
+    },
+  };
+
+  return createTimelineWorkflowRecord({
+    projectId: "story-reference-disk-record",
+    name: "Story reference disk record",
+    workflow: referenceWorkflow,
+    sceneRequest: "A disk-restored story graph with references",
+    selectedPromptProfile: "illustrious",
+    selectedImageCount: 2,
+    selectedNodeId: "reference-asset-plan",
   });
 }
 
@@ -213,6 +266,43 @@ describe("timeline workflow local disk storage", () => {
     );
     expect(String(fsMocks.writeFile.mock.calls[0]?.[1])).toContain('"projectId": "workflow-local-safe"');
     expect(String(fsMocks.writeFile.mock.calls[0]?.[1])).toContain('"name": "Saved workflow"');
+  });
+
+  it("saves and loads named Story Reference workflow metadata without unsafe payloads", async () => {
+    const record = createStoryReferenceRecord();
+    fsMocks.mkdir.mockResolvedValue(undefined);
+    fsMocks.readFile.mockRejectedValueOnce(Object.assign(new Error("missing"), { code: "ENOENT" }));
+    fsMocks.writeFile.mockResolvedValue(undefined);
+
+    await saveNamedTimelineWorkflowToDisk({
+      id: "story-reference-safe",
+      name: "Story reference safe",
+      record,
+    });
+
+    const serialized = String(fsMocks.writeFile.mock.calls[0]?.[1]);
+    expect(serialized).toContain("disk reference prompt");
+    expect(serialized).not.toContain("disk-reference-secret");
+    expect(serialized).not.toContain("SHOULD_NOT_PERSIST");
+    expect(serialized).not.toContain("generatedBytes");
+    expect(serialized).not.toContain("dataUrl");
+
+    fsMocks.readFile.mockResolvedValue(serialized);
+    const loaded = await loadNamedTimelineWorkflowFromDisk("story-reference-safe");
+    expect(loaded && isStoryGraphTimelineWorkflowRecord(loaded)).toBe(true);
+
+    if (!loaded || !isStoryGraphTimelineWorkflowRecord(loaded)) {
+      throw new Error("Expected a Story Graph timeline record.");
+    }
+
+    const referencePlan = loaded.workflow.nodes["reference-asset-plan"].result as StoryReferenceAssetPlan;
+    expect(referencePlan.assets[0].candidateAssetReferences[0]).toMatchObject({
+      filename: "disk-reference.png",
+      metadata: {
+        positivePrompt: "disk reference prompt",
+      },
+      url: "/api/comfyui/generated-images/disk-reference.png",
+    });
   });
 
   it("lists named workflow summaries by newest update and skips the active autosave", async () => {
