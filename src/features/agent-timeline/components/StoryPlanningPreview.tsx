@@ -926,10 +926,122 @@ function getLatestReferenceCandidate(asset: StoryReferenceAsset) {
   return asset.candidateAssetReferences[asset.candidateAssetReferences.length - 1] ?? null;
 }
 
-function getReferenceAssetImageLabel(asset: StoryReferenceAsset) {
-  const latest = getLatestReferenceCandidate(asset);
-  return latest?.filename ?? latest?.id ?? "No candidate";
+function getReferenceAssetImageLabel(
+  asset: StoryReferenceAsset,
+  reference = getLatestReferenceCandidate(asset),
+) {
+  return reference?.filename ?? reference?.id ?? "No candidate";
 }
+
+function formatReferenceToken(value: string) {
+  return value.replace(/-/g, " ");
+}
+
+function getReferenceImportanceClassName(importance: StoryReferenceAsset["importance"]) {
+  if (importance === "required") {
+    return "border-rose-200 bg-rose-50 text-rose-700";
+  }
+
+  if (importance === "recommended") {
+    return "border-amber-200 bg-amber-50 text-amber-700";
+  }
+
+  return "border-sky-200 bg-sky-50 text-sky-700";
+}
+
+function getReferenceCardClassName(importance: StoryReferenceAsset["importance"]) {
+  if (importance === "required") {
+    return "border-rose-200 bg-white";
+  }
+
+  if (importance === "recommended") {
+    return "border-amber-200 bg-white";
+  }
+
+  return "border-sky-200 bg-white";
+}
+
+function getReferenceStateClassName(asset: StoryReferenceAsset) {
+  if (asset.resolutionState === "approved") {
+    return "border-emerald-200 bg-emerald-50 text-emerald-700";
+  }
+
+  if (asset.resolutionState === "prompt-only") {
+    return "border-violet-200 bg-violet-50 text-violet-700";
+  }
+
+  if (asset.resolutionState === "failed" || asset.resolutionState === "rejected") {
+    return "border-rose-200 bg-rose-50 text-rose-700";
+  }
+
+  if (asset.resolutionState === "stale") {
+    return "border-amber-200 bg-amber-50 text-amber-700";
+  }
+
+  if (asset.resolutionState === "generated" || asset.resolutionState === "uploaded") {
+    return "border-blue-200 bg-blue-50 text-blue-700";
+  }
+
+  return "border-slate-200 bg-slate-50 text-slate-600";
+}
+
+function getReferenceResolutionLabel(asset: StoryReferenceAsset) {
+  if (asset.resolutionState === "approved" && asset.approval?.source) {
+    return `${asset.approval.source}-approved`;
+  }
+
+  return formatReferenceToken(asset.resolutionState);
+}
+
+function getReferenceGenerateLabel(asset: StoryReferenceAsset) {
+  if (asset.resolutionState === "stale") {
+    return "Regenerate";
+  }
+
+  if (asset.resolutionState === "failed" || asset.candidateAssetReferences.length > 0) {
+    return "Reroll";
+  }
+
+  return "Generate";
+}
+
+function getReferenceValidActions({
+  asset,
+  canApprove,
+  canReject,
+}: {
+  asset: StoryReferenceAsset;
+  canApprove: boolean;
+  canReject: boolean;
+}) {
+  const actions = [
+    getReferenceGenerateLabel(asset).toLocaleLowerCase(),
+    "upload",
+    "upload + approve",
+  ];
+
+  if (canApprove) {
+    actions.push("approve latest");
+  }
+
+  if (asset.resolutionState !== "prompt-only") {
+    actions.push("prompt-only fallback");
+  }
+
+  if (canReject) {
+    actions.push("reject");
+  }
+
+  return actions.join(", ");
+}
+
+type ReferencePromptDraft = {
+  canonicalPrompt: string;
+  value: string;
+};
+
+const referenceActionButtonClassName =
+  "inline-flex h-8 items-center justify-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60";
 
 function ReferenceUploadInput({
   approve,
@@ -973,6 +1085,7 @@ function ReferenceUploadInput({
 function StoryReferenceActionPanel({
   busy,
   onApprove,
+  onEditPrompt,
   onGenerate,
   onPromptOnly,
   onReject,
@@ -981,105 +1094,208 @@ function StoryReferenceActionPanel({
 }: {
   busy: boolean;
   onApprove: (referenceId: string) => void;
+  onEditPrompt: (referenceId: string, canonicalPrompt: string) => void;
   onGenerate: (referenceId: string) => void;
   onPromptOnly: (referenceId: string) => void;
   onReject: (referenceId: string) => void;
   onUpload: (referenceId: string, file: File, approve: boolean) => void;
   plan: StoryReferenceAssetPlan;
 }) {
+  const [promptDrafts, setPromptDrafts] = useState<Record<string, ReferencePromptDraft>>({});
+
   return (
     <section className="mt-4 rounded-md border border-slate-200 bg-slate-50 p-3" data-testid="story-reference-action-panel">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <div>
-          <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Reference actions</h3>
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Story Reference workspace</h3>
           <p className="mt-1 text-xs text-slate-600">
-            {plan.assets.length} planned references / latest candidate shown
+            Reference actions for {plan.assets.length} planned references. Required items block final generation until
+            resolved; recommended and optional items remain review priorities only.
           </p>
         </div>
       </div>
-      <div className="grid gap-2">
+      <div className="grid gap-3">
         {plan.assets.map((asset) => {
           const latest = getLatestReferenceCandidate(asset);
-          const canApprove = Boolean(latest) && asset.resolutionState !== "approved";
-          const canReject = asset.importance !== "required";
+          const previewReference = asset.approvedAssetReference ?? latest;
+          const canApprove = Boolean(latest) && asset.resolutionState !== "approved" && asset.resolutionState !== "stale";
+          const canReject = asset.importance !== "required" && asset.resolutionState !== "rejected";
+          const promptDraft = promptDrafts[asset.id]?.canonicalPrompt === asset.canonicalPrompt
+            ? promptDrafts[asset.id]?.value ?? asset.canonicalPrompt
+            : asset.canonicalPrompt;
+          const promptChanged = promptDraft.trim().replace(/\s+/g, " ") !== asset.canonicalPrompt.trim().replace(/\s+/g, " ");
+          const promptOnlyDegraded = asset.resolutionState === "prompt-only" && asset.promptOnlyFallback?.decidedBy === "user";
 
           return (
-            <article className="rounded-md border border-slate-200 bg-white p-3" key={asset.id}>
-              <div className="flex flex-wrap items-start justify-between gap-3">
+            <article
+              className={cn("rounded-md border p-3", getReferenceCardClassName(asset.importance))}
+              data-importance={asset.importance}
+              data-testid="story-reference-card"
+              key={asset.id}
+            >
+              <div className="grid gap-3 lg:grid-cols-[13rem_1fr]">
                 <div className="min-w-0">
-                  <h4 className="break-words text-xs font-semibold text-slate-900">
-                    {asset.sourceEntity.name} / {asset.referenceType}
-                  </h4>
-                  <p className="mt-1 text-[11px] text-slate-500">
-                    {asset.importance} / {asset.resolutionState} / {asset.candidateAssetReferences.length} candidates
-                  </p>
-                </div>
-                <span className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] font-medium uppercase text-slate-500">
-                  {asset.approval ? "approved" : asset.resolutionState}
-                </span>
-              </div>
-              <p className="mt-2 line-clamp-2 text-xs leading-relaxed text-slate-600">{asset.canonicalPrompt}</p>
-              {latest ? (
-                <div className="mt-3 flex flex-wrap items-center gap-3 rounded-md border border-slate-200 bg-slate-50 p-2 text-[11px] text-slate-600">
-                  {latest.url ? (
-                    <a className="flex items-center gap-2 text-blue-700 underline-offset-2 hover:underline" href={latest.url} rel="noreferrer" target="_blank">
-                      <ImageIcon className="size-3.5" />
-                      {getReferenceAssetImageLabel(asset)}
-                    </a>
-                  ) : (
-                    <span className="flex items-center gap-2">
-                      <ImageIcon className="size-3.5" />
-                      {getReferenceAssetImageLabel(asset)}
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className={cn("rounded-md border px-2 py-1 text-[11px] font-semibold uppercase", getReferenceImportanceClassName(asset.importance))}>
+                      {asset.importance}
                     </span>
-                  )}
-                  <span>{latest.source}</span>
-                  {latest.contentType ? <span>{latest.contentType}</span> : null}
+                    <span className={cn("rounded-md border px-2 py-1 text-[11px] font-semibold uppercase", getReferenceStateClassName(asset))}>
+                      {getReferenceResolutionLabel(asset)}
+                    </span>
+                  </div>
+                  <h4 className="mt-2 break-words text-sm font-semibold text-slate-950">
+                    {asset.sourceEntity.name}
+                  </h4>
+                  <p className="mt-1 text-[11px] font-medium uppercase text-slate-500">
+                    {formatReferenceToken(asset.referenceType)} / {asset.sourceEntity.type}
+                  </p>
+                  <div className="mt-3 overflow-hidden rounded-md border border-slate-200 bg-slate-100">
+                    {previewReference?.url ? (
+                      <a className="flex h-44 items-center justify-center p-2 transition-colors hover:bg-slate-50" href={previewReference.url} rel="noreferrer" target="_blank">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          alt={`${asset.sourceEntity.name} ${formatReferenceToken(asset.referenceType)} reference preview`}
+                          className="max-h-full max-w-full rounded object-contain"
+                          src={previewReference.url}
+                        />
+                      </a>
+                    ) : (
+                      <div className="flex h-44 flex-col items-center justify-center gap-2 px-3 text-center text-[11px] text-slate-500">
+                        <ImageIcon className="size-5 text-slate-400" />
+                        <span className="font-semibold uppercase text-slate-400">No image reference</span>
+                        <span>Generate, upload, or choose prompt-only fallback.</span>
+                      </div>
+                    )}
+                  </div>
+                  {previewReference ? (
+                    <p className="mt-2 break-all text-[11px] leading-relaxed text-slate-500">
+                      {getReferenceAssetImageLabel(asset, previewReference)} / {previewReference.source}
+                      {previewReference.contentType ? ` / ${previewReference.contentType}` : ""}
+                    </p>
+                  ) : null}
                 </div>
-              ) : null}
-              {asset.failure ? (
-                <div className="mt-3 rounded-md border border-rose-200 bg-rose-50 p-2 text-[11px] leading-relaxed text-rose-700">
-                  <p>{asset.failure.message}</p>
-                  <p className="mt-1">Recover with: {asset.failure.recoverableActions.join(", ")}</p>
+
+                <div className="min-w-0">
+                  <div className="grid gap-x-4 gap-y-2 text-xs sm:grid-cols-3">
+                    <div>
+                      <p className="text-[11px] font-semibold uppercase text-slate-500">Importance</p>
+                      <p className="mt-1 font-medium text-slate-800">{asset.importance}</p>
+                    </div>
+                    <div>
+                      <p className="text-[11px] font-semibold uppercase text-slate-500">Current resolution</p>
+                      <p className="mt-1 font-medium text-slate-800">{getReferenceResolutionLabel(asset)}</p>
+                    </div>
+                    <div>
+                      <p className="text-[11px] font-semibold uppercase text-slate-500">Candidates</p>
+                      <p className="mt-1 font-medium text-slate-800">{asset.candidateAssetReferences.length}</p>
+                    </div>
+                  </div>
+
+                  <div className="mt-3">
+                    <label className="text-[11px] font-semibold uppercase text-slate-500" htmlFor={`reference-prompt-${asset.id}`}>
+                      Canonical prompt
+                    </label>
+                    <textarea
+                      className="mt-1 min-h-24 w-full resize-y rounded-md border border-slate-200 bg-white p-2 text-xs leading-relaxed text-slate-700 shadow-inner focus:border-slate-400 focus:outline-none"
+                      disabled={busy}
+                      id={`reference-prompt-${asset.id}`}
+                      onChange={(event) =>
+                        setPromptDrafts((current) => ({
+                          ...current,
+                          [asset.id]: {
+                            canonicalPrompt: asset.canonicalPrompt,
+                            value: event.currentTarget.value,
+                          },
+                        }))
+                      }
+                      value={promptDraft}
+                    />
+                    <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+                      <p className="text-[11px] leading-relaxed text-slate-500">
+                        Editing this prompt stales image-backed decisions and the render readiness gate.
+                      </p>
+                      <button
+                        className={referenceActionButtonClassName}
+                        disabled={busy || !promptChanged || !promptDraft.trim()}
+                        onClick={() => onEditPrompt(asset.id, promptDraft)}
+                        type="button"
+                      >
+                        <CheckCircle2 className="size-3.5" />
+                        Save prompt
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="mt-3 grid gap-3 text-xs sm:grid-cols-2">
+                    <div className="rounded-md border border-slate-200 bg-slate-50 p-2">
+                      <p className="text-[11px] font-semibold uppercase text-slate-500">Rationale</p>
+                      <p className="mt-1 leading-relaxed text-slate-700">{asset.rationale}</p>
+                    </div>
+                    <div className="rounded-md border border-slate-200 bg-slate-50 p-2">
+                      <p className="text-[11px] font-semibold uppercase text-slate-500">Valid actions</p>
+                      <p className="mt-1 leading-relaxed text-slate-700">
+                        {getReferenceValidActions({ asset, canApprove, canReject })}
+                      </p>
+                      {asset.resolutionState === "stale" ? (
+                        <p className="mt-1 leading-relaxed text-amber-700">
+                          Stale candidates cannot be approved until a fresh generated or uploaded candidate exists.
+                        </p>
+                      ) : null}
+                    </div>
+                  </div>
+
+                  {promptOnlyDegraded ? (
+                    <div className="mt-3 rounded-md border border-violet-200 bg-violet-50 p-2 text-[11px] leading-relaxed text-violet-700">
+                      <p className="font-semibold uppercase">Prompt-only degraded mode</p>
+                      <p className="mt-1">{asset.promptOnlyFallback?.reason}</p>
+                    </div>
+                  ) : null}
+                  {asset.failure ? (
+                    <div className="mt-3 rounded-md border border-rose-200 bg-rose-50 p-2 text-[11px] leading-relaxed text-rose-700">
+                      <p>{asset.failure.message}</p>
+                      <p className="mt-1">Recover with: {asset.failure.recoverableActions.join(", ")}</p>
+                    </div>
+                  ) : null}
+                  <div className="mt-3 flex flex-wrap justify-end gap-2">
+                    <button
+                      className={referenceActionButtonClassName}
+                      disabled={busy}
+                      onClick={() => onGenerate(asset.id)}
+                      type="button"
+                    >
+                      <RefreshCw className="size-3.5" />
+                      {getReferenceGenerateLabel(asset)}
+                    </button>
+                    <ReferenceUploadInput approve={false} busy={busy} label="Upload" onUpload={onUpload} referenceId={asset.id} />
+                    <ReferenceUploadInput approve busy={busy} label="Upload + approve" onUpload={onUpload} referenceId={asset.id} />
+                    <button
+                      className={referenceActionButtonClassName}
+                      disabled={busy || !canApprove}
+                      onClick={() => onApprove(asset.id)}
+                      type="button"
+                    >
+                      <CheckCircle2 className="size-3.5" />
+                      Approve latest
+                    </button>
+                    <button
+                      className={referenceActionButtonClassName}
+                      disabled={busy || asset.resolutionState === "prompt-only"}
+                      onClick={() => onPromptOnly(asset.id)}
+                      type="button"
+                    >
+                      Prompt-only
+                    </button>
+                    <button
+                      className={referenceActionButtonClassName}
+                      disabled={busy || !canReject}
+                      onClick={() => onReject(asset.id)}
+                      type="button"
+                    >
+                      <XCircle className="size-3.5" />
+                      Reject
+                    </button>
+                  </div>
                 </div>
-              ) : null}
-              <div className="mt-3 flex flex-wrap justify-end gap-2">
-                <button
-                  className="inline-flex h-8 items-center justify-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
-                  disabled={busy}
-                  onClick={() => onGenerate(asset.id)}
-                  type="button"
-                >
-                  <RefreshCw className="size-3.5" />
-                  {asset.candidateAssetReferences.length > 0 ? "Reroll" : "Generate"}
-                </button>
-                <ReferenceUploadInput approve={false} busy={busy} label="Upload" onUpload={onUpload} referenceId={asset.id} />
-                <ReferenceUploadInput approve busy={busy} label="Upload + approve" onUpload={onUpload} referenceId={asset.id} />
-                <button
-                  className="inline-flex h-8 items-center justify-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
-                  disabled={busy || !canApprove}
-                  onClick={() => onApprove(asset.id)}
-                  type="button"
-                >
-                  <CheckCircle2 className="size-3.5" />
-                  Approve latest
-                </button>
-                <button
-                  className="inline-flex h-8 items-center justify-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
-                  disabled={busy}
-                  onClick={() => onPromptOnly(asset.id)}
-                  type="button"
-                >
-                  Prompt-only
-                </button>
-                <button
-                  className="inline-flex h-8 items-center justify-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
-                  disabled={busy || !canReject}
-                  onClick={() => onReject(asset.id)}
-                  type="button"
-                >
-                  <XCircle className="size-3.5" />
-                  Reject
-                </button>
               </div>
             </article>
           );
@@ -1611,6 +1827,30 @@ export function StoryPlanningPreview() {
     }
   }
 
+  async function handleReferencePromptEdit(referenceId: string, canonicalPrompt: string) {
+    if (!workflow) {
+      return;
+    }
+
+    setPlanningError("");
+    setPlanningStatus("reference-action");
+
+    try {
+      const updated = await postStoryWorkflow("/api/agent-timeline/story/reference-assets/decision", {
+        workflow,
+        referenceId,
+        action: "edit-prompt",
+        canonicalPrompt,
+      }, "Story reference prompt update failed.");
+      setWorkflow(updated);
+      setSelectedNodeId("reference-asset-plan");
+    } catch (error) {
+      setPlanningError(error instanceof Error ? error.message : "Story reference prompt update failed.");
+    } finally {
+      setPlanningStatus("idle");
+    }
+  }
+
   function handlePromptOnlyReference(referenceId: string) {
     const reason = window.prompt("Reason for prompt-only fallback:");
     if (reason === null) {
@@ -1881,6 +2121,9 @@ export function StoryPlanningPreview() {
                                 action: "approve",
                                 referenceId,
                               })
+                            }
+                            onEditPrompt={(referenceId, canonicalPrompt) =>
+                              void handleReferencePromptEdit(referenceId, canonicalPrompt)
                             }
                             onGenerate={(referenceId) => void handleGenerateReference(referenceId)}
                             onPromptOnly={handlePromptOnlyReference}

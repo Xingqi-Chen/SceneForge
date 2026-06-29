@@ -3,6 +3,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  applyStoryReferenceApproval,
   applyStoryReferenceGenerationFailure,
   applyStoryReferenceGenerationSuccess,
   createTimelineWorkflowRecord,
@@ -11,6 +12,12 @@ import {
   type StoryReferenceAssetPlan,
   type StoryWorkflowState,
 } from "@/features/agent-timeline";
+import {
+  editStoryReferenceCanonicalPrompt,
+  rejectStoryReferenceAsset,
+  setStoryReferencePromptOnlyFallback,
+  uploadStoryReferenceAsset,
+} from "@/features/agent-timeline/story-api";
 
 vi.mock("@/features/editor/components/ImageGenerationPanel", () => ({
   ComfyUiGenerationDialog: (props: Record<string, unknown>) => {
@@ -301,6 +308,63 @@ function withFailedReferenceReroll(workflow: StoryWorkflowState): { referenceId:
   };
 }
 
+function withApprovedReference(workflow: StoryWorkflowState): { referenceId: string; workflow: StoryWorkflowState } {
+  const plan = workflow.nodes["reference-asset-plan"].result as StoryReferenceAssetPlan;
+  const referenceId = plan.assets.find((asset) => asset.importance === "required")?.id ?? plan.assets[0]?.id;
+
+  if (!referenceId) {
+    throw new Error("Expected a planned Story reference asset.");
+  }
+
+  const generatedPlan = applyStoryReferenceGenerationSuccess({
+    plan,
+    referenceId,
+    now: () => "2026-06-15T00:00:01.000Z",
+    assetReference: {
+      id: "approved-reference-image",
+      filename: "approved-reference.png",
+      source: "generated",
+      url: "/api/comfyui/generated-images/approved-reference.png",
+    },
+  });
+  const approvedPlan = applyStoryReferenceApproval({
+    plan: generatedPlan,
+    referenceId,
+    now: () => "2026-06-15T00:00:02.000Z",
+  });
+  const assetFreezeGate = evaluateStoryReferenceAssetFreezeGate(approvedPlan);
+  const generationGate = workflow.nodes["generation-gate"].result as Record<string, unknown>;
+  const updatedAt = "2026-06-15T00:00:02.000Z";
+
+  return {
+    referenceId,
+    workflow: {
+      ...workflow,
+      nodes: {
+        ...workflow.nodes,
+        "reference-asset-plan": {
+          ...workflow.nodes["reference-asset-plan"],
+          result: approvedPlan,
+          source: "manual",
+          status: "manual",
+          updatedAt,
+        },
+        "generation-gate": {
+          ...workflow.nodes["generation-gate"],
+          result: {
+            ...generationGate,
+            assetFreezeGate,
+            ready: assetFreezeGate.ready,
+            executionAvailable: assetFreezeGate.ready,
+          },
+          updatedAt,
+        },
+      },
+      updatedAt,
+    },
+  };
+}
+
 function withExecution(workflow: StoryWorkflowState, promptPrefix = "prompt"): StoryWorkflowState {
   const execution = {
     storyId: workflow.storyId,
@@ -413,6 +477,56 @@ async function clickButtonAsync(label: string) {
 
   await act(async () => {
     (button as HTMLButtonElement).click();
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+}
+
+function getReferenceCardByImportance(importance: "required" | "recommended" | "optional") {
+  const card = container.querySelector(`[data-testid="story-reference-card"][data-importance="${importance}"]`);
+
+  if (!card) {
+    throw new Error(`Unable to find ${importance} reference card.`);
+  }
+
+  return card;
+}
+
+async function clickCardButtonAsync(card: Element, label: string) {
+  const button = Array.from(card.querySelectorAll("button")).find(
+    (candidate) => candidate.textContent?.replace(/\s+/g, " ").trim() === label,
+  ) as HTMLButtonElement | undefined;
+
+  if (!button) {
+    throw new Error(`Unable to find card button "${label}".`);
+  }
+
+  expect(button.disabled).toBe(false);
+
+  await act(async () => {
+    button.click();
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+}
+
+async function uploadCardReferenceAsync(card: Element, label: string, file: File) {
+  const uploadLabel = Array.from(card.querySelectorAll("label")).find(
+    (candidate) => candidate.textContent?.replace(/\s+/g, " ").trim() === label,
+  );
+  const input = uploadLabel?.querySelector("input") as HTMLInputElement | null;
+
+  if (!input) {
+    throw new Error(`Unable to find card upload input "${label}".`);
+  }
+
+  Object.defineProperty(input, "files", {
+    configurable: true,
+    value: [file],
+  });
+
+  await act(async () => {
+    input.dispatchEvent(new Event("change", { bubbles: true }));
     await Promise.resolve();
     await Promise.resolve();
   });
@@ -1653,6 +1767,376 @@ describe("StoryPlanningPreview", () => {
     expect(errorNotice?.textContent).toContain("No ranked local Illustrious checkpoint candidates are available.");
     expect(errorNotice?.textContent).toContain("resource_selection_invalid");
     expect(container.textContent).not.toContain("Story Graph planning failed.");
+  });
+
+  it("renders the Story Reference review workspace and stales prompt edits", async () => {
+    const approvedReference = withApprovedReference(createPlannedWorkflow("A courier reviews Story references."));
+    const editedPrompt = "clean face reference plate, Main character, edited Story Reference prompt";
+    const editedWorkflow = editStoryReferenceCanonicalPrompt({
+      workflow: approvedReference.workflow,
+      referenceId: approvedReference.referenceId,
+      canonicalPrompt: editedPrompt,
+      now: () => "2026-06-15T00:00:03.000Z",
+    });
+    const activeRecord = createTimelineWorkflowRecord({
+      projectId: "story-reference-review-workspace",
+      name: "Reference review workflow",
+      workflow: approvedReference.workflow,
+      sceneRequest: "A courier reviews Story references.",
+      selectedPromptProfile: "illustrious",
+      selectedImageCount: 2,
+      selectedNodeId: "reference-asset-plan",
+    });
+    const decisionBodies: Array<{
+      action?: string;
+      canonicalPrompt?: string;
+      referenceId?: string;
+      workflow?: StoryWorkflowState;
+    }> = [];
+    const activeSaveBodies: unknown[] = [];
+    const fetchMock = vi.fn<typeof fetch>(async (url, init) => {
+      const target = typeof url === "string" ? url : url instanceof Request ? url.url : url.toString();
+
+      if (target === "/api/settings") {
+        return {
+          ok: true,
+          json: async () => ({}),
+        } as Response;
+      }
+
+      if (target === "/api/agent-timeline/active-workflow") {
+        if (init?.method === "PUT") {
+          activeSaveBodies.push(typeof init.body === "string" ? JSON.parse(init.body) : null);
+          return {
+            ok: true,
+            json: async () => ({
+              ok: true,
+              record: activeSaveBodies.at(-1),
+            }),
+          } as Response;
+        }
+
+        return {
+          ok: true,
+          json: async () => activeRecord,
+        } as Response;
+      }
+
+      if (target === "/api/agent-timeline/story/reference-assets/decision") {
+        decisionBodies.push(JSON.parse(String(init?.body ?? "{}")) as {
+          action?: string;
+          canonicalPrompt?: string;
+          referenceId?: string;
+          workflow?: StoryWorkflowState;
+        });
+        return {
+          ok: true,
+          json: async () => ({
+            workflow: editedWorkflow,
+          }),
+        } as Response;
+      }
+
+      throw new Error(`Unexpected fetch ${target}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await act(async () => {
+      root.render(<StoryPlanningPreview />);
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(container.textContent).toContain("Reference review workflow");
+    expect(container.textContent).toContain("Story Reference workspace");
+    expect(container.textContent).toContain("Reference actions");
+    expect(container.textContent).toContain("Current resolution");
+    expect(container.textContent).toContain("Canonical prompt");
+    expect(container.textContent).toContain("Rationale");
+    expect(container.textContent).toContain("Valid actions");
+    expect(container.querySelectorAll('[data-testid="story-reference-card"]')).toHaveLength(
+      (approvedReference.workflow.nodes["reference-asset-plan"].result as StoryReferenceAssetPlan).assets.length,
+    );
+    expect(container.querySelector('[data-importance="required"]')).not.toBeNull();
+    expect(container.querySelector('[data-importance="recommended"]')).not.toBeNull();
+    expect(container.querySelector('[data-importance="optional"]')).not.toBeNull();
+    expect(container.querySelector('img[alt*="reference preview"]')?.getAttribute("src")).toBe(
+      "/api/comfyui/generated-images/approved-reference.png",
+    );
+
+    const firstPrompt = container.querySelector("textarea") as HTMLTextAreaElement | null;
+    act(() => {
+      setNativeInputValue(firstPrompt as HTMLTextAreaElement, editedPrompt);
+    });
+    await clickButtonAsync("Save prompt");
+    await flushAsyncWork();
+
+    expect(decisionBodies).toHaveLength(1);
+    expect(decisionBodies[0]).toMatchObject({
+      action: "edit-prompt",
+      canonicalPrompt: editedPrompt,
+      referenceId: approvedReference.referenceId,
+      workflow: {
+        workflowId: approvedReference.workflow.workflowId,
+        workflowMode: "story-graph",
+      },
+    });
+    expect(container.textContent).toContain("stale");
+    expect(container.textContent).toContain("Regenerate");
+    expect(container.textContent).toContain("Stale candidates cannot be approved");
+  });
+
+  it("sends prompt-only fallback and optional rejection decisions through the Story reference decision route", async () => {
+    const workflow = withPromptOnlyReferenceFallbacks(createPlannedWorkflow("A courier reviews prompt-only references."));
+    const plan = workflow.nodes["reference-asset-plan"].result as StoryReferenceAssetPlan;
+    const recommendedReference = plan.assets.find((asset) => asset.importance === "recommended");
+    const optionalReference = plan.assets.find((asset) => asset.importance === "optional");
+
+    if (!recommendedReference || !optionalReference) {
+      throw new Error("Expected recommended and optional Story reference assets.");
+    }
+
+    const promptOnlyWorkflow = setStoryReferencePromptOnlyFallback({
+      workflow,
+      referenceId: recommendedReference.id,
+      reason: "Anima IPAdapter support is unavailable for this reference.",
+      now: () => "2026-06-15T00:00:04.000Z",
+    });
+    const optionalRejectedWorkflow = rejectStoryReferenceAsset({
+      workflow: promptOnlyWorkflow,
+      referenceId: optionalReference.id,
+      now: () => "2026-06-15T00:00:05.000Z",
+    });
+
+    expect(optionalRejectedWorkflow.nodes["generation-gate"].result).toMatchObject({
+      ready: true,
+      assetFreezeGate: {
+        blockingReferences: [],
+        ready: true,
+      },
+    });
+
+    const activeRecord = createTimelineWorkflowRecord({
+      projectId: "story-reference-decisions",
+      name: "Reference decision workflow",
+      workflow,
+      sceneRequest: "A courier reviews prompt-only references.",
+      selectedPromptProfile: "illustrious",
+      selectedImageCount: 2,
+      selectedNodeId: "reference-asset-plan",
+    });
+    const decisionBodies: Array<{
+      action?: string;
+      reason?: string;
+      referenceId?: string;
+      workflow?: StoryWorkflowState;
+    }> = [];
+    const activeSaveBodies: unknown[] = [];
+    const fetchMock = vi.fn<typeof fetch>(async (url, init) => {
+      const target = typeof url === "string" ? url : url instanceof Request ? url.url : url.toString();
+
+      if (target === "/api/settings") {
+        return {
+          ok: true,
+          json: async () => ({}),
+        } as Response;
+      }
+
+      if (target === "/api/agent-timeline/active-workflow") {
+        if (init?.method === "PUT") {
+          activeSaveBodies.push(typeof init.body === "string" ? JSON.parse(init.body) : null);
+          return {
+            ok: true,
+            json: async () => ({
+              ok: true,
+              record: activeSaveBodies.at(-1),
+            }),
+          } as Response;
+        }
+
+        return {
+          ok: true,
+          json: async () => activeRecord,
+        } as Response;
+      }
+
+      if (target === "/api/agent-timeline/story/reference-assets/decision") {
+        decisionBodies.push(JSON.parse(String(init?.body ?? "{}")) as {
+          action?: string;
+          reason?: string;
+          referenceId?: string;
+          workflow?: StoryWorkflowState;
+        });
+        return {
+          ok: true,
+          json: async () => ({
+            workflow: decisionBodies.length === 1 ? promptOnlyWorkflow : optionalRejectedWorkflow,
+          }),
+        } as Response;
+      }
+
+      throw new Error(`Unexpected fetch ${target}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    vi.spyOn(window, "prompt").mockReturnValue("Anima IPAdapter support is unavailable for this reference.");
+
+    await act(async () => {
+      root.render(<StoryPlanningPreview />);
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(container.textContent).toContain("Reference decision workflow");
+    expect(container.textContent).toContain("Prompt-only degraded mode");
+    expect(container.textContent).toContain("User accepted prompt-only fallback for this reference.");
+
+    await clickCardButtonAsync(getReferenceCardByImportance("recommended"), "Prompt-only");
+    await flushAsyncWork();
+
+    expect(decisionBodies[0]).toMatchObject({
+      action: "prompt-only",
+      reason: "Anima IPAdapter support is unavailable for this reference.",
+      referenceId: recommendedReference.id,
+      workflow: {
+        workflowId: workflow.workflowId,
+        workflowMode: "story-graph",
+      },
+    });
+    expect(container.textContent).toContain("Anima IPAdapter support is unavailable for this reference.");
+
+    await clickCardButtonAsync(getReferenceCardByImportance("optional"), "Reject");
+    await flushAsyncWork();
+
+    expect(decisionBodies[1]).toMatchObject({
+      action: "reject",
+      referenceId: optionalReference.id,
+      workflow: {
+        workflowId: promptOnlyWorkflow.workflowId,
+        workflowMode: "story-graph",
+      },
+    });
+    expect(container.textContent).toContain("rejected");
+  });
+
+  it("uploads review workspace replacements through the Story reference upload route", async () => {
+    const workflow = withPromptOnlyReferenceFallbacks(createPlannedWorkflow("A courier uploads a replacement reference."));
+    const plan = workflow.nodes["reference-asset-plan"].result as StoryReferenceAssetPlan;
+    const uploadReference = plan.assets.find((asset) => asset.importance === "recommended");
+
+    if (!uploadReference) {
+      throw new Error("Expected a recommended Story reference asset.");
+    }
+
+    const uploadedWorkflow = uploadStoryReferenceAsset({
+      workflow,
+      referenceId: uploadReference.id,
+      approve: true,
+      now: () => "2026-06-15T00:00:06.000Z",
+      assetReference: {
+        filename: "workspace-upload.png",
+        source: "uploaded",
+        url: "/api/comfyui/sequence-references/workspace-upload.png",
+      },
+    });
+    const activeRecord = createTimelineWorkflowRecord({
+      projectId: "story-reference-upload",
+      name: "Reference upload workflow",
+      workflow,
+      sceneRequest: "A courier uploads a replacement reference.",
+      selectedPromptProfile: "illustrious",
+      selectedImageCount: 2,
+      selectedNodeId: "reference-asset-plan",
+    });
+    const uploadBodies: Array<{
+      approve?: boolean;
+      dataUrl?: string;
+      referenceId?: string;
+      workflow?: StoryWorkflowState;
+    }> = [];
+    const activeSaveBodies: unknown[] = [];
+    const fetchMock = vi.fn<typeof fetch>(async (url, init) => {
+      const target = typeof url === "string" ? url : url instanceof Request ? url.url : url.toString();
+
+      if (target === "/api/settings") {
+        return {
+          ok: true,
+          json: async () => ({}),
+        } as Response;
+      }
+
+      if (target === "/api/agent-timeline/active-workflow") {
+        if (init?.method === "PUT") {
+          activeSaveBodies.push(typeof init.body === "string" ? JSON.parse(init.body) : null);
+          return {
+            ok: true,
+            json: async () => ({
+              ok: true,
+              record: activeSaveBodies.at(-1),
+            }),
+          } as Response;
+        }
+
+        return {
+          ok: true,
+          json: async () => activeRecord,
+        } as Response;
+      }
+
+      if (target === "/api/agent-timeline/story/reference-assets/upload") {
+        uploadBodies.push(JSON.parse(String(init?.body ?? "{}")) as {
+          approve?: boolean;
+          dataUrl?: string;
+          referenceId?: string;
+          workflow?: StoryWorkflowState;
+        });
+        return {
+          ok: true,
+          json: async () => ({
+            workflow: uploadedWorkflow,
+          }),
+        } as Response;
+      }
+
+      throw new Error(`Unexpected fetch ${target}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await act(async () => {
+      root.render(<StoryPlanningPreview />);
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    await uploadCardReferenceAsync(
+      getReferenceCardByImportance("recommended"),
+      "Upload + approve",
+      new File(["fake"], "workspace-upload.png", { type: "image/png" }),
+    );
+    await flushAsyncWork();
+
+    expect(uploadBodies).toHaveLength(1);
+    expect(uploadBodies[0]).toMatchObject({
+      approve: true,
+      referenceId: uploadReference.id,
+      workflow: {
+        workflowId: workflow.workflowId,
+        workflowMode: "story-graph",
+      },
+    });
+    expect(uploadBodies[0]?.dataUrl).toMatch(/^data:image\/png;base64,/);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/agent-timeline/story/reference-assets/upload",
+      expect.objectContaining({
+        method: "POST",
+      }),
+    );
+    expect(container.textContent).toContain("uploaded-approved");
+    expect(container.querySelector('img[alt*="reference preview"]')?.getAttribute("src")).toBe(
+      "/api/comfyui/sequence-references/workspace-upload.png",
+    );
   });
 
   it("shows recoverable failed reference actions and rerolls through the reference route", async () => {

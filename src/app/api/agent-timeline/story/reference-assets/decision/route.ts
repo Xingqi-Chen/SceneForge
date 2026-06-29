@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import {
   approveStoryReferenceAsset,
+  editStoryReferenceCanonicalPrompt,
   rejectStoryReferenceAsset,
   sanitizeStoryWorkflowState,
   setStoryReferencePromptOnlyFallback,
@@ -39,6 +40,7 @@ export async function POST(request: Request) {
   const referenceId = isRecord(payload) && typeof payload.referenceId === "string" ? payload.referenceId.trim() : "";
   const action = isRecord(payload) && typeof payload.action === "string" ? payload.action.trim() : "";
   const reason = isRecord(payload) && typeof payload.reason === "string" ? payload.reason : "";
+  const canonicalPrompt = isRecord(payload) && typeof payload.canonicalPrompt === "string" ? payload.canonicalPrompt : "";
   const assetReferenceId = isRecord(payload) && typeof payload.assetReferenceId === "string"
     ? payload.assetReferenceId.trim()
     : undefined;
@@ -82,7 +84,17 @@ export async function POST(request: Request) {
       });
     }
 
-    return errorResponse("action must be approve, reject, or prompt-only.", 400);
+    if (action === "edit-prompt") {
+      return NextResponse.json({
+        workflow: editStoryReferenceCanonicalPrompt({
+          workflow,
+          referenceId,
+          canonicalPrompt,
+        }),
+      });
+    }
+
+    return errorResponse("action must be approve, reject, prompt-only, or edit-prompt.", 400);
   } catch (error) {
     if (error instanceof StoryApiValidationError) {
       return errorResponse(error.message, error.status, error.details);

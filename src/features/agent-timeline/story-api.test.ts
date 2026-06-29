@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   approveStoryReferenceAsset,
   confirmAndExecuteStoryGeneration,
+  editStoryReferenceCanonicalPrompt,
   generateStoryReferencePlate,
   sanitizeStoryWorkflowState,
   StoryApiValidationError,
@@ -330,6 +331,48 @@ describe("story API workflow sanitizer", () => {
       }),
     });
     expect(approved.nodes["generation-gate"].result).toMatchObject({ ready: true });
+  });
+
+  it("stales an approved reference and downstream readiness after canonical prompt edits", () => {
+    const workflow = approveAllRequiredReferences(createReferenceWorkflow());
+    const referenceId = "character-face:main-character";
+    const edited = editStoryReferenceCanonicalPrompt({
+      workflow,
+      referenceId,
+      canonicalPrompt: "clean face reference plate, Main character, updated silver hair cue",
+      now: () => "2026-06-29T00:07:30.000Z",
+    });
+    const reference = getReferencePlan(edited).assets.find((asset) => asset.id === referenceId);
+
+    expect(reference).toMatchObject({
+      canonicalPrompt: "clean face reference plate, Main character, updated silver hair cue",
+      resolutionState: "stale",
+      approval: undefined,
+      approvedAssetReference: undefined,
+    });
+    expect(reference?.candidateAssetReferences).toHaveLength(1);
+    expect(edited.generationConfirmed).toBe(false);
+    expect(edited.nodes["reference-asset-plan"]).toMatchObject({
+      source: "manual",
+      status: "manual",
+    });
+    expect(edited.nodes["story-render-plan"].status).toBe("stale");
+    expect(edited.nodes["story-consistency-check"].status).toBe("stale");
+    expect(edited.nodes["generation-gate"]).toMatchObject({
+      source: "system",
+      status: "stale",
+      result: {
+        ready: false,
+        assetFreezeGate: {
+          blockingReferences: expect.arrayContaining([
+            expect.objectContaining({
+              referenceId,
+              resolutionState: "stale",
+            }),
+          ]),
+        },
+      },
+    });
   });
 
   it("does not inject approved Story references into final shot execution", async () => {

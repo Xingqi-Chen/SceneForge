@@ -16,6 +16,7 @@ import {
   confirmStoryGeneration,
   markStoryNodeRunning,
   refreshStoryWorkflowReadiness,
+  setStoryNodeManualResult,
   type StoryWorkflowState,
 } from "./story-state";
 import {
@@ -27,6 +28,7 @@ import {
 import type { StoryGenerationGatePreview } from "./story-input";
 import {
   applyStoryReferenceApproval,
+  applyStoryReferenceCanonicalPromptEdit,
   applyStoryReferenceGenerationFailure,
   applyStoryReferenceGenerationSuccess,
   applyStoryReferencePromptOnlyFallback,
@@ -179,6 +181,10 @@ function getReferenceGateBlockingReason({
   return "Confirm generation to start shot graph execution.";
 }
 
+function normalizeCanonicalPromptText(value: string) {
+  return value.replace(/\s+/g, " ").trim();
+}
+
 function createUpdatedGenerationGate({
   now,
   referenceAssetPlan,
@@ -271,6 +277,56 @@ function applyReferenceAssetPlanToWorkflow({
 
   return refreshStoryWorkflowReadiness({
     ...workflow,
+    generationConfirmed: false,
+    nodes,
+    updatedAt,
+  });
+}
+
+function applyReferenceAssetPromptEditToWorkflow({
+  now,
+  referenceAssetPlan,
+  workflow,
+}: {
+  now?: () => string;
+  referenceAssetPlan: StoryReferenceAssetPlan;
+  workflow: StoryWorkflowState;
+}) {
+  const clock = now ?? (() => new Date().toISOString());
+  const updatedAt = clock();
+  const editedWorkflow = setStoryNodeManualResult(workflow, "reference-asset-plan", referenceAssetPlan, {
+    now: () => updatedAt,
+    scope: {
+      artifactType: "reference-asset-plan",
+      kind: "story",
+      storyId: workflow.storyId,
+    },
+  });
+  const generationGate = createUpdatedGenerationGate({
+    now: () => updatedAt,
+    referenceAssetPlan,
+    workflow: editedWorkflow,
+  });
+  const nodes = {
+    ...editedWorkflow.nodes,
+    "reference-asset-plan": {
+      ...editedWorkflow.nodes["reference-asset-plan"],
+      result: referenceAssetPlan,
+      source: "manual" as const,
+      status: "manual" as const,
+      updatedAt,
+    },
+    "generation-gate": {
+      ...editedWorkflow.nodes["generation-gate"],
+      result: generationGate,
+      source: "system" as const,
+      status: "stale" as const,
+      updatedAt,
+    },
+  };
+
+  return refreshStoryWorkflowReadiness({
+    ...editedWorkflow,
     generationConfirmed: false,
     nodes,
     updatedAt,
@@ -496,6 +552,41 @@ export function approveStoryReferenceAsset({
       referenceId,
     }),
     source: "manual",
+    workflow,
+  });
+}
+
+export function editStoryReferenceCanonicalPrompt({
+  canonicalPrompt,
+  now,
+  referenceId,
+  workflow,
+}: {
+  canonicalPrompt: string;
+  now?: () => string;
+  referenceId: string;
+  workflow: StoryWorkflowState;
+}) {
+  assertStoryWorkflow(workflow);
+  const plan = getStoryReferenceAssetPlanFromWorkflow(workflow);
+  const reference = findReferenceAsset(plan, referenceId);
+  const normalizedPrompt = normalizeCanonicalPromptText(canonicalPrompt);
+
+  if (!normalizedPrompt) {
+    throw new StoryApiValidationError("Story reference canonical prompt cannot be empty.", 400);
+  }
+
+  if (reference.canonicalPrompt === normalizedPrompt) {
+    return workflow;
+  }
+
+  return applyReferenceAssetPromptEditToWorkflow({
+    now,
+    referenceAssetPlan: applyStoryReferenceCanonicalPromptEdit({
+      canonicalPrompt: normalizedPrompt,
+      plan,
+      referenceId,
+    }),
     workflow,
   });
 }

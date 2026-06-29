@@ -93,4 +93,54 @@ describe("POST /api/agent-timeline/story/reference-assets/decision", () => {
     expect(routeResponse.status).toBe(400);
     expect(payload.error.message).toBe("Prompt-only fallback requires a user-provided reason.");
   });
+
+  it("marks a reference stale when its canonical prompt is edited", async () => {
+    const referenceId = "character-face:main-character";
+    const workflow = uploadStoryReferenceAsset({
+      workflow: createWorkflow(),
+      referenceId,
+      approve: true,
+      now: () => "2026-06-29T00:01:00.000Z",
+      assetReference: {
+        filename: "approved-face.png",
+        source: "uploaded",
+        url: "/api/comfyui/sequence-references/approved-face.png",
+      },
+    });
+
+    const routeResponse = await POST(new Request("http://localhost/api/agent-timeline/story/reference-assets/decision", {
+      method: "POST",
+      body: JSON.stringify({
+        workflow,
+        referenceId,
+        action: "edit-prompt",
+        canonicalPrompt: "clean face reference plate, Main character, edited route prompt",
+      }),
+    }));
+    const payload = await routeResponse.json();
+    const resultWorkflow = payload.workflow as { nodes: Record<string, { result: unknown; status: string }> };
+
+    expect(routeResponse.status).toBe(200);
+    const referenceAsset = getReferenceAsset(payload, referenceId);
+
+    expect(referenceAsset).toMatchObject({
+      canonicalPrompt: "clean face reference plate, Main character, edited route prompt",
+      resolutionState: "stale",
+    });
+    expect(referenceAsset?.approval).toBeUndefined();
+    expect(referenceAsset?.approvedAssetReference).toBeUndefined();
+    expect(resultWorkflow.nodes["story-render-plan"].status).toBe("stale");
+    expect(resultWorkflow.nodes["generation-gate"].status).toBe("stale");
+    expect(resultWorkflow.nodes["generation-gate"].result).toMatchObject({
+      ready: false,
+      assetFreezeGate: {
+        blockingReferences: expect.arrayContaining([
+          expect.objectContaining({
+            referenceId,
+            resolutionState: "stale",
+          }),
+        ]),
+      },
+    });
+  });
 });

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   applyStoryReferenceApproval,
+  applyStoryReferenceCanonicalPromptEdit,
   applyStoryReferenceGenerationFailure,
   applyStoryReferenceGenerationSuccess,
   applyStoryReferencePromptOnlyFallback,
@@ -180,6 +181,7 @@ describe("story reference assets", () => {
       "uploaded",
       "approved",
       "failed",
+      "stale",
       "rejected",
       "prompt-only",
     ]);
@@ -320,10 +322,10 @@ describe("story reference assets", () => {
     });
   });
 
-  it("blocks required missing, generated, uploaded, failed, and rejected references", () => {
+  it("blocks required missing, generated, uploaded, failed, stale, and rejected references", () => {
     const plan = deriveStoryReferenceAssetPlan({ entityCards, shots });
 
-    for (const state of ["missing", "generated", "uploaded", "failed", "rejected"] as const) {
+    for (const state of ["missing", "generated", "uploaded", "failed", "stale", "rejected"] as const) {
       const gate = evaluateStoryReferenceAssetFreezeGate(markRequiredAssets(plan, state));
 
       expect(gate.ready).toBe(false);
@@ -604,5 +606,99 @@ describe("story reference assets", () => {
         referenceId: "prop:signal-box",
       }),
     ]));
+  });
+
+  it("marks image-backed prompt edits stale and blocks pre-edit candidate approval after regeneration", () => {
+    const plan = deriveStoryReferenceAssetPlan({ entityCards, shots });
+    const referenceId = "character-face:courier";
+    const generated = applyStoryReferenceGenerationSuccess({
+      plan,
+      referenceId,
+      now: () => "2026-06-29T00:09:00.000Z",
+      assetReference: {
+        id: "generated-face-old",
+        filename: "face-old.png",
+        source: "generated",
+        url: "/api/comfyui/generated-images/face-old.png",
+      },
+    });
+    const approved = applyStoryReferenceApproval({
+      plan: generated,
+      referenceId,
+      now: () => "2026-06-29T00:10:00.000Z",
+    });
+    const edited = applyStoryReferenceCanonicalPromptEdit({
+      plan: approved,
+      referenceId,
+      canonicalPrompt: "clean face reference plate, Courier, edited blue scarf",
+    });
+    const asset = edited.assets.find((candidate) => candidate.id === referenceId);
+
+    expect(asset).toMatchObject({
+      canonicalPrompt: "clean face reference plate, Courier, edited blue scarf",
+      resolutionState: "stale",
+      approval: undefined,
+      approvedAssetReference: undefined,
+      promptOnlyFallback: undefined,
+    });
+    expect(asset?.candidateAssetReferences).toEqual([
+      expect.objectContaining({
+        id: "generated-face-old",
+        source: "generated",
+      }),
+    ]);
+    expect(evaluateStoryReferenceAssetFreezeGate(edited)).toMatchObject({
+      ready: false,
+      blockingReferences: expect.arrayContaining([
+        expect.objectContaining({
+          referenceId,
+          resolutionState: "stale",
+          reason: "Required reference prompt changed and needs regeneration, upload approval, or explicit prompt-only fallback.",
+        }),
+      ]),
+    });
+    expect(() =>
+      applyStoryReferenceApproval({
+        plan: edited,
+        referenceId,
+        now: () => "2026-06-29T00:11:00.000Z",
+      }),
+    ).toThrow("has a stale candidate");
+
+    const regenerated = applyStoryReferenceGenerationSuccess({
+      plan: edited,
+      referenceId,
+      now: () => "2026-06-29T00:12:00.000Z",
+      assetReference: {
+        id: "generated-face-new",
+        filename: "face-new.png",
+        source: "generated",
+        url: "/api/comfyui/generated-images/face-new.png",
+      },
+    });
+
+    expect(() =>
+      applyStoryReferenceApproval({
+        plan: regenerated,
+        referenceId,
+        assetReferenceId: "generated-face-old",
+        now: () => "2026-06-29T00:13:00.000Z",
+      }),
+    ).toThrow("candidate was created before the latest canonical prompt edit");
+
+    expect(
+      applyStoryReferenceApproval({
+        plan: regenerated,
+        referenceId,
+        assetReferenceId: "generated-face-new",
+        now: () => "2026-06-29T00:14:00.000Z",
+      }).assets.find((candidate) => candidate.id === referenceId),
+    ).toMatchObject({
+      resolutionState: "approved",
+      approvedAssetReference: expect.objectContaining({
+        id: "generated-face-new",
+        canonicalPromptRevision: 1,
+      }),
+    });
   });
 });
