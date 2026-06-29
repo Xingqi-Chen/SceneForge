@@ -13,7 +13,9 @@ import {
   Play,
   RefreshCw,
   Settings,
+  Upload,
   Workflow,
+  XCircle,
 } from "lucide-react";
 
 import {
@@ -48,6 +50,8 @@ import {
   type TimelineWorkflowRecordInput,
 } from "@/features/agent-timeline/timeline-workflow-persistence";
 import type {
+  StoryReferenceAsset,
+  StoryReferenceAssetPlan,
   StoryWorkflowNodeId,
 } from "@/features/agent-timeline/story-types";
 import {
@@ -499,6 +503,26 @@ function isStoryResultDisplay(value: unknown): value is StoryResultDisplay {
   return isRecord(value) && Array.isArray(value.finalReferences) && typeof value.status === "string";
 }
 
+function isStoryReferenceAssetPlan(value: unknown): value is StoryReferenceAssetPlan {
+  return isRecord(value) && Array.isArray(value.assets) && typeof value.storyId === "string";
+}
+
+function readFileAsDataUrl(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === "string") {
+        resolve(reader.result);
+        return;
+      }
+
+      reject(new Error("Reference upload did not produce a data URL."));
+    };
+    reader.onerror = () => reject(reader.error ?? new Error("Reference upload could not be read."));
+    reader.readAsDataURL(file);
+  });
+}
+
 function getStoryResultImageUrl(reference: StoryResultDisplay["finalReferences"][number]) {
   return reference.storedImage?.url ?? reference.storedImages?.[0]?.url ?? "";
 }
@@ -898,6 +922,173 @@ function StoryExecutionPanel({
   );
 }
 
+function getLatestReferenceCandidate(asset: StoryReferenceAsset) {
+  return asset.candidateAssetReferences[asset.candidateAssetReferences.length - 1] ?? null;
+}
+
+function getReferenceAssetImageLabel(asset: StoryReferenceAsset) {
+  const latest = getLatestReferenceCandidate(asset);
+  return latest?.filename ?? latest?.id ?? "No candidate";
+}
+
+function ReferenceUploadInput({
+  approve,
+  busy,
+  label,
+  onUpload,
+  referenceId,
+}: {
+  approve: boolean;
+  busy: boolean;
+  label: string;
+  onUpload: (referenceId: string, file: File, approve: boolean) => void;
+  referenceId: string;
+}) {
+  return (
+    <label
+      className={cn(
+        "inline-flex h-8 cursor-pointer items-center justify-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50",
+        busy ? "pointer-events-none opacity-60" : "",
+      )}
+    >
+      <Upload className="size-3.5" />
+      {label}
+      <input
+        accept="image/png,image/jpeg,image/webp"
+        className="sr-only"
+        disabled={busy}
+        onChange={(event) => {
+          const file = event.currentTarget.files?.[0];
+          event.currentTarget.value = "";
+          if (file) {
+            onUpload(referenceId, file, approve);
+          }
+        }}
+        type="file"
+      />
+    </label>
+  );
+}
+
+function StoryReferenceActionPanel({
+  busy,
+  onApprove,
+  onGenerate,
+  onPromptOnly,
+  onReject,
+  onUpload,
+  plan,
+}: {
+  busy: boolean;
+  onApprove: (referenceId: string) => void;
+  onGenerate: (referenceId: string) => void;
+  onPromptOnly: (referenceId: string) => void;
+  onReject: (referenceId: string) => void;
+  onUpload: (referenceId: string, file: File, approve: boolean) => void;
+  plan: StoryReferenceAssetPlan;
+}) {
+  return (
+    <section className="mt-4 rounded-md border border-slate-200 bg-slate-50 p-3" data-testid="story-reference-action-panel">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Reference actions</h3>
+          <p className="mt-1 text-xs text-slate-600">
+            {plan.assets.length} planned references / latest candidate shown
+          </p>
+        </div>
+      </div>
+      <div className="grid gap-2">
+        {plan.assets.map((asset) => {
+          const latest = getLatestReferenceCandidate(asset);
+          const canApprove = Boolean(latest) && asset.resolutionState !== "approved";
+          const canReject = asset.importance !== "required";
+
+          return (
+            <article className="rounded-md border border-slate-200 bg-white p-3" key={asset.id}>
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <h4 className="break-words text-xs font-semibold text-slate-900">
+                    {asset.sourceEntity.name} / {asset.referenceType}
+                  </h4>
+                  <p className="mt-1 text-[11px] text-slate-500">
+                    {asset.importance} / {asset.resolutionState} / {asset.candidateAssetReferences.length} candidates
+                  </p>
+                </div>
+                <span className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] font-medium uppercase text-slate-500">
+                  {asset.approval ? "approved" : asset.resolutionState}
+                </span>
+              </div>
+              <p className="mt-2 line-clamp-2 text-xs leading-relaxed text-slate-600">{asset.canonicalPrompt}</p>
+              {latest ? (
+                <div className="mt-3 flex flex-wrap items-center gap-3 rounded-md border border-slate-200 bg-slate-50 p-2 text-[11px] text-slate-600">
+                  {latest.url ? (
+                    <a className="flex items-center gap-2 text-blue-700 underline-offset-2 hover:underline" href={latest.url} rel="noreferrer" target="_blank">
+                      <ImageIcon className="size-3.5" />
+                      {getReferenceAssetImageLabel(asset)}
+                    </a>
+                  ) : (
+                    <span className="flex items-center gap-2">
+                      <ImageIcon className="size-3.5" />
+                      {getReferenceAssetImageLabel(asset)}
+                    </span>
+                  )}
+                  <span>{latest.source}</span>
+                  {latest.contentType ? <span>{latest.contentType}</span> : null}
+                </div>
+              ) : null}
+              {asset.failure ? (
+                <div className="mt-3 rounded-md border border-rose-200 bg-rose-50 p-2 text-[11px] leading-relaxed text-rose-700">
+                  <p>{asset.failure.message}</p>
+                  <p className="mt-1">Recover with: {asset.failure.recoverableActions.join(", ")}</p>
+                </div>
+              ) : null}
+              <div className="mt-3 flex flex-wrap justify-end gap-2">
+                <button
+                  className="inline-flex h-8 items-center justify-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                  disabled={busy}
+                  onClick={() => onGenerate(asset.id)}
+                  type="button"
+                >
+                  <RefreshCw className="size-3.5" />
+                  {asset.candidateAssetReferences.length > 0 ? "Reroll" : "Generate"}
+                </button>
+                <ReferenceUploadInput approve={false} busy={busy} label="Upload" onUpload={onUpload} referenceId={asset.id} />
+                <ReferenceUploadInput approve busy={busy} label="Upload + approve" onUpload={onUpload} referenceId={asset.id} />
+                <button
+                  className="inline-flex h-8 items-center justify-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                  disabled={busy || !canApprove}
+                  onClick={() => onApprove(asset.id)}
+                  type="button"
+                >
+                  <CheckCircle2 className="size-3.5" />
+                  Approve latest
+                </button>
+                <button
+                  className="inline-flex h-8 items-center justify-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                  disabled={busy}
+                  onClick={() => onPromptOnly(asset.id)}
+                  type="button"
+                >
+                  Prompt-only
+                </button>
+                <button
+                  className="inline-flex h-8 items-center justify-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                  disabled={busy || !canReject}
+                  onClick={() => onReject(asset.id)}
+                  type="button"
+                >
+                  <XCircle className="size-3.5" />
+                  Reject
+                </button>
+              </div>
+            </article>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
 function StoryResultGrid({ result }: { result: StoryResultDisplay }) {
   return (
     <section className="rounded-md border border-slate-200 bg-slate-50 p-3" data-testid="story-result-grid">
@@ -965,7 +1156,7 @@ export function StoryPlanningPreview() {
   const [settingsNsfwEnabled, setSettingsNsfwEnabled] = useState(false);
   const [settingsAutoReviewEnabled, setSettingsAutoReviewEnabled] = useState(false);
   const [planningError, setPlanningError] = useState("");
-  const [planningStatus, setPlanningStatus] = useState<"idle" | "planning" | "generating" | "regenerating">("idle");
+  const [planningStatus, setPlanningStatus] = useState<"idle" | "planning" | "generating" | "regenerating" | "reference-action">("idle");
   const [, setAutosaveStatus] = useState<StoryAutosaveStatus>("idle");
   const [, setAutosaveMessage] = useState("");
   const autosaveTimeoutRef = useRef<number | null>(null);
@@ -1341,6 +1532,98 @@ export function StoryPlanningPreview() {
     }
   }
 
+  async function handleGenerateReference(referenceId: string) {
+    if (!workflow) {
+      return;
+    }
+
+    setPlanningError("");
+    setPlanningStatus("reference-action");
+
+    try {
+      const updated = await postStoryWorkflow("/api/agent-timeline/story/reference-assets/generate", {
+        workflow,
+        referenceId,
+      }, "Story reference generation failed.");
+      setWorkflow(updated);
+      setSelectedNodeId("reference-asset-plan");
+    } catch (error) {
+      setPlanningError(error instanceof Error ? error.message : "Story reference generation failed.");
+    } finally {
+      setPlanningStatus("idle");
+    }
+  }
+
+  async function handleReferenceUpload(referenceId: string, file: File, approve: boolean) {
+    if (!workflow) {
+      return;
+    }
+
+    setPlanningError("");
+    setPlanningStatus("reference-action");
+
+    try {
+      const dataUrl = await readFileAsDataUrl(file);
+      const updated = await postStoryWorkflow("/api/agent-timeline/story/reference-assets/upload", {
+        workflow,
+        referenceId,
+        dataUrl,
+        approve,
+      }, "Story reference upload failed.");
+      setWorkflow(updated);
+      setSelectedNodeId("reference-asset-plan");
+    } catch (error) {
+      setPlanningError(error instanceof Error ? error.message : "Story reference upload failed.");
+    } finally {
+      setPlanningStatus("idle");
+    }
+  }
+
+  async function handleReferenceDecision({
+    action,
+    referenceId,
+    reason,
+  }: {
+    action: "approve" | "prompt-only" | "reject";
+    referenceId: string;
+    reason?: string;
+  }) {
+    if (!workflow) {
+      return;
+    }
+
+    setPlanningError("");
+    setPlanningStatus("reference-action");
+
+    try {
+      const updated = await postStoryWorkflow("/api/agent-timeline/story/reference-assets/decision", {
+        workflow,
+        referenceId,
+        action,
+        ...(reason ? { reason } : {}),
+      }, "Story reference update failed.");
+      setWorkflow(updated);
+      setSelectedNodeId("reference-asset-plan");
+    } catch (error) {
+      setPlanningError(error instanceof Error ? error.message : "Story reference update failed.");
+    } finally {
+      setPlanningStatus("idle");
+    }
+  }
+
+  function handlePromptOnlyReference(referenceId: string) {
+    const reason = window.prompt("Reason for prompt-only fallback:");
+    if (reason === null) {
+      return;
+    }
+
+    void handleReferenceDecision({
+      action: "prompt-only",
+      referenceId,
+      reason,
+    });
+  }
+
   function handleSave(nodeId: StoryWorkflowNodeId, result: unknown, scope: StoryManualEditScope) {
     setWorkflow((current) =>
       current
@@ -1357,6 +1640,9 @@ export function StoryPlanningPreview() {
     : null;
   const storyResult = isStoryResultDisplay(workflow?.nodes["story-result-display"].result)
     ? workflow?.nodes["story-result-display"].result
+    : null;
+  const referenceAssetPlan = isStoryReferenceAssetPlan(workflow?.nodes["reference-asset-plan"].result)
+    ? workflow?.nodes["reference-asset-plan"].result
     : null;
   const actionBusy = planningStatus !== "idle";
 
@@ -1587,6 +1873,27 @@ export function StoryPlanningPreview() {
                     ) : (
                       <>
                         <StoryNodeOutputSummaryView nodeId={selectedNodeId} result={selectedNode.result} />
+                        {selectedNodeId === "reference-asset-plan" && referenceAssetPlan ? (
+                          <StoryReferenceActionPanel
+                            busy={actionBusy}
+                            onApprove={(referenceId) =>
+                              void handleReferenceDecision({
+                                action: "approve",
+                                referenceId,
+                              })
+                            }
+                            onGenerate={(referenceId) => void handleGenerateReference(referenceId)}
+                            onPromptOnly={handlePromptOnlyReference}
+                            onReject={(referenceId) =>
+                              void handleReferenceDecision({
+                                action: "reject",
+                                referenceId,
+                              })
+                            }
+                            onUpload={(referenceId, file, approve) => void handleReferenceUpload(referenceId, file, approve)}
+                            plan={referenceAssetPlan}
+                          />
+                        ) : null}
                         <details
                           className="mt-4 rounded-md border border-slate-200 bg-slate-50 p-3"
                           onToggle={(event) =>

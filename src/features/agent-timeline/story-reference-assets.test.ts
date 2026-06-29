@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  applyStoryReferenceApproval,
+  applyStoryReferenceGenerationFailure,
+  applyStoryReferenceGenerationSuccess,
+  applyStoryReferencePromptOnlyFallback,
+  applyStoryReferenceRejection,
+  applyStoryReferenceUpload,
   deriveStoryReferenceAssetPlan,
   evaluateStoryReferenceAssetFreezeGate,
 } from "./story-reference-assets";
@@ -376,5 +382,227 @@ describe("story reference assets", () => {
       resolutionState: "prompt-only",
       reason: "Required reference is prompt-only without an explicit user fallback decision.",
     });
+  });
+
+  it("records one generated candidate per request and keeps required refs blocked until approval", () => {
+    const plan = deriveStoryReferenceAssetPlan({ entityCards, shots });
+    const referenceId = "character-face:courier";
+    const generated = applyStoryReferenceGenerationSuccess({
+      plan,
+      referenceId,
+      now: () => "2026-06-29T00:00:00.000Z",
+      assetReference: {
+        byteLength: 12,
+        contentType: "image/png",
+        filename: "face-1.png",
+        source: "generated",
+        url: "/api/comfyui/generated-images/face-1.png",
+      },
+    });
+    const asset = generated.assets.find((candidate) => candidate.id === referenceId);
+
+    expect(asset).toMatchObject({
+      resolutionState: "generated",
+      approvedAssetReference: undefined,
+      candidateAssetReferences: [
+        expect.objectContaining({
+          contentType: "image/png",
+          filename: "face-1.png",
+          source: "generated",
+        }),
+      ],
+    });
+    expect(asset?.candidateAssetReferences).toHaveLength(1);
+    expect(evaluateStoryReferenceAssetFreezeGate(generated)).toMatchObject({
+      ready: false,
+      blockingReferences: expect.arrayContaining([
+        expect.objectContaining({
+          referenceId,
+          resolutionState: "generated",
+        }),
+      ]),
+    });
+  });
+
+  it("reroll appends one new generated candidate and does not approve by default", () => {
+    const plan = deriveStoryReferenceAssetPlan({ entityCards, shots });
+    const referenceId = "character-face:courier";
+    const first = applyStoryReferenceGenerationSuccess({
+      plan,
+      referenceId,
+      now: () => "2026-06-29T00:00:00.000Z",
+      assetReference: {
+        filename: "face-1.png",
+        source: "generated",
+        url: "/api/comfyui/generated-images/face-1.png",
+      },
+    });
+    const rerolled = applyStoryReferenceGenerationSuccess({
+      plan: first,
+      referenceId,
+      now: () => "2026-06-29T00:01:00.000Z",
+      assetReference: {
+        filename: "face-2.png",
+        source: "generated",
+        url: "/api/comfyui/generated-images/face-2.png",
+      },
+    });
+    const asset = rerolled.assets.find((candidate) => candidate.id === referenceId);
+
+    expect(asset?.resolutionState).toBe("generated");
+    expect(asset?.approvedAssetReference).toBeUndefined();
+    expect(asset?.candidateAssetReferences.map((reference) => reference.filename)).toEqual([
+      "face-1.png",
+      "face-2.png",
+    ]);
+  });
+
+  it("records recoverable generation failure without implicit prompt-only fallback", () => {
+    const plan = deriveStoryReferenceAssetPlan({ entityCards, shots });
+    const referenceId = "character-face:courier";
+    const failed = applyStoryReferenceGenerationFailure({
+      plan,
+      referenceId,
+      now: () => "2026-06-29T00:02:00.000Z",
+      error: Object.assign(new Error("ComfyUI object info mismatch."), { code: "comfyui_object_info_mismatch" }),
+    });
+    const asset = failed.assets.find((candidate) => candidate.id === referenceId);
+
+    expect(asset).toMatchObject({
+      resolutionState: "failed",
+      failure: {
+        code: "comfyui_object_info_mismatch",
+        failedAt: "2026-06-29T00:02:00.000Z",
+        message: "ComfyUI object info mismatch.",
+        recoverable: true,
+        recoverableActions: ["reroll", "upload", "prompt-only"],
+      },
+      promptOnlyFallback: undefined,
+    });
+    expect(evaluateStoryReferenceAssetFreezeGate(failed).blockingReferences).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        referenceId,
+        resolutionState: "failed",
+      }),
+    ]));
+  });
+
+  it("records uploaded refs as candidates and supports explicit direct approval", () => {
+    const plan = deriveStoryReferenceAssetPlan({ entityCards, shots });
+    const referenceId = "character-face:courier";
+    const uploaded = applyStoryReferenceUpload({
+      plan,
+      referenceId,
+      now: () => "2026-06-29T00:03:00.000Z",
+      assetReference: {
+        byteLength: 22,
+        contentType: "image/webp",
+        filename: "upload.webp",
+        source: "uploaded",
+        url: "/api/comfyui/sequence-references/upload.webp",
+      },
+    });
+    const directlyApproved = applyStoryReferenceUpload({
+      plan,
+      referenceId,
+      approve: true,
+      now: () => "2026-06-29T00:04:00.000Z",
+      assetReference: {
+        byteLength: 23,
+        contentType: "image/png",
+        filename: "upload-approved.png",
+        source: "uploaded",
+        url: "/api/comfyui/sequence-references/upload-approved.png",
+      },
+    });
+
+    expect(uploaded.assets.find((asset) => asset.id === referenceId)).toMatchObject({
+      resolutionState: "uploaded",
+      approvedAssetReference: undefined,
+      candidateAssetReferences: [
+        expect.objectContaining({
+          filename: "upload.webp",
+          source: "uploaded",
+        }),
+      ],
+    });
+    expect(evaluateStoryReferenceAssetFreezeGate(uploaded).ready).toBe(false);
+    expect(directlyApproved.assets.find((asset) => asset.id === referenceId)).toMatchObject({
+      resolutionState: "approved",
+      approval: {
+        approvedBy: "user",
+        source: "uploaded",
+      },
+      approvedAssetReference: expect.objectContaining({
+        filename: "upload-approved.png",
+        source: "uploaded",
+      }),
+    });
+  });
+
+  it("approves latest generated or uploaded candidate explicitly", () => {
+    const plan = deriveStoryReferenceAssetPlan({ entityCards, shots });
+    const referenceId = "character-face:courier";
+    const generated = applyStoryReferenceGenerationSuccess({
+      plan,
+      referenceId,
+      now: () => "2026-06-29T00:05:00.000Z",
+      assetReference: {
+        id: "generated-face",
+        filename: "face.png",
+        source: "generated",
+      },
+    });
+    const approved = applyStoryReferenceApproval({
+      plan: generated,
+      referenceId,
+      now: () => "2026-06-29T00:06:00.000Z",
+    });
+
+    expect(approved.assets.find((asset) => asset.id === referenceId)).toMatchObject({
+      resolutionState: "approved",
+      approval: {
+        approvedAssetReferenceId: "generated-face",
+        approvedAt: "2026-06-29T00:06:00.000Z",
+        approvedBy: "user",
+        source: "generated",
+      },
+    });
+  });
+
+  it("keeps prompt-only fallback explicit and lets optional rejected refs stay nonblocking", () => {
+    const plan = deriveStoryReferenceAssetPlan({ entityCards, shots });
+    const promptOnly = applyStoryReferencePromptOnlyFallback({
+      plan,
+      referenceId: "character-face:courier",
+      now: () => "2026-06-29T00:07:00.000Z",
+      reason: "User accepts prompt-only identity fallback.",
+    });
+    const optionalRejected = applyStoryReferenceRejection({
+      plan: promptOnly,
+      referenceId: "prop:signal-box",
+      now: () => "2026-06-29T00:08:00.000Z",
+      reason: "Prop reference not needed.",
+    });
+
+    expect(optionalRejected.assets.find((asset) => asset.id === "character-face:courier")).toMatchObject({
+      resolutionState: "prompt-only",
+      promptOnlyFallback: {
+        decidedBy: "user",
+        reason: "User accepts prompt-only identity fallback.",
+      },
+    });
+    expect(optionalRejected.assets.find((asset) => asset.id === "prop:signal-box")).toMatchObject({
+      importance: "optional",
+      resolutionState: "rejected",
+      rejection: {
+        rejectedBy: "user",
+      },
+    });
+    expect(evaluateStoryReferenceAssetFreezeGate(optionalRejected).blockingReferences).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        referenceId: "prop:signal-box",
+      }),
+    ]));
   });
 });

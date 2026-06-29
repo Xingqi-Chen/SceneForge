@@ -745,12 +745,20 @@ function summarizeReferenceAssetPlan(result: unknown): StoryNodeOutputSummary {
         emptyState: "No reference assets planned.",
         rows: assets.map((asset) => {
           const sourceEntity = isRecord(asset.sourceEntity) ? asset.sourceEntity : {};
+          const candidates = asRecordArray(asset.candidateAssetReferences);
+          const latestCandidate = candidates[candidates.length - 1] ?? {};
+          const approved = isRecord(asset.approvedAssetReference) ? asset.approvedAssetReference : {};
+          const failure = isRecord(asset.failure) ? asset.failure : {};
 
           return {
             entity: compactText(sourceEntity.name, 80) || compactText(sourceEntity.id, 80),
             type: compactText(asset.referenceType, 60),
             importance: compactText(asset.importance, 40),
             state: compactText(asset.resolutionState, 40),
+            candidates: String(candidates.length),
+            latest: compactText(latestCandidate.filename, 80) || compactText(latestCandidate.id, 80),
+            approved: compactText(approved.filename, 80) || compactText(approved.id, 80),
+            failure: compactText(failure.message, 120),
             shots: formatList(asset.sourceShotIds),
             prompt: compactText(asset.canonicalPrompt, 220),
             rationale: compactText(asset.rationale, 220),
