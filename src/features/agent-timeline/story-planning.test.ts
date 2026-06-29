@@ -5,9 +5,11 @@ import {
   compileStoryAnimaPrompt,
   createStoryExecutionRequestBatch,
   createStoryDefaultGenerationParameters,
+  createStoryGenerationRequestPreview,
   createStoryParameterPlan,
   createStoryPreviewParameters,
   createStoryResourcePlan,
+  getStoryRenderPlanEligibleSourceShotIds,
   normalizeStoryAnimaPromptParts,
   StoryResourcePlanValidationError,
   type StoryGenerationParameters,
@@ -15,7 +17,7 @@ import {
   type StoryParameterPlan,
   type StoryPreviewExecutionOptions,
 } from "./story-planning";
-import type { StorySafetyPlan, StoryShot } from "./story-types";
+import type { StoryReferenceAssetPlan, StorySafetyPlan, StoryShot } from "./story-types";
 
 const storyId = "story-1";
 
@@ -63,6 +65,75 @@ const safetyPlan = {
     rationale: "User enabled mature story execution context.",
   },
 } satisfies StorySafetyPlan;
+
+const referenceAssetPlan = {
+  storyId,
+  planningNotes: ["Reference plan for render recipe tests."],
+  assets: [
+    {
+      id: "character-face:lead",
+      storyId,
+      referenceType: "character-face",
+      importance: "required",
+      resolutionState: "approved",
+      canonicalPrompt: "Lead face reference.",
+      rationale: "Keep the lead identity stable.",
+      sourceEntity: {
+        id: "lead",
+        name: "Lead",
+        type: "character",
+      },
+      sourceShotIds: ["shot-1", "shot-2"],
+      approvedAssetReference: {
+        id: "approved-face",
+        source: "uploaded",
+        url: "/references/lead.png",
+      },
+      approval: {
+        approvedAssetReferenceId: "approved-face",
+        approvedBy: "user",
+        source: "uploaded",
+      },
+      candidateAssetReferences: [],
+    },
+    {
+      id: "location:station",
+      storyId,
+      referenceType: "location",
+      importance: "optional",
+      resolutionState: "prompt-only",
+      canonicalPrompt: "Rainy station reference.",
+      rationale: "Keep station anchors prompt-only.",
+      sourceEntity: {
+        id: "station",
+        name: "Station",
+        type: "location",
+      },
+      sourceShotIds: ["shot-1", "shot-2"],
+      candidateAssetReferences: [],
+      promptOnlyFallback: {
+        decidedBy: "user",
+        reason: "Use prompt-only location continuity.",
+      },
+    },
+    {
+      id: "prop:signal-card",
+      storyId,
+      referenceType: "prop",
+      importance: "recommended",
+      resolutionState: "stale",
+      canonicalPrompt: "Red signal card.",
+      rationale: "Prompt edit made the old prop candidate stale.",
+      sourceEntity: {
+        id: "signal-card",
+        name: "Signal card",
+        type: "prop",
+      },
+      sourceShotIds: ["shot-2"],
+      candidateAssetReferences: [],
+    },
+  ],
+} satisfies StoryReferenceAssetPlan;
 
 const defaults = {
   width: 1024,
@@ -427,6 +498,244 @@ describe("story planning", () => {
     expect(JSON.stringify(renderPlan.shots)).not.toContain("\"resources\"");
     expect(JSON.stringify(renderPlan.shots)).not.toContain("\"checkpoint\"");
     expect(JSON.stringify(renderPlan.shots)).not.toContain("\"loras\"");
+  });
+
+  it("adds reference recipes and structured source-image location continuity to render plans and requests", () => {
+    const resourcePlan = createResourcePlan();
+    const parameterPlan = createStoryParameterPlan({ storyId, defaults });
+    const renderPlan = assembleStoryRenderPlan({
+      img2imgDenoise: 0.82,
+      parameterPlan,
+      referenceAssetPlan,
+      renderPromptPlan: {
+        storyId,
+        warnings: [],
+        shots: [
+          {
+            shotId: "shot-2",
+            animaPromptParts: animaParts({
+              subjectTags: ["1girl", "solo"],
+              characterTags: ["adult lead in raincoat"],
+              settingTags: ["rainy station signal platform"],
+              cameraTags: ["low close-up"],
+              lightingTags: ["red signal glow"],
+              singleFrameCaption: "The lead studies a red signal reflected in the station puddle.",
+            }),
+            locationContinuity: {
+              mode: "source-image",
+              sourceShotIds: ["shot-1"],
+              reason: "Use shot-1 as the loose station img2img source.",
+              notes: ["Keep the rainy station platform layout."],
+            },
+            referenceRecipe: {
+              summary: "Use approved lead identity and prompt-only station references as review anchors.",
+              referenceIds: ["character-face:lead", "location:station", "prop:signal-card"],
+              approvedReferenceIds: ["character-face:lead"],
+              promptOnlyReferenceIds: ["location:station"],
+              unresolvedReferenceIds: ["prop:signal-card"],
+              notes: ["Do not inject final references in T29."],
+            },
+          },
+        ],
+      },
+      resourcePlan,
+      safetyPlan,
+      shots,
+    });
+    const shot = renderPlan.shots[1];
+    const preview = shot ? createStoryExecutionRequestBatch({ mode: "final", renderPlan, resourcePlan }).requests[1] : null;
+    const requestPreview = shot ? createStoryGenerationRequestPreview(shot, renderPlan.img2imgDenoise) : null;
+
+    expect(shot?.locationContinuity).toEqual({
+      mode: "source-image",
+      sourceShotIds: ["shot-1"],
+      reason: "Use shot-1 as the loose station img2img source.",
+      notes: ["Keep the rainy station platform layout."],
+    });
+    expect(shot?.outputAnchors.source).toMatchObject({
+      mode: "source-image",
+      sourceShotIds: ["shot-1"],
+    });
+    expect(shot?.referenceRecipe).toMatchObject({
+      summary: "Use approved lead identity and prompt-only station references as review anchors.",
+      referenceIds: ["character-face:lead", "location:station", "prop:signal-card"],
+      approvedReferenceIds: ["character-face:lead"],
+      promptOnlyReferenceIds: ["location:station"],
+      unresolvedReferenceIds: ["prop:signal-card"],
+    });
+    expect(requestPreview).toMatchObject({
+      sourceMode: "source-image",
+      sourceShotIds: ["shot-1"],
+    });
+    expect(preview?.sourceShotIds).toEqual(["shot-1"]);
+    expect(preview?.request.denoise).toBe(0.82);
+  });
+
+  it("rejects self and future source-image continuity sources before execution planning", () => {
+    const resourcePlan = createResourcePlan();
+    const parameterPlan = createStoryParameterPlan({ storyId, defaults });
+    const futureSourceShots = [
+      shots[0],
+      {
+        ...shots[1],
+        sourceShotIds: [],
+      },
+      {
+        ...shots[1],
+        id: "shot-3",
+        order: 3,
+        title: "Future station view",
+        sourceShotIds: [],
+      },
+    ] satisfies StoryShot[];
+    const renderPlan = assembleStoryRenderPlan({
+      parameterPlan,
+      renderPromptPlan: {
+        storyId,
+        warnings: [],
+        shots: [
+          {
+            shotId: "shot-2",
+            animaPromptParts: animaParts({
+              subjectTags: ["1girl"],
+              settingTags: ["rainy station platform"],
+              cameraTags: ["medium view"],
+              lightingTags: ["red signal light"],
+              singleFrameCaption: "The lead waits on the station platform.",
+            }),
+            locationContinuity: {
+              mode: "source-image",
+              sourceShotIds: ["shot-2", "shot-3"],
+              reason: "The LLM incorrectly referenced the target and a future shot.",
+            },
+          },
+        ],
+      },
+      resourcePlan,
+      safetyPlan,
+      shots: futureSourceShots,
+    });
+    const shot = renderPlan.shots.find((candidate) => candidate.shotId === "shot-2");
+    const batch = createStoryExecutionRequestBatch({ mode: "final", renderPlan, resourcePlan });
+
+    expect(shot?.locationContinuity.mode).toBe("prompt-only");
+    expect(shot?.locationContinuity.sourceShotIds).toEqual([]);
+    expect(shot?.sourceShotIds).toEqual([]);
+    expect(shot?.sourceImageEdges).toEqual([]);
+    expect(shot?.promptWarnings).toEqual(expect.arrayContaining([
+      "locationContinuity requested source-image but did not provide a valid source shot; using prompt-only continuity.",
+    ]));
+    expect(batch.requests.find((request) => request.shotId === "shot-2")?.sourceShotIds).toEqual([]);
+  });
+
+  it("keeps prompt-only and inpaint-preferred continuity non-executing even when shot sources exist", () => {
+    const resourcePlan = createResourcePlan();
+    const parameterPlan = createStoryParameterPlan({ storyId, defaults });
+    const continuityShots = [
+      shots[0],
+      {
+        ...shots[1],
+        sourceShotIds: ["shot-1"],
+      },
+      {
+        ...shots[1],
+        id: "shot-3",
+        order: 3,
+        title: "Repair Preferred",
+        sourceShotIds: ["shot-2"],
+      },
+    ] satisfies StoryShot[];
+    const renderPlan = assembleStoryRenderPlan({
+      parameterPlan,
+      referenceAssetPlan,
+      renderPromptPlan: {
+        storyId,
+        warnings: [],
+        shots: [
+          {
+            shotId: "shot-2",
+            animaPromptParts: animaParts({
+              subjectTags: ["1girl"],
+              settingTags: ["same rainy station platform, source image from shot-1 mentioned only as text"],
+              cameraTags: ["close-up"],
+              lightingTags: ["red signal light"],
+              singleFrameCaption: "The lead stays on the same station platform.",
+            }),
+            locationContinuity: {
+              mode: "prompt-only",
+              sourceShotIds: ["shot-1"],
+              reason: "The layout can be described in text.",
+              notes: ["Do not inherit an image."],
+            },
+          },
+          {
+            shotId: "shot-3",
+            animaPromptParts: animaParts({
+              subjectTags: ["1girl"],
+              settingTags: ["same station platform with altered poster"],
+              cameraTags: ["medium view"],
+              lightingTags: ["rainy red signal light"],
+              singleFrameCaption: "The lead studies a changed poster on the same station platform.",
+            }),
+            locationContinuity: {
+              mode: "inpaint-preferred",
+              sourceShotIds: ["shot-2"],
+              reason: "A future inpaint pass would best update only the poster.",
+              notes: ["Advisory only in v1."],
+            },
+          },
+        ],
+      },
+      resourcePlan,
+      safetyPlan,
+      shots: continuityShots,
+    });
+    const batch = createStoryExecutionRequestBatch({ mode: "final", renderPlan, resourcePlan });
+    const promptOnlyShot = renderPlan.shots.find((shot) => shot.shotId === "shot-2");
+    const inpaintShot = renderPlan.shots.find((shot) => shot.shotId === "shot-3");
+    const inpaintRequest = batch.requests.find((request) => request.shotId === "shot-3")?.request as Record<string, unknown> | undefined;
+
+    expect(promptOnlyShot?.locationContinuity.mode).toBe("prompt-only");
+    expect(promptOnlyShot?.sourceShotIds).toEqual([]);
+    expect(promptOnlyShot?.sourceImageEdges).toEqual([]);
+    expect(inpaintShot?.locationContinuity.mode).toBe("inpaint-preferred");
+    expect(inpaintShot?.sourceShotIds).toEqual([]);
+    expect(inpaintShot?.sourceImageEdges).toEqual([]);
+    expect(batch.requests.find((request) => request.shotId === "shot-2")?.sourceShotIds).toEqual([]);
+    expect(batch.requests.find((request) => request.shotId === "shot-3")?.sourceShotIds).toEqual([]);
+    expect(batch.requests.find((request) => request.shotId === "shot-2")?.request.denoise).toBe(defaults.denoise);
+    expect(batch.requests.find((request) => request.shotId === "shot-3")?.request.denoise).toBe(defaults.denoise);
+    expect(inpaintRequest).not.toHaveProperty("sourceImage");
+    expect(inpaintRequest).not.toHaveProperty("sourceImages");
+    expect(inpaintRequest).not.toHaveProperty("maskImage");
+    expect(inpaintRequest).not.toHaveProperty("inpaintMask");
+    expect(inpaintRequest).not.toHaveProperty("repair");
+  });
+
+  it("keeps stale reference prompt edits visible in reference recipes without creating source inputs", () => {
+    const resourcePlan = createResourcePlan();
+    const parameterPlan = createStoryParameterPlan({ storyId, defaults });
+    const renderPlan = assembleStoryRenderPlan({
+      parameterPlan,
+      referenceAssetPlan,
+      resourcePlan,
+      safetyPlan,
+      shots: shots.map((shot) => ({ ...shot, sourceShotIds: [] })),
+    });
+    const staleShot = renderPlan.shots.find((shot) => shot.shotId === "shot-2");
+    const batch = createStoryExecutionRequestBatch({ mode: "final", renderPlan, resourcePlan });
+
+    expect(staleShot?.referenceRecipe).toMatchObject({
+      referenceIds: ["character-face:lead", "location:station", "prop:signal-card"],
+      approvedReferenceIds: ["character-face:lead"],
+      promptOnlyReferenceIds: ["location:station"],
+      unresolvedReferenceIds: ["prop:signal-card"],
+    });
+    expect(staleShot?.referenceRecipe.notes).toEqual(expect.arrayContaining([
+      expect.stringContaining("prop:signal-card is stale"),
+    ]));
+    expect(staleShot?.locationContinuity.mode).toBe("prompt-only");
+    expect(batch.requests.find((request) => request.shotId === "shot-2")?.sourceShotIds).toEqual([]);
   });
 
   it("normalizes Story parameter plans against live sampler and scheduler options", () => {
@@ -1370,7 +1679,7 @@ describe("story planning", () => {
       "red rain jacket, older teen bike messenger with freckles, kneeling beside a greasy broken chain, umbrellas and produce stalls, centered composition, overcast rainy daylight, loose background detail, extra crowd description, extra storefront description",
     ]);
     expect(renderPlan.shots[0]?.outputAnchors.source).toMatchObject({
-      mode: "none",
+      mode: "prompt-only",
       sourceShotIds: [],
     });
   });
@@ -1407,7 +1716,7 @@ describe("story planning", () => {
     expect(anchors?.lighting).toContain("cool rainy street lighting");
     expect(anchors?.detail).toEqual(expect.arrayContaining(["cinematic illustrated realism", "damp urban textures"]));
     expect(anchors?.source).toMatchObject({
-      mode: "none",
+      mode: "prompt-only",
       sourceShotIds: [],
     });
   });
@@ -1636,6 +1945,65 @@ describe("story planning", () => {
     expect(firstRequest?.positivePrompt).toBe("manual edited anima prompt, anima_style");
     expect(firstRequest?.negativePrompt).toContain("manual edited negative");
     expect(firstRequest?.negativePrompt).toContain("worst quality");
+  });
+
+  it("filters invalid stored source-image continuity at the execution boundary", () => {
+    const resourcePlan = createResourcePlan();
+    const futureSourceShots = [
+      shots[0],
+      {
+        ...shots[1],
+        sourceShotIds: [],
+      },
+      {
+        ...shots[1],
+        id: "shot-3",
+        order: 3,
+        title: "Future station view",
+        sourceShotIds: [],
+      },
+    ] satisfies StoryShot[];
+    const renderPlan = assembleStoryRenderPlan({
+      img2imgDenoise: 0.62,
+      parameterPlan: createStoryParameterPlan({ storyId, defaults }),
+      resourcePlan,
+      safetyPlan,
+      shots: futureSourceShots,
+    });
+    const storedRenderPlan = {
+      ...renderPlan,
+      shots: renderPlan.shots.map((shot) =>
+        shot.shotId === "shot-2"
+          ? {
+              ...shot,
+              locationContinuity: {
+                mode: "source-image" as const,
+                sourceShotIds: ["shot-1", "shot-2", "shot-3"],
+                reason: "Tampered stored plan points at a valid earlier shot, self, and a future shot.",
+                notes: [],
+              },
+              sourceShotIds: ["shot-1", "shot-2", "shot-3"],
+            }
+          : shot,
+      ),
+    };
+    const storedShot = storedRenderPlan.shots.find((shot) => shot.shotId === "shot-2");
+    const finalBatch = createStoryExecutionRequestBatch({ mode: "final", renderPlan: storedRenderPlan, resourcePlan });
+    const requestPreview = storedShot
+      ? createStoryGenerationRequestPreview(storedShot, storedRenderPlan.img2imgDenoise, {
+          eligibleSourceShotIds: getStoryRenderPlanEligibleSourceShotIds(storedRenderPlan.shots, storedShot.shotId),
+        })
+      : null;
+
+    expect(storedShot?.locationContinuity).toMatchObject({
+      mode: "source-image",
+      sourceShotIds: ["shot-1", "shot-2", "shot-3"],
+    });
+    expect(finalBatch.requests.find((request) => request.shotId === "shot-2")?.sourceShotIds).toEqual(["shot-1"]);
+    expect(finalBatch.requests.find((request) => request.shotId === "shot-2")?.request.denoise).toBe(0.62);
+    expect(requestPreview?.sourceShotIds).toEqual(["shot-1"]);
+    expect(requestPreview?.locationContinuity.sourceShotIds).toEqual(["shot-1"]);
+    expect(requestPreview?.parameters.denoise).toBe(0.62);
   });
 
   it("tolerates legacy render plans that still carry per-shot resource objects", () => {

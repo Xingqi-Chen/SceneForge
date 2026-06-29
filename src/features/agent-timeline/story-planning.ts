@@ -29,6 +29,7 @@ import type {
   StoryInput,
   StorySourceImageEdgeSummary,
   StoryReferenceAsset,
+  StoryReferenceAssetPlan,
 } from "./story-types";
 import {
   createStorySourceImageEdgeSummaries,
@@ -139,16 +140,36 @@ export type StoryRenderPlanResourceRefs = {
   }>;
 };
 
+export type StoryLocationContinuityMode = "prompt-only" | "source-image" | "inpaint-preferred";
+
+export type StoryRenderLocationContinuity = {
+  mode: StoryLocationContinuityMode;
+  sourceShotIds: StoryShotId[];
+  reason: string;
+  notes: string[];
+};
+
+export type StoryRenderReferenceRecipe = {
+  summary: string;
+  referenceIds: string[];
+  approvedReferenceIds: string[];
+  promptOnlyReferenceIds: string[];
+  unresolvedReferenceIds: string[];
+  notes: string[];
+};
+
 export type StoryGenerationRequestPreview = {
   animaPromptParts: StoryAnimaPromptParts;
+  locationContinuity: StoryRenderLocationContinuity;
   negativePromptLength: number;
   negativePromptPreview: string;
   parameters: StoryGenerationParameters;
   positivePromptLength: number;
   positivePromptPreview: string;
+  referenceRecipe: StoryRenderReferenceRecipe;
   sourceImageEdges: StorySourceImageEdgeSummary[];
   shotId: StoryShotId;
-  sourceMode: "none" | "source-image";
+  sourceMode: StoryLocationContinuityMode;
   sourceShotIds: StoryShotId[];
   title: string;
 };
@@ -172,6 +193,8 @@ export type StoryAnimaPromptParts = {
 export type StoryRenderPromptDraftShot = {
   shotId: StoryShotId;
   animaPromptParts: StoryAnimaPromptParts;
+  locationContinuity?: Partial<StoryRenderLocationContinuity>;
+  referenceRecipe?: Partial<StoryRenderReferenceRecipe>;
   rationale?: string;
   warnings?: string[];
 };
@@ -189,7 +212,9 @@ export type StoryRenderPlanShot = {
   animaPromptParts: StoryAnimaPromptParts;
   positivePrompt: string;
   negativePrompt: string;
+  locationContinuity: StoryRenderLocationContinuity;
   outputAnchors: StoryOutputAnchors;
+  referenceRecipe: StoryRenderReferenceRecipe;
   sourceImageEdges: StorySourceImageEdgeSummary[];
   sourceShotIds: StoryShotId[];
   parameters: StoryGenerationParameters;
@@ -235,7 +260,7 @@ export type StoryExecutionRequestBatch = {
 export type StoryOutputAnchors = Record<StoryPromptBucket, string[]> & {
   negative: string[];
   source: {
-    mode: "none" | "source-image";
+    mode: StoryLocationContinuityMode;
     risks: StorySourceImageEdgeSummary[];
     sourceShotIds: StoryShotId[];
     reason: string;
@@ -700,6 +725,159 @@ function getStoryAnimaPromptPartSourceValue(
   return source[key] ?? source[storyAnimaPromptPartAliases[key]];
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function normalizeStoryText(value: unknown, maxLength = 500) {
+  if (typeof value !== "string") {
+    return "";
+  }
+
+  const text = value.replace(/\s+/g, " ").trim();
+  return maxLength > 0 ? text.slice(0, maxLength).trim() : text;
+}
+
+function normalizeStoryStringList(value: unknown, maxItems = 12) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const seen = new Set<string>();
+  const result: string[] = [];
+
+  for (const item of value) {
+    const text = normalizeStoryText(item, 160);
+    if (!text || seen.has(text)) {
+      continue;
+    }
+
+    seen.add(text);
+    result.push(text);
+
+    if (result.length >= maxItems) {
+      break;
+    }
+  }
+
+  return result;
+}
+
+function normalizeStoryShotIdList(value: unknown, knownShotIds?: ReadonlySet<string>, maxItems = 8) {
+  return normalizeStoryStringList(value, maxItems).filter((shotId): shotId is StoryShotId =>
+    !knownShotIds || knownShotIds.has(shotId),
+  );
+}
+
+function normalizeStoryLocationContinuityMode(value: unknown): StoryLocationContinuityMode | null {
+  return value === "prompt-only" || value === "source-image" || value === "inpaint-preferred"
+    ? value
+    : null;
+}
+
+export function normalizeStoryRenderLocationContinuity(
+  raw: unknown,
+  {
+    eligibleSourceShotIds,
+    fallbackSourceShotIds = [],
+    knownShotIds,
+    targetShotId,
+    warnings,
+  }: {
+    eligibleSourceShotIds?: ReadonlySet<string>;
+    fallbackSourceShotIds?: StoryShotId[];
+    knownShotIds?: ReadonlySet<string>;
+    targetShotId?: StoryShotId;
+    warnings?: string[];
+  } = {},
+): StoryRenderLocationContinuity {
+  const source = isRecord(raw) ? raw : {};
+  const requestedMode = normalizeStoryLocationContinuityMode(
+    source.mode ?? source.continuityMode ?? source.continuity_mode,
+  );
+  let mode: StoryLocationContinuityMode = requestedMode ?? (fallbackSourceShotIds.length > 0 ? "source-image" : "prompt-only");
+  const requestedSourceShotIds = normalizeStoryShotIdList(
+    source.sourceShotIds ?? source.source_shot_ids ?? source.sourceShots ?? source.source_shots,
+    knownShotIds,
+  ).filter((sourceShotId) => sourceShotId !== targetShotId && (!eligibleSourceShotIds || eligibleSourceShotIds.has(sourceShotId)));
+  const fallbackEligibleSourceShotIds = fallbackSourceShotIds.filter((sourceShotId) =>
+    sourceShotId !== targetShotId &&
+    (!knownShotIds || knownShotIds.has(sourceShotId)) &&
+    (!eligibleSourceShotIds || eligibleSourceShotIds.has(sourceShotId)),
+  );
+  let sourceShotIds = mode === "source-image"
+    ? (requestedSourceShotIds.length > 0
+        ? requestedSourceShotIds
+        : fallbackEligibleSourceShotIds)
+    : [];
+
+  if (mode === "source-image" && sourceShotIds.length === 0) {
+    mode = "prompt-only";
+    warnings?.push("locationContinuity requested source-image but did not provide a valid source shot; using prompt-only continuity.");
+  }
+
+  if (mode !== "source-image") {
+    sourceShotIds = [];
+  }
+
+  const defaultReason = mode === "source-image"
+    ? "Use the listed source shot as executable img2img location continuity."
+    : mode === "inpaint-preferred"
+      ? "Inpaint is preferred for location continuity when a future backend supports it; v1 remains prompt-only."
+      : "Carry location continuity through prompt text and planning notes only.";
+
+  return {
+    mode,
+    sourceShotIds,
+    reason: normalizeStoryText(source.reason ?? source.rationale, 360) || defaultReason,
+    notes: normalizeStoryStringList(source.notes ?? source.continuityNotes ?? source.continuity_notes, 8),
+  };
+}
+
+export function normalizeStoryRenderReferenceRecipe(
+  raw: unknown,
+  fallback: StoryRenderReferenceRecipe = {
+    summary: "Use prompt text only; no reference assets are attached to this shot.",
+    referenceIds: [],
+    approvedReferenceIds: [],
+    promptOnlyReferenceIds: [],
+    unresolvedReferenceIds: [],
+    notes: [],
+  },
+  knownReferenceIds?: ReadonlySet<string>,
+): StoryRenderReferenceRecipe {
+  if (typeof raw === "string") {
+    return {
+      ...fallback,
+      summary: normalizeStoryText(raw, 500) || fallback.summary,
+    };
+  }
+
+  const source = isRecord(raw) ? raw : {};
+  const normalizeReferenceIds = (value: unknown) =>
+    normalizeStoryStringList(value, 24).filter((referenceId) => !knownReferenceIds || knownReferenceIds.has(referenceId));
+  const referenceIds = normalizeReferenceIds([
+    ...normalizeStoryStringList(source.referenceIds ?? source.reference_ids, 24),
+    ...normalizeStoryStringList(source.characterReferenceIds ?? source.character_reference_ids, 24),
+    ...normalizeStoryStringList(source.outfitReferenceIds ?? source.outfit_reference_ids, 24),
+    ...normalizeStoryStringList(source.propReferenceIds ?? source.prop_reference_ids, 24),
+    ...normalizeStoryStringList(source.locationReferenceIds ?? source.location_reference_ids, 24),
+  ]);
+  const approvedReferenceIds = normalizeReferenceIds(source.approvedReferenceIds ?? source.approved_reference_ids);
+  const promptOnlyReferenceIds = normalizeReferenceIds(source.promptOnlyReferenceIds ?? source.prompt_only_reference_ids);
+  const unresolvedReferenceIds = normalizeReferenceIds(source.unresolvedReferenceIds ?? source.unresolved_reference_ids);
+  const notes = normalizeStoryStringList(source.notes ?? source.referenceNotes ?? source.reference_notes, 8);
+
+  return {
+    summary: normalizeStoryText(source.summary ?? source.intent ?? source.rationale, 500) || fallback.summary,
+    referenceIds: referenceIds.length > 0 ? referenceIds : [...fallback.referenceIds],
+    approvedReferenceIds: approvedReferenceIds.length > 0 ? approvedReferenceIds : [...fallback.approvedReferenceIds],
+    promptOnlyReferenceIds: promptOnlyReferenceIds.length > 0 ? promptOnlyReferenceIds : [...fallback.promptOnlyReferenceIds],
+    unresolvedReferenceIds: unresolvedReferenceIds.length > 0 ? unresolvedReferenceIds : [...fallback.unresolvedReferenceIds],
+    notes: notes.length > 0 ? notes : [...fallback.notes],
+  };
+}
+
 export function normalizeStoryAnimaPromptParts(raw: unknown): StoryAnimaPromptParts {
   const source = typeof raw === "object" && raw !== null && !Array.isArray(raw)
     ? raw as Record<string, unknown>
@@ -753,6 +931,10 @@ function getStoryRenderPromptDraft(shotId: StoryShotId, renderPromptPlan?: Story
   return {
     ...draft,
     animaPromptParts: normalizeStoryAnimaPromptParts(draft.animaPromptParts),
+    locationContinuity: draft.locationContinuity ? { ...draft.locationContinuity } : undefined,
+    referenceRecipe: draft.referenceRecipe
+      ? normalizeStoryRenderReferenceRecipe(draft.referenceRecipe)
+      : undefined,
     warnings: draft.warnings ? [...draft.warnings] : undefined,
   };
 }
@@ -1252,31 +1434,101 @@ function inferStoryAnimaSubjectCount(shot: StoryShot) {
   return [`${subjectCount}people`];
 }
 
+function getStoryRenderLocationContinuitySourceShotIds(locationContinuity: StoryRenderLocationContinuity) {
+  return locationContinuity.mode === "source-image" ? [...locationContinuity.sourceShotIds] : [];
+}
+
+export function getStoryRenderPlanEligibleSourceShotIds(
+  shots: readonly Pick<StoryRenderPlanShot, "shotId">[],
+  targetShotId: StoryShotId,
+) {
+  const targetIndex = shots.findIndex((shot) => shot.shotId === targetShotId);
+  if (targetIndex <= 0) {
+    return new Set<string>();
+  }
+
+  return new Set(shots.slice(0, targetIndex).map((shot) => shot.shotId));
+}
+
+export function getStoryRenderPlanShotRequestedSourceShotIds(shot: StoryRenderPlanShot) {
+  return getStoryRenderLocationContinuitySourceShotIds(
+    shot.locationContinuity ?? normalizeStoryRenderLocationContinuity(undefined, {
+      fallbackSourceShotIds: shot.sourceShotIds,
+    }),
+  );
+}
+
+export function getStoryRenderPlanShotSourceShotIds(
+  shot: StoryRenderPlanShot,
+  eligibleSourceShotIds?: ReadonlySet<string>,
+) {
+  return getStoryRenderPlanShotRequestedSourceShotIds(shot).filter((sourceShotId) =>
+    sourceShotId !== shot.shotId && (!eligibleSourceShotIds || eligibleSourceShotIds.has(sourceShotId)),
+  );
+}
+
+function getReferenceAssetsForShot(referenceAssetPlan: StoryReferenceAssetPlan | undefined, shotId: StoryShotId) {
+  return referenceAssetPlan?.assets.filter((asset) => asset.sourceShotIds.includes(shotId)) ?? [];
+}
+
+function createDefaultStoryReferenceRecipe({
+  referenceAssetPlan,
+  shotId,
+}: {
+  referenceAssetPlan?: StoryReferenceAssetPlan;
+  shotId: StoryShotId;
+}): StoryRenderReferenceRecipe {
+  const assets = getReferenceAssetsForShot(referenceAssetPlan, shotId);
+  const referenceIds = assets.map((asset) => asset.id);
+  const approvedReferenceIds = assets.flatMap((asset) => asset.resolutionState === "approved" ? [asset.id] : []);
+  const promptOnlyReferenceIds = assets.flatMap((asset) => asset.resolutionState === "prompt-only" ? [asset.id] : []);
+  const unresolvedReferenceIds = assets.flatMap((asset) =>
+    asset.resolutionState !== "approved" && asset.resolutionState !== "prompt-only" ? [asset.id] : [],
+  );
+
+  return {
+    summary: assets.length > 0
+      ? "Use the listed Story reference assets as visible prompt-review anchors only; final image reference injection is not enabled in v1."
+      : "Use prompt text only; no reference assets are attached to this shot.",
+    referenceIds,
+    approvedReferenceIds,
+    promptOnlyReferenceIds,
+    unresolvedReferenceIds,
+    notes: assets.map((asset) =>
+      `${asset.referenceType} ${asset.id} is ${asset.resolutionState}${asset.importance === "required" ? " and required" : ""}.`,
+    ),
+  };
+}
+
+function getReferenceAssetIds(referenceAssetPlan: StoryReferenceAssetPlan | undefined) {
+  return new Set(referenceAssetPlan?.assets.map((asset) => asset.id) ?? []);
+}
+
 function createStoryOutputAnchors({
   baseNegativePrompt,
   basePositivePrompt,
+  locationContinuity,
   sourceImageEdges,
-  sourceShotIds,
 }: {
   baseNegativePrompt: string;
   basePositivePrompt: string;
+  locationContinuity: StoryRenderLocationContinuity;
   sourceImageEdges: StorySourceImageEdgeSummary[];
-  sourceShotIds: StoryShotId[];
 }): StoryOutputAnchors {
+  const executableSourceShotIds = getStoryRenderLocationContinuitySourceShotIds(locationContinuity);
+
   return {
     ...getStoryPositiveAnchorBuckets(basePositivePrompt),
     negative: splitPromptParts(baseNegativePrompt),
     source: {
-      mode: sourceShotIds.length > 0 ? "source-image" : "none",
+      mode: locationContinuity.mode,
       risks: sourceImageEdges.map((edge) => ({
         ...edge,
         riskFactors: [...edge.riskFactors],
         sourceChain: [...edge.sourceChain],
       })),
-      sourceShotIds: [...sourceShotIds],
-      reason: sourceShotIds.length > 0
-        ? "This shot will receive previous generated image inputs from the listed source shots."
-        : "No previous generated image is injected; continuity is prompt-only for this shot.",
+      sourceShotIds: executableSourceShotIds,
+      reason: locationContinuity.reason,
     },
   };
 }
@@ -1498,8 +1750,17 @@ function compactRequestPromptPreview(value: string) {
 export function createStoryGenerationRequestPreview(
   shot: StoryRenderPlanShot,
   img2imgDenoise = DEFAULT_STORY_IMG2IMG_DENOISE,
+  {
+    eligibleSourceShotIds,
+  }: {
+    eligibleSourceShotIds?: ReadonlySet<string>;
+  } = {},
 ): StoryGenerationRequestPreview {
   const normalizedImg2ImgDenoise = normalizeStoryImg2ImgDenoise(img2imgDenoise);
+  const locationContinuity = shot.locationContinuity ?? normalizeStoryRenderLocationContinuity(undefined, {
+    fallbackSourceShotIds: shot.sourceShotIds,
+  });
+  const executableSourceShotIds = getStoryRenderPlanShotSourceShotIds(shot, eligibleSourceShotIds);
 
   return {
     animaPromptParts: {
@@ -1517,22 +1778,28 @@ export function createStoryGenerationRequestPreview(
       subjectTags: [...shot.animaPromptParts.subjectTags],
       seriesTags: [...shot.animaPromptParts.seriesTags],
     },
+    locationContinuity: {
+      ...locationContinuity,
+      notes: [...locationContinuity.notes],
+      sourceShotIds: executableSourceShotIds,
+    },
     negativePromptLength: shot.negativePrompt.length,
     negativePromptPreview: compactRequestPromptPreview(shot.negativePrompt),
     parameters: {
       ...shot.parameters,
-      ...(shot.sourceShotIds.length > 0 ? { denoise: normalizedImg2ImgDenoise } : {}),
+      ...(executableSourceShotIds.length > 0 ? { denoise: normalizedImg2ImgDenoise } : {}),
     },
     positivePromptLength: shot.positivePrompt.length,
     positivePromptPreview: compactRequestPromptPreview(shot.positivePrompt),
+    referenceRecipe: normalizeStoryRenderReferenceRecipe(shot.referenceRecipe),
     sourceImageEdges: (shot.sourceImageEdges ?? []).map((edge) => ({
       ...edge,
       riskFactors: [...edge.riskFactors],
       sourceChain: [...edge.sourceChain],
     })),
     shotId: shot.shotId,
-    sourceMode: shot.sourceShotIds.length > 0 ? "source-image" : "none",
-    sourceShotIds: [...shot.sourceShotIds],
+    sourceMode: locationContinuity.mode,
+    sourceShotIds: executableSourceShotIds,
     title: shot.title,
   };
 }
@@ -1664,6 +1931,7 @@ export function assembleStoryRenderPlan({
   parameterPlan,
   previewOptions = defaultPreviewExecutionOptions,
   previewResultReferences = [],
+  referenceAssetPlan,
   resourcePlan,
   renderPromptPlan,
   samplerOptions,
@@ -1674,6 +1942,7 @@ export function assembleStoryRenderPlan({
   parameterPlan: StoryParameterPlan;
   previewOptions?: StoryPreviewExecutionOptions;
   previewResultReferences?: StoryPreviewResultReference[];
+  referenceAssetPlan?: StoryReferenceAssetPlan;
   resourcePlan: StoryResourcePlan;
   renderPromptPlan?: StoryRenderPromptPlan;
   samplerOptions?: TimelineSamplerOptions;
@@ -1684,16 +1953,9 @@ export function assembleStoryRenderPlan({
   const defaultParameters = normalizeParameters(parameterPlan.defaults, samplerOptions);
   const normalizedImg2ImgDenoise = normalizeStoryImg2ImgDenoise(img2imgDenoise);
   const renderWarnings: string[] = [];
-  const sourceImageEdges = createStorySourceImageEdgeSummaries(shots);
-  renderWarnings.push(
-    ...sourceImageEdges
-      .filter((edge) => edge.riskLevel === "high")
-      .map((edge) =>
-        `Shot "${edge.targetShotId}" uses high-risk source image "${edge.sourceShotId}": ${edge.riskReason}`,
-      ),
-  );
-  const renderShots = shots.map((shot) => {
-    const shotSourceImageEdges = sourceImageEdges.filter((edge) => edge.targetShotId === shot.id);
+  const shotIds = new Set(shots.map((shot) => shot.id));
+  const referenceAssetIds = referenceAssetPlan ? getReferenceAssetIds(referenceAssetPlan) : undefined;
+  const renderShots = shots.map((shot, index) => {
     const parameters = enforceStoryResolution(
       applyParameterOverride(
         defaultParameters,
@@ -1723,7 +1985,40 @@ export function assembleStoryRenderPlan({
       supportsNsfw: nsfwContext.enabled,
     });
 
-    const promptWarnings = renderPromptDraft?.warnings ?? [];
+    const continuityWarnings: string[] = [];
+    const locationContinuity = normalizeStoryRenderLocationContinuity(renderPromptDraft?.locationContinuity, {
+      eligibleSourceShotIds: new Set(shots.slice(0, index).map((sourceShot) => sourceShot.id)),
+      fallbackSourceShotIds: shot.sourceShotIds,
+      knownShotIds: shotIds,
+      targetShotId: shot.id,
+      warnings: continuityWarnings,
+    });
+    const executableSourceShotIds = getStoryRenderLocationContinuitySourceShotIds(locationContinuity);
+    const shotSourceImageEdges = createStorySourceImageEdgeSummaries(
+      shots.map((candidate) => candidate.id === shot.id
+        ? { ...candidate, sourceShotIds: executableSourceShotIds }
+        : candidate),
+    ).filter((edge) => edge.targetShotId === shot.id && executableSourceShotIds.includes(edge.sourceShotId));
+    const defaultReferenceRecipe = createDefaultStoryReferenceRecipe({
+      referenceAssetPlan,
+      shotId: shot.id,
+    });
+    const referenceRecipe = normalizeStoryRenderReferenceRecipe(
+      renderPromptDraft?.referenceRecipe,
+      defaultReferenceRecipe,
+      referenceAssetIds,
+    );
+    const promptWarnings = [
+      ...(renderPromptDraft?.warnings ?? []),
+      ...continuityWarnings,
+    ];
+    renderWarnings.push(
+      ...shotSourceImageEdges
+        .filter((edge) => edge.riskLevel === "high")
+        .map((edge) =>
+          `Shot "${edge.targetShotId}" uses high-risk source image "${edge.sourceShotId}": ${edge.riskReason}`,
+        ),
+    );
 
     return {
       shotId: shot.id,
@@ -1732,18 +2027,20 @@ export function assembleStoryRenderPlan({
       animaPromptParts,
       positivePrompt: settings.request.positivePrompt,
       negativePrompt: settings.request.negativePrompt ?? "",
+      locationContinuity,
       outputAnchors: createStoryOutputAnchors({
         baseNegativePrompt,
         basePositivePrompt,
+        locationContinuity,
         sourceImageEdges: shotSourceImageEdges,
-        sourceShotIds: shot.sourceShotIds,
       }),
+      referenceRecipe,
       sourceImageEdges: shotSourceImageEdges.map((edge) => ({
         ...edge,
         riskFactors: [...edge.riskFactors],
         sourceChain: [...edge.sourceChain],
       })),
-      sourceShotIds: [...shot.sourceShotIds],
+      sourceShotIds: executableSourceShotIds,
       parameters,
       resourceRefs: {
         checkpointResourceId: resourcePlan.checkpoint.resource.id,
@@ -1841,6 +2138,11 @@ export function createStoryExecutionRequestBatch({
         });
       }
 
+      const executableSourceShotIds = getStoryRenderPlanShotSourceShotIds(
+        shot,
+        getStoryRenderPlanEligibleSourceShotIds(renderPlan.shots, shot.shotId),
+      );
+
       return {
         nsfwContext: renderPlan.nsfwContext,
         request: {
@@ -1851,11 +2153,11 @@ export function createStoryExecutionRequestBatch({
             requestResourcePlan,
             samplerOptions,
           ),
-          denoise: shot.sourceShotIds.length > 0 ? renderPlan.img2imgDenoise : requestParameters.denoise,
+          denoise: executableSourceShotIds.length > 0 ? renderPlan.img2imgDenoise : requestParameters.denoise,
           preview: mode === "preview",
         },
         shotId: shot.shotId,
-        sourceShotIds: [...shot.sourceShotIds],
+        sourceShotIds: executableSourceShotIds,
       };
     }),
     storyId: renderPlan.storyId,

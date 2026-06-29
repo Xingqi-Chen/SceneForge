@@ -2832,6 +2832,18 @@ describe("story LLM adapters", () => {
               negative_additions: ["cropped signal"],
               single_frame_caption: " The courier studies the red signal card in rain. ",
             },
+            reference_recipe: {
+              summary: "Use the approved courier face reference for review.",
+              reference_ids: ["character-face:courier"],
+              approved_reference_ids: ["character-face:courier"],
+              notes: ["No final reference injection yet."],
+            },
+            location_continuity: {
+              mode: "prompt-only",
+              source_shot_ids: ["shot-0"],
+              reason: "Prompt text carries the market layout.",
+              notes: ["No source image for this shot."],
+            },
           },
           {
             shot_id: "shot-2",
@@ -2839,6 +2851,11 @@ describe("story LLM adapters", () => {
               action_tags: ["leans toward reflected signal"],
               camera_tags: ["low close view"],
               single_frame_caption: "The courier leans toward the reflected signal.",
+            },
+            location_continuity: {
+              mode: "source-image",
+              source_shot_ids: ["shot-1"],
+              reason: "Use the previous market shot as img2img continuity.",
             },
           },
           {
@@ -2867,6 +2884,18 @@ describe("story LLM adapters", () => {
             singleFrameCaption: "The courier studies the red signal card in rain.",
             negativeAdditions: ["cropped signal"],
           },
+          referenceRecipe: {
+            summary: "Use the approved courier face reference for review.",
+            referenceIds: ["character-face:courier"],
+            approvedReferenceIds: ["character-face:courier"],
+            notes: ["No final reference injection yet."],
+          },
+          locationContinuity: {
+            mode: "prompt-only",
+            sourceShotIds: [],
+            reason: "Prompt text carries the market layout.",
+            notes: ["No source image for this shot."],
+          },
         },
         {
           shotId: "shot-2",
@@ -2874,6 +2903,11 @@ describe("story LLM adapters", () => {
             actionTags: ["leans toward reflected signal"],
             cameraTags: ["low close view"],
             singleFrameCaption: "The courier leans toward the reflected signal.",
+          },
+          locationContinuity: {
+            mode: "source-image",
+            sourceShotIds: ["shot-1"],
+            reason: "Use the previous market shot as img2img continuity.",
           },
         },
       ],
@@ -3155,6 +3189,11 @@ describe("story LLM adapters", () => {
     expect(requestSystemPrompt).toContain("prefix each item with @");
     expect(requestSystemPrompt).toContain("must not negate positive key characters, actions, props, clothing, or environments");
     expect(requestSystemPrompt).toContain("sketchbook or visible sketch pages");
+    expect(requestSystemPrompt).toContain("referenceRecipe");
+    expect(requestSystemPrompt).toContain("locationContinuity.mode");
+    expect(requestSystemPrompt).toContain("source-image");
+    expect(requestSystemPrompt).toContain("inpaint-preferred");
+    expect(requestSystemPrompt).toContain("v1 will not create masks, repair, inpaint, or fallback image-edit requests");
     expect(requestPayload).toMatchObject({
       characterContinuityGraph: expect.objectContaining({
         storyId: "story-1",
@@ -3163,6 +3202,9 @@ describe("story LLM adapters", () => {
         storyId: "story-1",
       }),
       parameterPlan: expect.objectContaining({
+        storyId: "story-1",
+      }),
+      referenceAssetPlan: expect.objectContaining({
         storyId: "story-1",
       }),
       selectedResourcePromptContext: expect.stringContaining("Checkpoint:"),
@@ -3180,6 +3222,8 @@ describe("story LLM adapters", () => {
     expect(renderPlan?.shots[0]?.positivePrompt).toContain("The courier studies the red signal reflection");
     expect(renderPlan?.shots[0]?.positivePrompt).not.toContain("cropped signal");
     expect(renderPlan?.shots[0]?.negativePrompt).toContain("cropped signal");
+    expect(renderPlan?.shots[0]?.locationContinuity.mode).toBe("prompt-only");
+    expect(renderPlan?.shots[0]?.referenceRecipe.summary).toContain("Story reference assets");
     expect(renderPlan?.shots[0]?.promptRationale).toBe("Keep the signal readable.");
     expect(renderPlan?.warnings).toContain("Structured Anima prompt parts returned.");
   });

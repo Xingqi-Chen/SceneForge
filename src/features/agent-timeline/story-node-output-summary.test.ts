@@ -232,6 +232,20 @@ describe("story node output summaries", () => {
           title: "Book Swap Begins",
           positivePrompt: longPositivePrompt,
           negativePrompt: "worst quality, bad anatomy, score_1, score_2, score_3, bad_hands, borrowed paperback, cropped flyer tail marker",
+          locationContinuity: {
+            mode: "source-image",
+            sourceShotIds: ["shot-0"],
+            reason: "Use the previous hallway image as loose img2img continuity.",
+            notes: ["Keep the notice board position."],
+          },
+          referenceRecipe: {
+            summary: "Use the approved Mara face reference and prompt-only hallway location reference for review.",
+            referenceIds: ["character-face:mara", "location:hallway"],
+            approvedReferenceIds: ["character-face:mara"],
+            promptOnlyReferenceIds: ["location:hallway"],
+            unresolvedReferenceIds: [],
+            notes: ["No final reference injection in T29."],
+          },
           sourceShotIds: ["shot-0"],
           sourceImageEdges: [
             {
@@ -276,7 +290,9 @@ describe("story node output summaries", () => {
 
     expect(card).toMatchObject({
       dependencies: "source-image from shot-0",
+      locationContinuity: expect.stringContaining("Use the previous hallway image"),
       negativePrompt: expect.stringContaining("cropped flyer tail marker"),
+      referenceRecipe: expect.stringContaining("Use the approved Mara face reference"),
       readinessLabel: "Warning",
       resources: "Resource plan",
       sceneBeat: expect.stringContaining("resident reader paused beside the notice board"),

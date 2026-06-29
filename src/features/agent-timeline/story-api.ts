@@ -1,6 +1,7 @@
 import {
   createStoryGenerationRequestPreview,
   createStoryExecutionRequestBatch,
+  getStoryRenderPlanEligibleSourceShotIds,
   type StoryParameterPlan,
   type StoryResourcePlan,
   type StoryRenderPlan,
@@ -226,7 +227,10 @@ function createUpdatedGenerationGate({
     nsfwContext: renderPlan.nsfwContext,
     renderPlanShotCount: renderPlan.shots.length,
     previewEnabled: renderPlan.preview.options.enabled,
-    requestPreview: renderPlan.shots.map((shot) => createStoryGenerationRequestPreview(shot, renderPlan.img2imgDenoise)),
+    requestPreview: renderPlan.shots.map((shot) =>
+      createStoryGenerationRequestPreview(shot, renderPlan.img2imgDenoise, {
+        eligibleSourceShotIds: getStoryRenderPlanEligibleSourceShotIds(renderPlan.shots, shot.shotId),
+      })),
   };
 }
 

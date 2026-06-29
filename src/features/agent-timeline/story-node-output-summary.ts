@@ -50,6 +50,7 @@ export type StoryShotSummaryCard = {
   dependencies: string;
   imageLabel?: string;
   imageUrl?: string;
+  locationContinuity?: string;
   negativePrompt?: string;
   parameters?: string;
   promptHealth: StoryShotPromptHealth;
@@ -57,6 +58,7 @@ export type StoryShotSummaryCard = {
   readinessLabel: string;
   readinessTone: StoryShotSummaryTone;
   removedNegatives: string[];
+  referenceRecipe?: string;
   resources?: string;
   sceneBeat: string;
   shotId: string;
@@ -1010,14 +1012,86 @@ function getShotTitle(shot: Record<string, unknown>) {
   return compactText(shot.title, 120) || compactText(shot.shotId, 80) || "Untitled shot";
 }
 
-function getShotDependencies(sourceShotIds: unknown, sourceMode?: unknown) {
-  const sources = fullStringArray(sourceShotIds);
-
-  if (sources.length > 0) {
-    return `${compactText(sourceMode, 40) || "source-image"} from ${sources.join(", ")}`;
+function getLocationContinuityMode(locationContinuity: unknown, sourceMode?: unknown) {
+  if (isRecord(locationContinuity)) {
+    const mode = compactText(locationContinuity.mode, 40);
+    if (mode) {
+      return mode;
+    }
   }
 
-  return compactText(sourceMode, 40) === "source-image" ? "Source image pending" : "Text-to-image";
+  return compactText(sourceMode, 40);
+}
+
+function getLocationContinuitySourceShotIds(locationContinuity: unknown, sourceShotIds: unknown) {
+  if (isRecord(locationContinuity)) {
+    return fullStringArray(locationContinuity.sourceShotIds);
+  }
+
+  return fullStringArray(sourceShotIds);
+}
+
+function getShotDependencies(sourceShotIds: unknown, sourceMode?: unknown, locationContinuity?: unknown) {
+  const fallbackSources = fullStringArray(sourceShotIds);
+  const mode = getLocationContinuityMode(locationContinuity, sourceMode) ||
+    (fallbackSources.length > 0 ? "source-image" : "prompt-only");
+  const sources = mode === "source-image"
+    ? getLocationContinuitySourceShotIds(locationContinuity, sourceShotIds)
+    : [];
+
+  if (mode === "source-image" && sources.length > 0) {
+    return `source-image from ${sources.join(", ")}`;
+  }
+
+  if (mode === "source-image") {
+    return "Source image pending";
+  }
+
+  if (mode === "inpaint-preferred") {
+    return "Inpaint preferred (advisory only)";
+  }
+
+  return "Prompt-only continuity";
+}
+
+function formatLocationContinuity(locationContinuity: unknown, sourceMode?: unknown) {
+  const mode = getLocationContinuityMode(locationContinuity, sourceMode) || "prompt-only";
+  if (!isRecord(locationContinuity)) {
+    return mode === "source-image" ? "source-image" : mode;
+  }
+
+  const reason = compactText(locationContinuity.reason, 220);
+  const sources = getLocationContinuitySourceShotIds(locationContinuity, []);
+  const notes = formatList(locationContinuity.notes, "");
+
+  return [
+    mode,
+    sources.length > 0 ? `sources: ${sources.join(", ")}` : "",
+    reason,
+    notes ? `notes: ${notes}` : "",
+  ].filter(Boolean).join(" / ");
+}
+
+function formatReferenceRecipe(referenceRecipe: unknown) {
+  if (!isRecord(referenceRecipe)) {
+    return "";
+  }
+
+  const summary = compactText(referenceRecipe.summary, 420);
+  const references = formatList(referenceRecipe.referenceIds, "");
+  const approved = formatList(referenceRecipe.approvedReferenceIds, "");
+  const promptOnly = formatList(referenceRecipe.promptOnlyReferenceIds, "");
+  const unresolved = formatList(referenceRecipe.unresolvedReferenceIds, "");
+  const notes = formatList(referenceRecipe.notes, "");
+
+  return [
+    summary,
+    references ? `refs: ${references}` : "",
+    approved ? `approved: ${approved}` : "",
+    promptOnly ? `prompt-only: ${promptOnly}` : "",
+    unresolved ? `unresolved: ${unresolved}` : "",
+    notes ? `notes: ${notes}` : "",
+  ].filter(Boolean).join(" / ");
 }
 
 const storyAnimaPromptPartGroupSpecs = [
@@ -1069,9 +1143,11 @@ function createPromptShotCard({
   animaPromptParts,
   globalWarnings,
   index,
+  locationContinuity,
   negativePrompt,
   parameters,
   positivePrompt,
+  referenceRecipe,
   resources,
   sceneBeat,
   shot,
@@ -1082,9 +1158,11 @@ function createPromptShotCard({
   animaPromptParts?: unknown;
   globalWarnings?: unknown;
   index: number;
+  locationContinuity?: unknown;
   negativePrompt: unknown;
   parameters?: unknown;
   positivePrompt: unknown;
+  referenceRecipe?: unknown;
   resources?: string;
   sceneBeat?: string;
   shot: Record<string, unknown>;
@@ -1109,7 +1187,8 @@ function createPromptShotCard({
 
   return {
     animaPromptParts: formatAnimaPromptPartGroups(animaPromptParts),
-    dependencies: getShotDependencies(shot.sourceShotIds, sourceMode),
+    dependencies: getShotDependencies(shot.sourceShotIds, sourceMode, locationContinuity),
+    locationContinuity: formatLocationContinuity(locationContinuity, sourceMode),
     negativePrompt: fullText(negativePrompt),
     parameters: parameters ? formatParameters(parameters) : undefined,
     promptHealth,
@@ -1117,6 +1196,7 @@ function createPromptShotCard({
     readinessLabel: readiness.label,
     readinessTone: readiness.tone,
     removedNegatives,
+    referenceRecipe: formatReferenceRecipe(referenceRecipe),
     resources,
     sceneBeat: sceneBeat || getShotSceneBeat(shot, animaPromptParts),
     shotId,
@@ -1165,13 +1245,17 @@ function summarizeRenderPlan(result: unknown): StoryNodeOutputSummary {
         globalWarnings: warningNotes,
         index,
         animaPromptParts: shot.animaPromptParts,
+        locationContinuity: shot.locationContinuity,
         negativePrompt: shot.negativePrompt,
         parameters: shot.parameters,
         positivePrompt: shot.positivePrompt,
+        referenceRecipe: shot.referenceRecipe,
         resources: getRenderResourceNames(plan, shot),
         shot,
         sourceImageEdges: shot.sourceImageEdges,
-        sourceMode: asStringArray(shot.sourceShotIds).length > 0 ? "source-image" : "none",
+        sourceMode: isRecord(shot.locationContinuity)
+          ? shot.locationContinuity.mode
+          : asStringArray(shot.sourceShotIds).length > 0 ? "source-image" : "prompt-only",
         warningDisplayMode: "llm-only",
       }),
     ),
@@ -1284,9 +1368,11 @@ function summarizeGenerationGate(result: unknown): StoryNodeOutputSummary {
       const baseCard = createPromptShotCard({
         animaPromptParts: preview.animaPromptParts,
         index,
+        locationContinuity: preview.locationContinuity,
         negativePrompt: preview.negativePromptPreview,
         parameters: preview.parameters,
         positivePrompt: preview.positivePromptPreview ?? preview.positivePrompt,
+        referenceRecipe: preview.referenceRecipe,
         sceneBeat: compactText(preview.title, 120) || compactText(preview.shotId, 80),
         shot: {
           ...preview,
