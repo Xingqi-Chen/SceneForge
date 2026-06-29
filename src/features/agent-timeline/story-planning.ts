@@ -28,6 +28,7 @@ import type {
   StoryShotId,
   StoryInput,
   StorySourceImageEdgeSummary,
+  StoryReferenceAsset,
 } from "./story-types";
 import {
   createStorySourceImageEdgeSummaries,
@@ -1405,6 +1406,64 @@ function createStoryComfyUiSettings({
           : lora;
       }),
     },
+  };
+}
+
+export function createStoryReferencePlateComfyUiRequest({
+  nsfwContext,
+  parameterPlan,
+  reference,
+  resourcePlan,
+  samplerOptions,
+}: {
+  nsfwContext: StoryNsfwContext;
+  parameterPlan: StoryParameterPlan;
+  reference: StoryReferenceAsset;
+  resourcePlan: StoryResourcePlan;
+  samplerOptions?: TimelineSamplerOptions;
+}): ComfyUiTextToImageRequest {
+  const checkpoint = resourcePlan.checkpoint.resource;
+  const parameters = normalizeParameters(parameterPlan.defaults, samplerOptions);
+  const formattedPositivePrompt = [
+    reference.canonicalPrompt,
+    "single clean reference plate",
+    "neutral background",
+    "clear readable design",
+    "front-facing visual reference",
+  ].filter(Boolean).join(", ");
+  const settings = createStoryComfyUiSettings({
+    baseNegativePrompt: [
+      "text",
+      "watermark",
+      "logo",
+      "multi-panel layout",
+      "multiple unrelated characters",
+      "cropped subject",
+      "low quality",
+    ].join(", "),
+    formattedPositivePrompt,
+    parameters,
+    resourcePlan,
+    supportsNsfw: nsfwContext.enabled,
+  });
+
+  return {
+    ...settings.request,
+    batchSize: 1,
+    cfg: parameters.cfg,
+    denoise: parameters.denoise,
+    height: parameters.height,
+    outputPrefix: `sceneforge-story-reference-${reference.referenceType}`,
+    samplerName: parameters.samplerName,
+    scheduler: parameters.scheduler,
+    seed: parameters.seed,
+    steps: parameters.steps,
+    width: parameters.width,
+    workflowProfile: checkpoint.workflowProfile ?? settings.request.workflowProfile,
+    clipName: checkpoint.clipName ?? settings.request.clipName,
+    clipDevice: checkpoint.clipDevice ?? settings.request.clipDevice,
+    vaeName: checkpoint.vaeName ?? settings.request.vaeName,
+    unetWeightDtype: checkpoint.unetWeightDtype ?? settings.request.unetWeightDtype,
   };
 }
 

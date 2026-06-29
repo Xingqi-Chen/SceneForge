@@ -353,17 +353,54 @@ export type StoryReferenceAssetType =
 export type StoryReferenceEntityType = "character" | "outfit" | "prop" | "location";
 
 export type StoryReferenceAssetReference = {
+  byteLength?: number;
+  contentType?: string;
   createdAt?: string;
   filename?: string;
   id?: string;
+  metadata?: {
+    checkpointResourceId?: string;
+    height?: number;
+    loraResourceIds?: string[];
+    negativePrompt?: string;
+    positivePrompt?: string;
+    promptId?: string;
+    referenceId?: string;
+    warnings?: string[];
+    width?: number;
+    workflowProfile?: string;
+  };
   source: "generated" | "uploaded";
   url?: string;
+};
+
+export type StoryReferenceApprovalDecision = {
+  approvedAssetReferenceId?: string;
+  approvedAt?: string;
+  approvedBy: "user";
+  source: "generated" | "uploaded";
+};
+
+export type StoryReferenceGenerationFailureAction = "reroll" | "upload" | "prompt-only";
+
+export type StoryReferenceGenerationFailureSummary = {
+  code?: string;
+  failedAt?: string;
+  message: string;
+  recoverable: true;
+  recoverableActions: StoryReferenceGenerationFailureAction[];
 };
 
 export type StoryReferencePromptOnlyFallbackDecision = {
   decidedAt?: string;
   decidedBy: "user";
   reason: string;
+};
+
+export type StoryReferenceRejectionDecision = {
+  reason?: string;
+  rejectedAt?: string;
+  rejectedBy: "user";
 };
 
 export type StoryReferenceAsset = {
@@ -380,9 +417,12 @@ export type StoryReferenceAsset = {
     type: StoryReferenceEntityType;
   };
   sourceShotIds: StoryShotId[];
+  approval?: StoryReferenceApprovalDecision;
   approvedAssetReference?: StoryReferenceAssetReference;
   candidateAssetReferences: StoryReferenceAssetReference[];
+  failure?: StoryReferenceGenerationFailureSummary;
   promptOnlyFallback?: StoryReferencePromptOnlyFallbackDecision;
+  rejection?: StoryReferenceRejectionDecision;
 };
 
 export type StoryReferenceAssetPlan = {

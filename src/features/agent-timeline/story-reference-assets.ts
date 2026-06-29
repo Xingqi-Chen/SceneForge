@@ -6,11 +6,13 @@ import type {
   StoryEntityCards,
   StoryId,
   StoryReferenceAsset,
+  StoryReferenceAssetReference,
   StoryReferenceAssetFreezeBlock,
   StoryReferenceAssetFreezeGate,
   StoryReferenceAssetPlan,
   StoryReferenceAssetType,
   StoryReferenceEntityType,
+  StoryReferenceGenerationFailureSummary,
   StoryReferenceImportance,
   StoryReferenceResolutionState,
   StoryShot,
@@ -106,12 +108,354 @@ function getLocationShotIds(location: StoryEntityCardLocation, shots: readonly S
 function cloneAsset(asset: StoryReferenceAsset): StoryReferenceAsset {
   return {
     ...asset,
+    approval: asset.approval ? { ...asset.approval } : undefined,
     approvedAssetReference: asset.approvedAssetReference ? { ...asset.approvedAssetReference } : undefined,
-    candidateAssetReferences: asset.candidateAssetReferences.map((reference) => ({ ...reference })),
+    candidateAssetReferences: asset.candidateAssetReferences.map(cloneAssetReference),
+    failure: asset.failure
+      ? {
+          ...asset.failure,
+          recoverableActions: [...asset.failure.recoverableActions],
+        }
+      : undefined,
     promptOnlyFallback: asset.promptOnlyFallback ? { ...asset.promptOnlyFallback } : undefined,
+    rejection: asset.rejection ? { ...asset.rejection } : undefined,
     sourceEntity: { ...asset.sourceEntity },
     sourceShotIds: [...asset.sourceShotIds],
   };
+}
+
+function cloneAssetReference(reference: StoryReferenceAssetReference): StoryReferenceAssetReference {
+  return {
+    ...reference,
+    metadata: reference.metadata
+      ? {
+          ...reference.metadata,
+          loraResourceIds: reference.metadata.loraResourceIds ? [...reference.metadata.loraResourceIds] : undefined,
+          warnings: reference.metadata.warnings ? [...reference.metadata.warnings] : undefined,
+        }
+      : undefined,
+  };
+}
+
+function makeAssetReferenceId({
+  createdAt,
+  filename,
+  referenceId,
+  source,
+}: {
+  createdAt: string;
+  filename?: string;
+  referenceId: string;
+  source: StoryReferenceAssetReference["source"];
+}) {
+  const safeReferenceId = referenceId
+    .toLocaleLowerCase()
+    .replace(/[^a-z0-9-]+/g, "-")
+    .replace(/^-+|-+$/g, "") || "reference";
+  const safeTimestamp = createdAt.replace(/[^0-9]/g, "").slice(0, 14) || "00000000000000";
+  const safeFilename = filename
+    ?.toLocaleLowerCase()
+    .replace(/[^a-z0-9.]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+
+  return [source, safeReferenceId, safeTimestamp, safeFilename].filter(Boolean).join(":");
+}
+
+function normalizeAssetReference({
+  createdAt,
+  reference,
+  referenceId,
+  source,
+}: {
+  createdAt: string;
+  reference: StoryReferenceAssetReference;
+  referenceId: string;
+  source: StoryReferenceAssetReference["source"];
+}): StoryReferenceAssetReference {
+  const normalizedCreatedAt = compactText(reference.createdAt) || createdAt;
+  const filename = compactText(reference.filename) || undefined;
+  const url = compactText(reference.url) || undefined;
+  const id = compactText(reference.id) || makeAssetReferenceId({
+    createdAt: normalizedCreatedAt,
+    filename,
+    referenceId,
+    source,
+  });
+
+  return {
+    ...cloneAssetReference(reference),
+    createdAt: normalizedCreatedAt,
+    id,
+    ...(filename ? { filename } : {}),
+    ...(url ? { url } : {}),
+    source,
+  };
+}
+
+function getLatestCandidate(asset: StoryReferenceAsset, source?: StoryReferenceAssetReference["source"]) {
+  const candidates = source
+    ? asset.candidateAssetReferences.filter((candidate) => candidate.source === source)
+    : asset.candidateAssetReferences;
+
+  return candidates[candidates.length - 1];
+}
+
+function findCandidate(
+  asset: StoryReferenceAsset,
+  assetReferenceId: string | undefined,
+) {
+  if (!assetReferenceId) {
+    return getLatestCandidate(asset);
+  }
+
+  return asset.candidateAssetReferences.find((candidate) => candidate.id === assetReferenceId);
+}
+
+function mapReferenceAsset(
+  plan: StoryReferenceAssetPlan,
+  referenceId: string,
+  update: (asset: StoryReferenceAsset) => StoryReferenceAsset,
+) {
+  let found = false;
+  const assets = plan.assets.map((asset) => {
+    if (asset.id !== referenceId) {
+      return cloneAsset(asset);
+    }
+
+    found = true;
+    return update(cloneAsset(asset));
+  });
+
+  if (!found) {
+    throw new Error(`Story reference "${referenceId}" was not found.`);
+  }
+
+  return {
+    ...plan,
+    assets,
+    planningNotes: [...plan.planningNotes],
+  };
+}
+
+function clearResolvedDecisionFields(asset: StoryReferenceAsset): StoryReferenceAsset {
+  return {
+    ...asset,
+    approval: undefined,
+    approvedAssetReference: undefined,
+    promptOnlyFallback: undefined,
+    rejection: undefined,
+  };
+}
+
+export function applyStoryReferenceGenerationSuccess({
+  assetReference,
+  now = () => new Date().toISOString(),
+  plan,
+  referenceId,
+}: {
+  assetReference: StoryReferenceAssetReference;
+  now?: () => string;
+  plan: StoryReferenceAssetPlan;
+  referenceId: string;
+}): StoryReferenceAssetPlan {
+  const generatedAt = now();
+
+  return mapReferenceAsset(plan, referenceId, (asset) => ({
+    ...clearResolvedDecisionFields(asset),
+    candidateAssetReferences: [
+      ...asset.candidateAssetReferences.map(cloneAssetReference),
+      normalizeAssetReference({
+        createdAt: generatedAt,
+        reference: assetReference,
+        referenceId,
+        source: "generated",
+      }),
+    ],
+    failure: undefined,
+    resolutionState: "generated",
+  }));
+}
+
+function normalizeFailureSummary(error: unknown, failedAt: string): StoryReferenceGenerationFailureSummary {
+  const message = error instanceof Error
+    ? compactText(error.message) || "Story reference generation failed."
+    : typeof error === "string"
+      ? compactText(error) || "Story reference generation failed."
+      : "Story reference generation failed.";
+  const code = error &&
+    typeof error === "object" &&
+    "code" in error &&
+    typeof error.code === "string"
+      ? compactText(error.code)
+      : undefined;
+
+  return {
+    ...(code ? { code } : {}),
+    failedAt,
+    message,
+    recoverable: true,
+    recoverableActions: ["reroll", "upload", "prompt-only"],
+  };
+}
+
+export function applyStoryReferenceGenerationFailure({
+  error,
+  now = () => new Date().toISOString(),
+  plan,
+  referenceId,
+}: {
+  error: unknown;
+  now?: () => string;
+  plan: StoryReferenceAssetPlan;
+  referenceId: string;
+}): StoryReferenceAssetPlan {
+  const failedAt = now();
+
+  return mapReferenceAsset(plan, referenceId, (asset) => ({
+    ...clearResolvedDecisionFields(asset),
+    candidateAssetReferences: asset.candidateAssetReferences.map(cloneAssetReference),
+    failure: normalizeFailureSummary(error, failedAt),
+    resolutionState: "failed",
+  }));
+}
+
+export function applyStoryReferenceUpload({
+  approve = false,
+  assetReference,
+  now = () => new Date().toISOString(),
+  plan,
+  referenceId,
+}: {
+  approve?: boolean;
+  assetReference: StoryReferenceAssetReference;
+  now?: () => string;
+  plan: StoryReferenceAssetPlan;
+  referenceId: string;
+}): StoryReferenceAssetPlan {
+  const uploadedAt = now();
+
+  return mapReferenceAsset(plan, referenceId, (asset) => {
+    const uploadedReference = normalizeAssetReference({
+      createdAt: uploadedAt,
+      reference: assetReference,
+      referenceId,
+      source: "uploaded",
+    });
+
+    return {
+      ...clearResolvedDecisionFields(asset),
+      approval: approve
+        ? {
+            approvedAssetReferenceId: uploadedReference.id,
+            approvedAt: uploadedAt,
+            approvedBy: "user",
+            source: "uploaded",
+          }
+        : undefined,
+      approvedAssetReference: approve ? cloneAssetReference(uploadedReference) : undefined,
+      candidateAssetReferences: [
+        ...asset.candidateAssetReferences.map(cloneAssetReference),
+        uploadedReference,
+      ],
+      failure: undefined,
+      resolutionState: approve ? "approved" : "uploaded",
+    };
+  });
+}
+
+export function applyStoryReferenceApproval({
+  assetReferenceId,
+  now = () => new Date().toISOString(),
+  plan,
+  referenceId,
+}: {
+  assetReferenceId?: string;
+  now?: () => string;
+  plan: StoryReferenceAssetPlan;
+  referenceId: string;
+}): StoryReferenceAssetPlan {
+  const approvedAt = now();
+
+  return mapReferenceAsset(plan, referenceId, (asset) => {
+    const candidate = findCandidate(asset, assetReferenceId);
+    if (!candidate) {
+      throw new Error(`Story reference "${referenceId}" does not have a generated or uploaded candidate to approve.`);
+    }
+
+    return {
+      ...asset,
+      approval: {
+        approvedAssetReferenceId: candidate.id,
+        approvedAt,
+        approvedBy: "user",
+        source: candidate.source,
+      },
+      approvedAssetReference: cloneAssetReference(candidate),
+      failure: undefined,
+      promptOnlyFallback: undefined,
+      rejection: undefined,
+      resolutionState: "approved",
+    };
+  });
+}
+
+export function applyStoryReferencePromptOnlyFallback({
+  now = () => new Date().toISOString(),
+  plan,
+  reason,
+  referenceId,
+}: {
+  now?: () => string;
+  plan: StoryReferenceAssetPlan;
+  reason: string;
+  referenceId: string;
+}): StoryReferenceAssetPlan {
+  const normalizedReason = compactText(reason);
+  if (!normalizedReason) {
+    throw new Error("Prompt-only fallback requires a user-provided reason.");
+  }
+
+  const decidedAt = now();
+
+  return mapReferenceAsset(plan, referenceId, (asset) => ({
+    ...asset,
+    approval: undefined,
+    approvedAssetReference: undefined,
+    failure: undefined,
+    promptOnlyFallback: {
+      decidedAt,
+      decidedBy: "user",
+      reason: normalizedReason,
+    },
+    rejection: undefined,
+    resolutionState: "prompt-only",
+  }));
+}
+
+export function applyStoryReferenceRejection({
+  now = () => new Date().toISOString(),
+  plan,
+  reason,
+  referenceId,
+}: {
+  now?: () => string;
+  plan: StoryReferenceAssetPlan;
+  reason?: string;
+  referenceId: string;
+}): StoryReferenceAssetPlan {
+  const rejectedAt = now();
+  const normalizedReason = compactText(reason);
+
+  return mapReferenceAsset(plan, referenceId, (asset) => ({
+    ...clearResolvedDecisionFields(asset),
+    failure: undefined,
+    rejection: {
+      rejectedAt,
+      rejectedBy: "user",
+      ...(normalizedReason ? { reason: normalizedReason } : {}),
+    },
+    resolutionState: "rejected",
+  }));
 }
 
 function createReferenceAsset({

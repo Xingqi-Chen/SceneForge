@@ -4,6 +4,26 @@ This log records dated implementation and documentation work. Keep entries conci
 
 ## 2026-06-29
 
+### T27 / Issue #106 Story Reference Plate Generation and Upload
+
+Summary:
+
+- Added explicit Story reference transitions for generated candidates, rerolls, failures, uploads, approval, rejection, and prompt-only fallback decisions.
+- Added a Story reference ComfyUI adapter that builds a single Anima-compatible reference plate request, validates object info, stores the first returned image through generated-image storage, and returns workflow-safe metadata only.
+- Added thin Story reference routes for generation, upload, and review decisions; failed generation returns recoverable reference state instead of silently choosing prompt-only fallback.
+- Added minimal `/story` reference-asset-plan controls for generate/reroll, upload, upload + approve, approve latest, prompt-only fallback, and optional/recommended rejection.
+- Recomputed `generation-gate.assetFreezeGate` after reference actions while leaving final Story shot execution request assembly unchanged.
+
+Validation:
+
+- `npm test -- --run src/app/api/agent-timeline/story/reference-assets/upload/route.test.ts src/features/agent-timeline/story-api.test.ts` passed with 2 files and 10 tests.
+- `npm test -- --run src/features/agent-timeline/components/StoryPlanningPreview.test.tsx` passed with 1 file and 18 tests.
+- `npm test -- --run src/features/agent-timeline src/app/api/agent-timeline/story` passed with 36 files and 330 tests.
+- `npm run typecheck` passed.
+- `npm run lint` passed with 23 existing warnings.
+- `npm run build` passed.
+- tester-agent PASS and reviewer-agent APPROVE.
+
 ### T26 / Issue #104 Reference Asset Plan and Freeze Gate
 
 Summary:

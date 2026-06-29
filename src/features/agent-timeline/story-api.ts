@@ -1,5 +1,7 @@
 import {
+  createStoryGenerationRequestPreview,
   createStoryExecutionRequestBatch,
+  type StoryParameterPlan,
   type StoryResourcePlan,
   type StoryRenderPlan,
 } from "./story-planning";
@@ -22,9 +24,26 @@ import {
   getStoryRenderPlanFromWorkflow,
   isStoryResourcePlanExecutable,
 } from "./story-llm-adapters";
-import { evaluateStoryReferenceAssetFreezeGate } from "./story-reference-assets";
+import type { StoryGenerationGatePreview } from "./story-input";
+import {
+  applyStoryReferenceApproval,
+  applyStoryReferenceGenerationFailure,
+  applyStoryReferenceGenerationSuccess,
+  applyStoryReferencePromptOnlyFallback,
+  applyStoryReferenceRejection,
+  applyStoryReferenceUpload,
+  evaluateStoryReferenceAssetFreezeGate,
+} from "./story-reference-assets";
+import type {
+  StoryReferencePlateGenerationAdapter,
+} from "./story-reference-comfyui";
 import { storyGraphWorkflowMode, storyWorkflowDefinition } from "./story-workflow";
-import type { StoryShotId } from "./story-types";
+import type {
+  StoryReferenceAsset,
+  StoryReferenceAssetPlan,
+  StoryReferenceAssetReference,
+  StoryShotId,
+} from "./story-types";
 
 export type StoryResultDisplay = {
   errors: StoryShotGraphExecutionState["errors"];
@@ -101,6 +120,161 @@ function getSubmittedExecutionStateForRegeneration(workflow: StoryWorkflowState)
   return isRecord(execution) && Array.isArray(execution.shots)
     ? execution as StoryShotGraphExecutionState
     : undefined;
+}
+
+function assertStoryWorkflow(workflow: StoryWorkflowState) {
+  if (workflow.workflowMode !== storyGraphWorkflowMode) {
+    throw new StoryApiValidationError("Story reference actions require workflowMode story-graph.");
+  }
+}
+
+function getStoryParameterPlanFromWorkflow(workflow: StoryWorkflowState): StoryParameterPlan {
+  const parameterPlan = workflow.nodes["parameter-plan"].result;
+  if (!isRecord(parameterPlan) || !isRecord(parameterPlan.defaults)) {
+    throw new StoryApiValidationError("Story parameter plan is required for reference generation.", 400);
+  }
+
+  return parameterPlan as StoryParameterPlan;
+}
+
+function getStoryResourcePlanForReferenceGeneration(workflow: StoryWorkflowState): StoryResourcePlan {
+  const resourcePlan = workflow.nodes["resource-plan"].result;
+  if (!isRecord(resourcePlan) || !isRecord(resourcePlan.checkpoint)) {
+    throw new StoryApiValidationError("Story resource plan is required for reference generation.", 400);
+  }
+
+  return resourcePlan as StoryResourcePlan;
+}
+
+function findReferenceAsset(plan: StoryReferenceAssetPlan, referenceId: string): StoryReferenceAsset {
+  const reference = plan.assets.find((asset) => asset.id === referenceId);
+  if (!reference) {
+    throw new StoryApiValidationError(`Story reference "${referenceId}" was not found.`, 404);
+  }
+
+  return reference;
+}
+
+function getReferenceGateBlockingReason({
+  assetFreezeGate,
+  consistencyPassed,
+  executableResourcePlan,
+}: {
+  assetFreezeGate: ReturnType<typeof evaluateStoryReferenceAssetFreezeGate>;
+  consistencyPassed: boolean;
+  executableResourcePlan: boolean;
+}) {
+  if (!assetFreezeGate.ready) {
+    return assetFreezeGate.blockingReferences[0]?.reason ?? "Resolve required Story reference assets before generation.";
+  }
+
+  if (!consistencyPassed) {
+    return "Story consistency checks must pass before generation.";
+  }
+
+  if (!executableResourcePlan) {
+    return "Story resource plan is not executable.";
+  }
+
+  return "Confirm generation to start shot graph execution.";
+}
+
+function createUpdatedGenerationGate({
+  now,
+  referenceAssetPlan,
+  workflow,
+}: {
+  now: () => string;
+  referenceAssetPlan: StoryReferenceAssetPlan;
+  workflow: StoryWorkflowState;
+}): StoryGenerationGatePreview {
+  const timestamp = now();
+  const tentativeWorkflow = {
+    ...workflow,
+    nodes: {
+      ...workflow.nodes,
+      "reference-asset-plan": {
+        ...workflow.nodes["reference-asset-plan"],
+        result: referenceAssetPlan,
+      },
+    },
+  };
+  const renderPlan = getStoryRenderPlanFromWorkflow(tentativeWorkflow);
+  const consistency = createStoryConsistencyCheckFromWorkflow(tentativeWorkflow, () => timestamp);
+  const resourcePlan = getStoryResourcePlanForReferenceGeneration(tentativeWorkflow);
+  const executableResourcePlan = isStoryResourcePlanExecutable(resourcePlan);
+  const assetFreezeGate = evaluateStoryReferenceAssetFreezeGate(referenceAssetPlan);
+  const ready = consistency.passed && executableResourcePlan && assetFreezeGate.ready;
+
+  return {
+    storyId: renderPlan.storyId,
+    ready,
+    executionAvailable: ready,
+    assetFreezeGate,
+    blockingReason: getReferenceGateBlockingReason({
+      assetFreezeGate,
+      consistencyPassed: consistency.passed,
+      executableResourcePlan,
+    }),
+    confirmationRequired: true,
+    nsfwContext: renderPlan.nsfwContext,
+    renderPlanShotCount: renderPlan.shots.length,
+    previewEnabled: renderPlan.preview.options.enabled,
+    requestPreview: renderPlan.shots.map((shot) => createStoryGenerationRequestPreview(shot, renderPlan.img2imgDenoise)),
+  };
+}
+
+function applyReferenceAssetPlanToWorkflow({
+  now,
+  referenceAssetPlan,
+  source,
+  workflow,
+}: {
+  now?: () => string;
+  referenceAssetPlan: StoryReferenceAssetPlan;
+  source: StoryWorkflowState["nodes"]["reference-asset-plan"]["source"];
+  workflow: StoryWorkflowState;
+}) {
+  const clock = now ?? (() => new Date().toISOString());
+  const updatedAt = clock();
+  const generationGate = createUpdatedGenerationGate({
+    now: () => updatedAt,
+    referenceAssetPlan,
+    workflow,
+  });
+  const nodes = {
+    ...workflow.nodes,
+    "reference-asset-plan": {
+      nodeId: "reference-asset-plan" as const,
+      result: referenceAssetPlan,
+      source,
+      status: source === "manual" ? "manual" as const : "done" as const,
+      updatedAt,
+    },
+    "generation-gate": {
+      nodeId: "generation-gate" as const,
+      result: generationGate,
+      source: "system" as const,
+      status: "done" as const,
+      updatedAt,
+    },
+    "shot-graph-execution": {
+      ...workflow.nodes["shot-graph-execution"],
+      error: {
+        code: "confirmation_required",
+        message: "Confirm generation before starting Story Graph shot execution.",
+      },
+      status: "blocked" as const,
+      updatedAt,
+    },
+  };
+
+  return refreshStoryWorkflowReadiness({
+    ...workflow,
+    generationConfirmed: false,
+    nodes,
+    updatedAt,
+  });
 }
 
 function assertGateReady(workflow: StoryWorkflowState): {
@@ -204,6 +378,178 @@ export async function confirmAndExecuteStoryGeneration({
   );
 
   return nextWorkflow;
+}
+
+export async function generateStoryReferencePlate({
+  generatePlate,
+  now,
+  referenceId,
+  workflow,
+}: {
+  generatePlate: StoryReferencePlateGenerationAdapter;
+  now?: () => string;
+  referenceId: string;
+  workflow: StoryWorkflowState;
+}) {
+  assertStoryWorkflow(workflow);
+  const plan = getStoryReferenceAssetPlanFromWorkflow(workflow);
+  const reference = findReferenceAsset(plan, referenceId);
+  const resourcePlan = getStoryResourcePlanForReferenceGeneration(workflow);
+  const parameterPlan = getStoryParameterPlanFromWorkflow(workflow);
+  const renderPlan = getStoryRenderPlanFromWorkflow(workflow);
+
+  try {
+    const assetReference = await generatePlate({
+      nsfwContext: renderPlan.nsfwContext,
+      parameterPlan,
+      reference,
+      resourcePlan,
+    });
+
+    return applyReferenceAssetPlanToWorkflow({
+      now,
+      referenceAssetPlan: applyStoryReferenceGenerationSuccess({
+        assetReference,
+        now,
+        plan,
+        referenceId,
+      }),
+      source: "system",
+      workflow,
+    });
+  } catch (error) {
+    return applyReferenceAssetPlanToWorkflow({
+      now,
+      referenceAssetPlan: applyStoryReferenceGenerationFailure({
+        error,
+        now,
+        plan,
+        referenceId,
+      }),
+      source: "system",
+      workflow,
+    });
+  }
+}
+
+export function assertStoryReferenceAssetActionTarget({
+  referenceId,
+  workflow,
+}: {
+  referenceId: string;
+  workflow: StoryWorkflowState;
+}) {
+  assertStoryWorkflow(workflow);
+  findReferenceAsset(getStoryReferenceAssetPlanFromWorkflow(workflow), referenceId);
+}
+
+export function uploadStoryReferenceAsset({
+  approve = false,
+  assetReference,
+  now,
+  referenceId,
+  workflow,
+}: {
+  approve?: boolean;
+  assetReference: StoryReferenceAssetReference;
+  now?: () => string;
+  referenceId: string;
+  workflow: StoryWorkflowState;
+}) {
+  assertStoryWorkflow(workflow);
+  const plan = getStoryReferenceAssetPlanFromWorkflow(workflow);
+  findReferenceAsset(plan, referenceId);
+
+  return applyReferenceAssetPlanToWorkflow({
+    now,
+    referenceAssetPlan: applyStoryReferenceUpload({
+      approve,
+      assetReference,
+      now,
+      plan,
+      referenceId,
+    }),
+    source: "manual",
+    workflow,
+  });
+}
+
+export function approveStoryReferenceAsset({
+  assetReferenceId,
+  now,
+  referenceId,
+  workflow,
+}: {
+  assetReferenceId?: string;
+  now?: () => string;
+  referenceId: string;
+  workflow: StoryWorkflowState;
+}) {
+  assertStoryWorkflow(workflow);
+
+  return applyReferenceAssetPlanToWorkflow({
+    now,
+    referenceAssetPlan: applyStoryReferenceApproval({
+      assetReferenceId,
+      now,
+      plan: getStoryReferenceAssetPlanFromWorkflow(workflow),
+      referenceId,
+    }),
+    source: "manual",
+    workflow,
+  });
+}
+
+export function rejectStoryReferenceAsset({
+  now,
+  reason,
+  referenceId,
+  workflow,
+}: {
+  now?: () => string;
+  reason?: string;
+  referenceId: string;
+  workflow: StoryWorkflowState;
+}) {
+  assertStoryWorkflow(workflow);
+
+  return applyReferenceAssetPlanToWorkflow({
+    now,
+    referenceAssetPlan: applyStoryReferenceRejection({
+      now,
+      plan: getStoryReferenceAssetPlanFromWorkflow(workflow),
+      reason,
+      referenceId,
+    }),
+    source: "manual",
+    workflow,
+  });
+}
+
+export function setStoryReferencePromptOnlyFallback({
+  now,
+  reason,
+  referenceId,
+  workflow,
+}: {
+  now?: () => string;
+  reason: string;
+  referenceId: string;
+  workflow: StoryWorkflowState;
+}) {
+  assertStoryWorkflow(workflow);
+
+  return applyReferenceAssetPlanToWorkflow({
+    now,
+    referenceAssetPlan: applyStoryReferencePromptOnlyFallback({
+      now,
+      plan: getStoryReferenceAssetPlanFromWorkflow(workflow),
+      reason,
+      referenceId,
+    }),
+    source: "manual",
+    workflow,
+  });
 }
 
 export async function regenerateStoryShot({

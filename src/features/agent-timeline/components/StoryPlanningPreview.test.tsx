@@ -3,6 +3,8 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  applyStoryReferenceGenerationFailure,
+  applyStoryReferenceGenerationSuccess,
   createTimelineWorkflowRecord,
   evaluateStoryReferenceAssetFreezeGate,
   startStoryGraphWorkflow,
@@ -237,6 +239,64 @@ function withPromptOnlyReferenceFallbacks(workflow: StoryWorkflowState): StoryWo
           ready: true,
         },
       },
+    },
+  };
+}
+
+function withFailedReferenceReroll(workflow: StoryWorkflowState): { referenceId: string; workflow: StoryWorkflowState } {
+  const plan = workflow.nodes["reference-asset-plan"].result as StoryReferenceAssetPlan;
+  const referenceId = plan.assets.find((asset) => asset.importance === "required")?.id ?? plan.assets[0]?.id;
+
+  if (!referenceId) {
+    throw new Error("Expected a planned Story reference asset.");
+  }
+
+  const generatedPlan = applyStoryReferenceGenerationSuccess({
+    plan,
+    referenceId,
+    now: () => "2026-06-15T00:00:01.000Z",
+    assetReference: {
+      filename: "failed-reroll-base.png",
+      source: "generated",
+      url: "/api/comfyui/generated-images/failed-reroll-base.png",
+    },
+  });
+  const referenceAssetPlan = applyStoryReferenceGenerationFailure({
+    plan: generatedPlan,
+    referenceId,
+    now: () => "2026-06-15T00:00:02.000Z",
+    error: Object.assign(new Error("ComfyUI rejected the reference plate."), { code: "comfyui_execution_failed" }),
+  });
+  const assetFreezeGate = evaluateStoryReferenceAssetFreezeGate(referenceAssetPlan);
+  const generationGate = workflow.nodes["generation-gate"].result as Record<string, unknown>;
+  const updatedAt = "2026-06-15T00:00:02.000Z";
+
+  return {
+    referenceId,
+    workflow: {
+      ...workflow,
+      nodes: {
+        ...workflow.nodes,
+        "reference-asset-plan": {
+          ...workflow.nodes["reference-asset-plan"],
+          result: referenceAssetPlan,
+          source: "system",
+          status: "done",
+          updatedAt,
+        },
+        "generation-gate": {
+          ...workflow.nodes["generation-gate"],
+          result: {
+            ...generationGate,
+            assetFreezeGate,
+            blockingReason: assetFreezeGate.blockingReferences[0]?.reason ?? "Resolve required Story reference assets before generation.",
+            executionAvailable: false,
+            ready: false,
+          },
+          updatedAt,
+        },
+      },
+      updatedAt,
     },
   };
 }
@@ -1593,6 +1653,95 @@ describe("StoryPlanningPreview", () => {
     expect(errorNotice?.textContent).toContain("No ranked local Illustrious checkpoint candidates are available.");
     expect(errorNotice?.textContent).toContain("resource_selection_invalid");
     expect(container.textContent).not.toContain("Story Graph planning failed.");
+  });
+
+  it("shows recoverable failed reference actions and rerolls through the reference route", async () => {
+    const failedReference = withFailedReferenceReroll(createPlannedWorkflow("A courier needs a failed reference reroll."));
+    const activeRecord = createTimelineWorkflowRecord({
+      projectId: "story-failed-reference",
+      name: "Failed reference workflow",
+      workflow: failedReference.workflow,
+      sceneRequest: "A courier needs a failed reference reroll.",
+      selectedPromptProfile: "illustrious",
+      selectedImageCount: 2,
+      selectedNodeId: "reference-asset-plan",
+    });
+    const generateBodies: Array<{ referenceId?: string; workflow?: StoryWorkflowState }> = [];
+    const activeSaveBodies: unknown[] = [];
+    const fetchMock = vi.fn<typeof fetch>(async (url, init) => {
+      const target = typeof url === "string" ? url : url instanceof Request ? url.url : url.toString();
+
+      if (target === "/api/settings") {
+        return {
+          ok: true,
+          json: async () => ({}),
+        } as Response;
+      }
+
+      if (target === "/api/agent-timeline/active-workflow") {
+        if (init?.method === "PUT") {
+          activeSaveBodies.push(typeof init.body === "string" ? JSON.parse(init.body) : null);
+          return {
+            ok: true,
+            json: async () => ({
+              ok: true,
+              record: activeSaveBodies.at(-1),
+            }),
+          } as Response;
+        }
+
+        return {
+          ok: true,
+          json: async () => activeRecord,
+        } as Response;
+      }
+
+      if (target === "/api/agent-timeline/story/reference-assets/generate") {
+        generateBodies.push(JSON.parse(String(init?.body ?? "{}")) as { referenceId?: string; workflow?: StoryWorkflowState });
+        return {
+          ok: true,
+          json: async () => ({
+            workflow: failedReference.workflow,
+          }),
+        } as Response;
+      }
+
+      throw new Error(`Unexpected fetch ${target}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await act(async () => {
+      root.render(<StoryPlanningPreview />);
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(container.textContent).toContain("Failed reference workflow");
+    expect(container.textContent).toContain("Reference actions");
+    expect(container.textContent).toContain("ComfyUI rejected the reference plate.");
+    expect(container.textContent).toContain("Recover with: reroll, upload, prompt-only");
+    expect(container.textContent).toContain("Reroll");
+    expect(container.textContent).toContain("Upload");
+    expect(container.textContent).toContain("Upload + approve");
+    expect(container.textContent).toContain("Prompt-only");
+
+    await clickButtonAsync("Reroll");
+
+    expect(generateBodies).toHaveLength(1);
+    expect(generateBodies[0]).toMatchObject({
+      referenceId: failedReference.referenceId,
+      workflow: {
+        workflowId: failedReference.workflow.workflowId,
+        workflowMode: "story-graph",
+      },
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/agent-timeline/story/reference-assets/generate",
+      expect.objectContaining({
+        method: "POST",
+      }),
+    );
   });
 
   it("starts generation, renders execution/results, and regenerates a shot", async () => {
