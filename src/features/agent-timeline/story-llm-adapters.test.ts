@@ -8,6 +8,7 @@ import {
   createStoryLlmNodeAdapters,
   normalizeStoryParameterPlan,
   normalizeStoryRenderPromptPlan,
+  normalizeStoryEntityCards,
   normalizeShotDependencyGraph,
   normalizeStoryBible,
   normalizeStoryResourcePlan,
@@ -25,6 +26,7 @@ import {
   type StoryRenderPlan,
 } from "./story-planning";
 import type {
+  CharacterContinuityGraph,
   StoryBible,
   StoryInput,
   StoryShot,
@@ -135,6 +137,7 @@ const bible = {
       visualAnchors: ["wet pavement", "neon signage"],
     },
   ],
+  props: [],
   continuityRules: ["Keep the courier identity stable."],
 } satisfies StoryBible;
 
@@ -193,6 +196,777 @@ describe("story LLM adapters", () => {
       characters: [{ id: "courier", name: "Courier" }],
       locations: [{ id: "market", name: "Market" }],
     });
+  });
+
+  it("normalizes StoryBible props and records invalid owner references as planning errors", () => {
+    const normalized = normalizeStoryBible(
+      {
+        title: "Signal Market",
+        logline: "A courier protects a cake box.",
+        characters: [
+          {
+            id: "courier",
+            name: "Courier",
+            description: "A rain-jacket courier.",
+          },
+        ],
+        locations: [
+          {
+            id: "market",
+            name: "Market",
+            description: "A wet neon market.",
+          },
+        ],
+        props: [
+          {
+            id: "cake-box",
+            name: "Cake box",
+            description: "A white bakery box tied with red string.",
+            ownerCharacterIds: ["courier", "unknown-character"],
+            visualAnchors: ["red string", "creased cardboard corner"],
+          },
+        ],
+      },
+      input,
+    );
+
+    expect(normalized.props).toEqual([
+      expect.objectContaining({
+        id: "cake-box",
+        name: "Cake box",
+        ownerCharacterIds: ["courier"],
+        visualAnchors: ["red string", "creased cardboard corner"],
+      }),
+    ]);
+    expect(normalized.planningErrors).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "story_bible_prop_owner_ref",
+          message: expect.stringContaining("unknown-character"),
+        }),
+      ]),
+    );
+  });
+
+  it("normalizes shot state fields and keeps invalid references as recoverable planning errors", () => {
+    const storyBible = normalizeStoryBible(
+      {
+        title: "Signal Market",
+        logline: "A courier protects a cake box.",
+        characters: [{ id: "courier", name: "Courier", description: "A rain-jacket courier." }],
+        locations: [{ id: "market", name: "Market", description: "A wet neon market." }],
+        props: [{ id: "cake-box", name: "Cake box", description: "A white bakery box." }],
+      },
+      input,
+    );
+    const outline = {
+      storyId: input.storyId,
+      beats: [
+        {
+          id: "beat-1",
+          title: "Arrival",
+          summary: "The courier enters the market.",
+          order: 1,
+          characterIds: ["courier"],
+        },
+      ],
+    };
+    const normalized = normalizeStoryShots(
+      {
+        shots: [
+          {
+            id: "shot-1",
+            order: 1,
+            title: "Arrival",
+            description: "The courier enters the market.",
+            beatId: "beat-1",
+            locationId: "market",
+            characterIds: ["courier"],
+            camera: "wide",
+            promptIntent: "courier holding the cake box in a wet neon market",
+            continuityNotes: [],
+            appearanceState: {
+              characterStates: [
+                {
+                  characterId: "courier",
+                  outfitId: "courier-raincoat",
+                  appearance: "yellow rain jacket",
+                  visible: true,
+                },
+                {
+                  characterId: "ghost-character",
+                  appearance: "invalid extra subject",
+                },
+              ],
+              propIds: ["cake-box", "unknown-prop"],
+            },
+            interactionState: {
+              characterIds: ["courier", "ghost-character"],
+              propIds: ["cake-box", "unknown-prop"],
+              description: "Courier grips the cake box.",
+              physicalContact: ["hands around box"],
+            },
+            locationViewState: {
+              locationId: "unknown-location",
+              viewDescription: "Neon market aisle.",
+              visibleAnchors: ["wet pavement"],
+              camera: "wide",
+            },
+          },
+        ],
+      },
+      input,
+      storyBible,
+      outline,
+    );
+
+    expect(normalized[0]).toMatchObject({
+      appearanceState: {
+        characterStates: [
+          expect.objectContaining({
+            characterId: "courier",
+            outfitId: "courier-raincoat",
+          }),
+        ],
+        propIds: ["cake-box"],
+      },
+      interactionState: {
+        characterIds: ["courier"],
+        propIds: ["cake-box"],
+      },
+      locationViewState: {
+        viewDescription: "Neon market aisle.",
+        visibleAnchors: ["wet pavement"],
+      },
+    });
+    expect(normalized[0].locationViewState?.locationId).toBeUndefined();
+    expect(normalized[0].planningErrors).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: "shot_appearance_character_ref" }),
+        expect.objectContaining({ code: "shot_appearance_prop_ref" }),
+        expect.objectContaining({ code: "shot_interaction_character_ref" }),
+        expect.objectContaining({ code: "shot_interaction_prop_ref" }),
+        expect.objectContaining({ code: "shot_location_view_ref" }),
+      ]),
+    );
+  });
+
+  it("records missing and malformed shot state fields as recoverable planning errors", () => {
+    const storyBible = normalizeStoryBible(
+      {
+        title: "Signal Market",
+        logline: "A courier protects a cake box.",
+        characters: [{ id: "courier", name: "Courier", description: "A rain-jacket courier." }],
+        locations: [{ id: "market", name: "Market", description: "A wet neon market." }],
+      },
+      input,
+    );
+    const outline = {
+      storyId: input.storyId,
+      beats: [
+        {
+          id: "beat-1",
+          title: "Arrival",
+          summary: "The courier enters the market.",
+          order: 1,
+          characterIds: ["courier"],
+        },
+      ],
+    };
+    const normalized = normalizeStoryShots(
+      {
+        shots: [
+          {
+            id: "shot-1",
+            order: 1,
+            title: "Arrival",
+            description: "The courier enters the market.",
+            beatId: "beat-1",
+            locationId: "market",
+            characterIds: ["courier"],
+            camera: "wide",
+            promptIntent: "courier in a wet neon market",
+            continuityNotes: ["Keep the rain jacket visible."],
+            interactionState: "not an object",
+            locationViewState: [],
+          },
+        ],
+      },
+      input,
+      storyBible,
+      outline,
+    );
+
+    expect(normalized[0]).toMatchObject({
+      appearanceState: {
+        characterStates: [
+          expect.objectContaining({
+            characterId: "courier",
+            appearance: "courier in a wet neon market",
+            visible: true,
+          }),
+        ],
+        propIds: [],
+      },
+      interactionState: {
+        characterIds: ["courier"],
+        description: "The courier enters the market.",
+        propIds: [],
+      },
+      locationViewState: {
+        camera: "wide",
+        locationId: "market",
+        viewDescription: "The courier enters the market.",
+      },
+    });
+    expect(normalized[0].planningErrors).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: "shot_appearance_state_missing" }),
+        expect.objectContaining({ code: "shot_interaction_state_malformed" }),
+        expect.objectContaining({ code: "shot_location_view_state_malformed" }),
+      ]),
+    );
+  });
+
+  it("normalizes entity cards from structured refs and reports invalid ids without throwing", () => {
+    const storyBible = {
+      ...bible,
+      props: [
+        {
+          id: "cake-box",
+          name: "Cake box",
+          description: "A white bakery box tied with red string.",
+          continuityNotes: ["Keep the red string visible."],
+          ownerCharacterIds: ["courier"],
+          visualAnchors: ["red string"],
+        },
+      ],
+    } satisfies StoryBible;
+    const continuityGraph = {
+      storyId: input.storyId,
+      characters: [
+        {
+          characterId: "courier",
+          name: "Courier",
+          canonicalDescription: "A courier in a yellow rain jacket.",
+          visualAnchors: ["yellow rain jacket"],
+        },
+      ],
+      appearances: [
+        {
+          shotId: "shot-1",
+          characterId: "courier",
+          wardrobe: ["yellow rain jacket"],
+          poseOrAction: "holding cake box",
+          expression: "focused",
+          continuityNotes: ["Keep the rain jacket."],
+        },
+      ],
+    } satisfies CharacterContinuityGraph;
+    const normalized = normalizeStoryEntityCards({
+      bible: storyBible,
+      continuityGraph,
+      input,
+      shots: [
+        {
+          ...shots[0],
+          locationId: "market",
+          appearanceState: {
+            characterStates: [
+              {
+                characterId: "courier",
+                appearance: "yellow rain jacket",
+                outfitId: "rain-outfit",
+                visible: true,
+                continuityNotes: [],
+              },
+            ],
+            notes: [],
+            propIds: ["cake-box"],
+          },
+          interactionState: {
+            characterIds: ["courier"],
+            continuityNotes: [],
+            description: "Courier holds the cake box.",
+            physicalContact: ["hands on cake box"],
+            propIds: ["cake-box"],
+          },
+          locationViewState: {
+            camera: "wide",
+            locationId: "market",
+            viewDescription: "Wet neon market aisle.",
+            visibleAnchors: ["wet pavement"],
+          },
+        },
+      ],
+      raw: {
+        characters: [
+          {
+            id: "courier",
+            outfitIds: ["rain-outfit", "ghost-outfit"],
+            propIds: ["cake-box", "ghost-prop"],
+            shotIds: ["shot-1", "ghost-shot"],
+          },
+        ],
+        outfits: [
+          {
+            id: "rain-outfit",
+            characterId: "courier",
+            name: "Yellow rain jacket",
+            shotIds: ["shot-1"],
+          },
+          {
+            id: "ghost-outfit",
+            characterId: "ghost-character",
+            name: "Invalid outfit",
+            shotIds: ["shot-1"],
+          },
+        ],
+        props: [
+          {
+            id: "cake-box",
+            ownerCharacterIds: ["courier", "ghost-character"],
+            shotIds: ["shot-1", "ghost-shot"],
+          },
+          {
+            id: "ghost-prop",
+            shotIds: ["shot-1"],
+          },
+        ],
+        locations: [
+          {
+            id: "market",
+            shotIds: ["shot-1", "ghost-shot"],
+            viewStates: [
+              {
+                shotId: "shot-1",
+                viewDescription: "Wet neon market aisle.",
+              },
+              {
+                shotId: "ghost-shot",
+                viewDescription: "Invalid view.",
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    expect(normalized.characters[0]).toMatchObject({
+      id: "courier",
+      outfitIds: ["rain-outfit"],
+      propIds: ["cake-box"],
+      shotIds: ["shot-1"],
+    });
+    expect(normalized.outfits).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "rain-outfit",
+        characterId: "courier",
+      }),
+    ]));
+    expect(normalized.props[0]).toMatchObject({
+      id: "cake-box",
+      ownerCharacterIds: ["courier"],
+      shotIds: ["shot-1"],
+    });
+    expect(normalized.locations[0]).toMatchObject({
+      id: "market",
+      shotIds: ["shot-1"],
+      viewStates: [expect.objectContaining({ shotId: "shot-1" })],
+    });
+    expect(normalized.planningErrors).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: "entity_cards_character_outfit_ref" }),
+        expect.objectContaining({ code: "entity_cards_character_prop_ref" }),
+        expect.objectContaining({ code: "entity_cards_shot_ref" }),
+        expect.objectContaining({ code: "entity_cards_outfit_character_ref" }),
+        expect.objectContaining({ code: "entity_cards_prop_owner_ref" }),
+        expect.objectContaining({ code: "entity_cards_prop_ref" }),
+        expect.objectContaining({ code: "entity_cards_location_view_shot_ref" }),
+      ]),
+    );
+  });
+
+  it("preserves derived entity cards when LLM output only returns partial sections", () => {
+    const storyBible = {
+      ...bible,
+      characters: [
+        ...bible.characters,
+        {
+          id: "villain",
+          name: "Villain",
+          role: "Rival",
+          description: "A rival in a black coat.",
+          continuityNotes: ["Keep the black coat."],
+          visualAnchors: ["black coat"],
+        },
+      ],
+      locations: [
+        ...bible.locations,
+        {
+          id: "rooftop",
+          name: "Rooftop",
+          description: "A rain-soaked rooftop.",
+          visualAnchors: ["antenna lights"],
+        },
+      ],
+      props: [
+        {
+          id: "cake-box",
+          name: "Cake box",
+          description: "A white bakery box tied with red string.",
+          continuityNotes: ["Keep the red string visible."],
+          ownerCharacterIds: ["courier"],
+          visualAnchors: ["red string"],
+        },
+        {
+          id: "signal-charm",
+          name: "Signal charm",
+          description: "A small glowing charm.",
+          continuityNotes: ["Keep the glow blue."],
+          ownerCharacterIds: ["villain"],
+          visualAnchors: ["blue glow"],
+        },
+      ],
+    } satisfies StoryBible;
+    const continuityGraph = {
+      storyId: input.storyId,
+      characters: storyBible.characters.map((character) => ({
+        characterId: character.id,
+        name: character.name,
+        canonicalDescription: character.description,
+        visualAnchors: character.visualAnchors,
+      })),
+      appearances: [
+        {
+          shotId: "shot-1",
+          characterId: "courier",
+          wardrobe: ["yellow rain jacket"],
+          poseOrAction: "holding cake box",
+          expression: "focused",
+          continuityNotes: ["Keep the rain jacket."],
+        },
+        {
+          shotId: "shot-2",
+          characterId: "villain",
+          wardrobe: ["black coat"],
+          poseOrAction: "holding signal charm",
+          expression: "calm",
+          continuityNotes: ["Keep the black coat."],
+        },
+      ],
+    } satisfies CharacterContinuityGraph;
+    const normalized = normalizeStoryEntityCards({
+      bible: storyBible,
+      continuityGraph,
+      input,
+      shots: [
+        {
+          ...shots[0],
+          locationId: "market",
+          appearanceState: {
+            characterStates: [
+              {
+                characterId: "courier",
+                appearance: "yellow rain jacket",
+                outfitId: "courier-yellow-rain-jacket",
+                visible: true,
+                continuityNotes: [],
+              },
+            ],
+            notes: [],
+            propIds: ["cake-box"],
+          },
+          interactionState: {
+            characterIds: ["courier"],
+            continuityNotes: [],
+            description: "Courier holds the cake box.",
+            physicalContact: ["hands on cake box"],
+            propIds: ["cake-box"],
+          },
+          locationViewState: {
+            camera: "wide",
+            locationId: "market",
+            viewDescription: "Wet neon market aisle.",
+            visibleAnchors: ["wet pavement"],
+          },
+        },
+        {
+          ...shots[1],
+          characterIds: ["villain"],
+          locationId: "rooftop",
+          appearanceState: {
+            characterStates: [
+              {
+                characterId: "villain",
+                appearance: "black coat",
+                outfitId: "villain-black-coat",
+                visible: true,
+                continuityNotes: [],
+              },
+            ],
+            notes: [],
+            propIds: ["signal-charm"],
+          },
+          interactionState: {
+            characterIds: ["villain"],
+            continuityNotes: [],
+            description: "Villain holds the signal charm.",
+            physicalContact: ["hand around charm"],
+            propIds: ["signal-charm"],
+          },
+          locationViewState: {
+            camera: "close",
+            locationId: "rooftop",
+            viewDescription: "Rain-soaked rooftop.",
+            visibleAnchors: ["antenna lights"],
+          },
+        },
+      ],
+      raw: {
+        characters: [
+          {
+            id: "courier",
+            outfitIds: ["courier-yellow-rain-jacket"],
+            propIds: ["cake-box"],
+            shotIds: ["shot-1"],
+          },
+        ],
+        outfits: [
+          {
+            id: "courier-yellow-rain-jacket",
+            characterId: "courier",
+            name: "Yellow rain jacket",
+            shotIds: ["shot-1"],
+          },
+        ],
+        props: [
+          {
+            id: "cake-box",
+            ownerCharacterIds: ["courier"],
+            shotIds: ["shot-1"],
+          },
+        ],
+        locations: [
+          {
+            id: "market",
+            shotIds: ["shot-1"],
+          },
+        ],
+      },
+    });
+
+    expect(normalized.characters.map((character) => character.id)).toEqual(["courier", "villain"]);
+    expect(normalized.outfits.map((outfit) => outfit.id)).toEqual(["courier-yellow-rain-jacket", "villain-black-coat"]);
+    expect(normalized.props.map((prop) => prop.id)).toEqual(["cake-box", "signal-charm"]);
+    expect(normalized.locations.map((location) => location.id)).toEqual(["market", "rooftop"]);
+    expect(normalized.characters.find((character) => character.id === "villain")).toMatchObject({
+      shotIds: ["shot-2"],
+      propIds: ["signal-charm"],
+    });
+    expect(normalized.planningErrors).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: "entity_cards_character_missing" }),
+        expect.objectContaining({ code: "entity_cards_outfit_missing" }),
+        expect.objectContaining({ code: "entity_cards_prop_missing" }),
+        expect.objectContaining({ code: "entity_cards_location_missing" }),
+      ]),
+    );
+  });
+
+  it("derives entity cards when structured sections are missing and reports planning errors", () => {
+    const storyBible = {
+      ...bible,
+      props: [
+        {
+          id: "cake-box",
+          name: "Cake box",
+          description: "A white bakery box tied with red string.",
+          continuityNotes: ["Keep the red string visible."],
+          ownerCharacterIds: ["courier"],
+          visualAnchors: ["red string"],
+        },
+      ],
+    } satisfies StoryBible;
+    const continuityGraph = {
+      storyId: input.storyId,
+      characters: [
+        {
+          characterId: "courier",
+          name: "Courier",
+          canonicalDescription: "A courier in a yellow rain jacket.",
+          visualAnchors: ["yellow rain jacket"],
+        },
+      ],
+      appearances: [
+        {
+          shotId: "shot-1",
+          characterId: "courier",
+          wardrobe: ["yellow rain jacket"],
+          poseOrAction: "holding cake box",
+          expression: "focused",
+          continuityNotes: ["Keep the rain jacket."],
+        },
+      ],
+    } satisfies CharacterContinuityGraph;
+    const normalized = normalizeStoryEntityCards({
+      bible: storyBible,
+      continuityGraph,
+      input,
+      shots: [
+        {
+          ...shots[0],
+          locationId: "market",
+          appearanceState: {
+            characterStates: [
+              {
+                characterId: "courier",
+                appearance: "yellow rain jacket",
+                outfitId: "rain-outfit",
+                visible: true,
+                continuityNotes: [],
+              },
+            ],
+            notes: [],
+            propIds: ["cake-box"],
+          },
+          interactionState: {
+            characterIds: ["courier"],
+            continuityNotes: [],
+            description: "Courier holds the cake box.",
+            physicalContact: ["hands on cake box"],
+            propIds: ["cake-box"],
+          },
+          locationViewState: {
+            camera: "wide",
+            locationId: "market",
+            viewDescription: "Wet neon market aisle.",
+            visibleAnchors: ["wet pavement"],
+          },
+        },
+      ],
+      raw: {},
+    });
+
+    expect(normalized.characters[0]).toMatchObject({
+      id: "courier",
+      propIds: ["cake-box"],
+      shotIds: ["shot-1"],
+    });
+    expect(normalized.outfits[0]).toMatchObject({
+      characterId: "courier",
+      shotIds: ["shot-1"],
+    });
+    expect(normalized.props[0]).toMatchObject({
+      id: "cake-box",
+      ownerCharacterIds: ["courier"],
+      shotIds: ["shot-1"],
+    });
+    expect(normalized.locations[0]).toMatchObject({
+      id: "market",
+      shotIds: ["shot-1"],
+      viewStates: [expect.objectContaining({ shotId: "shot-1" })],
+    });
+    expect(normalized.planningErrors).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: "entity_cards_characters_missing" }),
+        expect.objectContaining({ code: "entity_cards_outfits_missing" }),
+        expect.objectContaining({ code: "entity_cards_props_missing" }),
+        expect.objectContaining({ code: "entity_cards_locations_missing" }),
+      ]),
+    );
+  });
+
+  it("records planning errors when entity-card sections are present but empty", () => {
+    const storyBible = {
+      ...bible,
+      props: [
+        {
+          id: "cake-box",
+          name: "Cake box",
+          description: "A white bakery box tied with red string.",
+          continuityNotes: ["Keep the red string visible."],
+          ownerCharacterIds: ["courier"],
+          visualAnchors: ["red string"],
+        },
+      ],
+    } satisfies StoryBible;
+    const continuityGraph = {
+      storyId: input.storyId,
+      characters: [
+        {
+          characterId: "courier",
+          name: "Courier",
+          canonicalDescription: "A courier in a yellow rain jacket.",
+          visualAnchors: ["yellow rain jacket"],
+        },
+      ],
+      appearances: [
+        {
+          shotId: "shot-1",
+          characterId: "courier",
+          wardrobe: ["yellow rain jacket"],
+          poseOrAction: "holding cake box",
+          expression: "focused",
+          continuityNotes: ["Keep the rain jacket."],
+        },
+      ],
+    } satisfies CharacterContinuityGraph;
+    const normalized = normalizeStoryEntityCards({
+      bible: storyBible,
+      continuityGraph,
+      input,
+      shots: [
+        {
+          ...shots[0],
+          locationId: "market",
+          appearanceState: {
+            characterStates: [
+              {
+                characterId: "courier",
+                appearance: "yellow rain jacket",
+                visible: true,
+                continuityNotes: [],
+              },
+            ],
+            notes: [],
+            propIds: ["cake-box"],
+          },
+          interactionState: {
+            characterIds: ["courier"],
+            continuityNotes: [],
+            description: "Courier holds the cake box.",
+            physicalContact: ["hands on cake box"],
+            propIds: ["cake-box"],
+          },
+          locationViewState: {
+            camera: "wide",
+            locationId: "market",
+            viewDescription: "Wet neon market aisle.",
+            visibleAnchors: ["wet pavement"],
+          },
+        },
+      ],
+      raw: {
+        characters: [],
+        outfits: [],
+        props: [],
+        locations: [],
+      },
+    });
+
+    expect(normalized.characters.map((character) => character.id)).toEqual(["courier"]);
+    expect(normalized.outfits.map((outfit) => outfit.characterId)).toEqual(["courier"]);
+    expect(normalized.props.map((prop) => prop.id)).toEqual(["cake-box"]);
+    expect(normalized.locations.map((location) => location.id)).toEqual(["market"]);
+    expect(normalized.planningErrors).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: "entity_cards_character_missing" }),
+        expect.objectContaining({ code: "entity_cards_outfit_missing" }),
+        expect.objectContaining({ code: "entity_cards_prop_missing" }),
+        expect.objectContaining({ code: "entity_cards_location_missing" }),
+      ]),
+    );
   });
 
   it("normalizes malformed JSON and LiteLLM errors into timeline node errors", async () => {
@@ -294,6 +1068,39 @@ describe("story LLM adapters", () => {
           continuityNotes: [],
         }],
       };
+      const entityCards = {
+        storyId: explicitInput.storyId,
+        characters: [{
+          id: "courier",
+          name: "Courier",
+          role: "Lead",
+          description: "A courier in a yellow rain jacket.",
+          continuityNotes: [],
+          outfitIds: ["courier-yellow-rain-jacket"],
+          propIds: [],
+          shotIds: ["shot-1"],
+          visualAnchors: ["yellow rain jacket"],
+        }],
+        outfits: [{
+          id: "courier-yellow-rain-jacket",
+          characterId: "courier",
+          name: "Yellow rain jacket",
+          description: "Yellow rain jacket.",
+          continuityNotes: [],
+          shotIds: ["shot-1"],
+          visualAnchors: ["yellow rain jacket"],
+        }],
+        props: [],
+        locations: [{
+          id: "market",
+          name: "Neon market",
+          description: "A crowded wet market alley under neon signs.",
+          shotIds: ["shot-1"],
+          viewStates: [],
+          visualAnchors: ["wet pavement", "neon signage"],
+        }],
+        planningErrors: [],
+      };
       const checkpoint = explicitInput.settingsSnapshot.resourceCandidates.checkpoints[0]!;
       const lora = explicitInput.settingsSnapshot.resourceCandidates.loras[0]!;
       const resourcePlan = createStoryResourcePlan({
@@ -378,6 +1185,13 @@ describe("story LLM adapters", () => {
         status: "done",
         updatedAt: workflow.updatedAt,
       };
+      workflow.nodes["entity-cards"] = {
+        nodeId: "entity-cards",
+        result: entityCards,
+        source: "ai",
+        status: "done",
+        updatedAt: workflow.updatedAt,
+      };
       workflow.nodes["resource-plan"] = {
         nodeId: "resource-plan",
         result: resourcePlan,
@@ -409,6 +1223,8 @@ describe("story LLM adapters", () => {
             logline: "A courier follows a signal.",
             characters: bible.characters,
             locations: bible.locations,
+            props: bible.props,
+            outfits: entityCards.outfits,
             beats: outline.beats,
             shots: shots.map((shot) => ({
               ...shot,
@@ -457,6 +1273,7 @@ describe("story LLM adapters", () => {
         "shot-dependency-graph",
         "plot-state-graph",
         "character-continuity-graph",
+        "entity-cards",
         "resource-plan",
         "parameter-plan",
         "story-render-plan",
@@ -478,6 +1295,7 @@ describe("story LLM adapters", () => {
         "story-safety-plan": { model: "story-nsfw-model", nsfw: true },
         "plot-state-graph": { model: "story-nsfw-model", nsfw: true },
         "character-continuity-graph": { model: "story-nsfw-model", nsfw: true },
+        "entity-cards": { model: "story-nsfw-model", nsfw: true },
         "story-render-plan": { model: "story-nsfw-model", nsfw: true },
         "shot-dependency-graph": { nsfw: true },
         "resource-plan": { nsfw: true },
@@ -2064,6 +2882,45 @@ describe("story LLM adapters", () => {
       status: "done",
       updatedAt,
     };
+    workflow.nodes["entity-cards"] = {
+      nodeId: "entity-cards",
+      result: {
+        storyId: "story-1",
+        characters: [{
+          id: "courier",
+          name: "Courier",
+          role: "Lead",
+          description: "A courier in a reflective yellow jacket.",
+          continuityNotes: ["Keep reflective yellow jacket visible."],
+          outfitIds: ["courier-reflective-yellow-jacket"],
+          propIds: [],
+          shotIds: ["shot-1", "shot-2"],
+          visualAnchors: ["reflective yellow jacket"],
+        }],
+        outfits: [{
+          id: "courier-reflective-yellow-jacket",
+          characterId: "courier",
+          name: "Reflective yellow jacket",
+          description: "Reflective yellow jacket.",
+          continuityNotes: ["Keep reflective yellow jacket visible."],
+          shotIds: ["shot-1", "shot-2"],
+          visualAnchors: ["reflective yellow jacket"],
+        }],
+        props: [],
+        locations: [{
+          id: "market",
+          name: "Market",
+          description: "A wet neon market.",
+          shotIds: ["shot-1", "shot-2"],
+          viewStates: [],
+          visualAnchors: ["wet neon market"],
+        }],
+        planningErrors: [],
+      },
+      source: "ai",
+      status: "done",
+      updatedAt,
+    };
     workflow.nodes["shot-dependency-graph"] = {
       nodeId: "shot-dependency-graph",
       result: {
@@ -2123,6 +2980,7 @@ describe("story LLM adapters", () => {
       workflow,
       dependencies: [
         workflow.nodes["character-continuity-graph"],
+        workflow.nodes["entity-cards"],
         workflow.nodes["shot-dependency-graph"],
         workflow.nodes["resource-plan"],
         workflow.nodes["parameter-plan"],
@@ -2164,6 +3022,9 @@ describe("story LLM adapters", () => {
     expect(requestSystemPrompt).toContain("sketchbook or visible sketch pages");
     expect(requestPayload).toMatchObject({
       characterContinuityGraph: expect.objectContaining({
+        storyId: "story-1",
+      }),
+      entityCards: expect.objectContaining({
         storyId: "story-1",
       }),
       parameterPlan: expect.objectContaining({

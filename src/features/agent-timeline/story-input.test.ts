@@ -640,6 +640,7 @@ describe("story input workflow start", () => {
       },
     });
     expect(edited.nodes["story-safety-plan"].status).toBe("stale");
+    expect(edited.nodes["entity-cards"].status).toBe("stale");
     expect(edited.nodes["resource-plan"].status).toBe("stale");
     expect(edited.nodes["generation-gate"].status).toBe("stale");
     expect(edited.generationConfirmed).toBe(false);

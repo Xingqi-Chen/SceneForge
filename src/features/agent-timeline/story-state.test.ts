@@ -7,6 +7,7 @@ import {
 } from "./story-state";
 import type {
   ShotDependencyGraph,
+  StoryEntityCards,
   StorySafetyPlan,
   StoryShot,
 } from "./story-types";
@@ -169,5 +170,63 @@ describe("story workflow state", () => {
       "shot-4",
     ]);
     expect(edited.nodes["shot-dependency-graph"].manualEdit?.staleShotIds).not.toContain("shot-3");
+  });
+
+  it("marks entity-card edits stale through render, consistency, and generation gate nodes", () => {
+    const workflow = createStoryWorkflowState({ now, storyId: "story-1", workflowId: "story-workflow-1" });
+    const entityCards = {
+      storyId: "story-1",
+      characters: [
+        {
+          id: "hero",
+          name: "Hero",
+          role: "Lead",
+          description: "A focused traveler.",
+          continuityNotes: [],
+          outfitIds: ["hero-default-outfit"],
+          propIds: [],
+          shotIds: ["shot-1"],
+          visualAnchors: ["red scarf"],
+        },
+      ],
+      outfits: [
+        {
+          id: "hero-default-outfit",
+          characterId: "hero",
+          name: "Default outfit",
+          description: "Red scarf and dark coat.",
+          continuityNotes: [],
+          shotIds: ["shot-1"],
+          visualAnchors: ["red scarf"],
+        },
+      ],
+      props: [],
+      locations: [],
+      planningErrors: [],
+    } satisfies StoryEntityCards;
+
+    const edited = setStoryNodeManualResult(workflow, "entity-cards", entityCards, {
+      now: editedAt,
+      scope: {
+        artifactType: "entity-cards",
+        kind: "story",
+        storyId: "story-1",
+      },
+    });
+
+    expect(edited.nodes["entity-cards"].manualEdit).toMatchObject({
+      staleNodeIds: expect.arrayContaining([
+        "story-render-plan",
+        "story-consistency-check",
+        "generation-gate",
+        "shot-graph-execution",
+        "story-result-display",
+      ]),
+      staleShotIds: [],
+    });
+    expect(edited.nodes["story-render-plan"].status).toBe("stale");
+    expect(edited.nodes["story-consistency-check"].status).toBe("stale");
+    expect(edited.nodes["generation-gate"].status).toBe("stale");
+    expect(edited.generationConfirmed).toBe(false);
   });
 });

@@ -7,6 +7,7 @@ export const storyWorkflowNodeIds = [
   "shot-dependency-graph",
   "plot-state-graph",
   "character-continuity-graph",
+  "entity-cards",
   "resource-plan",
   "parameter-plan",
   "story-render-plan",
@@ -32,7 +33,24 @@ export type StoryCharacterId = string;
 
 export type StoryLocationId = string;
 
+export type StoryPropId = string;
+
+export type StoryOutfitId = string;
+
 export type PlotStateId = string;
+
+export type StoryPlanningErrorSeverity = "warning" | "error";
+
+export type StoryPlanningError = {
+  code: string;
+  message: string;
+  severity: StoryPlanningErrorSeverity;
+  path?: string;
+  shotIds?: StoryShotId[];
+  characterIds?: StoryCharacterId[];
+  propIds?: StoryPropId[];
+  locationIds?: StoryLocationId[];
+};
 
 export type StoryAudienceRating = "safe" | "suggestive" | "mature" | "explicit";
 
@@ -74,6 +92,15 @@ export type StoryBibleLocation = {
   visualAnchors: string[];
 };
 
+export type StoryBibleProp = {
+  id: StoryPropId;
+  name: string;
+  description: string;
+  continuityNotes: string[];
+  ownerCharacterIds?: StoryCharacterId[];
+  visualAnchors: string[];
+};
+
 export type StoryBible = {
   storyId: StoryId;
   title: string;
@@ -84,7 +111,9 @@ export type StoryBible = {
   visualStyle: string;
   characters: StoryBibleCharacter[];
   locations: StoryBibleLocation[];
+  props: StoryBibleProp[];
   continuityRules: string[];
+  planningErrors?: StoryPlanningError[];
 };
 
 export type StoryOutlineBeat = {
@@ -113,6 +142,37 @@ export type StoryShot = {
   camera: string;
   promptIntent: string;
   continuityNotes: string[];
+  appearanceState?: StoryShotAppearanceState;
+  interactionState?: StoryShotInteractionState;
+  locationViewState?: StoryShotLocationViewState;
+  planningErrors?: StoryPlanningError[];
+};
+
+export type StoryShotAppearanceState = {
+  characterStates: Array<{
+    characterId: StoryCharacterId;
+    appearance: string;
+    continuityNotes: string[];
+    outfitId?: StoryOutfitId;
+    visible: boolean;
+  }>;
+  notes: string[];
+  propIds: StoryPropId[];
+};
+
+export type StoryShotInteractionState = {
+  characterIds: StoryCharacterId[];
+  continuityNotes: string[];
+  description: string;
+  physicalContact: string[];
+  propIds: StoryPropId[];
+};
+
+export type StoryShotLocationViewState = {
+  camera: string;
+  viewDescription: string;
+  visibleAnchors: string[];
+  locationId?: StoryLocationId;
 };
 
 export type StorySafetyPlan = {
@@ -204,6 +264,61 @@ export type CharacterContinuityGraph = {
     visualAnchors: string[];
   }>;
   appearances: CharacterContinuityAppearance[];
+};
+
+export type StoryEntityCardCharacter = {
+  id: StoryCharacterId;
+  name: string;
+  role: string;
+  description: string;
+  continuityNotes: string[];
+  outfitIds: StoryOutfitId[];
+  propIds: StoryPropId[];
+  shotIds: StoryShotId[];
+  visualAnchors: string[];
+};
+
+export type StoryEntityCardOutfit = {
+  id: StoryOutfitId;
+  characterId: StoryCharacterId;
+  name: string;
+  description: string;
+  continuityNotes: string[];
+  shotIds: StoryShotId[];
+  visualAnchors: string[];
+};
+
+export type StoryEntityCardProp = {
+  id: StoryPropId;
+  name: string;
+  description: string;
+  continuityNotes: string[];
+  ownerCharacterIds: StoryCharacterId[];
+  shotIds: StoryShotId[];
+  visualAnchors: string[];
+};
+
+export type StoryEntityCardLocation = {
+  id: StoryLocationId;
+  name: string;
+  description: string;
+  shotIds: StoryShotId[];
+  viewStates: Array<{
+    shotId: StoryShotId;
+    camera: string;
+    viewDescription: string;
+    visibleAnchors: string[];
+  }>;
+  visualAnchors: string[];
+};
+
+export type StoryEntityCards = {
+  storyId: StoryId;
+  characters: StoryEntityCardCharacter[];
+  outfits: StoryEntityCardOutfit[];
+  props: StoryEntityCardProp[];
+  locations: StoryEntityCardLocation[];
+  planningErrors: StoryPlanningError[];
 };
 
 export type StoryConsistencyIssueSeverity = "info" | "warning" | "error";

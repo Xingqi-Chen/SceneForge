@@ -520,7 +520,8 @@ describe("StoryPlanningPreview", () => {
     });
     await clickButtonAsync("Start planning");
 
-    expect(container.textContent).toContain("Step 13 / 15");
+    expect(container.textContent).toContain("Step 14 / 16");
+    expect(container.textContent).toContain("Entity cards");
     expect(container.textContent).toContain("Generation gate summary");
     expect(container.textContent).not.toContain("old autosaved story request");
 
@@ -533,7 +534,7 @@ describe("StoryPlanningPreview", () => {
       await Promise.resolve();
     });
 
-    expect(container.textContent).toContain("Step 13 / 15");
+    expect(container.textContent).toContain("Step 14 / 16");
     expect(container.textContent).toContain("Generation gate summary");
     expect(container.textContent).not.toContain("old autosaved story request");
     expect(container.textContent).not.toContain("An old autosaved story request.");
@@ -706,8 +707,9 @@ describe("StoryPlanningPreview", () => {
 
     expect(container.textContent).toContain("User-started planning workflow");
     expect(container.textContent).toContain("New story");
-    expect(container.textContent).toContain("15 steps");
-    expect(container.textContent).toContain("Step 13 / 15");
+    expect(container.textContent).toContain("16 steps");
+    expect(container.textContent).toContain("Step 14 / 16");
+    expect(container.textContent).toContain("Entity cards");
     expect(container.textContent).toContain("Start shot generation");
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/agent-timeline/story/run-planning",
@@ -1610,7 +1612,8 @@ describe("StoryPlanningPreview", () => {
     });
     await clickButtonAsync("Start planning");
 
-    expect(container.textContent).toContain("Step 13 / 15");
+    expect(container.textContent).toContain("Step 14 / 16");
+    expect(container.textContent).toContain("Entity cards");
     expect(container.textContent).toContain("Start shot generation");
 
     await clickButtonAsync("Start shot generation");
