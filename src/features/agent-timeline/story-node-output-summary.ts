@@ -723,6 +723,49 @@ function summarizeEntityCards(result: unknown): StoryNodeOutputSummary {
   };
 }
 
+function summarizeReferenceAssetPlan(result: unknown): StoryNodeOutputSummary {
+  const plan = isRecord(result) ? result : {};
+  const assets = asRecordArray(plan.assets);
+  const notes = asStringArray(plan.planningNotes, 20);
+  const requiredCount = assets.filter((asset) => asset.importance === "required").length;
+  const recommendedCount = assets.filter((asset) => asset.importance === "recommended").length;
+  const optionalCount = assets.filter((asset) => asset.importance === "optional").length;
+
+  return {
+    title: "Reference asset plan summary",
+    metrics: [
+      { label: "Assets", value: String(assets.length) },
+      { label: "Required", value: String(requiredCount) },
+      { label: "Recommended", value: String(recommendedCount) },
+      { label: "Optional", value: String(optionalCount) },
+    ],
+    sections: [
+      {
+        title: "Reference assets",
+        emptyState: "No reference assets planned.",
+        rows: assets.map((asset) => {
+          const sourceEntity = isRecord(asset.sourceEntity) ? asset.sourceEntity : {};
+
+          return {
+            entity: compactText(sourceEntity.name, 80) || compactText(sourceEntity.id, 80),
+            type: compactText(asset.referenceType, 60),
+            importance: compactText(asset.importance, 40),
+            state: compactText(asset.resolutionState, 40),
+            shots: formatList(asset.sourceShotIds),
+            prompt: compactText(asset.canonicalPrompt, 220),
+            rationale: compactText(asset.rationale, 220),
+          };
+        }),
+      },
+      {
+        title: "Planning notes",
+        emptyState: "No reference planning notes.",
+        notes,
+      },
+    ],
+  };
+}
+
 function summarizeStorySafety(result: unknown): StoryNodeOutputSummary {
   const safety = isRecord(result) ? result : {};
   const notes = asRecordArray(safety.perShotNotes);
@@ -1215,6 +1258,8 @@ function summarizeGenerationGate(result: unknown): StoryNodeOutputSummary {
   const gate = isRecord(result) ? result : {};
   const previews = asRecordArray(gate.requestPreview);
   const sourceEdges = previews.flatMap((preview) => asRecordArray(preview.sourceImageEdges));
+  const assetFreezeGate = isRecord(gate.assetFreezeGate) ? gate.assetFreezeGate : {};
+  const blockingReferences = asRecordArray(assetFreezeGate.blockingReferences);
   const gateReady = gate.ready === true;
   const gateBlockingReason = compactText(gate.blockingReason, 220);
 
@@ -1225,6 +1270,7 @@ function summarizeGenerationGate(result: unknown): StoryNodeOutputSummary {
       { label: "Shots", value: formatNumber(gate.renderPlanShotCount, String(previews.length)) },
       { label: "Confirmation", value: gate.confirmationRequired === true ? "Required" : "Not required" },
       { label: "Source risks", value: String(sourceEdges.length) },
+      { label: "Reference blockers", value: String(blockingReferences.length) },
     ],
     shotCards: previews.map((preview, index) => {
       const baseCard = createPromptShotCard({
@@ -1273,8 +1319,22 @@ function summarizeGenerationGate(result: unknown): StoryNodeOutputSummary {
         fields: [
           { label: "Execution available", value: formatBoolean(gate.executionAvailable) },
           { label: "Preview enabled", value: formatBoolean(gate.previewEnabled) },
+          { label: "Reference freeze ready", value: formatBoolean(assetFreezeGate.ready) },
+          { label: "Required references", value: `${formatNumber(assetFreezeGate.resolvedRequiredReferenceCount, "0")} / ${formatNumber(assetFreezeGate.requiredReferenceCount, "0")} resolved` },
           { label: "Blocking reason", value: gateBlockingReason || "None" },
         ],
+      },
+      {
+        title: "Blocking required references",
+        emptyState: "No blocking required references.",
+        rows: blockingReferences.map((reference) => ({
+          entity: compactText(reference.entityName, 80) || compactText(reference.entityId, 80),
+          "entity type": compactText(reference.entityType, 60),
+          "reference type": compactText(reference.referenceType, 60),
+          importance: compactText(reference.importance, 40),
+          state: compactText(reference.resolutionState, 40),
+          reason: compactText(reference.reason, 220),
+        })),
       },
       {
         title: "Source-image risk",
@@ -1435,6 +1495,8 @@ export function createStoryNodeOutputSummary(
       return summarizeCharacterContinuity(result);
     case "entity-cards":
       return summarizeEntityCards(result);
+    case "reference-asset-plan":
+      return summarizeReferenceAssetPlan(result);
     case "resource-plan":
       return summarizeResourcePlan(result);
     case "parameter-plan":

@@ -4,8 +4,9 @@ import type { LlmChatResponse } from "@/features/llm";
 import { confirmAndExecuteStoryGeneration } from "@/features/agent-timeline/story-api";
 import type { StoryShotExecutionAdapter } from "@/features/agent-timeline/story-execution";
 import type { StoryRenderPlan } from "@/features/agent-timeline/story-planning";
+import { evaluateStoryReferenceAssetFreezeGate } from "@/features/agent-timeline/story-reference-assets";
 import { runStoryPlanning } from "@/features/agent-timeline/story-runner";
-import type { StoryShotId } from "@/features/agent-timeline/story-types";
+import type { StoryReferenceAssetPlan, StoryShotId } from "@/features/agent-timeline/story-types";
 
 const comfyMocks = vi.hoisted(() => ({
   adapter: vi.fn(),
@@ -145,6 +146,37 @@ function planningResponses() {
       })),
     }),
     response({
+      characters: [{
+        id: "courier",
+        name: "Courier",
+        role: "Lead",
+        description: "A focused courier.",
+        continuityNotes: [],
+        outfitIds: ["courier-blue-jacket"],
+        propIds: [],
+        shotIds: shots.map((shot) => shot.id),
+        visualAnchors: ["blue jacket"],
+      }],
+      outfits: [{
+        id: "courier-blue-jacket",
+        characterId: "courier",
+        name: "Blue courier jacket",
+        description: "A bright blue courier jacket.",
+        continuityNotes: [],
+        shotIds: shots.map((shot) => shot.id),
+        visualAnchors: ["blue jacket"],
+      }],
+      props: [],
+      locations: [{
+        id: "market",
+        name: "Market",
+        description: "A neon market.",
+        shotIds: shots.map((shot) => shot.id),
+        viewStates: [],
+        visualAnchors: ["wet signs"],
+      }],
+    }),
+    response({
       checkpoint: { resource: { id: "checkpoint-local" }, reason: "Local." },
       loras: [],
       recommendationReason: "Use local checkpoint.",
@@ -210,10 +242,55 @@ async function createExecutedWorkflow() {
   });
 
   return confirmAndExecuteStoryGeneration({
-    workflow: planned,
+    workflow: withPromptOnlyReferenceFallbacks(planned),
     now: () => "2026-06-15T00:00:01.000Z",
     executeShot: ({ request }) => adapterResult(request.shotId, "first"),
   });
+}
+
+function withPromptOnlyReferenceFallbacks<TWorkflow extends Awaited<ReturnType<typeof runStoryPlanning>>>(
+  workflow: TWorkflow,
+): TWorkflow {
+  const plan = workflow.nodes["reference-asset-plan"].result as StoryReferenceAssetPlan;
+  const referenceAssetPlan = {
+    ...plan,
+    assets: plan.assets.map((asset) =>
+      asset.importance === "required"
+        ? {
+            ...asset,
+            resolutionState: "prompt-only" as const,
+            promptOnlyFallback: {
+              decidedAt: "2026-06-15T00:00:00.000Z",
+              decidedBy: "user" as const,
+              reason: "Route fixture explicitly accepts prompt-only reference fallback.",
+            },
+          }
+        : asset,
+    ),
+  } satisfies StoryReferenceAssetPlan;
+  const assetFreezeGate = evaluateStoryReferenceAssetFreezeGate(referenceAssetPlan);
+  const generationGate = workflow.nodes["generation-gate"].result as Record<string, unknown>;
+
+  return {
+    ...workflow,
+    nodes: {
+      ...workflow.nodes,
+      "reference-asset-plan": {
+        ...workflow.nodes["reference-asset-plan"],
+        result: referenceAssetPlan,
+      },
+      "generation-gate": {
+        ...workflow.nodes["generation-gate"],
+        result: {
+          ...generationGate,
+          assetFreezeGate,
+          blockingReason: "Confirm generation to start shot graph execution.",
+          executionAvailable: true,
+          ready: true,
+        },
+      },
+    },
+  };
 }
 
 afterEach(() => {

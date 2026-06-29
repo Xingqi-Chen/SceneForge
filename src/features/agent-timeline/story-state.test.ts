@@ -216,6 +216,7 @@ describe("story workflow state", () => {
 
     expect(edited.nodes["entity-cards"].manualEdit).toMatchObject({
       staleNodeIds: expect.arrayContaining([
+        "reference-asset-plan",
         "story-render-plan",
         "story-consistency-check",
         "generation-gate",
@@ -224,6 +225,7 @@ describe("story workflow state", () => {
       ]),
       staleShotIds: [],
     });
+    expect(edited.nodes["reference-asset-plan"].status).toBe("stale");
     expect(edited.nodes["story-render-plan"].status).toBe("stale");
     expect(edited.nodes["story-consistency-check"].status).toBe("stale");
     expect(edited.nodes["generation-gate"].status).toBe("stale");

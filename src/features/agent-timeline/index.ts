@@ -6,6 +6,7 @@ export * from "./state";
 export * from "./story-input";
 export * from "./story-execution";
 export * from "./story-planning";
+export * from "./story-reference-assets";
 export * from "./story-state";
 export type * from "./story-types";
 export * from "./story-workflow";

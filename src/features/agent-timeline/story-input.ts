@@ -18,6 +18,10 @@ import {
   type StoryShotGraphExecutionState,
   type StoryShotResultReference,
 } from "./story-execution";
+import {
+  deriveStoryReferenceAssetPlan,
+  evaluateStoryReferenceAssetFreezeGate,
+} from "./story-reference-assets";
 import { refreshStoryWorkflowReadiness, type StoryWorkflowState } from "./story-state";
 import {
   validateShotDependencyGraph,
@@ -29,6 +33,8 @@ import type {
   StoryAudienceRating,
   StoryBible,
   StoryEntityCards,
+  StoryReferenceAssetFreezeGate,
+  StoryReferenceAssetPlan,
   StoryConsistencyCheck,
   StoryConsistencyIssue,
   StoryInput,
@@ -82,6 +88,7 @@ export type StoryGenerationGatePreview = {
   storyId: string;
   ready: boolean;
   executionAvailable: boolean;
+  assetFreezeGate: StoryReferenceAssetFreezeGate;
   blockingReason?: string;
   confirmationRequired: boolean;
   nsfwContext: StoryNsfwContext;
@@ -108,6 +115,7 @@ export type StoryPlanningArtifacts = {
   plotStateGraph: PlotStateGraph;
   characterContinuityGraph: CharacterContinuityGraph;
   entityCards: StoryEntityCards;
+  referenceAssetPlan: StoryReferenceAssetPlan;
   resourcePlan: StoryResourcePlan;
   parameterPlan: StoryParameterPlan;
   renderPlan: StoryRenderPlan;
@@ -700,12 +708,21 @@ function createConsistencyCheck({
   };
 }
 
-function createGenerationGate(renderPlan: StoryRenderPlan): StoryGenerationGatePreview {
+function createGenerationGate(
+  renderPlan: StoryRenderPlan,
+  referenceAssetPlan: StoryReferenceAssetPlan,
+): StoryGenerationGatePreview {
+  const assetFreezeGate = evaluateStoryReferenceAssetFreezeGate(referenceAssetPlan);
+  const ready = assetFreezeGate.ready;
+
   return {
     storyId: renderPlan.storyId,
-    ready: true,
-    executionAvailable: true,
-    blockingReason: "Confirm generation to start shot graph execution.",
+    ready,
+    executionAvailable: ready,
+    assetFreezeGate,
+    blockingReason: ready
+      ? "Confirm generation to start shot graph execution."
+      : assetFreezeGate.blockingReferences[0]?.reason ?? "Resolve required Story reference assets before generation.",
     confirmationRequired: true,
     nsfwContext: renderPlan.nsfwContext,
     renderPlanShotCount: renderPlan.shots.length,
@@ -727,6 +744,11 @@ export function createStoryPlanningArtifacts(
   const plotStateGraph = createPlotStateGraph(input, outline, shots);
   const characterContinuityGraph = createCharacterContinuityGraph(input, bible, shots);
   const entityCards = createEntityCards(input, bible, shots, characterContinuityGraph);
+  const referenceAssetPlan = deriveStoryReferenceAssetPlan({
+    entityCards,
+    shots,
+    storyId: input.storyId,
+  });
   const resourcePlan = createResourcePlan(input, resourceCandidates);
   const parameterPlan = createParameterPlan(input, resourcePlan, shots);
   const renderPlan = assembleStoryRenderPlan({
@@ -747,7 +769,7 @@ export function createStoryPlanningArtifacts(
     shots,
     timestamp,
   });
-  const generationGate = createGenerationGate(renderPlan);
+  const generationGate = createGenerationGate(renderPlan, referenceAssetPlan);
 
   return {
     input,
@@ -759,6 +781,7 @@ export function createStoryPlanningArtifacts(
     plotStateGraph,
     characterContinuityGraph,
     entityCards,
+    referenceAssetPlan,
     resourcePlan,
     parameterPlan,
     renderPlan,
@@ -820,6 +843,7 @@ const artifactNodeMap = {
   "plot-state-graph": "plotStateGraph",
   "character-continuity-graph": "characterContinuityGraph",
   "entity-cards": "entityCards",
+  "reference-asset-plan": "referenceAssetPlan",
   "resource-plan": "resourcePlan",
   "parameter-plan": "parameterPlan",
   "story-render-plan": "renderPlan",

@@ -18,9 +18,11 @@ import {
 } from "./story-state";
 import {
   createStoryConsistencyCheckFromWorkflow,
+  getStoryReferenceAssetPlanFromWorkflow,
   getStoryRenderPlanFromWorkflow,
   isStoryResourcePlanExecutable,
 } from "./story-llm-adapters";
+import { evaluateStoryReferenceAssetFreezeGate } from "./story-reference-assets";
 import { storyGraphWorkflowMode, storyWorkflowDefinition } from "./story-workflow";
 import type { StoryShotId } from "./story-types";
 
@@ -68,7 +70,7 @@ export function sanitizeStoryWorkflowState(value: unknown): StoryWorkflowState |
 
   const nodes: Record<string, unknown> = {};
   for (const nodeId of storyWorkflowDefinition.nodeIds) {
-    const node = value.nodes[nodeId] ?? (nodeId === "entity-cards"
+    const node = value.nodes[nodeId] ?? (nodeId === "entity-cards" || nodeId === "reference-asset-plan"
       ? {
           nodeId,
           status: "blocked",
@@ -113,6 +115,7 @@ function assertGateReady(workflow: StoryWorkflowState): {
   const gateResult = gate.result;
   const renderPlan = getStoryRenderPlanFromWorkflow(workflow);
   const consistency = createStoryConsistencyCheckFromWorkflow(workflow, () => workflow.updatedAt);
+  const assetFreezeGate = evaluateStoryReferenceAssetFreezeGate(getStoryReferenceAssetPlanFromWorkflow(workflow));
 
   if (!isRecord(gateResult) || gateResult.ready !== true || gate.status !== "done") {
     throw new StoryApiValidationError("Story generation gate is not ready.", 400, {
@@ -124,6 +127,12 @@ function assertGateReady(workflow: StoryWorkflowState): {
   if (!consistency.passed) {
     throw new StoryApiValidationError("Story consistency checks must pass before generation.", 400, {
       issues: consistency.issues,
+    });
+  }
+
+  if (!assetFreezeGate.ready) {
+    throw new StoryApiValidationError("Story reference asset freeze gate is blocked.", 400, {
+      blockingReferences: assetFreezeGate.blockingReferences,
     });
   }
 
