@@ -28,6 +28,7 @@ import type {
   ShotDependencyGraph,
   StoryAudienceRating,
   StoryBible,
+  StoryEntityCards,
   StoryConsistencyCheck,
   StoryConsistencyIssue,
   StoryInput,
@@ -106,6 +107,7 @@ export type StoryPlanningArtifacts = {
   dependencyGraph: ShotDependencyGraph;
   plotStateGraph: PlotStateGraph;
   characterContinuityGraph: CharacterContinuityGraph;
+  entityCards: StoryEntityCards;
   resourcePlan: StoryResourcePlan;
   parameterPlan: StoryParameterPlan;
   renderPlan: StoryRenderPlan;
@@ -268,6 +270,7 @@ function createBible(input: StoryInput): StoryBible {
         visualAnchors: ["establishing environment", "recurring background details"],
       },
     ],
+    props: [],
     continuityRules: [
       "Preserve the main character identity across all shots.",
       "Carry important props and environmental details forward when referenced.",
@@ -328,6 +331,32 @@ function createShots(input: StoryInput, outline: StoryOutline): StoryShot[] {
         "Keep main character identity consistent.",
         order > 1 ? `Preserve visual anchors from shot ${order - 1}.` : "Establish reusable visual anchors.",
       ],
+      appearanceState: {
+        characterStates: [
+          {
+            characterId: "main-character",
+            appearance: "Primary subject inferred from the story request in a consistent outfit.",
+            continuityNotes: ["Keep the main character silhouette and outfit stable."],
+            outfitId: "main-character-default-outfit",
+            visible: true,
+          },
+        ],
+        notes: ["Local planning default; LLM planning should refine visible appearance state."],
+        propIds: [],
+      },
+      interactionState: {
+        characterIds: ["main-character"],
+        continuityNotes: ["Local planning default; LLM planning should refine interaction state."],
+        description: beat?.summary ?? input.rawIntent,
+        physicalContact: [],
+        propIds: [],
+      },
+      locationViewState: {
+        camera: order === 1 ? "Wide establishing frame" : order === shotCount ? "Resolved closing frame" : "Medium continuity frame",
+        locationId: "primary-location",
+        viewDescription: beat?.summary ?? input.rawIntent,
+        visibleAnchors: ["establishing environment", "recurring background details"],
+      },
     };
   });
 }
@@ -405,6 +434,73 @@ function createCharacterContinuityGraph(input: StoryInput, bible: StoryBible, sh
       expression: shot.order === 1 ? "establishing expression" : "continuity expression",
       continuityNotes: [...shot.continuityNotes],
     })),
+  };
+}
+
+function createEntityCards(
+  input: StoryInput,
+  bible: StoryBible,
+  shots: readonly StoryShot[],
+  characterContinuityGraph: CharacterContinuityGraph,
+): StoryEntityCards {
+  const outfits = characterContinuityGraph.characters.map((character) => ({
+    id: `${character.characterId}-default-outfit`,
+    characterId: character.characterId,
+    name: `${character.name} default outfit`,
+    description: character.canonicalDescription,
+    continuityNotes: ["Local planning default; LLM planning should refine outfit cards."],
+    shotIds: shots
+      .filter((shot) => shot.characterIds.includes(character.characterId))
+      .map((shot) => shot.id),
+    visualAnchors: [...character.visualAnchors],
+  }));
+
+  return {
+    storyId: input.storyId,
+    characters: bible.characters.map((character) => ({
+      id: character.id,
+      name: character.name,
+      role: character.role,
+      description: character.description,
+      continuityNotes: [...character.continuityNotes],
+      outfitIds: outfits.filter((outfit) => outfit.characterId === character.id).map((outfit) => outfit.id),
+      propIds: [],
+      shotIds: shots.filter((shot) => shot.characterIds.includes(character.id)).map((shot) => shot.id),
+      visualAnchors: [...character.visualAnchors],
+    })),
+    outfits,
+    props: bible.props.map((prop) => ({
+      id: prop.id,
+      name: prop.name,
+      description: prop.description,
+      continuityNotes: [...prop.continuityNotes],
+      ownerCharacterIds: [...(prop.ownerCharacterIds ?? [])],
+      shotIds: shots
+        .filter((shot) =>
+          (shot.appearanceState?.propIds ?? []).includes(prop.id) ||
+          (shot.interactionState?.propIds ?? []).includes(prop.id),
+        )
+        .map((shot) => shot.id),
+      visualAnchors: [...prop.visualAnchors],
+    })),
+    locations: bible.locations.map((location) => ({
+      id: location.id,
+      name: location.name,
+      description: location.description,
+      shotIds: shots
+        .filter((shot) => shot.locationId === location.id || shot.locationViewState?.locationId === location.id)
+        .map((shot) => shot.id),
+      viewStates: shots
+        .filter((shot) => shot.locationId === location.id || shot.locationViewState?.locationId === location.id)
+        .map((shot) => ({
+          shotId: shot.id,
+          camera: shot.locationViewState?.camera ?? shot.camera,
+          viewDescription: shot.locationViewState?.viewDescription ?? shot.description,
+          visibleAnchors: [...(shot.locationViewState?.visibleAnchors ?? [])],
+        })),
+      visualAnchors: [...location.visualAnchors],
+    })),
+    planningErrors: [],
   };
 }
 
@@ -630,6 +726,7 @@ export function createStoryPlanningArtifacts(
   const dependencyGraph = createDependencyGraph(input, shots);
   const plotStateGraph = createPlotStateGraph(input, outline, shots);
   const characterContinuityGraph = createCharacterContinuityGraph(input, bible, shots);
+  const entityCards = createEntityCards(input, bible, shots, characterContinuityGraph);
   const resourcePlan = createResourcePlan(input, resourceCandidates);
   const parameterPlan = createParameterPlan(input, resourcePlan, shots);
   const renderPlan = assembleStoryRenderPlan({
@@ -661,6 +758,7 @@ export function createStoryPlanningArtifacts(
     dependencyGraph,
     plotStateGraph,
     characterContinuityGraph,
+    entityCards,
     resourcePlan,
     parameterPlan,
     renderPlan,
@@ -721,6 +819,7 @@ const artifactNodeMap = {
   "shot-dependency-graph": "dependencyGraph",
   "plot-state-graph": "plotStateGraph",
   "character-continuity-graph": "characterContinuityGraph",
+  "entity-cards": "entityCards",
   "resource-plan": "resourcePlan",
   "parameter-plan": "parameterPlan",
   "story-render-plan": "renderPlan",

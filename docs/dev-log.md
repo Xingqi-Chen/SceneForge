@@ -4,6 +4,26 @@ This log records dated implementation and documentation work. Keep entries conci
 
 ## 2026-06-29
 
+### T25 / Issue #102 Story Entity and Shot-State Contracts
+
+Summary:
+
+- Added `StoryBible.props`, shot `appearanceState` / `interactionState` / `locationViewState`, and the `entity-cards` Story workflow node.
+- Normalized Story props, shot state, and entity-card structured LLM output with recoverable `StoryPlanningError` entries for missing or invalid references.
+- Preserved derived entity cards when LLM output returns partial character, outfit, prop, or location sections.
+- Added recoverable diagnostics when LLM entity-card sections are present but empty.
+- Wired entity-card planning into Story render planning, consistency checks, compact node summaries, deterministic `/story` planning defaults, and legacy workflow compatibility.
+- Added stale propagation coverage for entity-card edits and shot-state edits.
+- Updated product and technical specs for the T25 planning contract without adding T26 reference asset-plan, freeze gate, generation, review, or execution behavior.
+
+Validation:
+
+- `npm test -- --run src/features/agent-timeline/story-api.test.ts src/features/agent-timeline/story-workflow.test.ts src/features/agent-timeline/story-state.test.ts src/features/agent-timeline/story-input.test.ts src/features/agent-timeline/story-llm-adapters.test.ts` passed with 5 files and 72 tests.
+- `npm test -- --run src/features/agent-timeline` passed with 28 files and 277 tests.
+- `npm run typecheck` passed.
+- `npm run lint` passed with 23 existing warnings.
+- `npm run build` passed.
+
 ### Issue #98 Story Selected Resource Loader Coverage
 
 Summary:

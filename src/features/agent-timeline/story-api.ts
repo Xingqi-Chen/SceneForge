@@ -68,7 +68,14 @@ export function sanitizeStoryWorkflowState(value: unknown): StoryWorkflowState |
 
   const nodes: Record<string, unknown> = {};
   for (const nodeId of storyWorkflowDefinition.nodeIds) {
-    const node = value.nodes[nodeId];
+    const node = value.nodes[nodeId] ?? (nodeId === "entity-cards"
+      ? {
+          nodeId,
+          status: "blocked",
+          source: "system",
+          updatedAt: value.updatedAt,
+        }
+      : undefined);
     if (!isRecord(node) || node.nodeId !== nodeId || typeof node.status !== "string" || typeof node.updatedAt !== "string") {
       return null;
     }

@@ -47,13 +47,27 @@ import type {
   StoryBible,
   StoryBibleCharacter,
   StoryBibleLocation,
+  StoryBibleProp,
+  StoryCharacterId,
   StoryConsistencyCheck,
   StoryConsistencyIssue,
+  StoryEntityCardCharacter,
+  StoryEntityCardLocation,
+  StoryEntityCardOutfit,
+  StoryEntityCardProp,
+  StoryEntityCards,
   StoryInput,
+  StoryLocationId,
   StoryOutline,
+  StoryOutfitId,
+  StoryPlanningError,
+  StoryPropId,
   StorySafetyPlan,
   StoryShot,
+  StoryShotAppearanceState,
   StoryShotId,
+  StoryShotInteractionState,
+  StoryShotLocationViewState,
   StoryWorkflowNodeId,
 } from "./story-types";
 import type {
@@ -106,6 +120,7 @@ export type StoryLlmNodeAdapterOptions = {
 
 const maxCharacters = 12;
 const maxLocations = 12;
+const maxProps = 24;
 const maxWarnings = 12;
 const storyNsfwModelExcludedNodeIds = new Set<StoryWorkflowNodeId>([
   "shot-dependency-graph",
@@ -345,6 +360,93 @@ function normalizeId(value: unknown, fallback: string) {
   return text || fallback;
 }
 
+function uniqueStringList(values: readonly string[]) {
+  const seen = new Set<string>();
+  const result: string[] = [];
+
+  for (const value of values) {
+    if (!value || seen.has(value)) {
+      continue;
+    }
+
+    seen.add(value);
+    result.push(value);
+  }
+
+  return result;
+}
+
+function createPlanningError({
+  characterIds,
+  code,
+  locationIds,
+  message,
+  path,
+  propIds,
+  severity = "warning",
+  shotIds,
+}: {
+  characterIds?: StoryPlanningError["characterIds"];
+  code: string;
+  locationIds?: StoryPlanningError["locationIds"];
+  message: string;
+  path?: string;
+  propIds?: StoryPlanningError["propIds"];
+  severity?: StoryPlanningError["severity"];
+  shotIds?: StoryPlanningError["shotIds"];
+}): StoryPlanningError {
+  return {
+    code,
+    message,
+    severity,
+    ...(path ? { path } : {}),
+    ...(shotIds?.length ? { shotIds } : {}),
+    ...(characterIds?.length ? { characterIds } : {}),
+    ...(propIds?.length ? { propIds } : {}),
+    ...(locationIds?.length ? { locationIds } : {}),
+  };
+}
+
+function pushPlanningError(errors: StoryPlanningError[], error: StoryPlanningError) {
+  errors.push(error);
+}
+
+function filterKnownIds({
+  code,
+  errors,
+  ids,
+  knownIds,
+  label,
+  path,
+  shotId,
+}: {
+  code: string;
+  errors: StoryPlanningError[];
+  ids: string[];
+  knownIds: ReadonlySet<string>;
+  label: string;
+  path: string;
+  shotId?: StoryShotId;
+}) {
+  const result: string[] = [];
+
+  for (const id of uniqueStringList(ids)) {
+    if (knownIds.has(id)) {
+      result.push(id);
+      continue;
+    }
+
+    pushPlanningError(errors, createPlanningError({
+      code,
+      message: `${label} references unknown id "${id}".`,
+      path,
+      ...(shotId ? { shotIds: [shotId] } : {}),
+    }));
+  }
+
+  return result;
+}
+
 function normalizeCharacter(value: unknown, index: number): StoryBibleCharacter {
   const raw = isRecord(value) ? value : {};
   const id = normalizeId(raw.id ?? raw.name, `character-${index + 1}`);
@@ -373,18 +475,51 @@ function normalizeLocation(value: unknown, index: number): StoryBibleLocation {
   };
 }
 
+function normalizeProp(
+  value: unknown,
+  index: number,
+  characterIds: ReadonlySet<StoryCharacterId>,
+  planningErrors: StoryPlanningError[],
+): StoryBibleProp {
+  const raw = isRecord(value) ? value : {};
+  const id = normalizeId(raw.id ?? raw.name, `prop-${index + 1}`);
+  const name = compactText(raw.name, 80) || `Prop ${index + 1}`;
+  const ownerCharacterIds = filterKnownIds({
+    code: "story_bible_prop_owner_ref",
+    errors: planningErrors,
+    ids: normalizeStringList(raw.ownerCharacterIds ?? raw.owner_character_ids, 12),
+    knownIds: characterIds,
+    label: `Story Bible prop "${id}"`,
+    path: `props.${index}.ownerCharacterIds`,
+  }) as StoryCharacterId[];
+
+  return {
+    id,
+    name,
+    description: displayText(raw.description ?? raw.summary) || name,
+    continuityNotes: normalizeStringList(raw.continuityNotes ?? raw.continuity_notes, 8),
+    ...(ownerCharacterIds.length > 0 ? { ownerCharacterIds } : {}),
+    visualAnchors: normalizeStringList(raw.visualAnchors ?? raw.visual_anchors, 8),
+  };
+}
+
 export function normalizeStoryBible(raw: unknown, input: StoryInput): StoryBible {
   const parsed = typeof raw === "string" ? parseJsonObjectFromText(raw) : raw;
   if (!isRecord(parsed)) {
     throw malformedResponse("Story bible response must be a JSON object.", { raw });
   }
 
+  const planningErrors: StoryPlanningError[] = [];
   const characters = (Array.isArray(parsed.characters) ? parsed.characters : [])
     .map(normalizeCharacter)
     .slice(0, maxCharacters);
   const locations = (Array.isArray(parsed.locations) ? parsed.locations : [])
     .map(normalizeLocation)
     .slice(0, maxLocations);
+  const characterIds = new Set(characters.map((character) => character.id));
+  const props = (Array.isArray(parsed.props) ? parsed.props : [])
+    .map((prop, index) => normalizeProp(prop, index, characterIds, planningErrors))
+    .slice(0, maxProps);
 
   return {
     storyId: compactText(parsed.storyId, 120) || input.storyId,
@@ -400,7 +535,9 @@ export function normalizeStoryBible(raw: unknown, input: StoryInput): StoryBible
     locations: locations.length > 0
       ? locations
       : [normalizeLocation({ id: "primary-location", name: "Primary location", description: input.rawIntent }, 0)],
+    props,
     continuityRules: normalizeStringList(parsed.continuityRules ?? parsed.continuity_rules, 12),
+    ...(planningErrors.length > 0 ? { planningErrors } : {}),
   };
 }
 
@@ -459,6 +596,257 @@ export function normalizeStoryOutline(raw: unknown, input: StoryInput, bible: St
   };
 }
 
+function createDefaultAppearanceState(shot: Pick<StoryShot, "characterIds" | "continuityNotes" | "description" | "id" | "promptIntent">): StoryShotAppearanceState {
+  return {
+    characterStates: shot.characterIds.map((characterId) => ({
+      characterId,
+      appearance: shot.promptIntent || shot.description,
+      continuityNotes: [...shot.continuityNotes],
+      visible: true,
+    })),
+    notes: [...shot.continuityNotes],
+    propIds: [],
+  };
+}
+
+function createDefaultInteractionState(shot: Pick<StoryShot, "characterIds" | "continuityNotes" | "description" | "id">): StoryShotInteractionState {
+  return {
+    characterIds: [...shot.characterIds],
+    continuityNotes: [...shot.continuityNotes],
+    description: shot.description,
+    physicalContact: [],
+    propIds: [],
+  };
+}
+
+function createDefaultLocationViewState(shot: Pick<StoryShot, "camera" | "description" | "locationId">): StoryShotLocationViewState {
+  return {
+    camera: shot.camera,
+    viewDescription: shot.description,
+    visibleAnchors: [],
+    ...(shot.locationId ? { locationId: shot.locationId } : {}),
+  };
+}
+
+function normalizeShotAppearanceState({
+  characterIds,
+  planningErrors,
+  propIds,
+  raw,
+  shot,
+}: {
+  characterIds: ReadonlySet<StoryCharacterId>;
+  planningErrors: StoryPlanningError[];
+  propIds: ReadonlySet<StoryPropId>;
+  raw: unknown;
+  shot: StoryShot;
+}): StoryShotAppearanceState {
+  const fallback = createDefaultAppearanceState(shot);
+  if (raw === undefined) {
+    pushPlanningError(planningErrors, createPlanningError({
+      code: "shot_appearance_state_missing",
+      message: `Shot "${shot.id}" is missing appearanceState; local defaults were applied.`,
+      path: "appearanceState",
+      shotIds: [shot.id],
+    }));
+    return fallback;
+  }
+
+  if (!isRecord(raw)) {
+    pushPlanningError(planningErrors, createPlanningError({
+      code: "shot_appearance_state_malformed",
+      message: `Shot "${shot.id}" appearanceState must be an object; local defaults were applied.`,
+      path: "appearanceState",
+      shotIds: [shot.id],
+    }));
+    return fallback;
+  }
+
+  const rawCharacterStates = Array.isArray(raw.characterStates)
+    ? raw.characterStates
+    : Array.isArray(raw.character_states)
+      ? raw.character_states
+      : [];
+  const characterStates = rawCharacterStates
+    .map((state, index) => {
+      if (!isRecord(state)) {
+        pushPlanningError(planningErrors, createPlanningError({
+          code: "shot_appearance_character_state_malformed",
+          message: `Shot "${shot.id}" appearanceState.characterStates.${index} must be an object.`,
+          path: `appearanceState.characterStates.${index}`,
+          shotIds: [shot.id],
+        }));
+        return null;
+      }
+
+      const characterId = compactText(state.characterId ?? state.character_id, 80);
+      if (!characterIds.has(characterId)) {
+        pushPlanningError(planningErrors, createPlanningError({
+          characterIds: characterId ? [characterId] : undefined,
+          code: "shot_appearance_character_ref",
+          message: `Shot "${shot.id}" appearanceState references unknown character "${characterId || "(missing)"}".`,
+          path: `appearanceState.characterStates.${index}.characterId`,
+          shotIds: [shot.id],
+        }));
+        return null;
+      }
+
+      return {
+        characterId,
+        appearance: displayText(state.appearance ?? state.description) ||
+          shot.promptIntent ||
+          shot.description,
+        continuityNotes: normalizeStringList(state.continuityNotes ?? state.continuity_notes, 8),
+        ...(compactText(state.outfitId ?? state.outfit_id, 80)
+          ? { outfitId: compactText(state.outfitId ?? state.outfit_id, 80) }
+          : {}),
+        visible: state.visible === false ? false : true,
+      };
+    })
+    .filter((state): state is StoryShotAppearanceState["characterStates"][number] => Boolean(state));
+
+  const validPropIds = filterKnownIds({
+    code: "shot_appearance_prop_ref",
+    errors: planningErrors,
+    ids: normalizeStringList(raw.propIds ?? raw.prop_ids, 24),
+    knownIds: propIds,
+    label: `Shot "${shot.id}" appearanceState`,
+    path: "appearanceState.propIds",
+    shotId: shot.id,
+  }) as StoryPropId[];
+
+  if (characterStates.length === 0 && rawCharacterStates.length > 0) {
+    pushPlanningError(planningErrors, createPlanningError({
+      code: "shot_appearance_state_empty_after_validation",
+      message: `Shot "${shot.id}" appearanceState did not contain any valid character states; local character defaults were applied.`,
+      path: "appearanceState.characterStates",
+      shotIds: [shot.id],
+    }));
+  }
+
+  return {
+    characterStates: characterStates.length > 0 ? characterStates : fallback.characterStates,
+    notes: normalizeStringList(raw.notes ?? raw.continuityNotes ?? raw.continuity_notes, 8),
+    propIds: validPropIds,
+  };
+}
+
+function normalizeShotInteractionState({
+  characterIds,
+  planningErrors,
+  propIds,
+  raw,
+  shot,
+}: {
+  characterIds: ReadonlySet<StoryCharacterId>;
+  planningErrors: StoryPlanningError[];
+  propIds: ReadonlySet<StoryPropId>;
+  raw: unknown;
+  shot: StoryShot;
+}): StoryShotInteractionState {
+  const fallback = createDefaultInteractionState(shot);
+  if (raw === undefined) {
+    pushPlanningError(planningErrors, createPlanningError({
+      code: "shot_interaction_state_missing",
+      message: `Shot "${shot.id}" is missing interactionState; local defaults were applied.`,
+      path: "interactionState",
+      shotIds: [shot.id],
+    }));
+    return fallback;
+  }
+
+  if (!isRecord(raw)) {
+    pushPlanningError(planningErrors, createPlanningError({
+      code: "shot_interaction_state_malformed",
+      message: `Shot "${shot.id}" interactionState must be an object; local defaults were applied.`,
+      path: "interactionState",
+      shotIds: [shot.id],
+    }));
+    return fallback;
+  }
+
+  const validCharacterIds = filterKnownIds({
+    code: "shot_interaction_character_ref",
+    errors: planningErrors,
+    ids: normalizeStringList(raw.characterIds ?? raw.character_ids, 16),
+    knownIds: characterIds,
+    label: `Shot "${shot.id}" interactionState`,
+    path: "interactionState.characterIds",
+    shotId: shot.id,
+  }) as StoryCharacterId[];
+  const validPropIds = filterKnownIds({
+    code: "shot_interaction_prop_ref",
+    errors: planningErrors,
+    ids: normalizeStringList(raw.propIds ?? raw.prop_ids, 24),
+    knownIds: propIds,
+    label: `Shot "${shot.id}" interactionState`,
+    path: "interactionState.propIds",
+    shotId: shot.id,
+  }) as StoryPropId[];
+
+  return {
+    characterIds: validCharacterIds.length > 0 ? validCharacterIds : fallback.characterIds,
+    continuityNotes: normalizeStringList(raw.continuityNotes ?? raw.continuity_notes, 8),
+    description: displayText(raw.description ?? raw.summary) || fallback.description,
+    physicalContact: normalizeStringList(raw.physicalContact ?? raw.physical_contact, 8),
+    propIds: validPropIds,
+  };
+}
+
+function normalizeShotLocationViewState({
+  locationIds,
+  planningErrors,
+  raw,
+  shot,
+}: {
+  locationIds: ReadonlySet<StoryLocationId>;
+  planningErrors: StoryPlanningError[];
+  raw: unknown;
+  shot: StoryShot;
+}): StoryShotLocationViewState {
+  const fallback = createDefaultLocationViewState(shot);
+  if (raw === undefined) {
+    pushPlanningError(planningErrors, createPlanningError({
+      code: "shot_location_view_state_missing",
+      message: `Shot "${shot.id}" is missing locationViewState; local defaults were applied.`,
+      path: "locationViewState",
+      shotIds: [shot.id],
+    }));
+    return fallback;
+  }
+
+  if (!isRecord(raw)) {
+    pushPlanningError(planningErrors, createPlanningError({
+      code: "shot_location_view_state_malformed",
+      message: `Shot "${shot.id}" locationViewState must be an object; local defaults were applied.`,
+      path: "locationViewState",
+      shotIds: [shot.id],
+    }));
+    return fallback;
+  }
+
+  const rawLocationId = compactText(raw.locationId ?? raw.location_id, 80);
+  const locationId = rawLocationId || shot.locationId;
+
+  if (rawLocationId && !locationIds.has(rawLocationId)) {
+    pushPlanningError(planningErrors, createPlanningError({
+      code: "shot_location_view_ref",
+      locationIds: [rawLocationId],
+      message: `Shot "${shot.id}" locationViewState references unknown location "${rawLocationId}".`,
+      path: "locationViewState.locationId",
+      shotIds: [shot.id],
+    }));
+  }
+
+  return {
+    camera: displayText(raw.camera) || fallback.camera,
+    viewDescription: displayText(raw.viewDescription ?? raw.view_description ?? raw.description) ||
+      fallback.viewDescription,
+    visibleAnchors: normalizeStringList(raw.visibleAnchors ?? raw.visible_anchors, 8),
+    ...(locationId && locationIds.has(locationId) ? { locationId } : {}),
+  };
+}
+
 export function normalizeStoryShots(
   raw: unknown,
   input: StoryInput,
@@ -478,6 +866,7 @@ export function normalizeStoryShots(
 
   const characterIds = new Set(bible.characters.map((character) => character.id));
   const locationIds = new Set(bible.locations.map((location) => location.id));
+  const propIds = new Set((bible.props ?? []).map((prop) => prop.id));
   const beatIds = new Set(outline.beats.map((beat) => beat.id));
   const fallbackCharacterId = bible.characters[0]?.id;
   const fallbackLocationId = bible.locations[0]?.id;
@@ -497,8 +886,7 @@ export function normalizeStoryShots(
     const locationId = compactText(rawShot.locationId ?? rawShot.location_id, 80);
     const shotCharacterIds = normalizeStringList(rawShot.characterIds ?? rawShot.character_ids, 16)
       .filter((characterId) => characterIds.has(characterId));
-
-    return {
+    const baseShot = {
       id,
       storyId: input.storyId,
       order,
@@ -519,6 +907,35 @@ export function normalizeStoryShots(
       camera: displayText(rawShot.camera) || "Storyboard frame",
       promptIntent: displayText(rawShot.promptIntent ?? rawShot.prompt_intent ?? rawShot.prompt) || input.rawIntent,
       continuityNotes: normalizeStringList(rawShot.continuityNotes ?? rawShot.continuity_notes, 12),
+    } satisfies StoryShot;
+    const planningErrors: StoryPlanningError[] = [];
+    const appearanceState = normalizeShotAppearanceState({
+      characterIds,
+      planningErrors,
+      propIds,
+      raw: rawShot.appearanceState ?? rawShot.appearance_state,
+      shot: baseShot,
+    });
+    const interactionState = normalizeShotInteractionState({
+      characterIds,
+      planningErrors,
+      propIds,
+      raw: rawShot.interactionState ?? rawShot.interaction_state,
+      shot: baseShot,
+    });
+    const locationViewState = normalizeShotLocationViewState({
+      locationIds,
+      planningErrors,
+      raw: rawShot.locationViewState ?? rawShot.location_view_state,
+      shot: baseShot,
+    });
+
+    return {
+      ...baseShot,
+      appearanceState,
+      interactionState,
+      locationViewState,
+      ...(planningErrors.length > 0 ? { planningErrors } : {}),
     };
   });
 
@@ -728,6 +1145,629 @@ export function normalizeCharacterContinuityGraph(
   };
 }
 
+function getShotIdsForCharacter(shots: readonly StoryShot[], characterId: StoryCharacterId) {
+  return shots
+    .filter((shot) =>
+      shot.characterIds.includes(characterId) ||
+      (shot.appearanceState?.characterStates ?? []).some((state) => state.characterId === characterId) ||
+      (shot.interactionState?.characterIds ?? []).includes(characterId),
+    )
+    .map((shot) => shot.id);
+}
+
+function getShotPropIds(shot: StoryShot) {
+  return uniqueStringList([
+    ...(shot.appearanceState?.propIds ?? []),
+    ...(shot.interactionState?.propIds ?? []),
+  ]) as StoryPropId[];
+}
+
+function getShotIdsForProp(shots: readonly StoryShot[], propId: StoryPropId) {
+  return shots
+    .filter((shot) => getShotPropIds(shot).includes(propId))
+    .map((shot) => shot.id);
+}
+
+function getShotIdsForLocation(shots: readonly StoryShot[], locationId: StoryLocationId) {
+  return shots
+    .filter((shot) => shot.locationId === locationId || shot.locationViewState?.locationId === locationId)
+    .map((shot) => shot.id);
+}
+
+function normalizeOutfitId(characterId: StoryCharacterId, wardrobe: readonly string[], index: number) {
+  return normalizeId([characterId, ...wardrobe].filter(Boolean).join("-"), `${characterId}-outfit-${index + 1}`);
+}
+
+function createFallbackEntityOutfits({
+  bible,
+  continuityGraph,
+}: {
+  bible: StoryBible;
+  continuityGraph: CharacterContinuityGraph;
+}): StoryEntityCardOutfit[] {
+  const outfits = new Map<StoryOutfitId, StoryEntityCardOutfit>();
+  let index = 0;
+
+  for (const appearance of continuityGraph.appearances) {
+    const wardrobe = appearance.wardrobe.length > 0 ? appearance.wardrobe : ["continuity outfit"];
+    const id = normalizeOutfitId(appearance.characterId, wardrobe, index);
+    const existing = outfits.get(id);
+
+    if (existing) {
+      outfits.set(id, {
+        ...existing,
+        continuityNotes: uniqueStringList([...existing.continuityNotes, ...appearance.continuityNotes]),
+        shotIds: uniqueStringList([...existing.shotIds, appearance.shotId]),
+      });
+      continue;
+    }
+
+    index += 1;
+    outfits.set(id, {
+      id,
+      characterId: appearance.characterId,
+      name: wardrobe.join(", "),
+      description: wardrobe.join(", "),
+      continuityNotes: [...appearance.continuityNotes],
+      shotIds: [appearance.shotId],
+      visualAnchors: wardrobe,
+    });
+  }
+
+  for (const character of bible.characters) {
+    if ([...outfits.values()].some((outfit) => outfit.characterId === character.id)) {
+      continue;
+    }
+
+    const id = normalizeId(`${character.id}-default-outfit`, `${character.id}-outfit-${index + 1}`);
+    outfits.set(id, {
+      id,
+      characterId: character.id,
+      name: `${character.name} default outfit`,
+      description: character.description,
+      continuityNotes: [...character.continuityNotes],
+      shotIds: [],
+      visualAnchors: [...character.visualAnchors],
+    });
+    index += 1;
+  }
+
+  return [...outfits.values()];
+}
+
+function createFallbackEntityCards({
+  bible,
+  continuityGraph,
+  input,
+  planningErrors = [],
+  shots,
+}: {
+  bible: StoryBible;
+  continuityGraph: CharacterContinuityGraph;
+  input: StoryInput;
+  planningErrors?: StoryPlanningError[];
+  shots: readonly StoryShot[];
+}): StoryEntityCards {
+  const outfits = createFallbackEntityOutfits({ bible, continuityGraph });
+  const outfitIdsByCharacter = new Map<StoryCharacterId, StoryOutfitId[]>();
+  for (const outfit of outfits) {
+    outfitIdsByCharacter.set(outfit.characterId, [
+      ...(outfitIdsByCharacter.get(outfit.characterId) ?? []),
+      outfit.id,
+    ]);
+  }
+
+  const propIdsByCharacter = new Map<StoryCharacterId, StoryPropId[]>();
+  for (const shot of shots) {
+    const shotPropIds = getShotPropIds(shot);
+    const shotCharacterIds = uniqueStringList([
+      ...shot.characterIds,
+      ...(shot.appearanceState?.characterStates ?? []).map((state) => state.characterId),
+      ...(shot.interactionState?.characterIds ?? []),
+    ]) as StoryCharacterId[];
+
+    for (const characterId of shotCharacterIds) {
+      propIdsByCharacter.set(characterId, uniqueStringList([
+        ...(propIdsByCharacter.get(characterId) ?? []),
+        ...shotPropIds,
+      ]) as StoryPropId[]);
+    }
+  }
+
+  return {
+    storyId: input.storyId,
+    characters: bible.characters.map((character) => ({
+      id: character.id,
+      name: character.name,
+      role: character.role,
+      description: character.description,
+      continuityNotes: [...character.continuityNotes],
+      outfitIds: outfitIdsByCharacter.get(character.id) ?? [],
+      propIds: propIdsByCharacter.get(character.id) ?? [],
+      shotIds: getShotIdsForCharacter(shots, character.id),
+      visualAnchors: [...character.visualAnchors],
+    })),
+    outfits,
+    props: (bible.props ?? []).map((prop) => ({
+      id: prop.id,
+      name: prop.name,
+      description: prop.description,
+      continuityNotes: [...prop.continuityNotes],
+      ownerCharacterIds: [...(prop.ownerCharacterIds ?? [])],
+      shotIds: getShotIdsForProp(shots, prop.id),
+      visualAnchors: [...prop.visualAnchors],
+    })),
+    locations: bible.locations.map((location) => ({
+      id: location.id,
+      name: location.name,
+      description: location.description,
+      shotIds: getShotIdsForLocation(shots, location.id),
+      viewStates: shots
+        .filter((shot) => shot.locationId === location.id || shot.locationViewState?.locationId === location.id)
+        .map((shot) => ({
+          shotId: shot.id,
+          camera: shot.locationViewState?.camera || shot.camera,
+          viewDescription: shot.locationViewState?.viewDescription || shot.description,
+          visibleAnchors: [...(shot.locationViewState?.visibleAnchors ?? [])],
+        })),
+      visualAnchors: [...location.visualAnchors],
+    })),
+    planningErrors: [...planningErrors],
+  };
+}
+
+function normalizeEntityShotIds(
+  rawShotIds: unknown,
+  shotIds: ReadonlySet<StoryShotId>,
+  fallback: StoryShotId[],
+  errors: StoryPlanningError[],
+  path: string,
+) {
+  if (!Array.isArray(rawShotIds)) {
+    pushPlanningError(errors, createPlanningError({
+      code: "entity_cards_shot_ids_missing",
+      message: `${path} is missing shotIds; derived shot ids were used.`,
+      path,
+    }));
+    return fallback;
+  }
+
+  return filterKnownIds({
+    code: "entity_cards_shot_ref",
+    errors,
+    ids: normalizeStringList(rawShotIds, 24),
+    knownIds: shotIds,
+    label: "Entity cards",
+    path,
+  }) as StoryShotId[];
+}
+
+function mergeDerivedEntityCards<T extends { id: string }>({
+  code,
+  derived,
+  errors,
+  label,
+  normalized,
+  path,
+}: {
+  code: string;
+  derived: T[];
+  errors: StoryPlanningError[];
+  label: string;
+  normalized: T[];
+  path: string;
+}): T[] {
+  if (normalized.length === 0) {
+    for (const card of derived) {
+      pushPlanningError(errors, createPlanningError({
+        code,
+        message: `Entity cards response omitted ${label} "${card.id}"; derived ${label} card was used.`,
+        path,
+      }));
+    }
+    return derived;
+  }
+
+  const normalizedById = new Map(normalized.map((card) => [card.id, card]));
+  const merged = derived.map((card) => {
+    const normalizedCard = normalizedById.get(card.id);
+    if (normalizedCard) {
+      return normalizedCard;
+    }
+
+    pushPlanningError(errors, createPlanningError({
+      code,
+      message: `Entity cards response omitted ${label} "${card.id}"; derived ${label} card was used.`,
+      path,
+    }));
+    return card;
+  });
+
+  for (const card of normalized) {
+    if (!derived.some((derivedCard) => derivedCard.id === card.id)) {
+      merged.push(card);
+    }
+  }
+
+  return merged;
+}
+
+function normalizeEntityCharacterCards({
+  derived,
+  errors,
+  raw,
+  outfitIds,
+  propIds,
+  shotIds,
+}: {
+  derived: StoryEntityCards;
+  errors: StoryPlanningError[];
+  raw: unknown;
+  outfitIds: ReadonlySet<StoryOutfitId>;
+  propIds: ReadonlySet<StoryPropId>;
+  shotIds: ReadonlySet<StoryShotId>;
+}): StoryEntityCardCharacter[] {
+  const rawCards = Array.isArray(raw) ? raw : null;
+  if (!rawCards) {
+    pushPlanningError(errors, createPlanningError({
+      code: "entity_cards_characters_missing",
+      message: "Entity cards response is missing characters; derived character cards were used.",
+      path: "characters",
+    }));
+    return derived.characters;
+  }
+
+  const derivedById = new Map(derived.characters.map((character) => [character.id, character]));
+  const normalized = rawCards.flatMap((card, index) => {
+    const rawCard = isRecord(card) ? card : {};
+    const id = compactText(rawCard.id ?? rawCard.characterId ?? rawCard.character_id, 80);
+    const fallback = derivedById.get(id);
+
+    if (!fallback) {
+      pushPlanningError(errors, createPlanningError({
+        characterIds: id ? [id] : undefined,
+        code: "entity_cards_character_ref",
+        message: `Entity character card "${id || "(missing)"}" does not match Story Bible characters.`,
+        path: `characters.${index}.id`,
+      }));
+      return [];
+    }
+    const rawOutfitIds = rawCard.outfitIds ?? rawCard.outfit_ids;
+    const rawPropIds = rawCard.propIds ?? rawCard.prop_ids;
+
+    return [{
+      id: fallback.id,
+      name: compactText(rawCard.name, 80) || fallback.name,
+      role: compactText(rawCard.role, 120) || fallback.role,
+      description: displayText(rawCard.description ?? rawCard.summary) || fallback.description,
+      continuityNotes: normalizeStringList(rawCard.continuityNotes ?? rawCard.continuity_notes, 12),
+      outfitIds: rawOutfitIds === undefined
+        ? fallback.outfitIds
+        : filterKnownIds({
+            code: "entity_cards_character_outfit_ref",
+            errors,
+            ids: normalizeStringList(rawOutfitIds, 24),
+            knownIds: outfitIds,
+            label: `Entity character card "${fallback.id}"`,
+            path: `characters.${index}.outfitIds`,
+          }) as StoryOutfitId[],
+      propIds: rawPropIds === undefined
+        ? fallback.propIds
+        : filterKnownIds({
+            code: "entity_cards_character_prop_ref",
+            errors,
+            ids: normalizeStringList(rawPropIds, 24),
+            knownIds: propIds,
+            label: `Entity character card "${fallback.id}"`,
+            path: `characters.${index}.propIds`,
+          }) as StoryPropId[],
+      shotIds: normalizeEntityShotIds(rawCard.shotIds ?? rawCard.shot_ids, shotIds, fallback.shotIds, errors, `characters.${index}.shotIds`),
+      visualAnchors: normalizeStringList(rawCard.visualAnchors ?? rawCard.visual_anchors, 12),
+    }];
+  });
+
+  return mergeDerivedEntityCards({
+    code: "entity_cards_character_missing",
+    derived: derived.characters,
+    errors,
+    label: "character",
+    normalized,
+    path: "characters",
+  });
+}
+
+function normalizeEntityOutfitCards({
+  characterIds,
+  derived,
+  errors,
+  raw,
+  shotIds,
+}: {
+  characterIds: ReadonlySet<StoryCharacterId>;
+  derived: StoryEntityCards;
+  errors: StoryPlanningError[];
+  raw: unknown;
+  shotIds: ReadonlySet<StoryShotId>;
+}): StoryEntityCardOutfit[] {
+  const rawCards = Array.isArray(raw) ? raw : null;
+  if (!rawCards) {
+    pushPlanningError(errors, createPlanningError({
+      code: "entity_cards_outfits_missing",
+      message: "Entity cards response is missing outfits; derived outfit cards were used.",
+      path: "outfits",
+    }));
+    return derived.outfits;
+  }
+
+  const normalized = rawCards.flatMap((card, index) => {
+    const rawCard = isRecord(card) ? card : {};
+    const characterId = compactText(rawCard.characterId ?? rawCard.character_id, 80);
+
+    if (!characterIds.has(characterId)) {
+      pushPlanningError(errors, createPlanningError({
+        characterIds: characterId ? [characterId] : undefined,
+        code: "entity_cards_outfit_character_ref",
+        message: `Entity outfit card references unknown character "${characterId || "(missing)"}".`,
+        path: `outfits.${index}.characterId`,
+      }));
+      return [];
+    }
+
+    const id = normalizeId(rawCard.id ?? rawCard.name, `${characterId}-outfit-${index + 1}`);
+    return [{
+      id,
+      characterId,
+      name: compactText(rawCard.name, 100) || `Outfit ${index + 1}`,
+      description: displayText(rawCard.description ?? rawCard.summary) || compactText(rawCard.name, 100) || `Outfit ${index + 1}`,
+      continuityNotes: normalizeStringList(rawCard.continuityNotes ?? rawCard.continuity_notes, 12),
+      shotIds: normalizeEntityShotIds(rawCard.shotIds ?? rawCard.shot_ids, shotIds, [], errors, `outfits.${index}.shotIds`),
+      visualAnchors: normalizeStringList(rawCard.visualAnchors ?? rawCard.visual_anchors, 12),
+    }];
+  });
+
+  return mergeDerivedEntityCards({
+    code: "entity_cards_outfit_missing",
+    derived: derived.outfits,
+    errors,
+    label: "outfit",
+    normalized,
+    path: "outfits",
+  });
+}
+
+function normalizeEntityPropCards({
+  characterIds,
+  derived,
+  errors,
+  raw,
+  shotIds,
+}: {
+  characterIds: ReadonlySet<StoryCharacterId>;
+  derived: StoryEntityCards;
+  errors: StoryPlanningError[];
+  raw: unknown;
+  shotIds: ReadonlySet<StoryShotId>;
+}): StoryEntityCardProp[] {
+  const rawCards = Array.isArray(raw) ? raw : null;
+  if (!rawCards) {
+    pushPlanningError(errors, createPlanningError({
+      code: "entity_cards_props_missing",
+      message: "Entity cards response is missing props; derived prop cards were used.",
+      path: "props",
+    }));
+    return derived.props;
+  }
+
+  const derivedById = new Map(derived.props.map((prop) => [prop.id, prop]));
+  const normalized = rawCards.flatMap((card, index) => {
+    const rawCard = isRecord(card) ? card : {};
+    const id = compactText(rawCard.id ?? rawCard.propId ?? rawCard.prop_id, 80);
+    const fallback = derivedById.get(id);
+
+    if (!fallback) {
+      pushPlanningError(errors, createPlanningError({
+        code: "entity_cards_prop_ref",
+        message: `Entity prop card "${id || "(missing)"}" does not match Story Bible props.`,
+        path: `props.${index}.id`,
+        propIds: id ? [id] : undefined,
+      }));
+      return [];
+    }
+    const rawOwnerCharacterIds = rawCard.ownerCharacterIds ?? rawCard.owner_character_ids;
+
+    return [{
+      id: fallback.id,
+      name: compactText(rawCard.name, 100) || fallback.name,
+      description: displayText(rawCard.description ?? rawCard.summary) || fallback.description,
+      continuityNotes: normalizeStringList(rawCard.continuityNotes ?? rawCard.continuity_notes, 12),
+      ownerCharacterIds: rawOwnerCharacterIds === undefined
+        ? fallback.ownerCharacterIds
+        : filterKnownIds({
+            code: "entity_cards_prop_owner_ref",
+            errors,
+            ids: normalizeStringList(rawOwnerCharacterIds, 12),
+            knownIds: characterIds,
+            label: `Entity prop card "${fallback.id}"`,
+            path: `props.${index}.ownerCharacterIds`,
+          }) as StoryCharacterId[],
+      shotIds: normalizeEntityShotIds(rawCard.shotIds ?? rawCard.shot_ids, shotIds, fallback.shotIds, errors, `props.${index}.shotIds`),
+      visualAnchors: normalizeStringList(rawCard.visualAnchors ?? rawCard.visual_anchors, 12),
+    }];
+  });
+
+  return mergeDerivedEntityCards({
+    code: "entity_cards_prop_missing",
+    derived: derived.props,
+    errors,
+    label: "prop",
+    normalized,
+    path: "props",
+  });
+}
+
+function normalizeEntityLocationCards({
+  derived,
+  errors,
+  raw,
+  shotIds,
+}: {
+  derived: StoryEntityCards;
+  errors: StoryPlanningError[];
+  raw: unknown;
+  shotIds: ReadonlySet<StoryShotId>;
+}): StoryEntityCardLocation[] {
+  const rawCards = Array.isArray(raw) ? raw : null;
+  if (!rawCards) {
+    pushPlanningError(errors, createPlanningError({
+      code: "entity_cards_locations_missing",
+      message: "Entity cards response is missing locations; derived location cards were used.",
+      path: "locations",
+    }));
+    return derived.locations;
+  }
+
+  const derivedById = new Map(derived.locations.map((location) => [location.id, location]));
+  const normalized = rawCards.flatMap((card, index) => {
+    const rawCard = isRecord(card) ? card : {};
+    const id = compactText(rawCard.id ?? rawCard.locationId ?? rawCard.location_id, 80);
+    const fallback = derivedById.get(id);
+    const rawViewStates = Array.isArray(rawCard.viewStates)
+      ? rawCard.viewStates
+      : Array.isArray(rawCard.view_states)
+        ? rawCard.view_states
+        : null;
+
+    if (!fallback) {
+      pushPlanningError(errors, createPlanningError({
+        code: "entity_cards_location_ref",
+        locationIds: id ? [id] : undefined,
+        message: `Entity location card "${id || "(missing)"}" does not match Story Bible locations.`,
+        path: `locations.${index}.id`,
+      }));
+      return [];
+    }
+
+    return [{
+      id: fallback.id,
+      name: compactText(rawCard.name, 100) || fallback.name,
+      description: displayText(rawCard.description ?? rawCard.summary) || fallback.description,
+      shotIds: normalizeEntityShotIds(rawCard.shotIds ?? rawCard.shot_ids, shotIds, fallback.shotIds, errors, `locations.${index}.shotIds`),
+      viewStates: rawViewStates
+        ? rawViewStates
+          .filter(isRecord)
+          .map((viewState, viewIndex) => {
+            const shotId = compactText(viewState.shotId ?? viewState.shot_id, 80);
+            if (!shotIds.has(shotId)) {
+              pushPlanningError(errors, createPlanningError({
+                code: "entity_cards_location_view_shot_ref",
+                message: `Entity location view state references unknown shot "${shotId || "(missing)"}".`,
+                path: `locations.${index}.viewStates.${viewIndex}.shotId`,
+                shotIds: shotId ? [shotId] : undefined,
+              }));
+              return null;
+            }
+
+            return {
+              shotId,
+              camera: displayText(viewState.camera) || fallback.viewStates.find((state) => state.shotId === shotId)?.camera || "",
+              viewDescription: displayText(viewState.viewDescription ?? viewState.view_description ?? viewState.description) ||
+                fallback.viewStates.find((state) => state.shotId === shotId)?.viewDescription ||
+                fallback.description,
+              visibleAnchors: normalizeStringList(viewState.visibleAnchors ?? viewState.visible_anchors, 12),
+            };
+          })
+          .filter((viewState): viewState is StoryEntityCardLocation["viewStates"][number] => Boolean(viewState))
+        : fallback.viewStates,
+      visualAnchors: normalizeStringList(rawCard.visualAnchors ?? rawCard.visual_anchors, 12),
+    }];
+  });
+
+  return mergeDerivedEntityCards({
+    code: "entity_cards_location_missing",
+    derived: derived.locations,
+    errors,
+    label: "location",
+    normalized,
+    path: "locations",
+  });
+}
+
+export function normalizeStoryEntityCards({
+  bible,
+  continuityGraph,
+  input,
+  raw,
+  shots,
+}: {
+  bible: StoryBible;
+  continuityGraph: CharacterContinuityGraph;
+  input: StoryInput;
+  raw: unknown;
+  shots: readonly StoryShot[];
+}): StoryEntityCards {
+  const parsed = typeof raw === "string" ? parseJsonObjectFromText(raw) : raw;
+  if (!isRecord(parsed)) {
+    throw malformedResponse("Entity-card response must be a JSON object.", { raw });
+  }
+
+  const errors: StoryPlanningError[] = [];
+  const derived = createFallbackEntityCards({
+    bible,
+    continuityGraph,
+    input,
+    planningErrors: [
+      ...(bible.planningErrors ?? []),
+      ...shots.flatMap((shot) => shot.planningErrors ?? []),
+    ],
+    shots,
+  });
+  const shotIds = new Set(shots.map((shot) => shot.id));
+  const characterIds = new Set(bible.characters.map((character) => character.id));
+  const props = bible.props ?? [];
+  const propIds = new Set(props.map((prop) => prop.id));
+  const outfits = normalizeEntityOutfitCards({
+    characterIds,
+    derived,
+    errors,
+    raw: parsed.outfits,
+    shotIds,
+  });
+  const outfitIds = new Set(outfits.map((outfit) => outfit.id));
+
+  return {
+    storyId: input.storyId,
+    characters: normalizeEntityCharacterCards({
+      derived,
+      errors,
+      outfitIds,
+      propIds,
+      raw: parsed.characters,
+      shotIds,
+    }),
+    outfits,
+    props: normalizeEntityPropCards({
+      characterIds,
+      derived,
+      errors,
+      raw: parsed.props,
+      shotIds,
+    }),
+    locations: normalizeEntityLocationCards({
+      derived,
+      errors,
+      raw: parsed.locations,
+      shotIds,
+    }),
+    planningErrors: [...derived.planningErrors, ...errors, ...normalizeStringList(parsed.planningErrors ?? parsed.planning_errors, maxWarnings).map((message, index) =>
+      createPlanningError({
+        code: `entity_cards_llm_warning_${index + 1}`,
+        message,
+        path: "planningErrors",
+      }),
+    )],
+  };
+}
+
 function getSettingsResourceCandidates(
   input: StoryInput,
   resourceCandidates?: StoryLlmNodeAdapterOptions["resourceCandidates"],
@@ -780,6 +1820,15 @@ function buildStoryResourceDesiredEffect({
       ].filter(Boolean).join(", "),
     )
     .join("\n");
+  const propText = (bible.props ?? [])
+    .map((prop) =>
+      [
+        prop.name,
+        prop.description,
+        ...prop.visualAnchors,
+      ].filter(Boolean).join(", "),
+    )
+    .join("\n");
   const shotText = shots
     .map((shot) =>
       [
@@ -803,6 +1852,7 @@ function buildStoryResourceDesiredEffect({
     bible.themes.length > 0 ? `Themes: ${bible.themes.join(", ")}` : "",
     characterText ? `Characters:\n${characterText}` : "",
     locationText ? `Locations:\n${locationText}` : "",
+    propText ? `Props:\n${propText}` : "",
     shotText ? `Storyboard shots:\n${shotText}` : "",
   ].filter(Boolean).join("\n"), 6000);
 }
@@ -1249,6 +2299,52 @@ export function createStoryRenderPlanFromWorkflow(
   });
 }
 
+function getOptionalEntityCards(workflow: StoryWorkflowState): StoryEntityCards | null {
+  const result = workflow.nodes["entity-cards"]?.result;
+  return isRecord(result) &&
+    Array.isArray(result.characters) &&
+    Array.isArray(result.outfits) &&
+    Array.isArray(result.props) &&
+    Array.isArray(result.locations)
+    ? result as StoryEntityCards
+    : null;
+}
+
+function getPlanningErrorIssues({
+  bible,
+  entityCards,
+  shots,
+}: {
+  bible: StoryBible;
+  entityCards: StoryEntityCards | null;
+  shots: readonly StoryShot[];
+}): StoryConsistencyIssue[] {
+  const planningErrors = [
+    ...(bible.planningErrors ?? []),
+    ...shots.flatMap((shot) => shot.planningErrors ?? []),
+    ...(entityCards?.planningErrors ?? []),
+  ];
+  const seen = new Set<string>();
+
+  return planningErrors
+    .filter((error) => {
+      const key = JSON.stringify([error.code, error.message, error.path, error.shotIds ?? []]);
+      if (seen.has(key)) {
+        return false;
+      }
+
+      seen.add(key);
+      return true;
+    })
+    .map((error) => ({
+      code: error.code,
+      message: error.message,
+      severity: error.severity,
+      shotIds: error.shotIds ?? [],
+      ...(error.characterIds ? { characterIds: error.characterIds } : {}),
+    }));
+}
+
 export function createStoryConsistencyCheckFromWorkflow(
   workflow: StoryWorkflowState,
   now: () => string,
@@ -1256,12 +2352,14 @@ export function createStoryConsistencyCheckFromWorkflow(
   samplerOptions?: TimelineSamplerOptions,
 ): StoryConsistencyCheck {
   const input = getStoryInput(workflow);
+  const bible = getBible(workflow);
   const rawShots = getShots(workflow);
   const graph = getDependencyGraph(workflow);
   const shots = syncStoryShotsWithDependencyGraph(rawShots, graph, {
     allowHighRiskSourceEdges: shouldAllowHighRiskSourceEdges(workflow),
   });
   const safetyPlan = getSafetyPlan(workflow);
+  const entityCards = getOptionalEntityCards(workflow);
   const resourcePlan = getResourcePlan(workflow);
   const renderPlan = getStoryRenderPlanFromWorkflow(workflow, samplerOptions);
   const shotIds = new Set(shots.map((shot) => shot.id));
@@ -1271,6 +2369,7 @@ export function createStoryConsistencyCheckFromWorkflow(
     severity: "error",
     shotIds: issue.shotId ? [issue.shotId] : [],
   }));
+  issues.push(...getPlanningErrorIssues({ bible, entityCards, shots }));
 
   for (const note of safetyPlan.perShotNotes) {
     if (!shotIds.has(note.shotId)) {
@@ -1315,7 +2414,7 @@ export function createStoryConsistencyCheckFromWorkflow(
 
   return {
     storyId: input.storyId,
-    passed: issues.length === 0,
+    passed: !issues.some((issue) => issue.severity === "error"),
     checkedAt: now(),
     issues,
     warnings: [...extraWarnings, ...renderPlan.warnings],
@@ -1475,7 +2574,7 @@ export function createStoryLlmNodeAdapters({
       return makeJsonRequest({
         input,
         instruction:
-          'Create a typed StoryBible with concrete visual anchors. Treat storySegments as the visual sequence and storyContext as global continuity, not as an extra shot. Create characters only for people or creatures explicitly present in the user story or storySegments; do not invent visible supporting people from implied locations or occupations. Character descriptions must include visible role/age range, silhouette, clothing, key prop, and emotional baseline when inferable. Location descriptions must include visible set pieces, materials, color accents, and recurring background anchors. visualStyle must describe renderable camera/lighting/color style, not abstract theme. Required shape: {"title":"","logline":"","genre":[""],"themes":[""],"worldSummary":"","visualStyle":"","characters":[{"id":"","name":"","role":"","description":"","continuityNotes":[""],"visualAnchors":[""]}],"locations":[{"id":"","name":"","description":"","visualAnchors":[""]}],"continuityRules":[""]}.',
+          'Create a typed StoryBible with concrete visual anchors. Treat storySegments as the visual sequence and storyContext as global continuity, not as an extra shot. Create characters only for people or creatures explicitly present in the user story or storySegments; do not invent visible supporting people from implied locations or occupations. Character descriptions must include visible role/age range, silhouette, clothing, key prop, and emotional baseline when inferable. Create props only for recurring or continuity-critical visible objects explicitly present in the story. Location descriptions must include visible set pieces, materials, color accents, and recurring background anchors. visualStyle must describe renderable camera/lighting/color style, not abstract theme. Required shape: {"title":"","logline":"","genre":[""],"themes":[""],"worldSummary":"","visualStyle":"","characters":[{"id":"","name":"","role":"","description":"","continuityNotes":[""],"visualAnchors":[""]}],"locations":[{"id":"","name":"","description":"","visualAnchors":[""]}],"props":[{"id":"","name":"","description":"","ownerCharacterIds":[""],"continuityNotes":[""],"visualAnchors":[""]}],"continuityRules":[""]}.',
         payload: {
           input,
           storyContext: input.storyContext ?? "",
@@ -1514,7 +2613,7 @@ export function createStoryLlmNodeAdapters({
       return makeJsonRequest({
         input,
         instruction:
-          'Create typed storyboard shots with stable ids, order, camera, promptIntent, continuityNotes, characterIds, locationId, and sourceShotIds. Create exactly one storyboard shot per supplied outline beat unless input.targetShotCount is set and a target-count adjustment is necessary. If input.targetShotCount is unset, follow the StoryOutline beat count chosen by the LLM; local code has not parsed labels, counted events, or estimated a target. Preserve explicit rawIntent labels such as "Beat 1:" or "Final image:" through shot titles and shot content when they map to outline beats. Do not add filler shots or a separate context/setup shot. Each promptIntent must be an image-generation-ready visual brief with short comma-separated tag phrases: visible character identities/appearance, the same wardrobe and key prop continuity, one clear action, location/obstacle, composition, lighting, and visible emotional state. Visible subjects must match current segment explicitly named characters: do not invent extra visible people from a location or job role, and do not remove explicitly requested people. Partial/background interactions are acceptable when the segment explicitly requests them. Do not use abstract summaries, meta planning instructions, dangling clauses, or purely atmospheric prose. sourceShotIds must be empty unless this shot truly needs a previous generated image as an img2img/reference source; ordinary story order and continuity do not need sourceShotIds. Keep sourceShotIds empty for high-risk source-image transitions such as standing to kneeling, sitting to running, close-up to wide shot, major composition reset, camera reset, or large scene reset. Required shape: {"shots":[{"id":"shot-1","order":1,"title":"","description":"","beatId":"","locationId":"","characterIds":[""],"sourceShotIds":[""],"camera":"","promptIntent":"","continuityNotes":[""]}]}.',
+          'Create typed storyboard shots with stable ids, order, camera, promptIntent, continuityNotes, characterIds, locationId, sourceShotIds, appearanceState, interactionState, and locationViewState. Use only supplied Story Bible character, prop, and location ids. Create exactly one storyboard shot per supplied outline beat unless input.targetShotCount is set and a target-count adjustment is necessary. If input.targetShotCount is unset, follow the StoryOutline beat count chosen by the LLM; local code has not parsed labels, counted events, or estimated a target. Preserve explicit rawIntent labels such as "Beat 1:" or "Final image:" through shot titles and shot content when they map to outline beats. Do not add filler shots or a separate context/setup shot. Each promptIntent must be an image-generation-ready visual brief with short comma-separated tag phrases: visible character identities/appearance, the same wardrobe and key prop continuity, one clear action, location/obstacle, composition, lighting, and visible emotional state. Visible subjects must match current segment explicitly named characters: do not invent extra visible people from a location or job role, and do not remove explicitly requested people. Partial/background interactions are acceptable when the segment explicitly requests them. Do not use abstract summaries, meta planning instructions, dangling clauses, or purely atmospheric prose. sourceShotIds must be empty unless this shot truly needs a previous generated image as an img2img/reference source; ordinary story order and continuity do not need sourceShotIds. Keep sourceShotIds empty for high-risk source-image transitions such as standing to kneeling, sitting to running, close-up to wide shot, major composition reset, camera reset, or large scene reset. Required shape: {"shots":[{"id":"shot-1","order":1,"title":"","description":"","beatId":"","locationId":"","characterIds":[""],"sourceShotIds":[""],"camera":"","promptIntent":"","continuityNotes":[""],"appearanceState":{"characterStates":[{"characterId":"","outfitId":"","appearance":"","visible":true,"continuityNotes":[""]}],"propIds":[""],"notes":[""]},"interactionState":{"characterIds":[""],"propIds":[""],"description":"","physicalContact":[""],"continuityNotes":[""]},"locationViewState":{"locationId":"","viewDescription":"","visibleAnchors":[""],"camera":""}}]}.',
         payload: {
           input,
           targetShotCount: getRequestedTargetShotCount(input),
@@ -1613,6 +2712,30 @@ export function createStoryLlmNodeAdapters({
       getBible(context.workflow),
       getShots(context.workflow),
     ),
+  })(completeChat);
+  const entityCards = createLlmStoryNodeAdapter<StoryEntityCards>({
+    buildRequest: (context) => {
+      const input = getStoryInput(context.workflow);
+      return makeJsonRequest({
+        input,
+        instruction:
+          'Create typed Story entity cards derived only from the supplied Story Bible, storyboard shots, and CharacterContinuityGraph. Use Story Bible character, prop, and location ids exactly. Outfits may define stable outfit ids tied to one character. Do not plan reference assets, freeze gates, uploads, image generation, IPAdapter, ControlNet, masks, or execution behavior. Missing or uncertain details should stay in planningErrors, not invented ids. Required shape: {"characters":[{"id":"","name":"","role":"","description":"","visualAnchors":[""],"continuityNotes":[""],"shotIds":[""],"outfitIds":[""],"propIds":[""]}],"outfits":[{"id":"","characterId":"","name":"","description":"","visualAnchors":[""],"continuityNotes":[""],"shotIds":[""]}],"props":[{"id":"","name":"","description":"","visualAnchors":[""],"continuityNotes":[""],"ownerCharacterIds":[""],"shotIds":[""]}],"locations":[{"id":"","name":"","description":"","visualAnchors":[""],"shotIds":[""],"viewStates":[{"shotId":"","viewDescription":"","visibleAnchors":[""],"camera":""}]}],"planningErrors":[""]}.',
+        payload: {
+          input,
+          bible: getBible(context.workflow),
+          characterContinuityGraph: getContinuityGraph(context.workflow),
+          shots: getShots(context.workflow),
+        },
+        maxTokens: 1800,
+      });
+    },
+    parseResponse: (response, context) => normalizeStoryEntityCards({
+      bible: getBible(context.workflow),
+      continuityGraph: getContinuityGraph(context.workflow),
+      input: getStoryInput(context.workflow),
+      raw: response.content,
+      shots: getShots(context.workflow),
+    }),
   })(completeChat);
   const resourcePlan: StoryNodeAdapter<StoryResourcePlan> = async (context) => {
     try {
@@ -1763,6 +2886,7 @@ export function createStoryLlmNodeAdapters({
           "Translate structural ids such as character ids and location ids into natural visible descriptions; never emit ids like teen-resident or location-library as prompt text.",
           "Do not use original-story character names as prompt tags; describe their visible age category, hairstyle, wardrobe, props, and action instead. Only keep a name when it is an actual Civitai trained word or known source character tag.",
           "Preserve explicit current-shot subjects, adult/age context, wardrobe, key props, action or pose, setting, composition, camera, lighting, and continuity anchors as short visual clauses.",
+          "Use supplied entityCards as structured continuity context for characters, outfits, props, and locations; do not invent new entity ids or plan reference assets.",
           "For multi-character shots, each visible person must get a distinct clause with hairstyle, clothing, pose/action, spatial position, and adult or college-age presentation when applicable; do not collapse them into \"two young women\" or another generic group tag.",
           "For subjectTags use conservative tags like \"1girl\", \"solo\", \"2people\", or \"3people\"; only use \"3girls\" when every visible person is clearly a girl/woman.",
           "Use seriesTags only for known source/copyright tags when there is a real selected source; leave seriesTags empty for original stories. Use artistTags only for known artist tags and prefix each item with @; leave artistTags empty when no artist tag is selected.",
@@ -1775,6 +2899,7 @@ export function createStoryLlmNodeAdapters({
           bible: getBible(context.workflow),
           characterContinuityGraph: getContinuityGraph(context.workflow),
           dependencyGraph: getDependencyGraph(context.workflow),
+          entityCards: getOptionalEntityCards(context.workflow),
           parameterPlan: getParameterPlan(context.workflow),
           resourcePlan,
           safetyPlan: getSafetyPlan(context.workflow),
@@ -1812,6 +2937,7 @@ export function createStoryLlmNodeAdapters({
     "shot-dependency-graph": dependencyGraph,
     "plot-state-graph": plotGraph,
     "character-continuity-graph": continuityGraph,
+    "entity-cards": entityCards,
     "resource-plan": resourcePlan,
     "parameter-plan": parameterPlan,
     "story-render-plan": renderPlan,

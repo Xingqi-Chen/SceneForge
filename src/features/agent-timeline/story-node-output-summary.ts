@@ -554,12 +554,14 @@ function summarizeStoryBible(result: unknown): StoryNodeOutputSummary {
   const bible = isRecord(result) ? result : {};
   const characters = asRecordArray(bible.characters);
   const locations = asRecordArray(bible.locations);
+  const props = asRecordArray(bible.props);
 
   return {
     title: "Story bible summary",
     metrics: [
       { label: "Characters", value: String(characters.length) },
       { label: "Locations", value: String(locations.length) },
+      { label: "Props", value: String(props.length) },
       { label: "Genres", value: formatList(bible.genre) },
     ],
     sections: [
@@ -587,6 +589,15 @@ function summarizeStoryBible(result: unknown): StoryNodeOutputSummary {
           name: compactText(location.name, 80) || compactText(location.id, 80),
           description: compactText(location.description, 140),
           anchors: formatList(location.visualAnchors),
+        })),
+      },
+      {
+        title: "Props",
+        emptyState: "No props.",
+        rows: props.map((prop) => ({
+          name: compactText(prop.name, 80) || compactText(prop.id, 80),
+          description: compactText(prop.description, 140),
+          anchors: formatList(prop.visualAnchors),
         })),
       },
     ],
@@ -629,7 +640,83 @@ function summarizeStoryboardShots(result: unknown): StoryNodeOutputSummary {
           title: compactText(shot.title, 100) || compactText(shot.id, 80),
           camera: compactText(shot.camera, 100),
           intent: compactText(shot.promptIntent, 180),
+          state: [
+            isRecord(shot.appearanceState) ? "appearance" : "",
+            isRecord(shot.interactionState) ? "interaction" : "",
+            isRecord(shot.locationViewState) ? "location view" : "",
+          ].filter(Boolean).join(", ") || "Legacy",
           sources: formatList(shot.sourceShotIds),
+        })),
+      },
+    ],
+  };
+}
+
+function summarizeEntityCards(result: unknown): StoryNodeOutputSummary {
+  const cards = isRecord(result) ? result : {};
+  const characters = asRecordArray(cards.characters);
+  const outfits = asRecordArray(cards.outfits);
+  const props = asRecordArray(cards.props);
+  const locations = asRecordArray(cards.locations);
+  const planningErrors = asRecordArray(cards.planningErrors);
+
+  return {
+    title: "Entity cards summary",
+    metrics: [
+      { label: "Characters", value: String(characters.length) },
+      { label: "Outfits", value: String(outfits.length) },
+      { label: "Props", value: String(props.length) },
+      { label: "Locations", value: String(locations.length) },
+      { label: "Planning errors", value: String(planningErrors.length) },
+    ],
+    sections: [
+      {
+        title: "Characters",
+        emptyState: "No character cards.",
+        rows: characters.map((character) => ({
+          name: compactText(character.name, 80) || compactText(character.id, 80),
+          shots: formatList(character.shotIds),
+          outfits: formatList(character.outfitIds),
+          props: formatList(character.propIds),
+        })),
+      },
+      {
+        title: "Outfits",
+        emptyState: "No outfit cards.",
+        rows: outfits.map((outfit) => ({
+          name: compactText(outfit.name, 80) || compactText(outfit.id, 80),
+          character: compactText(outfit.characterId, 80),
+          shots: formatList(outfit.shotIds),
+          anchors: formatList(outfit.visualAnchors),
+        })),
+      },
+      {
+        title: "Props",
+        emptyState: "No prop cards.",
+        rows: props.map((prop) => ({
+          name: compactText(prop.name, 80) || compactText(prop.id, 80),
+          owners: formatList(prop.ownerCharacterIds),
+          shots: formatList(prop.shotIds),
+          anchors: formatList(prop.visualAnchors),
+        })),
+      },
+      {
+        title: "Locations",
+        emptyState: "No location cards.",
+        rows: locations.map((location) => ({
+          name: compactText(location.name, 80) || compactText(location.id, 80),
+          shots: formatList(location.shotIds),
+          views: String(asRecordArray(location.viewStates).length),
+          anchors: formatList(location.visualAnchors),
+        })),
+      },
+      {
+        title: "Planning errors",
+        emptyState: "No recoverable planning errors.",
+        rows: planningErrors.map((error) => ({
+          severity: compactText(error.severity, 40),
+          code: compactText(error.code, 80),
+          message: compactText(error.message, 220),
         })),
       },
     ],
@@ -1346,6 +1433,8 @@ export function createStoryNodeOutputSummary(
       return summarizePlotStateGraph(result);
     case "character-continuity-graph":
       return summarizeCharacterContinuity(result);
+    case "entity-cards":
+      return summarizeEntityCards(result);
     case "resource-plan":
       return summarizeResourcePlan(result);
     case "parameter-plan":
