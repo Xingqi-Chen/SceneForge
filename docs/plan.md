@@ -16,6 +16,8 @@ Story Graph prompt-planning refinements were merged in follow-up PR `#83`.
 
 Story Graph refinement tracks `T23A` through `T23D` were added after saved-workflow review found redundant node outputs, overly tag-like Anima Story prompts, risky source-image inheritance for major pose/composition changes, and Visual Output that still exposes implementation details. Implement them in order: `T23A`, `T23B`, `T23C`, then `T23D`. Follow-up reviewer fixes for Story Visual diagnostics and server-ranked resource planning were merged in PR `#95`; Story prompt-health warning cleanup was merged in PR `#96`.
 
+`T24` / Issue `#98` migrates explicit checkpoint, LoRA, and supported ComfyUI parameter selection into the `/story` start input. Story parameter saving is available only after explicit checkpoint selection. Saved Story style resource selections should bypass LLM resource planning, saved Story generation parameters should bypass LLM parameter planning, and render-prompt generation remains AI-driven.
+
 ## Status Values
 
 - `Todo`: not yet scoped.
@@ -64,6 +66,7 @@ Story Graph refinement tracks `T23A` through `T23D` were added after saved-workf
 | T23B | #90 | Refine Anima Story prompts into natural visual clauses | Story Graph Refinement | Done | PASS | APPROVE | Depends on T18 through T22. Implemented in merged PR #93 with Story Anima prompt parts, LLM-owned shot-count decisions, render prompt normalization hardening, and prompt conflict handling; Issue #90 closed. |
 | T23C | #91 | Add source-image risk decisions for Story shot dependencies | Story Graph Refinement | Done | PASS | APPROVE | Depends on T18 through T22. Implemented in merged PR #93 with source-image risk metadata and execution-safe dependency handling for Story generation; Issue #91 closed. |
 | T23D | #92 | Redesign Story Visual Output around shot cards and prompt health | Story Graph Refinement | Done | PASS | APPROVE | Depends on T23A-C. Implemented in merged PR #93 with shot-card Visual summaries, prompt health, source-chain display, and Raw JSON debug boundaries; Issue #92 closed. |
+| T24 | #98 | Add Story input style resource and parameter controls | Story Graph Workflow | In Progress | PASS | APPROVE | Depends on T20 through T23D. Migrate explicit checkpoint, LoRA, AI Style Advice inside the Parameters dialog, and supported ComfyUI parameter selection into `/story` start input only. Parameters can be saved only after explicit checkpoint selection; saved style resources bypass LLM resource planning and saved parameters bypass LLM parameter planning. Artist Strings, Subject Input, inpaint, ControlNet, imageCount, and sequence-specific settings remain out of scope. PR #99. |
 
 ## MVP Timeline Nodes
 

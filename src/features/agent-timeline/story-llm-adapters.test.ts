@@ -28,6 +28,7 @@ import type {
   StoryBible,
   StoryInput,
   StoryShot,
+  StoryWorkflowNodeId,
 } from "./story-types";
 
 const input = {
@@ -228,6 +229,270 @@ describe("story LLM adapters", () => {
     })).rejects.toMatchObject({
       code: "llm_config",
     });
+  });
+
+  it("uses the configured NSFW model for Story LLM nodes except dependency, resource, and parameter planning", async () => {
+    const previousNsfwModel = process.env.LITELLM_NSFW_MODEL;
+    process.env.LITELLM_NSFW_MODEL = "story-nsfw-model";
+
+    try {
+      const explicitInput = {
+        ...input,
+        audienceRating: "explicit",
+        nsfwContext: {
+          enabled: true,
+          audienceRating: "explicit",
+          contentWarnings: ["adult content"],
+          rationale: "NSFW test context.",
+        },
+        settingsSnapshot: {
+          ...input.settingsSnapshot,
+          audienceRating: "explicit",
+          nsfwEnabled: true,
+        },
+      } satisfies StoryInput;
+      const workflow = createStoryWorkflowState({ storyId: "story-1", workflowId: "workflow-nsfw-model" });
+      const outline = {
+        storyId: explicitInput.storyId,
+        beats: [{ id: "beat-1", title: "Arrival", summary: "The courier enters.", order: 1, characterIds: ["courier"] }],
+      };
+      const safetyPlan = {
+        storyId: explicitInput.storyId,
+        audienceRating: "explicit" as const,
+        contentWarnings: ["adult content"],
+        blockedContent: [],
+        perShotNotes: [],
+        nsfwContext: {
+          enabled: true,
+          rationale: "NSFW test context.",
+        },
+      };
+      const dependencyGraph = {
+        storyId: explicitInput.storyId,
+        nodes: shots.map((shot) => ({ shotId: shot.id, label: shot.title })),
+        edges: [],
+      };
+      const plotStateGraph = {
+        storyId: explicitInput.storyId,
+        states: [{ id: "state-1", title: "Arrival", summary: "The courier enters.", shotIds: ["shot-1"] }],
+        transitions: [],
+      };
+      const continuityGraph = {
+        storyId: explicitInput.storyId,
+        characters: [{
+          characterId: "courier",
+          name: "Courier",
+          canonicalDescription: "A courier in a yellow rain jacket.",
+          visualAnchors: ["yellow rain jacket"],
+        }],
+        appearances: [{
+          shotId: "shot-1",
+          characterId: "courier",
+          wardrobe: ["yellow rain jacket"],
+          poseOrAction: "entering the market",
+          expression: "focused",
+          continuityNotes: [],
+        }],
+      };
+      const checkpoint = explicitInput.settingsSnapshot.resourceCandidates.checkpoints[0]!;
+      const lora = explicitInput.settingsSnapshot.resourceCandidates.loras[0]!;
+      const resourcePlan = createStoryResourcePlan({
+        storyId: explicitInput.storyId,
+        candidates: {
+          checkpoints: [{ resource: checkpoint }],
+          loras: [{ resource: lora }],
+        },
+        recommendation: {
+          checkpoint: { resource: checkpoint, reason: "Local checkpoint." },
+          loras: [{ resource: lora, suggestedWeight: 0.6, reason: "Local LoRA." }],
+          recommendationReason: "Use local resources.",
+          overallEffect: "Neon continuity.",
+          warnings: [],
+        },
+      });
+      const parameterPlan = createStoryParameterPlan({
+        storyId: explicitInput.storyId,
+        defaults: {
+          width: 1024,
+          height: 768,
+          steps: 28,
+          cfg: 5.5,
+          samplerName: "dpmpp_2m",
+          scheduler: "karras",
+          denoise: 1,
+        },
+      });
+      workflow.nodes["story-input"] = {
+        nodeId: "story-input",
+        result: explicitInput,
+        source: "manual",
+        status: "manual",
+        updatedAt: workflow.updatedAt,
+      };
+      workflow.nodes["story-bible"] = {
+        nodeId: "story-bible",
+        result: bible,
+        source: "ai",
+        status: "done",
+        updatedAt: workflow.updatedAt,
+      };
+      workflow.nodes["story-outline"] = {
+        nodeId: "story-outline",
+        result: outline,
+        source: "ai",
+        status: "done",
+        updatedAt: workflow.updatedAt,
+      };
+      workflow.nodes["storyboard-shots"] = {
+        nodeId: "storyboard-shots",
+        result: shots,
+        source: "ai",
+        status: "done",
+        updatedAt: workflow.updatedAt,
+      };
+      workflow.nodes["story-safety-plan"] = {
+        nodeId: "story-safety-plan",
+        result: safetyPlan,
+        source: "ai",
+        status: "done",
+        updatedAt: workflow.updatedAt,
+      };
+      workflow.nodes["shot-dependency-graph"] = {
+        nodeId: "shot-dependency-graph",
+        result: dependencyGraph,
+        source: "ai",
+        status: "done",
+        updatedAt: workflow.updatedAt,
+      };
+      workflow.nodes["plot-state-graph"] = {
+        nodeId: "plot-state-graph",
+        result: plotStateGraph,
+        source: "ai",
+        status: "done",
+        updatedAt: workflow.updatedAt,
+      };
+      workflow.nodes["character-continuity-graph"] = {
+        nodeId: "character-continuity-graph",
+        result: continuityGraph,
+        source: "ai",
+        status: "done",
+        updatedAt: workflow.updatedAt,
+      };
+      workflow.nodes["resource-plan"] = {
+        nodeId: "resource-plan",
+        result: resourcePlan,
+        source: "ai",
+        status: "done",
+        updatedAt: workflow.updatedAt,
+      };
+      workflow.nodes["parameter-plan"] = {
+        nodeId: "parameter-plan",
+        result: parameterPlan,
+        source: "ai",
+        status: "done",
+        updatedAt: workflow.updatedAt,
+      };
+
+      let currentNodeId: StoryWorkflowNodeId | null = null;
+      const requests: Partial<Record<StoryWorkflowNodeId, { model?: string; nsfw?: boolean }>> = {};
+      const adapters = createStoryLlmNodeAdapters({
+        completeChat: async (request) => {
+          if (currentNodeId) {
+            requests[currentNodeId] = {
+              model: request.model,
+              nsfw: request.nsfw,
+            };
+          }
+
+          return chatResponse(JSON.stringify({
+            title: "Signal Market",
+            logline: "A courier follows a signal.",
+            characters: bible.characters,
+            locations: bible.locations,
+            beats: outline.beats,
+            shots: shots.map((shot) => ({
+              ...shot,
+              shotId: shot.id,
+              animaPromptParts: {
+                subjectTags: ["1boy", "solo"],
+                characterTags: ["courier in yellow rain jacket"],
+                seriesTags: [],
+                artistTags: [],
+                outfitTags: ["yellow rain jacket"],
+                propTags: ["signal card"],
+                actionTags: ["standing in neon market"],
+                settingTags: ["wet neon market"],
+                cameraTags: ["medium frame"],
+                lightingTags: ["neon light"],
+                styleTags: ["anime illustration"],
+                singleFrameCaption: "The courier stands in a wet neon market.",
+                negativeAdditions: [],
+              },
+            })),
+            audienceRating: "explicit",
+            contentWarnings: ["adult content"],
+            blockedContent: [],
+            perShotNotes: [],
+            nsfwContext: { enabled: true, rationale: "NSFW test context." },
+            nodes: dependencyGraph.nodes,
+            edges: dependencyGraph.edges,
+            states: plotStateGraph.states,
+            transitions: plotStateGraph.transitions,
+            appearances: continuityGraph.appearances,
+            checkpoint: { resource: { id: checkpoint.id }, reason: "Local checkpoint." },
+            loras: [{ resource: { id: lora.id }, suggestedWeight: 0.6, reason: "Local LoRA." }],
+            recommendationReason: "Use local resources.",
+            overallEffect: "Neon continuity.",
+            defaults: parameterPlan.defaults,
+            perShotOverrides: [],
+            warnings: [],
+          }));
+        },
+      });
+      const nodeIds = [
+        "story-bible",
+        "story-outline",
+        "storyboard-shots",
+        "story-safety-plan",
+        "shot-dependency-graph",
+        "plot-state-graph",
+        "character-continuity-graph",
+        "resource-plan",
+        "parameter-plan",
+        "story-render-plan",
+      ] as const satisfies readonly StoryWorkflowNodeId[];
+
+      for (const nodeId of nodeIds) {
+        currentNodeId = nodeId;
+        await adapters[nodeId]?.({
+          nodeId,
+          workflow,
+          dependencies: [],
+        });
+      }
+
+      expect(requests).toMatchObject({
+        "story-bible": { model: "story-nsfw-model", nsfw: true },
+        "story-outline": { model: "story-nsfw-model", nsfw: true },
+        "storyboard-shots": { model: "story-nsfw-model", nsfw: true },
+        "story-safety-plan": { model: "story-nsfw-model", nsfw: true },
+        "plot-state-graph": { model: "story-nsfw-model", nsfw: true },
+        "character-continuity-graph": { model: "story-nsfw-model", nsfw: true },
+        "story-render-plan": { model: "story-nsfw-model", nsfw: true },
+        "shot-dependency-graph": { nsfw: true },
+        "resource-plan": { nsfw: true },
+        "parameter-plan": { nsfw: true },
+      });
+      expect(requests["shot-dependency-graph"]?.model).toBeUndefined();
+      expect(requests["resource-plan"]?.model).toBeUndefined();
+      expect(requests["parameter-plan"]?.model).toBeUndefined();
+    } finally {
+      if (previousNsfwModel === undefined) {
+        delete process.env.LITELLM_NSFW_MODEL;
+      } else {
+        process.env.LITELLM_NSFW_MODEL = previousNsfwModel;
+      }
+    }
   });
 
   it("asks Story planning nodes for concrete visual anchors and selective source semantics", async () => {
@@ -1011,6 +1276,296 @@ describe("story LLM adapters", () => {
     });
     expect((result as { value?: { checkpoint?: { resource?: { id?: string } } } } | undefined)?.value?.checkpoint?.resource?.id)
       .toBe("checkpoint-ranked");
+  });
+
+  it("uses explicit Story style resources without asking the resource-plan LLM", async () => {
+    const styleInput = {
+      ...input,
+      settingsSnapshot: {
+        promptProfile: "illustrious",
+        stylePalette: {
+          checkpointId: "checkpoint-manual",
+          loras: [
+            { id: "lora-enabled", enabled: true, strengthModel: 0.84, strengthClip: 0.41 },
+            { id: "lora-disabled", enabled: false, strengthModel: 0.9, strengthClip: 0.9 },
+          ],
+        },
+      },
+    } satisfies StoryInput;
+    const workflow = createStoryWorkflowState({ storyId: "story-1", workflowId: "workflow-manual-resources" });
+    workflow.nodes["story-input"] = {
+      nodeId: "story-input",
+      result: styleInput,
+      source: "manual",
+      status: "manual",
+      updatedAt: workflow.updatedAt,
+    };
+    workflow.nodes["story-bible"] = {
+      nodeId: "story-bible",
+      result: bible,
+      source: "ai",
+      status: "done",
+      updatedAt: workflow.updatedAt,
+    };
+    workflow.nodes["storyboard-shots"] = {
+      nodeId: "storyboard-shots",
+      result: shots,
+      source: "ai",
+      status: "done",
+      updatedAt: workflow.updatedAt,
+    };
+    workflow.nodes["story-safety-plan"] = {
+      nodeId: "story-safety-plan",
+      result: {
+        storyId: "story-1",
+        audienceRating: "safe",
+        contentWarnings: [],
+        blockedContent: [],
+        perShotNotes: [],
+        nsfwContext: {
+          enabled: false,
+          rationale: "Safe test context.",
+        },
+      },
+      source: "ai",
+      status: "done",
+      updatedAt: workflow.updatedAt,
+    };
+    let loadRequest: unknown;
+    let chatCalled = false;
+    const adapters = createStoryLlmNodeAdapters({
+      completeChat: async () => {
+        chatCalled = true;
+        return chatResponse("{}");
+      },
+      loadResourceCandidates: async (request) => {
+        loadRequest = request;
+        return {
+          checkpoints: [
+            {
+              id: "checkpoint-manual",
+              name: "Manual Checkpoint",
+              baseModel: "Illustrious",
+              modelFileName: "manual.safetensors",
+            },
+          ],
+          loras: [
+            {
+              id: "lora-enabled",
+              name: "Enabled LoRA",
+              baseModel: "Illustrious",
+              modelFileName: "enabled-lora.safetensors",
+              averageWeight: 0.55,
+            },
+            {
+              id: "lora-disabled",
+              name: "Disabled LoRA",
+              baseModel: "Illustrious",
+              modelFileName: "disabled-lora.safetensors",
+              averageWeight: 0.9,
+            },
+          ],
+        };
+      },
+    });
+
+    const result = await adapters["resource-plan"]?.({
+      nodeId: "resource-plan",
+      workflow,
+      dependencies: [workflow.nodes["story-safety-plan"], workflow.nodes["storyboard-shots"]],
+    });
+    const resourcePlan = (result as { source: string; value: ReturnType<typeof normalizeStoryResourcePlan> } | undefined);
+
+    expect(chatCalled).toBe(false);
+    expect(loadRequest).toMatchObject({
+      selectedCheckpointId: "checkpoint-manual",
+      selectedLoraIds: ["lora-enabled"],
+    });
+    expect(resourcePlan?.source).toBe("manual");
+    expect(resourcePlan?.value.checkpoint.resource.id).toBe("checkpoint-manual");
+    expect(resourcePlan?.value.loras).toHaveLength(1);
+    expect(resourcePlan?.value.loras[0]).toMatchObject({
+      resource: {
+        id: "lora-enabled",
+        storyInputStrengthModel: 0.84,
+        storyInputStrengthClip: 0.41,
+      },
+      suggestedWeight: 0.84,
+    });
+  });
+
+  it("rejects incompatible explicit Story style LoRAs before asking the resource-plan LLM", async () => {
+    const styleInput = {
+      ...input,
+      settingsSnapshot: {
+        promptProfile: "illustrious",
+        stylePalette: {
+          checkpointId: "checkpoint-manual",
+          loras: [{ id: "lora-pony", enabled: true, strengthModel: 0.7 }],
+        },
+      },
+    } satisfies StoryInput;
+    const workflow = createStoryWorkflowState({ storyId: "story-1", workflowId: "workflow-incompatible-lora" });
+    workflow.nodes["story-input"] = {
+      nodeId: "story-input",
+      result: styleInput,
+      source: "manual",
+      status: "manual",
+      updatedAt: workflow.updatedAt,
+    };
+    workflow.nodes["story-bible"] = {
+      nodeId: "story-bible",
+      result: bible,
+      source: "ai",
+      status: "done",
+      updatedAt: workflow.updatedAt,
+    };
+    workflow.nodes["storyboard-shots"] = {
+      nodeId: "storyboard-shots",
+      result: shots,
+      source: "ai",
+      status: "done",
+      updatedAt: workflow.updatedAt,
+    };
+    workflow.nodes["story-safety-plan"] = {
+      nodeId: "story-safety-plan",
+      result: {
+        storyId: "story-1",
+        audienceRating: "safe",
+        contentWarnings: [],
+        blockedContent: [],
+        perShotNotes: [],
+        nsfwContext: {
+          enabled: false,
+          rationale: "Safe test context.",
+        },
+      },
+      source: "ai",
+      status: "done",
+      updatedAt: workflow.updatedAt,
+    };
+    let chatCalled = false;
+    const adapters = createStoryLlmNodeAdapters({
+      completeChat: async () => {
+        chatCalled = true;
+        return chatResponse("{}");
+      },
+      loadResourceCandidates: async () => ({
+        checkpoints: [
+          {
+            id: "checkpoint-manual",
+            name: "Manual Checkpoint",
+            baseModel: "Illustrious",
+            modelFileName: "manual.safetensors",
+          },
+        ],
+        loras: [
+          {
+            id: "lora-pony",
+            name: "Pony LoRA",
+            baseModel: "Pony",
+            modelFileName: "pony-lora.safetensors",
+            averageWeight: 0.7,
+          },
+        ],
+      }),
+    });
+    const resourcePlanAdapter = adapters["resource-plan"];
+
+    expect(resourcePlanAdapter).toBeDefined();
+    await expect(resourcePlanAdapter?.({
+      nodeId: "resource-plan",
+      workflow,
+      dependencies: [workflow.nodes["story-safety-plan"], workflow.nodes["storyboard-shots"]],
+    })).rejects.toMatchObject({
+      code: "resource_selection_invalid",
+      message: expect.stringContaining("incompatible"),
+    });
+    expect(chatCalled).toBe(false);
+  });
+
+  it("uses saved Story style parameters without asking the parameter-plan LLM", async () => {
+    const styleInput = {
+      ...input,
+      settingsSnapshot: {
+        stylePalette: {
+          checkpointId: "checkpoint-local",
+          loras: [],
+          parameters: {
+            width: 832,
+            height: 1216,
+            steps: 31,
+            cfg: 4.25,
+            samplerName: "euler",
+            scheduler: "normal",
+            denoise: 0.88,
+            seed: 12345,
+          },
+        },
+      },
+    } satisfies StoryInput;
+    const workflow = createStoryWorkflowState({ storyId: "story-1", workflowId: "workflow-manual-parameters" });
+    workflow.nodes["story-input"] = {
+      nodeId: "story-input",
+      result: styleInput,
+      source: "manual",
+      status: "manual",
+      updatedAt: workflow.updatedAt,
+    };
+    workflow.nodes["storyboard-shots"] = {
+      nodeId: "storyboard-shots",
+      result: shots,
+      source: "ai",
+      status: "done",
+      updatedAt: workflow.updatedAt,
+    };
+    workflow.nodes["resource-plan"] = {
+      nodeId: "resource-plan",
+      result: normalizeStoryResourcePlan(
+        {
+          checkpoint: { resource: { id: "checkpoint-local" }, reason: "Local checkpoint." },
+          loras: [],
+          recommendationReason: "Use real resources.",
+          overallEffect: "Neon continuity.",
+          warnings: [],
+        },
+        input,
+      ),
+      source: "manual",
+      status: "done",
+      updatedAt: workflow.updatedAt,
+    };
+    let chatCalled = false;
+    const adapters = createStoryLlmNodeAdapters({
+      completeChat: async () => {
+        chatCalled = true;
+        return chatResponse("{}");
+      },
+      samplerOptions: {
+        samplers: ["euler"],
+        schedulers: ["normal"],
+      },
+    });
+
+    const result = await adapters["parameter-plan"]?.({
+      nodeId: "parameter-plan",
+      workflow,
+      dependencies: [workflow.nodes["resource-plan"], workflow.nodes["storyboard-shots"]],
+    });
+    const parameterPlan = (result as { source: string; value: StoryParameterPlan } | undefined);
+
+    expect(chatCalled).toBe(false);
+    expect(parameterPlan?.source).toBe("manual");
+    expect(parameterPlan?.value.defaults).toMatchObject({
+      width: 832,
+      height: 1216,
+      steps: 31,
+      cfg: 4.25,
+      samplerName: "euler",
+      scheduler: "normal",
+      denoise: 0.88,
+      seed: 12345,
+    });
   });
 
   it("caps Story resource desiredEffect at the external candidate-ranking boundary", async () => {

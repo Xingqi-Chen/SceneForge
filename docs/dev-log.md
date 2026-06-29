@@ -2,6 +2,23 @@
 
 This log records dated implementation and documentation work. Keep entries concise and evidence-oriented.
 
+## 2026-06-29
+
+### Issue #98 Story Selected Resource Loader Coverage
+
+Summary:
+
+- Added direct route-boundary regression coverage for Story selected checkpoint/LoRA loading from the local Civitai library.
+- Loaded explicit selected Story checkpoint/LoRA IDs before ranked Civitai candidate retrieval so manual selections can proceed when embedding/index-backed ranking is unavailable.
+- Covered selected resources outside ranked candidates, selected checkpoint fallback when ranked loading fails, no-selection ranked failure propagation, missing selected IDs, wrong selected resource type, and unavailable ComfyUI download status.
+
+Validation:
+
+- `npm test -- src/app/api/agent-timeline/story/run-planning/route.test.ts` passed with 1 file and 11 tests.
+- `npm test -- src/app/api/agent-timeline/story/run-planning/route.test.ts src/features/agent-timeline/components/StoryPlanningPreview.test.tsx src/features/agent-timeline/story-input.test.ts src/features/agent-timeline/story-llm-adapters.test.ts src/features/agent-timeline/story-planning.test.ts` passed with 5 files and 115 tests.
+- `npm run typecheck` passed.
+- Earlier Issue #98 validation: `npm run lint` passed with 23 existing warnings.
+
 ## 2026-06-28
 
 ### Story Visual Diagnostics Reviewer Fixes

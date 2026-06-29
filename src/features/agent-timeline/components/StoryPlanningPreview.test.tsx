@@ -1,4 +1,4 @@
-import { act } from "react";
+import { act, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -7,6 +7,52 @@ import {
   startStoryGraphWorkflow,
   type StoryWorkflowState,
 } from "@/features/agent-timeline";
+
+vi.mock("@/features/editor/components/ImageGenerationPanel", () => ({
+  ComfyUiGenerationDialog: (props: Record<string, unknown>) => {
+    const open = props.open === true;
+    const onSaveParameters = props.onSaveParameters as ((parameters: Record<string, unknown>) => void) | undefined;
+
+    if (!open) {
+      return null;
+    }
+
+    return (
+      <div data-testid="mock-comfyui-generation-dialog">
+        {props.introContent as ReactNode}
+        <span>{props.parametersOnly === true ? "parameters-only" : "generation-enabled"}</span>
+        {props.advice ? <span>advice-loaded</span> : null}
+        <button
+          onClick={() =>
+            onSaveParameters?.({
+              width: 832,
+              height: 1216,
+              seed: 98765,
+              seedMode: "fixed",
+              steps: 31,
+              cfg: 4.25,
+              samplerName: "euler",
+              scheduler: "normal",
+              denoise: 0.88,
+              imageCount: 3,
+              latentImageNode: "EmptyLatentImage",
+              promptWrapper: { positivePrefix: "ignored", negativePrefix: "ignored" },
+              inpaint: { denoise: 0.5, growMaskBy: 4, mode: "fill" },
+              outputPrefix: "Ignored",
+              faceDetailer: { enabled: true },
+              handDetailer: { enabled: true },
+              loras: [],
+              savedAt: "2026-06-15T00:00:00.000Z",
+            })
+          }
+          type="button"
+        >
+          Save mock parameters
+        </button>
+      </div>
+    );
+  },
+}));
 
 import { StoryPlanningPreview } from "./StoryPlanningPreview";
 
@@ -87,6 +133,34 @@ function createCivitaiResourceItem(resourceType: "lora" | "model", id: string, n
 
 const downloadedCheckpointItem = createCivitaiResourceItem("model", "checkpoint-local", "Local Checkpoint");
 const downloadedLoraItem = createCivitaiResourceItem("lora", "lora-local", "Local LoRA");
+
+function selectedResourcePreviewFromItem(item: ReturnType<typeof createCivitaiResourceItem>) {
+  const fileName = item.resourceType === "model" ? "local.safetensors" : "local-lora.safetensors";
+
+  return {
+    id: item.id,
+    resourceType: item.resourceType,
+    name: item.name,
+    versionName: item.versionName,
+    baseModel: item.baseModel,
+    creator: item.creator,
+    trainedWords: item.trainedWords,
+    tags: item.tags,
+    categories: item.categories,
+    usageGuide: item.usageGuide,
+    descriptionSnippet: item.description,
+    averageWeight: item.averageWeight,
+    minWeight: item.minWeight,
+    maxWeight: item.maxWeight,
+    recommendations: item.recommendations,
+    previewImage: item.previewImage,
+    modelFileName: fileName,
+    modelFileNameAliases: [fileName],
+  };
+}
+
+const selectedCheckpointPreview = selectedResourcePreviewFromItem(downloadedCheckpointItem);
+const selectedLoraPreview = selectedResourcePreviewFromItem(downloadedLoraItem);
 
 function handleStoryResourceListFetch(target: string): Response | null {
   if (target.includes("/api/civitai-lora-library/resources?resourceType=model")) {
@@ -242,6 +316,12 @@ async function clickButtonAsync(label: string) {
 async function flushAsyncWork() {
   await act(async () => {
     await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+  });
+}
+
+async function waitForPickerDebounce() {
+  await act(async () => {
+    await new Promise<void>((resolve) => window.setTimeout(resolve, 180));
   });
 }
 
@@ -651,6 +731,304 @@ describe("StoryPlanningPreview", () => {
     const executionButton = container.querySelector('button[data-node-id="shot-graph-execution"]') as HTMLButtonElement | null;
 
     expect(executionButton?.textContent).toContain("blocked");
+  });
+
+  it("passes selected Story style resources in the planning request", async () => {
+    const plannedWorkflow = createPlannedWorkflow("A detective follows a signal through a storm-lit city.");
+    const fetchMock = vi.fn<typeof fetch>(async (url) => {
+      const target = typeof url === "string" ? url : url instanceof Request ? url.url : url.toString();
+      const resourceResponse = handleStoryResourceListFetch(target);
+      if (resourceResponse) {
+        return resourceResponse;
+      }
+
+      if (target.startsWith("/api/civitai-lora-library/selected-resources")) {
+        const params = new URLSearchParams(target.split("?")[1] ?? "");
+        const loraIds = params.get("loraIds")?.split(",").filter(Boolean) ?? [];
+
+        return {
+          ok: true,
+          json: async () => ({
+            checkpoint: params.get("checkpointId") === selectedCheckpointPreview.id ? selectedCheckpointPreview : null,
+            loras: loraIds.includes(selectedLoraPreview.id) ? [selectedLoraPreview] : [],
+          }),
+        } as Response;
+      }
+
+      if (target === "/api/settings") {
+        return {
+          ok: true,
+          json: async () => ({}),
+        } as Response;
+      }
+
+      if (target === "/api/agent-timeline/active-workflow") {
+        return {
+          ok: false,
+          status: 404,
+          statusText: "Not Found",
+          text: async () => "",
+        } as Response;
+      }
+
+      if (target === "/api/agent-timeline/story/run-planning") {
+        return {
+          ok: true,
+          json: async () => ({
+            workflow: plannedWorkflow,
+          }),
+        } as Response;
+      }
+
+      throw new Error(`Unexpected fetch ${target}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await act(async () => {
+      root.render(<StoryPlanningPreview />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const textarea = container.querySelector("textarea") as HTMLTextAreaElement | null;
+    act(() => {
+      setNativeInputValue(textarea as HTMLTextAreaElement, "A detective follows a signal through a storm-lit city.");
+    });
+
+    await clickButtonAsync("Select checkpoint");
+    await waitForPickerDebounce();
+    await clickButtonAsync("Select");
+    await waitForPickerDebounce();
+    await clickButtonAsync("Add");
+    await flushAsyncWork();
+    await clickButtonAsync("Start planning");
+
+    const planningBody = JSON.parse(String(
+      fetchMock.mock.calls.find(([input]) => input === "/api/agent-timeline/story/run-planning")?.[1]?.body ?? "{}",
+    )) as {
+      settingsSnapshot?: {
+        stylePalette?: {
+          checkpointId?: string;
+          loras?: Array<{ id: string; enabled: boolean }>;
+        };
+      };
+    };
+
+    expect(planningBody.settingsSnapshot?.stylePalette).toMatchObject({
+      checkpointId: "checkpoint-local",
+      loras: [{ id: "lora-local", enabled: true }],
+    });
+  });
+
+  it("generates Story AI Style Advice from selected resources and passes it to saved parameters", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (url) => {
+      const target = typeof url === "string" ? url : url instanceof Request ? url.url : url.toString();
+      const resourceResponse = handleStoryResourceListFetch(target);
+      if (resourceResponse) {
+        return resourceResponse;
+      }
+
+      if (target.startsWith("/api/civitai-lora-library/selected-resources")) {
+        const params = new URLSearchParams(target.split("?")[1] ?? "");
+
+        return {
+          ok: true,
+          json: async () => ({
+            checkpoint: params.get("checkpointId") === selectedCheckpointPreview.id ? selectedCheckpointPreview : null,
+            loras: [],
+          }),
+        } as Response;
+      }
+
+      if (target === "/api/llm/chat") {
+        return {
+          ok: true,
+          json: async () => ({
+            content: JSON.stringify({
+              prompt: "1girl, solo, detailed face",
+              parameterSuggestions: {
+                steps: 29,
+                cfgScale: 5.5,
+                sampler: "euler",
+                scheduler: "normal",
+                resolution: "832x1216",
+              },
+              parameterSuggestionReason: "Use moderate steps for this checkpoint.",
+              overallEffect: "Clean anime rendering.",
+            }),
+          }),
+        } as Response;
+      }
+
+      if (target === "/api/settings") {
+        return {
+          ok: true,
+          json: async () => ({}),
+        } as Response;
+      }
+
+      if (target === "/api/agent-timeline/active-workflow") {
+        return {
+          ok: false,
+          status: 404,
+          statusText: "Not Found",
+          text: async () => "",
+        } as Response;
+      }
+
+      throw new Error(`Unexpected fetch ${target}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await act(async () => {
+      root.render(<StoryPlanningPreview />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    await clickButtonAsync("Select checkpoint");
+    await waitForPickerDebounce();
+    await clickButtonAsync("Select");
+    await flushAsyncWork();
+    expect(container.textContent).not.toContain("AI Style Advice");
+    await clickButtonAsync("Parameters");
+    expect(container.textContent).toContain("parameters-only");
+    expect(container.textContent).toContain("AI Style Advice");
+    await clickButtonAsync("Generate");
+    await flushAsyncWork();
+
+    expect(container.textContent).toContain("Clean anime rendering.");
+    expect(container.textContent).toContain("Use moderate steps for this checkpoint.");
+    expect(container.textContent).toContain("advice-loaded");
+
+    const chatBody = JSON.parse(String(
+      fetchMock.mock.calls.find(([input]) => input === "/api/llm/chat")?.[1]?.body ?? "{}",
+    )) as {
+      purpose?: string;
+      messages?: Array<{ content?: string }>;
+    };
+    expect(chatBody.purpose).toBe("stable-diffusion-prompt-generation");
+    expect(JSON.stringify(chatBody.messages)).toContain("Local Checkpoint");
+  });
+
+  it("requires a selected Story checkpoint before saving style parameters", async () => {
+    const plannedWorkflow = createPlannedWorkflow("A detective follows a signal through a storm-lit city.");
+    const fetchMock = vi.fn<typeof fetch>(async (url) => {
+      const target = typeof url === "string" ? url : url instanceof Request ? url.url : url.toString();
+      const resourceResponse = handleStoryResourceListFetch(target);
+      if (resourceResponse) {
+        return resourceResponse;
+      }
+
+      if (target.startsWith("/api/civitai-lora-library/selected-resources")) {
+        const params = new URLSearchParams(target.split("?")[1] ?? "");
+
+        return {
+          ok: true,
+          json: async () => ({
+            checkpoint: params.get("checkpointId") === selectedCheckpointPreview.id ? selectedCheckpointPreview : null,
+            loras: [],
+          }),
+        } as Response;
+      }
+
+      if (target === "/api/settings") {
+        return {
+          ok: true,
+          json: async () => ({}),
+        } as Response;
+      }
+
+      if (target === "/api/agent-timeline/active-workflow") {
+        return {
+          ok: false,
+          status: 404,
+          statusText: "Not Found",
+          text: async () => "",
+        } as Response;
+      }
+
+      if (target === "/api/agent-timeline/story/run-planning") {
+        return {
+          ok: true,
+          json: async () => ({
+            workflow: plannedWorkflow,
+          }),
+        } as Response;
+      }
+
+      throw new Error(`Unexpected fetch ${target}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await act(async () => {
+      root.render(<StoryPlanningPreview />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const textarea = container.querySelector("textarea") as HTMLTextAreaElement | null;
+    act(() => {
+      setNativeInputValue(textarea as HTMLTextAreaElement, "A detective follows a signal through a storm-lit city.");
+    });
+
+    const parametersButton = Array.from(container.querySelectorAll("button")).find(
+      (button) => button.textContent?.replace(/\s+/g, " ").trim() === "Parameters",
+    ) as HTMLButtonElement | undefined;
+    expect(parametersButton).toBeDefined();
+    expect(parametersButton?.disabled).toBe(true);
+
+    await clickButtonAsync("Select checkpoint");
+    await waitForPickerDebounce();
+    await clickButtonAsync("Select");
+    await flushAsyncWork();
+
+    const enabledParametersButton = Array.from(container.querySelectorAll("button")).find(
+      (button) => button.textContent?.replace(/\s+/g, " ").trim() === "Parameters",
+    ) as HTMLButtonElement | undefined;
+    expect(enabledParametersButton?.disabled).toBe(false);
+    await clickButtonAsync("Parameters");
+    expect(container.textContent).toContain("parameters-only");
+    await clickButtonAsync("Save mock parameters");
+    expect(container.textContent).toContain("Saved parameters: 832x1216, 31 steps, CFG 4.25, euler/normal, fixed seed 98765");
+    await clickButtonAsync("Start planning");
+
+    expect(fetchMock.mock.calls.some(([input]) => String(input).includes("/api/comfyui"))).toBe(false);
+    const planningBody = JSON.parse(String(
+      fetchMock.mock.calls.find(([input]) => input === "/api/agent-timeline/story/run-planning")?.[1]?.body ?? "{}",
+    )) as {
+      settingsSnapshot?: {
+        stylePalette?: {
+          checkpointId?: string;
+          loras?: Array<{ id: string; enabled: boolean }>;
+          parameters?: {
+            width?: number;
+            height?: number;
+            steps?: number;
+            cfg?: number;
+            samplerName?: string;
+            scheduler?: string;
+            denoise?: number;
+            seed?: number;
+          };
+        };
+      };
+    };
+
+    expect(planningBody.settingsSnapshot?.stylePalette).toEqual({
+      checkpointId: "checkpoint-local",
+      loras: [],
+      parameters: {
+        width: 832,
+        height: 1216,
+        steps: 31,
+        cfg: 4.25,
+        samplerName: "euler",
+        scheduler: "normal",
+        denoise: 0.88,
+        seed: 98765,
+      },
+    });
   });
 
   it("shows compact Visual output by default and keeps Raw JSON available", async () => {

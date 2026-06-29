@@ -885,6 +885,54 @@ describe("story planning", () => {
     });
   });
 
+  it("preserves Story input LoRA weights and fixed seed in ComfyUI execution requests", () => {
+    const checkpoint = checkpointResource();
+    const lora = {
+      ...loraResource(),
+      storyInputStrengthModel: 0.84,
+      storyInputStrengthClip: 0.41,
+    };
+    const resourcePlan = createStoryResourcePlan({
+      storyId,
+      candidates: {
+        checkpoints: [{ resource: checkpoint }],
+        loras: [{ resource: lora }],
+      },
+      recommendation: {
+        checkpoint: { resource: checkpoint, reason: "Manual checkpoint." },
+        loras: [{ resource: lora, suggestedWeight: 0.84, reason: "Manual LoRA weight." }],
+        recommendationReason: "Use Story input style resources.",
+        overallEffect: "Manual style resources.",
+        warnings: [],
+      },
+    });
+    const parameterPlan = createStoryParameterPlan({
+      storyId,
+      defaults: {
+        ...defaults,
+        seed: 12345,
+      },
+    });
+    const renderPlan = assembleStoryRenderPlan({
+      parameterPlan,
+      resourcePlan,
+      safetyPlan,
+      shots,
+    });
+    const finalBatch = createStoryExecutionRequestBatch({ mode: "final", renderPlan, resourcePlan });
+
+    expect(finalBatch.requests[0]?.request).toMatchObject({
+      seed: 12345,
+      loras: [
+        {
+          loraName: "local-lora.safetensors",
+          strengthModel: 0.84,
+          strengthClip: 0.41,
+        },
+      ],
+    });
+  });
+
   it("uses Story-only Anima model-card prefix and safe minor negatives", () => {
     const renderPlan = assembleStoryRenderPlan({
       parameterPlan: createStoryParameterPlan({ storyId, defaults }),
