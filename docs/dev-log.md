@@ -4,6 +4,27 @@ This log records dated implementation and documentation work. Keep entries conci
 
 ## 2026-06-29
 
+### T29 / Issue #110 Render Reference Recipes and Location Continuity Modes
+
+Summary:
+
+- Added per-shot `referenceRecipe` and structured `locationContinuity` fields to Story render plans and generation-gate request previews.
+- Normalized render LLM output for `prompt-only`, `source-image`, and `inpaint-preferred` continuity modes without deriving execution behavior from prompt strings.
+- Limited Story execution request source-shot inputs to `locationContinuity.mode === "source-image"`; `prompt-only` and advisory `inpaint-preferred` remain non-executing and create no source image, mask, repair, inpaint, fallback edit, or dependency graph edge.
+- Added execution-boundary filtering and consistency errors for stored or manual render plans whose source-image continuity references the target shot, a future shot, or an unknown shot.
+- Kept old/stale Story reference review state visible by deriving safe prompt-only recipe defaults from reference assets when render LLM fields are missing.
+
+Validation:
+
+- `npm test -- --run src/features/agent-timeline/story-planning.test.ts` passed with 40 tests.
+- `npm test -- --run src/features/agent-timeline/story-llm-adapters.test.ts` passed with 43 tests.
+- `npm test -- --run src/features/agent-timeline/story-node-output-summary.test.ts src/features/agent-timeline/components/StoryNodeOutputSummaryView.test.tsx` passed with 13 tests.
+- `npm test -- --run src/features/agent-timeline/story-input.test.ts` passed with 17 tests.
+- `npm test -- --run src/app/api/agent-timeline/story/confirm-generation/route.test.ts src/app/api/agent-timeline/story/regenerate-shot/route.test.ts src/features/agent-timeline/story-api.test.ts` passed with 19 tests.
+- `npm test -- --run src/features/agent-timeline src/app/api/agent-timeline/story` passed with 36 files and 342 tests.
+- `npm run typecheck` passed.
+- `npm run lint` passed with 23 existing warnings.
+
 ### T28 / Issue #108 Story Reference Review Workspace
 
 Summary:

@@ -519,12 +519,12 @@ describe("story input workflow start", () => {
     });
     expect(artifacts.generationGate.requestPreview[0]).toMatchObject({
       animaPromptParts: artifacts.renderPlan.shots[0]?.animaPromptParts,
-      sourceMode: "none",
+      sourceMode: "prompt-only",
       sourceShotIds: [],
     });
     expect(artifacts.renderPlan.shots[0]?.outputAnchors).toMatchObject({
       source: {
-        mode: "none",
+        mode: "prompt-only",
         sourceShotIds: [],
       },
     });

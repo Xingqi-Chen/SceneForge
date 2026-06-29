@@ -209,6 +209,7 @@ Render and execution contracts:
 - `locationContinuity.mode` is `prompt-only`, `source-image`, or `inpaint-preferred`.
 - Only `source-image` creates an executable img2img/source-image dependency. `prompt-only` and `inpaint-preferred` do not pass a source shot to execution.
 - `inpaint-preferred` is advisory in v1 and must not trigger automatic masks, repair, or inpaint execution.
+- Story render-plan request previews carry `referenceRecipe` and `locationContinuity`; execution request assembly reads only structured `locationContinuity.mode === "source-image"` and prior render-plan source shot ids. Stored or manual render plans that reference the target shot, a future shot, or an unknown shot fail consistency checks, and execution batching filters those ids before request assembly. Prompt text, reference recipe prose, and advisory inpaint notes must not create source images, masks, repair passes, inpaint runs, fallback image edits, or shot dependency graph edges.
 - Approved character identity and outfit references may become Anima `characterReferences` only when selected resources are Anima-compatible and required IPAdapter nodes are available.
 - Missing IPAdapter support must visibly degrade to prompt-only with install guidance and must omit reference injection rather than silently failing.
 - Prop and location references remain visible anchors and are not injected into full-image generation by default in v1.

@@ -394,4 +394,69 @@ describe("story API workflow sanitizer", () => {
     });
     expect(requests).toEqual([undefined, undefined]);
   });
+
+  it("rejects stored render plans with self or future source-image continuity before execution", async () => {
+    const workflow = approveAllRequiredReferences(createReferenceWorkflow());
+    const renderPlan = workflow.nodes["story-render-plan"].result as Record<string, unknown>;
+    const renderShots = Array.isArray(renderPlan.shots) ? renderPlan.shots : [];
+    const tamperedRenderPlan = {
+      ...renderPlan,
+      shots: renderShots.map((shot, index) =>
+        index === 0 && typeof shot === "object" && shot !== null
+          ? {
+              ...shot,
+              locationContinuity: {
+                mode: "source-image",
+                sourceShotIds: ["shot-1", "shot-2"],
+                reason: "Tampered stored plan points at self and a future shot.",
+                notes: [],
+              },
+              sourceShotIds: ["shot-1", "shot-2"],
+            }
+          : shot,
+      ),
+    };
+    const tamperedWorkflow = {
+      ...workflow,
+      nodes: {
+        ...workflow.nodes,
+        "story-render-plan": {
+          ...workflow.nodes["story-render-plan"],
+          result: tamperedRenderPlan,
+          source: "manual" as const,
+          status: "manual" as const,
+        },
+      },
+    };
+    const executeShot: StoryShotExecutionAdapter = vi.fn();
+    let error: unknown;
+
+    try {
+      await confirmAndExecuteStoryGeneration({
+        executeShot,
+        workflow: tamperedWorkflow,
+      });
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error).toBeInstanceOf(StoryApiValidationError);
+    expect((error as Error).message).toBe("Story consistency checks must pass before generation.");
+    expect(error).toMatchObject({
+      details: {
+        issues: expect.arrayContaining([
+          expect.objectContaining({
+            code: "render-source-self",
+            shotIds: ["shot-1"],
+          }),
+          expect.objectContaining({
+            code: "render-source-order",
+            shotIds: ["shot-1"],
+          }),
+        ]),
+      },
+      status: 400,
+    });
+    expect(executeShot).not.toHaveBeenCalled();
+  });
 });

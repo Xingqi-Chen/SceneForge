@@ -5,6 +5,7 @@ import {
   createStoryGenerationRequestPreview,
   createStoryParameterPlan,
   createStoryResourcePlan,
+  getStoryRenderPlanEligibleSourceShotIds,
   getStoryInputImg2ImgDenoise,
   normalizeStoryImg2ImgDenoise,
   type StoryGenerationRequestPreview,
@@ -727,7 +728,10 @@ function createGenerationGate(
     nsfwContext: renderPlan.nsfwContext,
     renderPlanShotCount: renderPlan.shots.length,
     previewEnabled: renderPlan.preview.options.enabled,
-    requestPreview: renderPlan.shots.map((shot) => createStoryGenerationRequestPreview(shot, renderPlan.img2imgDenoise)),
+    requestPreview: renderPlan.shots.map((shot) =>
+      createStoryGenerationRequestPreview(shot, renderPlan.img2imgDenoise, {
+        eligibleSourceShotIds: getStoryRenderPlanEligibleSourceShotIds(renderPlan.shots, shot.shotId),
+      })),
   };
 }
 
@@ -754,6 +758,7 @@ export function createStoryPlanningArtifacts(
   const renderPlan = assembleStoryRenderPlan({
     img2imgDenoise: getStoryInputImg2ImgDenoise(input),
     parameterPlan,
+    referenceAssetPlan,
     resourcePlan,
     safetyPlan,
     shots,

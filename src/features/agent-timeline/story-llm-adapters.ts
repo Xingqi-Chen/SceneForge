@@ -7,9 +7,14 @@ import {
   createStoryGenerationRequestPreview,
   createStoryParameterPlan,
   createStoryResourcePlan,
+  getStoryRenderPlanEligibleSourceShotIds,
+  getStoryRenderPlanShotRequestedSourceShotIds,
+  getStoryRenderPlanShotSourceShotIds,
   getStoryInputImg2ImgDenoise,
   getSelectedStoryResourcesForPrompting,
   normalizeStoryAnimaPromptParts,
+  normalizeStoryRenderLocationContinuity,
+  normalizeStoryRenderReferenceRecipe,
   type StoryAnimaPromptParts,
   type StoryGenerationParameters,
   type StoryLocalResource,
@@ -2266,6 +2271,21 @@ export function normalizeStoryRenderPromptPlan(
         const rawAnimaPromptParts = rawShot.animaPromptParts ?? rawShot.anima_prompt_parts;
         let animaPromptParts = normalizeStoryAnimaPromptParts(rawAnimaPromptParts);
         const warnings = normalizeStringList(rawShot.warnings, maxWarnings);
+        const rawLocationContinuity = rawShot.locationContinuity ?? rawShot.location_continuity;
+        const rawReferenceRecipe = rawShot.referenceRecipe ?? rawShot.reference_recipe;
+        const sourceShotIndex = sourceShot ? shots.findIndex((candidate) => candidate.id === sourceShot.id) : index;
+        const locationContinuity = rawLocationContinuity === undefined
+          ? undefined
+          : normalizeStoryRenderLocationContinuity(rawLocationContinuity, {
+              eligibleSourceShotIds: new Set(shots.slice(0, Math.max(0, sourceShotIndex)).map((candidate) => candidate.id)),
+              fallbackSourceShotIds: sourceShot?.sourceShotIds ?? [],
+              knownShotIds: shotIds,
+              targetShotId: shotId,
+              warnings,
+            });
+        const referenceRecipe = rawReferenceRecipe === undefined
+          ? undefined
+          : normalizeStoryRenderReferenceRecipe(rawReferenceRecipe);
 
         if (sourceShot && !hasStoryAnimaPromptPartsContent(animaPromptParts)) {
           animaPromptParts = createFallbackStoryRenderPromptParts(sourceShot);
@@ -2275,6 +2295,8 @@ export function normalizeStoryRenderPromptPlan(
         return {
           shotId,
           animaPromptParts,
+          ...(locationContinuity ? { locationContinuity } : {}),
+          ...(referenceRecipe ? { referenceRecipe } : {}),
           rationale: displayText(rawShot.rationale ?? rawShot.reason) || undefined,
           warnings,
         };
@@ -2289,6 +2311,22 @@ export function isStoryResourcePlanExecutable(resourcePlan: StoryResourcePlan): 
   return Boolean(fileName) && fileName !== "story-planning-fallback.safetensors";
 }
 
+function getOptionalStoryReferenceAssetPlanForRender(workflow: StoryWorkflowState): StoryReferenceAssetPlan | undefined {
+  const result = workflow.nodes["reference-asset-plan"]?.result;
+  if (result !== undefined) {
+    return result as StoryReferenceAssetPlan;
+  }
+
+  const entityCards = getOptionalEntityCards(workflow);
+  return entityCards
+    ? deriveStoryReferenceAssetPlan({
+        entityCards,
+        shots: getShots(workflow),
+        storyId: getStoryInput(workflow).storyId,
+      })
+    : undefined;
+}
+
 export function createStoryRenderPlanFromWorkflow(
   workflow: StoryWorkflowState,
   samplerOptions?: TimelineSamplerOptions,
@@ -2300,6 +2338,7 @@ export function createStoryRenderPlanFromWorkflow(
   return assembleStoryRenderPlan({
     img2imgDenoise: getStoryInputImg2ImgDenoise(getStoryInput(workflow)),
     parameterPlan: getParameterPlan(workflow),
+    referenceAssetPlan: getOptionalStoryReferenceAssetPlanForRender(workflow),
     resourcePlan: getResourcePlan(workflow),
     samplerOptions,
     safetyPlan: getSafetyPlan(workflow),
@@ -2409,7 +2448,9 @@ export function createStoryConsistencyCheckFromWorkflow(
   }
 
   for (const shot of renderPlan.shots) {
-    const sourceShotIds = shots.find((candidate) => candidate.id === shot.shotId)?.sourceShotIds ?? [];
+    const eligibleSourceShotIds = getStoryRenderPlanEligibleSourceShotIds(renderPlan.shots, shot.shotId);
+    const requestedSourceShotIds = getStoryRenderPlanShotRequestedSourceShotIds(shot);
+    const executableSourceShotIds = getStoryRenderPlanShotSourceShotIds(shot, eligibleSourceShotIds);
     if (!shotIds.has(shot.shotId)) {
       issues.push({
         code: "render-shot-ref",
@@ -2419,10 +2460,35 @@ export function createStoryConsistencyCheckFromWorkflow(
       });
     }
 
-    if (sourceShotIds.join("|") !== shot.sourceShotIds.join("|")) {
+    for (const sourceShotId of requestedSourceShotIds) {
+      if (!shotIds.has(sourceShotId)) {
+        issues.push({
+          code: "render-source-ref",
+          message: `Render plan source-image continuity for "${shot.shotId}" references unknown source shot "${sourceShotId}".`,
+          severity: "error",
+          shotIds: [shot.shotId],
+        });
+      } else if (sourceShotId === shot.shotId) {
+        issues.push({
+          code: "render-source-self",
+          message: `Render plan source-image continuity for "${shot.shotId}" cannot reference the target shot itself.`,
+          severity: "error",
+          shotIds: [shot.shotId],
+        });
+      } else if (!eligibleSourceShotIds.has(sourceShotId)) {
+        issues.push({
+          code: "render-source-order",
+          message: `Render plan source-image continuity for "${shot.shotId}" must reference an earlier render-plan shot, not "${sourceShotId}".`,
+          severity: "error",
+          shotIds: [shot.shotId],
+        });
+      }
+    }
+
+    if (shot.locationContinuity?.mode === "source-image" && executableSourceShotIds.length === 0) {
       issues.push({
-        code: "render-source-sync",
-        message: `Render plan source shots for "${shot.shotId}" do not match the dependency graph.`,
+        code: "render-source-empty",
+        message: `Render plan source-image continuity for "${shot.shotId}" does not include a source shot.`,
         severity: "error",
         shotIds: [shot.shotId],
       });
@@ -2474,7 +2540,10 @@ export function createStoryGenerationGateFromWorkflow(
     nsfwContext: renderPlan.nsfwContext,
     renderPlanShotCount: renderPlan.shots.length,
     previewEnabled: renderPlan.preview.options.enabled,
-    requestPreview: renderPlan.shots.map((shot) => createStoryGenerationRequestPreview(shot, renderPlan.img2imgDenoise)),
+    requestPreview: renderPlan.shots.map((shot) =>
+      createStoryGenerationRequestPreview(shot, renderPlan.img2imgDenoise, {
+        eligibleSourceShotIds: getStoryRenderPlanEligibleSourceShotIds(renderPlan.shots, shot.shotId),
+      })),
   };
 }
 
@@ -2926,12 +2995,17 @@ export function createStoryLlmNodeAdapters({
           "Do not use original-story character names as prompt tags; describe their visible age category, hairstyle, wardrobe, props, and action instead. Only keep a name when it is an actual Civitai trained word or known source character tag.",
           "Preserve explicit current-shot subjects, adult/age context, wardrobe, key props, action or pose, setting, composition, camera, lighting, and continuity anchors as short visual clauses.",
           "Use supplied entityCards as structured continuity context for characters, outfits, props, and locations; do not invent new entity ids or plan reference assets.",
+          "Use supplied referenceAssetPlan only to describe per-shot reference-use intent in referenceRecipe. Do not add reference relationships to the dependency graph and do not request final reference injection.",
+          'Each shot must include referenceRecipe with a concise summary plus referenceIds, approvedReferenceIds, promptOnlyReferenceIds, unresolvedReferenceIds, and notes explaining how planned references should guide prompt review.',
+          'Each shot must include locationContinuity.mode as exactly "prompt-only", "source-image", or "inpaint-preferred". Use "source-image" only when this render plan should pass listed sourceShotIds into img2img execution. Use "prompt-only" when location continuity should stay in prompt text. Use "inpaint-preferred" only as advisory future intent; v1 will not create masks, repair, inpaint, or fallback image-edit requests.',
+          "Choose location continuity from structured shot/source/dependency fields, not from prompt wording. Do not rely on words inside final prompt text to trigger source images.",
+          "For prompt-only and inpaint-preferred continuity, locationContinuity.sourceShotIds must be empty. For source-image continuity, sourceShotIds must list valid earlier shot ids.",
           "For multi-character shots, each visible person must get a distinct clause with hairstyle, clothing, pose/action, spatial position, and adult or college-age presentation when applicable; do not collapse them into \"two young women\" or another generic group tag.",
           "For subjectTags use conservative tags like \"1girl\", \"solo\", \"2people\", or \"3people\"; only use \"3girls\" when every visible person is clearly a girl/woman.",
           "Use seriesTags only for known source/copyright tags when there is a real selected source; leave seriesTags empty for original stories. Use artistTags only for known artist tags and prefix each item with @; leave artistTags empty when no artist tag is selected.",
           "For selected style LoRAs, translate their usage guide into short visual style terms only, such as \"teal theme\", \"orange theme\", \"dusk glow\", or \"soft rim light\".",
           "Negative additions must be visual quality/exclusion terms only, must not replace safety negatives, and must not negate positive key characters, actions, props, clothing, or environments; for example, do not add \"sketch page\" or \"drawings\" when the shot requires a sketchbook or visible sketch pages.",
-          'Required shape: {"shots":[{"shotId":"","animaPromptParts":{"subjectTags":[""],"characterTags":[""],"seriesTags":[""],"artistTags":[""],"outfitTags":[""],"propTags":[""],"actionTags":[""],"settingTags":[""],"cameraTags":[""],"lightingTags":[""],"styleTags":[""],"singleFrameCaption":"","negativeAdditions":[""]},"rationale":"","warnings":[""]}],"warnings":[""]}.',
+          'Required shape: {"shots":[{"shotId":"","animaPromptParts":{"subjectTags":[""],"characterTags":[""],"seriesTags":[""],"artistTags":[""],"outfitTags":[""],"propTags":[""],"actionTags":[""],"settingTags":[""],"cameraTags":[""],"lightingTags":[""],"styleTags":[""],"singleFrameCaption":"","negativeAdditions":[""]},"referenceRecipe":{"summary":"","referenceIds":[""],"approvedReferenceIds":[""],"promptOnlyReferenceIds":[""],"unresolvedReferenceIds":[""],"notes":[""]},"locationContinuity":{"mode":"prompt-only|source-image|inpaint-preferred","sourceShotIds":[""],"reason":"","notes":[""]},"rationale":"","warnings":[""]}],"warnings":[""]}.',
         ].join(" "),
         payload: {
           input,
@@ -2940,6 +3014,7 @@ export function createStoryLlmNodeAdapters({
           dependencyGraph: getDependencyGraph(context.workflow),
           entityCards: getOptionalEntityCards(context.workflow),
           parameterPlan: getParameterPlan(context.workflow),
+          referenceAssetPlan: getOptionalStoryReferenceAssetPlanForRender(context.workflow),
           resourcePlan,
           safetyPlan: getSafetyPlan(context.workflow),
           selectedResources: getSelectedStoryResourcesForPrompting(resourcePlan),
@@ -2959,6 +3034,7 @@ export function createStoryLlmNodeAdapters({
       return assembleStoryRenderPlan({
         img2imgDenoise: getStoryInputImg2ImgDenoise(input),
         parameterPlan: getParameterPlan(context.workflow),
+        referenceAssetPlan: getOptionalStoryReferenceAssetPlanForRender(context.workflow),
         renderPromptPlan,
         resourcePlan: getResourcePlan(context.workflow),
         samplerOptions,

@@ -227,6 +227,12 @@ function StoryShotCard({ card }: { card: StoryShotSummaryCard }) {
                 <dd className="mt-1 leading-relaxed text-slate-700">{card.parameters}</dd>
               </div>
             ) : null}
+            {card.locationContinuity ? (
+              <div className="sm:col-span-2">
+                <dt className="text-[11px] font-semibold uppercase text-slate-500">Location continuity</dt>
+                <dd className="mt-1 leading-relaxed text-slate-700">{card.locationContinuity}</dd>
+              </div>
+            ) : null}
             {card.resources ? (
               <div className="sm:col-span-2">
                 <dt className="text-[11px] font-semibold uppercase text-slate-500">Resources</dt>
@@ -237,6 +243,7 @@ function StoryShotCard({ card }: { card: StoryShotSummaryCard }) {
 
           <div className="mt-3 grid gap-3">
             <AnimaPromptPartsGrid card={card} />
+            <SummaryTextBlock label="Reference recipe" value={card.referenceRecipe} />
             <SummaryTextBlock label="Visual prompt" value={card.visualPrompt} />
             <SummaryTextBlock label="Negative prompt" value={card.negativePrompt} />
             {card.readinessDetail ? (
