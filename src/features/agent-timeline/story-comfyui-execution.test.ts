@@ -1,3 +1,7 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+
 import { describe, expect, it, vi } from "vitest";
 
 import type { ComfyUiGenerateImageResponse, ComfyUiTextToImageRequest } from "@/features/comfyui";
@@ -109,6 +113,50 @@ function createClient() {
   return client;
 }
 
+function createAnimaObjectInfo() {
+  return {
+    CLIPLoader: {
+      input: {
+        optional: {
+          device: [["default"], {}],
+        },
+        required: {
+          clip_name: [["qwen_3_06b_base.safetensors"], {}],
+          type: [["qwen_image"], {}],
+        },
+      },
+    },
+    CLIPTextEncode: {},
+    EmptyLatentImage: {},
+    KSampler: {
+      input: {
+        required: {
+          sampler_name: [["euler"], {}],
+          scheduler: [["normal"], {}],
+        },
+      },
+    },
+    LoadImage: {},
+    PreviewImage: {},
+    UNETLoader: {
+      input: {
+        required: {
+          unet_name: [["anima.safetensors"], {}],
+          weight_dtype: [["default"], {}],
+        },
+      },
+    },
+    VAEDecode: {},
+    VAELoader: {
+      input: {
+        required: {
+          vae_name: [["qwen_image_vae.safetensors"], {}],
+        },
+      },
+    },
+  };
+}
+
 describe("story ComfyUI execution adapter", () => {
   it("reuses ComfyUI validation, object_info, queue, history, view fetch, and generated image storage helpers", async () => {
     const client = createClient();
@@ -188,6 +236,216 @@ describe("story ComfyUI execution adapter", () => {
     });
     expect(JSON.stringify(result)).not.toContain("data:image");
     expect(JSON.stringify(result)).not.toContain("base64");
+  });
+
+  it("uploads Story-managed approved character reference images before queueing", async () => {
+    const previousSequenceReferenceDir = process.env.SCENEFORGE_SEQUENCE_REFERENCE_DIR;
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "sceneforge-story-ref-"));
+
+    try {
+      process.env.SCENEFORGE_SEQUENCE_REFERENCE_DIR = tempDir;
+      const referenceFilename = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png";
+      await fs.writeFile(path.join(tempDir, referenceFilename), new Uint8Array([90, 91, 92]));
+
+      const request = {
+        checkpointName: "anima.safetensors",
+        modelBaseModel: "Anima",
+        modelStorageKind: "diffusion",
+        positivePrompt: "rainy station shot",
+        workflowProfile: "anima",
+        characterReferences: [
+          {
+            id: "story-reference:character-face:lead",
+            name: "Lead character-face reference",
+            mode: "face",
+            images: [
+              {
+                id: "story-reference:character-face:lead:approved",
+                imageName: referenceFilename,
+              },
+            ],
+          },
+        ],
+      } satisfies ComfyUiTextToImageRequest;
+      const client = createClient();
+      const generatedRequests: ComfyUiTextToImageRequest[] = [];
+      client.uploadImage = vi.fn<StoryComfyUiExecutionClient["uploadImage"]>(async (upload) => ({
+        filename: upload.filename,
+        imageName: "uploaded-lead-reference.png",
+        raw: {},
+        type: "input",
+      }));
+      client.generateImage = vi.fn<StoryComfyUiExecutionClient["generateImage"]>((queuedRequest) => {
+        generatedRequests.push(queuedRequest);
+        return Promise.resolve(createQueuedResponse(queuedRequest));
+      });
+      const validateRequest = vi.fn((value: unknown) => ({
+        ok: true as const,
+        request: value as ComfyUiTextToImageRequest,
+      }));
+      const validateObjectInfo = vi.fn((queuedRequest: ComfyUiTextToImageRequest) => ({
+        errors: [],
+        request: queuedRequest,
+        warnings: [],
+      }));
+      const adapter = createStoryComfyUiExecutionAdapter({
+        client,
+        fetchImage: async () => ({
+          bytes: new Uint8Array([1, 2, 3]),
+          contentType: "image/png",
+        }),
+        historyPollAttempts: 2,
+        historyPollIntervalMs: 0,
+        storeImage: async (bytes: Uint8Array, contentType: string | null) => ({
+          byteLength: bytes.byteLength,
+          contentType: contentType ?? "image/png",
+          filename: "stored-shot-a.png",
+          url: "/api/comfyui/generated-images/stored-shot-a.png",
+        }),
+        validateObjectInfo,
+        validateRequest,
+      });
+
+      const result = await executeStoryShotGraph(createBatch(request), adapter);
+
+      expect(result.shots[0]?.status).toBe("done");
+      expect(client.uploadImage).toHaveBeenCalledWith(expect.objectContaining({
+        bytes: new Uint8Array([90, 91, 92]),
+        filename: "sceneforge-story-ref-character-face-lead-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png",
+        mimeType: "image/png",
+        type: "input",
+      }));
+      expect(validateRequest).toHaveBeenLastCalledWith(expect.objectContaining({
+        characterReferences: [
+          expect.objectContaining({
+            id: "story-reference:character-face:lead",
+            images: [
+              {
+                id: "story-reference:character-face:lead:approved",
+                imageName: "uploaded-lead-reference.png",
+              },
+            ],
+          }),
+        ],
+      }));
+      expect(validateObjectInfo).toHaveBeenCalledWith(expect.objectContaining({
+        characterReferences: [
+          expect.objectContaining({
+            images: [
+              expect.objectContaining({
+                imageName: "uploaded-lead-reference.png",
+              }),
+            ],
+          }),
+        ],
+      }), expect.anything());
+      expect(generatedRequests[0]?.characterReferences?.[0]?.images[0]?.imageName).toBe("uploaded-lead-reference.png");
+    } finally {
+      if (previousSequenceReferenceDir === undefined) {
+        delete process.env.SCENEFORGE_SEQUENCE_REFERENCE_DIR;
+      } else {
+        process.env.SCENEFORGE_SEQUENCE_REFERENCE_DIR = previousSequenceReferenceDir;
+      }
+
+      await fs.rm(tempDir, { force: true, recursive: true });
+    }
+  });
+
+  it("omits Anima character references with visible guidance when IPAdapter nodes are missing", async () => {
+    const generatedRequests: ComfyUiTextToImageRequest[] = [];
+    const request = {
+      checkpointName: "anima.safetensors",
+      modelBaseModel: "Anima",
+      modelStorageKind: "diffusion",
+      positivePrompt: "rainy station shot",
+      samplerName: "euler",
+      scheduler: "normal",
+      workflowProfile: "anima",
+      characterReferences: [
+        {
+          id: "queued-reference:character-face:lead",
+          name: "Lead character-face reference",
+          mode: "face",
+          images: [{ imageName: "already-in-comfy-input.png" }],
+        },
+      ],
+    } satisfies ComfyUiTextToImageRequest;
+    const client = {
+      ...createClient(),
+      generateImage: vi.fn<StoryComfyUiExecutionClient["generateImage"]>((queuedRequest) => {
+        generatedRequests.push(queuedRequest);
+        return Promise.resolve(createQueuedResponse(queuedRequest));
+      }),
+      getObjectInfo: vi.fn<StoryComfyUiExecutionClient["getObjectInfo"]>().mockResolvedValue(createAnimaObjectInfo()),
+    } satisfies StoryComfyUiExecutionClient;
+    const adapter = createStoryComfyUiExecutionAdapter({
+      client,
+      fetchImage: async () => ({
+        bytes: new Uint8Array([1, 2, 3]),
+        contentType: "image/png",
+      }),
+      historyPollAttempts: 2,
+      historyPollIntervalMs: 0,
+      storeImage: async (bytes: Uint8Array, contentType: string | null) => ({
+        byteLength: bytes.byteLength,
+        contentType: contentType ?? "image/png",
+        filename: "stored-shot-a.png",
+        url: "/api/comfyui/generated-images/stored-shot-a.png",
+      }),
+    });
+
+    const result = await executeStoryShotGraph(createBatch(request), adapter);
+
+    expect(result.shots[0]?.status).toBe("done");
+    expect(generatedRequests[0]).not.toHaveProperty("characterReferences");
+    expect(result.shots[0]?.queueMetadata?.warnings).toEqual(expect.arrayContaining([
+      expect.stringContaining("Story character references were omitted because ComfyUI is missing Anima IPAdapter"),
+      expect.stringContaining("Install ComfyUI_IPAdapter_plus"),
+    ]));
+    expect(result.shots[0]?.resultReference?.warnings).toEqual(result.shots[0]?.queueMetadata?.warnings);
+  });
+
+  it("does not require IPAdapter nodes for unrelated Anima prompt-only generation", async () => {
+    const generatedRequests: ComfyUiTextToImageRequest[] = [];
+    const request = {
+      checkpointName: "anima.safetensors",
+      modelBaseModel: "Anima",
+      modelStorageKind: "diffusion",
+      positivePrompt: "rainy station shot",
+      samplerName: "euler",
+      scheduler: "normal",
+      workflowProfile: "anima",
+    } satisfies ComfyUiTextToImageRequest;
+    const client = {
+      ...createClient(),
+      generateImage: vi.fn<StoryComfyUiExecutionClient["generateImage"]>((queuedRequest) => {
+        generatedRequests.push(queuedRequest);
+        return Promise.resolve(createQueuedResponse(queuedRequest));
+      }),
+      getObjectInfo: vi.fn<StoryComfyUiExecutionClient["getObjectInfo"]>().mockResolvedValue(createAnimaObjectInfo()),
+    } satisfies StoryComfyUiExecutionClient;
+    const adapter = createStoryComfyUiExecutionAdapter({
+      client,
+      fetchImage: async () => ({
+        bytes: new Uint8Array([1, 2, 3]),
+        contentType: "image/png",
+      }),
+      historyPollAttempts: 2,
+      historyPollIntervalMs: 0,
+      storeImage: async (bytes: Uint8Array, contentType: string | null) => ({
+        byteLength: bytes.byteLength,
+        contentType: contentType ?? "image/png",
+        filename: "stored-shot-a.png",
+        url: "/api/comfyui/generated-images/stored-shot-a.png",
+      }),
+    });
+
+    const result = await executeStoryShotGraph(createBatch(request), adapter);
+
+    expect(result.shots[0]?.status).toBe("done");
+    expect(generatedRequests[0]?.characterReferences).toEqual([]);
+    expect(result.shots[0]?.queueMetadata?.warnings).toEqual([]);
+    expect(result.shots[0]?.resultReference?.warnings).toEqual([]);
   });
 
   it("uploads source shot results into downstream img2img and reference inputs", async () => {
