@@ -24,15 +24,17 @@ function isLongValue(value: string) {
 
 function SummaryValue({
   column,
+  forceBlock = false,
   value,
 }: {
   column?: string;
+  forceBlock?: boolean;
   value: string;
 }) {
   const longValue = isLongValue(value);
   const promptValue = column ? isPromptColumn(column) : false;
 
-  if (!longValue) {
+  if (!longValue && !forceBlock) {
     return <span className="whitespace-pre-wrap break-words">{value || "-"}</span>;
   }
 
@@ -127,7 +129,7 @@ function SummaryTextBlock({
   return (
     <div>
       <p className="text-[11px] font-semibold uppercase text-slate-500">{label}</p>
-      <SummaryValue column={label} value={value} />
+      <SummaryValue column={label} forceBlock={isPromptColumn(label)} value={value} />
     </div>
   );
 }
@@ -155,8 +157,8 @@ function WarningList({
   );
 }
 
-function AnimaPromptPartsGrid({ card }: { card: StoryShotSummaryCard }) {
-  const parts = card.animaPromptParts ?? [];
+function PromptSectionsGrid({ card }: { card: StoryShotSummaryCard }) {
+  const parts = card.promptSections ?? card.animaPromptParts ?? [];
 
   if (parts.length === 0) {
     return null;
@@ -164,7 +166,7 @@ function AnimaPromptPartsGrid({ card }: { card: StoryShotSummaryCard }) {
 
   return (
     <div>
-      <p className="text-[11px] font-semibold uppercase text-slate-500">Anima prompt parts</p>
+      <p className="text-[11px] font-semibold uppercase text-slate-500">Prompt sections</p>
       <dl className="mt-2 grid gap-x-3 gap-y-2 text-xs sm:grid-cols-[7rem_1fr]">
         {parts.map((part) => (
           <div className="contents" key={part.label}>
@@ -213,6 +215,7 @@ function StoryShotCard({ card }: { card: StoryShotSummaryCard }) {
               <SummaryPill label={card.readinessLabel} tone={card.readinessTone} />
               <SummaryPill label={card.promptHealth.label} tone={card.promptHealth.tone} />
               {card.status ? <SummaryPill label={card.status} tone="neutral" /> : null}
+              {card.promptProfile ? <SummaryPill label={card.promptProfile} tone="neutral" /> : null}
             </div>
           </div>
 
@@ -236,7 +239,7 @@ function StoryShotCard({ card }: { card: StoryShotSummaryCard }) {
           </dl>
 
           <div className="mt-3 grid gap-3">
-            <AnimaPromptPartsGrid card={card} />
+            <PromptSectionsGrid card={card} />
             <SummaryTextBlock label="Visual prompt" value={card.visualPrompt} />
             <SummaryTextBlock label="Negative prompt" value={card.negativePrompt} />
             {card.readinessDetail ? (

@@ -1,4 +1,4 @@
-export const promptProfileIds = ["illustrious", "anima", "generic"] as const;
+export const promptProfileIds = ["illustrious", "anima"] as const;
 
 export type PromptProfileId = (typeof promptProfileIds)[number];
 
@@ -11,7 +11,22 @@ export function isPromptProfileId(value: unknown): value is PromptProfileId {
 }
 
 export function normalizePromptProfileId(value: unknown): PromptProfileId {
-  return isPromptProfileId(value) ? value : defaultPromptProfileId;
+  if (value === undefined || value === null || value === "") {
+    return defaultPromptProfileId;
+  }
+
+  if (isPromptProfileId(value)) {
+    return value;
+  }
+
+  throw new Error(`Invalid promptProfile "${String(value)}".`);
+}
+
+export function coercePromptProfileId(
+  value: unknown,
+  fallback: PromptProfileId = defaultPromptProfileId,
+): PromptProfileId {
+  return isPromptProfileId(value) ? value : fallback;
 }
 
 export function formatPromptProfileLabel(profile: PromptProfileId) {
@@ -19,9 +34,5 @@ export function formatPromptProfileLabel(profile: PromptProfileId) {
     return "Illustrious";
   }
 
-  if (profile === "anima") {
-    return "Anima";
-  }
-
-  return "Generic";
+  return "Anima";
 }

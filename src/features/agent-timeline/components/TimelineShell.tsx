@@ -137,6 +137,7 @@ import {
 } from "@/features/settings/types";
 import { cn } from "@/shared/utils/cn";
 import {
+  coercePromptProfileId,
   defaultPromptProfileId,
   formatPromptProfileLabel,
   normalizePromptProfileId,
@@ -399,7 +400,7 @@ function toTimelineResourceCandidate(resource: CivitaiResourceListItem) {
 function getTimelineWorkflowPromptProfile(workflow: TimelineWorkflowState) {
   const sceneInput = workflow.nodes["scene-input"].result;
 
-  return isRecord(sceneInput) ? normalizePromptProfileId(sceneInput.promptProfile) : defaultPromptProfileId;
+  return isRecord(sceneInput) ? coercePromptProfileId(sceneInput.promptProfile) : defaultPromptProfileId;
 }
 
 async function loadCivitaiResourceItems(

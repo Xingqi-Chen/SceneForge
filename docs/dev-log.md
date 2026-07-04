@@ -2,6 +2,56 @@
 
 This log records dated implementation and documentation work. Keep entries concise and evidence-oriented.
 
+## 2026-07-04
+
+### Story Illustrious Trigger Selection
+
+Summary:
+
+- Changed Story Illustrious prompt compilation so selected checkpoint and LoRA `trainedWords` are not automatically injected into final prompts.
+- Added per-shot `resourceTriggerSelections` with exact original-trained-word validation, prompt warnings for invalid resource ids or non-member words, and preserved legacy automatic trigger injection for non-Story renderer calls.
+- Made Story Illustrious rating tags local to Settings NSFW state: `safe` when disabled and `nsfw` when enabled, ignoring LLM-authored rating sections.
+- Replaced Story Illustrious negative prompt assembly with a common Illustrious base only, so shot-specific safety text, names, props, brands, and LLM `negativeAdditions` do not leak into generation negatives.
+- Updated Story Visual prompt health and rendering so Illustrious sections satisfy identity/action/setting/camera/lighting checks and short negative prompts use the same prompt block styling as long prompts.
+- Tightened Story Illustrious LLM instructions so visible person counts, names, and subject descriptors must be emitted directly as high-quality Danbooru-style tags in `subjectIdentity`; local Story compilation no longer performs semantic string rewriting, filtering, or truncation for malformed count phrases, original character names, or repeated generic prefixes, and the common negative base omits `sketch` so framed-sketch stories are not self-negated.
+- Added explicit Story Illustrious LLM constraints for coherent multi-person count tags such as `2girls, 1man`, adult-safe gender tags that avoid `1boy` for adult/college-age subjects, no story names in any section, no contradictory age phrases such as `mature young face`, and no vague group phrases that imply extra people.
+- Added a resource-trigger validation guard so exact checkpoint trained words that are rating markers, such as `general`, `sensitive`, `nsfw`, `explicit`, or any `rating:*` value, are ignored with prompt warnings instead of overriding the Settings-derived Story Illustrious rating tag.
+
+Validation:
+
+- `npm test -- --run src/features/editor/ai-prompt/illustrious-prompt.test.ts` passed with 1 file and 8 tests.
+- `npm test -- --run src/features/agent-timeline/story-planning.test.ts` passed with 1 file and 39 tests.
+- `npm test -- --run src/features/agent-timeline/story-llm-adapters.test.ts` passed with 1 file and 37 tests.
+- `npm test -- --run src/features/agent-timeline/story-node-output-summary.test.ts` passed with 1 file and 10 tests.
+- `npm test -- --run src/features/agent-timeline/components/StoryNodeOutputSummaryView.test.tsx` passed with 1 file and 3 tests.
+- `npm test -- --run src/features/agent-timeline/story-input.test.ts` passed with 1 file and 18 tests.
+- `npm test -- --run src/app/api/agent-timeline/story/confirm-generation/route.test.ts` passed with 1 file and 6 tests.
+- `npm test -- --run src/app/api/agent-timeline/story/regenerate-shot/route.test.ts` passed with 1 file and 4 tests.
+- `npm test` passed with 122 files and 977 tests.
+- `npm run typecheck` passed.
+- `npm run lint` passed with 23 existing warnings.
+- `git diff --check` passed with line-ending warnings only.
+
+### Local Plan Story/Timeline Prompt Profile Cleanup
+
+Summary:
+
+- Removed Generic from the shared Agent Timeline/Story prompt profile set, keeping Illustrious and Anima with Illustrious as the default while preserving the legacy editor `PromptModelFormat` generic path.
+- Tightened Civitai resource and AI-recommendation prompt-profile validation so non-empty invalid values, including `generic`, return 400 instead of falling back.
+- Added safe persistence/UI restore fallbacks so old invalid Timeline/Story profile values do not crash saved workflow restore or visual scene prompt editing.
+- Made Timeline resource filtering strictly profile-compatible for Illustrious and Anima and removed SDXL/generic final-prompt fallback expectations from Timeline prompt assembly.
+- Added profile-specific Story render-plan normalization and prompt compilation: Anima keeps `animaPromptParts`, while Illustrious uses `illustriousSections` and the existing Illustrious renderer.
+- Updated Story Visual summaries and generation-gate previews to show the active profile and use neutral "Prompt sections" wording.
+
+Validation:
+
+- `npm test -- --run src/features/agent-timeline/t5-node-adapters.test.ts` passed with 1 file and 8 tests.
+- `npm test -- --run src/shared/prompt-profile.test.ts src/app/api/civitai-lora-library/resources/route.test.ts src/app/api/civitai-lora-library/ai-recommendation/route.test.ts src/features/agent-timeline/t5-node-adapters.test.ts src/features/agent-timeline/t7-node-adapters.test.ts src/features/agent-timeline/story-input.test.ts src/features/agent-timeline/story-llm-adapters.test.ts src/features/agent-timeline/story-planning.test.ts src/features/agent-timeline/timeline-workflow-persistence.test.ts src/features/agent-timeline/components/TimelineShell.test.tsx src/features/agent-timeline/components/StoryPlanningPreview.test.tsx src/features/agent-timeline/components/StoryNodeOutputSummaryView.test.tsx` passed with 12 files and 199 tests.
+- `npm test` passed with 122 files and 971 tests.
+- `npm run typecheck` passed.
+- `npm run lint` passed with 23 existing warnings.
+- `git diff --check` passed with line-ending warnings only.
+
 ## 2026-06-29
 
 ### Issue #98 Story Selected Resource Loader Coverage

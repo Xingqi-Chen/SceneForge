@@ -5,7 +5,7 @@ import {
   recommendCivitaiResourceCombination,
 } from "@/features/civitai-lora-library/ai-recommendation";
 import { openSceneForgeSqliteDatabase } from "@/features/persistence/sqlite-storage";
-import { isPromptProfileId } from "@/shared/prompt-profile";
+import { isPromptProfileId, type PromptProfileId } from "@/shared/prompt-profile";
 
 export const runtime = "nodejs";
 
@@ -29,8 +29,16 @@ function normalizeMaxLoras(value: unknown) {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
-function normalizePromptProfile(value: unknown) {
-  return isPromptProfileId(value) ? value : undefined;
+function normalizePromptProfile(value: unknown): PromptProfileId | undefined {
+  if (value === undefined || value === null || value === "") {
+    return undefined;
+  }
+
+  if (isPromptProfileId(value)) {
+    return value;
+  }
+
+  throw new CivitaiAiRecommendationError("Invalid promptProfile.", 400, { promptProfile: value });
 }
 
 function normalizeNsfw(value: unknown) {
@@ -50,6 +58,17 @@ export async function POST(request: Request) {
     return errorResponse("Request body must include desiredEffect.", 400);
   }
 
+  let promptProfile: PromptProfileId | undefined;
+  try {
+    promptProfile = normalizePromptProfile(payload.promptProfile);
+  } catch (error) {
+    if (error instanceof CivitaiAiRecommendationError) {
+      return errorResponse(error.message, error.statusCode, error.details);
+    }
+
+    throw error;
+  }
+
   const db = await openSceneForgeSqliteDatabase(undefined, { allowExtensions: true });
   try {
     const recommendation = await recommendCivitaiResourceCombination({
@@ -57,7 +76,7 @@ export async function POST(request: Request) {
       desiredEffect: payload.desiredEffect,
       maxLoras: normalizeMaxLoras(payload.maxLoras),
       nsfw: normalizeNsfw(payload.nsfw),
-      promptProfile: normalizePromptProfile(payload.promptProfile),
+      promptProfile,
     });
 
     return NextResponse.json(recommendation);

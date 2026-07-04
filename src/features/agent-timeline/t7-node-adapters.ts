@@ -17,11 +17,11 @@ import {
 } from "@/features/editor/ai-prompt/anima-prompt";
 import {
   classifyFlatPromptToIllustriousSections,
-  mergePromptParts,
   renderIllustriousPrompt,
   splitPromptParts,
 } from "@/features/editor/ai-prompt/illustrious-prompt";
 import {
+  coercePromptProfileId,
   formatPromptProfileLabel,
   normalizePromptProfileId,
   type PromptProfileId,
@@ -134,15 +134,15 @@ function getManualTextResult(result: unknown) {
 function getTimelinePromptProfile(workflow: TimelineNodeExecutionContext["workflow"]) {
   const sceneInput = workflow.nodes["scene-input"].result;
   if (isRecord(sceneInput)) {
-    return normalizePromptProfileId(sceneInput.promptProfile);
+    return coercePromptProfileId(sceneInput.promptProfile);
   }
 
   const scenePrompt = workflow.nodes["scene-prompt"].result;
   if (isRecord(scenePrompt)) {
-    return normalizePromptProfileId(scenePrompt.promptProfile);
+    return coercePromptProfileId(scenePrompt.promptProfile);
   }
 
-  return normalizePromptProfileId(undefined);
+  return coercePromptProfileId(undefined);
 }
 
 function getSceneInputSourceImage(workflow: TimelineNodeExecutionContext["workflow"]) {
@@ -198,7 +198,7 @@ function getScenePromptResult(workflow: TimelineNodeExecutionContext["workflow"]
   ) {
     return {
       ...result,
-      promptProfile: normalizePromptProfileId(result.promptProfile ?? promptProfile),
+      promptProfile: coercePromptProfileId(result.promptProfile, promptProfile),
     } as ScenePromptTimelineResult;
   }
 
@@ -312,18 +312,6 @@ function getSelectedResources(resourceResult: ResourceRecommendationTimelineResu
   };
 }
 
-function normalizeBaseModel(value: string | null | undefined) {
-  return value?.trim().toLocaleLowerCase() ?? "";
-}
-
-function getLoraTrainedWordPrompt(resources: SelectedCivitaiResourcesPreview) {
-  return resources.loras.flatMap((lora) => lora.trainedWords.flatMap(splitPromptParts)).join(", ");
-}
-
-function isPonyBaseModel(value: string | null | undefined) {
-  return normalizeBaseModel(value).includes("pony");
-}
-
 export function filterTimelineResourceCandidatesForPromptProfile(
   candidates: ResourceRecommendationTimelineResult["candidates"],
   promptProfile: PromptProfileId | undefined,
@@ -383,16 +371,7 @@ export function buildTimelineFinalPositivePrompt({
     });
   }
 
-  const loraTrainedWords = getLoraTrainedWordPrompt(resources);
-  if (isPonyBaseModel(resources.checkpoint?.baseModel)) {
-    return mergePromptParts([
-      "score_9, score_8_up, score_7_up",
-      sourcePrompt,
-      loraTrainedWords,
-    ]);
-  }
-
-  return mergePromptParts([sourcePrompt, loraTrainedWords]);
+  return sourcePrompt;
 }
 
 function getReferenceSampler(resource: SelectedCivitaiResourcePreview) {

@@ -44,7 +44,7 @@ import {
   type TimelineNodeStatus,
   type TimelineWorkflowState,
 } from "./types";
-import { normalizePromptProfileId, type PromptProfileId } from "@/shared/prompt-profile";
+import { coercePromptProfileId, isPromptProfileId, type PromptProfileId } from "@/shared/prompt-profile";
 
 export const TIMELINE_WORKFLOW_RECORD_KIND = "sceneforge-timeline-workflow" as const;
 export const TIMELINE_WORKFLOW_RECORD_VERSION = 1 as const;
@@ -626,21 +626,22 @@ function getWorkflowSceneRequest(workflow: TimelineWorkflowRecordState) {
   return isRecord(result) && typeof result.rawIntent === "string" ? result.rawIntent : "";
 }
 
-function getWorkflowSelectedPromptProfile(rawValue: unknown, workflow: TimelineWorkflowRecordState) {
-  if (typeof rawValue === "string") {
-    return normalizePromptProfileId(rawValue);
-  }
-
+function getWorkflowSettingsPromptProfile(workflow: TimelineWorkflowRecordState) {
   const inputResult = workflow.workflowMode === storyGraphWorkflowMode
     ? workflow.nodes["story-input"].result
     : workflow.nodes["scene-input"].result;
   const settingsSnapshot = isRecord(inputResult) ? inputResult.settingsSnapshot : undefined;
+  const promptProfile = isRecord(settingsSnapshot) ? settingsSnapshot.promptProfile : undefined;
 
-  return normalizePromptProfileId(
-    isRecord(settingsSnapshot) && typeof settingsSnapshot.promptProfile === "string"
-      ? settingsSnapshot.promptProfile
-      : undefined,
-  );
+  return coercePromptProfileId(promptProfile);
+}
+
+function getWorkflowSelectedPromptProfile(rawValue: unknown, workflow: TimelineWorkflowRecordState) {
+  if (isPromptProfileId(rawValue)) {
+    return rawValue;
+  }
+
+  return getWorkflowSettingsPromptProfile(workflow);
 }
 
 function getWorkflowSelectedImageCount(rawValue: unknown, workflow: TimelineWorkflowRecordState) {
@@ -677,7 +678,7 @@ export function createTimelineWorkflowRecord(
       : {}),
     workflow,
     sceneRequest: input.sceneRequest.trim() || getWorkflowSceneRequest(workflow),
-    selectedPromptProfile: normalizePromptProfileId(input.selectedPromptProfile),
+    selectedPromptProfile: getWorkflowSelectedPromptProfile(input.selectedPromptProfile, workflow),
     selectedImageCount: input.selectedImageCount,
     selectedNodeId,
     ...(selectedStoryShotId ? { selectedStoryShotId } : {}),

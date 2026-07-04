@@ -2,6 +2,7 @@ import {
   storyWorkflowNodeIds,
   type StoryWorkflowNodeId,
 } from "./story-types";
+import { formatPromptProfileLabel, isPromptProfileId } from "@/shared/prompt-profile";
 
 export type StoryNodeSummaryMetric = {
   label: string;
@@ -37,6 +38,8 @@ export type StoryShotAnimaPromptPartGroup = {
   value: string;
 };
 
+export type StoryShotPromptSectionGroup = StoryShotAnimaPromptPartGroup;
+
 export type StoryShotSourceRiskSummary = {
   detail: string;
   label: string;
@@ -53,6 +56,8 @@ export type StoryShotSummaryCard = {
   negativePrompt?: string;
   parameters?: string;
   promptHealth: StoryShotPromptHealth;
+  promptProfile?: string;
+  promptSections?: StoryShotPromptSectionGroup[];
   readinessDetail?: string;
   readinessLabel: string;
   readinessTone: StoryShotSummaryTone;
@@ -170,49 +175,64 @@ function getAnimaPromptPartValues(animaPromptParts: unknown, keys: string[]) {
   return keys.flatMap((key) => fullStringArray(animaPromptParts[key]));
 }
 
-function hasAnimaPromptPartOrPattern({
+function hasPromptPartOrPattern({
+  animaKeys,
   animaPromptParts,
-  keys,
+  illustriousKeys,
+  illustriousSections,
   pattern,
   prompt,
 }: {
+  animaKeys: string[];
   animaPromptParts: unknown;
-  keys: string[];
+  illustriousKeys: string[];
+  illustriousSections: unknown;
   pattern: RegExp;
   prompt: string;
 }) {
-  return getAnimaPromptPartValues(animaPromptParts, keys).length > 0 || pattern.test(prompt);
+  return getAnimaPromptPartValues(animaPromptParts, animaKeys).length > 0 ||
+    getIllustriousSectionValues(illustriousSections, illustriousKeys).length > 0 ||
+    pattern.test(prompt);
 }
 
-function getMissingPromptInfoIssues(positivePrompt: string, animaPromptParts: unknown): StoryShotPromptHealthIssue[] {
+function getMissingPromptInfoIssues(
+  positivePrompt: string,
+  animaPromptParts: unknown,
+  illustriousSections: unknown,
+): StoryShotPromptHealthIssue[] {
   const checks = [
     {
+      animaKeys: ["subjectTags", "characterTags", "outfitTags", "propTags"],
       detail: "Add a clear character, subject, or object identity.",
-      keys: ["subjectTags", "characterTags", "outfitTags", "propTags"],
+      illustriousKeys: ["subjectIdentity", "appearancePhysicalTraits", "clothingAccessories"],
       label: "Missing identity",
       pattern: /\b(?:adult|artist|boy|character|child|courier|detective|girl|man|person|people|protagonist|student|woman)\b.{0,80}\b(?:coat|dress|glasses|hair|jacket|shirt|uniform|wearing|with)\b/i,
     },
     {
+      animaKeys: ["actionTags"],
       detail: "Add a visible action, pose, or interaction.",
-      keys: ["actionTags"],
+      illustriousKeys: ["poseActionExpression"],
       label: "Missing action",
       pattern: /\b(?:carrying|crouching|facing|holding|kneeling|leaning|looking|opening|pointing|reaching|running|sitting|standing|walking)\b/i,
     },
     {
+      animaKeys: ["settingTags"],
       detail: "Add a concrete location or environmental setting.",
-      keys: ["settingTags"],
+      illustriousKeys: ["backgroundEnvironmentObjects"],
       label: "Missing setting",
       pattern: /\b(?:alley|apartment|beach|bedroom|cafe|city|classroom|corridor|forest|garden|hallway|interior|kitchen|library|market|park|room|station|street|studio)\b/i,
     },
     {
+      animaKeys: ["cameraTags"],
       detail: "Add framing, camera scale, angle, or composition guidance.",
-      keys: ["cameraTags"],
+      illustriousKeys: ["cameraFraming", "spatialComposition"],
       label: "Missing camera",
       pattern: /\b(?:camera|close[- ]?up|composition|eye[- ]level|framing|medium shot|over[- ]the[- ]shoulder|perspective|portrait|wide shot)\b/i,
     },
     {
+      animaKeys: ["lightingTags"],
       detail: "Add lighting, time of day, or visible atmosphere.",
-      keys: ["lightingTags"],
+      illustriousKeys: ["lightingFocus"],
       label: "Missing lighting",
       pattern: /\b(?:backlight|blue hour|candlelight|daylight|glow|golden hour|lamp|light|lighting|moonlight|neon|shadow|sunlight|window light)\b/i,
     },
@@ -220,9 +240,11 @@ function getMissingPromptInfoIssues(positivePrompt: string, animaPromptParts: un
 
   return checks
     .filter((check) =>
-      !hasAnimaPromptPartOrPattern({
+      !hasPromptPartOrPattern({
+        animaKeys: check.animaKeys,
         animaPromptParts,
-        keys: check.keys,
+        illustriousKeys: check.illustriousKeys,
+        illustriousSections,
         pattern: check.pattern,
         prompt: positivePrompt,
       }),
@@ -329,7 +351,7 @@ function isRenderPlanDecisionNote(warning: string) {
 
 function isRenderPlanSystemDiagnostic(warning: string) {
   return /^Shot "[^"]+" uses high-risk source image\b/i.test(warning)
-    || /^Shot "[^"]+" did not receive LLM Anima prompt parts\b/i.test(warning);
+    || /^Shot "[^"]+" did not receive LLM (?:Anima prompt parts|prompt sections)\b/i.test(warning);
 }
 
 function getRenderPlanWarningSections(warnings: unknown): {
@@ -377,11 +399,13 @@ function getSourceRiskSummaries(value: unknown): StoryShotSourceRiskSummary[] {
 
 export function createStoryPromptHealth({
   animaPromptParts,
+  illustriousSections,
   positivePrompt,
   promptWarnings = [],
   sourceImageEdges = [],
 }: {
   animaPromptParts?: unknown;
+  illustriousSections?: unknown;
   positivePrompt?: unknown;
   promptWarnings?: string[];
   sourceImageEdges?: unknown;
@@ -401,7 +425,7 @@ export function createStoryPromptHealth({
   }));
   const issues = [
     getTooShortPromptIssue(positive),
-    ...getMissingPromptInfoIssues(positive, animaPromptParts),
+    ...getMissingPromptInfoIssues(positive, animaPromptParts, illustriousSections),
     ...getHardcodedPromptIssues(positive),
     ...removedNegativeIssues,
     ...sourceRiskIssues,
@@ -898,6 +922,22 @@ const storyAnimaPromptPartGroupSpecs = [
   { key: "negativeAdditions", label: "Negative additions" },
 ] as const;
 
+const storyIllustriousSectionGroupSpecs = [
+  { key: "quality", label: "Quality" },
+  { key: "aestheticVersion", label: "Aesthetic" },
+  { key: "rating", label: "Rating" },
+  { key: "artistStyle", label: "Artist style" },
+  { key: "subjectIdentity", label: "Subject" },
+  { key: "appearancePhysicalTraits", label: "Appearance" },
+  { key: "clothingAccessories", label: "Clothing" },
+  { key: "poseActionExpression", label: "Action" },
+  { key: "backgroundEnvironmentObjects", label: "Environment" },
+  { key: "spatialComposition", label: "Composition" },
+  { key: "cameraFraming", label: "Camera" },
+  { key: "lightingFocus", label: "Lighting" },
+  { key: "detailResolution", label: "Detail" },
+] as const;
+
 function formatAnimaPromptPartGroups(animaPromptParts: unknown): StoryShotAnimaPromptPartGroup[] {
   if (!isRecord(animaPromptParts)) {
     return [];
@@ -918,22 +958,75 @@ function formatAnimaPromptPartGroups(animaPromptParts: unknown): StoryShotAnimaP
     .filter((group) => group.value);
 }
 
-function getShotSceneBeat(shot: Record<string, unknown>, animaPromptParts?: unknown) {
+function formatIllustriousSectionGroups(illustriousSections: unknown): StoryShotPromptSectionGroup[] {
+  if (!isRecord(illustriousSections)) {
+    return [];
+  }
+
+  return storyIllustriousSectionGroupSpecs
+    .map((spec) => {
+      const rawValue = illustriousSections[spec.key];
+      const value = Array.isArray(rawValue)
+        ? fullStringArray(rawValue).join(", ")
+        : fullText(rawValue);
+
+      return {
+        label: spec.label,
+        value,
+      };
+    })
+    .filter((group) => group.value);
+}
+
+function formatPromptSectionGroups({
+  animaPromptParts,
+  illustriousSections,
+}: {
+  animaPromptParts?: unknown;
+  illustriousSections?: unknown;
+}) {
+  const animaGroups = formatAnimaPromptPartGroups(animaPromptParts);
+  return animaGroups.length > 0 ? animaGroups : formatIllustriousSectionGroups(illustriousSections);
+}
+
+function getIllustriousSectionValues(illustriousSections: unknown, keys: string[]) {
+  if (!isRecord(illustriousSections)) {
+    return [];
+  }
+
+  return keys.flatMap((key) => {
+    const value = illustriousSections[key];
+    return Array.isArray(value) ? fullStringArray(value) : splitPromptParts(value);
+  });
+}
+
+function formatPromptProfile(value: unknown) {
+  return isPromptProfileId(value) ? formatPromptProfileLabel(value) : "";
+}
+
+function getShotSceneBeat(shot: Record<string, unknown>, animaPromptParts?: unknown, illustriousSections?: unknown) {
   const action = getAnimaPromptPartValues(animaPromptParts, ["actionTags"])[0];
   const environment = getAnimaPromptPartValues(animaPromptParts, ["settingTags"])[0];
   const caption = isRecord(animaPromptParts) ? fullText(animaPromptParts.singleFrameCaption) : "";
+  const illustriousAction = getIllustriousSectionValues(illustriousSections, ["poseActionExpression"])[0];
+  const illustriousEnvironment = getIllustriousSectionValues(
+    illustriousSections,
+    ["backgroundEnvironmentObjects"],
+  )[0];
   const title = getShotTitle(shot);
 
-  return [title, action, environment, caption].filter(Boolean).join(" / ");
+  return [title, action || illustriousAction, environment || illustriousEnvironment, caption].filter(Boolean).join(" / ");
 }
 
 function createPromptShotCard({
   animaPromptParts,
   globalWarnings,
   index,
+  illustriousSections,
   negativePrompt,
   parameters,
   positivePrompt,
+  promptProfile,
   resources,
   sceneBeat,
   shot,
@@ -944,9 +1037,11 @@ function createPromptShotCard({
   animaPromptParts?: unknown;
   globalWarnings?: unknown;
   index: number;
+  illustriousSections?: unknown;
   negativePrompt: unknown;
   parameters?: unknown;
   positivePrompt: unknown;
+  promptProfile?: unknown;
   resources?: string;
   sceneBeat?: string;
   shot: Record<string, unknown>;
@@ -958,6 +1053,7 @@ function createPromptShotCard({
   const promptWarnings = getWarningsForShot(shotId, shot.promptWarnings, globalWarnings);
   const promptHealth = createStoryPromptHealth({
     animaPromptParts,
+    illustriousSections,
     positivePrompt,
     promptWarnings,
     sourceImageEdges,
@@ -975,12 +1071,14 @@ function createPromptShotCard({
     negativePrompt: fullText(negativePrompt),
     parameters: parameters ? formatParameters(parameters) : undefined,
     promptHealth,
+    promptProfile: formatPromptProfile(promptProfile),
+    promptSections: formatPromptSectionGroups({ animaPromptParts, illustriousSections }),
     readinessDetail: readiness.detail,
     readinessLabel: readiness.label,
     readinessTone: readiness.tone,
     removedNegatives,
     resources,
-    sceneBeat: sceneBeat || getShotSceneBeat(shot, animaPromptParts),
+    sceneBeat: sceneBeat || getShotSceneBeat(shot, animaPromptParts, illustriousSections),
     shotId,
     shotNumber: getShotNumber(shot, index),
     sourceRisks: getSourceRiskSummaries(sourceImageEdges),
@@ -1018,6 +1116,7 @@ function summarizeRenderPlan(result: unknown): StoryNodeOutputSummary {
     title: "Story render plan summary",
     metrics: [
       { label: "Shots", value: String(shots.length) },
+      { label: "Profile", value: formatPromptProfile(plan.promptProfile) || "Unknown" },
       { label: "NSFW", value: formatBoolean(isRecord(plan.nsfwContext) ? plan.nsfwContext.enabled : undefined) },
       { label: "Warnings", value: String(warningNotes.length) },
       { label: "Decision notes", value: String(decisionNotes.length) },
@@ -1027,9 +1126,11 @@ function summarizeRenderPlan(result: unknown): StoryNodeOutputSummary {
         globalWarnings: warningNotes,
         index,
         animaPromptParts: shot.animaPromptParts,
+        illustriousSections: shot.illustriousSections,
         negativePrompt: shot.negativePrompt,
         parameters: shot.parameters,
         positivePrompt: shot.positivePrompt,
+        promptProfile: shot.promptProfile ?? plan.promptProfile,
         resources: getRenderResourceNames(plan, shot),
         shot,
         sourceImageEdges: shot.sourceImageEdges,
@@ -1136,16 +1237,19 @@ function summarizeGenerationGate(result: unknown): StoryNodeOutputSummary {
     metrics: [
       { label: "Ready", value: gateReady ? "Ready" : "Warning" },
       { label: "Shots", value: formatNumber(gate.renderPlanShotCount, String(previews.length)) },
+      { label: "Profile", value: formatPromptProfile(gate.promptProfile) || "Unknown" },
       { label: "Confirmation", value: gate.confirmationRequired === true ? "Required" : "Not required" },
       { label: "Source risks", value: String(sourceEdges.length) },
     ],
     shotCards: previews.map((preview, index) => {
       const baseCard = createPromptShotCard({
         animaPromptParts: preview.animaPromptParts,
+        illustriousSections: preview.illustriousSections,
         index,
         negativePrompt: preview.negativePromptPreview,
         parameters: preview.parameters,
         positivePrompt: preview.positivePromptPreview ?? preview.positivePrompt,
+        promptProfile: preview.promptProfile ?? gate.promptProfile,
         sceneBeat: compactText(preview.title, 120) || compactText(preview.shotId, 80),
         shot: {
           ...preview,

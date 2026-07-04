@@ -526,6 +526,75 @@ describe("story node output summaries", () => {
     ]);
   });
 
+  it("uses generation-gate Illustrious sections for prompt health instead of brittle preview text matching", () => {
+    const summary = createStoryNodeOutputSummary("generation-gate", {
+      storyId: "story-summary",
+      ready: true,
+      executionAvailable: true,
+      confirmationRequired: true,
+      renderPlanShotCount: 1,
+      previewEnabled: false,
+      requestPreview: [
+        {
+          illustriousSections: {
+            artistStyle: ["anime illustration, clean polished linework"],
+            subjectIdentity: ["1young woman", "college art student", "short black bob"],
+            appearancePhysicalTraits: ["warm brown eyes", "soft focused expression"],
+            clothingAccessories: ["mint green cardigan", "cream t-shirt"],
+            poseActionExpression: ["standing in narrow aisle", "one hand comparing wall hooks and tiny nails"],
+            backgroundEnvironmentObjects: [
+              "compact stationery shop, notebook racks, pastel notebook covers, wall hooks display",
+            ],
+            spatialComposition: ["solo, hardware display beside notebook racks, tidy busy shop"],
+            cameraFraming: ["medium shot, slight three-quarter angle, aisle height"],
+            lightingFocus: ["warm shop lighting, soft metallic glints, clear facial readability"],
+            detailResolution: ["crisp eyes, clean hands, paper and metal texture"],
+          },
+          negativePromptPreview: "bad quality, worst quality, worst detail, censor",
+          negativePromptLength: 47,
+          parameters: { width: 896, height: 1152, steps: 28, cfg: 5, samplerName: "er_sde", scheduler: "simple", denoise: 1 },
+          positivePromptPreview: [
+            "masterpiece",
+            "best quality",
+            "safe",
+            "anime illustration",
+            "1young woman",
+            "college art student",
+            "standing in narrow aisle",
+            "compact stationery shop",
+            "medium shot",
+            "warm shop lighting",
+            "crisp eyes",
+          ].join(", "),
+          positivePromptLength: 215,
+          promptProfile: "illustrious",
+          shotId: "shot-1",
+          sourceMode: "none",
+          sourceShotIds: [],
+          sourceImageEdges: [],
+          title: "Choosing Hardware",
+        },
+      ],
+    });
+    const labels = summary.shotCards?.[0]?.promptHealth.issues.map((issue) => issue.label) ?? [];
+
+    expect(summary.shotCards?.[0]).toMatchObject({
+      promptHealth: {
+        issues: [],
+        label: "Healthy",
+        tone: "ready",
+      },
+      readinessLabel: "Ready",
+    });
+    expect(labels).not.toEqual(expect.arrayContaining([
+      "Missing identity",
+      "Missing action",
+      "Missing setting",
+      "Missing camera",
+      "Missing lighting",
+    ]));
+  });
+
   it("omits ComfyUI node ids and temporary URLs from visual execution summaries", () => {
     const rawImage = {
       filename: "temp-preview.png",

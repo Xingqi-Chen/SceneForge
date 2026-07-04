@@ -28,6 +28,12 @@ export type IllustriousPromptSectionKey =
 
 export type IllustriousPromptSections = Partial<Record<IllustriousPromptSectionKey, string | string[]>>;
 
+export type IllustriousResourceTriggerSelection = {
+  resourceId: string;
+  selectedTrainedWords: string[];
+  reason?: string;
+};
+
 const ILLUSTRIOUS_RENDER_ORDER: IllustriousPromptSectionKey[] = [
   "quality",
   "aestheticVersion",
@@ -295,7 +301,10 @@ function classifyPromptPart(part: string): IllustriousPromptSectionKey {
     return "artistStyle";
   }
 
-  if (/^\d+\s*(?:girl|boy|other)s?$/.test(key) || /\b(?:solo|girl|boy|woman|man|person|character|protagonist)\b/.test(key)) {
+  if (
+    /^\d+\s*(?:boy|girl|man|men|other|people|person|woman|women)s?$/.test(key) ||
+    /\b(?:solo|girl|boy|woman|man|person|people|character|protagonist)\b/.test(key)
+  ) {
     return "subjectIdentity";
   }
 
@@ -365,21 +374,53 @@ function getLoraTriggerSection(resource: SelectedCivitaiResourcePreview): Illust
   return "unknownLoraTriggers";
 }
 
-function getResourceTriggerWords(resource: SelectedCivitaiResourcePreview) {
-  return resource.trainedWords.flatMap(splitPromptParts);
+function getResourceTriggerWords(
+  resource: SelectedCivitaiResourcePreview,
+  selectedTrainedWords?: string[],
+) {
+  const trainedWords = selectedTrainedWords ?? resource.trainedWords;
+
+  return trainedWords.flatMap(splitPromptParts);
 }
 
 export function collectCivitaiTriggerSections(
   resources: SelectedCivitaiResourcesPreview,
+  resourceTriggerSelections?: IllustriousResourceTriggerSelection[],
 ): IllustriousPromptSections {
   const sections = createEmptySections();
+  const selectionByResourceId = new Map(
+    resourceTriggerSelections?.map((selection) => [
+      selection.resourceId,
+      selection.selectedTrainedWords.filter((word) =>
+        (resources.checkpoint?.id === selection.resourceId
+          ? resources.checkpoint.trainedWords
+          : resources.loras.find((lora) => lora.id === selection.resourceId)?.trainedWords ?? []
+        ).includes(word),
+      ),
+    ]),
+  );
+  const shouldUseExplicitSelections = resourceTriggerSelections !== undefined;
 
   if (resources.checkpoint) {
-    appendSection(sections, "checkpointTriggerWords", getResourceTriggerWords(resources.checkpoint));
+    appendSection(
+      sections,
+      "checkpointTriggerWords",
+      getResourceTriggerWords(
+        resources.checkpoint,
+        shouldUseExplicitSelections ? selectionByResourceId.get(resources.checkpoint.id) ?? [] : undefined,
+      ),
+    );
   }
 
   for (const lora of resources.loras) {
-    appendSection(sections, getLoraTriggerSection(lora), getResourceTriggerWords(lora));
+    appendSection(
+      sections,
+      getLoraTriggerSection(lora),
+      getResourceTriggerWords(
+        lora,
+        shouldUseExplicitSelections ? selectionByResourceId.get(lora.id) ?? [] : undefined,
+      ),
+    );
   }
 
   return sections;
@@ -462,15 +503,17 @@ function extractPromptFromResponse(rawContent: string) {
 
 export function renderIllustriousPrompt({
   includeDefaultQualityTags = true,
+  resourceTriggerSelections,
   resources = { checkpoint: null, loras: [] },
   sections = {},
 }: {
   includeDefaultQualityTags?: boolean;
+  resourceTriggerSelections?: IllustriousResourceTriggerSelection[];
   resources?: SelectedCivitaiResourcesPreview;
   sections?: IllustriousPromptSections;
 }) {
   const merged = createEmptySections();
-  const resourceSections = collectCivitaiTriggerSections(resources);
+  const resourceSections = collectCivitaiTriggerSections(resources, resourceTriggerSelections);
 
   for (const key of ILLUSTRIOUS_RENDER_ORDER) {
     appendSection(merged, key, sectionValueToParts(sections[key]));

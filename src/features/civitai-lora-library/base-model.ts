@@ -28,5 +28,5 @@ export function isCivitaiBaseModelCompatibleWithPromptProfile(
     return normalized === "anima";
   }
 
-  return !normalized || (!normalized.includes("illustrious") && normalized !== "anima");
+  return false;
 }

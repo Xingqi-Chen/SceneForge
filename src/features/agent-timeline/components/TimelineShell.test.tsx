@@ -11,6 +11,8 @@ import {
   createTimelineWorkflowState,
   failTimelineNode,
   startStoryGraphWorkflow,
+  type ScenePromptTimelineResult,
+  type TimelineNodeResult,
   type TimelineWorkflowState,
 } from "@/features/agent-timeline";
 import type { PromptTag } from "@/shared/types";
@@ -59,6 +61,7 @@ vi.mock("@/features/persistence", async () => {
 });
 
 import { TimelineShell } from "./TimelineShell";
+import { TimelineScenePromptWorkspace } from "./TimelineScenePromptWorkspace";
 
 const nodeTitles = [
   "Scene input",
@@ -134,6 +137,36 @@ function createConfirmedGenerationWorkflow(workflow: TimelineWorkflowState) {
   );
 
   return confirmedWorkflow;
+}
+
+function createScenePromptResultWithProfile(promptProfile: string): ScenePromptTimelineResult {
+  return {
+    promptProfile: promptProfile as ScenePromptTimelineResult["promptProfile"],
+    primaryCharacter: {
+      name: "Courier",
+      identity: "A courier in a glass station.",
+      publicFacts: [],
+    },
+    sceneIntent: "A courier waits in a glass station.",
+    styleTone: "cinematic anime",
+    setting: "glass station",
+    sharedFacts: [],
+    positivePrompt: "courier, glass station, cinematic anime",
+    negativeSuggestions: [],
+    style: [],
+    camera: [],
+    lighting: [],
+  };
+}
+
+function createScenePromptNode(result: ScenePromptTimelineResult): TimelineNodeResult {
+  return {
+    nodeId: "scene-prompt",
+    status: "manual",
+    result,
+    source: "manual",
+    updatedAt: "2026-07-04T00:00:00.000Z",
+  };
 }
 
 function createMultiImageConfirmedGenerationWorkflow(workflow: TimelineWorkflowState) {
@@ -1449,7 +1482,7 @@ describe("TimelineShell", () => {
       });
 
       act(() => {
-        setNativeSelectValue(container.querySelector("#prompt-profile") as HTMLSelectElement, "generic");
+        setNativeSelectValue(container.querySelector("#prompt-profile") as HTMLSelectElement, "anima");
       });
 
       act(() => {
@@ -1460,7 +1493,7 @@ describe("TimelineShell", () => {
 
       expect(savedRecords.at(-1)).toMatchObject({
         sceneRequest: "Manual scene saved right before settings",
-        selectedPromptProfile: "generic",
+        selectedPromptProfile: "anima",
         workflow: {
           workflowId: "timeline-flush-before-settings",
           nodes: {
@@ -1506,7 +1539,6 @@ describe("TimelineShell", () => {
       expect(Array.from(promptProfile?.options ?? []).map((option) => option.value)).toEqual([
         "illustrious",
         "anima",
-        "generic",
       ]);
       expect(startButton.disabled).toBe(true);
       expect(settingsLink?.textContent).toContain("Settings");
@@ -1622,14 +1654,14 @@ describe("TimelineShell", () => {
     const workflow = createTimelineWorkflowState({
       workflowId: "timeline-simple-restored",
       sceneRequest: "A restored simple mode observatory",
-      promptProfile: "generic",
+      promptProfile: "anima",
       imageCount: 3,
       now: () => "2026-06-05T00:00:00.000Z",
     });
     const restoredRecord = createTimelineWorkflowRecord({
       workflow,
       sceneRequest: "A restored simple mode observatory",
-      selectedPromptProfile: "generic",
+      selectedPromptProfile: "anima",
       selectedImageCount: 3,
       selectedNodeId: "scene-input",
     });
@@ -1665,7 +1697,7 @@ describe("TimelineShell", () => {
       expect((container.querySelector("#scene-request") as HTMLTextAreaElement | null)?.value).toBe(
         "A restored simple mode observatory",
       );
-      expect((container.querySelector("#prompt-profile") as HTMLSelectElement | null)?.value).toBe("generic");
+      expect((container.querySelector("#prompt-profile") as HTMLSelectElement | null)?.value).toBe("anima");
       expect((container.querySelector("#timeline-image-count") as HTMLSelectElement | null)?.value).toBe("3");
     } finally {
       globalThis.fetch = originalFetch;
@@ -2792,6 +2824,39 @@ describe("TimelineShell", () => {
     } finally {
       globalThis.fetch = originalFetch;
     }
+  });
+
+  it("falls back to the selected profile for old invalid visual scene prompt results", () => {
+    let savedResult: ScenePromptTimelineResult | undefined;
+
+    act(() => {
+      root.render(
+        <TimelineScenePromptWorkspace
+          editable
+          emptyState="No scene prompt."
+          node={createScenePromptNode(createScenePromptResultWithProfile("generic"))}
+          onSave={(result) => {
+            savedResult = result;
+          }}
+          promptProfile="illustrious"
+        />,
+      );
+    });
+
+    expect(container.textContent).toContain("Illustrious");
+
+    const saveButton = Array.from(container.querySelectorAll("button")).find((button) =>
+      button.textContent?.includes("Save context"),
+    ) as HTMLButtonElement | undefined;
+
+    expect(saveButton?.disabled).toBe(false);
+
+    act(() => {
+      saveButton?.click();
+    });
+
+    expect(savedResult?.promptProfile).toBe("illustrious");
+    expect(savedResult?.positivePrompt).toBe("courier, glass station, cinematic anime");
   });
 
   it("keeps a visual scene prompt save when an in-flight graph result resolves later", async () => {

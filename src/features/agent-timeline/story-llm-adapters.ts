@@ -10,6 +10,8 @@ import {
   getStoryInputImg2ImgDenoise,
   getSelectedStoryResourcesForPrompting,
   normalizeStoryAnimaPromptParts,
+  normalizeStoryIllustriousSections,
+  normalizeStoryResourceTriggerSelections,
   type StoryAnimaPromptParts,
   type StoryGenerationParameters,
   type StoryLocalResource,
@@ -61,6 +63,7 @@ import type {
   CommonWorkflowNodeExecutionContext,
 } from "./workflow-definition";
 import {
+  coercePromptProfileId,
   formatPromptProfileLabel,
   normalizePromptProfileId,
   type PromptProfileId,
@@ -546,10 +549,7 @@ export function normalizeStorySafetyPlan(raw: unknown, input: StoryInput, shots:
   }
 
   const shotIds = new Set(shots.map((shot) => shot.id));
-  const audienceRating = compactText(parsed.audienceRating ?? parsed.audience_rating, 40) as StoryAudienceRating;
-  const resolvedRating: StoryAudienceRating = ["safe", "suggestive", "mature", "explicit"].includes(audienceRating)
-    ? audienceRating
-    : getAudienceRating(input);
+  const resolvedRating = getAudienceRating(input);
   const perShotNotes = (Array.isArray(parsed.perShotNotes) ? parsed.perShotNotes : parsed.per_shot_notes)
     ?? [];
 
@@ -748,7 +748,7 @@ function getSettingsResourceCandidates(
 function getStoryPromptProfile(input: StoryInput): PromptProfileId {
   const snapshot = isRecord(input.settingsSnapshot) ? input.settingsSnapshot : {};
 
-  return normalizePromptProfileId(snapshot.promptProfile);
+  return coercePromptProfileId(snapshot.promptProfile);
 }
 
 function buildStoryResourceDesiredEffect({
@@ -1185,45 +1185,146 @@ function createFallbackStoryRenderPromptParts(shot: StoryShot) {
   });
 }
 
+function hasStoryIllustriousSectionsContent(sections: object) {
+  return Object.values(sections).some((value) =>
+    Array.isArray(value)
+      ? value.some((item) => displayText(item))
+      : Boolean(displayText(value)),
+  );
+}
+
+function createFallbackStoryRenderPromptSections(shot: StoryShot) {
+  return normalizeStoryIllustriousSections({
+    subjectIdentity: shot.characterIds,
+    poseActionExpression: [shot.promptIntent],
+    backgroundEnvironmentObjects: shot.continuityNotes,
+    cameraFraming: [shot.camera],
+    detailResolution: [shot.description],
+  });
+}
+
 export function normalizeStoryRenderPromptPlan(
   raw: unknown,
   input: StoryInput,
   shots: readonly StoryShot[],
+  promptProfile: PromptProfileId = getStoryPromptProfile(input),
 ): StoryRenderPromptPlan {
   const parsed = typeof raw === "string" ? parseJsonObjectFromText(raw) : raw;
   if (!isRecord(parsed)) {
     throw malformedResponse("Render prompt plan response must be a JSON object.", { raw });
   }
 
+  const resolvedProfile = normalizePromptProfileId(promptProfile);
   const shotIds = new Set(shots.map((shot) => shot.id));
   const rawShots = Array.isArray(parsed.shots) ? parsed.shots : [];
 
   return {
+    promptProfile: resolvedProfile,
     storyId: input.storyId,
     shots: rawShots
       .map((shot, index) => {
         const rawShot = isRecord(shot) ? shot : {};
         const shotId = compactText(rawShot.shotId ?? rawShot.shot_id ?? rawShot.id, 80) || shots[index]?.id || "";
         const sourceShot = shots.find((candidate) => candidate.id === shotId) ?? shots[index];
-        const rawAnimaPromptParts = rawShot.animaPromptParts ?? rawShot.anima_prompt_parts;
-        let animaPromptParts = normalizeStoryAnimaPromptParts(rawAnimaPromptParts);
         const warnings = normalizeStringList(rawShot.warnings, maxWarnings);
 
-        if (sourceShot && !hasStoryAnimaPromptPartsContent(animaPromptParts)) {
-          animaPromptParts = createFallbackStoryRenderPromptParts(sourceShot);
-          warnings.push("LLM returned empty animaPromptParts; used storyboard prompt fallback.");
+        if (resolvedProfile === "anima") {
+          const rawAnimaPromptParts = rawShot.animaPromptParts ?? rawShot.anima_prompt_parts;
+          let animaPromptParts = normalizeStoryAnimaPromptParts(rawAnimaPromptParts);
+
+          if (sourceShot && !hasStoryAnimaPromptPartsContent(animaPromptParts)) {
+            animaPromptParts = createFallbackStoryRenderPromptParts(sourceShot);
+            warnings.push("LLM returned empty animaPromptParts; used storyboard prompt fallback.");
+          }
+
+          return {
+            shotId,
+            animaPromptParts,
+            rationale: displayText(rawShot.rationale ?? rawShot.reason) || undefined,
+            warnings,
+          };
+        }
+
+        const rawIllustriousSections =
+          rawShot.illustriousSections ?? rawShot.illustrious_sections ?? rawShot.sections;
+        let illustriousSections = normalizeStoryIllustriousSections(rawIllustriousSections);
+        if (sourceShot && !hasStoryIllustriousSectionsContent(illustriousSections)) {
+          illustriousSections = createFallbackStoryRenderPromptSections(sourceShot);
+          warnings.push("LLM returned empty illustriousSections; used storyboard prompt fallback.");
         }
 
         return {
           shotId,
-          animaPromptParts,
+          illustriousSections,
+          negativeAdditions: normalizeStringList(rawShot.negativeAdditions ?? rawShot.negative_additions, maxWarnings),
           rationale: displayText(rawShot.rationale ?? rawShot.reason) || undefined,
+          resourceTriggerSelections: normalizeStoryResourceTriggerSelections(
+            rawShot.resourceTriggerSelections ?? rawShot.resource_trigger_selections,
+          ),
           warnings,
         };
       })
       .filter((shot) => shotIds.has(shot.shotId)),
     warnings: normalizeStringList(parsed.warnings, maxWarnings),
   };
+}
+
+function buildStoryRenderPromptInstruction(promptProfile: PromptProfileId) {
+  if (promptProfile === "anima") {
+    return [
+      "Create a structured StoryRenderPromptPlan containing Anima prompt parts for each shot.",
+      "Do not output a raw final prompt string, positivePrompt, negativePrompt, promptSections, or coarse sections; local code will compile animaPromptParts into final positivePrompt and negativePrompt strings.",
+      "Each shot must include animaPromptParts with arrays for subjectTags, characterTags, seriesTags, artistTags, outfitTags, propTags, actionTags, settingTags, cameraTags, lightingTags, styleTags, negativeAdditions, plus singleFrameCaption.",
+      "Tag arrays must contain only essential visible details. Each array item must be one atomic visual tag or concise visual clause. Prefer 3-8 tags per category; do not pad categories; do not repeat concepts.",
+      "Follow Anima tag order semantics: the recommended quality/safety prefix is added locally, then subjectTags, characterTags, seriesTags, artistTags, then general visual tags.",
+      "singleFrameCaption must be one complete English sentence describing only the current visible instant as a drawable single frame.",
+      "Avoid repeating the same visible object, character description, action, setting, camera, lighting, or style phrase across tag arrays and singleFrameCaption; if a detail is already explicit in a tag, the caption should summarize the instant without restating the same wording.",
+      "Compress multi-event beats into one frozen tableau. Do not write after, then, before, realizing, deciding, discovering, about to, in the middle of, as, while, or unresolved states using or.",
+      "Action tags must be static visible poses, gestures, expressions, or object-contact states, not continuous motion or transition phrases. Avoid video-like wording such as stepping, walking, passing, glancing, moving, turning, entering, leaving, approaching, or reaching; prefer static wording such as standing beside the bulletin board, relaxed shoulders, easy smile, portfolio held against chest, tape on finger, students visible in hallway.",
+      "singleFrameCaption must also describe a static held instant; do not use subordinate motion clauses like as students pass, while walking, or after finishing. Background people should be described as visible figures or paused observers, not passing or moving.",
+      "Use only visible image content: subject count, adult/age context, visible people, hair, face, wardrobe, key props, concrete action or pose, setting, spatial position, framing, camera, lighting, color theme, and art style.",
+      "Do not include story intent, emotional arc, rationale, symbolic meaning, viewer instruction, prose transitions, or words like should, must, important, clearly, feels, as if, payoff, problem-solving moment, visual priority, or focal character inside animaPromptParts.",
+      "Do not include <lora:...> syntax, model names, checkpoint names, file names, sampler, scheduler, CFG, steps, seed, denoise, width, height, safety rating tags, quality tags, score tags, safe tag, or final prompt prefixes inside animaPromptParts.",
+      "Translate structural ids such as character ids and location ids into natural visible descriptions; never emit ids like teen-resident or location-library as prompt text.",
+      "Do not use original-story character names as prompt tags; describe their visible age category, hairstyle, wardrobe, props, and action instead. Only keep a name when it is an actual Civitai trained word or known source character tag.",
+      "Preserve explicit current-shot subjects, adult/age context, wardrobe, key props, action or pose, setting, composition, camera, lighting, and continuity anchors as short visual clauses.",
+      "For multi-character shots, each visible person must get a distinct clause with hairstyle, clothing, pose/action, spatial position, and adult or college-age presentation when applicable; do not collapse them into \"two young women\" or another generic group tag.",
+      "For subjectTags use conservative tags like \"1girl\", \"solo\", \"2people\", or \"3people\"; only use \"3girls\" when every visible person is clearly a girl/woman.",
+      "Use seriesTags only for known source/copyright tags when there is a real selected source; leave seriesTags empty for original stories. Use artistTags only for known artist tags and prefix each item with @; leave artistTags empty when no artist tag is selected.",
+      "For selected style LoRAs, translate their usage guide into short visual style terms only, such as \"teal theme\", \"orange theme\", \"dusk glow\", or \"soft rim light\".",
+      "Negative additions must be visual quality/exclusion terms only, must not replace safety negatives, and must not negate positive key characters, actions, props, clothing, or environments; for example, do not add \"sketch page\" or \"drawings\" when the shot requires a sketchbook or visible sketch pages.",
+      'Required shape: {"promptProfile":"anima","shots":[{"shotId":"","animaPromptParts":{"subjectTags":[""],"characterTags":[""],"seriesTags":[""],"artistTags":[""],"outfitTags":[""],"propTags":[""],"actionTags":[""],"settingTags":[""],"cameraTags":[""],"lightingTags":[""],"styleTags":[""],"singleFrameCaption":"","negativeAdditions":[""]},"rationale":"","warnings":[""]}],"warnings":[""]}.',
+    ].join(" ");
+  }
+
+  return [
+    "Create a structured StoryRenderPromptPlan containing Illustrious prompt sections for each shot.",
+    "Do not output a raw final prompt string, positivePrompt, negativePrompt, animaPromptParts, or Anima tag-order guidance; local code will compile illustriousSections into final prompts with renderIllustriousPrompt.",
+    "Each shot must include illustriousSections with section keys quality, aestheticVersion, artistStyle, subjectIdentity, appearancePhysicalTraits, clothingAccessories, poseActionExpression, backgroundEnvironmentObjects, spatialComposition, cameraFraming, lightingFocus, and detailResolution as needed.",
+    "Do not output rating tags in illustriousSections. Local code sets exactly one rating tag from Settings: safe when NSFW is disabled and nsfw when NSFW is enabled.",
+    "Leave quality and aestheticVersion empty unless the shot needs a specific non-default qualifier; local code adds Illustrious quality and aesthetic defaults.",
+    "Section values must contain only essential visible booru-style tags or concise visual clauses. Prefer short comma-separated strings or short arrays; do not pad categories; do not repeat concepts.",
+    "Local code will not semantically repair, rewrite, filter, or truncate bad Illustrious subject/name/count phrases; output these sections at final generation quality.",
+    "Put the visible person count at the start of subjectIdentity using one coherent Danbooru-style count strategy: 1girl, solo for one visible woman; 2girls for two visible women; 1man for one visible adult male; 2men for two visible adult males; 2girls, 1man for two adult women plus one adult man. Use 2people or 3people only when gender is unclear.",
+    "Do not combine count tags that contradict the story age context. Use 1boy or 2boys only for clearly childlike or teen male subjects; never use 1boy for an adult man, cafe owner, father, or college-age friend. Add adult woman, adult women, adult man, college-age woman, college-age man, or college art student as separate descriptors when age context matters.",
+    "For multi-character shots, every counted person must have a matching visible role, clothing or accessory, pose/action, and spatial position. Avoid abstract-only identities such as friendly cafe owner or understated young friend unless they are paired with visible traits like practical cafe apron, shoulder bag, standing near doorway, or smiling warmly.",
+    "Never create fused young-count tags such as 1young woman, 1young man, 2young women, or 2young men. Never write natural count phrases such as one adult woman or two adult women when a count tag like 1girl or 2girls is available.",
+    "Do not use original story character names such as Maya as prompt tokens in any section, including spatialComposition. Do not write Maya central, Maya holding, or Maya framed; write woman centered, protagonist on step stool, or central woman pinning poster instead.",
+    "Do not replace names with repeated generic subject prefixes such as main woman or main character. Prefer direct visible tags such as short black bob, round glasses, mint green cardigan, holding note card, friend holding tea tin, or college art student.",
+    "Avoid contradictory age phrases such as mature young face, youthful adult, or young-looking adult. Use adult face, approachable adult features, college-age woman, or adult woman instead.",
+    "Do not imply extra people through vague group phrases such as supporting figures, background people, crowd, or bystanders unless the shot explicitly requires them. Keep the visible person count, subjectIdentity, poseActionExpression, and spatialComposition aligned.",
+    "For each shot, output resourceTriggerSelections as an array of {resourceId, selectedTrainedWords, reason}. Choose only trainedWords that the current shot truly needs from the supplied selectedResources context; do not copy every trainedWords item into the prompt.",
+    "Selected trained words must be exact strings from that resource's original trainedWords list. Never invent trigger words and never alter spelling, punctuation, casing, or spacing.",
+    "Use the selected resources' trainedWords, usageGuide, promptReferences, tags, and categories as context. If a checkpoint's trainedWords look like broad example tags rather than required trigger words, such as WAI-style general tags, leave that checkpoint without selected triggers.",
+    "If a LoRA has a clear style or character trigger such as usnr and the shot uses that LoRA's style or concept, select that exact trigger for the relevant shot.",
+    "Compress multi-event beats into one frozen tableau. Do not write after, then, before, realizing, deciding, discovering, about to, in the middle of, as, while, or unresolved states using or.",
+    "Use only visible image content: subject count, adult/age context, visible people, hair, face, wardrobe, key props, concrete action or pose, setting, spatial position, framing, camera, lighting, color theme, and art style.",
+    "Do not include story intent, emotional arc, rationale, symbolic meaning, viewer instruction, prose transitions, model names, checkpoint names, file names, sampler, scheduler, CFG, steps, seed, denoise, width, height, score tags, safe tag, nsfw tag, or final prompt prefixes inside illustriousSections.",
+    "Translate structural ids such as character ids and location ids into natural visible descriptions; never emit ids like teen-resident or location-library as prompt text.",
+    "For selected style LoRAs, translate their usage guide into short visible style terms only, such as teal theme, orange theme, dusk glow, or soft rim light.",
+    "Leave negativeAdditions empty for Illustrious. Local code uses a common Illustrious negative prompt only: bad quality, worst quality, worst detail, censor.",
+    'Required shape: {"promptProfile":"illustrious","shots":[{"shotId":"","illustriousSections":{"subjectIdentity":[""],"appearancePhysicalTraits":[""],"clothingAccessories":[""],"poseActionExpression":[""],"backgroundEnvironmentObjects":[""],"spatialComposition":[""],"cameraFraming":[""],"lightingFocus":[""],"detailResolution":[""]},"resourceTriggerSelections":[{"resourceId":"","selectedTrainedWords":[""],"reason":""}],"negativeAdditions":[""],"rationale":"","warnings":[""]}],"warnings":[""]}.',
+  ].join(" ");
 }
 
 export function isStoryResourcePlanExecutable(resourcePlan: StoryResourcePlan): boolean {
@@ -1242,6 +1343,7 @@ export function createStoryRenderPlanFromWorkflow(
   return assembleStoryRenderPlan({
     img2imgDenoise: getStoryInputImg2ImgDenoise(getStoryInput(workflow)),
     parameterPlan: getParameterPlan(workflow),
+    promptProfile: getStoryPromptProfile(getStoryInput(workflow)),
     resourcePlan: getResourcePlan(workflow),
     samplerOptions,
     safetyPlan: getSafetyPlan(workflow),
@@ -1342,6 +1444,7 @@ export function createStoryGenerationGateFromWorkflow(
         "Story Graph planning must pass consistency checks before generation.",
     confirmationRequired: true,
     nsfwContext: renderPlan.nsfwContext,
+    promptProfile: renderPlan.promptProfile,
     renderPlanShotCount: renderPlan.shots.length,
     previewEnabled: renderPlan.preview.options.enabled,
     requestPreview: renderPlan.shots.map((shot) => createStoryGenerationRequestPreview(shot, renderPlan.img2imgDenoise)),
@@ -1540,7 +1643,7 @@ export function createStoryLlmNodeAdapters({
       return makeJsonRequest({
         input,
         instruction:
-          'Create a StorySafetyPlan that preserves the configured NSFW context and safety constraints. Never permit sexualized minors, non-consensual sexual content, or graphic sexual violence. Required shape: {"audienceRating":"safe|suggestive|mature|explicit","contentWarnings":[""],"blockedContent":[""],"perShotNotes":[{"shotId":"","risks":[""],"mitigations":[""]}],"nsfwContext":{"enabled":false,"rationale":""}}.',
+          'Create a StorySafetyPlan that preserves the configured NSFW context and safety constraints. Echo the input audienceRating and nsfwContext; do not choose a different rating. Never permit sexualized minors, non-consensual sexual content, or graphic sexual violence. Required shape: {"audienceRating":"safe|suggestive|mature|explicit","contentWarnings":[""],"blockedContent":[""],"perShotNotes":[{"shotId":"","risks":[""],"mitigations":[""]}],"nsfwContext":{"enabled":false,"rationale":""}}.',
         payload: {
           input,
           shots: getShots(context.workflow),
@@ -1736,6 +1839,7 @@ export function createStoryLlmNodeAdapters({
   const renderPlan = createLlmStoryNodeAdapter<StoryRenderPlan>({
     buildRequest: (context) => {
       const input = getStoryInput(context.workflow);
+      const promptProfile = getStoryPromptProfile(input);
       const resourcePlan = getResourcePlan(context.workflow);
       const shots = syncStoryShotsWithDependencyGraph(getShots(context.workflow), getDependencyGraph(context.workflow), {
         allowHighRiskSourceEdges: shouldAllowHighRiskSourceEdges(context.workflow),
@@ -1746,36 +1850,14 @@ export function createStoryLlmNodeAdapters({
 
       return makeJsonRequest({
         input,
-        instruction: [
-          "Create a structured StoryRenderPromptPlan containing Anima prompt parts for each shot.",
-          "Do not output a raw final prompt string, positivePrompt, negativePrompt, promptSections, or coarse sections; local code will compile animaPromptParts into final positivePrompt and negativePrompt strings.",
-          "Each shot must include animaPromptParts with arrays for subjectTags, characterTags, seriesTags, artistTags, outfitTags, propTags, actionTags, settingTags, cameraTags, lightingTags, styleTags, negativeAdditions, plus singleFrameCaption.",
-          "Tag arrays must contain only essential visible details. Each array item must be one atomic visual tag or concise visual clause. Prefer 3-8 tags per category; do not pad categories; do not repeat concepts.",
-          "Follow Anima tag order semantics: the recommended quality/safety prefix is added locally, then subjectTags, characterTags, seriesTags, artistTags, then general visual tags.",
-          "singleFrameCaption must be one complete English sentence describing only the current visible instant as a drawable single frame.",
-          "Avoid repeating the same visible object, character description, action, setting, camera, lighting, or style phrase across tag arrays and singleFrameCaption; if a detail is already explicit in a tag, the caption should summarize the instant without restating the same wording.",
-          "Compress multi-event beats into one frozen tableau. Do not write after, then, before, realizing, deciding, discovering, about to, in the middle of, as, while, or unresolved states using or.",
-          "Action tags must be static visible poses, gestures, expressions, or object-contact states, not continuous motion or transition phrases. Avoid video-like wording such as stepping, walking, passing, glancing, moving, turning, entering, leaving, approaching, or reaching; prefer static wording such as standing beside the bulletin board, relaxed shoulders, easy smile, portfolio held against chest, tape on finger, students visible in hallway.",
-          "singleFrameCaption must also describe a static held instant; do not use subordinate motion clauses like as students pass, while walking, or after finishing. Background people should be described as visible figures or paused observers, not passing or moving.",
-          "Use only visible image content: subject count, adult/age context, visible people, hair, face, wardrobe, key props, concrete action or pose, setting, spatial position, framing, camera, lighting, color theme, and art style.",
-          "Do not include story intent, emotional arc, rationale, symbolic meaning, viewer instruction, prose transitions, or words like should, must, important, clearly, feels, as if, payoff, problem-solving moment, visual priority, or focal character inside animaPromptParts.",
-          "Do not include <lora:...> syntax, model names, checkpoint names, file names, sampler, scheduler, CFG, steps, seed, denoise, width, height, safety rating tags, quality tags, score tags, safe tag, or final prompt prefixes inside animaPromptParts.",
-          "Translate structural ids such as character ids and location ids into natural visible descriptions; never emit ids like teen-resident or location-library as prompt text.",
-          "Do not use original-story character names as prompt tags; describe their visible age category, hairstyle, wardrobe, props, and action instead. Only keep a name when it is an actual Civitai trained word or known source character tag.",
-          "Preserve explicit current-shot subjects, adult/age context, wardrobe, key props, action or pose, setting, composition, camera, lighting, and continuity anchors as short visual clauses.",
-          "For multi-character shots, each visible person must get a distinct clause with hairstyle, clothing, pose/action, spatial position, and adult or college-age presentation when applicable; do not collapse them into \"two young women\" or another generic group tag.",
-          "For subjectTags use conservative tags like \"1girl\", \"solo\", \"2people\", or \"3people\"; only use \"3girls\" when every visible person is clearly a girl/woman.",
-          "Use seriesTags only for known source/copyright tags when there is a real selected source; leave seriesTags empty for original stories. Use artistTags only for known artist tags and prefix each item with @; leave artistTags empty when no artist tag is selected.",
-          "For selected style LoRAs, translate their usage guide into short visual style terms only, such as \"teal theme\", \"orange theme\", \"dusk glow\", or \"soft rim light\".",
-          "Negative additions must be visual quality/exclusion terms only, must not replace safety negatives, and must not negate positive key characters, actions, props, clothing, or environments; for example, do not add \"sketch page\" or \"drawings\" when the shot requires a sketchbook or visible sketch pages.",
-          'Required shape: {"shots":[{"shotId":"","animaPromptParts":{"subjectTags":[""],"characterTags":[""],"seriesTags":[""],"artistTags":[""],"outfitTags":[""],"propTags":[""],"actionTags":[""],"settingTags":[""],"cameraTags":[""],"lightingTags":[""],"styleTags":[""],"singleFrameCaption":"","negativeAdditions":[""]},"rationale":"","warnings":[""]}],"warnings":[""]}.',
-        ].join(" "),
+        instruction: buildStoryRenderPromptInstruction(promptProfile),
         payload: {
           input,
           bible: getBible(context.workflow),
           characterContinuityGraph: getContinuityGraph(context.workflow),
           dependencyGraph: getDependencyGraph(context.workflow),
           parameterPlan: getParameterPlan(context.workflow),
+          promptProfile,
           resourcePlan,
           safetyPlan: getSafetyPlan(context.workflow),
           selectedResources: getSelectedStoryResourcesForPrompting(resourcePlan),
@@ -1787,14 +1869,16 @@ export function createStoryLlmNodeAdapters({
     },
     parseResponse: (response, context) => {
       const input = getStoryInput(context.workflow);
+      const promptProfile = getStoryPromptProfile(input);
       const shots = syncStoryShotsWithDependencyGraph(getShots(context.workflow), getDependencyGraph(context.workflow), {
         allowHighRiskSourceEdges: shouldAllowHighRiskSourceEdges(context.workflow),
       });
-      const renderPromptPlan = normalizeStoryRenderPromptPlan(response.content, input, shots);
+      const renderPromptPlan = normalizeStoryRenderPromptPlan(response.content, input, shots, promptProfile);
 
       return assembleStoryRenderPlan({
         img2imgDenoise: getStoryInputImg2ImgDenoise(input),
         parameterPlan: getParameterPlan(context.workflow),
+        promptProfile,
         renderPromptPlan,
         resourcePlan: getResourcePlan(context.workflow),
         samplerOptions,
