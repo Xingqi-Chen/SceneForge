@@ -790,23 +790,52 @@ describe("StoryPlanningPreview", () => {
       handDetailerInput?.click();
     });
 
-    const faceDetectorInput = container.querySelector("#story-face-detailer-detector-model") as HTMLInputElement | null;
-    const faceStepsInput = container.querySelector("#story-face-detailer-steps") as HTMLInputElement | null;
+    expect(container.querySelector("#story-face-detailer-detector-model")).toBeNull();
+    const faceSettingsButton = container.querySelector('[data-testid="story-face-detailer-settings"]') as HTMLButtonElement | null;
+    expect(faceSettingsButton).not.toBeNull();
+    await act(async () => {
+      faceSettingsButton?.click();
+      await Promise.resolve();
+    });
+
+    const faceDetectorInput = document.body.querySelector("#story-face-detailer-detector-model") as HTMLInputElement | null;
+    const faceStepsInput = document.body.querySelector("#story-face-detailer-steps") as HTMLInputElement | null;
     const handDetectorInput = container.querySelector("#story-hand-detailer-detector-model") as HTMLInputElement | null;
     const handStepsInput = container.querySelector("#story-hand-detailer-steps") as HTMLInputElement | null;
     expect(faceDetectorInput).not.toBeNull();
     expect(faceStepsInput).not.toBeNull();
-    expect(handDetectorInput).not.toBeNull();
-    expect(handStepsInput).not.toBeNull();
-    const advancedDetailerSections = Array.from(container.querySelectorAll("details"));
-    expect(advancedDetailerSections).toHaveLength(2);
+    expect(handDetectorInput).toBeNull();
+    expect(handStepsInput).toBeNull();
+    const advancedDetailerSections = Array.from(document.body.querySelectorAll("details"));
+    expect(advancedDetailerSections).toHaveLength(1);
     expect(advancedDetailerSections.every((section) => !section.open)).toBe(true);
 
     act(() => {
       setNativeInputValue(faceDetectorInput as HTMLInputElement, "bbox/story-face.pt");
       setNativeInputValue(faceStepsInput as HTMLInputElement, "18");
-      setNativeInputValue(handDetectorInput as HTMLInputElement, "bbox/story-hand.pt");
-      setNativeInputValue(handStepsInput as HTMLInputElement, "19");
+    });
+    const faceDoneButton = Array.from(document.body.querySelectorAll("button")).find(
+      (button) => button.textContent?.replace(/\s+/g, " ").trim() === "Done",
+    ) as HTMLButtonElement | undefined;
+    await act(async () => {
+      faceDoneButton?.click();
+      await Promise.resolve();
+    });
+
+    const handSettingsButton = container.querySelector('[data-testid="story-hand-detailer-settings"]') as HTMLButtonElement | null;
+    expect(handSettingsButton).not.toBeNull();
+    await act(async () => {
+      handSettingsButton?.click();
+      await Promise.resolve();
+    });
+    const handModalDetectorInput = document.body.querySelector("#story-hand-detailer-detector-model") as HTMLInputElement | null;
+    const handModalStepsInput = document.body.querySelector("#story-hand-detailer-steps") as HTMLInputElement | null;
+    expect(handModalDetectorInput).not.toBeNull();
+    expect(handModalStepsInput).not.toBeNull();
+
+    act(() => {
+      setNativeInputValue(handModalDetectorInput as HTMLInputElement, "bbox/story-hand.pt");
+      setNativeInputValue(handModalStepsInput as HTMLInputElement, "19");
     });
     await clickButtonAsync("Start planning");
 

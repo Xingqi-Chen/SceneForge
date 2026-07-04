@@ -14,7 +14,9 @@ import {
   RefreshCw,
   Settings,
   Workflow,
+  X,
 } from "lucide-react";
+import { createPortal } from "react-dom";
 
 import {
   createStoryGraphInputWorkflow,
@@ -498,12 +500,248 @@ function StoryDetailerTextAreaInput({
   );
 }
 
+function StoryDetailerControls({
+  idPrefix,
+  onChange,
+  parameterLabel,
+  resolved,
+}: {
+  idPrefix: string;
+  onChange: (patch: StoryDetailerPatch) => void;
+  parameterLabel: string;
+  resolved: Required<StoryDetailerConfig>;
+}) {
+  return (
+    <div className="grid gap-3">
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        <StoryDetailerTextInput
+          id={`${idPrefix}-detector-model`}
+          label="detector model"
+          onChange={(value) => onChange({ detectorModelName: value })}
+          value={resolved.detectorModelName}
+        />
+        <StoryDetailerNumberInput
+          label="guide size"
+          min={64}
+          onChange={(value) => onChange({ guideSize: Math.round(value / 8) * 8 })}
+          step={8}
+          value={resolved.guideSize}
+        />
+        <StoryDetailerNumberInput
+          label="max size"
+          min={64}
+          onChange={(value) => onChange({ maxSize: Math.round(value / 8) * 8 })}
+          step={8}
+          value={resolved.maxSize}
+        />
+        <StoryDetailerNumberInput
+          label={`${parameterLabel} denoise`}
+          max={1}
+          min={0}
+          onChange={(value) => onChange({ denoise: value })}
+          step={0.05}
+          value={resolved.denoise}
+        />
+        <StoryDetailerNumberInput
+          id={`${idPrefix}-steps`}
+          label={`${parameterLabel} steps`}
+          min={1}
+          onChange={(value) => onChange({ steps: Math.round(value) })}
+          value={resolved.steps}
+        />
+        <StoryDetailerNumberInput
+          label={`${parameterLabel} cfg`}
+          min={0}
+          onChange={(value) => onChange({ cfg: value })}
+          step={0.5}
+          value={resolved.cfg}
+        />
+        <StoryDetailerSelectInput
+          label={`${parameterLabel} sampler`}
+          onChange={(value) => onChange({ samplerName: value })}
+          options={COMFYUI_SAMPLER_OPTIONS}
+          value={resolved.samplerName}
+        />
+        <StoryDetailerSelectInput
+          label={`${parameterLabel} scheduler`}
+          onChange={(value) => onChange({ scheduler: value })}
+          options={COMFYUI_SCHEDULER_OPTIONS}
+          value={resolved.scheduler}
+        />
+      </div>
+      <details className="rounded-md border border-slate-200 bg-slate-50">
+        <summary className="cursor-pointer px-3 py-2 text-xs font-semibold text-slate-700 marker:text-slate-400">
+          Advanced parameters
+        </summary>
+        <div className="grid gap-3 border-t border-slate-200 p-3 sm:grid-cols-2 lg:grid-cols-3">
+          <StoryDetailerNumberInput
+            label="bbox threshold"
+            max={1}
+            min={0}
+            onChange={(value) => onChange({ bboxThreshold: value })}
+            step={0.01}
+            value={resolved.bboxThreshold}
+          />
+          <StoryDetailerNumberInput
+            label="bbox dilation"
+            max={512}
+            min={-512}
+            onChange={(value) => onChange({ bboxDilation: Math.round(value) })}
+            value={resolved.bboxDilation}
+          />
+          <StoryDetailerNumberInput
+            label="bbox crop"
+            max={10}
+            min={1}
+            onChange={(value) => onChange({ bboxCropFactor: value })}
+            step={0.1}
+            value={resolved.bboxCropFactor}
+          />
+          <StoryDetailerNumberInput
+            label="feather"
+            max={100}
+            min={0}
+            onChange={(value) => onChange({ feather: Math.round(value) })}
+            value={resolved.feather}
+          />
+          <StoryDetailerNumberInput
+            label="drop size"
+            min={1}
+            onChange={(value) => onChange({ dropSize: Math.round(value) })}
+            value={resolved.dropSize}
+          />
+          <StoryDetailerNumberInput
+            label="cycle"
+            max={10}
+            min={1}
+            onChange={(value) => onChange({ cycle: Math.round(value) })}
+            value={resolved.cycle}
+          />
+          <StoryDetailerBooleanInput
+            checked={resolved.guideSizeFor}
+            label="guide size for bbox"
+            onChange={(value) => onChange({ guideSizeFor: value })}
+          />
+          <StoryDetailerBooleanInput
+            checked={resolved.noiseMask}
+            label="noise mask"
+            onChange={(value) => onChange({ noiseMask: value })}
+          />
+          <StoryDetailerBooleanInput
+            checked={resolved.forceInpaint}
+            label="force inpaint"
+            onChange={(value) => onChange({ forceInpaint: value })}
+          />
+          <StoryDetailerSelectInput
+            label="sam hint"
+            onChange={(value) => onChange({ samDetectionHint: value as StoryDetailerConfig["samDetectionHint"] })}
+            options={COMFYUI_FACE_DETAILER_SAM_DETECTION_HINT_OPTIONS}
+            value={resolved.samDetectionHint}
+          />
+          <StoryDetailerNumberInput
+            label="sam dilation"
+            max={512}
+            min={-512}
+            onChange={(value) => onChange({ samDilation: Math.round(value) })}
+            value={resolved.samDilation}
+          />
+          <StoryDetailerNumberInput
+            label="sam threshold"
+            max={1}
+            min={0}
+            onChange={(value) => onChange({ samThreshold: value })}
+            step={0.01}
+            value={resolved.samThreshold}
+          />
+          <StoryDetailerNumberInput
+            label="sam bbox expansion"
+            max={1000}
+            min={0}
+            onChange={(value) => onChange({ samBBoxExpansion: Math.round(value) })}
+            value={resolved.samBBoxExpansion}
+          />
+          <StoryDetailerNumberInput
+            label="sam mask threshold"
+            max={1}
+            min={0}
+            onChange={(value) => onChange({ samMaskHintThreshold: value })}
+            step={0.01}
+            value={resolved.samMaskHintThreshold}
+          />
+          <StoryDetailerSelectInput
+            label="sam negative"
+            onChange={(value) => onChange({ samMaskHintUseNegative: value as StoryDetailerConfig["samMaskHintUseNegative"] })}
+            options={COMFYUI_FACE_DETAILER_SAM_MASK_HINT_USE_NEGATIVE_OPTIONS}
+            value={resolved.samMaskHintUseNegative}
+          />
+          <StoryDetailerTextAreaInput
+            label="wildcard"
+            onChange={(value) => onChange({ wildcard: value })}
+            value={resolved.wildcard}
+          />
+        </div>
+      </details>
+    </div>
+  );
+}
+
 function StoryDetailerPanel({
   detailer,
   idPrefix,
   kind,
   label,
   onChange,
+  onEdit,
+}: {
+  detailer: StoryDetailerConfig;
+  idPrefix: string;
+  kind: StoryDetailerKind;
+  label: string;
+  onChange: (patch: StoryDetailerPatch) => void;
+  onEdit: () => void;
+}) {
+  const resolved = sanitizeStoryDetailerSettingsSnapshot({
+    [kind]: detailer,
+  } as Partial<StoryDetailerSettingsSnapshot>)[kind] as Required<StoryDetailerConfig>;
+
+  return (
+    <div className="flex flex-col gap-3 rounded-md border border-slate-200 bg-white p-3 sm:flex-row sm:items-center sm:justify-between">
+      <label className="flex min-w-0 items-start gap-2 text-xs font-semibold text-slate-800">
+        <input
+          checked={resolved.enabled}
+          className="mt-0.5 size-4 rounded border-slate-300 text-slate-900 focus:ring-slate-300"
+          id={`${idPrefix}-enabled`}
+          onChange={(event) => onChange({ enabled: event.target.checked })}
+          type="checkbox"
+        />
+        <span className="grid min-w-0 gap-1">
+          <span>{label}</span>
+          <span className="truncate text-[11px] font-normal text-slate-500">
+            {resolved.detectorModelName} - {resolved.steps} steps - CFG {resolved.cfg} - {resolved.samplerName}/{resolved.scheduler}
+          </span>
+        </span>
+      </label>
+      <button
+        className="inline-flex h-8 shrink-0 items-center justify-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50"
+        data-testid={`${idPrefix}-settings`}
+        onClick={onEdit}
+        type="button"
+      >
+        <Settings className="size-3.5" />
+        Settings
+      </button>
+    </div>
+  );
+}
+
+function StoryDetailerSettingsDialog({
+  detailer,
+  idPrefix,
+  kind,
+  label,
+  onChange,
+  onClose,
+  open,
   parameterLabel,
 }: {
   detailer: StoryDetailerConfig;
@@ -511,197 +749,61 @@ function StoryDetailerPanel({
   kind: StoryDetailerKind;
   label: string;
   onChange: (patch: StoryDetailerPatch) => void;
+  onClose: () => void;
+  open: boolean;
   parameterLabel: string;
 }) {
   const resolved = sanitizeStoryDetailerSettingsSnapshot({
     [kind]: detailer,
   } as Partial<StoryDetailerSettingsSnapshot>)[kind] as Required<StoryDetailerConfig>;
 
-  return (
-    <div className="grid gap-3 rounded-md border border-slate-200 bg-white p-3">
-      <label className="flex min-w-0 items-center gap-2 text-xs font-semibold text-slate-800">
-        <input
-          checked={resolved.enabled}
-          className="size-4 rounded border-slate-300 text-slate-900 focus:ring-slate-300"
-          id={`${idPrefix}-enabled`}
-          onChange={(event) => onChange({ enabled: event.target.checked })}
-          type="checkbox"
-        />
-        <span>{label}</span>
-      </label>
-      {resolved.enabled ? (
-        <div className="grid gap-3">
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            <StoryDetailerTextInput
-              id={`${idPrefix}-detector-model`}
-              label="detector model"
-              onChange={(value) => onChange({ detectorModelName: value })}
-              value={resolved.detectorModelName}
-            />
-            <StoryDetailerNumberInput
-              label="guide size"
-              min={64}
-              onChange={(value) => onChange({ guideSize: Math.round(value / 8) * 8 })}
-              step={8}
-              value={resolved.guideSize}
-            />
-            <StoryDetailerNumberInput
-              label="max size"
-              min={64}
-              onChange={(value) => onChange({ maxSize: Math.round(value / 8) * 8 })}
-              step={8}
-              value={resolved.maxSize}
-            />
-            <StoryDetailerNumberInput
-              label={`${parameterLabel} denoise`}
-              max={1}
-              min={0}
-              onChange={(value) => onChange({ denoise: value })}
-              step={0.05}
-              value={resolved.denoise}
-            />
-            <StoryDetailerNumberInput
-              id={`${idPrefix}-steps`}
-              label={`${parameterLabel} steps`}
-              min={1}
-              onChange={(value) => onChange({ steps: Math.round(value) })}
-              value={resolved.steps}
-            />
-            <StoryDetailerNumberInput
-              label={`${parameterLabel} cfg`}
-              min={0}
-              onChange={(value) => onChange({ cfg: value })}
-              step={0.5}
-              value={resolved.cfg}
-            />
-            <StoryDetailerSelectInput
-              label={`${parameterLabel} sampler`}
-              onChange={(value) => onChange({ samplerName: value })}
-              options={COMFYUI_SAMPLER_OPTIONS}
-              value={resolved.samplerName}
-            />
-            <StoryDetailerSelectInput
-              label={`${parameterLabel} scheduler`}
-              onChange={(value) => onChange({ scheduler: value })}
-              options={COMFYUI_SCHEDULER_OPTIONS}
-              value={resolved.scheduler}
-            />
+  if (!open || typeof document === "undefined") {
+    return null;
+  }
+
+  return createPortal(
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4 backdrop-blur-sm">
+      <div
+        aria-modal="true"
+        className="flex max-h-[88vh] w-full max-w-5xl flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xl"
+        role="dialog"
+      >
+        <div className="flex items-start justify-between gap-3 border-b border-slate-100 bg-slate-50 px-5 py-4">
+          <div className="min-w-0">
+            <h3 className="text-sm font-bold text-slate-900">{label} settings</h3>
+            <p className="mt-1 truncate text-xs text-slate-500">
+              {resolved.detectorModelName} - {resolved.steps} steps - CFG {resolved.cfg}
+            </p>
           </div>
-          <details className="rounded-md border border-slate-200 bg-slate-50">
-            <summary className="cursor-pointer px-3 py-2 text-xs font-semibold text-slate-700 marker:text-slate-400">
-              Advanced parameters
-            </summary>
-            <div className="grid gap-3 border-t border-slate-200 p-3 sm:grid-cols-2 lg:grid-cols-3">
-              <StoryDetailerNumberInput
-                label="bbox threshold"
-                max={1}
-                min={0}
-                onChange={(value) => onChange({ bboxThreshold: value })}
-                step={0.01}
-                value={resolved.bboxThreshold}
-              />
-              <StoryDetailerNumberInput
-                label="bbox dilation"
-                max={512}
-                min={-512}
-                onChange={(value) => onChange({ bboxDilation: Math.round(value) })}
-                value={resolved.bboxDilation}
-              />
-              <StoryDetailerNumberInput
-                label="bbox crop"
-                max={10}
-                min={1}
-                onChange={(value) => onChange({ bboxCropFactor: value })}
-                step={0.1}
-                value={resolved.bboxCropFactor}
-              />
-              <StoryDetailerNumberInput
-                label="feather"
-                max={100}
-                min={0}
-                onChange={(value) => onChange({ feather: Math.round(value) })}
-                value={resolved.feather}
-              />
-              <StoryDetailerNumberInput
-                label="drop size"
-                min={1}
-                onChange={(value) => onChange({ dropSize: Math.round(value) })}
-                value={resolved.dropSize}
-              />
-              <StoryDetailerNumberInput
-                label="cycle"
-                max={10}
-                min={1}
-                onChange={(value) => onChange({ cycle: Math.round(value) })}
-                value={resolved.cycle}
-              />
-              <StoryDetailerBooleanInput
-                checked={resolved.guideSizeFor}
-                label="guide size for bbox"
-                onChange={(value) => onChange({ guideSizeFor: value })}
-              />
-              <StoryDetailerBooleanInput
-                checked={resolved.noiseMask}
-                label="noise mask"
-                onChange={(value) => onChange({ noiseMask: value })}
-              />
-              <StoryDetailerBooleanInput
-                checked={resolved.forceInpaint}
-                label="force inpaint"
-                onChange={(value) => onChange({ forceInpaint: value })}
-              />
-              <StoryDetailerSelectInput
-                label="sam hint"
-                onChange={(value) => onChange({ samDetectionHint: value as StoryDetailerConfig["samDetectionHint"] })}
-                options={COMFYUI_FACE_DETAILER_SAM_DETECTION_HINT_OPTIONS}
-                value={resolved.samDetectionHint}
-              />
-              <StoryDetailerNumberInput
-                label="sam dilation"
-                max={512}
-                min={-512}
-                onChange={(value) => onChange({ samDilation: Math.round(value) })}
-                value={resolved.samDilation}
-              />
-              <StoryDetailerNumberInput
-                label="sam threshold"
-                max={1}
-                min={0}
-                onChange={(value) => onChange({ samThreshold: value })}
-                step={0.01}
-                value={resolved.samThreshold}
-              />
-              <StoryDetailerNumberInput
-                label="sam bbox expansion"
-                max={1000}
-                min={0}
-                onChange={(value) => onChange({ samBBoxExpansion: Math.round(value) })}
-                value={resolved.samBBoxExpansion}
-              />
-              <StoryDetailerNumberInput
-                label="sam mask threshold"
-                max={1}
-                min={0}
-                onChange={(value) => onChange({ samMaskHintThreshold: value })}
-                step={0.01}
-                value={resolved.samMaskHintThreshold}
-              />
-              <StoryDetailerSelectInput
-                label="sam negative"
-                onChange={(value) => onChange({ samMaskHintUseNegative: value as StoryDetailerConfig["samMaskHintUseNegative"] })}
-                options={COMFYUI_FACE_DETAILER_SAM_MASK_HINT_USE_NEGATIVE_OPTIONS}
-                value={resolved.samMaskHintUseNegative}
-              />
-              <StoryDetailerTextAreaInput
-                label="wildcard"
-                onChange={(value) => onChange({ wildcard: value })}
-                value={resolved.wildcard}
-              />
-            </div>
-          </details>
+          <button
+            aria-label={`Close ${label} settings`}
+            className="rounded-full bg-white p-1.5 text-slate-400 shadow-sm transition hover:text-slate-700"
+            onClick={onClose}
+            type="button"
+          >
+            <X className="size-4" />
+          </button>
         </div>
-      ) : null}
-    </div>
+        <div className="min-h-0 flex-1 overflow-y-auto p-5">
+          <StoryDetailerControls
+            idPrefix={idPrefix}
+            onChange={onChange}
+            parameterLabel={parameterLabel}
+            resolved={resolved}
+          />
+        </div>
+        <div className="flex justify-end border-t border-slate-100 bg-slate-50 px-5 py-3">
+          <button
+            className="inline-flex h-8 items-center justify-center rounded-md bg-slate-950 px-4 text-xs font-semibold text-white transition-colors hover:bg-slate-800"
+            onClick={onClose}
+            type="button"
+          >
+            Done
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -712,6 +814,8 @@ function StoryDetailerSettingsEditor({
   detailers: StoryDetailerSettingsSnapshot;
   onChange: (detailers: StoryDetailerSettingsSnapshot) => void;
 }) {
+  const [editingDetailer, setEditingDetailer] = useState<StoryDetailerKind | null>(null);
+
   function patchDetailer(kind: StoryDetailerKind, patch: StoryDetailerPatch) {
     onChange(
       sanitizeStoryDetailerSettingsSnapshot({
@@ -733,7 +837,7 @@ function StoryDetailerSettingsEditor({
         kind="faceDetailer"
         label="FaceDetailer"
         onChange={(patch) => patchDetailer("faceDetailer", patch)}
-        parameterLabel="face"
+        onEdit={() => setEditingDetailer("faceDetailer")}
       />
       <StoryDetailerPanel
         detailer={detailers.handDetailer}
@@ -741,6 +845,26 @@ function StoryDetailerSettingsEditor({
         kind="handDetailer"
         label="HandDetailer"
         onChange={(patch) => patchDetailer("handDetailer", patch)}
+        onEdit={() => setEditingDetailer("handDetailer")}
+      />
+      <StoryDetailerSettingsDialog
+        detailer={detailers.faceDetailer}
+        idPrefix="story-face-detailer"
+        kind="faceDetailer"
+        label="FaceDetailer"
+        onChange={(patch) => patchDetailer("faceDetailer", patch)}
+        onClose={() => setEditingDetailer(null)}
+        open={editingDetailer === "faceDetailer"}
+        parameterLabel="face"
+      />
+      <StoryDetailerSettingsDialog
+        detailer={detailers.handDetailer}
+        idPrefix="story-hand-detailer"
+        kind="handDetailer"
+        label="HandDetailer"
+        onChange={(patch) => patchDetailer("handDetailer", patch)}
+        onClose={() => setEditingDetailer(null)}
+        open={editingDetailer === "handDetailer"}
         parameterLabel="hand"
       />
     </fieldset>
