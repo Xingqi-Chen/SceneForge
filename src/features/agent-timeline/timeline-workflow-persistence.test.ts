@@ -458,6 +458,45 @@ describe("timeline workflow persistence", () => {
     });
   });
 
+  it("restores legacy Story input records with disabled detailer defaults", () => {
+    const workflow = startStoryGraphWorkflow({
+      rawIntent: "A courier follows a signal through a neon market.",
+      targetShotCount: 2,
+      now: () => "2026-06-15T00:00:00.000Z",
+      settingsSnapshot: {
+        promptProfile: "illustrious",
+      },
+    });
+    const storyInput = workflow.nodes["story-input"].result as {
+      settingsSnapshot?: Record<string, unknown>;
+    };
+    if (storyInput.settingsSnapshot) {
+      delete storyInput.settingsSnapshot.detailers;
+    }
+
+    const record = createTimelineWorkflowRecord({
+      workflow,
+      sceneRequest: "A courier follows a signal through a neon market.",
+      selectedPromptProfile: "illustrious",
+      selectedImageCount: 2,
+      selectedNodeId: "story-input",
+      outputDisplayModes: {},
+    });
+
+    if (!isStoryGraphTimelineWorkflowRecord(record)) {
+      throw new Error("Expected a Story Graph workflow record.");
+    }
+
+    expect(record.workflow.nodes["story-input"].result).toMatchObject({
+      settingsSnapshot: {
+        detailers: {
+          faceDetailer: { enabled: false },
+          handDetailer: { enabled: false },
+        },
+      },
+    });
+  });
+
   it("rejects malformed active workflow records", () => {
     expect(sanitizeTimelineWorkflowRecord({})).toBeNull();
     expect(

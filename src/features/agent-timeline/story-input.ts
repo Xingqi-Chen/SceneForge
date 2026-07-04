@@ -44,6 +44,11 @@ import {
   type StoryStylePaletteLoraSnapshot,
   type StoryStylePaletteSnapshot,
 } from "./story-style-palette";
+import {
+  getStoryInputDetailers,
+  sanitizeStoryDetailerSettingsSnapshot,
+  type StoryDetailerSettingsSnapshot,
+} from "./story-detailers";
 
 type StoryClock = () => string;
 
@@ -65,6 +70,7 @@ export type StoryGraphStartSettingsSnapshot = {
     loras: StoryLocalResource[];
   };
   stylePalette?: StoryStylePaletteSnapshot;
+  detailers: StoryDetailerSettingsSnapshot;
 };
 
 export type StoryGraphStartRequest = {
@@ -166,11 +172,13 @@ function createSettingsSnapshot({
   timestamp: string;
 }): StoryGraphStartSettingsSnapshot {
   const {
+    detailers,
     resourceCandidates,
     stylePalette,
     ...settingsSnapshot
   } = request.settingsSnapshot ?? {};
   const sanitizedStylePalette = sanitizeStoryStylePaletteSnapshot(stylePalette);
+  const sanitizedDetailers = sanitizeStoryDetailerSettingsSnapshot(detailers);
 
   return {
     capturedAt: settingsSnapshot.capturedAt ?? timestamp,
@@ -186,6 +194,7 @@ function createSettingsSnapshot({
           loras: resourceCandidates.loras.length,
         }
       : settingsSnapshot.resourceCandidateCounts,
+    detailers: sanitizedDetailers,
     ...(sanitizedStylePalette ? { stylePalette: sanitizedStylePalette } : {}),
     targetShotCount,
   } as StoryGraphStartSettingsSnapshot;
@@ -616,7 +625,9 @@ function createGenerationGate(renderPlan: StoryRenderPlan): StoryGenerationGateP
     promptProfile: renderPlan.promptProfile,
     renderPlanShotCount: renderPlan.shots.length,
     previewEnabled: renderPlan.preview.options.enabled,
-    requestPreview: renderPlan.shots.map((shot) => createStoryGenerationRequestPreview(shot, renderPlan.img2imgDenoise)),
+    requestPreview: renderPlan.shots.map((shot) =>
+      createStoryGenerationRequestPreview(shot, renderPlan.img2imgDenoise, renderPlan.detailers),
+    ),
   };
 }
 
@@ -640,6 +651,7 @@ export function createStoryPlanningArtifacts(
       : undefined,
   );
   const renderPlan = assembleStoryRenderPlan({
+    detailers: getStoryInputDetailers(input),
     img2imgDenoise: getStoryInputImg2ImgDenoise(input),
     parameterPlan,
     promptProfile,

@@ -282,14 +282,26 @@ describe("POST /api/agent-timeline/story/regenerate-shot", () => {
   it("uses the approved Story render plan prompts during scoped regeneration", async () => {
     const workflow = await createExecutedWorkflow();
     const renderPlan = workflow.nodes["story-render-plan"].result as StoryRenderPlan;
+    renderPlan.detailers = {
+      faceDetailer: { enabled: true, detectorModelName: "bbox/custom-face.pt", steps: 18 },
+      handDetailer: { enabled: true, detectorModelName: "bbox/custom-hand.pt", steps: 19 },
+    };
     renderPlan.shots = renderPlan.shots.map((shot, index) => ({
       ...shot,
       positivePrompt: `approved regeneration positive prompt ${index + 1}`,
       negativePrompt: `approved regeneration negative prompt ${index + 1}`,
     }));
-    const prompts: Array<{ negativePrompt?: string; positivePrompt: string; shotId: string }> = [];
+    const prompts: Array<{
+      faceDetailer?: { detectorModelName?: string; enabled?: boolean; steps?: number };
+      handDetailer?: { detectorModelName?: string; enabled?: boolean; steps?: number };
+      negativePrompt?: string;
+      positivePrompt: string;
+      shotId: string;
+    }> = [];
     comfyMocks.adapter.mockImplementation(({ request }: Parameters<StoryShotExecutionAdapter>[0]) => {
       prompts.push({
+        faceDetailer: request.request.faceDetailer,
+        handDetailer: request.request.handDetailer,
         negativePrompt: request.request.negativePrompt,
         positivePrompt: request.request.positivePrompt,
         shotId: request.shotId,
@@ -305,11 +317,31 @@ describe("POST /api/agent-timeline/story/regenerate-shot", () => {
     expect(response.status).toBe(200);
     expect(prompts).toEqual([
       {
+        faceDetailer: expect.objectContaining({
+          enabled: true,
+          detectorModelName: "bbox/custom-face.pt",
+          steps: 18,
+        }),
+        handDetailer: expect.objectContaining({
+          enabled: true,
+          detectorModelName: "bbox/custom-hand.pt",
+          steps: 19,
+        }),
         negativePrompt: "approved regeneration negative prompt 1",
         positivePrompt: "approved regeneration positive prompt 1",
         shotId: "shot-1",
       },
       {
+        faceDetailer: expect.objectContaining({
+          enabled: true,
+          detectorModelName: "bbox/custom-face.pt",
+          steps: 18,
+        }),
+        handDetailer: expect.objectContaining({
+          enabled: true,
+          detectorModelName: "bbox/custom-hand.pt",
+          steps: 19,
+        }),
         negativePrompt: "approved regeneration negative prompt 2",
         positivePrompt: "approved regeneration positive prompt 2",
         shotId: "shot-2",

@@ -211,6 +211,7 @@ export function buildStylePaletteAdviceMessages(input: {
         "Do not invent image subjects, characters, poses, actions, locations, or compositions beyond the supplied preset.",
         "Do not rewrite the preset into a new scene. Keep prompt content generic so style can be tested without subject-specific prompt interference.",
         "parameterSuggestions should focus on sampler, scheduler, steps, CFG, resolution, negativePromptAdditions, and LoRA weights.",
+        "Do not output or recommend FaceDetailer, HandDetailer, detailers, faceDetailer, or handDetailer fields.",
         `sampler must be one ComfyUI KSampler sampler_name value from: ${formatComfyUiOptionValuesForPrompt(COMFYUI_SAMPLER_OPTIONS)}.`,
         `scheduler must be one ComfyUI KSampler scheduler value from: ${formatComfyUiOptionValuesForPrompt(COMFYUI_SCHEDULER_OPTIONS)}.`,
         "Return sampler and scheduler as separate fields. Do not return combined A1111/Civitai strings such as \"DPM++ 2M Karras\".",

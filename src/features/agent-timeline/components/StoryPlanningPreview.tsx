@@ -20,6 +20,9 @@ import {
   createStoryGraphInputWorkflow,
   type StoryGraphStartRequest,
 } from "@/features/agent-timeline/story-input";
+import {
+  createStoryDetailerSettingsSnapshot,
+} from "@/features/agent-timeline/story-detailers";
 import { createStoryStylePaletteSnapshot } from "@/features/agent-timeline/story-style-palette";
 import type { StoryResultDisplay } from "@/features/agent-timeline/story-api";
 import type { StoryShotGraphExecutionState } from "@/features/agent-timeline/story-execution";
@@ -289,6 +292,8 @@ async function completeStoryInputAi({
 
 function createClientStartRequest({
   checkpointId,
+  faceDetailerEnabled,
+  handDetailerEnabled,
   img2imgDenoise,
   loraIds,
   nsfwEnabled,
@@ -298,6 +303,8 @@ function createClientStartRequest({
   targetShotCount,
 }: {
   checkpointId?: string | null;
+  faceDetailerEnabled: boolean;
+  handDetailerEnabled: boolean;
   img2imgDenoise: string;
   loraIds?: readonly string[];
   nsfwEnabled: boolean;
@@ -313,6 +320,11 @@ function createClientStartRequest({
     loraIds: loraIds ?? [],
     savedParameters,
   });
+  const detailers = createStoryDetailerSettingsSnapshot({
+    faceDetailerEnabled,
+    handDetailerEnabled,
+    savedParameters,
+  });
 
   return {
     nsfwEnabled,
@@ -320,6 +332,7 @@ function createClientStartRequest({
     targetShotCount: Number.isFinite(normalizedShotCount) ? normalizedShotCount : undefined,
     settingsSnapshot: {
       audienceRating,
+      detailers,
       img2imgDenoise: normalizeStoryImg2ImgDenoise(img2imgDenoise),
       nsfwEnabled,
       promptProfile,
@@ -561,6 +574,8 @@ function StartPanel({
   const [targetShotCount, setTargetShotCount] = useState("");
   const [img2imgDenoise, setImg2ImgDenoise] = useState(String(DEFAULT_STORY_IMG2IMG_DENOISE));
   const [promptProfile, setPromptProfile] = useState<PromptProfileId>(defaultPromptProfileId);
+  const [faceDetailerEnabled, setFaceDetailerEnabled] = useState(false);
+  const [handDetailerEnabled, setHandDetailerEnabled] = useState(false);
   const [selectedCheckpointId, setSelectedCheckpointId] = useState<string | null>(null);
   const [selectedLoraIds, setSelectedLoraIds] = useState<string[]>([]);
   const [selectedResources, setSelectedResources] = useState<SelectedCivitaiResourcesPreview>(EMPTY_SELECTED_CIVITAI_RESOURCES);
@@ -609,6 +624,8 @@ function StartPanel({
     onStart(
       createClientStartRequest({
         checkpointId: selectedCheckpointId,
+        faceDetailerEnabled,
+        handDetailerEnabled,
         img2imgDenoise,
         loraIds: selectedLoraIds,
         nsfwEnabled,
@@ -705,6 +722,30 @@ function StartPanel({
             />
           </label>
         </div>
+
+        <fieldset className="grid gap-2 rounded-md border border-slate-200 bg-slate-50 p-3 sm:grid-cols-2">
+          <legend className="sr-only">Story detailers</legend>
+          <label className="flex min-w-0 items-center gap-2 text-xs font-medium text-slate-700">
+            <input
+              checked={faceDetailerEnabled}
+              className="size-4 rounded border-slate-300 text-slate-900 focus:ring-slate-300"
+              id="story-face-detailer-enabled"
+              onChange={(event) => setFaceDetailerEnabled(event.target.checked)}
+              type="checkbox"
+            />
+            <span>FaceDetailer</span>
+          </label>
+          <label className="flex min-w-0 items-center gap-2 text-xs font-medium text-slate-700">
+            <input
+              checked={handDetailerEnabled}
+              className="size-4 rounded border-slate-300 text-slate-900 focus:ring-slate-300"
+              id="story-hand-detailer-enabled"
+              onChange={(event) => setHandDetailerEnabled(event.target.checked)}
+              type="checkbox"
+            />
+            <span>HandDetailer</span>
+          </label>
+        </fieldset>
 
         <section className="rounded-md border border-indigo-100 bg-indigo-50/40 p-3">
           <div className="mb-3 flex flex-wrap items-start justify-between gap-3">

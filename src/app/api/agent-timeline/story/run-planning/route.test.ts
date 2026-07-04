@@ -311,6 +311,10 @@ describe("POST /api/agent-timeline/story/run-planning", () => {
             checkpoints: [{ id: "checkpoint-local", name: "Local", modelFileName: "local.safetensors" }],
             loras: [],
           },
+          detailers: {
+            faceDetailer: { enabled: true, detectorModelName: "bbox/custom-face.pt", steps: 18 },
+            handDetailer: { enabled: false, detectorModelName: "bbox/custom-hand.pt", steps: 19 },
+          },
           stylePalette: {
             checkpointId: "checkpoint-local",
             loras: [{ id: "lora-local", enabled: true, strengthModel: 0.82, strengthClip: 0.44 }],
@@ -333,6 +337,10 @@ describe("POST /api/agent-timeline/story/run-planning", () => {
     expect(runStoryPlanningMock).toHaveBeenCalledWith(
       expect.objectContaining({
         settingsSnapshot: {
+          detailers: {
+            faceDetailer: { enabled: true, detectorModelName: "bbox/custom-face.pt", steps: 18 },
+            handDetailer: { enabled: false, detectorModelName: "bbox/custom-hand.pt", steps: 19 },
+          },
           stylePalette: {
             checkpointId: "checkpoint-local",
             loras: [{ id: "lora-local", enabled: true, strengthModel: 0.82, strengthClip: 0.44 }],

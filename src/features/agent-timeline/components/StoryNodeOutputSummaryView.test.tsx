@@ -149,6 +149,10 @@ describe("StoryNodeOutputSummaryView", () => {
                 ],
                 positivePromptPreview: "score_7, kneeling courier",
                 negativePromptPreview: "score_1, kneeling courier, bad_hands",
+                detailers: {
+                  faceDetailer: { enabled: true },
+                  handDetailer: { enabled: true },
+                },
                 parameters: {
                   width: 1024,
                   height: 1024,
@@ -171,6 +175,7 @@ describe("StoryNodeOutputSummaryView", () => {
     expect(container.textContent).toContain("Source-image risk");
     expect(container.textContent).toContain("standing to kneeling");
     expect(container.textContent).toContain("Prompt health");
+    expect(container.textContent).toContain("Detailers: FaceDetailer, HandDetailer");
     expect(container.textContent).not.toContain("Negative conflict");
     expect(container.textContent).not.toContain("Removed negatives");
   });

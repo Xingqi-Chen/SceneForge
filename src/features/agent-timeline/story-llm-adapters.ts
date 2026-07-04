@@ -40,6 +40,9 @@ import {
   type StoryStylePaletteLoraSnapshot,
   type StoryStylePaletteSnapshot,
 } from "./story-style-palette";
+import {
+  getStoryInputDetailers,
+} from "./story-detailers";
 import type {
   CharacterContinuityGraph,
   PlotStateGraph,
@@ -259,6 +262,20 @@ function getStoryInput(workflow: StoryWorkflowState) {
   }
 
   return input;
+}
+
+function getStoryInputForAiPayload(input: StoryInput): StoryInput {
+  if (!isRecord(input.settingsSnapshot) || !("detailers" in input.settingsSnapshot)) {
+    return input;
+  }
+
+  const settingsSnapshot = { ...input.settingsSnapshot };
+  delete settingsSnapshot.detailers;
+
+  return {
+    ...input,
+    settingsSnapshot,
+  };
 }
 
 function getBible(workflow: StoryWorkflowState) {
@@ -1284,7 +1301,7 @@ function buildStoryRenderPromptInstruction(promptProfile: PromptProfileId) {
       "singleFrameCaption must also describe a static held instant; do not use subordinate motion clauses like as students pass, while walking, or after finishing. Background people should be described as visible figures or paused observers, not passing or moving.",
       "Use only visible image content: subject count, adult/age context, visible people, hair, face, wardrobe, key props, concrete action or pose, setting, spatial position, framing, camera, lighting, color theme, and art style.",
       "Do not include story intent, emotional arc, rationale, symbolic meaning, viewer instruction, prose transitions, or words like should, must, important, clearly, feels, as if, payoff, problem-solving moment, visual priority, or focal character inside animaPromptParts.",
-      "Do not include <lora:...> syntax, model names, checkpoint names, file names, sampler, scheduler, CFG, steps, seed, denoise, width, height, safety rating tags, quality tags, score tags, safe tag, or final prompt prefixes inside animaPromptParts.",
+      "Do not include <lora:...> syntax, model names, checkpoint names, file names, sampler, scheduler, CFG, steps, seed, denoise, width, height, FaceDetailer, HandDetailer, detailers, faceDetailer, handDetailer, safety rating tags, quality tags, score tags, safe tag, or final prompt prefixes inside animaPromptParts.",
       "Translate structural ids such as character ids and location ids into natural visible descriptions; never emit ids like teen-resident or location-library as prompt text.",
       "Do not use original-story character names as prompt tags; describe their visible age category, hairstyle, wardrobe, props, and action instead. Only keep a name when it is an actual Civitai trained word or known source character tag.",
       "Preserve explicit current-shot subjects, adult/age context, wardrobe, key props, action or pose, setting, composition, camera, lighting, and continuity anchors as short visual clauses.",
@@ -1319,7 +1336,7 @@ function buildStoryRenderPromptInstruction(promptProfile: PromptProfileId) {
     "If a LoRA has a clear style or character trigger such as usnr and the shot uses that LoRA's style or concept, select that exact trigger for the relevant shot.",
     "Compress multi-event beats into one frozen tableau. Do not write after, then, before, realizing, deciding, discovering, about to, in the middle of, as, while, or unresolved states using or.",
     "Use only visible image content: subject count, adult/age context, visible people, hair, face, wardrobe, key props, concrete action or pose, setting, spatial position, framing, camera, lighting, color theme, and art style.",
-    "Do not include story intent, emotional arc, rationale, symbolic meaning, viewer instruction, prose transitions, model names, checkpoint names, file names, sampler, scheduler, CFG, steps, seed, denoise, width, height, score tags, safe tag, nsfw tag, or final prompt prefixes inside illustriousSections.",
+    "Do not include story intent, emotional arc, rationale, symbolic meaning, viewer instruction, prose transitions, model names, checkpoint names, file names, sampler, scheduler, CFG, steps, seed, denoise, width, height, FaceDetailer, HandDetailer, detailers, faceDetailer, handDetailer, score tags, safe tag, nsfw tag, or final prompt prefixes inside illustriousSections.",
     "Translate structural ids such as character ids and location ids into natural visible descriptions; never emit ids like teen-resident or location-library as prompt text.",
     "For selected style LoRAs, translate their usage guide into short visible style terms only, such as teal theme, orange theme, dusk glow, or soft rim light.",
     "Leave negativeAdditions empty for Illustrious. Local code uses a common Illustrious negative prompt only: bad quality, worst quality, worst detail, censor.",
@@ -1341,6 +1358,7 @@ export function createStoryRenderPlanFromWorkflow(
   });
 
   return assembleStoryRenderPlan({
+    detailers: getStoryInputDetailers(getStoryInput(workflow)),
     img2imgDenoise: getStoryInputImg2ImgDenoise(getStoryInput(workflow)),
     parameterPlan: getParameterPlan(workflow),
     promptProfile: getStoryPromptProfile(getStoryInput(workflow)),
@@ -1447,7 +1465,9 @@ export function createStoryGenerationGateFromWorkflow(
     promptProfile: renderPlan.promptProfile,
     renderPlanShotCount: renderPlan.shots.length,
     previewEnabled: renderPlan.preview.options.enabled,
-    requestPreview: renderPlan.shots.map((shot) => createStoryGenerationRequestPreview(shot, renderPlan.img2imgDenoise)),
+    requestPreview: renderPlan.shots.map((shot) =>
+      createStoryGenerationRequestPreview(shot, renderPlan.img2imgDenoise, renderPlan.detailers),
+    ),
   };
 }
 
@@ -1720,6 +1740,7 @@ export function createStoryLlmNodeAdapters({
   const resourcePlan: StoryNodeAdapter<StoryResourcePlan> = async (context) => {
     try {
       const input = getStoryInput(context.workflow);
+      const aiInput = getStoryInputForAiPayload(input);
       const {
         candidates,
         desiredEffect,
@@ -1750,11 +1771,11 @@ export function createStoryLlmNodeAdapters({
       }
 
       const response = await completeChat(makeJsonRequest({
-        input,
+        input: aiInput,
         instruction:
-          'Choose resources only from the supplied checkpoint and LoRA candidate ids. Do not invent ids. Candidates are ordered by BM25/embedding recommendation rank when recommendationRank and recommendationScore are present; treat higher-ranked candidates as stronger evidence, but still use metadata and story context to choose the best compatible combination. Use checkpoint and LoRA names, descriptions, tags, categories, trainedWords, usageGuide, observed weight ranges, common pairings, and parameter recommendations to choose LoRA suggestedWeight values and explain tradeoffs. Do not apply generic local caps by style, lighting, or resource type; if metadata conflicts, choose a finite sane weight from the selected resource evidence and explain it in reason or warnings. Required shape: {"checkpoint":{"resource":{"id":""},"reason":""},"loras":[{"resource":{"id":""},"suggestedWeight":0.7,"reason":""}],"recommendationReason":"","overallEffect":"","warnings":[""]}.',
+          'Choose resources only from the supplied checkpoint and LoRA candidate ids. Do not invent ids. Candidates are ordered by BM25/embedding recommendation rank when recommendationRank and recommendationScore are present; treat higher-ranked candidates as stronger evidence, but still use metadata and story context to choose the best compatible combination. Use checkpoint and LoRA names, descriptions, tags, categories, trainedWords, usageGuide, observed weight ranges, common pairings, and parameter recommendations to choose LoRA suggestedWeight values and explain tradeoffs. Do not output or recommend FaceDetailer, HandDetailer, detailers, faceDetailer, or handDetailer fields; those are controlled only by Story input checkboxes. Do not apply generic local caps by style, lighting, or resource type; if metadata conflicts, choose a finite sane weight from the selected resource evidence and explain it in reason or warnings. Required shape: {"checkpoint":{"resource":{"id":""},"reason":""},"loras":[{"resource":{"id":""},"suggestedWeight":0.7,"reason":""}],"recommendationReason":"","overallEffect":"","warnings":[""]}.',
         payload: {
-          input,
+          input: aiInput,
           desiredEffect,
           promptProfile,
           safetyPlan: getSafetyPlan(context.workflow),
@@ -1779,6 +1800,7 @@ export function createStoryLlmNodeAdapters({
   const aiParameterPlan = createLlmStoryNodeAdapter<StoryParameterPlan>({
     buildRequest: (context) => {
       const input = getStoryInput(context.workflow);
+      const aiInput = getStoryInputForAiPayload(input);
       const resourcePlan = getResourcePlan(context.workflow);
       const parameterDefaults = createStoryDefaultGenerationParameters({
         input,
@@ -1791,13 +1813,13 @@ export function createStoryLlmNodeAdapters({
       );
 
       return makeJsonRequest({
-        input,
+        input: aiInput,
         instruction:
-          `Create a typed StoryParameterPlan with one story-level generation resolution. Width and height must be positive story-level image dimensions. Every shot in the Story must use the same width and height, so put resolution only in defaults and never include width or height in perShotOverrides. Use supplied selectedResourceParameterContext plus resourcePlan as model-specific context: checkpoint description, usage guide, base model, selected LoRA descriptions, trained words, observed weights, recommendations, exampleImageDimensions, and storyboard composition needs jointly determine the single best story-level width, height, sampler, scheduler, steps, CFG, and denoise. You are responsible for choosing Anima and other model-family resolution from that resource context and the storyboard composition needs; local code will not infer resolution from scene keywords. Treat checkpoint exampleImageDimensions and explicit resource resolution guidance as stronger evidence than modelDefaultParameters when choosing width and height; preserve the dominant compatible model aspect ratio unless the user explicitly requested another aspect. Use supplied modelDefaultParameters only as the safe fallback when selected resources provide no stronger resolution or aspect evidence. Preserve supplied modelDefaultParameters for steps, cfg, samplerName, scheduler, and denoise unless a shot has a strong visual reason to override; do not lower steps/cfg/denoise just for speed. Put a brief resolution rationale in warnings when selected resource context changes width or height. samplerName must be one of availableSamplers and scheduler must be one of availableSchedulers. Per-shot parameter overrides may include only steps, cfg, samplerName, scheduler, denoise, or seed. Required shape: {"defaults":{"width":${parameterDefaults.width},"height":${parameterDefaults.height},"steps":${parameterDefaults.steps},"cfg":${parameterDefaults.cfg},"samplerName":"${parameterDefaults.samplerName}","scheduler":"${parameterDefaults.scheduler}","denoise":${parameterDefaults.denoise}},"perShotOverrides":[{"shotId":"","parameters":{},"reason":""}],"warnings":[""]}.`,
+          `Create a typed StoryParameterPlan with one story-level generation resolution. Width and height must be positive story-level image dimensions. Every shot in the Story must use the same width and height, so put resolution only in defaults and never include width or height in perShotOverrides. Use supplied selectedResourceParameterContext plus resourcePlan as model-specific context: checkpoint description, usage guide, base model, selected LoRA descriptions, trained words, observed weights, recommendations, exampleImageDimensions, and storyboard composition needs jointly determine the single best story-level width, height, sampler, scheduler, steps, CFG, and denoise. You are responsible for choosing Anima and other model-family resolution from that resource context and the storyboard composition needs; local code will not infer resolution from scene keywords. Treat checkpoint exampleImageDimensions and explicit resource resolution guidance as stronger evidence than modelDefaultParameters when choosing width and height; preserve the dominant compatible model aspect ratio unless the user explicitly requested another aspect. Use supplied modelDefaultParameters only as the safe fallback when selected resources provide no stronger resolution or aspect evidence. Preserve supplied modelDefaultParameters for steps, cfg, samplerName, scheduler, and denoise unless a shot has a strong visual reason to override; do not lower steps/cfg/denoise just for speed. Put a brief resolution rationale in warnings when selected resource context changes width or height. samplerName must be one of availableSamplers and scheduler must be one of availableSchedulers. Per-shot parameter overrides may include only steps, cfg, samplerName, scheduler, denoise, or seed. Do not output or recommend FaceDetailer, HandDetailer, detailers, faceDetailer, or handDetailer fields; those are controlled only by Story input checkboxes. Required shape: {"defaults":{"width":${parameterDefaults.width},"height":${parameterDefaults.height},"steps":${parameterDefaults.steps},"cfg":${parameterDefaults.cfg},"samplerName":"${parameterDefaults.samplerName}","scheduler":"${parameterDefaults.scheduler}","denoise":${parameterDefaults.denoise}},"perShotOverrides":[{"shotId":"","parameters":{},"reason":""}],"warnings":[""]}.`,
         payload: {
           availableSamplers: samplerOptions.samplers,
           availableSchedulers: samplerOptions.schedulers,
-          input,
+          input: aiInput,
           modelDefaultParameters: parameterDefaults,
           resourcePlan,
           selectedResources: getSelectedStoryResourcesForPrompting(resourcePlan),
@@ -1839,6 +1861,7 @@ export function createStoryLlmNodeAdapters({
   const renderPlan = createLlmStoryNodeAdapter<StoryRenderPlan>({
     buildRequest: (context) => {
       const input = getStoryInput(context.workflow);
+      const aiInput = getStoryInputForAiPayload(input);
       const promptProfile = getStoryPromptProfile(input);
       const resourcePlan = getResourcePlan(context.workflow);
       const shots = syncStoryShotsWithDependencyGraph(getShots(context.workflow), getDependencyGraph(context.workflow), {
@@ -1849,10 +1872,10 @@ export function createStoryLlmNodeAdapters({
       );
 
       return makeJsonRequest({
-        input,
+        input: aiInput,
         instruction: buildStoryRenderPromptInstruction(promptProfile),
         payload: {
-          input,
+          input: aiInput,
           bible: getBible(context.workflow),
           characterContinuityGraph: getContinuityGraph(context.workflow),
           dependencyGraph: getDependencyGraph(context.workflow),
@@ -1876,6 +1899,7 @@ export function createStoryLlmNodeAdapters({
       const renderPromptPlan = normalizeStoryRenderPromptPlan(response.content, input, shots, promptProfile);
 
       return assembleStoryRenderPlan({
+        detailers: getStoryInputDetailers(input),
         img2imgDenoise: getStoryInputImg2ImgDenoise(input),
         parameterPlan: getParameterPlan(context.workflow),
         promptProfile,

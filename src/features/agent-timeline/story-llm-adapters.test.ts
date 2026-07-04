@@ -23,6 +23,7 @@ import {
   createStoryResourcePlan,
   type StoryParameterPlan,
   type StoryRenderPlan,
+  type StoryResourcePlan,
 } from "./story-planning";
 import type {
   StoryBible,
@@ -2227,6 +2228,229 @@ describe("story LLM adapters", () => {
     expect(renderPlan?.shots[0]?.positivePrompt).toContain("1man");
     expect(renderPlan?.shots[0]?.positivePrompt).toContain("neon market");
     expect(renderPlan?.shots[0]?.negativePrompt).toBe("bad quality, worst quality, worst detail, censor");
+  });
+
+  it("keeps Story detailers out of resource, parameter, and render AI payload control", async () => {
+    const detailerInput = {
+      ...input,
+      settingsSnapshot: {
+        ...input.settingsSnapshot,
+        detailers: {
+          faceDetailer: { enabled: true, detectorModelName: "bbox/custom-face.pt", steps: 18 },
+          handDetailer: { enabled: true, detectorModelName: "bbox/custom-hand.pt", steps: 19 },
+        },
+      },
+    } satisfies StoryInput;
+    const workflow = createStoryWorkflowState({ storyId: "story-1", workflowId: "workflow-detailer-ai-boundary" });
+    const updatedAt = workflow.updatedAt;
+
+    workflow.nodes["story-input"] = {
+      nodeId: "story-input",
+      result: detailerInput,
+      source: "manual",
+      status: "manual",
+      updatedAt,
+    };
+    workflow.nodes["story-bible"] = {
+      nodeId: "story-bible",
+      result: bible,
+      source: "ai",
+      status: "done",
+      updatedAt,
+    };
+    workflow.nodes["storyboard-shots"] = {
+      nodeId: "storyboard-shots",
+      result: shots.map((shot) => ({ ...shot, sourceShotIds: [] })),
+      source: "ai",
+      status: "done",
+      updatedAt,
+    };
+    workflow.nodes["story-safety-plan"] = {
+      nodeId: "story-safety-plan",
+      result: {
+        storyId: "story-1",
+        audienceRating: "safe",
+        contentWarnings: [],
+        blockedContent: [],
+        perShotNotes: [],
+        nsfwContext: {
+          enabled: false,
+          rationale: "Safe story.",
+        },
+      },
+      source: "ai",
+      status: "done",
+      updatedAt,
+    };
+    workflow.nodes["shot-dependency-graph"] = {
+      nodeId: "shot-dependency-graph",
+      result: {
+        storyId: "story-1",
+        nodes: shots.map((shot) => ({ shotId: shot.id, label: shot.title })),
+        edges: [],
+      },
+      source: "ai",
+      status: "done",
+      updatedAt,
+    };
+    workflow.nodes["character-continuity-graph"] = {
+      nodeId: "character-continuity-graph",
+      result: {
+        storyId: "story-1",
+        characters: [
+          {
+            characterId: "courier",
+            name: "Courier",
+            canonicalDescription: "An adult courier in a yellow rain jacket.",
+            visualAnchors: ["yellow rain jacket"],
+          },
+        ],
+        appearances: shots.map((shot) => ({
+          shotId: shot.id,
+          characterId: "courier",
+          wardrobe: ["yellow rain jacket"],
+          poseOrAction: shot.description,
+          expression: "focused",
+          continuityNotes: [],
+        })),
+      },
+      source: "ai",
+      status: "done",
+      updatedAt,
+    };
+
+    let resourcePayload: Record<string, unknown> = {};
+    let resourceSystemPrompt = "";
+    const resourceAdapters = createStoryLlmNodeAdapters({
+      completeChat: async (request) => {
+        resourceSystemPrompt = String(request.messages[0]?.content ?? "");
+        resourcePayload = JSON.parse(String(request.messages[1]?.content ?? "{}")) as Record<string, unknown>;
+
+        return chatResponse(JSON.stringify({
+          checkpoint: { resource: { id: "checkpoint-local" }, reason: "Local checkpoint." },
+          loras: [],
+          recommendationReason: "Use local checkpoint.",
+          overallEffect: "Neon continuity.",
+          warnings: [],
+        }));
+      },
+    });
+    const resourceResult = await resourceAdapters["resource-plan"]?.({
+      nodeId: "resource-plan",
+      workflow,
+      dependencies: [workflow.nodes["story-safety-plan"], workflow.nodes["storyboard-shots"]],
+    });
+    const resourcePlan = (resourceResult as { value: StoryResourcePlan } | undefined)?.value;
+    if (!resourcePlan) {
+      throw new Error("Expected resource plan.");
+    }
+
+    workflow.nodes["resource-plan"] = {
+      nodeId: "resource-plan",
+      result: resourcePlan,
+      source: "ai",
+      status: "done",
+      updatedAt,
+    };
+
+    let parameterPayload: Record<string, unknown> = {};
+    let parameterSystemPrompt = "";
+    const parameterAdapters = createStoryLlmNodeAdapters({
+      completeChat: async (request) => {
+        parameterSystemPrompt = String(request.messages[0]?.content ?? "");
+        parameterPayload = JSON.parse(String(request.messages[1]?.content ?? "{}")) as Record<string, unknown>;
+
+        return chatResponse(JSON.stringify({
+          defaults: {
+            width: 1024,
+            height: 768,
+            steps: 28,
+            cfg: 5.5,
+            samplerName: "dpmpp_2m",
+            scheduler: "karras",
+            denoise: 1,
+            faceDetailer: { enabled: false },
+          },
+          faceDetailer: { enabled: false },
+          handDetailer: { enabled: false },
+          perShotOverrides: [],
+          warnings: [],
+        }));
+      },
+    });
+    const parameterResult = await parameterAdapters["parameter-plan"]?.({
+      nodeId: "parameter-plan",
+      workflow,
+      dependencies: [workflow.nodes["resource-plan"], workflow.nodes["storyboard-shots"]],
+    });
+    const parameterPlan = (parameterResult as { value: StoryParameterPlan } | undefined)?.value;
+    if (!parameterPlan) {
+      throw new Error("Expected parameter plan.");
+    }
+
+    workflow.nodes["parameter-plan"] = {
+      nodeId: "parameter-plan",
+      result: parameterPlan,
+      source: "ai",
+      status: "done",
+      updatedAt,
+    };
+
+    let renderPayload: Record<string, unknown> = {};
+    let renderSystemPrompt = "";
+    const renderAdapters = createStoryLlmNodeAdapters({
+      completeChat: async (request) => {
+        renderSystemPrompt = String(request.messages[0]?.content ?? "");
+        renderPayload = JSON.parse(String(request.messages[1]?.content ?? "{}")) as Record<string, unknown>;
+
+        return chatResponse(JSON.stringify({
+          detailers: {
+            faceDetailer: { enabled: false },
+            handDetailer: { enabled: false },
+          },
+          shots: shots.map((shot) => ({
+            shotId: shot.id,
+            illustriousSections: {
+              subjectIdentity: ["1man", "solo", "adult courier"],
+              poseActionExpression: [shot.promptIntent],
+            },
+          })),
+          warnings: [],
+        }));
+      },
+    });
+    const renderResult = await renderAdapters["story-render-plan"]?.({
+      nodeId: "story-render-plan",
+      workflow,
+      dependencies: [
+        workflow.nodes["character-continuity-graph"],
+        workflow.nodes["shot-dependency-graph"],
+        workflow.nodes["resource-plan"],
+        workflow.nodes["parameter-plan"],
+      ],
+    });
+    const renderPlan = (renderResult as { value: StoryRenderPlan } | undefined)?.value;
+
+    expect(JSON.stringify(resourcePayload.input)).not.toContain("detailer");
+    expect(JSON.stringify(parameterPayload.input)).not.toContain("detailer");
+    expect(JSON.stringify(renderPayload.input)).not.toContain("detailer");
+    expect(resourceSystemPrompt).toContain("Do not output or recommend FaceDetailer");
+    expect(parameterSystemPrompt).toContain("Do not output or recommend FaceDetailer");
+    expect(renderSystemPrompt).toContain("FaceDetailer");
+    expect(JSON.stringify(parameterPlan)).not.toContain("faceDetailer");
+    expect(JSON.stringify(parameterPlan)).not.toContain("handDetailer");
+    expect(renderPlan?.detailers).toMatchObject({
+      faceDetailer: {
+        enabled: true,
+        detectorModelName: "bbox/custom-face.pt",
+        steps: 18,
+      },
+      handDetailer: {
+        enabled: true,
+        detectorModelName: "bbox/custom-hand.pt",
+        steps: 19,
+      },
+    });
   });
 
   it("asks the LLM for structured Anima prompt parts before assembling render plans", async () => {

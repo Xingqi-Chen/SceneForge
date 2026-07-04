@@ -20,6 +20,8 @@ Story Graph refinement tracks `T23A` through `T23D` were added after saved-workf
 
 Story Reference planning tracks `T25` through `T31` were closed as not planned after product review found the current approach did not produce good enough results. Future Story Reference work should be rescoped before new issues are opened.
 
+`T32` / Issue `#118` adds explicit Story input FaceDetailer and HandDetailer toggles as user-controlled final-generation and regeneration options. Detailers remain out of AI advice and parameter planning, Story previews keep detailers disabled, and restored legacy workflows default both detailers off.
+
 ## Status Values
 
 - `Todo`: not yet scoped.
@@ -76,6 +78,7 @@ Story Reference planning tracks `T25` through `T31` were closed as not planned a
 | T29 | #110 | Add render-plan reference recipes and location continuity modes | Story Reference Workflow | Deferred | N/A | N/A | Closed issue #110 and unmerged PR #111 as not planned because the current Story Reference approach did not produce good enough results. Future work should be rescoped before implementation. |
 | T30 | #112 | Inject approved Anima character references into execution requests | Story Reference Workflow | Deferred | N/A | N/A | Closed issue #112 and unmerged PR #113 as not planned because the current Story Reference approach did not produce good enough results. Future work should be rescoped before implementation. |
 | T31 | #114 | Persist and migrate Story Reference workflow state | Story Reference Workflow | Deferred | N/A | N/A | Closed issue #114 and unmerged PR #115 as not planned because the current Story Reference approach did not produce good enough results. Future work should be rescoped before implementation. |
+| T32 | #118 | Add Story input FaceDetailer and HandDetailer toggles | Story Graph Refinement | Ready | TBD | Product-reviewed | Add explicit `/story` start input checkboxes for FaceDetailer and HandDetailer. Checkbox state is the final execution switch, detailer fields come only from the current Story Parameters dialog or ComfyUI defaults, AI planning does not set detailers, final generation/regeneration use enabled configs, previews stay disabled, gate summaries show enabled state, and legacy workflow records default both detailers off. |
 
 ## MVP Timeline Nodes
 

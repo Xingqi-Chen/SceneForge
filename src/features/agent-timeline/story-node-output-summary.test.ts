@@ -405,6 +405,10 @@ describe("story node output summaries", () => {
           positivePromptLength: 16,
           negativePromptPreview: "standing courier, bad_hands",
           negativePromptLength: 0,
+          detailers: {
+            faceDetailer: { enabled: true },
+            handDetailer: { enabled: true },
+          },
           parameters: { width: 1024, height: 1024, steps: 28, cfg: 5.5, samplerName: "euler", scheduler: "normal", denoise: 1 },
         },
         {
@@ -427,6 +431,10 @@ describe("story node output summaries", () => {
           positivePromptLength: 16,
           negativePromptPreview: "score_1, kneeling courier, bad_hands",
           negativePromptLength: 0,
+          detailers: {
+            faceDetailer: { enabled: true },
+            handDetailer: { enabled: true },
+          },
           parameters: { width: 1024, height: 1024, steps: 28, cfg: 5.5, samplerName: "euler", scheduler: "normal", denoise: 0.9 },
         },
       ],
@@ -444,6 +452,7 @@ describe("story node output summaries", () => {
         ]),
       },
       readinessLabel: "Warning",
+      parameters: expect.stringContaining("Detailers: FaceDetailer, HandDetailer"),
       sourceRisks: [
         expect.objectContaining({
           detail: expect.stringContaining("standing to kneeling"),

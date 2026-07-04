@@ -39,8 +39,8 @@ vi.mock("@/features/editor/components/ImageGenerationPanel", () => ({
               promptWrapper: { positivePrefix: "ignored", negativePrefix: "ignored" },
               inpaint: { denoise: 0.5, growMaskBy: 4, mode: "fill" },
               outputPrefix: "Ignored",
-              faceDetailer: { enabled: true },
-              handDetailer: { enabled: true },
+              faceDetailer: { enabled: true, detectorModelName: "bbox/custom-face.pt", steps: 18 },
+              handDetailer: { enabled: true, detectorModelName: "bbox/custom-hand.pt", steps: 19 },
               loras: [],
               savedAt: "2026-06-15T00:00:00.000Z",
             })
@@ -687,10 +687,14 @@ describe("StoryPlanningPreview", () => {
     const textarea = container.querySelector("textarea") as HTMLTextAreaElement | null;
     const shotsInput = container.querySelector("#story-target-shot-count") as HTMLInputElement | null;
     const img2imgDenoiseInput = container.querySelector("#story-img2img-denoise") as HTMLInputElement | null;
+    const faceDetailerInput = container.querySelector("#story-face-detailer-enabled") as HTMLInputElement | null;
+    const handDetailerInput = container.querySelector("#story-hand-detailer-enabled") as HTMLInputElement | null;
 
     expect(textarea).not.toBeNull();
     expect(shotsInput).not.toBeNull();
     expect(img2imgDenoiseInput).not.toBeNull();
+    expect(faceDetailerInput?.checked).toBe(false);
+    expect(handDetailerInput?.checked).toBe(false);
     expect(img2imgDenoiseInput?.value).toBe("0.9");
     const baseModelSelect = container.querySelector("select") as HTMLSelectElement | null;
 
@@ -719,11 +723,19 @@ describe("StoryPlanningPreview", () => {
       fetchMock.mock.calls.find(([input]) => input === "/api/agent-timeline/story/run-planning")?.[1]?.body ?? "{}",
     )) as {
       settingsSnapshot?: {
+        detailers?: {
+          faceDetailer?: { enabled?: boolean };
+          handDetailer?: { enabled?: boolean };
+        };
         img2imgDenoise?: number;
         promptProfile?: string;
         resourceCandidates?: unknown;
       };
     };
+    expect(planningBody.settingsSnapshot?.detailers).toMatchObject({
+      faceDetailer: { enabled: false },
+      handDetailer: { enabled: false },
+    });
     expect(planningBody.settingsSnapshot?.img2imgDenoise).toBe(0.72);
     expect(planningBody.settingsSnapshot?.promptProfile).toBe("illustrious");
     expect(planningBody.settingsSnapshot?.resourceCandidates).toBeUndefined();
@@ -731,6 +743,75 @@ describe("StoryPlanningPreview", () => {
     const executionButton = container.querySelector('button[data-node-id="shot-graph-execution"]') as HTMLButtonElement | null;
 
     expect(executionButton?.textContent).toContain("blocked");
+  });
+
+  it("passes Story detailer checkboxes without requiring a checkpoint", async () => {
+    const plannedWorkflow = createPlannedWorkflow("A detective follows a signal through a storm-lit city.");
+    const fetchMock = vi.fn<typeof fetch>(async (url) => {
+      const target = typeof url === "string" ? url : url instanceof Request ? url.url : url.toString();
+
+      if (target === "/api/settings") {
+        return {
+          ok: true,
+          json: async () => ({}),
+        } as Response;
+      }
+
+      if (target === "/api/agent-timeline/story/run-planning") {
+        return {
+          ok: true,
+          json: async () => ({
+            workflow: plannedWorkflow,
+          }),
+        } as Response;
+      }
+
+      throw new Error(`Unexpected fetch ${target}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await act(async () => {
+      root.render(<StoryPlanningPreview />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const textarea = container.querySelector("textarea") as HTMLTextAreaElement | null;
+    const faceDetailerInput = container.querySelector("#story-face-detailer-enabled") as HTMLInputElement | null;
+    const handDetailerInput = container.querySelector("#story-hand-detailer-enabled") as HTMLInputElement | null;
+
+    act(() => {
+      setNativeInputValue(textarea as HTMLTextAreaElement, "A detective follows a signal through a storm-lit city.");
+      faceDetailerInput?.click();
+      handDetailerInput?.click();
+    });
+    await clickButtonAsync("Start planning");
+
+    const planningBody = JSON.parse(String(
+      fetchMock.mock.calls.find(([input]) => input === "/api/agent-timeline/story/run-planning")?.[1]?.body ?? "{}",
+    )) as {
+      settingsSnapshot?: {
+        detailers?: {
+          faceDetailer?: { detectorModelName?: string; enabled?: boolean; steps?: number };
+          handDetailer?: { detectorModelName?: string; enabled?: boolean; steps?: number };
+        };
+        stylePalette?: unknown;
+      };
+    };
+
+    expect(planningBody.settingsSnapshot?.stylePalette).toBeUndefined();
+    expect(planningBody.settingsSnapshot?.detailers).toMatchObject({
+      faceDetailer: {
+        enabled: true,
+        detectorModelName: "bbox/face_yolov8m.pt",
+        steps: 30,
+      },
+      handDetailer: {
+        enabled: true,
+        detectorModelName: "bbox/hand_yolov8s.pt",
+        steps: 30,
+      },
+    });
   });
 
   it("passes selected Story style resources in the planning request", async () => {
@@ -807,6 +888,10 @@ describe("StoryPlanningPreview", () => {
       fetchMock.mock.calls.find(([input]) => input === "/api/agent-timeline/story/run-planning")?.[1]?.body ?? "{}",
     )) as {
       settingsSnapshot?: {
+        detailers?: {
+          faceDetailer?: { detectorModelName?: string; enabled?: boolean; steps?: number };
+          handDetailer?: { detectorModelName?: string; enabled?: boolean; steps?: number };
+        };
         stylePalette?: {
           checkpointId?: string;
           loras?: Array<{ id: string; enabled: boolean }>;
@@ -998,6 +1083,10 @@ describe("StoryPlanningPreview", () => {
       fetchMock.mock.calls.find(([input]) => input === "/api/agent-timeline/story/run-planning")?.[1]?.body ?? "{}",
     )) as {
       settingsSnapshot?: {
+        detailers?: {
+          faceDetailer?: { detectorModelName?: string; enabled?: boolean; steps?: number };
+          handDetailer?: { detectorModelName?: string; enabled?: boolean; steps?: number };
+        };
         stylePalette?: {
           checkpointId?: string;
           loras?: Array<{ id: string; enabled: boolean }>;
@@ -1015,6 +1104,18 @@ describe("StoryPlanningPreview", () => {
       };
     };
 
+    expect(planningBody.settingsSnapshot?.detailers).toMatchObject({
+      faceDetailer: {
+        enabled: false,
+        detectorModelName: "bbox/custom-face.pt",
+        steps: 18,
+      },
+      handDetailer: {
+        enabled: false,
+        detectorModelName: "bbox/custom-hand.pt",
+        steps: 19,
+      },
+    });
     expect(planningBody.settingsSnapshot?.stylePalette).toEqual({
       checkpointId: "checkpoint-local",
       loras: [],
