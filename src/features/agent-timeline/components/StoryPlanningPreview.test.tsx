@@ -710,6 +710,10 @@ describe("StoryPlanningPreview", () => {
       setNativeInputValue(shotsInput as HTMLInputElement, "4");
       setNativeInputValue(img2imgDenoiseInput as HTMLInputElement, "0.72");
     });
+    const startPlanningButton = Array.from(container.querySelectorAll("button")).find(
+      (button) => button.textContent?.replace(/\s+/g, " ").trim() === "Start planning",
+    );
+    expect(startPlanningButton?.parentElement?.className).toContain("sticky");
     await clickButtonAsync("Start planning");
 
     expect(container.textContent).toContain("User-started planning workflow");

@@ -1159,7 +1159,7 @@ function StartPanel({
   }
 
   return (
-    <section className="mx-auto flex min-h-[calc(100vh-8rem)] w-full max-w-4xl items-center px-4 py-8">
+    <section className="mx-auto flex min-h-[calc(100vh-8rem)] w-full max-w-4xl items-start px-4 py-8">
       <form className="grid w-full gap-4 rounded-md border border-slate-200 bg-white p-4 shadow-sm" onSubmit={handleSubmit}>
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
@@ -1295,7 +1295,7 @@ function StartPanel({
 
         {error ? <div className="rounded-md border border-rose-200 bg-rose-50 p-3 text-xs text-rose-700">{error}</div> : null}
 
-        <div className="flex justify-end">
+        <div className="sticky bottom-0 z-10 -mx-4 -mb-4 flex justify-end border-t border-slate-100 bg-white/95 px-4 py-3 backdrop-blur">
           <button
             className="inline-flex h-9 items-center justify-center gap-2 rounded-md bg-slate-950 px-4 text-xs font-semibold text-white transition-colors hover:bg-slate-800"
             type="submit"
