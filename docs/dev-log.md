@@ -2,6 +2,28 @@
 
 This log records dated implementation and documentation work. Keep entries concise and evidence-oriented.
 
+## 2026-07-04
+
+### Local Plan Story/Timeline Prompt Profile Cleanup
+
+Summary:
+
+- Removed Generic from the shared Agent Timeline/Story prompt profile set, keeping Illustrious and Anima with Illustrious as the default while preserving the legacy editor `PromptModelFormat` generic path.
+- Tightened Civitai resource and AI-recommendation prompt-profile validation so non-empty invalid values, including `generic`, return 400 instead of falling back.
+- Added safe persistence/UI restore fallbacks so old invalid Timeline/Story profile values do not crash saved workflow restore or visual scene prompt editing.
+- Made Timeline resource filtering strictly profile-compatible for Illustrious and Anima and removed SDXL/generic final-prompt fallback expectations from Timeline prompt assembly.
+- Added profile-specific Story render-plan normalization and prompt compilation: Anima keeps `animaPromptParts`, while Illustrious uses `illustriousSections` and the existing Illustrious renderer.
+- Updated Story Visual summaries and generation-gate previews to show the active profile and use neutral "Prompt sections" wording.
+
+Validation:
+
+- `npm test -- --run src/features/agent-timeline/t5-node-adapters.test.ts` passed with 1 file and 8 tests.
+- `npm test -- --run src/shared/prompt-profile.test.ts src/app/api/civitai-lora-library/resources/route.test.ts src/app/api/civitai-lora-library/ai-recommendation/route.test.ts src/features/agent-timeline/t5-node-adapters.test.ts src/features/agent-timeline/t7-node-adapters.test.ts src/features/agent-timeline/story-input.test.ts src/features/agent-timeline/story-llm-adapters.test.ts src/features/agent-timeline/story-planning.test.ts src/features/agent-timeline/timeline-workflow-persistence.test.ts src/features/agent-timeline/components/TimelineShell.test.tsx src/features/agent-timeline/components/StoryPlanningPreview.test.tsx src/features/agent-timeline/components/StoryNodeOutputSummaryView.test.tsx` passed with 12 files and 199 tests.
+- `npm test` passed with 122 files and 971 tests.
+- `npm run typecheck` passed.
+- `npm run lint` passed with 23 existing warnings.
+- `git diff --check` passed with line-ending warnings only.
+
 ## 2026-06-29
 
 ### Issue #98 Story Selected Resource Loader Coverage

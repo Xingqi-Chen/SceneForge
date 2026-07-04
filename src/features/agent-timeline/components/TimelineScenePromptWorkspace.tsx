@@ -5,7 +5,13 @@ import { CheckCircle2, TableProperties } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import type { ScenePromptTimelineResult, TimelineNodeResult } from "@/features/agent-timeline";
-import { formatPromptProfileLabel, normalizePromptProfileId, type PromptProfileId } from "@/shared/prompt-profile";
+import {
+  coercePromptProfileId,
+  defaultPromptProfileId,
+  formatPromptProfileLabel,
+  isPromptProfileId,
+  type PromptProfileId,
+} from "@/shared/prompt-profile";
 
 type TimelineScenePromptWorkspaceProps = {
   editable: boolean;
@@ -89,6 +95,10 @@ function createMinimalScenePromptResult(value: string, promptProfile: PromptProf
   };
 }
 
+function getSafeScenePromptProfile(value: unknown, fallback: PromptProfileId) {
+  return coercePromptProfileId(value, isPromptProfileId(fallback) ? fallback : defaultPromptProfileId);
+}
+
 function linesToList(value: string) {
   return value
     .split(/\r?\n/)
@@ -127,13 +137,14 @@ function createDraftFromResult(result: ScenePromptTimelineResult | null): SceneP
 function createResultFromDraft(
   draft: ScenePromptDraft,
   previousResult: ScenePromptTimelineResult | null,
+  fallbackPromptProfile: PromptProfileId,
 ): ScenePromptTimelineResult {
   const positivePrompt = draft.positivePrompt.trim() || draft.sceneIntent.trim();
   const sceneIntent = draft.sceneIntent.trim() || positivePrompt;
   const primaryCharacterIdentity = draft.primaryCharacterIdentity.trim() || positivePrompt;
 
   return {
-    promptProfile: normalizePromptProfileId(previousResult?.promptProfile),
+    promptProfile: getSafeScenePromptProfile(previousResult?.promptProfile, fallbackPromptProfile),
     primaryCharacter: {
       name: draft.primaryCharacterName.trim() || "Primary character",
       identity: primaryCharacterIdentity,
@@ -197,7 +208,8 @@ export function TimelineScenePromptWorkspace({
     [node.result, promptProfile],
   );
   const [draft, setDraft] = useState(() => createDraftFromResult(scenePrompt));
-  const saveDisabled = !editable || !createResultFromDraft(draft, scenePrompt).positivePrompt.trim();
+  const safePromptProfile = getSafeScenePromptProfile(scenePrompt?.promptProfile, promptProfile);
+  const saveDisabled = !editable || !createResultFromDraft(draft, scenePrompt, promptProfile).positivePrompt.trim();
 
   function updateDraft<Key extends keyof ScenePromptDraft>(key: Key, value: ScenePromptDraft[Key]) {
     setDraft((current) => ({
@@ -224,7 +236,7 @@ export function TimelineScenePromptWorkspace({
           <Button
             className="h-8 px-2.5 text-xs shadow-none"
             disabled={saveDisabled}
-            onClick={() => onSave(createResultFromDraft(draft, scenePrompt))}
+            onClick={() => onSave(createResultFromDraft(draft, scenePrompt, promptProfile))}
             type="button"
           >
             <CheckCircle2 className="size-3.5" />
@@ -246,7 +258,7 @@ export function TimelineScenePromptWorkspace({
               </th>
               <td className="px-3 py-3">
                 <div className="h-9 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
-                  {formatPromptProfileLabel(normalizePromptProfileId(scenePrompt?.promptProfile))}
+                  {formatPromptProfileLabel(safePromptProfile)}
                 </div>
               </td>
             </tr>

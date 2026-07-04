@@ -242,6 +242,7 @@ describe("story input workflow start", () => {
       storyId: "story-resources",
       now,
       settingsSnapshot: {
+        promptProfile: "anima",
         resourceCandidates,
       },
     });
@@ -425,6 +426,7 @@ describe("story input workflow start", () => {
       storyId: "story-anima-resources",
       now,
       settingsSnapshot: {
+        promptProfile: "anima",
         resourceCandidates,
       },
     });
@@ -454,6 +456,43 @@ describe("story input workflow start", () => {
       },
     });
     expect(artifacts.renderPlan.shots[0]?.outputAnchors.subject.length).toBeGreaterThan(0);
+  });
+
+  it("coerces old generic Story settings to Illustrious for local planning artifacts", () => {
+    const resourceCandidates = {
+      checkpoints: [
+        {
+          id: "illustrious-checkpoint",
+          name: "Illustrious Checkpoint",
+          baseModel: "Illustrious",
+          modelBaseModel: "Illustrious",
+          modelFileName: "illustrious.safetensors",
+        },
+      ],
+      loras: [],
+    };
+    const input = createStoryInputFromStartRequest({
+      rawIntent: "A one-shot neon market courier scene.",
+      targetShotCount: 1,
+      storyId: "story-old-generic-profile",
+      now,
+      settingsSnapshot: {
+        promptProfile: "generic" as never,
+        resourceCandidates,
+      },
+    });
+    const artifacts = createStoryPlanningArtifacts(input, now(), resourceCandidates);
+    const shot = artifacts.renderPlan.shots[0];
+    const preview = artifacts.generationGate.requestPreview[0];
+
+    expect(artifacts.renderPlan.promptProfile).toBe("illustrious");
+    expect(artifacts.generationGate.promptProfile).toBe("illustrious");
+    expect(shot?.promptProfile).toBe("illustrious");
+    expect(shot?.illustriousSections).toBeDefined();
+    expect(shot?.animaPromptParts).toBeUndefined();
+    expect(preview?.promptProfile).toBe("illustrious");
+    expect(preview?.illustriousSections).toBeDefined();
+    expect(preview?.animaPromptParts).toBeUndefined();
   });
 
   it("keeps local Story planning dimensions neutral for aspect keywords", () => {

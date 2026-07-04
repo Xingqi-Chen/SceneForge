@@ -22,7 +22,12 @@ import {
 } from "@/features/prompt-engine/prompt-library/character-image-prompt-tags";
 import type { PromptTagCategory, SceneObject3DTransform } from "@/shared/types";
 import type { StickFigurePoseV1 } from "@/shared/types/stick-figure-pose";
-import { formatPromptProfileLabel, normalizePromptProfileId, type PromptProfileId } from "@/shared/prompt-profile";
+import {
+  coercePromptProfileId,
+  formatPromptProfileLabel,
+  normalizePromptProfileId,
+  type PromptProfileId,
+} from "@/shared/prompt-profile";
 
 import { createLlmTimelineNodeAdapter, type TimelineCompleteChat } from "./llm-adapter";
 import { createTimelineNodeError } from "./state";
@@ -183,6 +188,7 @@ function normalizeProfileSections<SectionMap>(
 export function normalizeScenePromptTimelineResult(
   raw: unknown,
   fallbackPromptProfile?: PromptProfileId,
+  options: { strictPromptProfile?: boolean } = {},
 ): ScenePromptTimelineResult {
   const parsed = typeof raw === "string" ? parseJsonObjectFromText(raw) : raw;
 
@@ -212,7 +218,10 @@ export function normalizeScenePromptTimelineResult(
   const sceneIntent = compactText(parsed.sceneIntent ?? parsed.scene_intent ?? parsed.globalSceneIntent, 800);
   const styleTone = compactText(parsed.styleTone ?? parsed.style_tone ?? parsed.tone, 400);
   const setting = compactText(parsed.setting ?? parsed.location, 400);
-  const promptProfile = normalizePromptProfileId(parsed.promptProfile ?? parsed.prompt_profile ?? fallbackPromptProfile);
+  const rawPromptProfile = parsed.promptProfile ?? parsed.prompt_profile;
+  const promptProfile = options.strictPromptProfile === false
+    ? coercePromptProfileId(rawPromptProfile, coercePromptProfileId(fallbackPromptProfile))
+    : normalizePromptProfileId(rawPromptProfile ?? fallbackPromptProfile);
   const illustriousSections = normalizeProfileSections<IllustriousPromptSections>(
     parsed.illustriousSections ?? parsed.illustrious_sections ?? parsed.sections,
     parseIllustriousPromptSectionsFromResponse,
@@ -358,7 +367,7 @@ function getSceneInput(workflow: TimelineNodeExecutionContext["workflow"]) {
   if (isRecord(result) && typeof result.rawIntent === "string") {
     return {
       ...result,
-      promptProfile: normalizePromptProfileId(result.promptProfile),
+      promptProfile: coercePromptProfileId(result.promptProfile),
     } as SceneInputTimelineResult;
   }
 
@@ -403,7 +412,7 @@ function getScenePromptResult(workflow: TimelineNodeExecutionContext["workflow"]
   }
 
   try {
-    return normalizeScenePromptTimelineResult(result, promptProfile);
+    return normalizeScenePromptTimelineResult(result, promptProfile, { strictPromptProfile: false });
   } catch (error) {
     if (error instanceof TimelineNodeExecutionError) {
       invalidTimelineInput("Scene prompt dependency is not usable for downstream execution.", {
@@ -494,7 +503,7 @@ function buildScenePromptRequest(context: TimelineNodeExecutionContext): LlmChat
           "Do not choose checkpoints, LoRAs, render parameters, file paths, or external resources.",
           `Selected prompt profile: ${formatPromptProfileLabel(sceneInput.promptProfile)} (${sceneInput.promptProfile}).`,
           profileInstructions,
-          'Required shape: {"promptProfile":"illustrious|anima|generic","primaryCharacter":{"name":"...","identity":"...","publicFacts":["..."]},"sceneIntent":"...","styleTone":"...","setting":"...","sharedFacts":["..."],"positivePrompt":"...","negativeSuggestions":["..."],"style":[{"label":"...","prompt":"..."}],"camera":[{"label":"...","prompt":"..."}],"lighting":[{"label":"...","prompt":"..."}],"illustriousSections"?:{},"animaSections"?:{}}',
+          'Required shape: {"promptProfile":"illustrious|anima","primaryCharacter":{"name":"...","identity":"...","publicFacts":["..."]},"sceneIntent":"...","styleTone":"...","setting":"...","sharedFacts":["..."],"positivePrompt":"...","negativeSuggestions":["..."],"style":[{"label":"...","prompt":"..."}],"camera":[{"label":"...","prompt":"..."}],"lighting":[{"label":"...","prompt":"..."}],"illustriousSections"?:{},"animaSections"?:{}}',
         ].join("\n"),
       },
       {
@@ -537,11 +546,7 @@ function buildPromptProfileSceneInstructions(promptProfile: PromptProfileId) {
     ].join("\n");
   }
 
-  return [
-    "Use generic Stable Diffusion prompt behavior.",
-    "For this scene context response, set promptProfile to generic.",
-    "Make positivePrompt a concise comma-separated visual prompt without Illustrious quality/aesthetic defaults or Anima score defaults.",
-  ].join("\n");
+  return "";
 }
 
 function buildCharacterTagSourceText(scenePrompt: ScenePromptTimelineResult) {

@@ -650,4 +650,22 @@ describe("Civitai AI recommendation route", () => {
     );
     expect(request.messages[0].content).toContain("No prompt/base-model profile was provided");
   });
+
+  it.each(["generic", "pony"])("rejects invalid non-empty prompt profile %s", async (promptProfile) => {
+    const response = await POST(
+      new Request("http://localhost/api/civitai-lora-library/ai-recommendation", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          desiredEffect: "rainy anime courier",
+          promptProfile,
+        }),
+      }),
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(payload.error.message).toBe("Invalid promptProfile.");
+    expect(mockCompleteChat).not.toHaveBeenCalled();
+  });
 });

@@ -58,6 +58,7 @@ import {
 import type { SelectedCivitaiResourcesPreview } from "@/features/civitai-lora-library";
 import type { SavedComfyUiGenerationParams } from "@/shared/types";
 import {
+  coercePromptProfileId,
   defaultPromptProfileId,
   formatPromptProfileLabel,
   normalizePromptProfileId,
@@ -535,7 +536,7 @@ function getStoryWorkflowPromptProfile(workflow: StoryWorkflowState): PromptProf
   const input = workflow.nodes["story-input"].result;
   const settingsSnapshot = isRecord(input) ? input.settingsSnapshot : undefined;
 
-  return normalizePromptProfileId(
+  return coercePromptProfileId(
     isRecord(settingsSnapshot) && typeof settingsSnapshot.promptProfile === "string"
       ? settingsSnapshot.promptProfile
       : undefined,

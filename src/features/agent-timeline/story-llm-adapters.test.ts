@@ -1899,6 +1899,7 @@ describe("story LLM adapters", () => {
       },
       input,
       shots,
+      "anima",
     );
 
     expect(plan).toMatchObject({
@@ -1939,6 +1940,7 @@ describe("story LLM adapters", () => {
       },
       input,
       shots,
+      "anima",
     );
 
     expect(plan.shots[0]).toMatchObject({
@@ -1952,7 +1954,91 @@ describe("story LLM adapters", () => {
     });
   });
 
+  it("normalizes structured Illustrious render sections from LLM output", () => {
+    const plan = normalizeStoryRenderPromptPlan(
+      {
+        shots: [
+          {
+            shotId: "shot-1",
+            illustriousSections: {
+              subjectIdentity: ["solo courier"],
+              poseActionExpression: ["holding red signal card"],
+              backgroundEnvironmentObjects: ["wet neon market aisle"],
+              cameraFraming: ["close view"],
+            },
+            negativeAdditions: ["cropped signal"],
+          },
+        ],
+        warnings: ["Structured Illustrious sections returned."],
+      },
+      input,
+      shots,
+      "illustrious",
+    );
+
+    expect(plan).toMatchObject({
+      promptProfile: "illustrious",
+      storyId: "story-1",
+      warnings: ["Structured Illustrious sections returned."],
+      shots: [
+        {
+          shotId: "shot-1",
+          illustriousSections: {
+            subjectIdentity: ["solo courier"],
+            poseActionExpression: ["holding red signal card"],
+            backgroundEnvironmentObjects: ["wet neon market aisle"],
+            cameraFraming: ["close view"],
+          },
+          negativeAdditions: ["cropped signal"],
+        },
+      ],
+    });
+    expect(plan.shots[0]).not.toHaveProperty("animaPromptParts");
+  });
+
+  it("coerces old generic Story prompt settings while normalizing render prompts", () => {
+    const legacyInput = {
+      ...input,
+      settingsSnapshot: {
+        ...input.settingsSnapshot,
+        promptProfile: "generic" as never,
+      },
+    };
+    const plan = normalizeStoryRenderPromptPlan(
+      {
+        shots: [
+          {
+            shotId: "shot-1",
+            illustriousSections: {
+              subjectIdentity: ["solo courier"],
+              poseActionExpression: ["holding red signal card"],
+            },
+          },
+        ],
+      },
+      legacyInput,
+      shots,
+    );
+
+    expect(plan.promptProfile).toBe("illustrious");
+    expect(plan.shots[0]).toMatchObject({
+      shotId: "shot-1",
+      illustriousSections: {
+        subjectIdentity: ["solo courier"],
+        poseActionExpression: ["holding red signal card"],
+      },
+    });
+    expect(plan.shots[0]).not.toHaveProperty("animaPromptParts");
+  });
+
   it("asks the LLM for structured Anima prompt parts before assembling render plans", async () => {
+    const animaInput = {
+      ...input,
+      settingsSnapshot: {
+        ...input.settingsSnapshot,
+        promptProfile: "anima",
+      },
+    };
     const workflow = createStoryWorkflowState({ storyId: "story-1", workflowId: "workflow-render-prompt" });
     const updatedAt = workflow.updatedAt;
     const resourcePlan = normalizeStoryResourcePlan(
@@ -1963,7 +2049,7 @@ describe("story LLM adapters", () => {
         overallEffect: "Neon continuity.",
         warnings: [],
       },
-      input,
+      animaInput,
     );
     let requestSystemPrompt = "";
     let requestPayload: unknown;
@@ -2012,7 +2098,7 @@ describe("story LLM adapters", () => {
 
     workflow.nodes["story-input"] = {
       nodeId: "story-input",
-      result: input,
+      result: animaInput,
       source: "manual",
       status: "manual",
       updatedAt,
@@ -2026,7 +2112,7 @@ describe("story LLM adapters", () => {
           characters: [{ id: "courier", name: "Courier", description: "A courier in a reflective yellow jacket." }],
           locations: [{ id: "market", name: "Market", description: "A wet neon market." }],
         },
-        input,
+        animaInput,
       ),
       source: "ai",
       status: "done",

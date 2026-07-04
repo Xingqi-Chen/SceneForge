@@ -97,7 +97,7 @@ describe("StoryNodeOutputSummaryView", () => {
     expect(container.textContent).toContain("source-image from shot-1");
     expect(container.textContent).toContain("1024x1024");
     expect(container.textContent).toContain("Local Checkpoint");
-    expect(container.textContent).toContain("Anima prompt parts");
+    expect(container.textContent).toContain("Prompt sections");
     expect(container.textContent).toContain("Subject");
     expect(container.textContent).toContain("1man, solo");
     expect(container.textContent).toContain("Series");

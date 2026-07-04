@@ -6,7 +6,7 @@ import type { LlmChatRequest, LlmChatResponse } from "@/features/llm";
 
 import { bindPrimaryTimelineCharacterToEditorStore } from "./editor-canvas-binding";
 import { executeTimelineGraph } from "./graph";
-import { createTimelineWorkflowState } from "./state";
+import { completeTimelineNode, createTimelineWorkflowState } from "./state";
 import {
   createTimelineT5NodeAdapters,
   normalizeCharacterTagsTimelineResult,
@@ -102,6 +102,23 @@ describe("T5 timeline node adapters", () => {
         },
       ],
     });
+
+    expect(() =>
+      normalizeScenePromptTimelineResult({
+        positivePrompt: "legacy prompt",
+        promptProfile: "generic" as never,
+      }),
+    ).toThrow("Invalid promptProfile");
+    expect(
+      normalizeScenePromptTimelineResult(
+        {
+          positivePrompt: "legacy prompt",
+          promptProfile: "generic" as never,
+        },
+        "illustrious",
+        { strictPromptProfile: false },
+      ).promptProfile,
+    ).toBe("illustrious");
   });
 
   it("defaults scene input to Illustrious and builds profile-specific scene prompt instructions", async () => {
@@ -141,6 +158,8 @@ describe("T5 timeline node adapters", () => {
     expect(requests).toHaveLength(1);
     expect(String(requests[0]?.messages[0]?.content)).toContain("Selected prompt profile: Illustrious (illustrious)");
     expect(String(requests[0]?.messages[0]?.content)).toContain("include illustriousSections");
+    expect(String(requests[0]?.messages[0]?.content)).toContain('"promptProfile":"illustrious|anima"');
+    expect(String(requests[0]?.messages[0]?.content)).not.toContain("generic");
     expect(JSON.parse(String(requests[0]?.messages[1]?.content))).toMatchObject({
       promptProfile: "illustrious",
       sceneRequest: "A pilot in a glass greenhouse",
@@ -151,6 +170,125 @@ describe("T5 timeline node adapters", () => {
         illustriousSections: {
           subjectIdentity: ["solo pilot"],
         },
+      },
+    });
+  });
+
+  it("coerces old generic scene input when building T5 scene prompt instructions", async () => {
+    const requests: LlmChatRequest[] = [];
+    const workflow = createTimelineWorkflowState({
+      workflowId: "legacy-generic-scene-input",
+      sceneRequest: "A pilot in a glass greenhouse",
+      now: () => "2026-05-29T00:00:00.000Z",
+    });
+    workflow.nodes["scene-input"] = {
+      ...workflow.nodes["scene-input"],
+      result: {
+        ...(workflow.nodes["scene-input"].result as Record<string, unknown>),
+        promptProfile: "generic" as never,
+      },
+    };
+    const adapter = createTimelineT5NodeAdapters({
+      completeChat: async (request) => {
+        requests.push(request);
+        return {
+          role: "assistant",
+          content: JSON.stringify({
+            positivePrompt: "solo pilot, glass greenhouse",
+            illustriousSections: {
+              subjectIdentity: ["solo pilot"],
+            },
+          }),
+        };
+      },
+    })["scene-prompt"];
+
+    const result = await adapter?.({
+      dependencies: [workflow.nodes["scene-input"]],
+      nodeId: "scene-prompt",
+      workflow,
+    });
+
+    expect(requests).toHaveLength(1);
+    expect(String(requests[0]?.messages[0]?.content)).toContain("Selected prompt profile: Illustrious (illustrious)");
+    expect(String(requests[0]?.messages[0]?.content)).not.toContain("generic");
+    expect(JSON.parse(String(requests[0]?.messages[1]?.content))).toMatchObject({
+      promptProfile: "illustrious",
+    });
+    expect(result).toMatchObject({
+      value: {
+        promptProfile: "illustrious",
+      },
+    });
+  });
+
+  it("coerces old generic scene prompt dependencies for downstream T5 nodes", async () => {
+    const requests: LlmChatRequest[] = [];
+    let workflow = createTimelineWorkflowState({
+      workflowId: "legacy-generic-scene-prompt",
+      sceneRequest: "A pilot in a glass greenhouse",
+      now: () => "2026-05-29T00:00:00.000Z",
+    });
+    workflow = completeTimelineNode(
+      workflow,
+      "scene-prompt",
+      {
+        promptProfile: "generic" as never,
+        primaryCharacter: {
+          name: "Pilot",
+          identity: "solo pilot in a glass greenhouse",
+          publicFacts: ["solo pilot"],
+        },
+        sceneIntent: "Pilot studies seedlings in a glass greenhouse",
+        styleTone: "cinematic anime",
+        setting: "glass greenhouse",
+        sharedFacts: ["seedlings"],
+        positivePrompt: "solo pilot, glass greenhouse, seedlings",
+        negativeSuggestions: [],
+        style: [],
+        camera: [],
+        lighting: [],
+      },
+      "ai",
+      { now: () => "2026-05-29T00:00:01.000Z" },
+    );
+    const adapter = createTimelineT5NodeAdapters({
+      completeChat: async (request) => {
+        requests.push(request);
+        return {
+          role: "assistant",
+          content: JSON.stringify({
+            items: [
+              {
+                targetKind: "character",
+                label: "Pilot",
+                prompt: "solo pilot protagonist",
+                category: "character",
+                subcategory: "character-subject",
+              },
+            ],
+          }),
+        };
+      },
+    })["character-tags"];
+
+    const result = await adapter?.({
+      dependencies: [workflow.nodes["scene-prompt"]],
+      nodeId: "character-tags",
+      workflow,
+    });
+
+    expect(requests).toHaveLength(1);
+    expect(String(requests[0]?.messages[1]?.content)).toContain("Primary character identity: solo pilot in a glass greenhouse");
+    expect(result).toMatchObject({
+      value: {
+        items: [
+          {
+            targetKind: "character",
+            label: "Pilot",
+            prompt: "solo pilot protagonist",
+          },
+        ],
       },
     });
   });

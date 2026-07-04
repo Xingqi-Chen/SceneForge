@@ -54,10 +54,27 @@ function filterResourcesForPromptProfile(items: CivitaiResourceListItem[], promp
   return items.filter((item) => isCivitaiBaseModelCompatibleWithPromptProfile(item.baseModel, promptProfile));
 }
 
+function normalizePromptProfileParam(value: string | null): PromptProfileId | null {
+  if (!value) {
+    return null;
+  }
+
+  if (!isPromptProfileId(value)) {
+    throw new Error(`Invalid promptProfile "${value}".`);
+  }
+
+  return value;
+}
+
 export async function GET(request: Request) {
   const params = new URL(request.url).searchParams;
   const resourceType = params.get("resourceType");
-  const promptProfile = params.get("promptProfile");
+  let promptProfile: PromptProfileId | null;
+  try {
+    promptProfile = normalizePromptProfileParam(params.get("promptProfile"));
+  } catch (error) {
+    return errorResponse(error instanceof Error ? error.message : "Invalid promptProfile.", 400);
+  }
   const filters: CivitaiResourceListFilters = {
     resourceType: resourceType === "model" ? "model" : "lora",
     category: (params.get("category") ?? "all") as CivitaiResourceListFilters["category"],
@@ -72,7 +89,7 @@ export async function GET(request: Request) {
   try {
     const items = filterResourcesForPromptProfile(
       listCivitaiResourcesFromSqlite(db, filters),
-      isPromptProfileId(promptProfile) ? promptProfile : null,
+      promptProfile,
     );
     return NextResponse.json({
       items: downloaded === "ready" ? await filterDownloadedResources(db, items) : items,

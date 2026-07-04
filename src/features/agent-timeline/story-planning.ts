@@ -11,8 +11,16 @@ import {
   resolveComfyUiGenerationSettings,
 } from "@/features/editor/ai-prompt/comfyui-generation-params";
 import {
+  classifyFlatPromptToIllustriousSections,
+  parseIllustriousPromptSectionsFromResponse,
+  renderIllustriousPrompt,
   splitPromptParts,
+  type IllustriousPromptSections,
 } from "@/features/editor/ai-prompt/illustrious-prompt";
+import {
+  normalizePromptProfileId,
+  type PromptProfileId,
+} from "@/shared/prompt-profile";
 import type { CivitaiAiPromptResult } from "@/features/editor/ai-prompt/civitai-ai-context";
 import {
   validateLocalResourcePlan,
@@ -139,10 +147,12 @@ export type StoryRenderPlanResourceRefs = {
 };
 
 export type StoryGenerationRequestPreview = {
-  animaPromptParts: StoryAnimaPromptParts;
+  animaPromptParts?: StoryAnimaPromptParts;
+  illustriousSections?: IllustriousPromptSections;
   negativePromptLength: number;
   negativePromptPreview: string;
   parameters: StoryGenerationParameters;
+  promptProfile: PromptProfileId;
   positivePromptLength: number;
   positivePromptPreview: string;
   sourceImageEdges: StorySourceImageEdgeSummary[];
@@ -170,12 +180,15 @@ export type StoryAnimaPromptParts = {
 
 export type StoryRenderPromptDraftShot = {
   shotId: StoryShotId;
-  animaPromptParts: StoryAnimaPromptParts;
+  animaPromptParts?: StoryAnimaPromptParts;
+  illustriousSections?: IllustriousPromptSections;
+  negativeAdditions?: string[];
   rationale?: string;
   warnings?: string[];
 };
 
 export type StoryRenderPromptPlan = {
+  promptProfile: PromptProfileId;
   storyId: string;
   shots: StoryRenderPromptDraftShot[];
   warnings: string[];
@@ -185,7 +198,9 @@ export type StoryRenderPlanShot = {
   shotId: StoryShotId;
   order: number;
   title: string;
-  animaPromptParts: StoryAnimaPromptParts;
+  promptProfile: PromptProfileId;
+  animaPromptParts?: StoryAnimaPromptParts;
+  illustriousSections?: IllustriousPromptSections;
   positivePrompt: string;
   negativePrompt: string;
   outputAnchors: StoryOutputAnchors;
@@ -209,6 +224,7 @@ export type StoryRenderPlan = {
   img2imgDenoise: number;
   nsfwContext: StoryNsfwContext;
   resourceRefs: StoryRenderPlanResourceRefs;
+  promptProfile: PromptProfileId;
   shots: StoryRenderPlanShot[];
   preview: {
     options: StoryPreviewExecutionOptions;
@@ -729,6 +745,35 @@ export function compileStoryAnimaPrompt(parts: StoryAnimaPromptParts): string {
   ].filter(Boolean).join(", ");
 }
 
+export function normalizeStoryIllustriousSections(raw: unknown): IllustriousPromptSections {
+  if (typeof raw === "string") {
+    return parseIllustriousPromptSectionsFromResponse(raw) ?? classifyFlatPromptToIllustriousSections(raw);
+  }
+
+  if (typeof raw === "object" && raw !== null && !Array.isArray(raw)) {
+    return parseIllustriousPromptSectionsFromResponse(JSON.stringify(raw)) ?? {};
+  }
+
+  return {};
+}
+
+function cloneStoryIllustriousSections(sections: IllustriousPromptSections): IllustriousPromptSections {
+  return Object.fromEntries(
+    Object.entries(sections).map(([key, value]) => [
+      key,
+      Array.isArray(value) ? [...value] : value,
+    ]),
+  ) as IllustriousPromptSections;
+}
+
+function hasStoryIllustriousSectionContent(sections: IllustriousPromptSections) {
+  return Object.values(sections).some((value) =>
+    Array.isArray(value)
+      ? value.flatMap(splitPromptParts).length > 0
+      : splitPromptParts(value ?? "").length > 0,
+  );
+}
+
 function dedupeStoryPromptParts(parts: string[]) {
   const seen = new Set<string>();
 
@@ -749,9 +794,14 @@ function getStoryRenderPromptDraft(shotId: StoryShotId, renderPromptPlan?: Story
     return undefined;
   }
 
+  const promptProfile = normalizePromptProfileId(renderPromptPlan?.promptProfile);
+
   return {
     ...draft,
-    animaPromptParts: normalizeStoryAnimaPromptParts(draft.animaPromptParts),
+    ...(promptProfile === "anima"
+      ? { animaPromptParts: normalizeStoryAnimaPromptParts(draft.animaPromptParts) }
+      : { illustriousSections: normalizeStoryIllustriousSections(draft.illustriousSections) }),
+    negativeAdditions: [...(draft.negativeAdditions ?? [])],
     warnings: draft.warnings ? [...draft.warnings] : undefined,
   };
 }
@@ -774,7 +824,10 @@ function mergeStoryNegativePrompts(...values: string[]) {
 }
 
 function getStoryRenderPromptDraftNegativeParts(renderPromptDraft?: StoryRenderPromptDraftShot) {
-  return renderPromptDraft?.animaPromptParts.negativeAdditions ?? [];
+  return [
+    ...(renderPromptDraft?.animaPromptParts?.negativeAdditions ?? []),
+    ...(renderPromptDraft?.negativeAdditions ?? []),
+  ];
 }
 
 function createFallbackStoryAnimaPromptParts(shot: StoryShot): StoryAnimaPromptParts {
@@ -793,13 +846,51 @@ function getStoryAnimaPromptPartsForShot(
   shot: StoryShot,
   renderPromptDraft?: StoryRenderPromptDraftShot,
 ): StoryAnimaPromptParts {
-  return renderPromptDraft
+  return renderPromptDraft?.animaPromptParts
     ? normalizeStoryAnimaPromptParts(renderPromptDraft.animaPromptParts)
     : createFallbackStoryAnimaPromptParts(shot);
 }
 
-function getBasePositivePrompt(parts: StoryAnimaPromptParts) {
-  return compileStoryAnimaPrompt(parts);
+function createFallbackStoryIllustriousSections(shot: StoryShot): IllustriousPromptSections {
+  return normalizeStoryIllustriousSections({
+    subjectIdentity: [inferStoryAnimaSubjectCount(shot).join(", "), ...shot.characterIds],
+    poseActionExpression: [shot.promptIntent],
+    backgroundEnvironmentObjects: shot.continuityNotes,
+    cameraFraming: [shot.camera],
+    detailResolution: [shot.description],
+  });
+}
+
+function getStoryIllustriousSectionsForShot(
+  shot: StoryShot,
+  renderPromptDraft?: StoryRenderPromptDraftShot,
+): IllustriousPromptSections {
+  const sections = normalizeStoryIllustriousSections(renderPromptDraft?.illustriousSections);
+
+  return hasStoryIllustriousSectionContent(sections)
+    ? sections
+    : createFallbackStoryIllustriousSections(shot);
+}
+
+function getBasePositivePrompt({
+  animaPromptParts,
+  illustriousSections,
+  promptProfile,
+  resourcePlan,
+}: {
+  animaPromptParts?: StoryAnimaPromptParts;
+  illustriousSections?: IllustriousPromptSections;
+  promptProfile: PromptProfileId;
+  resourcePlan: StoryResourcePlan;
+}) {
+  if (promptProfile === "anima") {
+    return compileStoryAnimaPrompt(animaPromptParts ?? createEmptyStoryAnimaPromptParts());
+  }
+
+  return renderIllustriousPrompt({
+    resources: getSelectedResources(resourcePlan),
+    sections: illustriousSections ?? {},
+  });
 }
 
 function getShotSafetyText(shot: StoryShot) {
@@ -1410,10 +1501,21 @@ function createStoryComfyUiSettings({
 
 function createFormattedStoryPositivePrompt({
   animaPromptParts,
+  illustriousSections,
+  promptProfile,
+  resourcePlan,
 }: {
-  animaPromptParts: StoryAnimaPromptParts;
+  animaPromptParts?: StoryAnimaPromptParts;
+  illustriousSections?: IllustriousPromptSections;
+  promptProfile: PromptProfileId;
+  resourcePlan: StoryResourcePlan;
 }) {
-  return compileStoryAnimaPrompt(animaPromptParts);
+  return getBasePositivePrompt({
+    animaPromptParts,
+    illustriousSections,
+    promptProfile,
+    resourcePlan,
+  });
 }
 
 function createStoryRenderPlanResourceRefs(resourcePlan: StoryResourcePlan): StoryRenderPlanResourceRefs {
@@ -1443,27 +1545,35 @@ export function createStoryGenerationRequestPreview(
   const normalizedImg2ImgDenoise = normalizeStoryImg2ImgDenoise(img2imgDenoise);
 
   return {
-    animaPromptParts: {
-      ...shot.animaPromptParts,
-      actionTags: [...shot.animaPromptParts.actionTags],
-      artistTags: [...shot.animaPromptParts.artistTags],
-      cameraTags: [...shot.animaPromptParts.cameraTags],
-      characterTags: [...shot.animaPromptParts.characterTags],
-      lightingTags: [...shot.animaPromptParts.lightingTags],
-      negativeAdditions: [...shot.animaPromptParts.negativeAdditions],
-      outfitTags: [...shot.animaPromptParts.outfitTags],
-      propTags: [...shot.animaPromptParts.propTags],
-      settingTags: [...shot.animaPromptParts.settingTags],
-      styleTags: [...shot.animaPromptParts.styleTags],
-      subjectTags: [...shot.animaPromptParts.subjectTags],
-      seriesTags: [...shot.animaPromptParts.seriesTags],
-    },
+    ...(shot.animaPromptParts
+      ? {
+          animaPromptParts: {
+            ...shot.animaPromptParts,
+            actionTags: [...shot.animaPromptParts.actionTags],
+            artistTags: [...shot.animaPromptParts.artistTags],
+            cameraTags: [...shot.animaPromptParts.cameraTags],
+            characterTags: [...shot.animaPromptParts.characterTags],
+            lightingTags: [...shot.animaPromptParts.lightingTags],
+            negativeAdditions: [...shot.animaPromptParts.negativeAdditions],
+            outfitTags: [...shot.animaPromptParts.outfitTags],
+            propTags: [...shot.animaPromptParts.propTags],
+            settingTags: [...shot.animaPromptParts.settingTags],
+            styleTags: [...shot.animaPromptParts.styleTags],
+            subjectTags: [...shot.animaPromptParts.subjectTags],
+            seriesTags: [...shot.animaPromptParts.seriesTags],
+          },
+        }
+      : {}),
+    ...(shot.illustriousSections
+      ? { illustriousSections: cloneStoryIllustriousSections(shot.illustriousSections) }
+      : {}),
     negativePromptLength: shot.negativePrompt.length,
     negativePromptPreview: compactRequestPromptPreview(shot.negativePrompt),
     parameters: {
       ...shot.parameters,
       ...(shot.sourceShotIds.length > 0 ? { denoise: normalizedImg2ImgDenoise } : {}),
     },
+    promptProfile: shot.promptProfile,
     positivePromptLength: shot.positivePrompt.length,
     positivePromptPreview: compactRequestPromptPreview(shot.positivePrompt),
     sourceImageEdges: (shot.sourceImageEdges ?? []).map((edge) => ({
@@ -1605,6 +1715,7 @@ export function assembleStoryRenderPlan({
   parameterPlan,
   previewOptions = defaultPreviewExecutionOptions,
   previewResultReferences = [],
+  promptProfile: rawPromptProfile,
   resourcePlan,
   renderPromptPlan,
   samplerOptions,
@@ -1615,6 +1726,7 @@ export function assembleStoryRenderPlan({
   parameterPlan: StoryParameterPlan;
   previewOptions?: StoryPreviewExecutionOptions;
   previewResultReferences?: StoryPreviewResultReference[];
+  promptProfile?: PromptProfileId;
   resourcePlan: StoryResourcePlan;
   renderPromptPlan?: StoryRenderPromptPlan;
   samplerOptions?: TimelineSamplerOptions;
@@ -1622,6 +1734,7 @@ export function assembleStoryRenderPlan({
   shots: readonly StoryShot[];
 }): StoryRenderPlan {
   const nsfwContext = getNsfwContext(safetyPlan);
+  const promptProfile = normalizePromptProfileId(renderPromptPlan?.promptProfile ?? rawPromptProfile);
   const defaultParameters = normalizeParameters(parameterPlan.defaults, samplerOptions);
   const normalizedImg2ImgDenoise = normalizeStoryImg2ImgDenoise(img2imgDenoise);
   const renderWarnings: string[] = [];
@@ -1645,16 +1758,29 @@ export function assembleStoryRenderPlan({
     );
     const renderPromptDraft = getStoryRenderPromptDraft(shot.id, renderPromptPlan);
     if (renderPromptPlan && !renderPromptDraft) {
-      renderWarnings.push(`Shot "${shot.id}" did not receive LLM Anima prompt parts; using local prompt fallback.`);
+      renderWarnings.push(`Shot "${shot.id}" did not receive LLM prompt sections; using local prompt fallback.`);
     }
-    const animaPromptParts = getStoryAnimaPromptPartsForShot(shot, renderPromptDraft);
-    const basePositivePrompt = getBasePositivePrompt(animaPromptParts);
+    const animaPromptParts = promptProfile === "anima"
+      ? getStoryAnimaPromptPartsForShot(shot, renderPromptDraft)
+      : undefined;
+    const illustriousSections = promptProfile === "illustrious"
+      ? getStoryIllustriousSectionsForShot(shot, renderPromptDraft)
+      : undefined;
+    const basePositivePrompt = getBasePositivePrompt({
+      animaPromptParts,
+      illustriousSections,
+      promptProfile,
+      resourcePlan,
+    });
     const baseNegativePrompt = mergeStoryNegativePrompts(
       getBaseNegativePrompt(safetyPlan, shot),
       getStoryRenderPromptDraftNegativeParts(renderPromptDraft).join(", "),
     );
     const formattedPositivePrompt = createFormattedStoryPositivePrompt({
       animaPromptParts,
+      illustriousSections,
+      promptProfile,
+      resourcePlan,
     });
     const settings = createStoryComfyUiSettings({
       baseNegativePrompt,
@@ -1670,7 +1796,9 @@ export function assembleStoryRenderPlan({
       shotId: shot.id,
       order: shot.order,
       title: shot.title,
-      animaPromptParts,
+      promptProfile,
+      ...(animaPromptParts ? { animaPromptParts } : {}),
+      ...(illustriousSections ? { illustriousSections } : {}),
       positivePrompt: settings.request.positivePrompt,
       negativePrompt: settings.request.negativePrompt ?? "",
       outputAnchors: createStoryOutputAnchors({
@@ -1703,6 +1831,7 @@ export function assembleStoryRenderPlan({
     storyId: resourcePlan.storyId,
     img2imgDenoise: normalizedImg2ImgDenoise,
     nsfwContext,
+    promptProfile,
     resourceRefs: createStoryRenderPlanResourceRefs(resourcePlan),
     preview: {
       options: {

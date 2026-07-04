@@ -5,6 +5,7 @@ import {
   compileStoryAnimaPrompt,
   createStoryExecutionRequestBatch,
   createStoryDefaultGenerationParameters,
+  createStoryGenerationRequestPreview,
   createStoryParameterPlan,
   createStoryPreviewParameters,
   createStoryResourcePlan,
@@ -272,6 +273,62 @@ describe("story planning", () => {
     expect(prompt).toContain("adult courier with cropped black hair");
     expect(prompt).toContain("studying the red signal card");
     expect(prompt).toContain("wet neon market aisle");
+  });
+
+  it("compiles Illustrious Story render sections without Anima-only prompt defaults", () => {
+    const renderPlan = assembleStoryRenderPlan({
+      parameterPlan: createStoryParameterPlan({ storyId, defaults }),
+      promptProfile: "illustrious",
+      renderPromptPlan: {
+        promptProfile: "illustrious",
+        storyId,
+        warnings: ["Structured Illustrious sections returned."],
+        shots: [
+          {
+            shotId: "shot-1",
+            illustriousSections: {
+              subjectIdentity: ["solo courier"],
+              appearancePhysicalTraits: ["cropped black hair"],
+              clothingAccessories: ["yellow rain jacket"],
+              poseActionExpression: ["holding red signal card"],
+              backgroundEnvironmentObjects: ["rainy station platform"],
+              cameraFraming: ["eye-level medium shot"],
+              lightingFocus: ["neon window lighting"],
+              detailResolution: ["crisp anime illustration"],
+            },
+            negativeAdditions: ["cropped signal"],
+            rationale: "Keep the signal readable.",
+          },
+        ],
+      },
+      resourcePlan: createResourcePlan(),
+      safetyPlan,
+      shots,
+    });
+    const shot = renderPlan.shots[0];
+    const prompt = shot?.positivePrompt ?? "";
+    const preview = shot ? createStoryGenerationRequestPreview(shot, renderPlan.img2imgDenoise) : null;
+
+    expect(renderPlan.promptProfile).toBe("illustrious");
+    expect(shot?.promptProfile).toBe("illustrious");
+    expect(shot?.illustriousSections).toMatchObject({
+      subjectIdentity: ["solo courier"],
+      poseActionExpression: ["holding red signal card"],
+    });
+    expect(shot?.animaPromptParts).toBeUndefined();
+    expect(prompt).toContain("amazing quality");
+    expect(prompt).toContain("solo courier");
+    expect(prompt).toContain("holding red signal card");
+    expect(prompt).toContain("wet platform");
+    expect(prompt).not.toContain("score_7");
+    expect(prompt).not.toContain("safe");
+    expect(shot?.negativePrompt).toContain("cropped signal");
+    expect(shot?.promptRationale).toBe("Keep the signal readable.");
+    expect(preview?.promptProfile).toBe("illustrious");
+    expect(preview?.illustriousSections).toMatchObject({
+      subjectIdentity: ["solo courier"],
+    });
+    expect(preview?.animaPromptParts).toBeUndefined();
   });
 
   it("selects only validated local resources and strips model NSFW markers", () => {
@@ -846,6 +903,7 @@ describe("story planning", () => {
     const resourcePlan = createAnimaResourcePlan();
     const renderPlan = assembleStoryRenderPlan({
       parameterPlan: createStoryParameterPlan({ storyId, defaults }),
+      promptProfile: "anima",
       resourcePlan,
       safetyPlan,
       shots,
@@ -936,6 +994,7 @@ describe("story planning", () => {
   it("uses Story-only Anima model-card prefix and safe minor negatives", () => {
     const renderPlan = assembleStoryRenderPlan({
       parameterPlan: createStoryParameterPlan({ storyId, defaults }),
+      promptProfile: "anima",
       resourcePlan: createAnimaResourcePlan(),
       safetyPlan: {
         storyId,
@@ -980,6 +1039,7 @@ describe("story planning", () => {
     const renderPlan = assembleStoryRenderPlan({
       parameterPlan: createStoryParameterPlan({ storyId, defaults }),
       renderPromptPlan: {
+        promptProfile: "anima",
         storyId,
         warnings: ["LLM prompt draft used naturalized character descriptions."],
         shots: [
@@ -1045,7 +1105,7 @@ describe("story planning", () => {
     expect(shot?.positivePrompt).not.toContain("teen-resident");
     expect(shot?.negativePrompt).toContain("cropped poster");
     expect(shot?.negativePrompt).not.toContain("<lora:");
-    expect(shot?.animaPromptParts.characterTags).toEqual(expect.arrayContaining([
+    expect(shot?.animaPromptParts?.characterTags).toEqual(expect.arrayContaining([
       "young woman with round glasses and cream cardigan",
     ]));
     expect(shot?.promptRationale).toBe("Keep the final poster action explicit.");
@@ -1056,6 +1116,7 @@ describe("story planning", () => {
     const renderPlan = assembleStoryRenderPlan({
       parameterPlan: createStoryParameterPlan({ storyId, defaults }),
       renderPromptPlan: {
+        promptProfile: "anima",
         storyId,
         warnings: [],
         shots: [
@@ -1126,6 +1187,7 @@ describe("story planning", () => {
     const renderPlan = assembleStoryRenderPlan({
       parameterPlan: createStoryParameterPlan({ storyId, defaults }),
       renderPromptPlan: {
+        promptProfile: "anima",
         storyId,
         warnings: [],
         shots: [
@@ -1191,6 +1253,7 @@ describe("story planning", () => {
     const renderPlan = assembleStoryRenderPlan({
       parameterPlan: createStoryParameterPlan({ storyId, defaults }),
       renderPromptPlan: {
+        promptProfile: "anima",
         storyId,
         warnings: [],
         shots: [
@@ -1263,6 +1326,7 @@ describe("story planning", () => {
     const renderPlan = assembleStoryRenderPlan({
       parameterPlan: createStoryParameterPlan({ storyId, defaults }),
       renderPromptPlan: {
+        promptProfile: "anima",
         storyId,
         warnings: [],
         shots: [
@@ -1283,12 +1347,13 @@ describe("story planning", () => {
 
     expect(renderPlan.shots[0]?.positivePrompt).toContain("lead in raincoat");
     expect(renderPlan.shots[1]?.positivePrompt).toContain("red signal reflected in a puddle");
-    expect(renderPlan.warnings).toContain('Shot "shot-2" did not receive LLM Anima prompt parts; using local prompt fallback.');
+    expect(renderPlan.warnings).toContain('Shot "shot-2" did not receive LLM prompt sections; using local prompt fallback.');
   });
 
   it("preserves required current-shot anchors in final Anima render prompts", () => {
     const renderPlan = assembleStoryRenderPlan({
       parameterPlan: createStoryParameterPlan({ storyId, defaults }),
+      promptProfile: "anima",
       resourcePlan: createAnimaResourcePlan(),
       safetyPlan: {
         storyId,
@@ -1336,6 +1401,7 @@ describe("story planning", () => {
   it("builds local fallback Anima parts from Story shot fields without profile-specific compacting", () => {
     const renderPlan = assembleStoryRenderPlan({
       parameterPlan: createStoryParameterPlan({ storyId, defaults }),
+      promptProfile: "anima",
       resourcePlan: createResourcePlan(),
       safetyPlan,
       shots: [
@@ -1366,7 +1432,7 @@ describe("story planning", () => {
     expect(prompt).toContain("umbrellas and produce stalls");
     expect(prompt).toContain("medium-wide slightly low angle");
     expect(prompt).toContain("extra storefront description");
-    expect(renderPlan.shots[0]?.animaPromptParts.actionTags).toEqual([
+    expect(renderPlan.shots[0]?.animaPromptParts?.actionTags).toEqual([
       "red rain jacket, older teen bike messenger with freckles, kneeling beside a greasy broken chain, umbrellas and produce stalls, centered composition, overcast rainy daylight, loose background detail, extra crowd description, extra storefront description",
     ]);
     expect(renderPlan.shots[0]?.outputAnchors.source).toMatchObject({
@@ -1497,6 +1563,7 @@ describe("story planning", () => {
   it("keeps verbose fallback Story intent available in Anima prompt parts", () => {
     const renderPlan = assembleStoryRenderPlan({
       parameterPlan: createStoryParameterPlan({ storyId, defaults }),
+      promptProfile: "anima",
       resourcePlan: createAnimaResourcePlan(),
       safetyPlan: {
         ...safetyPlan,
@@ -1539,10 +1606,10 @@ describe("story planning", () => {
     expect(prompt).toContain("rainy evening with warm interior contrast");
     expect(prompt).toContain("medium-wide low angle composition");
     expect(prompt).toMatch(/Maintain|Preserve|Use traffic|Show grease|must clearly signal|as only clear visible subject/i);
-    expect(shot?.animaPromptParts.actionTags).toEqual([
+    expect(shot?.animaPromptParts?.actionTags).toEqual([
       "Maintain Maya as only clear visible subject, Preserve yellow rain jacket, Use traffic lights to show urgency, Show grease on hands, must clearly signal late library return, rainy evening with warm interior contrast, and distant",
     ]);
-    expect(shot?.animaPromptParts.settingTags).toEqual(expect.arrayContaining([
+    expect(shot?.animaPromptParts?.settingTags).toEqual(expect.arrayContaining([
       expect.stringContaining("riding shaky bicycle"),
     ]));
     expect(shot?.outputAnchors.lighting).toContain("rainy evening with warm interior contrast");

@@ -38,7 +38,7 @@ import type {
   StoryWorkflowNodeId,
 } from "./story-types";
 import { createStoryWorkflowState } from "./story-state";
-import type { PromptProfileId } from "@/shared/prompt-profile";
+import { coercePromptProfileId, type PromptProfileId } from "@/shared/prompt-profile";
 import {
   sanitizeStoryStylePaletteSnapshot,
   type StoryStylePaletteLoraSnapshot,
@@ -84,6 +84,7 @@ export type StoryGenerationGatePreview = {
   blockingReason?: string;
   confirmationRequired: boolean;
   nsfwContext: StoryNsfwContext;
+  promptProfile: PromptProfileId;
   renderPlanShotCount: number;
   previewEnabled: boolean;
   requestPreview: StoryGenerationRequestPreview[];
@@ -612,6 +613,7 @@ function createGenerationGate(renderPlan: StoryRenderPlan): StoryGenerationGateP
     blockingReason: "Confirm generation to start shot graph execution.",
     confirmationRequired: true,
     nsfwContext: renderPlan.nsfwContext,
+    promptProfile: renderPlan.promptProfile,
     renderPlanShotCount: renderPlan.shots.length,
     previewEnabled: renderPlan.preview.options.enabled,
     requestPreview: renderPlan.shots.map((shot) => createStoryGenerationRequestPreview(shot, renderPlan.img2imgDenoise)),
@@ -632,9 +634,15 @@ export function createStoryPlanningArtifacts(
   const characterContinuityGraph = createCharacterContinuityGraph(input, bible, shots);
   const resourcePlan = createResourcePlan(input, resourceCandidates);
   const parameterPlan = createParameterPlan(input, resourcePlan, shots);
+  const promptProfile = coercePromptProfileId(
+    input.settingsSnapshot && typeof input.settingsSnapshot === "object" && "promptProfile" in input.settingsSnapshot
+      ? (input.settingsSnapshot as { promptProfile?: unknown }).promptProfile
+      : undefined,
+  );
   const renderPlan = assembleStoryRenderPlan({
     img2imgDenoise: getStoryInputImg2ImgDenoise(input),
     parameterPlan,
+    promptProfile,
     resourcePlan,
     safetyPlan,
     shots,

@@ -154,4 +154,16 @@ describe("Civitai resources route", () => {
     expect(checkpointPayload.items.map((item: { id: string }) => item.id)).toEqual([illustriousCheckpoint.id]);
     expect(loraPayload.items.map((item: { id: string }) => item.id)).toEqual([illustriousLora.id]);
   });
+
+  it.each(["generic", "pony"])("rejects invalid non-empty prompt profile %s", async (promptProfile) => {
+    const response = await GET(
+      new Request(
+        `http://localhost/api/civitai-lora-library/resources?resourceType=model&downloaded=ready&promptProfile=${promptProfile}`,
+      ),
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(payload.error.message).toContain("Invalid promptProfile");
+  });
 });

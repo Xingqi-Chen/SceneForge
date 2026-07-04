@@ -469,10 +469,19 @@ describe("timeline workflow persistence", () => {
     ).toBeNull();
   });
 
-  it("keeps T10 active workflow records without project metadata backward compatible", () => {
+  it("keeps T10 active workflow records and invalid prompt profiles backward compatible", () => {
     const workflow = createTimelineWorkflowState({
       workflowId: "timeline-no-project-metadata",
       sceneRequest: "A backward compatible active draft",
+      now: () => "2026-06-05T00:00:00.000Z",
+    });
+    const workflowWithSettingsProfile = createTimelineWorkflowState({
+      workflowId: "timeline-invalid-selected-profile",
+      sceneRequest: "A restored scene with old profile metadata",
+      promptProfile: "illustrious",
+      settingsSnapshot: {
+        promptProfile: "anima",
+      },
       now: () => "2026-06-05T00:00:00.000Z",
     });
 
@@ -488,6 +497,48 @@ describe("timeline workflow persistence", () => {
       createdAt: "2026-06-05T00:00:00.000Z",
       updatedAt: "2026-06-05T00:00:00.000Z",
     });
+    const record = createTimelineWorkflowRecord({
+      workflow: workflowWithSettingsProfile,
+      sceneRequest: "A restored scene with old profile metadata",
+      selectedPromptProfile: "generic" as never,
+      selectedImageCount: 1,
+      selectedNodeId: "scene-input",
+      outputDisplayModes: {},
+    });
+    const parsedInvalidProfile = sanitizeTimelineWorkflowRecord({
+      kind: "sceneforge-timeline-workflow",
+      version: 1,
+      workflow: {
+        workflowId: "timeline-invalid-old-profile",
+        workflowMode: "single-image",
+        createdAt: "2026-06-05T00:00:00.000Z",
+        updatedAt: "2026-06-05T00:00:00.000Z",
+        generationConfirmed: false,
+        nodes: {
+          "scene-input": {
+            nodeId: "scene-input",
+            status: "manual",
+            result: {
+              rawIntent: "A legacy generic profile scene",
+              promptProfile: "generic",
+              imageCount: 1,
+              settingsSnapshot: {
+                promptProfile: "generic",
+              },
+            },
+            source: "manual",
+            updatedAt: "2026-06-05T00:00:00.000Z",
+          },
+        },
+      },
+      sceneRequest: "A legacy generic profile scene",
+      selectedPromptProfile: "generic",
+      selectedImageCount: 1,
+      selectedNodeId: "scene-input",
+      outputDisplayModes: {},
+      createdAt: "2026-06-05T00:00:00.000Z",
+      updatedAt: "2026-06-05T00:00:00.000Z",
+    });
 
     expect(parsed).toMatchObject({
       workflow: {
@@ -497,6 +548,9 @@ describe("timeline workflow persistence", () => {
     });
     expect(parsed?.projectId).toBeUndefined();
     expect(parsed?.name).toBeUndefined();
+    expect(record.selectedPromptProfile).toBe("anima");
+    expect(parsedInvalidProfile).not.toBeNull();
+    expect(parsedInvalidProfile?.selectedPromptProfile).toBe("illustrious");
   });
 
   it("restores legacy workflow state without workflow mode as single-image", () => {
