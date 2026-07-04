@@ -836,6 +836,7 @@ function StartPanel({
           savedParameters={savedParameters}
           selectedCheckpointId={selectedCheckpointId}
           selectedLoraIds={selectedLoraIds}
+          showDetailersInParametersOnly
           title="Story style parameters"
         />
       </form>

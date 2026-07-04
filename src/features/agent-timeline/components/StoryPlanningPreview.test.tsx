@@ -8,8 +8,11 @@ import {
   type StoryWorkflowState,
 } from "@/features/agent-timeline";
 
+const dialogProps = vi.hoisted(() => [] as Array<Record<string, unknown>>);
+
 vi.mock("@/features/editor/components/ImageGenerationPanel", () => ({
   ComfyUiGenerationDialog: (props: Record<string, unknown>) => {
+    dialogProps.push(props);
     const open = props.open === true;
     const onSaveParameters = props.onSaveParameters as ((parameters: Record<string, unknown>) => void) | undefined;
 
@@ -327,6 +330,7 @@ async function waitForPickerDebounce() {
 
 beforeEach(() => {
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  dialogProps.length = 0;
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -1074,6 +1078,7 @@ describe("StoryPlanningPreview", () => {
     expect(enabledParametersButton?.disabled).toBe(false);
     await clickButtonAsync("Parameters");
     expect(container.textContent).toContain("parameters-only");
+    expect(dialogProps.at(-1)?.showDetailersInParametersOnly).toBe(true);
     await clickButtonAsync("Save mock parameters");
     expect(container.textContent).toContain("Saved parameters: 832x1216, 31 steps, CFG 4.25, euler/normal, fixed seed 98765");
     await clickButtonAsync("Start planning");
