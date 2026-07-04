@@ -1595,12 +1595,13 @@ export function createStoryLlmNodeAdapters({
   const storyBible = createLlmStoryNodeAdapter<StoryBible>({
     buildRequest: (context) => {
       const input = getStoryInput(context.workflow);
+      const aiInput = getStoryInputForAiPayload(input);
       return makeJsonRequest({
-        input,
+        input: aiInput,
         instruction:
           'Create a typed StoryBible with concrete visual anchors. Treat storySegments as the visual sequence and storyContext as global continuity, not as an extra shot. Create characters only for people or creatures explicitly present in the user story or storySegments; do not invent visible supporting people from implied locations or occupations. Character descriptions must include visible role/age range, silhouette, clothing, key prop, and emotional baseline when inferable. Location descriptions must include visible set pieces, materials, color accents, and recurring background anchors. visualStyle must describe renderable camera/lighting/color style, not abstract theme. Required shape: {"title":"","logline":"","genre":[""],"themes":[""],"worldSummary":"","visualStyle":"","characters":[{"id":"","name":"","role":"","description":"","continuityNotes":[""],"visualAnchors":[""]}],"locations":[{"id":"","name":"","description":"","visualAnchors":[""]}],"continuityRules":[""]}.',
         payload: {
-          input,
+          input: aiInput,
           storyContext: input.storyContext ?? "",
           storySegments: input.storySegments ?? [],
         },
@@ -1611,12 +1612,13 @@ export function createStoryLlmNodeAdapters({
   const storyOutline = createLlmStoryNodeAdapter<StoryOutline>({
     buildRequest: (context) => {
       const input = getStoryInput(context.workflow);
+      const aiInput = getStoryInputForAiPayload(input);
       return makeJsonRequest({
-        input,
+        input: aiInput,
         instruction:
           'Create a typed StoryOutline. If input.targetShotCount is set, use exactly that count when practical. If input.targetShotCount is unset, you must decide the beat count from rawIntent yourself; local code has not parsed labels, counted events, or estimated a target. Read explicit user labels such as "Beat 1:", "Beat 2:", "Opening image:", and "Final image:" whether they appear inline or on separate lines, and preserve those labeled visual moments as separate beats unless the user explicitly asks to combine them. Do not pad to three shots. Use only as many beats as the story needs. If storySegments are supplied as structured input, use one beat per storySegment in order and do not create a beat for storyContext. Required shape: {"beats":[{"id":"","title":"","summary":"","order":1,"characterIds":[""]}]}.',
         payload: {
-          input,
+          input: aiInput,
           targetShotCount: getRequestedTargetShotCount(input),
           shotCountMode: getShotCountMode(input),
           storyContext: input.storyContext ?? "",
@@ -1634,12 +1636,13 @@ export function createStoryLlmNodeAdapters({
   const storyboardShots = createLlmStoryNodeAdapter<StoryShot[]>({
     buildRequest: (context) => {
       const input = getStoryInput(context.workflow);
+      const aiInput = getStoryInputForAiPayload(input);
       return makeJsonRequest({
-        input,
+        input: aiInput,
         instruction:
           'Create typed storyboard shots with stable ids, order, camera, promptIntent, continuityNotes, characterIds, locationId, and sourceShotIds. Create exactly one storyboard shot per supplied outline beat unless input.targetShotCount is set and a target-count adjustment is necessary. If input.targetShotCount is unset, follow the StoryOutline beat count chosen by the LLM; local code has not parsed labels, counted events, or estimated a target. Preserve explicit rawIntent labels such as "Beat 1:" or "Final image:" through shot titles and shot content when they map to outline beats. Do not add filler shots or a separate context/setup shot. Each promptIntent must be an image-generation-ready visual brief with short comma-separated tag phrases: visible character identities/appearance, the same wardrobe and key prop continuity, one clear action, location/obstacle, composition, lighting, and visible emotional state. Visible subjects must match current segment explicitly named characters: do not invent extra visible people from a location or job role, and do not remove explicitly requested people. Partial/background interactions are acceptable when the segment explicitly requests them. Do not use abstract summaries, meta planning instructions, dangling clauses, or purely atmospheric prose. sourceShotIds must be empty unless this shot truly needs a previous generated image as an img2img/reference source; ordinary story order and continuity do not need sourceShotIds. Keep sourceShotIds empty for high-risk source-image transitions such as standing to kneeling, sitting to running, close-up to wide shot, major composition reset, camera reset, or large scene reset. Required shape: {"shots":[{"id":"shot-1","order":1,"title":"","description":"","beatId":"","locationId":"","characterIds":[""],"sourceShotIds":[""],"camera":"","promptIntent":"","continuityNotes":[""]}]}.',
         payload: {
-          input,
+          input: aiInput,
           targetShotCount: getRequestedTargetShotCount(input),
           shotCountMode: getShotCountMode(input),
           storyContext: input.storyContext ?? "",
@@ -1660,12 +1663,13 @@ export function createStoryLlmNodeAdapters({
   const safetyPlan = createLlmStoryNodeAdapter<StorySafetyPlan>({
     buildRequest: (context) => {
       const input = getStoryInput(context.workflow);
+      const aiInput = getStoryInputForAiPayload(input);
       return makeJsonRequest({
-        input,
+        input: aiInput,
         instruction:
           'Create a StorySafetyPlan that preserves the configured NSFW context and safety constraints. Echo the input audienceRating and nsfwContext; do not choose a different rating. Never permit sexualized minors, non-consensual sexual content, or graphic sexual violence. Required shape: {"audienceRating":"safe|suggestive|mature|explicit","contentWarnings":[""],"blockedContent":[""],"perShotNotes":[{"shotId":"","risks":[""],"mitigations":[""]}],"nsfwContext":{"enabled":false,"rationale":""}}.',
         payload: {
-          input,
+          input: aiInput,
           shots: getShots(context.workflow),
         },
       });
@@ -1679,12 +1683,13 @@ export function createStoryLlmNodeAdapters({
   const dependencyGraph = createLlmStoryNodeAdapter<ShotDependencyGraph>({
     buildRequest: (context) => {
       const input = getStoryInput(context.workflow);
+      const aiInput = getStoryInputForAiPayload(input);
       return makeJsonRequest({
-        input,
+        input: aiInput,
         instruction:
           'Create a shot dependency graph using only supplied shot ids. Use reason "img2img-source" only when the later shot should receive the earlier generated image during ComfyUI execution, typically the same location, similar composition, continuous action, or a deliberate visual carry-over where image inheritance is desired. Never use img2img-source for high-risk source-image transitions such as standing to kneeling, sitting to running, close-up to wide shot, major composition reset, camera reset, large scene reset, cross-scene continuity, or cross-location cuts; use prompt-only continuity, reason "continuity", reason "story-order", reason "reference", or omit the edge instead. Existing execution only injects source images for img2img-source edges, so planning-only reasons must remain non-executable. Required shape: {"nodes":[{"shotId":"","label":""}],"edges":[{"fromShotId":"","toShotId":"","reason":"img2img-source|reference|continuity|story-order|manual"}]}.',
         payload: {
-          input,
+          input: aiInput,
           shots: getShots(context.workflow),
         },
       });
@@ -1698,12 +1703,13 @@ export function createStoryLlmNodeAdapters({
   const plotGraph = createLlmStoryNodeAdapter<PlotStateGraph>({
     buildRequest: (context) => {
       const input = getStoryInput(context.workflow);
+      const aiInput = getStoryInputForAiPayload(input);
       return makeJsonRequest({
-        input,
+        input: aiInput,
         instruction:
           'Create a typed PlotStateGraph. Use only supplied shot ids. Required shape: {"states":[{"id":"","title":"","summary":"","shotIds":[""]}],"transitions":[{"fromStateId":"","toStateId":"","reason":""}]}.',
         payload: {
-          input,
+          input: aiInput,
           outline: getOutline(context.workflow),
           shots: getShots(context.workflow),
         },
@@ -1718,12 +1724,13 @@ export function createStoryLlmNodeAdapters({
   const continuityGraph = createLlmStoryNodeAdapter<CharacterContinuityGraph>({
     buildRequest: (context) => {
       const input = getStoryInput(context.workflow);
+      const aiInput = getStoryInputForAiPayload(input);
       return makeJsonRequest({
-        input,
+        input: aiInput,
         instruction:
           'Create a typed CharacterContinuityGraph. Use only supplied shot and character ids. Required shape: {"appearances":[{"shotId":"","characterId":"","wardrobe":[""],"poseOrAction":"","expression":"","continuityNotes":[""]}]}.',
         payload: {
-          input,
+          input: aiInput,
           bible: getBible(context.workflow),
           shots: getShots(context.workflow),
         },

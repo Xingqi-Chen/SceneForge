@@ -2453,6 +2453,214 @@ describe("story LLM adapters", () => {
     });
   });
 
+  it("keeps Story detailers out of early Story AI payloads", async () => {
+    const detailerInput = {
+      ...input,
+      settingsSnapshot: {
+        ...input.settingsSnapshot,
+        detailers: {
+          faceDetailer: { enabled: true, detectorModelName: "bbox/custom-face.pt", steps: 18 },
+          handDetailer: { enabled: true, detectorModelName: "bbox/custom-hand.pt", steps: 19 },
+        },
+      },
+    } satisfies StoryInput;
+    const workflow = createStoryWorkflowState({ storyId: "story-1", workflowId: "workflow-detailer-early-ai" });
+    const updatedAt = workflow.updatedAt;
+    const outline = {
+      storyId: "story-1",
+      beats: [
+        { id: "beat-1", title: "Arrival", summary: "The courier enters.", order: 1, characterIds: ["courier"] },
+        { id: "beat-2", title: "Signal", summary: "The courier sees a signal.", order: 2, characterIds: ["courier"] },
+      ],
+    };
+    const safetyPlan = {
+      storyId: "story-1",
+      audienceRating: "safe" as const,
+      contentWarnings: [],
+      blockedContent: [],
+      perShotNotes: [],
+      nsfwContext: {
+        enabled: false,
+        rationale: "Safe story.",
+      },
+    };
+    const dependencyGraph = {
+      storyId: "story-1",
+      nodes: shots.map((shot) => ({ shotId: shot.id, label: shot.title })),
+      edges: [],
+    };
+    const plotStateGraph = {
+      storyId: "story-1",
+      states: [{ id: "state-1", title: "Arrival", summary: "The courier enters.", shotIds: ["shot-1"] }],
+      transitions: [],
+    };
+    const continuityGraph = {
+      storyId: "story-1",
+      characters: [
+        {
+          characterId: "courier",
+          name: "Courier",
+          canonicalDescription: "An adult courier in a yellow rain jacket.",
+          visualAnchors: ["yellow rain jacket"],
+        },
+      ],
+      appearances: shots.map((shot) => ({
+        shotId: shot.id,
+        characterId: "courier",
+        wardrobe: ["yellow rain jacket"],
+        poseOrAction: shot.description,
+        expression: "focused",
+        continuityNotes: [],
+      })),
+    };
+
+    workflow.nodes["story-input"] = {
+      nodeId: "story-input",
+      result: detailerInput,
+      source: "manual",
+      status: "manual",
+      updatedAt,
+    };
+    workflow.nodes["story-bible"] = {
+      nodeId: "story-bible",
+      result: bible,
+      source: "ai",
+      status: "done",
+      updatedAt,
+    };
+    workflow.nodes["story-outline"] = {
+      nodeId: "story-outline",
+      result: outline,
+      source: "ai",
+      status: "done",
+      updatedAt,
+    };
+    workflow.nodes["storyboard-shots"] = {
+      nodeId: "storyboard-shots",
+      result: shots,
+      source: "ai",
+      status: "done",
+      updatedAt,
+    };
+    workflow.nodes["story-safety-plan"] = {
+      nodeId: "story-safety-plan",
+      result: safetyPlan,
+      source: "ai",
+      status: "done",
+      updatedAt,
+    };
+    workflow.nodes["shot-dependency-graph"] = {
+      nodeId: "shot-dependency-graph",
+      result: dependencyGraph,
+      source: "ai",
+      status: "done",
+      updatedAt,
+    };
+    workflow.nodes["plot-state-graph"] = {
+      nodeId: "plot-state-graph",
+      result: plotStateGraph,
+      source: "ai",
+      status: "done",
+      updatedAt,
+    };
+    workflow.nodes["character-continuity-graph"] = {
+      nodeId: "character-continuity-graph",
+      result: continuityGraph,
+      source: "ai",
+      status: "done",
+      updatedAt,
+    };
+
+    const responsePayload = {
+      ...bible,
+      beats: outline.beats,
+      shots: shots.map((shot) => ({ ...shot, beatId: "beat-1", locationId: "market" })),
+      audienceRating: "safe",
+      contentWarnings: [],
+      blockedContent: [],
+      perShotNotes: [],
+      nsfwContext: { enabled: false, rationale: "Safe story." },
+      nodes: dependencyGraph.nodes,
+      edges: dependencyGraph.edges,
+      states: plotStateGraph.states,
+      transitions: plotStateGraph.transitions,
+      appearances: continuityGraph.appearances,
+    };
+    let currentNodeId: StoryWorkflowNodeId | null = null;
+    const payloads: Partial<Record<StoryWorkflowNodeId, Record<string, unknown>>> = {};
+    const adapters = createStoryLlmNodeAdapters({
+      completeChat: async (request) => {
+        if (currentNodeId) {
+          payloads[currentNodeId] = JSON.parse(String(request.messages[1]?.content ?? "{}")) as Record<string, unknown>;
+        }
+
+        return chatResponse(JSON.stringify(responsePayload));
+      },
+    });
+
+    currentNodeId = "story-bible";
+    await adapters["story-bible"]?.({
+      nodeId: "story-bible",
+      workflow,
+      dependencies: [workflow.nodes["story-input"]],
+    });
+    currentNodeId = "story-outline";
+    await adapters["story-outline"]?.({
+      nodeId: "story-outline",
+      workflow,
+      dependencies: [workflow.nodes["story-bible"]],
+    });
+    currentNodeId = "storyboard-shots";
+    await adapters["storyboard-shots"]?.({
+      nodeId: "storyboard-shots",
+      workflow,
+      dependencies: [workflow.nodes["story-bible"], workflow.nodes["story-outline"]],
+    });
+    currentNodeId = "story-safety-plan";
+    await adapters["story-safety-plan"]?.({
+      nodeId: "story-safety-plan",
+      workflow,
+      dependencies: [workflow.nodes["storyboard-shots"]],
+    });
+    currentNodeId = "shot-dependency-graph";
+    await adapters["shot-dependency-graph"]?.({
+      nodeId: "shot-dependency-graph",
+      workflow,
+      dependencies: [workflow.nodes["storyboard-shots"]],
+    });
+    currentNodeId = "plot-state-graph";
+    await adapters["plot-state-graph"]?.({
+      nodeId: "plot-state-graph",
+      workflow,
+      dependencies: [workflow.nodes["story-outline"], workflow.nodes["storyboard-shots"]],
+    });
+    currentNodeId = "character-continuity-graph";
+    await adapters["character-continuity-graph"]?.({
+      nodeId: "character-continuity-graph",
+      workflow,
+      dependencies: [workflow.nodes["story-bible"], workflow.nodes["storyboard-shots"]],
+    });
+
+    expect(Object.keys(payloads).sort()).toEqual([
+      "character-continuity-graph",
+      "plot-state-graph",
+      "shot-dependency-graph",
+      "story-bible",
+      "story-outline",
+      "story-safety-plan",
+      "storyboard-shots",
+    ]);
+    for (const payload of Object.values(payloads)) {
+      const serializedPayload = JSON.stringify(payload);
+
+      expect(serializedPayload).not.toContain("detailers");
+      expect(serializedPayload).not.toContain("faceDetailer");
+      expect(serializedPayload).not.toContain("handDetailer");
+      expect(serializedPayload).not.toContain("bbox/custom-face.pt");
+      expect(serializedPayload).not.toContain("bbox/custom-hand.pt");
+    }
+  });
+
   it("asks the LLM for structured Anima prompt parts before assembling render plans", async () => {
     const animaInput = {
       ...input,

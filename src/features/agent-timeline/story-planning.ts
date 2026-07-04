@@ -2105,7 +2105,13 @@ export function createStoryExecutionRequestBatch({
   const storyResolution = mode === "final" && renderPlan.shots[0]
     ? normalizeParameters(renderPlan.shots[0].parameters, samplerOptions)
     : null;
-  const detailers = sanitizeStoryDetailerSettingsSnapshot(renderPlan.detailers);
+  const sanitizedDetailers = sanitizeStoryDetailerSettingsSnapshot(renderPlan.detailers);
+  const detailers = mode === "preview"
+    ? sanitizeStoryDetailerSettingsSnapshot({
+        faceDetailer: { ...sanitizedDetailers.faceDetailer, enabled: false },
+        handDetailer: { ...sanitizedDetailers.handDetailer, enabled: false },
+      })
+    : sanitizedDetailers;
 
   return {
     mode,

@@ -2130,6 +2130,49 @@ describe("story planning", () => {
     });
   });
 
+  it("disables Story-scoped detailers for preview execution requests", () => {
+    const resourcePlan = createResourcePlan();
+    const renderPlan = assembleStoryRenderPlan({
+      detailers: {
+        faceDetailer: {
+          enabled: true,
+          detectorModelName: "bbox/custom-face.pt",
+          steps: 18,
+        },
+        handDetailer: {
+          enabled: true,
+          detectorModelName: "bbox/custom-hand.pt",
+          steps: 19,
+        },
+      },
+      parameterPlan: createStoryParameterPlan({ storyId, defaults }),
+      previewOptions: {
+        enabled: true,
+        shotIds: ["shot-1"],
+        parameterOverrides: { steps: 8 },
+      },
+      resourcePlan,
+      safetyPlan,
+      shots,
+    });
+    const previewBatch = createStoryExecutionRequestBatch({ mode: "preview", renderPlan, resourcePlan });
+
+    expect(previewBatch.requests).toHaveLength(1);
+    expect(previewBatch.requests[0]?.request).toMatchObject({
+      faceDetailer: {
+        enabled: false,
+        detectorModelName: "bbox/custom-face.pt",
+        steps: 18,
+      },
+      handDetailer: {
+        enabled: false,
+        detectorModelName: "bbox/custom-hand.pt",
+        steps: 19,
+      },
+      preview: true,
+    });
+  });
+
   it("normalizes Story execution requests against live sampler and scheduler options", () => {
     const resourcePlan = createResourcePlan();
     const renderPlan = assembleStoryRenderPlan({
