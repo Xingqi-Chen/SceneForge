@@ -1159,143 +1159,160 @@ function StartPanel({
   }
 
   return (
-    <section className="mx-auto flex min-h-[calc(100vh-8rem)] w-full max-w-4xl items-start px-4 py-8">
-      <form className="grid w-full gap-4 rounded-md border border-slate-200 bg-white p-4 shadow-sm" onSubmit={handleSubmit}>
-        <div className="flex flex-wrap items-start justify-between gap-3">
+    <section className="mx-auto flex h-[calc(100vh-4.5rem)] w-full max-w-7xl px-4 py-4">
+      <form
+        className="grid min-h-0 w-full grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden rounded-md border border-slate-200 bg-white shadow-sm"
+        onSubmit={handleSubmit}
+      >
+        <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-100 px-4 py-3">
           <div>
             <h2 className="text-base font-semibold text-slate-950">Start Story Graph</h2>
             <p className="mt-1 text-xs text-slate-500">Create an inspectable in-memory story planning workflow.</p>
           </div>
         </div>
 
-        <label className="flex flex-col gap-1 text-xs font-medium text-slate-700">
-          <span className="flex items-center justify-between gap-3">
-            Story request
-            <span className="flex shrink-0 items-center gap-2">
-              <button
-                className="inline-flex h-8 items-center justify-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
-                disabled={aiStatus !== null || !rawIntent.trim()}
-                onClick={() => void handleStoryInputAi("rewrite")}
-                type="button"
-              >
-                <RefreshCw className="size-3.5" />
-                Rewrite
-              </button>
-              <button
-                className="inline-flex h-8 items-center justify-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
-                disabled={aiStatus !== null}
-                onClick={() => void handleStoryInputAi("suggest")}
-                type="button"
-              >
-                <Bot className="size-3.5" />
-                Suggest
-              </button>
-            </span>
-          </span>
-          <textarea
-            className="min-h-36 rounded-md border border-slate-200 px-3 py-2 text-sm leading-relaxed outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
-            onChange={(event) => setRawIntent(event.target.value)}
-            placeholder="A short comic scene, storyboard sequence, or visual story beat..."
-            value={rawIntent}
-          />
-        </label>
+        <div className="min-h-0 overflow-y-auto p-4">
+          <div className="grid gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(360px,0.9fr)]">
+            <div className="grid min-h-0 gap-4">
+              <label className="flex min-h-0 flex-col gap-1 text-xs font-medium text-slate-700">
+                <span className="flex items-center justify-between gap-3">
+                  Story request
+                  <span className="flex shrink-0 items-center gap-2">
+                    <button
+                      className="inline-flex h-8 items-center justify-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                      disabled={aiStatus !== null || !rawIntent.trim()}
+                      onClick={() => void handleStoryInputAi("rewrite")}
+                      type="button"
+                    >
+                      <RefreshCw className="size-3.5" />
+                      Rewrite
+                    </button>
+                    <button
+                      className="inline-flex h-8 items-center justify-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                      disabled={aiStatus !== null}
+                      onClick={() => void handleStoryInputAi("suggest")}
+                      type="button"
+                    >
+                      <Bot className="size-3.5" />
+                      Suggest
+                    </button>
+                  </span>
+                </span>
+                <textarea
+                  className="min-h-40 resize-y rounded-md border border-slate-200 px-3 py-2 text-sm leading-relaxed outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 xl:min-h-[20rem]"
+                  onChange={(event) => setRawIntent(event.target.value)}
+                  placeholder="A short comic scene, storyboard sequence, or visual story beat..."
+                  value={rawIntent}
+                />
+              </label>
 
-        <div className="grid gap-3 md:grid-cols-[minmax(0,12rem)_8rem_10rem]">
-          <label className="flex flex-col gap-1 text-xs font-medium text-slate-700">
-            Base model
-            <select
-              className="h-9 rounded-md border border-slate-200 bg-white px-3 text-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
-              onChange={(event) => setPromptProfile(normalizePromptProfileId(event.target.value))}
-              value={promptProfile}
-            >
-              {promptProfileIds.map((profile) => (
-                <option key={profile} value={profile}>
-                  {formatPromptProfileLabel(profile)}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="flex flex-col gap-1 text-xs font-medium text-slate-700">
-            Shots
-            <input
-              id="story-target-shot-count"
-              className="h-9 rounded-md border border-slate-200 px-3 text-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
-              min={1}
-              max={24}
-              onChange={(event) => setTargetShotCount(event.target.value)}
-              placeholder="Auto"
-              type="number"
-              value={targetShotCount}
-            />
-          </label>
-          <label className="flex flex-col gap-1 text-xs font-medium text-slate-700">
-            Img2img denoise
-            <input
-              id="story-img2img-denoise"
-              className="h-9 rounded-md border border-slate-200 px-3 text-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
-              max={1}
-              min={0}
-              onBlur={(event) => setImg2ImgDenoise(String(normalizeStoryImg2ImgDenoise(event.target.value)))}
-              onChange={(event) => setImg2ImgDenoise(event.target.value)}
-              step={0.01}
-              type="number"
-              value={img2imgDenoise}
-            />
-          </label>
+              <section className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-600">Core settings</h3>
+                <div className="grid gap-3 md:grid-cols-[minmax(0,12rem)_8rem_10rem]">
+                  <label className="flex flex-col gap-1 text-xs font-medium text-slate-700">
+                    Base model
+                    <select
+                      className="h-9 rounded-md border border-slate-200 bg-white px-3 text-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+                      onChange={(event) => setPromptProfile(normalizePromptProfileId(event.target.value))}
+                      value={promptProfile}
+                    >
+                      {promptProfileIds.map((profile) => (
+                        <option key={profile} value={profile}>
+                          {formatPromptProfileLabel(profile)}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="flex flex-col gap-1 text-xs font-medium text-slate-700">
+                    Shots
+                    <input
+                      id="story-target-shot-count"
+                      className="h-9 rounded-md border border-slate-200 bg-white px-3 text-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+                      min={1}
+                      max={24}
+                      onChange={(event) => setTargetShotCount(event.target.value)}
+                      placeholder="Auto"
+                      type="number"
+                      value={targetShotCount}
+                    />
+                  </label>
+                  <label className="flex flex-col gap-1 text-xs font-medium text-slate-700">
+                    Img2img denoise
+                    <input
+                      id="story-img2img-denoise"
+                      className="h-9 rounded-md border border-slate-200 bg-white px-3 text-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+                      max={1}
+                      min={0}
+                      onBlur={(event) => setImg2ImgDenoise(String(normalizeStoryImg2ImgDenoise(event.target.value)))}
+                      onChange={(event) => setImg2ImgDenoise(event.target.value)}
+                      step={0.01}
+                      type="number"
+                      value={img2imgDenoise}
+                    />
+                  </label>
+                </div>
+              </section>
+            </div>
+
+            <div className="grid min-h-0 gap-4 xl:max-h-[calc(100vh-12rem)] xl:overflow-y-auto xl:pr-1">
+              <StoryDetailerSettingsEditor detailers={detailers} onChange={setDetailers} />
+
+              <section className="rounded-md border border-indigo-100 bg-indigo-50/40 p-3">
+                <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-600">
+                      Style resources / parameters
+                    </h3>
+                    <p className="mt-1 text-xs leading-relaxed text-slate-500">
+                      Optional manual checkpoint, LoRA, and generation settings for this planning run.
+                    </p>
+                  </div>
+                  <button
+                    className="inline-flex h-8 items-center justify-center gap-2 rounded-md border border-indigo-200 bg-white px-3 text-xs font-medium text-indigo-700 transition-colors hover:bg-indigo-50 disabled:cursor-not-allowed disabled:opacity-60"
+                    disabled={!canEditStyleParameters}
+                    onClick={() => setParametersOpen(true)}
+                    title={
+                      canEditStyleParameters
+                        ? "Edit Story style parameters"
+                        : "Select a checkpoint before editing Story style parameters"
+                    }
+                    type="button"
+                  >
+                    Parameters
+                  </button>
+                </div>
+                <StylePaletteCivitaiResourceSelector
+                  onSelectedResourcesChange={setSelectedResources}
+                  onSelectionChange={(selection) => {
+                    setSelectedCheckpointId(selection.checkpointId);
+                    setSelectedLoraIds(selection.loraIds);
+                    setSelectedResources(EMPTY_SELECTED_CIVITAI_RESOURCES);
+                    setSavedParameters(null);
+                    setStyleAdvice(EMPTY_STYLE_PALETTE_ADVICE);
+                    setParametersOpen(false);
+                  }}
+                  pickerLayout="dialog"
+                  selectedCheckpointId={selectedCheckpointId}
+                  selectedLoraIds={selectedLoraIds}
+                />
+                {savedParameters ? (
+                  <p className="mt-2 rounded-md border border-emerald-100 bg-white px-3 py-2 text-xs leading-relaxed text-emerald-700">
+                    Saved parameters: {savedParameters.width}x{savedParameters.height}, {savedParameters.steps} steps, CFG{" "}
+                    {savedParameters.cfg}, {savedParameters.samplerName}/{savedParameters.scheduler}
+                    {savedParameters.seedMode === "fixed" ? `, fixed seed ${savedParameters.seed}` : ", random seed"}
+                  </p>
+                ) : null}
+              </section>
+            </div>
+          </div>
         </div>
 
-        <StoryDetailerSettingsEditor detailers={detailers} onChange={setDetailers} />
-
-        <section className="rounded-md border border-indigo-100 bg-indigo-50/40 p-3">
-          <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
-            <div>
-              <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-600">
-                Style resources / parameters
-              </h3>
-              <p className="mt-1 text-xs leading-relaxed text-slate-500">
-                Optional manual checkpoint, LoRA, and generation settings for this planning run.
-              </p>
-            </div>
-            <button
-              className="inline-flex h-8 items-center justify-center gap-2 rounded-md border border-indigo-200 bg-white px-3 text-xs font-medium text-indigo-700 transition-colors hover:bg-indigo-50 disabled:cursor-not-allowed disabled:opacity-60"
-              disabled={!canEditStyleParameters}
-              onClick={() => setParametersOpen(true)}
-              title={
-                canEditStyleParameters
-                  ? "Edit Story style parameters"
-                  : "Select a checkpoint before editing Story style parameters"
-              }
-              type="button"
-            >
-              Parameters
-            </button>
-          </div>
-          <StylePaletteCivitaiResourceSelector
-            onSelectedResourcesChange={setSelectedResources}
-            onSelectionChange={(selection) => {
-              setSelectedCheckpointId(selection.checkpointId);
-              setSelectedLoraIds(selection.loraIds);
-              setSelectedResources(EMPTY_SELECTED_CIVITAI_RESOURCES);
-              setSavedParameters(null);
-              setStyleAdvice(EMPTY_STYLE_PALETTE_ADVICE);
-              setParametersOpen(false);
-            }}
-            pickerLayout="dialog"
-            selectedCheckpointId={selectedCheckpointId}
-            selectedLoraIds={selectedLoraIds}
-          />
-          {savedParameters ? (
-            <p className="mt-2 rounded-md border border-emerald-100 bg-white px-3 py-2 text-xs leading-relaxed text-emerald-700">
-              Saved parameters: {savedParameters.width}x{savedParameters.height}, {savedParameters.steps} steps, CFG{" "}
-              {savedParameters.cfg}, {savedParameters.samplerName}/{savedParameters.scheduler}
-              {savedParameters.seedMode === "fixed" ? `, fixed seed ${savedParameters.seed}` : ", random seed"}
-            </p>
-          ) : null}
-        </section>
-
-        {error ? <div className="rounded-md border border-rose-200 bg-rose-50 p-3 text-xs text-rose-700">{error}</div> : null}
-
-        <div className="sticky bottom-0 z-10 -mx-4 -mb-4 flex justify-end border-t border-slate-100 bg-white/95 px-4 py-3 backdrop-blur">
+        <div className="flex flex-col gap-3 border-t border-slate-100 bg-white px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+          {error ? (
+            <div className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">{error}</div>
+          ) : (
+            <span className="hidden text-xs text-slate-500 sm:block">Ready to start Story planning.</span>
+          )}
           <button
             className="inline-flex h-9 items-center justify-center gap-2 rounded-md bg-slate-950 px-4 text-xs font-semibold text-white transition-colors hover:bg-slate-800"
             type="submit"

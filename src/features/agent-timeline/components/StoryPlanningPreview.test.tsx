@@ -713,7 +713,7 @@ describe("StoryPlanningPreview", () => {
     const startPlanningButton = Array.from(container.querySelectorAll("button")).find(
       (button) => button.textContent?.replace(/\s+/g, " ").trim() === "Start planning",
     );
-    expect(startPlanningButton?.parentElement?.className).toContain("sticky");
+    expect(startPlanningButton?.parentElement?.className).toContain("border-t");
     await clickButtonAsync("Start planning");
 
     expect(container.textContent).toContain("User-started planning workflow");
