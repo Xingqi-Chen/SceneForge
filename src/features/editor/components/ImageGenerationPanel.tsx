@@ -4843,7 +4843,6 @@ export type ComfyUiGenerationDialogProps = {
   savedParameters?: SavedComfyUiGenerationParams | null;
   selectedCheckpointId: string | null;
   selectedLoraIds: string[];
-  showDetailersInParametersOnly?: boolean;
   title?: string;
 };
 
@@ -4867,7 +4866,6 @@ export function ComfyUiGenerationDialog({
   savedParameters = null,
   selectedCheckpointId,
   selectedLoraIds,
-  showDetailersInParametersOnly = false,
   title = "ComfyUI 生图",
 }: ComfyUiGenerationDialogProps) {
   const scene = useEditorStore((state) => state.project.scene);
@@ -6005,7 +6003,6 @@ export function ComfyUiGenerationDialog({
   const diagnosisHasEnabledScope =
     (diagnosisPromptAllowed && diagnosisPromptEnabled) ||
     (diagnosisParameterAllowed && diagnosisParameterEnabled);
-  const showDetailerControls = !parametersOnly || showDetailersInParametersOnly;
 
   if (!open || typeof document === "undefined") {
     return null;
@@ -6356,7 +6353,7 @@ export function ComfyUiGenerationDialog({
                                 preview={controlNetOpenPosePreview}
                               />
                             ) : null}
-                            {showDetailerControls ? (
+                            {!parametersOnly ? (
                             <DetailerFoldout
                               detailer={draft.handDetailer}
                               label="HandDetailer"
@@ -6366,7 +6363,7 @@ export function ComfyUiGenerationDialog({
                               schedulerOptions={schedulerOptions}
                             />
                             ) : null}
-                            {showDetailerControls ? (
+                            {!parametersOnly ? (
                             <DetailerFoldout
                               detailer={draft.faceDetailer}
                               label="FaceDetailer"

@@ -22,6 +22,9 @@ import {
 } from "@/features/agent-timeline/story-input";
 import {
   createStoryDetailerSettingsSnapshot,
+  sanitizeStoryDetailerSettingsSnapshot,
+  type StoryDetailerConfig,
+  type StoryDetailerSettingsSnapshot,
 } from "@/features/agent-timeline/story-detailers";
 import { createStoryStylePaletteSnapshot } from "@/features/agent-timeline/story-style-palette";
 import type { StoryResultDisplay } from "@/features/agent-timeline/story-api";
@@ -60,6 +63,14 @@ import {
 } from "@/features/llm";
 import type { SelectedCivitaiResourcesPreview } from "@/features/civitai-lora-library";
 import type { SavedComfyUiGenerationParams } from "@/shared/types";
+import {
+  COMFYUI_FACE_DETAILER_SAM_DETECTION_HINT_OPTIONS,
+  COMFYUI_FACE_DETAILER_SAM_MASK_HINT_USE_NEGATIVE_OPTIONS,
+} from "@/features/comfyui";
+import {
+  COMFYUI_SAMPLER_OPTIONS,
+  COMFYUI_SCHEDULER_OPTIONS,
+} from "@/features/editor/ai-prompt/comfyui-generation-options";
 import {
   coercePromptProfileId,
   defaultPromptProfileId,
@@ -292,8 +303,7 @@ async function completeStoryInputAi({
 
 function createClientStartRequest({
   checkpointId,
-  faceDetailerEnabled,
-  handDetailerEnabled,
+  detailers,
   img2imgDenoise,
   loraIds,
   nsfwEnabled,
@@ -303,8 +313,7 @@ function createClientStartRequest({
   targetShotCount,
 }: {
   checkpointId?: string | null;
-  faceDetailerEnabled: boolean;
-  handDetailerEnabled: boolean;
+  detailers: StoryDetailerSettingsSnapshot;
   img2imgDenoise: string;
   loraIds?: readonly string[];
   nsfwEnabled: boolean;
@@ -320,11 +329,7 @@ function createClientStartRequest({
     loraIds: loraIds ?? [],
     savedParameters,
   });
-  const detailers = createStoryDetailerSettingsSnapshot({
-    faceDetailerEnabled,
-    handDetailerEnabled,
-    savedParameters,
-  });
+  const sanitizedDetailers = sanitizeStoryDetailerSettingsSnapshot(detailers);
 
   return {
     nsfwEnabled,
@@ -332,7 +337,7 @@ function createClientStartRequest({
     targetShotCount: Number.isFinite(normalizedShotCount) ? normalizedShotCount : undefined,
     settingsSnapshot: {
       audienceRating,
-      detailers,
+      detailers: sanitizedDetailers,
       img2imgDenoise: normalizeStoryImg2ImgDenoise(img2imgDenoise),
       nsfwEnabled,
       promptProfile,
@@ -346,6 +351,391 @@ function getApiErrorMessage(payload: unknown, fallback: string) {
   return isRecord(payload) && isRecord(payload.error) && typeof payload.error.message === "string"
     ? payload.error.message
     : fallback;
+}
+
+type StoryDetailerKind = keyof StoryDetailerSettingsSnapshot;
+type StoryDetailerPatch = Partial<StoryDetailerConfig>;
+
+const storyDetailerTextFieldClassName =
+  "h-9 w-full min-w-0 rounded-md border border-slate-200 bg-white px-2 text-xs text-slate-700 outline-none transition focus:border-blue-300 focus:ring-2 focus:ring-blue-100";
+const storyDetailerLabelTextClassName = "text-[10px] font-semibold uppercase tracking-wider text-slate-500";
+
+function StoryDetailerNumberInput({
+  id,
+  label,
+  max,
+  min,
+  onChange,
+  step = 1,
+  value,
+}: {
+  id?: string;
+  label: string;
+  max?: number;
+  min?: number;
+  onChange: (value: number) => void;
+  step?: number;
+  value: number;
+}) {
+  return (
+    <label className="grid gap-1">
+      <span className={storyDetailerLabelTextClassName}>{label}</span>
+      <input
+        className={storyDetailerTextFieldClassName}
+        id={id}
+        max={max}
+        min={min}
+        onChange={(event) => {
+          const parsed = Number(event.target.value);
+          if (Number.isFinite(parsed)) {
+            onChange(parsed);
+          }
+        }}
+        step={step}
+        type="number"
+        value={value}
+      />
+    </label>
+  );
+}
+
+function StoryDetailerTextInput({
+  id,
+  label,
+  onChange,
+  value,
+}: {
+  id?: string;
+  label: string;
+  onChange: (value: string) => void;
+  value: string;
+}) {
+  return (
+    <label className="grid gap-1">
+      <span className={storyDetailerLabelTextClassName}>{label}</span>
+      <input
+        className={storyDetailerTextFieldClassName}
+        id={id}
+        onChange={(event) => onChange(event.target.value)}
+        type="text"
+        value={value}
+      />
+    </label>
+  );
+}
+
+function StoryDetailerSelectInput({
+  label,
+  onChange,
+  options,
+  value,
+}: {
+  label: string;
+  onChange: (value: string) => void;
+  options: readonly { label: string; value: string }[];
+  value: string;
+}) {
+  const selectedValue = options.some((option) => option.value === value) ? value : options[0]?.value ?? "";
+
+  return (
+    <label className="grid gap-1">
+      <span className={storyDetailerLabelTextClassName}>{label}</span>
+      <select
+        className={storyDetailerTextFieldClassName}
+        onChange={(event) => onChange(event.target.value)}
+        value={selectedValue}
+      >
+        {options.map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+function StoryDetailerBooleanInput({
+  checked,
+  label,
+  onChange,
+}: {
+  checked: boolean;
+  label: string;
+  onChange: (value: boolean) => void;
+}) {
+  return (
+    <label className="flex min-h-9 items-center gap-2 rounded-md border border-slate-200 bg-white px-2 text-xs font-medium text-slate-700">
+      <input
+        checked={checked}
+        className="size-3.5 rounded border-slate-300 text-slate-900 focus:ring-slate-300"
+        onChange={(event) => onChange(event.target.checked)}
+        type="checkbox"
+      />
+      {label}
+    </label>
+  );
+}
+
+function StoryDetailerTextAreaInput({
+  label,
+  onChange,
+  value,
+}: {
+  label: string;
+  onChange: (value: string) => void;
+  value: string;
+}) {
+  return (
+    <label className="grid gap-1 sm:col-span-2 lg:col-span-3">
+      <span className={storyDetailerLabelTextClassName}>{label}</span>
+      <textarea
+        className="min-h-16 w-full resize-y rounded-md border border-slate-200 bg-white px-2 py-2 text-xs leading-relaxed text-slate-700 outline-none transition focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
+        onChange={(event) => onChange(event.target.value)}
+        value={value}
+      />
+    </label>
+  );
+}
+
+function StoryDetailerPanel({
+  detailer,
+  idPrefix,
+  kind,
+  label,
+  onChange,
+  parameterLabel,
+}: {
+  detailer: StoryDetailerConfig;
+  idPrefix: string;
+  kind: StoryDetailerKind;
+  label: string;
+  onChange: (patch: StoryDetailerPatch) => void;
+  parameterLabel: string;
+}) {
+  const resolved = sanitizeStoryDetailerSettingsSnapshot({
+    [kind]: detailer,
+  } as Partial<StoryDetailerSettingsSnapshot>)[kind] as Required<StoryDetailerConfig>;
+
+  return (
+    <div className="grid gap-3 rounded-md border border-slate-200 bg-white p-3">
+      <label className="flex min-w-0 items-center gap-2 text-xs font-semibold text-slate-800">
+        <input
+          checked={resolved.enabled}
+          className="size-4 rounded border-slate-300 text-slate-900 focus:ring-slate-300"
+          id={`${idPrefix}-enabled`}
+          onChange={(event) => onChange({ enabled: event.target.checked })}
+          type="checkbox"
+        />
+        <span>{label}</span>
+      </label>
+      {resolved.enabled ? (
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          <StoryDetailerTextInput
+            id={`${idPrefix}-detector-model`}
+            label="detector model"
+            onChange={(value) => onChange({ detectorModelName: value })}
+            value={resolved.detectorModelName}
+          />
+          <StoryDetailerNumberInput
+            label="guide size"
+            min={64}
+            onChange={(value) => onChange({ guideSize: Math.round(value / 8) * 8 })}
+            step={8}
+            value={resolved.guideSize}
+          />
+          <StoryDetailerNumberInput
+            label="max size"
+            min={64}
+            onChange={(value) => onChange({ maxSize: Math.round(value / 8) * 8 })}
+            step={8}
+            value={resolved.maxSize}
+          />
+          <StoryDetailerNumberInput
+            label={`${parameterLabel} denoise`}
+            max={1}
+            min={0}
+            onChange={(value) => onChange({ denoise: value })}
+            step={0.05}
+            value={resolved.denoise}
+          />
+          <StoryDetailerNumberInput
+            id={`${idPrefix}-steps`}
+            label={`${parameterLabel} steps`}
+            min={1}
+            onChange={(value) => onChange({ steps: Math.round(value) })}
+            value={resolved.steps}
+          />
+          <StoryDetailerNumberInput
+            label={`${parameterLabel} cfg`}
+            min={0}
+            onChange={(value) => onChange({ cfg: value })}
+            step={0.5}
+            value={resolved.cfg}
+          />
+          <StoryDetailerSelectInput
+            label={`${parameterLabel} sampler`}
+            onChange={(value) => onChange({ samplerName: value })}
+            options={COMFYUI_SAMPLER_OPTIONS}
+            value={resolved.samplerName}
+          />
+          <StoryDetailerSelectInput
+            label={`${parameterLabel} scheduler`}
+            onChange={(value) => onChange({ scheduler: value })}
+            options={COMFYUI_SCHEDULER_OPTIONS}
+            value={resolved.scheduler}
+          />
+          <StoryDetailerNumberInput
+            label="bbox threshold"
+            max={1}
+            min={0}
+            onChange={(value) => onChange({ bboxThreshold: value })}
+            step={0.01}
+            value={resolved.bboxThreshold}
+          />
+          <StoryDetailerNumberInput
+            label="bbox dilation"
+            max={512}
+            min={-512}
+            onChange={(value) => onChange({ bboxDilation: Math.round(value) })}
+            value={resolved.bboxDilation}
+          />
+          <StoryDetailerNumberInput
+            label="bbox crop"
+            max={10}
+            min={1}
+            onChange={(value) => onChange({ bboxCropFactor: value })}
+            step={0.1}
+            value={resolved.bboxCropFactor}
+          />
+          <StoryDetailerNumberInput
+            label="feather"
+            max={100}
+            min={0}
+            onChange={(value) => onChange({ feather: Math.round(value) })}
+            value={resolved.feather}
+          />
+          <StoryDetailerNumberInput
+            label="drop size"
+            min={1}
+            onChange={(value) => onChange({ dropSize: Math.round(value) })}
+            value={resolved.dropSize}
+          />
+          <StoryDetailerNumberInput
+            label="cycle"
+            max={10}
+            min={1}
+            onChange={(value) => onChange({ cycle: Math.round(value) })}
+            value={resolved.cycle}
+          />
+          <StoryDetailerBooleanInput
+            checked={resolved.guideSizeFor}
+            label="guide size for bbox"
+            onChange={(value) => onChange({ guideSizeFor: value })}
+          />
+          <StoryDetailerBooleanInput
+            checked={resolved.noiseMask}
+            label="noise mask"
+            onChange={(value) => onChange({ noiseMask: value })}
+          />
+          <StoryDetailerBooleanInput
+            checked={resolved.forceInpaint}
+            label="force inpaint"
+            onChange={(value) => onChange({ forceInpaint: value })}
+          />
+          <StoryDetailerSelectInput
+            label="sam hint"
+            onChange={(value) => onChange({ samDetectionHint: value as StoryDetailerConfig["samDetectionHint"] })}
+            options={COMFYUI_FACE_DETAILER_SAM_DETECTION_HINT_OPTIONS}
+            value={resolved.samDetectionHint}
+          />
+          <StoryDetailerNumberInput
+            label="sam dilation"
+            max={512}
+            min={-512}
+            onChange={(value) => onChange({ samDilation: Math.round(value) })}
+            value={resolved.samDilation}
+          />
+          <StoryDetailerNumberInput
+            label="sam threshold"
+            max={1}
+            min={0}
+            onChange={(value) => onChange({ samThreshold: value })}
+            step={0.01}
+            value={resolved.samThreshold}
+          />
+          <StoryDetailerNumberInput
+            label="sam bbox expansion"
+            max={1000}
+            min={0}
+            onChange={(value) => onChange({ samBBoxExpansion: Math.round(value) })}
+            value={resolved.samBBoxExpansion}
+          />
+          <StoryDetailerNumberInput
+            label="sam mask threshold"
+            max={1}
+            min={0}
+            onChange={(value) => onChange({ samMaskHintThreshold: value })}
+            step={0.01}
+            value={resolved.samMaskHintThreshold}
+          />
+          <StoryDetailerSelectInput
+            label="sam negative"
+            onChange={(value) => onChange({ samMaskHintUseNegative: value as StoryDetailerConfig["samMaskHintUseNegative"] })}
+            options={COMFYUI_FACE_DETAILER_SAM_MASK_HINT_USE_NEGATIVE_OPTIONS}
+            value={resolved.samMaskHintUseNegative}
+          />
+          <StoryDetailerTextAreaInput
+            label="wildcard"
+            onChange={(value) => onChange({ wildcard: value })}
+            value={resolved.wildcard}
+          />
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function StoryDetailerSettingsEditor({
+  detailers,
+  onChange,
+}: {
+  detailers: StoryDetailerSettingsSnapshot;
+  onChange: (detailers: StoryDetailerSettingsSnapshot) => void;
+}) {
+  function patchDetailer(kind: StoryDetailerKind, patch: StoryDetailerPatch) {
+    onChange(
+      sanitizeStoryDetailerSettingsSnapshot({
+        ...detailers,
+        [kind]: {
+          ...detailers[kind],
+          ...patch,
+        },
+      }),
+    );
+  }
+
+  return (
+    <fieldset className="grid gap-3 rounded-md border border-slate-200 bg-slate-50 p-3">
+      <legend className="px-1 text-xs font-semibold uppercase tracking-wide text-slate-600">Detailers</legend>
+      <StoryDetailerPanel
+        detailer={detailers.faceDetailer}
+        idPrefix="story-face-detailer"
+        kind="faceDetailer"
+        label="FaceDetailer"
+        onChange={(patch) => patchDetailer("faceDetailer", patch)}
+        parameterLabel="face"
+      />
+      <StoryDetailerPanel
+        detailer={detailers.handDetailer}
+        idPrefix="story-hand-detailer"
+        kind="handDetailer"
+        label="HandDetailer"
+        onChange={(patch) => patchDetailer("handDetailer", patch)}
+        parameterLabel="hand"
+      />
+    </fieldset>
+  );
 }
 
 function StoryNodeErrorNotice({ node }: { node: StoryWorkflowNodeResult }) {
@@ -574,8 +964,7 @@ function StartPanel({
   const [targetShotCount, setTargetShotCount] = useState("");
   const [img2imgDenoise, setImg2ImgDenoise] = useState(String(DEFAULT_STORY_IMG2IMG_DENOISE));
   const [promptProfile, setPromptProfile] = useState<PromptProfileId>(defaultPromptProfileId);
-  const [faceDetailerEnabled, setFaceDetailerEnabled] = useState(false);
-  const [handDetailerEnabled, setHandDetailerEnabled] = useState(false);
+  const [detailers, setDetailers] = useState<StoryDetailerSettingsSnapshot>(() => createStoryDetailerSettingsSnapshot());
   const [selectedCheckpointId, setSelectedCheckpointId] = useState<string | null>(null);
   const [selectedLoraIds, setSelectedLoraIds] = useState<string[]>([]);
   const [selectedResources, setSelectedResources] = useState<SelectedCivitaiResourcesPreview>(EMPTY_SELECTED_CIVITAI_RESOURCES);
@@ -624,8 +1013,7 @@ function StartPanel({
     onStart(
       createClientStartRequest({
         checkpointId: selectedCheckpointId,
-        faceDetailerEnabled,
-        handDetailerEnabled,
+        detailers,
         img2imgDenoise,
         loraIds: selectedLoraIds,
         nsfwEnabled,
@@ -723,29 +1111,7 @@ function StartPanel({
           </label>
         </div>
 
-        <fieldset className="grid gap-2 rounded-md border border-slate-200 bg-slate-50 p-3 sm:grid-cols-2">
-          <legend className="sr-only">Story detailers</legend>
-          <label className="flex min-w-0 items-center gap-2 text-xs font-medium text-slate-700">
-            <input
-              checked={faceDetailerEnabled}
-              className="size-4 rounded border-slate-300 text-slate-900 focus:ring-slate-300"
-              id="story-face-detailer-enabled"
-              onChange={(event) => setFaceDetailerEnabled(event.target.checked)}
-              type="checkbox"
-            />
-            <span>FaceDetailer</span>
-          </label>
-          <label className="flex min-w-0 items-center gap-2 text-xs font-medium text-slate-700">
-            <input
-              checked={handDetailerEnabled}
-              className="size-4 rounded border-slate-300 text-slate-900 focus:ring-slate-300"
-              id="story-hand-detailer-enabled"
-              onChange={(event) => setHandDetailerEnabled(event.target.checked)}
-              type="checkbox"
-            />
-            <span>HandDetailer</span>
-          </label>
-        </fieldset>
+        <StoryDetailerSettingsEditor detailers={detailers} onChange={setDetailers} />
 
         <section className="rounded-md border border-indigo-100 bg-indigo-50/40 p-3">
           <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
@@ -836,7 +1202,6 @@ function StartPanel({
           savedParameters={savedParameters}
           selectedCheckpointId={selectedCheckpointId}
           selectedLoraIds={selectedLoraIds}
-          showDetailersInParametersOnly
           title="Story style parameters"
         />
       </form>

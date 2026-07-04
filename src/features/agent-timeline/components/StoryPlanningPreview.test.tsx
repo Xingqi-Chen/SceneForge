@@ -789,6 +789,22 @@ describe("StoryPlanningPreview", () => {
       faceDetailerInput?.click();
       handDetailerInput?.click();
     });
+
+    const faceDetectorInput = container.querySelector("#story-face-detailer-detector-model") as HTMLInputElement | null;
+    const faceStepsInput = container.querySelector("#story-face-detailer-steps") as HTMLInputElement | null;
+    const handDetectorInput = container.querySelector("#story-hand-detailer-detector-model") as HTMLInputElement | null;
+    const handStepsInput = container.querySelector("#story-hand-detailer-steps") as HTMLInputElement | null;
+    expect(faceDetectorInput).not.toBeNull();
+    expect(faceStepsInput).not.toBeNull();
+    expect(handDetectorInput).not.toBeNull();
+    expect(handStepsInput).not.toBeNull();
+
+    act(() => {
+      setNativeInputValue(faceDetectorInput as HTMLInputElement, "bbox/story-face.pt");
+      setNativeInputValue(faceStepsInput as HTMLInputElement, "18");
+      setNativeInputValue(handDetectorInput as HTMLInputElement, "bbox/story-hand.pt");
+      setNativeInputValue(handStepsInput as HTMLInputElement, "19");
+    });
     await clickButtonAsync("Start planning");
 
     const planningBody = JSON.parse(String(
@@ -807,13 +823,13 @@ describe("StoryPlanningPreview", () => {
     expect(planningBody.settingsSnapshot?.detailers).toMatchObject({
       faceDetailer: {
         enabled: true,
-        detectorModelName: "bbox/face_yolov8m.pt",
-        steps: 30,
+        detectorModelName: "bbox/story-face.pt",
+        steps: 18,
       },
       handDetailer: {
         enabled: true,
-        detectorModelName: "bbox/hand_yolov8s.pt",
-        steps: 30,
+        detectorModelName: "bbox/story-hand.pt",
+        steps: 19,
       },
     });
   });
@@ -1078,7 +1094,7 @@ describe("StoryPlanningPreview", () => {
     expect(enabledParametersButton?.disabled).toBe(false);
     await clickButtonAsync("Parameters");
     expect(container.textContent).toContain("parameters-only");
-    expect(dialogProps.at(-1)?.showDetailersInParametersOnly).toBe(true);
+    expect(dialogProps.at(-1)?.showDetailersInParametersOnly).toBeUndefined();
     await clickButtonAsync("Save mock parameters");
     expect(container.textContent).toContain("Saved parameters: 832x1216, 31 steps, CFG 4.25, euler/normal, fixed seed 98765");
     await clickButtonAsync("Start planning");
@@ -1112,13 +1128,13 @@ describe("StoryPlanningPreview", () => {
     expect(planningBody.settingsSnapshot?.detailers).toMatchObject({
       faceDetailer: {
         enabled: false,
-        detectorModelName: "bbox/custom-face.pt",
-        steps: 18,
+        detectorModelName: "bbox/face_yolov8m.pt",
+        steps: 30,
       },
       handDetailer: {
         enabled: false,
-        detectorModelName: "bbox/custom-hand.pt",
-        steps: 19,
+        detectorModelName: "bbox/hand_yolov8s.pt",
+        steps: 30,
       },
     });
     expect(planningBody.settingsSnapshot?.stylePalette).toEqual({

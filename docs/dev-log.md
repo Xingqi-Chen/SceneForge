@@ -8,9 +8,9 @@ This log records dated implementation and documentation work. Keep entries conci
 
 Summary:
 
-- Added unchecked FaceDetailer and HandDetailer checkboxes to the `/story` start form.
-- Added Story-scoped `settingsSnapshot.detailers` sanitization that reuses current-request saved detailer fields when present, falls back to ComfyUI detailer defaults when absent, and always forces `enabled` from the checkboxes.
-- Kept detailer settings independent of `stylePalette` so users can enable detailers without selecting a checkpoint, and kept resource, parameter, and render LLM payloads from receiving detailer settings.
+- Added a `/story` input Detailers section with FaceDetailer and HandDetailer enable checkboxes plus fine parameter controls for detector, steps, CFG, sampler/scheduler, bbox, SAM, and wildcard fields.
+- Added Story-scoped `settingsSnapshot.detailers` sanitization that falls back to ComfyUI detailer defaults and persists the input Detailers section independently from saved Story Parameters.
+- Kept detailer settings independent of `stylePalette` and resource selection so users can configure detailers without selecting a checkpoint, and kept resource, parameter, and render LLM payloads from receiving detailer settings.
 - Applied Story detailers to final generation and scoped regeneration request assembly while preserving existing preview-mode detailer disabling.
 - Updated generation-gate shot summaries and Story workflow persistence restore behavior for detailer visibility and legacy disabled defaults.
 

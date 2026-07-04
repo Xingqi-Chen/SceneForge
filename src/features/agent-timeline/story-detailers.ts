@@ -7,7 +7,6 @@ import {
   type ComfyUiFaceDetailerConfig,
   type ComfyUiHandDetailerConfig,
 } from "@/features/comfyui";
-import type { SavedComfyUiGenerationParams } from "@/shared/types";
 
 export type StoryDetailerConfig = ComfyUiFaceDetailerConfig & {
   enabled: boolean;
@@ -136,27 +135,8 @@ function detailerEnabled(rawValue: unknown) {
   return isRecord(rawValue) && rawValue.enabled === true;
 }
 
-export function createStoryDetailerSettingsSnapshot({
-  faceDetailerEnabled,
-  handDetailerEnabled,
-  savedParameters,
-}: {
-  faceDetailerEnabled: boolean;
-  handDetailerEnabled: boolean;
-  savedParameters?: SavedComfyUiGenerationParams | null;
-}): StoryDetailerSettingsSnapshot {
-  return {
-    faceDetailer: sanitizeStoryDetailer(
-      savedParameters?.faceDetailer,
-      DEFAULT_COMFYUI_FACE_DETAILER_DETECTOR_MODEL,
-      faceDetailerEnabled,
-    ),
-    handDetailer: sanitizeStoryDetailer(
-      savedParameters?.handDetailer,
-      DEFAULT_COMFYUI_HAND_DETAILER_DETECTOR_MODEL,
-      handDetailerEnabled,
-    ) as ComfyUiHandDetailerConfig & { enabled: boolean },
-  };
+export function createStoryDetailerSettingsSnapshot(value?: Partial<StoryDetailerSettingsSnapshot>): StoryDetailerSettingsSnapshot {
+  return sanitizeStoryDetailerSettingsSnapshot(value);
 }
 
 export function sanitizeStoryDetailerSettingsSnapshot(value: unknown): StoryDetailerSettingsSnapshot {

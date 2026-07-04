@@ -8,7 +8,6 @@ import {
 import {
   createStoryDetailerSettingsSnapshot,
 } from "./story-detailers";
-import type { SavedComfyUiGenerationParams } from "@/shared/types";
 import { confirmStoryGeneration, setStoryNodeManualResult } from "./story-state";
 import { canRunCommonWorkflowNode } from "./workflow-definition";
 import { storyWorkflowDefinition } from "./story-workflow";
@@ -309,43 +308,25 @@ describe("story input workflow start", () => {
     expect(input.settingsSnapshot).not.toHaveProperty("stylePalette");
   });
 
-  it("stores Story detailers independently from style resources and forces checkbox enabled state", () => {
-    const savedParameters = {
-      width: 832,
-      height: 1216,
-      seed: 12345,
-      seedMode: "fixed",
-      steps: 31,
-      cfg: 4.25,
-      samplerName: "euler",
-      scheduler: "normal",
-      denoise: 0.88,
-      imageCount: 1,
-      outputPrefix: "SceneForge",
-      faceDetailer: {
-        enabled: true,
-        bboxDilation: -24,
-        detectorModelName: "bbox/custom-face.pt",
-        samDilation: -8,
-        steps: 18,
-      },
-      handDetailer: {
-        enabled: false,
-        detectorModelName: "bbox/custom-hand.pt",
-        steps: 19,
-      },
-      loras: [],
-      savedAt: "2026-06-15T00:00:00.000Z",
-    } satisfies SavedComfyUiGenerationParams;
+  it("stores Story detailers independently from style resources", () => {
     const input = createStoryInputFromStartRequest({
       rawIntent: "A one-shot portrait without a selected checkpoint.",
       storyId: "story-detailers",
       now,
       settingsSnapshot: {
         detailers: createStoryDetailerSettingsSnapshot({
-          faceDetailerEnabled: false,
-          handDetailerEnabled: true,
-          savedParameters,
+          faceDetailer: {
+            enabled: false,
+            bboxDilation: -24,
+            detectorModelName: "bbox/custom-face.pt",
+            samDilation: -8,
+            steps: 18,
+          },
+          handDetailer: {
+            enabled: true,
+            detectorModelName: "bbox/custom-hand.pt",
+            steps: 19,
+          },
         }),
       },
     });
@@ -376,9 +357,8 @@ describe("story input workflow start", () => {
       now,
       settingsSnapshot: {
         detailers: createStoryDetailerSettingsSnapshot({
-          faceDetailerEnabled: true,
-          handDetailerEnabled: false,
-          savedParameters: null,
+          faceDetailer: { enabled: true },
+          handDetailer: { enabled: false },
         }),
       },
     });
