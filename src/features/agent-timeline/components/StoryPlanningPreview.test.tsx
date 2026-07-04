@@ -798,6 +798,9 @@ describe("StoryPlanningPreview", () => {
     expect(faceStepsInput).not.toBeNull();
     expect(handDetectorInput).not.toBeNull();
     expect(handStepsInput).not.toBeNull();
+    const advancedDetailerSections = Array.from(container.querySelectorAll("details"));
+    expect(advancedDetailerSections).toHaveLength(2);
+    expect(advancedDetailerSections.every((section) => !section.open)).toBe(true);
 
     act(() => {
       setNativeInputValue(faceDetectorInput as HTMLInputElement, "bbox/story-face.pt");
