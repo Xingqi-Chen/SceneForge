@@ -44,6 +44,23 @@ function formatExampleImageDimensions(resource: SelectedCivitaiResourcePreview) 
   return dimensions.length > 0 ? `- exampleImageDimensions: ${dimensions.join(", ")}` : null;
 }
 
+function formatPromptReferences(resource: SelectedCivitaiResourcePreview) {
+  const references = resource.promptReferences
+    ?.map((reference) =>
+      [
+        reference.prompt ? `prompt=${reference.prompt}` : null,
+        reference.negativePrompt ? `negative=${reference.negativePrompt}` : null,
+        reference.sampler ? `sampler=${reference.sampler}` : null,
+        reference.steps !== null ? `steps=${reference.steps}` : null,
+        reference.cfgScale !== null ? `cfg=${reference.cfgScale}` : null,
+      ].filter(Boolean).join("; "),
+    )
+    .filter(Boolean)
+    .slice(0, 3) ?? [];
+
+  return references.length > 0 ? `- promptReferences: ${references.join(" | ")}` : null;
+}
+
 function formatRecommendation(recommendation: CivitaiResourceRecommendation) {
   const parts = [
     recommendation.condition ? `condition=${recommendation.condition}` : null,
@@ -72,6 +89,7 @@ function formatResourceForAi(resource: SelectedCivitaiResourcePreview, label: st
     `- categories: ${joinList(resource.categories)}`,
     formatWeightRange(resource),
     formatExampleImageDimensions(resource),
+    formatPromptReferences(resource),
     resource.usageGuide ? `- usageGuide: ${resource.usageGuide}` : null,
     resource.descriptionSnippet ? `- description: ${resource.descriptionSnippet}` : null,
     resource.recommendations.length > 0

@@ -15,6 +15,7 @@ import {
   parseIllustriousPromptSectionsFromResponse,
   renderIllustriousPrompt,
   splitPromptParts,
+  type IllustriousResourceTriggerSelection,
   type IllustriousPromptSections,
 } from "@/features/editor/ai-prompt/illustrious-prompt";
 import {
@@ -146,6 +147,8 @@ export type StoryRenderPlanResourceRefs = {
   }>;
 };
 
+export type StoryResourceTriggerSelection = IllustriousResourceTriggerSelection;
+
 export type StoryGenerationRequestPreview = {
   animaPromptParts?: StoryAnimaPromptParts;
   illustriousSections?: IllustriousPromptSections;
@@ -155,6 +158,7 @@ export type StoryGenerationRequestPreview = {
   promptProfile: PromptProfileId;
   positivePromptLength: number;
   positivePromptPreview: string;
+  resourceTriggerSelections?: StoryResourceTriggerSelection[];
   sourceImageEdges: StorySourceImageEdgeSummary[];
   shotId: StoryShotId;
   sourceMode: "none" | "source-image";
@@ -184,6 +188,7 @@ export type StoryRenderPromptDraftShot = {
   illustriousSections?: IllustriousPromptSections;
   negativeAdditions?: string[];
   rationale?: string;
+  resourceTriggerSelections?: StoryResourceTriggerSelection[];
   warnings?: string[];
 };
 
@@ -211,6 +216,7 @@ export type StoryRenderPlanShot = {
     checkpointResourceId: string;
     loraResourceIds: string[];
   };
+  resourceTriggerSelections?: StoryResourceTriggerSelection[];
   resources?: {
     checkpoint: StoryResourcePlan["checkpoint"];
     loras: StoryResourcePlan["loras"];
@@ -302,6 +308,16 @@ const storySafeMinorNegativeTags = [
   "gore",
   "severe injury",
 ];
+const storyIllustriousNegativePromptTags = [
+  "bad quality",
+  "worst quality",
+  "worst detail",
+  "censor",
+] as const;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
 
 function failStoryResourcePlan(message: string, details?: unknown): never {
   throw new StoryResourcePlanValidationError({ message, details });
@@ -757,6 +773,44 @@ export function normalizeStoryIllustriousSections(raw: unknown): IllustriousProm
   return {};
 }
 
+function normalizeStoryResourceTriggerWord(value: unknown) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+export function normalizeStoryResourceTriggerSelections(raw: unknown): StoryResourceTriggerSelection[] {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+
+  return raw
+    .filter(isRecord)
+    .map((selection) => {
+      const resourceId = normalizeStoryResourceTriggerWord(
+        selection.resourceId ?? selection.resource_id,
+      );
+      const selectedTrainedWordsRaw =
+        selection.selectedTrainedWords ??
+        selection.selected_trained_words ??
+        selection.trainedWords ??
+        selection.trained_words;
+      const selectedTrainedWords = Array.isArray(selectedTrainedWordsRaw)
+        ? dedupeExactPromptParts(
+            selectedTrainedWordsRaw
+              .map(normalizeStoryResourceTriggerWord)
+              .filter(Boolean),
+          )
+        : [];
+      const reason = normalizeStoryResourceTriggerWord(selection.reason);
+
+      return {
+        resourceId,
+        selectedTrainedWords,
+        ...(reason ? { reason } : {}),
+      };
+    })
+    .filter((selection) => selection.resourceId && selection.selectedTrainedWords.length > 0);
+}
+
 function cloneStoryIllustriousSections(sections: IllustriousPromptSections): IllustriousPromptSections {
   return Object.fromEntries(
     Object.entries(sections).map(([key, value]) => [
@@ -764,6 +818,16 @@ function cloneStoryIllustriousSections(sections: IllustriousPromptSections): Ill
       Array.isArray(value) ? [...value] : value,
     ]),
   ) as IllustriousPromptSections;
+}
+
+function cloneStoryResourceTriggerSelections(
+  selections: StoryResourceTriggerSelection[],
+): StoryResourceTriggerSelection[] {
+  return selections.map((selection) => ({
+    resourceId: selection.resourceId,
+    selectedTrainedWords: [...selection.selectedTrainedWords],
+    ...(selection.reason ? { reason: selection.reason } : {}),
+  }));
 }
 
 function hasStoryIllustriousSectionContent(sections: IllustriousPromptSections) {
@@ -802,6 +866,7 @@ function getStoryRenderPromptDraft(shotId: StoryShotId, renderPromptPlan?: Story
       ? { animaPromptParts: normalizeStoryAnimaPromptParts(draft.animaPromptParts) }
       : { illustriousSections: normalizeStoryIllustriousSections(draft.illustriousSections) }),
     negativeAdditions: [...(draft.negativeAdditions ?? [])],
+    resourceTriggerSelections: normalizeStoryResourceTriggerSelections(draft.resourceTriggerSelections),
     warnings: draft.warnings ? [...draft.warnings] : undefined,
   };
 }
@@ -828,6 +893,10 @@ function getStoryRenderPromptDraftNegativeParts(renderPromptDraft?: StoryRenderP
     ...(renderPromptDraft?.animaPromptParts?.negativeAdditions ?? []),
     ...(renderPromptDraft?.negativeAdditions ?? []),
   ];
+}
+
+function getStoryIllustriousNegativePrompt() {
+  return storyIllustriousNegativePromptTags.join(", ");
 }
 
 function createFallbackStoryAnimaPromptParts(shot: StoryShot): StoryAnimaPromptParts {
@@ -866,21 +935,119 @@ function getStoryIllustriousSectionsForShot(
   renderPromptDraft?: StoryRenderPromptDraftShot,
 ): IllustriousPromptSections {
   const sections = normalizeStoryIllustriousSections(renderPromptDraft?.illustriousSections);
-
   return hasStoryIllustriousSectionContent(sections)
     ? sections
     : createFallbackStoryIllustriousSections(shot);
+}
+
+function applyStoryIllustriousRating(
+  sections: IllustriousPromptSections,
+  nsfwContext: StoryNsfwContext,
+): IllustriousPromptSections {
+  return {
+    ...sections,
+    rating: [nsfwContext.enabled ? "nsfw" : "safe"],
+  };
+}
+
+function getStoryPromptResources(resourcePlan: StoryResourcePlan) {
+  return [
+    resourcePlan.checkpoint.resource,
+    ...resourcePlan.loras.map((lora) => lora.resource),
+  ];
+}
+
+const storyIllustriousRatingTriggerWords = new Set([
+  "safe",
+  "general",
+  "sensitive",
+  "questionable",
+  "nsfw",
+  "explicit",
+]);
+
+function isStoryIllustriousRatingTriggerWord(word: string) {
+  const key = word.toLocaleLowerCase();
+  return storyIllustriousRatingTriggerWords.has(key) || key.startsWith("rating:");
+}
+
+function validateStoryResourceTriggerSelections({
+  resourcePlan,
+  selections,
+}: {
+  resourcePlan: StoryResourcePlan;
+  selections: StoryResourceTriggerSelection[];
+}) {
+  const resourcesById = new Map(
+    getStoryPromptResources(resourcePlan).map((resource) => [resource.id, resource]),
+  );
+  const acceptedByResourceId = new Map<string, StoryResourceTriggerSelection>();
+  const warnings: string[] = [];
+
+  for (const selection of selections) {
+    const resource = resourcesById.get(selection.resourceId);
+    if (!resource) {
+      warnings.push(`Ignored trigger selection for unknown resource "${selection.resourceId}".`);
+      continue;
+    }
+
+    const trainedWords = resource.trainedWords ?? [];
+    const acceptedWords: string[] = [];
+    for (const word of selection.selectedTrainedWords) {
+      if (isStoryIllustriousRatingTriggerWord(word)) {
+        warnings.push(
+          `Ignored rating trigger word "${word}" for resource "${resource.name}" because Story Illustrious rating is controlled by Settings.`,
+        );
+        continue;
+      }
+
+      if (trainedWords.includes(word)) {
+        acceptedWords.push(word);
+      } else {
+        warnings.push(
+          `Ignored trigger word "${word}" for resource "${resource.name}" because it is not in that resource's trainedWords.`,
+        );
+      }
+    }
+
+    const dedupedWords = dedupeExactPromptParts(acceptedWords);
+    if (dedupedWords.length === 0) {
+      continue;
+    }
+
+    const existing = acceptedByResourceId.get(selection.resourceId);
+    if (existing) {
+      existing.selectedTrainedWords = dedupeExactPromptParts([
+        ...existing.selectedTrainedWords,
+        ...dedupedWords,
+      ]);
+      continue;
+    }
+
+    acceptedByResourceId.set(selection.resourceId, {
+      resourceId: selection.resourceId,
+      selectedTrainedWords: dedupedWords,
+      ...(selection.reason ? { reason: selection.reason } : {}),
+    });
+  }
+
+  return {
+    selections: Array.from(acceptedByResourceId.values()),
+    warnings,
+  };
 }
 
 function getBasePositivePrompt({
   animaPromptParts,
   illustriousSections,
   promptProfile,
+  resourceTriggerSelections,
   resourcePlan,
 }: {
   animaPromptParts?: StoryAnimaPromptParts;
   illustriousSections?: IllustriousPromptSections;
   promptProfile: PromptProfileId;
+  resourceTriggerSelections?: StoryResourceTriggerSelection[];
   resourcePlan: StoryResourcePlan;
 }) {
   if (promptProfile === "anima") {
@@ -888,6 +1055,7 @@ function getBasePositivePrompt({
   }
 
   return renderIllustriousPrompt({
+    resourceTriggerSelections,
     resources: getSelectedResources(resourcePlan),
     sections: illustriousSections ?? {},
   });
@@ -1300,7 +1468,7 @@ function hasAdultSubjectContext(text: string) {
   return /\b(?:adult|college|college-age|university|woman|women|man|men|mother|father)\b/.test(text);
 }
 
-function inferStoryAnimaSubjectCount(shot: StoryShot) {
+function getStorySubjectCounts(shot: StoryShot) {
   const subjectCount = Math.max(1, shot.characterIds.length);
   const text = getShotSubjectText(shot);
   const femaleCount = Math.min(
@@ -1311,6 +1479,24 @@ function inferStoryAnimaSubjectCount(shot: StoryShot) {
     subjectCount - femaleCount,
     countSubjectMatches(text, /\b(?:man|male|father|boy|son|brother|he|his)\b/g),
   );
+
+  return {
+    adultContext: hasAdultSubjectContext(text),
+    femaleCount,
+    maleCount,
+    subjectCount,
+    text,
+  };
+}
+
+function inferStoryAnimaSubjectCount(shot: StoryShot) {
+  const {
+    adultContext,
+    femaleCount,
+    maleCount,
+    subjectCount,
+    text,
+  } = getStorySubjectCounts(shot);
 
   if (subjectCount === 1) {
     if (femaleCount > 0) {
@@ -1324,7 +1510,7 @@ function inferStoryAnimaSubjectCount(shot: StoryShot) {
     return ["solo"];
   }
 
-  if (hasAdultSubjectContext(text)) {
+  if (adultContext) {
     return [`${subjectCount}people`];
   }
 
@@ -1503,17 +1689,20 @@ function createFormattedStoryPositivePrompt({
   animaPromptParts,
   illustriousSections,
   promptProfile,
+  resourceTriggerSelections,
   resourcePlan,
 }: {
   animaPromptParts?: StoryAnimaPromptParts;
   illustriousSections?: IllustriousPromptSections;
   promptProfile: PromptProfileId;
+  resourceTriggerSelections?: StoryResourceTriggerSelection[];
   resourcePlan: StoryResourcePlan;
 }) {
   return getBasePositivePrompt({
     animaPromptParts,
     illustriousSections,
     promptProfile,
+    resourceTriggerSelections,
     resourcePlan,
   });
 }
@@ -1576,6 +1765,9 @@ export function createStoryGenerationRequestPreview(
     promptProfile: shot.promptProfile,
     positivePromptLength: shot.positivePrompt.length,
     positivePromptPreview: compactRequestPromptPreview(shot.positivePrompt),
+    ...(shot.resourceTriggerSelections
+      ? { resourceTriggerSelections: cloneStoryResourceTriggerSelections(shot.resourceTriggerSelections) }
+      : {}),
     sourceImageEdges: (shot.sourceImageEdges ?? []).map((edge) => ({
       ...edge,
       riskFactors: [...edge.riskFactors],
@@ -1764,22 +1956,39 @@ export function assembleStoryRenderPlan({
       ? getStoryAnimaPromptPartsForShot(shot, renderPromptDraft)
       : undefined;
     const illustriousSections = promptProfile === "illustrious"
-      ? getStoryIllustriousSectionsForShot(shot, renderPromptDraft)
+      ? applyStoryIllustriousRating(
+          getStoryIllustriousSectionsForShot(shot, renderPromptDraft),
+          nsfwContext,
+        )
       : undefined;
+    const resourceTriggerSelectionResult = promptProfile === "illustrious"
+      ? validateStoryResourceTriggerSelections({
+          resourcePlan,
+          selections: renderPromptDraft?.resourceTriggerSelections ?? [],
+        })
+      : { selections: [], warnings: [] };
     const basePositivePrompt = getBasePositivePrompt({
       animaPromptParts,
       illustriousSections,
       promptProfile,
+      resourceTriggerSelections: promptProfile === "illustrious"
+        ? resourceTriggerSelectionResult.selections
+        : undefined,
       resourcePlan,
     });
-    const baseNegativePrompt = mergeStoryNegativePrompts(
-      getBaseNegativePrompt(safetyPlan, shot),
-      getStoryRenderPromptDraftNegativeParts(renderPromptDraft).join(", "),
-    );
+    const baseNegativePrompt = promptProfile === "illustrious"
+      ? getStoryIllustriousNegativePrompt()
+      : mergeStoryNegativePrompts(
+          getBaseNegativePrompt(safetyPlan, shot),
+          getStoryRenderPromptDraftNegativeParts(renderPromptDraft).join(", "),
+        );
     const formattedPositivePrompt = createFormattedStoryPositivePrompt({
       animaPromptParts,
       illustriousSections,
       promptProfile,
+      resourceTriggerSelections: promptProfile === "illustrious"
+        ? resourceTriggerSelectionResult.selections
+        : undefined,
       resourcePlan,
     });
     const settings = createStoryComfyUiSettings({
@@ -1790,7 +1999,10 @@ export function assembleStoryRenderPlan({
       supportsNsfw: nsfwContext.enabled,
     });
 
-    const promptWarnings = renderPromptDraft?.warnings ?? [];
+    const promptWarnings = [
+      ...(renderPromptDraft?.warnings ?? []),
+      ...resourceTriggerSelectionResult.warnings,
+    ];
 
     return {
       shotId: shot.id,
@@ -1818,6 +2030,9 @@ export function assembleStoryRenderPlan({
         checkpointResourceId: resourcePlan.checkpoint.resource.id,
         loraResourceIds: resourcePlan.loras.map((lora) => lora.resource.id),
       },
+      ...(promptProfile === "illustrious"
+        ? { resourceTriggerSelections: cloneStoryResourceTriggerSelections(resourceTriggerSelectionResult.selections) }
+        : {}),
       ...(renderPromptDraft
         ? {
             promptRationale: renderPromptDraft.rationale,

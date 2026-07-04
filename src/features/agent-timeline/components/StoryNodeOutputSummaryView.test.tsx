@@ -107,6 +107,9 @@ describe("StoryNodeOutputSummaryView", () => {
     expect(container.textContent).toContain("Caption");
     expect(container.textContent).toContain("Visual prompt");
     expect(container.textContent).toContain("adult courier with cropped black hair");
+    expect(Array.from(container.querySelectorAll("pre")).some((block) =>
+      block.textContent?.includes("kneeling courier, low quality"),
+    )).toBe(true);
     expect(container.textContent).toContain("Warnings");
     expect(container.textContent).toContain("removed negative addition");
     expect(container.textContent).toContain("Prompt health");

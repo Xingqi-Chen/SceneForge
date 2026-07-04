@@ -11,6 +11,7 @@ import {
   getSelectedStoryResourcesForPrompting,
   normalizeStoryAnimaPromptParts,
   normalizeStoryIllustriousSections,
+  normalizeStoryResourceTriggerSelections,
   type StoryAnimaPromptParts,
   type StoryGenerationParameters,
   type StoryLocalResource,
@@ -548,10 +549,7 @@ export function normalizeStorySafetyPlan(raw: unknown, input: StoryInput, shots:
   }
 
   const shotIds = new Set(shots.map((shot) => shot.id));
-  const audienceRating = compactText(parsed.audienceRating ?? parsed.audience_rating, 40) as StoryAudienceRating;
-  const resolvedRating: StoryAudienceRating = ["safe", "suggestive", "mature", "explicit"].includes(audienceRating)
-    ? audienceRating
-    : getAudienceRating(input);
+  const resolvedRating = getAudienceRating(input);
   const perShotNotes = (Array.isArray(parsed.perShotNotes) ? parsed.perShotNotes : parsed.per_shot_notes)
     ?? [];
 
@@ -1260,6 +1258,9 @@ export function normalizeStoryRenderPromptPlan(
           illustriousSections,
           negativeAdditions: normalizeStringList(rawShot.negativeAdditions ?? rawShot.negative_additions, maxWarnings),
           rationale: displayText(rawShot.rationale ?? rawShot.reason) || undefined,
+          resourceTriggerSelections: normalizeStoryResourceTriggerSelections(
+            rawShot.resourceTriggerSelections ?? rawShot.resource_trigger_selections,
+          ),
           warnings,
         };
       })
@@ -1299,16 +1300,30 @@ function buildStoryRenderPromptInstruction(promptProfile: PromptProfileId) {
   return [
     "Create a structured StoryRenderPromptPlan containing Illustrious prompt sections for each shot.",
     "Do not output a raw final prompt string, positivePrompt, negativePrompt, animaPromptParts, or Anima tag-order guidance; local code will compile illustriousSections into final prompts with renderIllustriousPrompt.",
-    "Each shot must include illustriousSections with section keys quality, aestheticVersion, rating, artistStyle, subjectIdentity, appearancePhysicalTraits, clothingAccessories, poseActionExpression, backgroundEnvironmentObjects, spatialComposition, cameraFraming, lightingFocus, and detailResolution as needed.",
+    "Each shot must include illustriousSections with section keys quality, aestheticVersion, artistStyle, subjectIdentity, appearancePhysicalTraits, clothingAccessories, poseActionExpression, backgroundEnvironmentObjects, spatialComposition, cameraFraming, lightingFocus, and detailResolution as needed.",
+    "Do not output rating tags in illustriousSections. Local code sets exactly one rating tag from Settings: safe when NSFW is disabled and nsfw when NSFW is enabled.",
     "Leave quality and aestheticVersion empty unless the shot needs a specific non-default qualifier; local code adds Illustrious quality and aesthetic defaults.",
     "Section values must contain only essential visible booru-style tags or concise visual clauses. Prefer short comma-separated strings or short arrays; do not pad categories; do not repeat concepts.",
+    "Local code will not semantically repair, rewrite, filter, or truncate bad Illustrious subject/name/count phrases; output these sections at final generation quality.",
+    "Put the visible person count at the start of subjectIdentity using one coherent Danbooru-style count strategy: 1girl, solo for one visible woman; 2girls for two visible women; 1man for one visible adult male; 2men for two visible adult males; 2girls, 1man for two adult women plus one adult man. Use 2people or 3people only when gender is unclear.",
+    "Do not combine count tags that contradict the story age context. Use 1boy or 2boys only for clearly childlike or teen male subjects; never use 1boy for an adult man, cafe owner, father, or college-age friend. Add adult woman, adult women, adult man, college-age woman, college-age man, or college art student as separate descriptors when age context matters.",
+    "For multi-character shots, every counted person must have a matching visible role, clothing or accessory, pose/action, and spatial position. Avoid abstract-only identities such as friendly cafe owner or understated young friend unless they are paired with visible traits like practical cafe apron, shoulder bag, standing near doorway, or smiling warmly.",
+    "Never create fused young-count tags such as 1young woman, 1young man, 2young women, or 2young men. Never write natural count phrases such as one adult woman or two adult women when a count tag like 1girl or 2girls is available.",
+    "Do not use original story character names such as Maya as prompt tokens in any section, including spatialComposition. Do not write Maya central, Maya holding, or Maya framed; write woman centered, protagonist on step stool, or central woman pinning poster instead.",
+    "Do not replace names with repeated generic subject prefixes such as main woman or main character. Prefer direct visible tags such as short black bob, round glasses, mint green cardigan, holding note card, friend holding tea tin, or college art student.",
+    "Avoid contradictory age phrases such as mature young face, youthful adult, or young-looking adult. Use adult face, approachable adult features, college-age woman, or adult woman instead.",
+    "Do not imply extra people through vague group phrases such as supporting figures, background people, crowd, or bystanders unless the shot explicitly requires them. Keep the visible person count, subjectIdentity, poseActionExpression, and spatialComposition aligned.",
+    "For each shot, output resourceTriggerSelections as an array of {resourceId, selectedTrainedWords, reason}. Choose only trainedWords that the current shot truly needs from the supplied selectedResources context; do not copy every trainedWords item into the prompt.",
+    "Selected trained words must be exact strings from that resource's original trainedWords list. Never invent trigger words and never alter spelling, punctuation, casing, or spacing.",
+    "Use the selected resources' trainedWords, usageGuide, promptReferences, tags, and categories as context. If a checkpoint's trainedWords look like broad example tags rather than required trigger words, such as WAI-style general tags, leave that checkpoint without selected triggers.",
+    "If a LoRA has a clear style or character trigger such as usnr and the shot uses that LoRA's style or concept, select that exact trigger for the relevant shot.",
     "Compress multi-event beats into one frozen tableau. Do not write after, then, before, realizing, deciding, discovering, about to, in the middle of, as, while, or unresolved states using or.",
     "Use only visible image content: subject count, adult/age context, visible people, hair, face, wardrobe, key props, concrete action or pose, setting, spatial position, framing, camera, lighting, color theme, and art style.",
-    "Do not include story intent, emotional arc, rationale, symbolic meaning, viewer instruction, prose transitions, model names, checkpoint names, file names, sampler, scheduler, CFG, steps, seed, denoise, width, height, score tags, safe tag, or final prompt prefixes inside illustriousSections.",
+    "Do not include story intent, emotional arc, rationale, symbolic meaning, viewer instruction, prose transitions, model names, checkpoint names, file names, sampler, scheduler, CFG, steps, seed, denoise, width, height, score tags, safe tag, nsfw tag, or final prompt prefixes inside illustriousSections.",
     "Translate structural ids such as character ids and location ids into natural visible descriptions; never emit ids like teen-resident or location-library as prompt text.",
     "For selected style LoRAs, translate their usage guide into short visible style terms only, such as teal theme, orange theme, dusk glow, or soft rim light.",
-    "negativeAdditions must be visual quality/exclusion terms only, must not replace safety negatives, and must not negate positive key characters, actions, props, clothing, or environments.",
-    'Required shape: {"promptProfile":"illustrious","shots":[{"shotId":"","illustriousSections":{"subjectIdentity":[""],"appearancePhysicalTraits":[""],"clothingAccessories":[""],"poseActionExpression":[""],"backgroundEnvironmentObjects":[""],"spatialComposition":[""],"cameraFraming":[""],"lightingFocus":[""],"detailResolution":[""]},"negativeAdditions":[""],"rationale":"","warnings":[""]}],"warnings":[""]}.',
+    "Leave negativeAdditions empty for Illustrious. Local code uses a common Illustrious negative prompt only: bad quality, worst quality, worst detail, censor.",
+    'Required shape: {"promptProfile":"illustrious","shots":[{"shotId":"","illustriousSections":{"subjectIdentity":[""],"appearancePhysicalTraits":[""],"clothingAccessories":[""],"poseActionExpression":[""],"backgroundEnvironmentObjects":[""],"spatialComposition":[""],"cameraFraming":[""],"lightingFocus":[""],"detailResolution":[""]},"resourceTriggerSelections":[{"resourceId":"","selectedTrainedWords":[""],"reason":""}],"negativeAdditions":[""],"rationale":"","warnings":[""]}],"warnings":[""]}.',
   ].join(" ");
 }
 
@@ -1628,7 +1643,7 @@ export function createStoryLlmNodeAdapters({
       return makeJsonRequest({
         input,
         instruction:
-          'Create a StorySafetyPlan that preserves the configured NSFW context and safety constraints. Never permit sexualized minors, non-consensual sexual content, or graphic sexual violence. Required shape: {"audienceRating":"safe|suggestive|mature|explicit","contentWarnings":[""],"blockedContent":[""],"perShotNotes":[{"shotId":"","risks":[""],"mitigations":[""]}],"nsfwContext":{"enabled":false,"rationale":""}}.',
+          'Create a StorySafetyPlan that preserves the configured NSFW context and safety constraints. Echo the input audienceRating and nsfwContext; do not choose a different rating. Never permit sexualized minors, non-consensual sexual content, or graphic sexual violence. Required shape: {"audienceRating":"safe|suggestive|mature|explicit","contentWarnings":[""],"blockedContent":[""],"perShotNotes":[{"shotId":"","risks":[""],"mitigations":[""]}],"nsfwContext":{"enabled":false,"rationale":""}}.',
         payload: {
           input,
           shots: getShots(context.workflow),

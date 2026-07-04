@@ -175,49 +175,64 @@ function getAnimaPromptPartValues(animaPromptParts: unknown, keys: string[]) {
   return keys.flatMap((key) => fullStringArray(animaPromptParts[key]));
 }
 
-function hasAnimaPromptPartOrPattern({
+function hasPromptPartOrPattern({
+  animaKeys,
   animaPromptParts,
-  keys,
+  illustriousKeys,
+  illustriousSections,
   pattern,
   prompt,
 }: {
+  animaKeys: string[];
   animaPromptParts: unknown;
-  keys: string[];
+  illustriousKeys: string[];
+  illustriousSections: unknown;
   pattern: RegExp;
   prompt: string;
 }) {
-  return getAnimaPromptPartValues(animaPromptParts, keys).length > 0 || pattern.test(prompt);
+  return getAnimaPromptPartValues(animaPromptParts, animaKeys).length > 0 ||
+    getIllustriousSectionValues(illustriousSections, illustriousKeys).length > 0 ||
+    pattern.test(prompt);
 }
 
-function getMissingPromptInfoIssues(positivePrompt: string, animaPromptParts: unknown): StoryShotPromptHealthIssue[] {
+function getMissingPromptInfoIssues(
+  positivePrompt: string,
+  animaPromptParts: unknown,
+  illustriousSections: unknown,
+): StoryShotPromptHealthIssue[] {
   const checks = [
     {
+      animaKeys: ["subjectTags", "characterTags", "outfitTags", "propTags"],
       detail: "Add a clear character, subject, or object identity.",
-      keys: ["subjectTags", "characterTags", "outfitTags", "propTags"],
+      illustriousKeys: ["subjectIdentity", "appearancePhysicalTraits", "clothingAccessories"],
       label: "Missing identity",
       pattern: /\b(?:adult|artist|boy|character|child|courier|detective|girl|man|person|people|protagonist|student|woman)\b.{0,80}\b(?:coat|dress|glasses|hair|jacket|shirt|uniform|wearing|with)\b/i,
     },
     {
+      animaKeys: ["actionTags"],
       detail: "Add a visible action, pose, or interaction.",
-      keys: ["actionTags"],
+      illustriousKeys: ["poseActionExpression"],
       label: "Missing action",
       pattern: /\b(?:carrying|crouching|facing|holding|kneeling|leaning|looking|opening|pointing|reaching|running|sitting|standing|walking)\b/i,
     },
     {
+      animaKeys: ["settingTags"],
       detail: "Add a concrete location or environmental setting.",
-      keys: ["settingTags"],
+      illustriousKeys: ["backgroundEnvironmentObjects"],
       label: "Missing setting",
       pattern: /\b(?:alley|apartment|beach|bedroom|cafe|city|classroom|corridor|forest|garden|hallway|interior|kitchen|library|market|park|room|station|street|studio)\b/i,
     },
     {
+      animaKeys: ["cameraTags"],
       detail: "Add framing, camera scale, angle, or composition guidance.",
-      keys: ["cameraTags"],
+      illustriousKeys: ["cameraFraming", "spatialComposition"],
       label: "Missing camera",
       pattern: /\b(?:camera|close[- ]?up|composition|eye[- ]level|framing|medium shot|over[- ]the[- ]shoulder|perspective|portrait|wide shot)\b/i,
     },
     {
+      animaKeys: ["lightingTags"],
       detail: "Add lighting, time of day, or visible atmosphere.",
-      keys: ["lightingTags"],
+      illustriousKeys: ["lightingFocus"],
       label: "Missing lighting",
       pattern: /\b(?:backlight|blue hour|candlelight|daylight|glow|golden hour|lamp|light|lighting|moonlight|neon|shadow|sunlight|window light)\b/i,
     },
@@ -225,9 +240,11 @@ function getMissingPromptInfoIssues(positivePrompt: string, animaPromptParts: un
 
   return checks
     .filter((check) =>
-      !hasAnimaPromptPartOrPattern({
+      !hasPromptPartOrPattern({
+        animaKeys: check.animaKeys,
         animaPromptParts,
-        keys: check.keys,
+        illustriousKeys: check.illustriousKeys,
+        illustriousSections,
         pattern: check.pattern,
         prompt: positivePrompt,
       }),
@@ -382,11 +399,13 @@ function getSourceRiskSummaries(value: unknown): StoryShotSourceRiskSummary[] {
 
 export function createStoryPromptHealth({
   animaPromptParts,
+  illustriousSections,
   positivePrompt,
   promptWarnings = [],
   sourceImageEdges = [],
 }: {
   animaPromptParts?: unknown;
+  illustriousSections?: unknown;
   positivePrompt?: unknown;
   promptWarnings?: string[];
   sourceImageEdges?: unknown;
@@ -406,7 +425,7 @@ export function createStoryPromptHealth({
   }));
   const issues = [
     getTooShortPromptIssue(positive),
-    ...getMissingPromptInfoIssues(positive, animaPromptParts),
+    ...getMissingPromptInfoIssues(positive, animaPromptParts, illustriousSections),
     ...getHardcodedPromptIssues(positive),
     ...removedNegativeIssues,
     ...sourceRiskIssues,
@@ -1034,6 +1053,7 @@ function createPromptShotCard({
   const promptWarnings = getWarningsForShot(shotId, shot.promptWarnings, globalWarnings);
   const promptHealth = createStoryPromptHealth({
     animaPromptParts,
+    illustriousSections,
     positivePrompt,
     promptWarnings,
     sourceImageEdges,

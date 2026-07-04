@@ -133,6 +133,63 @@ describe("Illustrious prompt renderer", () => {
     expect(prompt).not.toContain("<lora:");
   });
 
+  it("uses only explicit resource trigger selections when provided", () => {
+    const prompt = renderIllustriousPrompt({
+      resourceTriggerSelections: [
+        {
+          resourceId: "style-lora",
+          selectedTrainedWords: ["usnr", "invented trigger"],
+        },
+      ],
+      resources: {
+        checkpoint: makeResource("model", "Checkpoint", {
+          trainedWords: ["general", "sensitive", "nsfw", "explicit"],
+        }),
+        loras: [
+          makeResource("lora", "Style LoRA", {
+            id: "style-lora",
+            categories: ["style"],
+            trainedWords: ["usnr", "unused style trigger"],
+          }),
+        ],
+      },
+      sections: {
+        rating: ["safe"],
+        subjectIdentity: ["1girl"],
+      },
+    });
+
+    expect(prompt).toContain("safe, usnr, 1girl");
+    expect(prompt).not.toContain("general");
+    expect(prompt).not.toContain("sensitive");
+    expect(prompt).not.toContain("nsfw");
+    expect(prompt).not.toContain("explicit");
+    expect(prompt).not.toContain("unused style trigger");
+    expect(prompt).not.toContain("invented trigger");
+  });
+
+  it("keeps legacy automatic resource triggers when selections are omitted", () => {
+    const prompt = renderIllustriousPrompt({
+      resources: {
+        checkpoint: makeResource("model", "Checkpoint", {
+          trainedWords: ["checkpoint trigger"],
+        }),
+        loras: [
+          makeResource("lora", "Style LoRA", {
+            id: "style-lora",
+            categories: ["style"],
+            trainedWords: ["style trigger"],
+          }),
+        ],
+      },
+      sections: {
+        subjectIdentity: ["1girl"],
+      },
+    });
+
+    expect(prompt).toContain("style trigger, checkpoint trigger, 1girl");
+  });
+
   it("parses JSON sections before rendering and falls back to flat prompt classification", () => {
     const jsonPrompt = renderIllustriousPromptFromAiResponse({
       rawContent: JSON.stringify({

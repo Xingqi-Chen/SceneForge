@@ -311,24 +311,195 @@ describe("story planning", () => {
 
     expect(renderPlan.promptProfile).toBe("illustrious");
     expect(shot?.promptProfile).toBe("illustrious");
-    expect(shot?.illustriousSections).toMatchObject({
-      subjectIdentity: ["solo courier"],
-      poseActionExpression: ["holding red signal card"],
-    });
+    expect(shot?.illustriousSections?.subjectIdentity).toEqual(["solo courier"]);
+    expect(shot?.illustriousSections?.poseActionExpression).toEqual(["holding red signal card"]);
     expect(shot?.animaPromptParts).toBeUndefined();
     expect(prompt).toContain("amazing quality");
     expect(prompt).toContain("solo courier");
     expect(prompt).toContain("holding red signal card");
-    expect(prompt).toContain("wet platform");
+    expect(prompt).toContain("nsfw");
+    expect(prompt).not.toContain("wet platform");
     expect(prompt).not.toContain("score_7");
     expect(prompt).not.toContain("safe");
-    expect(shot?.negativePrompt).toContain("cropped signal");
+    expect(shot?.resourceTriggerSelections).toEqual([]);
+    expect(shot?.negativePrompt).toBe("bad quality, worst quality, worst detail, censor");
     expect(shot?.promptRationale).toBe("Keep the signal readable.");
     expect(preview?.promptProfile).toBe("illustrious");
-    expect(preview?.illustriousSections).toMatchObject({
-      subjectIdentity: ["solo courier"],
-    });
+    expect(preview?.illustriousSections?.subjectIdentity).toEqual(["solo courier"]);
+    expect(preview?.resourceTriggerSelections).toEqual([]);
     expect(preview?.animaPromptParts).toBeUndefined();
+  });
+
+  it("uses explicit Story Illustrious resource trigger selections with exact member validation", () => {
+    const checkpoint: StoryLocalResource = {
+      id: "wai-checkpoint",
+      name: "WAI Checkpoint",
+      baseModel: "Illustrious",
+      modelFileName: "wai.safetensors",
+      trainedWords: ["general", "sensitive", "nsfw", "explicit", "rating:mature"],
+    };
+    const lora: StoryLocalResource = {
+      id: "style-lora",
+      name: "USNR Style",
+      baseModel: "Illustrious",
+      modelFileName: "usnr.safetensors",
+      trainedWords: ["usnr", "unused style trigger"],
+      categories: ["style"],
+    };
+    const resourcePlan = createStoryResourcePlan({
+      storyId,
+      candidates: {
+        checkpoints: [{ resource: checkpoint }],
+        loras: [{ resource: lora }],
+      },
+      recommendation: {
+        checkpoint: { resource: checkpoint, reason: "Local checkpoint." },
+        loras: [{ resource: lora, suggestedWeight: 0.7, reason: "Local style LoRA." }],
+        recommendationReason: "Use selected resources.",
+        overallEffect: "USNR style.",
+        warnings: [],
+      },
+    });
+    const renderPlan = assembleStoryRenderPlan({
+      parameterPlan: createStoryParameterPlan({ storyId, defaults }),
+      promptProfile: "illustrious",
+      renderPromptPlan: {
+        promptProfile: "illustrious",
+        storyId,
+        warnings: [],
+        shots: [
+          {
+            shotId: "shot-1",
+            illustriousSections: {
+              rating: ["explicit"],
+              subjectIdentity: ["solo courier"],
+              poseActionExpression: ["holding red signal card"],
+            },
+            resourceTriggerSelections: [
+              {
+                resourceId: "style-lora",
+                selectedTrainedWords: ["usnr", "invented trigger"],
+                reason: "The shot uses the selected style LoRA.",
+              },
+              {
+                resourceId: "missing-resource",
+                selectedTrainedWords: ["usnr"],
+              },
+              {
+                resourceId: "wai-checkpoint",
+                selectedTrainedWords: ["nsfw", "explicit", "rating:mature", "invented checkpoint token"],
+              },
+            ],
+          },
+        ],
+      },
+      resourcePlan,
+      safetyPlan: {
+        storyId,
+        audienceRating: "safe",
+        contentWarnings: [],
+        blockedContent: [],
+        perShotNotes: [],
+        nsfwContext: { enabled: false, rationale: "NSFW disabled in Settings." },
+      },
+      shots,
+    });
+    const shot = renderPlan.shots[0];
+    const promptParts = shot?.positivePrompt.split(", ") ?? [];
+
+    expect(promptParts).toEqual(expect.arrayContaining(["safe", "usnr", "solo courier"]));
+    for (const forbidden of [
+      "general",
+      "sensitive",
+      "nsfw",
+      "explicit",
+      "rating:mature",
+      "unused style trigger",
+      "invented trigger",
+      "invented checkpoint token",
+    ]) {
+      expect(promptParts).not.toContain(forbidden);
+    }
+    expect(shot?.resourceTriggerSelections).toEqual([
+      {
+        resourceId: "style-lora",
+        selectedTrainedWords: ["usnr"],
+        reason: "The shot uses the selected style LoRA.",
+      },
+    ]);
+    expect(shot?.promptWarnings).toEqual(expect.arrayContaining([
+      expect.stringContaining('Ignored trigger word "invented trigger"'),
+      expect.stringContaining('Ignored trigger selection for unknown resource "missing-resource"'),
+      expect.stringContaining('Ignored rating trigger word "nsfw"'),
+      expect.stringContaining('Ignored rating trigger word "explicit"'),
+      expect.stringContaining('Ignored rating trigger word "rating:mature"'),
+      expect.stringContaining('Ignored trigger word "invented checkpoint token"'),
+    ]));
+  });
+
+  it("uses Settings-derived nsfw rating for Story Illustrious prompts", () => {
+    const checkpoint: StoryLocalResource = {
+      id: "wai-checkpoint",
+      name: "WAI Checkpoint",
+      baseModel: "Illustrious",
+      modelFileName: "wai.safetensors",
+      trainedWords: ["general", "sensitive", "explicit"],
+    };
+    const resourcePlan = createStoryResourcePlan({
+      storyId,
+      candidates: {
+        checkpoints: [{ resource: checkpoint }],
+        loras: [],
+      },
+      recommendation: {
+        checkpoint: { resource: checkpoint, reason: "Local checkpoint." },
+        loras: [],
+        recommendationReason: "Use selected checkpoint.",
+        overallEffect: "Illustrious storyboard.",
+        warnings: [],
+      },
+    });
+    const renderPlan = assembleStoryRenderPlan({
+      parameterPlan: createStoryParameterPlan({ storyId, defaults }),
+      promptProfile: "illustrious",
+      renderPromptPlan: {
+        promptProfile: "illustrious",
+        storyId,
+        warnings: [],
+        shots: [
+          {
+            shotId: "shot-1",
+            illustriousSections: {
+              rating: ["safe", "general", "explicit"],
+              subjectIdentity: ["solo courier"],
+              poseActionExpression: ["holding red signal card"],
+            },
+          },
+        ],
+      },
+      resourcePlan,
+      safetyPlan: {
+        storyId,
+        audienceRating: "explicit",
+        contentWarnings: [],
+        blockedContent: [],
+        perShotNotes: [],
+        nsfwContext: { enabled: true, rationale: "NSFW enabled in Settings." },
+      },
+      shots,
+    });
+    const promptParts = renderPlan.shots[0]?.positivePrompt.split(", ") ?? [];
+
+    expect(promptParts).toContain("nsfw");
+    for (const forbidden of [
+      "safe",
+      "general",
+      "sensitive",
+      "explicit",
+    ]) {
+      expect(promptParts).not.toContain(forbidden);
+    }
+    expect(renderPlan.shots[0]?.illustriousSections?.rating).toEqual(["nsfw"]);
   });
 
   it("selects only validated local resources and strips model NSFW markers", () => {
@@ -463,7 +634,7 @@ describe("story planning", () => {
     expect(renderPlan.preview.resultReferences).toHaveLength(1);
     expect(renderPlan.shots[1]).toMatchObject({
       shotId: "shot-2",
-      negativePrompt: "gore, severe injury",
+      negativePrompt: "bad quality, worst quality, worst detail, censor",
       parameters: defaults,
     });
     expect(renderPlan.shots[1]?.positivePrompt).toContain("red signal reflected in a puddle");
@@ -475,7 +646,12 @@ describe("story planning", () => {
       expect.stringContaining("raincoat visible"),
     ]));
     expect(renderPlan.shots[1]?.outputAnchors.camera).toContain("low close-up");
-    expect(renderPlan.shots[1]?.outputAnchors.negative).toEqual(["gore", "severe injury"]);
+    expect(renderPlan.shots[1]?.outputAnchors.negative).toEqual([
+      "bad quality",
+      "worst quality",
+      "worst detail",
+      "censor",
+    ]);
     expect(renderPlan.shots[1]?.outputAnchors.source).toMatchObject({
       mode: "source-image",
       sourceShotIds: ["shot-1"],
@@ -864,6 +1040,7 @@ describe("story planning", () => {
     });
     const renderPlan = assembleStoryRenderPlan({
       parameterPlan: createStoryParameterPlan({ storyId, defaults: parameterDefaults }),
+      promptProfile: "anima",
       resourcePlan: createAnimaResourcePlan(),
       safetyPlan: adultSafetyPlan,
       shots: rupaShots,
@@ -1615,45 +1792,65 @@ describe("story planning", () => {
     expect(shot?.outputAnchors.lighting).toContain("rainy evening with warm interior contrast");
   });
 
-  it("normalizes verbose Story safety blocks into compact negative prompt tags", () => {
+  it("keeps Story Illustrious negative prompts content-neutral", () => {
     const renderPlan = assembleStoryRenderPlan({
       parameterPlan: createStoryParameterPlan({ storyId, defaults }),
+      promptProfile: "illustrious",
+      renderPromptPlan: {
+        promptProfile: "illustrious",
+        storyId,
+        warnings: [],
+        shots: [
+          {
+            shotId: "shot-1",
+            illustriousSections: {
+              subjectIdentity: ["solo Maya"],
+              poseActionExpression: ["holding a framed menu"],
+              backgroundEnvironmentObjects: ["small cafe interior"],
+            },
+            negativeAdditions: [
+              "broken frame glass",
+              "copyrighted character references",
+              "branded signage in cafe",
+            ],
+          },
+        ],
+      },
       resourcePlan: createResourcePlan(),
       safetyPlan: {
         ...safetyPlan,
         blockedContent: [
-          "Any sexualization of characters under 16 or teen-coded characters",
-          "Nudity, fetish framing, or voyeuristic emphasis",
-          "Non-consensual sexual content of any kind",
-          "Graphic bodily injury, gore, or severe accident aftermath",
-          "Criminal misconduct shown as aspirational behavior",
-          "Demeaning/stereotyped depiction of a protected group",
-          "Aging up or ambiguously portraying Maya as adult to bypass safeguards",
+          "sexualized depiction of Maya or any youthful-looking character",
+          "harmful self-injury behavior with tools or broken glass",
+          "copyrighted character references or branded signage in cafe",
         ],
       },
       shots,
     });
     const negativePrompt = renderPlan.shots[0]?.negativePrompt ?? "";
 
-    expect(negativePrompt).toContain("sexualized minor");
-    expect(negativePrompt).toContain("childlike face");
-    expect(negativePrompt).toContain("nude");
-    expect(negativePrompt).toContain("fetish");
-    expect(negativePrompt).not.toContain("non-consensual");
-    expect(negativePrompt).toContain("gore");
-    expect(negativePrompt).toContain("severe injury");
-    expect(negativePrompt).toContain("crime");
-    expect(negativePrompt).toContain("stereotype");
-    expect(negativePrompt).toContain("aged-up minor");
-    expect(negativePrompt).not.toContain("Any sexualization");
-    expect(negativePrompt).not.toContain("under 16");
-    expect(negativePrompt).not.toContain("Non-consensual sexual content of any kind");
-    expect(negativePrompt).not.toContain("Aging up or ambiguously portraying Maya as adult to bypass safeguards");
+    expect(negativePrompt).toBe("bad quality, worst quality, worst detail, censor");
+    for (const forbidden of [
+      "Maya",
+      "youthful-looking",
+      "self-injury",
+      "tools",
+      "broken glass",
+      "copyrighted",
+      "branded signage",
+      "cafe",
+      "broken frame glass",
+      "sketch",
+      "sexualized depiction",
+    ]) {
+      expect(negativePrompt).not.toContain(forbidden);
+    }
   });
 
-  it("canonicalizes minor and age-gap safety sentences into ordered negative tags", () => {
+  it("uses only common Story Illustrious negative tags for safety-heavy inputs", () => {
     const renderPlan = assembleStoryRenderPlan({
       parameterPlan: createStoryParameterPlan({ storyId, defaults }),
+      promptProfile: "illustrious",
       resourcePlan: createResourcePlan(),
       safetyPlan: {
         ...safetyPlan,
@@ -1671,10 +1868,121 @@ describe("story planning", () => {
       shots,
     });
 
-    expect(renderPlan.shots[0]?.negativePrompt).toBe("sexualized minor, age-gap romantic framing, nude, gore, severe injury, childlike face");
+    expect(renderPlan.shots[0]?.negativePrompt).toBe("bad quality, worst quality, worst detail, censor");
     expect(renderPlan.shots[0]?.negativePrompt).not.toContain("teenage courier");
     expect(renderPlan.shots[0]?.negativePrompt).not.toContain("little girl");
     expect(renderPlan.shots[0]?.negativePrompt).not.toContain("romantic or sexual framing");
+    expect(renderPlan.shots[0]?.outputAnchors.negative).toEqual([
+      "bad quality",
+      "worst quality",
+      "worst detail",
+      "censor",
+    ]);
+  });
+
+  it("preserves LLM-authored Story Illustrious subject tags without semantic rewriting", () => {
+    const mayaShots = [
+      {
+        id: "shot-1",
+        storyId,
+        order: 1,
+        title: "Choosing Nails",
+        description: "Maya is a 19-year-old college art student choosing tiny nails in a stationery shop.",
+        characterIds: ["maya"],
+        sourceShotIds: [],
+        camera: "medium shot",
+        promptIntent: "Maya compares wall hooks while holding a wrapped sketch frame.",
+        continuityNotes: ["Maya has a short black bob and warm brown eyes."],
+      },
+      {
+        id: "shot-2",
+        storyId,
+        order: 2,
+        title: "Friend Arrives",
+        description: "Maya kneels by the bookshelf as her best friend arrives with a tea tin.",
+        characterIds: ["maya", "friend"],
+        sourceShotIds: [],
+        camera: "medium-wide shot",
+        promptIntent: "Maya looks up toward her friend at the open doorway.",
+        continuityNotes: ["Maya is a college art student in a mint cardigan."],
+      },
+    ] satisfies StoryShot[];
+    const renderPlan = assembleStoryRenderPlan({
+      parameterPlan: createStoryParameterPlan({ storyId, defaults }),
+      promptProfile: "illustrious",
+      renderPromptPlan: {
+        promptProfile: "illustrious",
+        storyId,
+        warnings: [],
+        shots: [
+          {
+            shotId: "shot-1",
+            illustriousSections: {
+              subjectIdentity: [
+                "1girl",
+                "solo",
+                "adult woman",
+                "college art student",
+              ],
+              appearancePhysicalTraits: ["short black bob", "warm brown eyes", "approachable adult features"],
+              clothingAccessories: ["mint-green cardigan"],
+              poseActionExpression: [
+                "comparing wall hooks and tiny nails",
+                "holding wrapped sketch frame",
+              ],
+              backgroundEnvironmentObjects: ["compact stationery shop"],
+              spatialComposition: ["hardware display beside notebook racks"],
+            },
+          },
+          {
+            shotId: "shot-2",
+            illustriousSections: {
+              subjectIdentity: ["2girls", "adult women", "friend holding tea tin"],
+              poseActionExpression: [
+                "kneeling beside low bookshelf",
+                "opening the door",
+                "friend standing at open doorway",
+              ],
+              backgroundEnvironmentObjects: ["bright small living room"],
+            },
+          },
+        ],
+      },
+      resourcePlan: createResourcePlan(),
+      safetyPlan,
+      shots: mayaShots,
+    });
+    const firstPrompt = renderPlan.shots[0]?.positivePrompt ?? "";
+    const secondPrompt = renderPlan.shots[1]?.positivePrompt ?? "";
+
+    expect(renderPlan.shots[0]?.illustriousSections?.subjectIdentity).toEqual([
+      "1girl",
+      "solo",
+      "adult woman",
+      "college art student",
+    ]);
+    expect(renderPlan.shots[0]?.illustriousSections?.appearancePhysicalTraits).toEqual([
+      "short black bob",
+      "warm brown eyes",
+      "approachable adult features",
+    ]);
+    expect(renderPlan.shots[0]?.illustriousSections?.clothingAccessories).toEqual(["mint-green cardigan"]);
+    expect(firstPrompt).toContain("solo");
+    expect(firstPrompt).toContain("adult woman");
+    expect(firstPrompt).toContain("comparing wall hooks and tiny nails");
+    expect(firstPrompt).toContain("holding wrapped sketch frame");
+    expect(firstPrompt).toContain("mint-green cardigan");
+    expect(firstPrompt.indexOf("1girl")).toBeLessThan(firstPrompt.indexOf("short black bob"));
+
+    expect(renderPlan.shots[1]?.illustriousSections?.subjectIdentity).toEqual([
+      "2girls",
+      "adult women",
+      "friend holding tea tin",
+    ]);
+    expect(secondPrompt).toContain("2girls");
+    expect(secondPrompt).toContain("kneeling beside low bookshelf");
+    expect(secondPrompt).toContain("opening the door");
+    expect(secondPrompt).toContain("friend standing at open doorway");
   });
 
   it("preserves manually edited Story render prompts when creating execution requests", () => {

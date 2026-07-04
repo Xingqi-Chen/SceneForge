@@ -1967,6 +1967,13 @@ describe("story LLM adapters", () => {
               cameraFraming: ["close view"],
             },
             negativeAdditions: ["cropped signal"],
+            resourceTriggerSelections: [
+              {
+                resourceId: "lora-local",
+                selectedTrainedWords: ["neon market", "invented"],
+                reason: "Use the local LoRA trigger only when relevant.",
+              },
+            ],
           },
         ],
         warnings: ["Structured Illustrious sections returned."],
@@ -1990,6 +1997,13 @@ describe("story LLM adapters", () => {
             cameraFraming: ["close view"],
           },
           negativeAdditions: ["cropped signal"],
+          resourceTriggerSelections: [
+            {
+              resourceId: "lora-local",
+              selectedTrainedWords: ["neon market", "invented"],
+              reason: "Use the local LoRA trigger only when relevant.",
+            },
+          ],
         },
       ],
     });
@@ -2029,6 +2043,190 @@ describe("story LLM adapters", () => {
       },
     });
     expect(plan.shots[0]).not.toHaveProperty("animaPromptParts");
+  });
+
+  it("asks the LLM for final-quality Illustrious tags without local semantic repair", async () => {
+    const workflow = createStoryWorkflowState({ storyId: "story-1", workflowId: "workflow-illustrious-render" });
+    const updatedAt = workflow.updatedAt;
+    const resourcePlan = normalizeStoryResourcePlan(
+      {
+        checkpoint: { resource: { id: "checkpoint-local" }, reason: "Local checkpoint." },
+        loras: [{ resource: { id: "lora-local" }, reason: "Local LoRA.", suggestedWeight: 0.6 }],
+        recommendationReason: "Use real resources.",
+        overallEffect: "Neon continuity.",
+        warnings: [],
+      },
+      input,
+    );
+    let requestSystemPrompt = "";
+    const adapters = createStoryLlmNodeAdapters({
+      completeChat: async (request) => {
+        requestSystemPrompt = typeof request.messages[0]?.content === "string" ? request.messages[0].content : "";
+
+        return chatResponse(JSON.stringify({
+          shots: [
+            {
+              shotId: "shot-1",
+              illustriousSections: {
+                subjectIdentity: ["1man", "solo", "adult man", "courier"],
+                clothingAccessories: ["reflective yellow jacket"],
+                poseActionExpression: ["holding red signal card"],
+                backgroundEnvironmentObjects: ["wet neon market aisle"],
+                cameraFraming: ["close view"],
+              },
+              resourceTriggerSelections: [
+                {
+                  resourceId: "lora-local",
+                  selectedTrainedWords: ["neon market"],
+                  reason: "Use selected neon style LoRA.",
+                },
+              ],
+            },
+          ],
+          warnings: ["Structured Illustrious sections returned."],
+        }));
+      },
+    });
+
+    workflow.nodes["story-input"] = {
+      nodeId: "story-input",
+      result: input,
+      source: "manual",
+      status: "manual",
+      updatedAt,
+    };
+    workflow.nodes["story-bible"] = {
+      nodeId: "story-bible",
+      result: normalizeStoryBible(
+        {
+          title: "Signal Market",
+          logline: "A courier follows a signal.",
+          characters: [{ id: "courier", name: "Courier", description: "An adult courier in a reflective yellow jacket." }],
+          locations: [{ id: "market", name: "Market", description: "A wet neon market." }],
+        },
+        input,
+      ),
+      source: "ai",
+      status: "done",
+      updatedAt,
+    };
+    workflow.nodes["storyboard-shots"] = {
+      nodeId: "storyboard-shots",
+      result: shots.map((shot) => ({ ...shot, sourceShotIds: [] })),
+      source: "ai",
+      status: "done",
+      updatedAt,
+    };
+    workflow.nodes["character-continuity-graph"] = {
+      nodeId: "character-continuity-graph",
+      result: {
+        storyId: "story-1",
+        characters: [
+          {
+            characterId: "courier",
+            name: "Courier",
+            canonicalDescription: "An adult courier in a reflective yellow jacket.",
+            visualAnchors: ["reflective yellow jacket"],
+          },
+        ],
+        appearances: shots.map((shot) => ({
+          shotId: shot.id,
+          characterId: "courier",
+          wardrobe: ["reflective yellow jacket"],
+          poseOrAction: shot.id === "shot-1" ? "holding red signal card" : "leans toward the signal",
+          expression: "focused",
+          continuityNotes: ["Keep reflective yellow jacket visible."],
+        })),
+      },
+      source: "ai",
+      status: "done",
+      updatedAt,
+    };
+    workflow.nodes["shot-dependency-graph"] = {
+      nodeId: "shot-dependency-graph",
+      result: {
+        storyId: "story-1",
+        nodes: shots.map((shot) => ({ shotId: shot.id, label: shot.title })),
+        edges: [],
+      },
+      source: "ai",
+      status: "done",
+      updatedAt,
+    };
+    workflow.nodes["story-safety-plan"] = {
+      nodeId: "story-safety-plan",
+      result: {
+        storyId: "story-1",
+        audienceRating: "safe",
+        contentWarnings: [],
+        blockedContent: [],
+        perShotNotes: [],
+        nsfwContext: {
+          enabled: false,
+          rationale: "Safe story.",
+        },
+      },
+      source: "ai",
+      status: "done",
+      updatedAt,
+    };
+    workflow.nodes["resource-plan"] = {
+      nodeId: "resource-plan",
+      result: resourcePlan,
+      source: "ai",
+      status: "done",
+      updatedAt,
+    };
+    workflow.nodes["parameter-plan"] = {
+      nodeId: "parameter-plan",
+      result: createStoryParameterPlan({
+        storyId: "story-1",
+        defaults: {
+          width: 1024,
+          height: 768,
+          steps: 28,
+          cfg: 5.5,
+          samplerName: "dpmpp_2m",
+          scheduler: "karras",
+          denoise: 1,
+        },
+      }),
+      source: "ai",
+      status: "done",
+      updatedAt,
+    };
+
+    const result = await adapters["story-render-plan"]?.({
+      nodeId: "story-render-plan",
+      workflow,
+      dependencies: [
+        workflow.nodes["character-continuity-graph"],
+        workflow.nodes["shot-dependency-graph"],
+        workflow.nodes["resource-plan"],
+        workflow.nodes["parameter-plan"],
+      ],
+    });
+    const renderResult = result as { source: string; value: StoryRenderPlan } | undefined;
+    const renderPlan = renderResult?.value;
+
+    expect(renderResult?.source).toBe("ai");
+    expect(requestSystemPrompt).toContain("final generation quality");
+    expect(requestSystemPrompt).toContain("2girls, 1man");
+    expect(requestSystemPrompt).toContain("never use 1boy for an adult man");
+    expect(requestSystemPrompt).toContain("including spatialComposition");
+    expect(requestSystemPrompt).toContain("Do not write Maya central");
+    expect(requestSystemPrompt).toContain("mature young face");
+    expect(requestSystemPrompt).toContain("supporting figures");
+    expect(requestSystemPrompt).toContain("Keep the visible person count");
+    expect(renderPlan?.shots[0]?.illustriousSections?.subjectIdentity).toEqual([
+      "1man",
+      "solo",
+      "adult man",
+      "courier",
+    ]);
+    expect(renderPlan?.shots[0]?.positivePrompt).toContain("1man");
+    expect(renderPlan?.shots[0]?.positivePrompt).toContain("neon market");
+    expect(renderPlan?.shots[0]?.negativePrompt).toBe("bad quality, worst quality, worst detail, censor");
   });
 
   it("asks the LLM for structured Anima prompt parts before assembling render plans", async () => {

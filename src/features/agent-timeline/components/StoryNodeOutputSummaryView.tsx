@@ -24,15 +24,17 @@ function isLongValue(value: string) {
 
 function SummaryValue({
   column,
+  forceBlock = false,
   value,
 }: {
   column?: string;
+  forceBlock?: boolean;
   value: string;
 }) {
   const longValue = isLongValue(value);
   const promptValue = column ? isPromptColumn(column) : false;
 
-  if (!longValue) {
+  if (!longValue && !forceBlock) {
     return <span className="whitespace-pre-wrap break-words">{value || "-"}</span>;
   }
 
@@ -127,7 +129,7 @@ function SummaryTextBlock({
   return (
     <div>
       <p className="text-[11px] font-semibold uppercase text-slate-500">{label}</p>
-      <SummaryValue column={label} value={value} />
+      <SummaryValue column={label} forceBlock={isPromptColumn(label)} value={value} />
     </div>
   );
 }
