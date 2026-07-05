@@ -55,6 +55,27 @@ vi.mock("@/features/editor/components/ImageGenerationPanel", () => ({
       </div>
     );
   },
+  InpaintMaskDialog: (props: Record<string, unknown>) =>
+    props.open === true ? <div data-testid="mock-inpaint-mask-dialog" /> : null,
+  toDraft: (request: Record<string, unknown>) => ({
+    cfg: request.cfg ?? 5,
+    denoise: request.denoise ?? 1,
+    faceDetailer: request.faceDetailer ?? { enabled: false },
+    handDetailer: request.handDetailer ?? { enabled: false },
+    height: request.height ?? 1024,
+    inpaint: { brushSize: 24, denoise: 0.65, growMaskBy: 6, mode: "latent-noise-mask" },
+    loras: request.loras ?? [],
+    negativePrompt: request.negativePrompt ?? "",
+    outputPrefix: request.outputPrefix ?? "SceneForge",
+    positivePrompt: request.positivePrompt ?? "",
+    preview: false,
+    samplerName: request.samplerName ?? "euler",
+    scheduler: request.scheduler ?? "normal",
+    seed: request.seed ?? 1,
+    steps: request.steps ?? 20,
+    width: request.width ?? 1024,
+  }),
+  toInpaintRequestPayload: () => ({}),
 }));
 
 import { StoryPlanningPreview } from "./StoryPlanningPreview";
@@ -199,6 +220,102 @@ function createPlannedWorkflow(rawIntent = "A detective follows a signal through
   });
 }
 
+function createTestStoryOutputAnchors(sourceShotIds: string[]) {
+  return {
+    action: [],
+    appearance: [],
+    camera: [],
+    clothing: [],
+    composition: [],
+    detail: [],
+    environment: [],
+    lighting: [],
+    negative: [],
+    subject: [],
+    source: {
+      mode: sourceShotIds.length > 0 ? "source-image" : "none",
+      reason: sourceShotIds.length > 0 ? "Test source-shot inheritance." : "Independent test shot.",
+      risks: [],
+      sourceShotIds,
+    },
+  };
+}
+
+function createTestStoryResourcePlan(storyId: string) {
+  return {
+    storyId,
+    checkpoint: {
+      resource: selectedCheckpointPreview,
+      reason: "Test checkpoint.",
+    },
+    loras: [],
+    recommendationReason: "Test resources.",
+    overallEffect: "Stable test rendering.",
+    warnings: [],
+  };
+}
+
+function createTestStoryRenderPlan(storyId: string) {
+  return {
+    storyId,
+    img2imgDenoise: 0.9,
+    nsfwContext: {
+      audienceRating: "safe",
+      contentWarnings: [],
+      enabled: false,
+      rationale: "Safe test context.",
+    },
+    promptProfile: "illustrious",
+    resourceRefs: {
+      sourceNodeId: "resource-plan",
+      checkpoint: {
+        modelFileName: selectedCheckpointPreview.modelFileName,
+        name: selectedCheckpointPreview.name,
+        resourceId: selectedCheckpointPreview.id,
+      },
+      loras: [],
+    },
+    preview: {
+      options: {
+        enabled: false,
+        parameterOverrides: {},
+        shotIds: [],
+      },
+      resultReferences: [],
+    },
+    shots: ["shot-1", "shot-2"].map((shotId, index) => {
+      const sourceShotIds = shotId === "shot-2" ? ["shot-1"] : [];
+
+      return {
+        shotId,
+        order: index + 1,
+        title: `Shot ${index + 1}`,
+        promptProfile: "illustrious",
+        positivePrompt: `test story render prompt ${shotId}`,
+        negativePrompt: "bad quality",
+        outputAnchors: createTestStoryOutputAnchors(sourceShotIds),
+        sourceImageEdges: [],
+        sourceShotIds,
+        parameters: {
+          width: 1024,
+          height: 1024,
+          steps: 20,
+          cfg: 5,
+          samplerName: "euler",
+          scheduler: "normal",
+          denoise: 1,
+          seed: index + 1,
+        },
+        resourceRefs: {
+          checkpointResourceId: selectedCheckpointPreview.id,
+          loraResourceIds: [],
+        },
+      };
+    }),
+    warnings: [],
+  };
+}
+
 function withExecution(workflow: StoryWorkflowState, promptPrefix = "prompt"): StoryWorkflowState {
   const execution = {
     storyId: workflow.storyId,
@@ -258,6 +375,20 @@ function withExecution(workflow: StoryWorkflowState, promptPrefix = "prompt"): S
     generationConfirmed: true,
     nodes: {
       ...workflow.nodes,
+      "resource-plan": {
+        nodeId: "resource-plan",
+        status: "done",
+        source: "ai",
+        result: createTestStoryResourcePlan(workflow.storyId),
+        updatedAt: execution.updatedAt,
+      },
+      "story-render-plan": {
+        nodeId: "story-render-plan",
+        status: "done",
+        source: "ai",
+        result: createTestStoryRenderPlan(workflow.storyId),
+        updatedAt: execution.updatedAt,
+      },
       "shot-graph-execution": {
         nodeId: "shot-graph-execution",
         status: "done",
@@ -1788,7 +1919,15 @@ describe("StoryPlanningPreview", () => {
     expect(resultImage?.getAttribute("src")).not.toContain("comfyui.test/view");
     expect(resultImage?.className).toContain("object-contain");
     expect(resultImage?.className).not.toContain("object-cover");
-    expect(resultImage?.closest("a")?.getAttribute("href")).toBe("/api/comfyui/generated-images/first-shot-1.png");
+    const storyResultGrid = container.querySelector('[data-testid="story-result-grid"]') as HTMLElement | null;
+    const inpaintButtons = Array.from(storyResultGrid?.querySelectorAll("button") ?? [])
+      .filter((button) => button.textContent?.includes("Inpaint"));
+    expect(inpaintButtons).toHaveLength(2);
+    expect(inpaintButtons.every((button) => !button.disabled)).toBe(true);
+    act(() => {
+      inpaintButtons[0]?.click();
+    });
+    expect(container.querySelector('[data-testid="mock-inpaint-mask-dialog"]')).not.toBeNull();
 
     const executionButton = container.querySelector('button[data-node-id="shot-graph-execution"]') as HTMLButtonElement | null;
     act(() => {
