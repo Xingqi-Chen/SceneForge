@@ -401,7 +401,7 @@ export function getStoryStyleReferenceCapability({
   if (/\billustrious\b/.test(text)) {
     return {
       mode: "ipadapter",
-      reason: "Illustrious checkpoints support the sequence-style IPAdapter reference.",
+      reason: "Illustrious base models support the sequence-style IPAdapter reference.",
     };
   }
 

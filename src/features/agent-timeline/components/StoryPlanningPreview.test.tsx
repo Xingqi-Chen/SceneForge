@@ -1250,11 +1250,132 @@ describe("StoryPlanningPreview", () => {
       },
       settingsSnapshot: {
         checkpointId: "checkpoint-local",
-        modeReason: "Illustrious checkpoints support the sequence-style IPAdapter reference.",
+        modeReason: "Illustrious base models support the sequence-style IPAdapter reference.",
       },
     });
     expect(JSON.stringify(planningBody.settingsSnapshot?.styleReference)).not.toContain("data:image");
     expect(planningBody.settingsSnapshot?.styleReference?.dataUrl).toBeUndefined();
+  });
+
+  it("uses the Core Settings base model to enable Story style reference IPAdapter before checkpoint selection", async () => {
+    const plannedWorkflow = createPlannedWorkflow("A detective follows a signal through a storm-lit city.");
+    const fetchMock = vi.fn<typeof fetch>(async (url, init) => {
+      const target = typeof url === "string" ? url : url instanceof Request ? url.url : url.toString();
+      const resourceResponse = handleStoryResourceListFetch(target);
+      if (resourceResponse) {
+        return resourceResponse;
+      }
+
+      if (target === "/api/settings") {
+        return {
+          ok: true,
+          json: async () => ({}),
+        } as Response;
+      }
+
+      if (target === "/api/agent-timeline/active-workflow") {
+        return {
+          ok: false,
+          status: 404,
+          statusText: "Not Found",
+          text: async () => "",
+        } as Response;
+      }
+
+      if (target === "/api/comfyui/sequence-references") {
+        expect(init?.method).toBe("POST");
+
+        return {
+          ok: true,
+          json: async () => ({
+            byteLength: 3,
+            contentType: "image/png",
+            filename: "0123456789abcdef0123456789abcdef.png",
+            url: "/api/comfyui/sequence-references/0123456789abcdef0123456789abcdef.png",
+          }),
+        } as Response;
+      }
+
+      if (target === "/api/llm/chat") {
+        return {
+          ok: true,
+          json: async () => ({
+            role: "assistant",
+            model: "vision-model",
+            content: JSON.stringify({
+              summary: "Soft watercolor anime rendering with pastel highlights.",
+              stylePrompt: "soft watercolor anime rendering, clean pencil linework, pastel highlights",
+            }),
+          }),
+        } as Response;
+      }
+
+      if (target === "/api/agent-timeline/story/run-planning") {
+        return {
+          ok: true,
+          json: async () => ({
+            workflow: plannedWorkflow,
+          }),
+        } as Response;
+      }
+
+      throw new Error(`Unexpected fetch ${target}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await act(async () => {
+      root.render(<StoryPlanningPreview />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const textarea = container.querySelector("textarea") as HTMLTextAreaElement | null;
+    act(() => {
+      setNativeInputValue(textarea as HTMLTextAreaElement, "A detective follows a signal through a storm-lit city.");
+    });
+
+    const fileInput = container.querySelector('input[type="file"][accept="image/png,image/jpeg,image/webp"]') as HTMLInputElement | null;
+    expect(fileInput).not.toBeNull();
+    const styleFile = new File([new Uint8Array([1, 2, 3])], "style.png", { type: "image/png" });
+
+    await act(async () => {
+      Object.defineProperty(fileInput as HTMLInputElement, "files", {
+        configurable: true,
+        value: [styleFile],
+      });
+      fileInput?.dispatchEvent(new Event("change", { bubbles: true }));
+      await Promise.resolve();
+    });
+    for (let index = 0; index < 6 && !container.textContent?.includes("Soft watercolor anime rendering"); index += 1) {
+      await flushAsyncWork();
+    }
+
+    expect(container.textContent).toContain("IPAdapter");
+    expect(container.textContent).toContain("Illustrious base models support the sequence-style IPAdapter reference.");
+    expect(Array.from(container.querySelectorAll('input[type="number"]')).map((input) => (input as HTMLInputElement).value))
+      .toEqual(expect.arrayContaining(["0.45", "0", "1"]));
+
+    await clickButtonAsync("Start planning");
+
+    const planningBody = JSON.parse(String(
+      fetchMock.mock.calls.find(([input]) => input === "/api/agent-timeline/story/run-planning")?.[1]?.body ?? "{}",
+    )) as {
+      settingsSnapshot?: {
+        styleReference?: {
+          mode?: string;
+          settingsSnapshot?: { checkpointBaseModel?: string; checkpointId?: string; modeReason?: string };
+        };
+      };
+    };
+
+    expect(planningBody.settingsSnapshot?.styleReference).toMatchObject({
+      mode: "ipadapter",
+      settingsSnapshot: {
+        checkpointBaseModel: "illustrious",
+        modeReason: "Illustrious base models support the sequence-style IPAdapter reference.",
+      },
+    });
+    expect(planningBody.settingsSnapshot?.styleReference?.settingsSnapshot?.checkpointId).toBeUndefined();
   });
 
   it("blocks Story planning while a style reference upload is pending or failed", async () => {

@@ -1387,6 +1387,20 @@ function getStoryWorkflowShotCount(workflow: StoryWorkflowState) {
   return typeof targetShotCount === "number" && Number.isFinite(targetShotCount) ? targetShotCount : 1;
 }
 
+function getStoryStyleReferenceCapabilityForStart({
+  promptProfile,
+  selectedCheckpoint,
+}: {
+  promptProfile: PromptProfileId;
+  selectedCheckpoint: SelectedCivitaiResourcesPreview["checkpoint"];
+}) {
+  return getStoryStyleReferenceCapability({
+    baseModel: selectedCheckpoint?.baseModel ?? promptProfile,
+    modelFileName: selectedCheckpoint?.modelFileName,
+    name: selectedCheckpoint?.name,
+  });
+}
+
 function StoryStyleReferenceNumberInput({
   label,
   onChange,
@@ -1425,7 +1439,6 @@ function StoryStyleReferencePanel({
   onIpAdapterChange,
   promptProfile,
   selectedCheckpoint,
-  selectedCheckpointId,
 }: {
   draft: StoryStyleReferenceDraft;
   ipAdapter: StoryStyleReferenceIpAdapterSettings;
@@ -1434,13 +1447,11 @@ function StoryStyleReferencePanel({
   onIpAdapterChange: (settings: StoryStyleReferenceIpAdapterSettings) => void;
   promptProfile: PromptProfileId;
   selectedCheckpoint: SelectedCivitaiResourcesPreview["checkpoint"];
-  selectedCheckpointId: string | null;
 }) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const capability = getStoryStyleReferenceCapability({
-    baseModel: selectedCheckpoint?.baseModel,
-    modelFileName: selectedCheckpoint?.modelFileName,
-    name: selectedCheckpoint?.name,
+  const capability = getStoryStyleReferenceCapabilityForStart({
+    promptProfile,
+    selectedCheckpoint,
   });
   const busy = draft.status === "uploading" || draft.status === "analyzing";
   const hasReference = draft.status !== "empty";
@@ -1612,7 +1623,7 @@ function StoryStyleReferencePanel({
 
       <div className="grid gap-3">
         <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs leading-relaxed text-slate-600">
-          {selectedCheckpointId && selectedCheckpoint ? capability.reason : "Select a checkpoint to enable IPAdapter mode when supported."}
+          {capability.reason}
         </div>
 
         {draft.status === "empty" ? (
@@ -1773,15 +1784,14 @@ function StartPanel({
         return;
       }
 
-      const capability = getStoryStyleReferenceCapability({
-        baseModel: selectedResources.checkpoint?.baseModel,
-        modelFileName: selectedResources.checkpoint?.modelFileName,
-        name: selectedResources.checkpoint?.name,
+      const capability = getStoryStyleReferenceCapabilityForStart({
+        promptProfile,
+        selectedCheckpoint: selectedResources.checkpoint,
       });
       styleReference = createStoryStyleReferenceSnapshot({
         analysis: styleReferenceDraft.analysis,
         capturedAt: new Date().toISOString(),
-        checkpointBaseModel: selectedResources.checkpoint?.baseModel ?? null,
+        checkpointBaseModel: selectedResources.checkpoint?.baseModel ?? promptProfile,
         checkpointId: selectedCheckpointId,
         ipAdapter: styleReferenceIpAdapter,
         metadata: styleReferenceDraft.metadata,
@@ -1920,7 +1930,6 @@ function StartPanel({
                 onIpAdapterChange={setStyleReferenceIpAdapter}
                 promptProfile={promptProfile}
                 selectedCheckpoint={selectedResources.checkpoint}
-                selectedCheckpointId={selectedCheckpointId}
               />
 
               <section className="rounded-md border border-indigo-100 bg-indigo-50/40 p-3">

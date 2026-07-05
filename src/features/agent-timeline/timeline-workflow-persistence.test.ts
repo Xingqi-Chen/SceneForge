@@ -43,7 +43,7 @@ const readyStyleReference = {
     capturedAt: "2026-06-14T00:00:02.000Z",
     checkpointBaseModel: "Illustrious",
     checkpointId: "local-checkpoint",
-    modeReason: "Illustrious checkpoints support the sequence-style IPAdapter reference.",
+    modeReason: "Illustrious base models support the sequence-style IPAdapter reference.",
     promptProfile: "illustrious",
   },
   dataUrl: "data:image/png;base64,SHOULD_NOT_PERSIST",
