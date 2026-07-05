@@ -1909,7 +1909,7 @@ function StartPanel({
               </section>
             </div>
 
-            <div className="grid min-h-0 gap-4 xl:max-h-[calc(100vh-12rem)] xl:overflow-y-auto xl:pr-1">
+            <div className="grid min-h-0 content-start gap-4">
               <StoryDetailerSettingsEditor detailers={detailers} onChange={setDetailers} />
 
               <StoryStyleReferencePanel
