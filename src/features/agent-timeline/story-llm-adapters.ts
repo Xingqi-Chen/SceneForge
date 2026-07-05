@@ -40,6 +40,9 @@ import {
   type StoryStylePaletteLoraSnapshot,
   type StoryStylePaletteSnapshot,
 } from "./story-style-palette";
+import {
+  getStoryInputDetailers,
+} from "./story-detailers";
 import type {
   CharacterContinuityGraph,
   PlotStateGraph,
@@ -259,6 +262,20 @@ function getStoryInput(workflow: StoryWorkflowState) {
   }
 
   return input;
+}
+
+function getStoryInputForAiPayload(input: StoryInput): StoryInput {
+  if (!isRecord(input.settingsSnapshot) || !("detailers" in input.settingsSnapshot)) {
+    return input;
+  }
+
+  const settingsSnapshot = { ...input.settingsSnapshot };
+  delete settingsSnapshot.detailers;
+
+  return {
+    ...input,
+    settingsSnapshot,
+  };
 }
 
 function getBible(workflow: StoryWorkflowState) {
@@ -1284,7 +1301,7 @@ function buildStoryRenderPromptInstruction(promptProfile: PromptProfileId) {
       "singleFrameCaption must also describe a static held instant; do not use subordinate motion clauses like as students pass, while walking, or after finishing. Background people should be described as visible figures or paused observers, not passing or moving.",
       "Use only visible image content: subject count, adult/age context, visible people, hair, face, wardrobe, key props, concrete action or pose, setting, spatial position, framing, camera, lighting, color theme, and art style.",
       "Do not include story intent, emotional arc, rationale, symbolic meaning, viewer instruction, prose transitions, or words like should, must, important, clearly, feels, as if, payoff, problem-solving moment, visual priority, or focal character inside animaPromptParts.",
-      "Do not include <lora:...> syntax, model names, checkpoint names, file names, sampler, scheduler, CFG, steps, seed, denoise, width, height, safety rating tags, quality tags, score tags, safe tag, or final prompt prefixes inside animaPromptParts.",
+      "Do not include <lora:...> syntax, model names, checkpoint names, file names, sampler, scheduler, CFG, steps, seed, denoise, width, height, FaceDetailer, HandDetailer, detailers, faceDetailer, handDetailer, safety rating tags, quality tags, score tags, safe tag, or final prompt prefixes inside animaPromptParts.",
       "Translate structural ids such as character ids and location ids into natural visible descriptions; never emit ids like teen-resident or location-library as prompt text.",
       "Do not use original-story character names as prompt tags; describe their visible age category, hairstyle, wardrobe, props, and action instead. Only keep a name when it is an actual Civitai trained word or known source character tag.",
       "Preserve explicit current-shot subjects, adult/age context, wardrobe, key props, action or pose, setting, composition, camera, lighting, and continuity anchors as short visual clauses.",
@@ -1319,7 +1336,7 @@ function buildStoryRenderPromptInstruction(promptProfile: PromptProfileId) {
     "If a LoRA has a clear style or character trigger such as usnr and the shot uses that LoRA's style or concept, select that exact trigger for the relevant shot.",
     "Compress multi-event beats into one frozen tableau. Do not write after, then, before, realizing, deciding, discovering, about to, in the middle of, as, while, or unresolved states using or.",
     "Use only visible image content: subject count, adult/age context, visible people, hair, face, wardrobe, key props, concrete action or pose, setting, spatial position, framing, camera, lighting, color theme, and art style.",
-    "Do not include story intent, emotional arc, rationale, symbolic meaning, viewer instruction, prose transitions, model names, checkpoint names, file names, sampler, scheduler, CFG, steps, seed, denoise, width, height, score tags, safe tag, nsfw tag, or final prompt prefixes inside illustriousSections.",
+    "Do not include story intent, emotional arc, rationale, symbolic meaning, viewer instruction, prose transitions, model names, checkpoint names, file names, sampler, scheduler, CFG, steps, seed, denoise, width, height, FaceDetailer, HandDetailer, detailers, faceDetailer, handDetailer, score tags, safe tag, nsfw tag, or final prompt prefixes inside illustriousSections.",
     "Translate structural ids such as character ids and location ids into natural visible descriptions; never emit ids like teen-resident or location-library as prompt text.",
     "For selected style LoRAs, translate their usage guide into short visible style terms only, such as teal theme, orange theme, dusk glow, or soft rim light.",
     "Leave negativeAdditions empty for Illustrious. Local code uses a common Illustrious negative prompt only: bad quality, worst quality, worst detail, censor.",
@@ -1341,6 +1358,7 @@ export function createStoryRenderPlanFromWorkflow(
   });
 
   return assembleStoryRenderPlan({
+    detailers: getStoryInputDetailers(getStoryInput(workflow)),
     img2imgDenoise: getStoryInputImg2ImgDenoise(getStoryInput(workflow)),
     parameterPlan: getParameterPlan(workflow),
     promptProfile: getStoryPromptProfile(getStoryInput(workflow)),
@@ -1447,7 +1465,9 @@ export function createStoryGenerationGateFromWorkflow(
     promptProfile: renderPlan.promptProfile,
     renderPlanShotCount: renderPlan.shots.length,
     previewEnabled: renderPlan.preview.options.enabled,
-    requestPreview: renderPlan.shots.map((shot) => createStoryGenerationRequestPreview(shot, renderPlan.img2imgDenoise)),
+    requestPreview: renderPlan.shots.map((shot) =>
+      createStoryGenerationRequestPreview(shot, renderPlan.img2imgDenoise, renderPlan.detailers),
+    ),
   };
 }
 
@@ -1575,12 +1595,13 @@ export function createStoryLlmNodeAdapters({
   const storyBible = createLlmStoryNodeAdapter<StoryBible>({
     buildRequest: (context) => {
       const input = getStoryInput(context.workflow);
+      const aiInput = getStoryInputForAiPayload(input);
       return makeJsonRequest({
-        input,
+        input: aiInput,
         instruction:
           'Create a typed StoryBible with concrete visual anchors. Treat storySegments as the visual sequence and storyContext as global continuity, not as an extra shot. Create characters only for people or creatures explicitly present in the user story or storySegments; do not invent visible supporting people from implied locations or occupations. Character descriptions must include visible role/age range, silhouette, clothing, key prop, and emotional baseline when inferable. Location descriptions must include visible set pieces, materials, color accents, and recurring background anchors. visualStyle must describe renderable camera/lighting/color style, not abstract theme. Required shape: {"title":"","logline":"","genre":[""],"themes":[""],"worldSummary":"","visualStyle":"","characters":[{"id":"","name":"","role":"","description":"","continuityNotes":[""],"visualAnchors":[""]}],"locations":[{"id":"","name":"","description":"","visualAnchors":[""]}],"continuityRules":[""]}.',
         payload: {
-          input,
+          input: aiInput,
           storyContext: input.storyContext ?? "",
           storySegments: input.storySegments ?? [],
         },
@@ -1591,12 +1612,13 @@ export function createStoryLlmNodeAdapters({
   const storyOutline = createLlmStoryNodeAdapter<StoryOutline>({
     buildRequest: (context) => {
       const input = getStoryInput(context.workflow);
+      const aiInput = getStoryInputForAiPayload(input);
       return makeJsonRequest({
-        input,
+        input: aiInput,
         instruction:
           'Create a typed StoryOutline. If input.targetShotCount is set, use exactly that count when practical. If input.targetShotCount is unset, you must decide the beat count from rawIntent yourself; local code has not parsed labels, counted events, or estimated a target. Read explicit user labels such as "Beat 1:", "Beat 2:", "Opening image:", and "Final image:" whether they appear inline or on separate lines, and preserve those labeled visual moments as separate beats unless the user explicitly asks to combine them. Do not pad to three shots. Use only as many beats as the story needs. If storySegments are supplied as structured input, use one beat per storySegment in order and do not create a beat for storyContext. Required shape: {"beats":[{"id":"","title":"","summary":"","order":1,"characterIds":[""]}]}.',
         payload: {
-          input,
+          input: aiInput,
           targetShotCount: getRequestedTargetShotCount(input),
           shotCountMode: getShotCountMode(input),
           storyContext: input.storyContext ?? "",
@@ -1614,12 +1636,13 @@ export function createStoryLlmNodeAdapters({
   const storyboardShots = createLlmStoryNodeAdapter<StoryShot[]>({
     buildRequest: (context) => {
       const input = getStoryInput(context.workflow);
+      const aiInput = getStoryInputForAiPayload(input);
       return makeJsonRequest({
-        input,
+        input: aiInput,
         instruction:
           'Create typed storyboard shots with stable ids, order, camera, promptIntent, continuityNotes, characterIds, locationId, and sourceShotIds. Create exactly one storyboard shot per supplied outline beat unless input.targetShotCount is set and a target-count adjustment is necessary. If input.targetShotCount is unset, follow the StoryOutline beat count chosen by the LLM; local code has not parsed labels, counted events, or estimated a target. Preserve explicit rawIntent labels such as "Beat 1:" or "Final image:" through shot titles and shot content when they map to outline beats. Do not add filler shots or a separate context/setup shot. Each promptIntent must be an image-generation-ready visual brief with short comma-separated tag phrases: visible character identities/appearance, the same wardrobe and key prop continuity, one clear action, location/obstacle, composition, lighting, and visible emotional state. Visible subjects must match current segment explicitly named characters: do not invent extra visible people from a location or job role, and do not remove explicitly requested people. Partial/background interactions are acceptable when the segment explicitly requests them. Do not use abstract summaries, meta planning instructions, dangling clauses, or purely atmospheric prose. sourceShotIds must be empty unless this shot truly needs a previous generated image as an img2img/reference source; ordinary story order and continuity do not need sourceShotIds. Keep sourceShotIds empty for high-risk source-image transitions such as standing to kneeling, sitting to running, close-up to wide shot, major composition reset, camera reset, or large scene reset. Required shape: {"shots":[{"id":"shot-1","order":1,"title":"","description":"","beatId":"","locationId":"","characterIds":[""],"sourceShotIds":[""],"camera":"","promptIntent":"","continuityNotes":[""]}]}.',
         payload: {
-          input,
+          input: aiInput,
           targetShotCount: getRequestedTargetShotCount(input),
           shotCountMode: getShotCountMode(input),
           storyContext: input.storyContext ?? "",
@@ -1640,12 +1663,13 @@ export function createStoryLlmNodeAdapters({
   const safetyPlan = createLlmStoryNodeAdapter<StorySafetyPlan>({
     buildRequest: (context) => {
       const input = getStoryInput(context.workflow);
+      const aiInput = getStoryInputForAiPayload(input);
       return makeJsonRequest({
-        input,
+        input: aiInput,
         instruction:
           'Create a StorySafetyPlan that preserves the configured NSFW context and safety constraints. Echo the input audienceRating and nsfwContext; do not choose a different rating. Never permit sexualized minors, non-consensual sexual content, or graphic sexual violence. Required shape: {"audienceRating":"safe|suggestive|mature|explicit","contentWarnings":[""],"blockedContent":[""],"perShotNotes":[{"shotId":"","risks":[""],"mitigations":[""]}],"nsfwContext":{"enabled":false,"rationale":""}}.',
         payload: {
-          input,
+          input: aiInput,
           shots: getShots(context.workflow),
         },
       });
@@ -1659,12 +1683,13 @@ export function createStoryLlmNodeAdapters({
   const dependencyGraph = createLlmStoryNodeAdapter<ShotDependencyGraph>({
     buildRequest: (context) => {
       const input = getStoryInput(context.workflow);
+      const aiInput = getStoryInputForAiPayload(input);
       return makeJsonRequest({
-        input,
+        input: aiInput,
         instruction:
           'Create a shot dependency graph using only supplied shot ids. Use reason "img2img-source" only when the later shot should receive the earlier generated image during ComfyUI execution, typically the same location, similar composition, continuous action, or a deliberate visual carry-over where image inheritance is desired. Never use img2img-source for high-risk source-image transitions such as standing to kneeling, sitting to running, close-up to wide shot, major composition reset, camera reset, large scene reset, cross-scene continuity, or cross-location cuts; use prompt-only continuity, reason "continuity", reason "story-order", reason "reference", or omit the edge instead. Existing execution only injects source images for img2img-source edges, so planning-only reasons must remain non-executable. Required shape: {"nodes":[{"shotId":"","label":""}],"edges":[{"fromShotId":"","toShotId":"","reason":"img2img-source|reference|continuity|story-order|manual"}]}.',
         payload: {
-          input,
+          input: aiInput,
           shots: getShots(context.workflow),
         },
       });
@@ -1678,12 +1703,13 @@ export function createStoryLlmNodeAdapters({
   const plotGraph = createLlmStoryNodeAdapter<PlotStateGraph>({
     buildRequest: (context) => {
       const input = getStoryInput(context.workflow);
+      const aiInput = getStoryInputForAiPayload(input);
       return makeJsonRequest({
-        input,
+        input: aiInput,
         instruction:
           'Create a typed PlotStateGraph. Use only supplied shot ids. Required shape: {"states":[{"id":"","title":"","summary":"","shotIds":[""]}],"transitions":[{"fromStateId":"","toStateId":"","reason":""}]}.',
         payload: {
-          input,
+          input: aiInput,
           outline: getOutline(context.workflow),
           shots: getShots(context.workflow),
         },
@@ -1698,12 +1724,13 @@ export function createStoryLlmNodeAdapters({
   const continuityGraph = createLlmStoryNodeAdapter<CharacterContinuityGraph>({
     buildRequest: (context) => {
       const input = getStoryInput(context.workflow);
+      const aiInput = getStoryInputForAiPayload(input);
       return makeJsonRequest({
-        input,
+        input: aiInput,
         instruction:
           'Create a typed CharacterContinuityGraph. Use only supplied shot and character ids. Required shape: {"appearances":[{"shotId":"","characterId":"","wardrobe":[""],"poseOrAction":"","expression":"","continuityNotes":[""]}]}.',
         payload: {
-          input,
+          input: aiInput,
           bible: getBible(context.workflow),
           shots: getShots(context.workflow),
         },
@@ -1720,6 +1747,7 @@ export function createStoryLlmNodeAdapters({
   const resourcePlan: StoryNodeAdapter<StoryResourcePlan> = async (context) => {
     try {
       const input = getStoryInput(context.workflow);
+      const aiInput = getStoryInputForAiPayload(input);
       const {
         candidates,
         desiredEffect,
@@ -1750,11 +1778,11 @@ export function createStoryLlmNodeAdapters({
       }
 
       const response = await completeChat(makeJsonRequest({
-        input,
+        input: aiInput,
         instruction:
-          'Choose resources only from the supplied checkpoint and LoRA candidate ids. Do not invent ids. Candidates are ordered by BM25/embedding recommendation rank when recommendationRank and recommendationScore are present; treat higher-ranked candidates as stronger evidence, but still use metadata and story context to choose the best compatible combination. Use checkpoint and LoRA names, descriptions, tags, categories, trainedWords, usageGuide, observed weight ranges, common pairings, and parameter recommendations to choose LoRA suggestedWeight values and explain tradeoffs. Do not apply generic local caps by style, lighting, or resource type; if metadata conflicts, choose a finite sane weight from the selected resource evidence and explain it in reason or warnings. Required shape: {"checkpoint":{"resource":{"id":""},"reason":""},"loras":[{"resource":{"id":""},"suggestedWeight":0.7,"reason":""}],"recommendationReason":"","overallEffect":"","warnings":[""]}.',
+          'Choose resources only from the supplied checkpoint and LoRA candidate ids. Do not invent ids. Candidates are ordered by BM25/embedding recommendation rank when recommendationRank and recommendationScore are present; treat higher-ranked candidates as stronger evidence, but still use metadata and story context to choose the best compatible combination. Use checkpoint and LoRA names, descriptions, tags, categories, trainedWords, usageGuide, observed weight ranges, common pairings, and parameter recommendations to choose LoRA suggestedWeight values and explain tradeoffs. Do not output or recommend FaceDetailer, HandDetailer, detailers, faceDetailer, or handDetailer fields; those are controlled only by Story input checkboxes. Do not apply generic local caps by style, lighting, or resource type; if metadata conflicts, choose a finite sane weight from the selected resource evidence and explain it in reason or warnings. Required shape: {"checkpoint":{"resource":{"id":""},"reason":""},"loras":[{"resource":{"id":""},"suggestedWeight":0.7,"reason":""}],"recommendationReason":"","overallEffect":"","warnings":[""]}.',
         payload: {
-          input,
+          input: aiInput,
           desiredEffect,
           promptProfile,
           safetyPlan: getSafetyPlan(context.workflow),
@@ -1779,6 +1807,7 @@ export function createStoryLlmNodeAdapters({
   const aiParameterPlan = createLlmStoryNodeAdapter<StoryParameterPlan>({
     buildRequest: (context) => {
       const input = getStoryInput(context.workflow);
+      const aiInput = getStoryInputForAiPayload(input);
       const resourcePlan = getResourcePlan(context.workflow);
       const parameterDefaults = createStoryDefaultGenerationParameters({
         input,
@@ -1791,13 +1820,13 @@ export function createStoryLlmNodeAdapters({
       );
 
       return makeJsonRequest({
-        input,
+        input: aiInput,
         instruction:
-          `Create a typed StoryParameterPlan with one story-level generation resolution. Width and height must be positive story-level image dimensions. Every shot in the Story must use the same width and height, so put resolution only in defaults and never include width or height in perShotOverrides. Use supplied selectedResourceParameterContext plus resourcePlan as model-specific context: checkpoint description, usage guide, base model, selected LoRA descriptions, trained words, observed weights, recommendations, exampleImageDimensions, and storyboard composition needs jointly determine the single best story-level width, height, sampler, scheduler, steps, CFG, and denoise. You are responsible for choosing Anima and other model-family resolution from that resource context and the storyboard composition needs; local code will not infer resolution from scene keywords. Treat checkpoint exampleImageDimensions and explicit resource resolution guidance as stronger evidence than modelDefaultParameters when choosing width and height; preserve the dominant compatible model aspect ratio unless the user explicitly requested another aspect. Use supplied modelDefaultParameters only as the safe fallback when selected resources provide no stronger resolution or aspect evidence. Preserve supplied modelDefaultParameters for steps, cfg, samplerName, scheduler, and denoise unless a shot has a strong visual reason to override; do not lower steps/cfg/denoise just for speed. Put a brief resolution rationale in warnings when selected resource context changes width or height. samplerName must be one of availableSamplers and scheduler must be one of availableSchedulers. Per-shot parameter overrides may include only steps, cfg, samplerName, scheduler, denoise, or seed. Required shape: {"defaults":{"width":${parameterDefaults.width},"height":${parameterDefaults.height},"steps":${parameterDefaults.steps},"cfg":${parameterDefaults.cfg},"samplerName":"${parameterDefaults.samplerName}","scheduler":"${parameterDefaults.scheduler}","denoise":${parameterDefaults.denoise}},"perShotOverrides":[{"shotId":"","parameters":{},"reason":""}],"warnings":[""]}.`,
+          `Create a typed StoryParameterPlan with one story-level generation resolution. Width and height must be positive story-level image dimensions. Every shot in the Story must use the same width and height, so put resolution only in defaults and never include width or height in perShotOverrides. Use supplied selectedResourceParameterContext plus resourcePlan as model-specific context: checkpoint description, usage guide, base model, selected LoRA descriptions, trained words, observed weights, recommendations, exampleImageDimensions, and storyboard composition needs jointly determine the single best story-level width, height, sampler, scheduler, steps, CFG, and denoise. You are responsible for choosing Anima and other model-family resolution from that resource context and the storyboard composition needs; local code will not infer resolution from scene keywords. Treat checkpoint exampleImageDimensions and explicit resource resolution guidance as stronger evidence than modelDefaultParameters when choosing width and height; preserve the dominant compatible model aspect ratio unless the user explicitly requested another aspect. Use supplied modelDefaultParameters only as the safe fallback when selected resources provide no stronger resolution or aspect evidence. Preserve supplied modelDefaultParameters for steps, cfg, samplerName, scheduler, and denoise unless a shot has a strong visual reason to override; do not lower steps/cfg/denoise just for speed. Put a brief resolution rationale in warnings when selected resource context changes width or height. samplerName must be one of availableSamplers and scheduler must be one of availableSchedulers. Per-shot parameter overrides may include only steps, cfg, samplerName, scheduler, denoise, or seed. Do not output or recommend FaceDetailer, HandDetailer, detailers, faceDetailer, or handDetailer fields; those are controlled only by Story input checkboxes. Required shape: {"defaults":{"width":${parameterDefaults.width},"height":${parameterDefaults.height},"steps":${parameterDefaults.steps},"cfg":${parameterDefaults.cfg},"samplerName":"${parameterDefaults.samplerName}","scheduler":"${parameterDefaults.scheduler}","denoise":${parameterDefaults.denoise}},"perShotOverrides":[{"shotId":"","parameters":{},"reason":""}],"warnings":[""]}.`,
         payload: {
           availableSamplers: samplerOptions.samplers,
           availableSchedulers: samplerOptions.schedulers,
-          input,
+          input: aiInput,
           modelDefaultParameters: parameterDefaults,
           resourcePlan,
           selectedResources: getSelectedStoryResourcesForPrompting(resourcePlan),
@@ -1839,6 +1868,7 @@ export function createStoryLlmNodeAdapters({
   const renderPlan = createLlmStoryNodeAdapter<StoryRenderPlan>({
     buildRequest: (context) => {
       const input = getStoryInput(context.workflow);
+      const aiInput = getStoryInputForAiPayload(input);
       const promptProfile = getStoryPromptProfile(input);
       const resourcePlan = getResourcePlan(context.workflow);
       const shots = syncStoryShotsWithDependencyGraph(getShots(context.workflow), getDependencyGraph(context.workflow), {
@@ -1849,10 +1879,10 @@ export function createStoryLlmNodeAdapters({
       );
 
       return makeJsonRequest({
-        input,
+        input: aiInput,
         instruction: buildStoryRenderPromptInstruction(promptProfile),
         payload: {
-          input,
+          input: aiInput,
           bible: getBible(context.workflow),
           characterContinuityGraph: getContinuityGraph(context.workflow),
           dependencyGraph: getDependencyGraph(context.workflow),
@@ -1876,6 +1906,7 @@ export function createStoryLlmNodeAdapters({
       const renderPromptPlan = normalizeStoryRenderPromptPlan(response.content, input, shots, promptProfile);
 
       return assembleStoryRenderPlan({
+        detailers: getStoryInputDetailers(input),
         img2imgDenoise: getStoryInputImg2ImgDenoise(input),
         parameterPlan: getParameterPlan(context.workflow),
         promptProfile,

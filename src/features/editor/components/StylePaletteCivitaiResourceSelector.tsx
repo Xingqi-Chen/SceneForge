@@ -294,8 +294,8 @@ function CompactResourceRow({
   const trainedWords = resource.trainedWords.slice(0, 4);
 
   return (
-    <div className="grid min-h-14 grid-cols-[44px_minmax(0,1fr)_auto] items-center gap-2 rounded-md border border-slate-200 bg-white px-2 py-2">
-      <div className="flex size-11 overflow-hidden rounded-md bg-slate-100">
+    <div className="grid min-h-10 grid-cols-[32px_minmax(0,1fr)_32px] items-center gap-2 rounded-md border border-slate-200 bg-white px-2 py-1.5">
+      <div className="flex size-8 overflow-hidden rounded-md bg-slate-100">
         {previewImage ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img alt={`${resource.name} preview`} className="h-full w-full object-cover" src={previewImage} />
@@ -306,12 +306,12 @@ function CompactResourceRow({
         )}
       </div>
       <div className="min-w-0">
-        <div className="flex min-w-0 items-center gap-1.5">
+        <div className="flex min-w-0 items-center gap-1">
           <span className="shrink-0 rounded-full bg-indigo-50 px-1.5 py-0.5 text-[10px] font-medium text-indigo-700">
             {resource.resourceType === "model" ? "Checkpoint" : "LoRA"}
           </span>
           {resource.resourceType === "lora" ? (
-            <span className="shrink-0 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700">
+            <span className="hidden shrink-0 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700 sm:inline">
               {weightLabel(resource)}
             </span>
           ) : null}
@@ -319,21 +319,21 @@ function CompactResourceRow({
             {resource.name}
           </p>
         </div>
-        <div className="mt-1 flex min-w-0 items-center gap-1 text-[11px] text-slate-500">
+        <div className="mt-0.5 flex min-w-0 items-center gap-1 overflow-hidden text-[10px] text-slate-500">
           <span className="shrink-0 truncate">{resource.versionName ?? resource.baseModel ?? "unknown version"}</span>
-          {trainedWords.map((word) => (
-            <span className="shrink-0 rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-600" key={word}>
+          {trainedWords.slice(0, 2).map((word) => (
+            <span className="shrink-0 rounded-full bg-slate-100 px-1 py-0.5 text-[10px] text-slate-600" key={word}>
               {word}
             </span>
           ))}
-          {resource.trainedWords.length > trainedWords.length ? (
-            <span className="shrink-0 text-[10px] text-slate-400">+{resource.trainedWords.length - trainedWords.length}</span>
+          {resource.trainedWords.length > 2 ? (
+            <span className="shrink-0 text-[10px] text-slate-400">+{resource.trainedWords.length - 2}</span>
           ) : null}
         </div>
       </div>
       <Button
         aria-label={`Remove ${resource.resourceType === "model" ? "checkpoint" : "LoRA"} ${resource.name}`}
-        className="size-8 rounded-md border border-rose-100 bg-white p-0 text-rose-700 hover:bg-rose-50"
+        className="size-7 rounded-md border border-rose-100 bg-white p-0 text-rose-700 hover:bg-rose-50"
         onClick={onRemove}
         size="sm"
         title="Remove selected resource"
@@ -814,7 +814,7 @@ export function StylePaletteCivitaiResourceSelector({
             <p className="text-xs leading-relaxed text-rose-700">{selectedCivitaiError}</p>
           ) : null}
           {selectedResourceCards.length > 0 ? (
-            <div className={compactSelectedResources ? "max-h-56 space-y-2 overflow-y-auto overscroll-contain pr-1" : "space-y-2"}>
+            <div className={compactSelectedResources ? "max-h-36 space-y-1.5 overflow-y-auto overscroll-contain pr-1" : "space-y-2"}>
               {selectedResourceCards.map((resource) => (
                 compactSelectedResources ? (
                   <CompactResourceRow

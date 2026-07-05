@@ -5,6 +5,9 @@ import {
   createStoryPlanningArtifacts,
   startStoryGraphWorkflow,
 } from "./story-input";
+import {
+  createStoryDetailerSettingsSnapshot,
+} from "./story-detailers";
 import { confirmStoryGeneration, setStoryNodeManualResult } from "./story-state";
 import { canRunCommonWorkflowNode } from "./workflow-definition";
 import { storyWorkflowDefinition } from "./story-workflow";
@@ -303,6 +306,79 @@ describe("story input workflow start", () => {
     });
 
     expect(input.settingsSnapshot).not.toHaveProperty("stylePalette");
+  });
+
+  it("stores Story detailers independently from style resources", () => {
+    const input = createStoryInputFromStartRequest({
+      rawIntent: "A one-shot portrait without a selected checkpoint.",
+      storyId: "story-detailers",
+      now,
+      settingsSnapshot: {
+        detailers: createStoryDetailerSettingsSnapshot({
+          faceDetailer: {
+            enabled: false,
+            bboxDilation: -24,
+            detectorModelName: "bbox/custom-face.pt",
+            samDilation: -8,
+            steps: 18,
+          },
+          handDetailer: {
+            enabled: true,
+            detectorModelName: "bbox/custom-hand.pt",
+            steps: 19,
+          },
+        }),
+      },
+    });
+
+    expect(input.settingsSnapshot).not.toHaveProperty("stylePalette");
+    expect(input.settingsSnapshot).toMatchObject({
+      detailers: {
+        faceDetailer: {
+          bboxDilation: -24,
+          enabled: false,
+          detectorModelName: "bbox/custom-face.pt",
+          samDilation: -8,
+          steps: 18,
+        },
+        handDetailer: {
+          enabled: true,
+          detectorModelName: "bbox/custom-hand.pt",
+          steps: 19,
+        },
+      },
+    });
+  });
+
+  it("uses ComfyUI detailer defaults when Story checkboxes are enabled without saved detailer fields", () => {
+    const input = createStoryInputFromStartRequest({
+      rawIntent: "A one-shot portrait with default detailers.",
+      storyId: "story-detailer-defaults",
+      now,
+      settingsSnapshot: {
+        detailers: createStoryDetailerSettingsSnapshot({
+          faceDetailer: { enabled: true },
+          handDetailer: { enabled: false },
+        }),
+      },
+    });
+
+    expect(input.settingsSnapshot).toMatchObject({
+      detailers: {
+        faceDetailer: {
+          enabled: true,
+          detectorModelName: "bbox/face_yolov8m.pt",
+          steps: 30,
+          cfg: 7,
+        },
+        handDetailer: {
+          enabled: false,
+          detectorModelName: "bbox/hand_yolov8s.pt",
+          steps: 30,
+          cfg: 7,
+        },
+      },
+    });
   });
 
   it("uses Story input style resources and saved parameters for local planning artifacts", () => {

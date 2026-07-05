@@ -46,6 +46,10 @@ import {
   pickSupportedValue,
   type TimelineSamplerOptions,
 } from "./timeline-sampler-options";
+import {
+  sanitizeStoryDetailerSettingsSnapshot,
+  type StoryDetailerSettingsSnapshot,
+} from "./story-detailers";
 
 export type StoryLocalResource = ResourcePlanLocalResource & {
   versionName?: string | null;
@@ -151,6 +155,7 @@ export type StoryResourceTriggerSelection = IllustriousResourceTriggerSelection;
 
 export type StoryGenerationRequestPreview = {
   animaPromptParts?: StoryAnimaPromptParts;
+  detailers?: StoryDetailerSettingsSnapshot;
   illustriousSections?: IllustriousPromptSections;
   negativePromptLength: number;
   negativePromptPreview: string;
@@ -227,6 +232,7 @@ export type StoryRenderPlanShot = {
 
 export type StoryRenderPlan = {
   storyId: string;
+  detailers?: StoryDetailerSettingsSnapshot;
   img2imgDenoise: number;
   nsfwContext: StoryNsfwContext;
   resourceRefs: StoryRenderPlanResourceRefs;
@@ -1730,8 +1736,10 @@ function compactRequestPromptPreview(value: string) {
 export function createStoryGenerationRequestPreview(
   shot: StoryRenderPlanShot,
   img2imgDenoise = DEFAULT_STORY_IMG2IMG_DENOISE,
+  detailers?: StoryDetailerSettingsSnapshot,
 ): StoryGenerationRequestPreview {
   const normalizedImg2ImgDenoise = normalizeStoryImg2ImgDenoise(img2imgDenoise);
+  const sanitizedDetailers = sanitizeStoryDetailerSettingsSnapshot(detailers);
 
   return {
     ...(shot.animaPromptParts
@@ -1756,6 +1764,7 @@ export function createStoryGenerationRequestPreview(
     ...(shot.illustriousSections
       ? { illustriousSections: cloneStoryIllustriousSections(shot.illustriousSections) }
       : {}),
+    detailers: sanitizedDetailers,
     negativePromptLength: shot.negativePrompt.length,
     negativePromptPreview: compactRequestPromptPreview(shot.negativePrompt),
     parameters: {
@@ -1803,6 +1812,7 @@ function createShotComfyUiRequest(
   storyId: string,
   nsfwContext: StoryNsfwContext,
   resourcePlan: StoryResourcePlan,
+  detailers: StoryDetailerSettingsSnapshot,
   samplerOptions?: TimelineSamplerOptions,
 ): ComfyUiTextToImageRequest {
   const checkpoint = resourcePlan.checkpoint.resource;
@@ -1819,7 +1829,9 @@ function createShotComfyUiRequest(
     ...settings.request,
     cfg: parameters.cfg,
     denoise: parameters.denoise,
+    faceDetailer: detailers.faceDetailer,
     height: parameters.height,
+    handDetailer: detailers.handDetailer,
     samplerName: parameters.samplerName,
     scheduler: parameters.scheduler,
     seed: parameters.seed,
@@ -1903,6 +1915,7 @@ export function createStoryPreviewParameters(
 }
 
 export function assembleStoryRenderPlan({
+  detailers,
   img2imgDenoise = DEFAULT_STORY_IMG2IMG_DENOISE,
   parameterPlan,
   previewOptions = defaultPreviewExecutionOptions,
@@ -1914,6 +1927,7 @@ export function assembleStoryRenderPlan({
   safetyPlan,
   shots,
 }: {
+  detailers?: StoryDetailerSettingsSnapshot;
   img2imgDenoise?: number;
   parameterPlan: StoryParameterPlan;
   previewOptions?: StoryPreviewExecutionOptions;
@@ -1929,6 +1943,7 @@ export function assembleStoryRenderPlan({
   const promptProfile = normalizePromptProfileId(renderPromptPlan?.promptProfile ?? rawPromptProfile);
   const defaultParameters = normalizeParameters(parameterPlan.defaults, samplerOptions);
   const normalizedImg2ImgDenoise = normalizeStoryImg2ImgDenoise(img2imgDenoise);
+  const sanitizedDetailers = sanitizeStoryDetailerSettingsSnapshot(detailers);
   const renderWarnings: string[] = [];
   const sourceImageEdges = createStorySourceImageEdgeSummaries(shots);
   renderWarnings.push(
@@ -2044,6 +2059,7 @@ export function assembleStoryRenderPlan({
 
   return {
     storyId: resourcePlan.storyId,
+    detailers: sanitizedDetailers,
     img2imgDenoise: normalizedImg2ImgDenoise,
     nsfwContext,
     promptProfile,
@@ -2089,6 +2105,13 @@ export function createStoryExecutionRequestBatch({
   const storyResolution = mode === "final" && renderPlan.shots[0]
     ? normalizeParameters(renderPlan.shots[0].parameters, samplerOptions)
     : null;
+  const sanitizedDetailers = sanitizeStoryDetailerSettingsSnapshot(renderPlan.detailers);
+  const detailers = mode === "preview"
+    ? sanitizeStoryDetailerSettingsSnapshot({
+        faceDetailer: { ...sanitizedDetailers.faceDetailer, enabled: false },
+        handDetailer: { ...sanitizedDetailers.handDetailer, enabled: false },
+      })
+    : sanitizedDetailers;
 
   return {
     mode,
@@ -2134,6 +2157,7 @@ export function createStoryExecutionRequestBatch({
             renderPlan.storyId,
             renderPlan.nsfwContext,
             requestResourcePlan,
+            detailers,
             samplerOptions,
           ),
           denoise: shot.sourceShotIds.length > 0 ? renderPlan.img2imgDenoise : requestParameters.denoise,

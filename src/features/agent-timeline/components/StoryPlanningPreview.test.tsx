@@ -8,8 +8,11 @@ import {
   type StoryWorkflowState,
 } from "@/features/agent-timeline";
 
+const dialogProps = vi.hoisted(() => [] as Array<Record<string, unknown>>);
+
 vi.mock("@/features/editor/components/ImageGenerationPanel", () => ({
   ComfyUiGenerationDialog: (props: Record<string, unknown>) => {
+    dialogProps.push(props);
     const open = props.open === true;
     const onSaveParameters = props.onSaveParameters as ((parameters: Record<string, unknown>) => void) | undefined;
 
@@ -39,8 +42,8 @@ vi.mock("@/features/editor/components/ImageGenerationPanel", () => ({
               promptWrapper: { positivePrefix: "ignored", negativePrefix: "ignored" },
               inpaint: { denoise: 0.5, growMaskBy: 4, mode: "fill" },
               outputPrefix: "Ignored",
-              faceDetailer: { enabled: true },
-              handDetailer: { enabled: true },
+              faceDetailer: { enabled: true, detectorModelName: "bbox/custom-face.pt", steps: 18 },
+              handDetailer: { enabled: true, detectorModelName: "bbox/custom-hand.pt", steps: 19 },
               loras: [],
               savedAt: "2026-06-15T00:00:00.000Z",
             })
@@ -327,6 +330,7 @@ async function waitForPickerDebounce() {
 
 beforeEach(() => {
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  dialogProps.length = 0;
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -687,10 +691,14 @@ describe("StoryPlanningPreview", () => {
     const textarea = container.querySelector("textarea") as HTMLTextAreaElement | null;
     const shotsInput = container.querySelector("#story-target-shot-count") as HTMLInputElement | null;
     const img2imgDenoiseInput = container.querySelector("#story-img2img-denoise") as HTMLInputElement | null;
+    const faceDetailerInput = container.querySelector("#story-face-detailer-enabled") as HTMLInputElement | null;
+    const handDetailerInput = container.querySelector("#story-hand-detailer-enabled") as HTMLInputElement | null;
 
     expect(textarea).not.toBeNull();
     expect(shotsInput).not.toBeNull();
     expect(img2imgDenoiseInput).not.toBeNull();
+    expect(faceDetailerInput?.checked).toBe(false);
+    expect(handDetailerInput?.checked).toBe(false);
     expect(img2imgDenoiseInput?.value).toBe("0.9");
     const baseModelSelect = container.querySelector("select") as HTMLSelectElement | null;
 
@@ -702,6 +710,10 @@ describe("StoryPlanningPreview", () => {
       setNativeInputValue(shotsInput as HTMLInputElement, "4");
       setNativeInputValue(img2imgDenoiseInput as HTMLInputElement, "0.72");
     });
+    const startPlanningButton = Array.from(container.querySelectorAll("button")).find(
+      (button) => button.textContent?.replace(/\s+/g, " ").trim() === "Start planning",
+    );
+    expect(startPlanningButton?.parentElement?.className).toContain("border-t");
     await clickButtonAsync("Start planning");
 
     expect(container.textContent).toContain("User-started planning workflow");
@@ -719,11 +731,19 @@ describe("StoryPlanningPreview", () => {
       fetchMock.mock.calls.find(([input]) => input === "/api/agent-timeline/story/run-planning")?.[1]?.body ?? "{}",
     )) as {
       settingsSnapshot?: {
+        detailers?: {
+          faceDetailer?: { enabled?: boolean };
+          handDetailer?: { enabled?: boolean };
+        };
         img2imgDenoise?: number;
         promptProfile?: string;
         resourceCandidates?: unknown;
       };
     };
+    expect(planningBody.settingsSnapshot?.detailers).toMatchObject({
+      faceDetailer: { enabled: false },
+      handDetailer: { enabled: false },
+    });
     expect(planningBody.settingsSnapshot?.img2imgDenoise).toBe(0.72);
     expect(planningBody.settingsSnapshot?.promptProfile).toBe("illustrious");
     expect(planningBody.settingsSnapshot?.resourceCandidates).toBeUndefined();
@@ -731,6 +751,123 @@ describe("StoryPlanningPreview", () => {
     const executionButton = container.querySelector('button[data-node-id="shot-graph-execution"]') as HTMLButtonElement | null;
 
     expect(executionButton?.textContent).toContain("blocked");
+  });
+
+  it("passes Story detailer checkboxes without requiring a checkpoint", async () => {
+    const plannedWorkflow = createPlannedWorkflow("A detective follows a signal through a storm-lit city.");
+    const fetchMock = vi.fn<typeof fetch>(async (url) => {
+      const target = typeof url === "string" ? url : url instanceof Request ? url.url : url.toString();
+
+      if (target === "/api/settings") {
+        return {
+          ok: true,
+          json: async () => ({}),
+        } as Response;
+      }
+
+      if (target === "/api/agent-timeline/story/run-planning") {
+        return {
+          ok: true,
+          json: async () => ({
+            workflow: plannedWorkflow,
+          }),
+        } as Response;
+      }
+
+      throw new Error(`Unexpected fetch ${target}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await act(async () => {
+      root.render(<StoryPlanningPreview />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const textarea = container.querySelector("textarea") as HTMLTextAreaElement | null;
+    const faceDetailerInput = container.querySelector("#story-face-detailer-enabled") as HTMLInputElement | null;
+    const handDetailerInput = container.querySelector("#story-hand-detailer-enabled") as HTMLInputElement | null;
+
+    act(() => {
+      setNativeInputValue(textarea as HTMLTextAreaElement, "A detective follows a signal through a storm-lit city.");
+      faceDetailerInput?.click();
+      handDetailerInput?.click();
+    });
+
+    expect(container.querySelector("#story-face-detailer-detector-model")).toBeNull();
+    const faceSettingsButton = container.querySelector('[data-testid="story-face-detailer-settings"]') as HTMLButtonElement | null;
+    expect(faceSettingsButton).not.toBeNull();
+    await act(async () => {
+      faceSettingsButton?.click();
+      await Promise.resolve();
+    });
+
+    const faceDetectorInput = document.body.querySelector("#story-face-detailer-detector-model") as HTMLInputElement | null;
+    const faceStepsInput = document.body.querySelector("#story-face-detailer-steps") as HTMLInputElement | null;
+    const handDetectorInput = container.querySelector("#story-hand-detailer-detector-model") as HTMLInputElement | null;
+    const handStepsInput = container.querySelector("#story-hand-detailer-steps") as HTMLInputElement | null;
+    expect(faceDetectorInput).not.toBeNull();
+    expect(faceStepsInput).not.toBeNull();
+    expect(handDetectorInput).toBeNull();
+    expect(handStepsInput).toBeNull();
+    const advancedDetailerSections = Array.from(document.body.querySelectorAll("details"));
+    expect(advancedDetailerSections).toHaveLength(1);
+    expect(advancedDetailerSections.every((section) => !section.open)).toBe(true);
+
+    act(() => {
+      setNativeInputValue(faceDetectorInput as HTMLInputElement, "bbox/story-face.pt");
+      setNativeInputValue(faceStepsInput as HTMLInputElement, "18");
+    });
+    const faceDoneButton = Array.from(document.body.querySelectorAll("button")).find(
+      (button) => button.textContent?.replace(/\s+/g, " ").trim() === "Done",
+    ) as HTMLButtonElement | undefined;
+    await act(async () => {
+      faceDoneButton?.click();
+      await Promise.resolve();
+    });
+
+    const handSettingsButton = container.querySelector('[data-testid="story-hand-detailer-settings"]') as HTMLButtonElement | null;
+    expect(handSettingsButton).not.toBeNull();
+    await act(async () => {
+      handSettingsButton?.click();
+      await Promise.resolve();
+    });
+    const handModalDetectorInput = document.body.querySelector("#story-hand-detailer-detector-model") as HTMLInputElement | null;
+    const handModalStepsInput = document.body.querySelector("#story-hand-detailer-steps") as HTMLInputElement | null;
+    expect(handModalDetectorInput).not.toBeNull();
+    expect(handModalStepsInput).not.toBeNull();
+
+    act(() => {
+      setNativeInputValue(handModalDetectorInput as HTMLInputElement, "bbox/story-hand.pt");
+      setNativeInputValue(handModalStepsInput as HTMLInputElement, "19");
+    });
+    await clickButtonAsync("Start planning");
+
+    const planningBody = JSON.parse(String(
+      fetchMock.mock.calls.find(([input]) => input === "/api/agent-timeline/story/run-planning")?.[1]?.body ?? "{}",
+    )) as {
+      settingsSnapshot?: {
+        detailers?: {
+          faceDetailer?: { detectorModelName?: string; enabled?: boolean; steps?: number };
+          handDetailer?: { detectorModelName?: string; enabled?: boolean; steps?: number };
+        };
+        stylePalette?: unknown;
+      };
+    };
+
+    expect(planningBody.settingsSnapshot?.stylePalette).toBeUndefined();
+    expect(planningBody.settingsSnapshot?.detailers).toMatchObject({
+      faceDetailer: {
+        enabled: true,
+        detectorModelName: "bbox/story-face.pt",
+        steps: 18,
+      },
+      handDetailer: {
+        enabled: true,
+        detectorModelName: "bbox/story-hand.pt",
+        steps: 19,
+      },
+    });
   });
 
   it("passes selected Story style resources in the planning request", async () => {
@@ -807,6 +944,10 @@ describe("StoryPlanningPreview", () => {
       fetchMock.mock.calls.find(([input]) => input === "/api/agent-timeline/story/run-planning")?.[1]?.body ?? "{}",
     )) as {
       settingsSnapshot?: {
+        detailers?: {
+          faceDetailer?: { detectorModelName?: string; enabled?: boolean; steps?: number };
+          handDetailer?: { detectorModelName?: string; enabled?: boolean; steps?: number };
+        };
         stylePalette?: {
           checkpointId?: string;
           loras?: Array<{ id: string; enabled: boolean }>;
@@ -989,6 +1130,7 @@ describe("StoryPlanningPreview", () => {
     expect(enabledParametersButton?.disabled).toBe(false);
     await clickButtonAsync("Parameters");
     expect(container.textContent).toContain("parameters-only");
+    expect(dialogProps.at(-1)?.showDetailersInParametersOnly).toBeUndefined();
     await clickButtonAsync("Save mock parameters");
     expect(container.textContent).toContain("Saved parameters: 832x1216, 31 steps, CFG 4.25, euler/normal, fixed seed 98765");
     await clickButtonAsync("Start planning");
@@ -998,6 +1140,10 @@ describe("StoryPlanningPreview", () => {
       fetchMock.mock.calls.find(([input]) => input === "/api/agent-timeline/story/run-planning")?.[1]?.body ?? "{}",
     )) as {
       settingsSnapshot?: {
+        detailers?: {
+          faceDetailer?: { detectorModelName?: string; enabled?: boolean; steps?: number };
+          handDetailer?: { detectorModelName?: string; enabled?: boolean; steps?: number };
+        };
         stylePalette?: {
           checkpointId?: string;
           loras?: Array<{ id: string; enabled: boolean }>;
@@ -1015,6 +1161,18 @@ describe("StoryPlanningPreview", () => {
       };
     };
 
+    expect(planningBody.settingsSnapshot?.detailers).toMatchObject({
+      faceDetailer: {
+        enabled: false,
+        detectorModelName: "bbox/face_yolov8m.pt",
+        steps: 30,
+      },
+      handDetailer: {
+        enabled: false,
+        detectorModelName: "bbox/hand_yolov8s.pt",
+        steps: 30,
+      },
+    });
     expect(planningBody.settingsSnapshot?.stylePalette).toEqual({
       checkpointId: "checkpoint-local",
       loras: [],

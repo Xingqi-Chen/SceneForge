@@ -32,6 +32,9 @@ import {
   type StoryShotExecutionStatus,
 } from "./story-execution";
 import {
+  sanitizeStoryDetailerSettingsSnapshot,
+} from "./story-detailers";
+import {
   type CommonWorkflowArtifactScope,
   type CommonWorkflowDefinitionVersion,
 } from "./workflow-definition";
@@ -437,7 +440,23 @@ function sanitizeStoryNodeResult(
     return sanitizeStoryShotGraphExecutionResult(raw, fallbackUpdatedAt);
   }
 
-  return sanitizeJsonValue(raw, 0, { redactDataUrls: true });
+  const sanitized = sanitizeJsonValue(raw, 0, { redactDataUrls: true });
+
+  if (nodeId !== "story-input" || !isRecord(sanitized)) {
+    return sanitized;
+  }
+
+  const settingsSnapshot = isRecord(sanitized.settingsSnapshot)
+    ? sanitized.settingsSnapshot
+    : {};
+
+  return {
+    ...sanitized,
+    settingsSnapshot: {
+      ...settingsSnapshot,
+      detailers: sanitizeStoryDetailerSettingsSnapshot(settingsSnapshot.detailers),
+    },
+  };
 }
 
 function sanitizeStoryNode(

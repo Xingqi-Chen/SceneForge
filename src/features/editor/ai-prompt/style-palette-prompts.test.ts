@@ -115,6 +115,7 @@ describe("style palette prompts", () => {
     expect(messages[0].content).toContain("Do not invent image subjects");
     expect(messages[0].content).toContain("Do not rewrite the preset into a new scene");
     expect(messages[0].content).toContain("parameterSuggestions");
+    expect(messages[0].content).toContain("Do not output or recommend FaceDetailer");
     expect(messages[0].content).toContain("sampler must be one ComfyUI KSampler sampler_name value");
     expect(messages[0].content).toContain("scheduler must be one ComfyUI KSampler scheduler value");
     expect(messages[0].content).toContain("Do not return combined A1111/Civitai strings");

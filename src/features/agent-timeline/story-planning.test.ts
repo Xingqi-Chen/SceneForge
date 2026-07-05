@@ -2092,6 +2092,87 @@ describe("story planning", () => {
     expect(JSON.stringify(previewBatch)).not.toContain("aiNsfwLevel");
   });
 
+  it("applies Story-scoped detailers to final execution requests", () => {
+    const resourcePlan = createResourcePlan();
+    const renderPlan = assembleStoryRenderPlan({
+      detailers: {
+        faceDetailer: {
+          enabled: true,
+          detectorModelName: "bbox/custom-face.pt",
+          steps: 18,
+        },
+        handDetailer: {
+          enabled: false,
+          detectorModelName: "bbox/custom-hand.pt",
+          steps: 19,
+        },
+      },
+      parameterPlan: createStoryParameterPlan({ storyId, defaults }),
+      resourcePlan,
+      safetyPlan,
+      shots,
+    });
+    const finalBatch = createStoryExecutionRequestBatch({ mode: "final", renderPlan, resourcePlan });
+
+    expect(finalBatch.requests).toHaveLength(2);
+    expect(finalBatch.requests[0]?.request).toMatchObject({
+      faceDetailer: {
+        enabled: true,
+        detectorModelName: "bbox/custom-face.pt",
+        steps: 18,
+      },
+      handDetailer: {
+        enabled: false,
+        detectorModelName: "bbox/custom-hand.pt",
+        steps: 19,
+      },
+      preview: false,
+    });
+  });
+
+  it("disables Story-scoped detailers for preview execution requests", () => {
+    const resourcePlan = createResourcePlan();
+    const renderPlan = assembleStoryRenderPlan({
+      detailers: {
+        faceDetailer: {
+          enabled: true,
+          detectorModelName: "bbox/custom-face.pt",
+          steps: 18,
+        },
+        handDetailer: {
+          enabled: true,
+          detectorModelName: "bbox/custom-hand.pt",
+          steps: 19,
+        },
+      },
+      parameterPlan: createStoryParameterPlan({ storyId, defaults }),
+      previewOptions: {
+        enabled: true,
+        shotIds: ["shot-1"],
+        parameterOverrides: { steps: 8 },
+      },
+      resourcePlan,
+      safetyPlan,
+      shots,
+    });
+    const previewBatch = createStoryExecutionRequestBatch({ mode: "preview", renderPlan, resourcePlan });
+
+    expect(previewBatch.requests).toHaveLength(1);
+    expect(previewBatch.requests[0]?.request).toMatchObject({
+      faceDetailer: {
+        enabled: false,
+        detectorModelName: "bbox/custom-face.pt",
+        steps: 18,
+      },
+      handDetailer: {
+        enabled: false,
+        detectorModelName: "bbox/custom-hand.pt",
+        steps: 19,
+      },
+      preview: true,
+    });
+  });
+
   it("normalizes Story execution requests against live sampler and scheduler options", () => {
     const resourcePlan = createResourcePlan();
     const renderPlan = assembleStoryRenderPlan({

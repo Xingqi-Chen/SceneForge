@@ -4,6 +4,23 @@ This log records dated implementation and documentation work. Keep entries conci
 
 ## 2026-07-04
 
+### Issue #118 Story Detailer Toggles
+
+Summary:
+
+- Added a `/story` input Detailers section with FaceDetailer and HandDetailer enable checkboxes plus fine parameter controls for detector, steps, CFG, sampler/scheduler, bbox, SAM, and wildcard fields.
+- Added Story-scoped `settingsSnapshot.detailers` sanitization that falls back to ComfyUI detailer defaults and persists the input Detailers section independently from saved Story Parameters.
+- Kept detailer settings independent of `stylePalette` and resource selection so users can configure detailers without selecting a checkpoint, and kept resource, parameter, and render LLM payloads from receiving detailer settings.
+- Applied Story detailers to final generation and scoped regeneration request assembly while preserving existing preview-mode detailer disabling.
+- Updated generation-gate shot summaries and Story workflow persistence restore behavior for detailer visibility and legacy disabled defaults.
+
+Validation:
+
+- `npm test -- --run src/features/agent-timeline/story-input.test.ts src/features/agent-timeline/story-planning.test.ts src/features/agent-timeline/story-llm-adapters.test.ts src/features/agent-timeline/components/StoryPlanningPreview.test.tsx src/features/agent-timeline/story-node-output-summary.test.ts src/features/agent-timeline/components/StoryNodeOutputSummaryView.test.tsx src/features/agent-timeline/timeline-workflow-persistence.test.ts src/app/api/agent-timeline/story/run-planning/route.test.ts src/app/api/agent-timeline/story/confirm-generation/route.test.ts src/app/api/agent-timeline/story/regenerate-shot/route.test.ts src/features/agent-timeline/story-comfyui-execution.test.ts` passed with 11 files and 168 tests.
+- `npm test -- --run src/features/editor/ai-prompt/style-palette-prompts.test.ts` passed with 1 file and 5 tests.
+- `npm run typecheck` passed.
+- `npm run lint` passed with 23 existing warnings.
+
 ### Story Illustrious Trigger Selection
 
 Summary:

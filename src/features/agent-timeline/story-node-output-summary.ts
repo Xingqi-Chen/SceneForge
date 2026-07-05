@@ -150,6 +150,26 @@ function formatParameters(value: unknown) {
   ].filter(Boolean).join(", ") || "Unknown";
 }
 
+function formatEnabledDetailers(value: unknown) {
+  if (!isRecord(value)) {
+    return "";
+  }
+
+  const enabled = [
+    isRecord(value.faceDetailer) && value.faceDetailer.enabled === true ? "FaceDetailer" : "",
+    isRecord(value.handDetailer) && value.handDetailer.enabled === true ? "HandDetailer" : "",
+  ].filter(Boolean);
+
+  return enabled.join(", ");
+}
+
+function formatParametersWithDetailers(parameters: unknown, detailers: unknown) {
+  const formattedParameters = formatParameters(parameters);
+  const enabledDetailers = formatEnabledDetailers(detailers);
+
+  return enabledDetailers ? `${formattedParameters}; Detailers: ${enabledDetailers}` : formattedParameters;
+}
+
 function fullStringArray(value: unknown) {
   return Array.isArray(value)
     ? value.map((item) => fullText(item)).filter(Boolean)
@@ -1023,6 +1043,7 @@ function createPromptShotCard({
   globalWarnings,
   index,
   illustriousSections,
+  detailers,
   negativePrompt,
   parameters,
   positivePrompt,
@@ -1038,6 +1059,7 @@ function createPromptShotCard({
   globalWarnings?: unknown;
   index: number;
   illustriousSections?: unknown;
+  detailers?: unknown;
   negativePrompt: unknown;
   parameters?: unknown;
   positivePrompt: unknown;
@@ -1069,7 +1091,7 @@ function createPromptShotCard({
     animaPromptParts: formatAnimaPromptPartGroups(animaPromptParts),
     dependencies: getShotDependencies(shot.sourceShotIds, sourceMode),
     negativePrompt: fullText(negativePrompt),
-    parameters: parameters ? formatParameters(parameters) : undefined,
+    parameters: parameters ? formatParametersWithDetailers(parameters, detailers) : undefined,
     promptHealth,
     promptProfile: formatPromptProfile(promptProfile),
     promptSections: formatPromptSectionGroups({ animaPromptParts, illustriousSections }),
@@ -1123,6 +1145,7 @@ function summarizeRenderPlan(result: unknown): StoryNodeOutputSummary {
     ],
     shotCards: shots.map((shot, index) =>
       createPromptShotCard({
+        detailers: plan.detailers,
         globalWarnings: warningNotes,
         index,
         animaPromptParts: shot.animaPromptParts,
@@ -1244,6 +1267,7 @@ function summarizeGenerationGate(result: unknown): StoryNodeOutputSummary {
     shotCards: previews.map((preview, index) => {
       const baseCard = createPromptShotCard({
         animaPromptParts: preview.animaPromptParts,
+        detailers: preview.detailers,
         illustriousSections: preview.illustriousSections,
         index,
         negativePrompt: preview.negativePromptPreview,

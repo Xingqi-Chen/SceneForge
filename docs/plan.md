@@ -20,6 +20,8 @@ Story Graph refinement tracks `T23A` through `T23D` were added after saved-workf
 
 Story Reference planning tracks `T25` through `T31` were closed as not planned after product review found the current approach did not produce good enough results. Future Story Reference work should be rescoped before new issues are opened.
 
+`T32` / Issue `#118` adds explicit Story input FaceDetailer and HandDetailer controls as user-controlled final-generation and regeneration options. Detailer enablement and fine parameters live in the Story input Detailers section, remain independent of resource/Parameters selection, stay out of AI advice and parameter planning, Story previews keep detailers disabled, and restored legacy workflows default both detailers off.
+
 ## Status Values
 
 - `Todo`: not yet scoped.
@@ -76,6 +78,7 @@ Story Reference planning tracks `T25` through `T31` were closed as not planned a
 | T29 | #110 | Add render-plan reference recipes and location continuity modes | Story Reference Workflow | Deferred | N/A | N/A | Closed issue #110 and unmerged PR #111 as not planned because the current Story Reference approach did not produce good enough results. Future work should be rescoped before implementation. |
 | T30 | #112 | Inject approved Anima character references into execution requests | Story Reference Workflow | Deferred | N/A | N/A | Closed issue #112 and unmerged PR #113 as not planned because the current Story Reference approach did not produce good enough results. Future work should be rescoped before implementation. |
 | T31 | #114 | Persist and migrate Story Reference workflow state | Story Reference Workflow | Deferred | N/A | N/A | Closed issue #114 and unmerged PR #115 as not planned because the current Story Reference approach did not produce good enough results. Future work should be rescoped before implementation. |
+| T32 | #118 | Add Story input FaceDetailer and HandDetailer controls | Story Graph Refinement | Ready | PASS | APPROVE | Add explicit `/story` start input controls for FaceDetailer and HandDetailer. Detailer enablement and fine parameters are edited in the Story input Detailers section, independent of checkpoint/LoRA resource selection and the Story Parameters dialog. AI planning does not set detailers, final generation/regeneration use enabled configs, previews stay disabled, gate summaries show enabled state, and legacy workflow records default both detailers off. PR #119. |
 
 ## MVP Timeline Nodes
 
