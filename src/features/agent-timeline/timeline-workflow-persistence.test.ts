@@ -15,6 +15,40 @@ import {
 } from "./timeline-workflow-persistence";
 import { startStoryGraphWorkflow } from "./story-input";
 
+const readyStyleReference = {
+  status: "ready",
+  mode: "ipadapter",
+  metadata: {
+    byteLength: 1234,
+    contentType: "image/png",
+    filename: "story-style.png",
+    storedFilename: "0123456789abcdef0123456789abcdef.png",
+    uploadedAt: "2026-06-14T00:00:00.000Z",
+    url: "/api/comfyui/sequence-references/0123456789abcdef0123456789abcdef.png",
+    dataUrl: "data:image/png;base64,SHOULD_NOT_PERSIST",
+  },
+  analysis: {
+    analyzedAt: "2026-06-14T00:00:01.000Z",
+    model: "vision-model",
+    summary: "Soft watercolor anime rendering with pastel highlights.",
+    stylePrompt: "soft watercolor anime rendering, clean pencil linework, pastel highlights",
+    dataUrl: "data:image/png;base64,SHOULD_NOT_PERSIST",
+  },
+  ipAdapter: {
+    weight: 0.45,
+    startPercent: 0,
+    endPercent: 1,
+  },
+  settingsSnapshot: {
+    capturedAt: "2026-06-14T00:00:02.000Z",
+    checkpointBaseModel: "Illustrious",
+    checkpointId: "local-checkpoint",
+    modeReason: "Illustrious checkpoints support the sequence-style IPAdapter reference.",
+    promptProfile: "illustrious",
+  },
+  dataUrl: "data:image/png;base64,SHOULD_NOT_PERSIST",
+} as const;
+
 describe("timeline workflow persistence", () => {
   it("round-trips an active workflow record without preserving secrets", () => {
     let workflow = createTimelineWorkflowState({
@@ -492,6 +526,55 @@ describe("timeline workflow persistence", () => {
         detailers: {
           faceDetailer: { enabled: false },
           handDetailer: { enabled: false },
+        },
+      },
+    });
+  });
+
+  it("round-trips Story style reference metadata without persisting image bytes", () => {
+    const workflow = startStoryGraphWorkflow({
+      rawIntent: "A courier follows a signal through a neon market.",
+      targetShotCount: 2,
+      now: () => "2026-06-15T00:00:00.000Z",
+      settingsSnapshot: {
+        promptProfile: "illustrious",
+        styleReference: readyStyleReference,
+      },
+    });
+    const record = createTimelineWorkflowRecord({
+      workflow,
+      sceneRequest: "A courier follows a signal through a neon market.",
+      selectedPromptProfile: "illustrious",
+      selectedImageCount: 2,
+      selectedNodeId: "story-input",
+      outputDisplayModes: {},
+    });
+    const serialized = serializeTimelineWorkflowRecord(record);
+    const parsed = parseTimelineWorkflowRecordJson(serialized);
+
+    expect(serialized).not.toContain("data:image");
+    expect(serialized).not.toContain("base64");
+    if (!parsed || !isStoryGraphTimelineWorkflowRecord(parsed)) {
+      throw new Error("Expected a Story Graph workflow record.");
+    }
+
+    expect(parsed.workflow.nodes["story-input"].result).toMatchObject({
+      settingsSnapshot: {
+        styleReference: {
+          status: "ready",
+          mode: "ipadapter",
+          metadata: {
+            filename: "story-style.png",
+            storedFilename: "0123456789abcdef0123456789abcdef.png",
+          },
+          analysis: {
+            stylePrompt: "soft watercolor anime rendering, clean pencil linework, pastel highlights",
+          },
+          ipAdapter: {
+            weight: 0.45,
+            startPercent: 0,
+            endPercent: 1,
+          },
         },
       },
     });

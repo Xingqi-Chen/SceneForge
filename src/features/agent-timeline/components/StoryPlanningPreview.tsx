@@ -28,7 +28,18 @@ import {
   type StoryDetailerConfig,
   type StoryDetailerSettingsSnapshot,
 } from "@/features/agent-timeline/story-detailers";
-import { createStoryStylePaletteSnapshot } from "@/features/agent-timeline/story-style-palette";
+import {
+  createStoryStylePaletteSnapshot,
+  createStoryStyleReferenceSnapshot,
+  getStoryStyleReferenceCapability,
+  parseStoryStyleReferenceAnalysisContent,
+  sanitizeStoryStyleReferenceIpAdapterSettings,
+  STORY_STYLE_REFERENCE_IP_ADAPTER_DEFAULTS,
+  type StoryStyleReferenceAnalysis,
+  type StoryStyleReferenceIpAdapterSettings,
+  type StoryStyleReferenceMetadata,
+  type StoryStyleReferenceSnapshot,
+} from "@/features/agent-timeline/story-style-palette";
 import type { StoryResultDisplay } from "@/features/agent-timeline/story-api";
 import type { StoryShotGraphExecutionState } from "@/features/agent-timeline/story-execution";
 import {
@@ -314,6 +325,199 @@ async function completeStoryInputAi({
   return nextStoryRequest;
 }
 
+type StoryStyleReferenceDraftStatus = "empty" | "uploading" | "analyzing" | "ready" | "error";
+
+type StoryStyleReferenceFileInfo = {
+  byteLength: number;
+  contentType: string;
+  name: string;
+};
+
+type StoryStyleReferenceDraft = {
+  analysis?: StoryStyleReferenceAnalysis;
+  dataUrl?: string;
+  error?: string;
+  fileInfo?: StoryStyleReferenceFileInfo;
+  metadata?: StoryStyleReferenceMetadata;
+  status: StoryStyleReferenceDraftStatus;
+};
+
+const emptyStoryStyleReferenceDraft: StoryStyleReferenceDraft = {
+  status: "empty",
+};
+const storyStyleReferenceAccept = "image/png,image/jpeg,image/webp";
+
+function getDataUrlContentType(dataUrl: string) {
+  return /^data:([^;,]+)[;,]/.exec(dataUrl)?.[1] ?? "image/png";
+}
+
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === "string") {
+        resolve(reader.result);
+      } else {
+        reject(new Error("Style reference image could not be read."));
+      }
+    };
+    reader.onerror = () => reject(new Error("Style reference image could not be read."));
+    reader.readAsDataURL(file);
+  });
+}
+
+function parseStoryStyleReferenceStoragePayload(
+  payload: unknown,
+  fileInfo: StoryStyleReferenceFileInfo,
+): StoryStyleReferenceMetadata {
+  if (!isRecord(payload)) {
+    throw new Error("Style reference upload did not return image metadata.");
+  }
+
+  const storedFilename = typeof payload.filename === "string" ? payload.filename.trim() : "";
+  const url = typeof payload.url === "string" ? payload.url.trim() : "";
+  const contentType = typeof payload.contentType === "string" && payload.contentType.trim()
+    ? payload.contentType.trim()
+    : fileInfo.contentType;
+  const byteLength = typeof payload.byteLength === "number" && Number.isFinite(payload.byteLength)
+    ? payload.byteLength
+    : fileInfo.byteLength;
+
+  if (!storedFilename || !url || !contentType.startsWith("image/") || byteLength <= 0) {
+    throw new Error("Style reference upload returned incomplete image metadata.");
+  }
+
+  return {
+    byteLength,
+    contentType,
+    filename: fileInfo.name,
+    storedFilename,
+    uploadedAt: new Date().toISOString(),
+    url,
+  };
+}
+
+async function uploadStoryStyleReferenceImage({
+  dataUrl,
+  fileInfo,
+}: {
+  dataUrl: string;
+  fileInfo: StoryStyleReferenceFileInfo;
+}) {
+  const response = await fetch("/api/comfyui/sequence-references", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ dataUrl }),
+  });
+  const payload: unknown = await response.json().catch(() => null);
+
+  if (!response.ok) {
+    throw new Error(getApiErrorMessage(payload, "Unable to upload the Story style reference."));
+  }
+
+  return parseStoryStyleReferenceStoragePayload(payload, fileInfo);
+}
+
+function buildStoryStyleReferenceAnalysisRequest({
+  dataUrl,
+  fileInfo,
+  nsfwEnabled,
+  promptProfile,
+}: {
+  dataUrl: string;
+  fileInfo: StoryStyleReferenceFileInfo;
+  nsfwEnabled: boolean;
+  promptProfile: PromptProfileId;
+}): LlmChatRequest {
+  return {
+    purpose: "story-style-reference-analysis",
+    nsfw: nsfwEnabled,
+    messages: [
+      {
+        role: "system",
+        content: [
+          "You analyze one visual style reference image for SceneForge Story Graph generation.",
+          "Return only valid JSON. No markdown, comments, or prose.",
+          "Describe reusable visual style only: medium, rendering finish, linework, color palette, lighting, texture, camera/framing, atmosphere, and production style.",
+          "Do not identify or imitate living artists, copyrighted characters, logos, celebrities, or specific franchise names.",
+          "Do not describe the image's subject as content to reproduce unless it is necessary to explain broad style.",
+          "The stylePrompt must be directly reusable as a positive prompt addition for every Story shot.",
+          'Required shape: {"summary":"one concise sentence","stylePrompt":"comma-separated reusable visual style prompt"}',
+        ].join("\n"),
+      },
+      {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(
+              {
+                filename: fileInfo.name,
+                contentType: fileInfo.contentType,
+                promptProfile,
+              },
+              null,
+              2,
+            ),
+          },
+          {
+            type: "image_url",
+            image_url: {
+              url: dataUrl,
+              detail: "high",
+            },
+          },
+        ],
+      },
+    ],
+    temperature: 0.1,
+    maxTokens: 700,
+  };
+}
+
+async function completeStoryStyleReferenceAnalysis({
+  dataUrl,
+  fileInfo,
+  nsfwEnabled,
+  promptProfile,
+}: {
+  dataUrl: string;
+  fileInfo: StoryStyleReferenceFileInfo;
+  nsfwEnabled: boolean;
+  promptProfile: PromptProfileId;
+}): Promise<StoryStyleReferenceAnalysis> {
+  const response = await fetch("/api/llm/chat", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+    },
+    body: JSON.stringify(
+      buildStoryStyleReferenceAnalysisRequest({
+        dataUrl,
+        fileInfo,
+        nsfwEnabled,
+        promptProfile,
+      }),
+    ),
+  });
+  const payload: unknown = await response.json().catch(() => null);
+
+  if (!response.ok) {
+    throw new Error(getLlmProxyErrorMessage(payload) ?? "Unable to analyze the Story style reference.");
+  }
+
+  if (!isLlmChatResponse(payload)) {
+    throw new Error("Style reference analysis response did not include chat content.");
+  }
+
+  return parseStoryStyleReferenceAnalysisContent(payload.content, {
+    analyzedAt: new Date().toISOString(),
+    model: payload.model,
+  });
+}
+
 function createClientStartRequest({
   checkpointId,
   detailers,
@@ -323,6 +527,7 @@ function createClientStartRequest({
   promptProfile,
   rawIntent,
   savedParameters,
+  styleReference,
   targetShotCount,
 }: {
   checkpointId?: string | null;
@@ -333,6 +538,7 @@ function createClientStartRequest({
   promptProfile: PromptProfileId;
   rawIntent: string;
   savedParameters?: SavedComfyUiGenerationParams | null;
+  styleReference?: StoryStyleReferenceSnapshot;
   targetShotCount: string;
 }): StoryGraphStartRequest {
   const normalizedShotCount = targetShotCount.trim() ? Number(targetShotCount) : undefined;
@@ -355,6 +561,7 @@ function createClientStartRequest({
       nsfwEnabled,
       promptProfile,
       ...(stylePalette ? { stylePalette } : {}),
+      ...(styleReference ? { styleReference } : {}),
       targetShotCount: Number.isFinite(normalizedShotCount) ? normalizedShotCount : undefined,
     } as StoryGraphStartRequest["settingsSnapshot"],
   };
@@ -1180,6 +1387,314 @@ function getStoryWorkflowShotCount(workflow: StoryWorkflowState) {
   return typeof targetShotCount === "number" && Number.isFinite(targetShotCount) ? targetShotCount : 1;
 }
 
+function StoryStyleReferenceNumberInput({
+  label,
+  onChange,
+  value,
+}: {
+  label: string;
+  onChange: (value: number) => void;
+  value: number;
+}) {
+  return (
+    <label className="grid gap-1">
+      <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">{label}</span>
+      <input
+        className="h-9 w-full rounded-md border border-indigo-200 bg-white px-2 text-xs text-slate-700 outline-none transition focus:border-indigo-300 focus:ring-2 focus:ring-indigo-100"
+        max={1}
+        min={0}
+        onChange={(event) => {
+          const parsed = Number(event.target.value);
+          if (Number.isFinite(parsed)) {
+            onChange(parsed);
+          }
+        }}
+        step={0.01}
+        type="number"
+        value={value}
+      />
+    </label>
+  );
+}
+
+function StoryStyleReferencePanel({
+  draft,
+  ipAdapter,
+  nsfwEnabled,
+  onDraftChange,
+  onIpAdapterChange,
+  promptProfile,
+  selectedCheckpoint,
+  selectedCheckpointId,
+}: {
+  draft: StoryStyleReferenceDraft;
+  ipAdapter: StoryStyleReferenceIpAdapterSettings;
+  nsfwEnabled: boolean;
+  onDraftChange: (draft: StoryStyleReferenceDraft) => void;
+  onIpAdapterChange: (settings: StoryStyleReferenceIpAdapterSettings) => void;
+  promptProfile: PromptProfileId;
+  selectedCheckpoint: SelectedCivitaiResourcesPreview["checkpoint"];
+  selectedCheckpointId: string | null;
+}) {
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const capability = getStoryStyleReferenceCapability({
+    baseModel: selectedCheckpoint?.baseModel,
+    modelFileName: selectedCheckpoint?.modelFileName,
+    name: selectedCheckpoint?.name,
+  });
+  const busy = draft.status === "uploading" || draft.status === "analyzing";
+  const hasReference = draft.status !== "empty";
+  const promptOnly = capability.mode !== "ipadapter";
+
+  async function analyzeStoredReference({
+    dataUrl,
+    fileInfo,
+    metadata,
+  }: {
+    dataUrl: string;
+    fileInfo: StoryStyleReferenceFileInfo;
+    metadata: StoryStyleReferenceMetadata;
+  }) {
+    onDraftChange({
+      dataUrl,
+      fileInfo,
+      metadata,
+      status: "analyzing",
+    });
+
+    const analysis = await completeStoryStyleReferenceAnalysis({
+      dataUrl,
+      fileInfo,
+      nsfwEnabled,
+      promptProfile,
+    });
+
+    onDraftChange({
+      analysis,
+      dataUrl,
+      fileInfo,
+      metadata,
+      status: "ready",
+    });
+  }
+
+  async function handleFileChange(file: File | undefined) {
+    if (!file) {
+      return;
+    }
+
+    if (!["image/png", "image/jpeg", "image/webp"].includes(file.type)) {
+      onDraftChange({
+        error: "Story style reference must be a PNG, JPEG, or WEBP image.",
+        fileInfo: {
+          byteLength: file.size,
+          contentType: file.type || "application/octet-stream",
+          name: file.name,
+        },
+        status: "error",
+      });
+      return;
+    }
+
+    const fileInfo = {
+      byteLength: file.size,
+      contentType: file.type || "image/png",
+      name: file.name,
+    };
+
+    onDraftChange({
+      fileInfo,
+      status: "uploading",
+    });
+
+    let nextDataUrl: string | undefined;
+    let nextMetadata: StoryStyleReferenceMetadata | undefined;
+
+    try {
+      nextDataUrl = await readFileAsDataUrl(file);
+      nextMetadata = await uploadStoryStyleReferenceImage({
+        dataUrl: nextDataUrl,
+        fileInfo: {
+          ...fileInfo,
+          contentType: fileInfo.contentType || getDataUrlContentType(nextDataUrl),
+        },
+      });
+      await analyzeStoredReference({
+        dataUrl: nextDataUrl,
+        fileInfo: {
+          ...fileInfo,
+          contentType: nextMetadata.contentType,
+        },
+        metadata: nextMetadata,
+      });
+    } catch (styleError) {
+      onDraftChange({
+        dataUrl: nextDataUrl,
+        error: styleError instanceof Error ? styleError.message : "Story style reference failed.",
+        fileInfo,
+        metadata: nextMetadata,
+        status: "error",
+      });
+    } finally {
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+      }
+    }
+  }
+
+  async function handleRetry() {
+    if (!draft.dataUrl || !draft.metadata || !draft.fileInfo) {
+      onDraftChange({
+        ...draft,
+        error: "Reupload the Story style reference before retrying analysis.",
+        status: "error",
+      });
+      return;
+    }
+
+    try {
+      await analyzeStoredReference({
+        dataUrl: draft.dataUrl,
+        fileInfo: draft.fileInfo,
+        metadata: draft.metadata,
+      });
+    } catch (styleError) {
+      onDraftChange({
+        ...draft,
+        error: styleError instanceof Error ? styleError.message : "Story style reference analysis failed.",
+        status: "error",
+      });
+    }
+  }
+
+  function patchIpAdapter(patch: Partial<StoryStyleReferenceIpAdapterSettings>) {
+    onIpAdapterChange(sanitizeStoryStyleReferenceIpAdapterSettings({
+      ...ipAdapter,
+      ...patch,
+    }));
+  }
+
+  return (
+    <section className="rounded-md border border-indigo-100 bg-white p-3">
+      <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-600">Style reference</h3>
+          <p className="mt-1 text-xs leading-relaxed text-slate-500">
+            Optional global style image for every Story shot.
+          </p>
+        </div>
+        <div className="flex shrink-0 flex-wrap items-center gap-2">
+          <label className="inline-flex h-8 cursor-pointer items-center justify-center gap-2 rounded-md border border-indigo-200 bg-white px-3 text-xs font-medium text-indigo-700 transition-colors hover:bg-indigo-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-60">
+            {busy ? <LoaderCircle className="size-3.5 animate-spin" /> : <ImageIcon className="size-3.5" />}
+            {hasReference ? "Replace" : "Upload"}
+            <input
+              accept={storyStyleReferenceAccept}
+              className="sr-only"
+              disabled={busy}
+              onChange={(event) => void handleFileChange(event.target.files?.[0])}
+              ref={fileInputRef}
+              type="file"
+            />
+          </label>
+          {hasReference ? (
+            <button
+              className="inline-flex h-8 items-center justify-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+              disabled={busy}
+              onClick={() => onDraftChange(emptyStoryStyleReferenceDraft)}
+              type="button"
+            >
+              <X className="size-3.5" />
+              Remove
+            </button>
+          ) : null}
+        </div>
+      </div>
+
+      <div className="grid gap-3">
+        <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs leading-relaxed text-slate-600">
+          {selectedCheckpointId && selectedCheckpoint ? capability.reason : "Select a checkpoint to enable IPAdapter mode when supported."}
+        </div>
+
+        {draft.status === "empty" ? (
+          <div className="rounded-md border border-dashed border-slate-200 bg-slate-50 px-3 py-4 text-center text-xs text-slate-500">
+            No Story style reference selected.
+          </div>
+        ) : null}
+
+        {busy ? (
+          <div className="flex items-center gap-2 rounded-md border border-indigo-100 bg-indigo-50 px-3 py-2 text-xs text-indigo-700">
+            <LoaderCircle className="size-3.5 animate-spin" />
+            {draft.status === "uploading" ? "Uploading style reference..." : "Analyzing style reference..."}
+          </div>
+        ) : null}
+
+        {draft.status === "error" ? (
+          <div className="rounded-md border border-rose-200 bg-rose-50 p-3 text-xs leading-relaxed text-rose-700">
+            <p>{draft.error ?? "Story style reference is invalid."}</p>
+            <div className="mt-2 flex flex-wrap gap-2">
+              <button
+                className="inline-flex h-8 items-center justify-center gap-2 rounded-md border border-rose-200 bg-white px-3 text-xs font-medium text-rose-700 transition-colors hover:bg-rose-50"
+                onClick={() => void handleRetry()}
+                type="button"
+              >
+                <RefreshCw className="size-3.5" />
+                Retry
+              </button>
+              <button
+                className="inline-flex h-8 items-center justify-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50"
+                onClick={() => onDraftChange(emptyStoryStyleReferenceDraft)}
+                type="button"
+              >
+                <X className="size-3.5" />
+                Remove
+              </button>
+            </div>
+          </div>
+        ) : null}
+
+        {draft.status === "ready" && draft.analysis ? (
+          <div className="grid gap-2 rounded-md border border-emerald-100 bg-emerald-50/60 p-3 text-xs leading-relaxed">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="font-semibold text-emerald-800">
+                {draft.metadata?.filename ?? draft.metadata?.storedFilename ?? "Style reference"} analyzed
+              </span>
+              <span className="rounded-md border border-emerald-200 bg-white px-2 py-1 text-[11px] font-medium uppercase text-emerald-700">
+                {promptOnly ? "Prompt-only" : "IPAdapter"}
+              </span>
+            </div>
+            <p className="text-slate-700">{draft.analysis.summary}</p>
+            <p className="rounded-md border border-emerald-100 bg-white p-2 text-slate-700">
+              {draft.analysis.stylePrompt}
+            </p>
+          </div>
+        ) : null}
+
+        {draft.status === "ready" && capability.mode === "ipadapter" ? (
+          <div className="grid gap-3 rounded-md border border-indigo-100 bg-indigo-50/40 p-3">
+            <div className="grid gap-3 sm:grid-cols-3">
+              <StoryStyleReferenceNumberInput
+                label="weight"
+                onChange={(value) => patchIpAdapter({ weight: value })}
+                value={ipAdapter.weight}
+              />
+              <StoryStyleReferenceNumberInput
+                label="start_at"
+                onChange={(value) => patchIpAdapter({ startPercent: value })}
+                value={ipAdapter.startPercent}
+              />
+              <StoryStyleReferenceNumberInput
+                label="end_at"
+                onChange={(value) => patchIpAdapter({ endPercent: value })}
+                value={ipAdapter.endPercent}
+              />
+            </div>
+          </div>
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
 function StartPanel({
   nsfwEnabled,
   onStart,
@@ -1196,6 +1711,10 @@ function StartPanel({
   const [selectedLoraIds, setSelectedLoraIds] = useState<string[]>([]);
   const [selectedResources, setSelectedResources] = useState<SelectedCivitaiResourcesPreview>(EMPTY_SELECTED_CIVITAI_RESOURCES);
   const [savedParameters, setSavedParameters] = useState<SavedComfyUiGenerationParams | null>(null);
+  const [styleReferenceDraft, setStyleReferenceDraft] =
+    useState<StoryStyleReferenceDraft>(emptyStoryStyleReferenceDraft);
+  const [styleReferenceIpAdapter, setStyleReferenceIpAdapter] =
+    useState<StoryStyleReferenceIpAdapterSettings>({ ...STORY_STYLE_REFERENCE_IP_ADAPTER_DEFAULTS });
   const [styleAdvice, setStyleAdvice] = useState<StylePaletteAdviceState>(EMPTY_STYLE_PALETTE_ADVICE);
   const [parametersOpen, setParametersOpen] = useState(false);
   const [aiStatus, setAiStatus] = useState<StoryInputAiAction | null>(null);
@@ -1236,6 +1755,47 @@ function StartPanel({
       return;
     }
 
+    let styleReference: StoryStyleReferenceSnapshot | undefined;
+
+    if (styleReferenceDraft.status === "uploading" || styleReferenceDraft.status === "analyzing") {
+      setError("Finish analyzing the Story style reference or remove it before starting planning.");
+      return;
+    }
+
+    if (styleReferenceDraft.status === "error") {
+      setError("Retry or remove the Story style reference before starting planning.");
+      return;
+    }
+
+    if (styleReferenceDraft.status === "ready") {
+      if (!styleReferenceDraft.metadata || !styleReferenceDraft.analysis) {
+        setError("Story style reference metadata or analysis is missing. Retry or remove the reference.");
+        return;
+      }
+
+      const capability = getStoryStyleReferenceCapability({
+        baseModel: selectedResources.checkpoint?.baseModel,
+        modelFileName: selectedResources.checkpoint?.modelFileName,
+        name: selectedResources.checkpoint?.name,
+      });
+      styleReference = createStoryStyleReferenceSnapshot({
+        analysis: styleReferenceDraft.analysis,
+        capturedAt: new Date().toISOString(),
+        checkpointBaseModel: selectedResources.checkpoint?.baseModel ?? null,
+        checkpointId: selectedCheckpointId,
+        ipAdapter: styleReferenceIpAdapter,
+        metadata: styleReferenceDraft.metadata,
+        mode: capability.mode,
+        modeReason: capability.reason,
+        promptProfile,
+      });
+
+      if (styleReference.status !== "ready") {
+        setError(styleReference.error ?? "Story style reference is invalid. Retry or remove the reference.");
+        return;
+      }
+    }
+
     setError("");
     onStart(
       createClientStartRequest({
@@ -1247,6 +1807,7 @@ function StartPanel({
         promptProfile,
         rawIntent,
         savedParameters,
+        styleReference,
         targetShotCount,
       }),
     );
@@ -1350,6 +1911,17 @@ function StartPanel({
 
             <div className="grid min-h-0 gap-4 xl:max-h-[calc(100vh-12rem)] xl:overflow-y-auto xl:pr-1">
               <StoryDetailerSettingsEditor detailers={detailers} onChange={setDetailers} />
+
+              <StoryStyleReferencePanel
+                draft={styleReferenceDraft}
+                ipAdapter={styleReferenceIpAdapter}
+                nsfwEnabled={nsfwEnabled}
+                onDraftChange={setStyleReferenceDraft}
+                onIpAdapterChange={setStyleReferenceIpAdapter}
+                promptProfile={promptProfile}
+                selectedCheckpoint={selectedResources.checkpoint}
+                selectedCheckpointId={selectedCheckpointId}
+              />
 
               <section className="rounded-md border border-indigo-100 bg-indigo-50/40 p-3">
                 <div className="mb-3 flex flex-wrap items-start justify-between gap-3">

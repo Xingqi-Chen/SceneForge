@@ -2,6 +2,27 @@
 
 This log records dated implementation and documentation work. Keep entries concise and evidence-oriented.
 
+## 2026-07-05
+
+### Issue #122 Story Style Reference
+
+Summary:
+
+- Added one optional global `/story` style reference image input that uploads through sequence-reference storage and analyzes the image through `/api/llm/chat` with the `story-style-reference-analysis` purpose.
+- Persisted Story style reference metadata, analyzed style prompt, selected-model settings, and optional IPAdapter controls while excluding image bytes and data URLs from Story workflow records.
+- Merged the analyzed style prompt into Story render prompts and execution requests for final generation and regeneration without duplicating the style prompt in the assembled ComfyUI request.
+- Reused the editor sequence IPAdapter reference structures and upload path for Story execution, injecting the style reference only for Illustrious-capable checkpoints with visible `weight`, `start_at`, and `end_at` controls in the `0..1` range.
+- Kept Anima and unknown checkpoints prompt-only, and blocked Story start while a style reference upload or analysis is pending, failed, or invalid.
+- Redacted image data URLs before local LLM request/error logging so multimodal style-reference analysis does not write uploaded image bytes to `data/logs`.
+- Added `LITELLM_VISION_MODEL` documentation for multimodal Story style reference analysis with fallback to `LITELLM_DEFAULT_MODEL`.
+
+Validation:
+
+- `npm test -- --run src/features/agent-timeline/story-input.test.ts src/features/agent-timeline/story-planning.test.ts src/features/agent-timeline/story-comfyui-execution.test.ts src/features/agent-timeline/components/StoryPlanningPreview.test.tsx src/features/agent-timeline/story-node-output-summary.test.ts src/features/agent-timeline/timeline-workflow-persistence.test.ts src/app/api/llm/chat/route.test.ts src/features/llm/llm-local-log.test.ts` passed with 8 files and 121 tests.
+- `npm run typecheck` passed.
+- `npm run lint` passed with 23 existing warnings.
+- `npm test` passed with 122 files and 996 tests.
+
 ## 2026-07-04
 
 ### Issue #118 Story Detailer Toggles

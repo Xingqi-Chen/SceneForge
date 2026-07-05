@@ -10,6 +10,7 @@ const ENV_KEYS = [
   "LITELLM_POSE_MODEL",
   "LITELLM_COMFYUI_DIAGNOSIS_MODEL",
   "LITELLM_CLASSIFICATION_MODEL",
+  "LITELLM_VISION_MODEL",
 ] as const;
 
 describe("LLM chat route model selection", () => {
@@ -22,6 +23,7 @@ describe("LLM chat route model selection", () => {
     process.env.LITELLM_POSE_MODEL = "pose-model";
     process.env.LITELLM_COMFYUI_DIAGNOSIS_MODEL = "diagnosis-model";
     process.env.LITELLM_CLASSIFICATION_MODEL = "classification-model";
+    process.env.LITELLM_VISION_MODEL = "vision-model";
   });
 
   afterEach(() => {
@@ -122,5 +124,23 @@ describe("LLM chat route model selection", () => {
         messages: [{ role: "user", content: "Generate a prompt" }],
       }),
     ).toBe("explicit-model");
+  });
+
+  it("uses the vision model for Story style reference analysis", () => {
+    expect(
+      resolveDefaultModel({
+        purpose: "story-style-reference-analysis",
+        messages: [{ role: "user", content: "Analyze this style reference" }],
+      }),
+    ).toBe("vision-model");
+
+    delete process.env.LITELLM_VISION_MODEL;
+
+    expect(
+      resolveDefaultModel({
+        purpose: "story-style-reference-analysis",
+        messages: [{ role: "user", content: "Analyze this style reference" }],
+      }),
+    ).toBe("default-model");
   });
 });

@@ -21,6 +21,39 @@ const courierStory = [
   "Beat 4: He smooths the crushed box corner and knocks at the apartment door with a forced calm expression.",
   "Final image: The courier holds the battered cake box beside a little girl in a party hat and her relieved father.",
 ].join("\n");
+const readyStyleReference = {
+  status: "ready",
+  mode: "ipadapter",
+  metadata: {
+    byteLength: 1234,
+    contentType: "image/png",
+    filename: "story-style.png",
+    storedFilename: "0123456789abcdef0123456789abcdef.png",
+    uploadedAt: "2026-06-14T00:00:00.000Z",
+    url: "/api/comfyui/sequence-references/0123456789abcdef0123456789abcdef.png",
+    dataUrl: "data:image/png;base64,SHOULD_NOT_PERSIST",
+  },
+  analysis: {
+    analyzedAt: "2026-06-14T00:00:01.000Z",
+    model: "vision-model",
+    summary: "Soft watercolor anime rendering with pastel highlights.",
+    stylePrompt: "soft watercolor anime rendering, clean pencil linework, pastel highlights",
+    dataUrl: "data:image/png;base64,SHOULD_NOT_PERSIST",
+  },
+  ipAdapter: {
+    weight: 0.45,
+    startPercent: 0,
+    endPercent: 1,
+  },
+  settingsSnapshot: {
+    capturedAt: "2026-06-14T00:00:02.000Z",
+    checkpointBaseModel: "Illustrious",
+    checkpointId: "local-checkpoint",
+    modeReason: "Illustrious checkpoints support the sequence-style IPAdapter reference.",
+    promptProfile: "illustrious",
+  },
+  dataUrl: "data:image/png;base64,SHOULD_NOT_PERSIST",
+} as const;
 
 describe("story input workflow start", () => {
   it("normalizes user input into typed StoryInput with settings and NSFW context", () => {
@@ -348,6 +381,61 @@ describe("story input workflow start", () => {
         },
       },
     });
+  });
+
+  it("persists Story style reference metadata and analysis without image bytes", () => {
+    const input = createStoryInputFromStartRequest({
+      rawIntent: "A two-shot neon arcade conversation with one global style reference.",
+      storyId: "story-style-reference",
+      now,
+      settingsSnapshot: {
+        styleReference: readyStyleReference,
+      },
+    });
+
+    expect(input.settingsSnapshot).toMatchObject({
+      styleReference: {
+        status: "ready",
+        mode: "ipadapter",
+        metadata: {
+          byteLength: 1234,
+          contentType: "image/png",
+          filename: "story-style.png",
+          storedFilename: "0123456789abcdef0123456789abcdef.png",
+          url: "/api/comfyui/sequence-references/0123456789abcdef0123456789abcdef.png",
+        },
+        analysis: {
+          summary: "Soft watercolor anime rendering with pastel highlights.",
+          stylePrompt: "soft watercolor anime rendering, clean pencil linework, pastel highlights",
+        },
+        ipAdapter: {
+          weight: 0.45,
+          startPercent: 0,
+          endPercent: 1,
+        },
+      },
+    });
+    expect(JSON.stringify(input.settingsSnapshot)).not.toContain("data:image");
+    expect(JSON.stringify(input.settingsSnapshot)).not.toContain("base64");
+  });
+
+  it("blocks Story start when the style reference upload or analysis state is invalid", () => {
+    expect(() =>
+      createStoryInputFromStartRequest({
+        rawIntent: "A two-shot story with a broken style reference.",
+        storyId: "story-broken-style-reference",
+        now,
+        settingsSnapshot: {
+          styleReference: {
+            ...readyStyleReference,
+            metadata: {
+              ...readyStyleReference.metadata,
+              storedFilename: "not-a-sequence-reference.png",
+            },
+          },
+        },
+      }),
+    ).toThrow("Story style reference storage is missing or invalid. Retry the upload or remove the reference.");
   });
 
   it("uses ComfyUI detailer defaults when Story checkboxes are enabled without saved detailer fields", () => {

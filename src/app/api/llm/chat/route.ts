@@ -55,6 +55,10 @@ function resolvePurposeDefaultModel(payload: LlmChatRequest) {
     return process.env.LITELLM_DEFAULT_MODEL;
   }
 
+  if (payload.purpose === "story-style-reference-analysis") {
+    return process.env.LITELLM_VISION_MODEL || process.env.LITELLM_DEFAULT_MODEL;
+  }
+
   if (payload.purpose === "comic-sequence-storyboard") {
     return process.env.LITELLM_DEFAULT_MODEL;
   }

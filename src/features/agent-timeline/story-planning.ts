@@ -50,6 +50,13 @@ import {
   sanitizeStoryDetailerSettingsSnapshot,
   type StoryDetailerSettingsSnapshot,
 } from "./story-detailers";
+import {
+  getStoryStyleReferenceCapability,
+  getStoryStyleReferencePrompt,
+  isStoryStyleReferenceReady,
+  sanitizeStoryStyleReferenceSnapshot,
+  type StoryStyleReferenceSnapshot,
+} from "./story-style-palette";
 
 export type StoryLocalResource = ResourcePlanLocalResource & {
   versionName?: string | null;
@@ -238,6 +245,7 @@ export type StoryRenderPlan = {
   resourceRefs: StoryRenderPlanResourceRefs;
   promptProfile: PromptProfileId;
   shots: StoryRenderPlanShot[];
+  styleReference?: StoryStyleReferenceSnapshot;
   preview: {
     options: StoryPreviewExecutionOptions;
     resultReferences: StoryPreviewResultReference[];
@@ -250,6 +258,7 @@ export type StoryExecutionRequest = {
   nsfwContext: StoryNsfwContext;
   request: ComfyUiTextToImageRequest;
   sourceShotIds: StoryShotId[];
+  styleReference?: StoryStyleReferenceSnapshot;
 };
 
 export type StoryExecutionRequestBatch = {
@@ -891,6 +900,12 @@ function mergeStoryNegativePrompts(...values: string[]) {
       .flatMap((value) => splitPromptParts(value))
       .map(normalizeStoryNegativePromptPart)
       .filter(Boolean),
+  ).join(", ");
+}
+
+function mergeStoryPositivePrompts(...values: string[]) {
+  return dedupeStoryPromptParts(
+    values.flatMap((value) => splitPromptParts(value)),
   ).join(", ");
 }
 
@@ -1713,6 +1728,30 @@ function createFormattedStoryPositivePrompt({
   });
 }
 
+function applyStyleReferenceToPositivePrompt(positivePrompt: string, styleReference?: StoryStyleReferenceSnapshot) {
+  const stylePrompt = getStoryStyleReferencePrompt(styleReference);
+  return stylePrompt ? mergeStoryPositivePrompts(positivePrompt, stylePrompt) : positivePrompt;
+}
+
+function getStoryStyleReferenceForExecution(
+  styleReference: StoryStyleReferenceSnapshot | undefined,
+  resourcePlan: StoryResourcePlan,
+) {
+  if (!isStoryStyleReferenceReady(styleReference) || styleReference.mode !== "ipadapter") {
+    return undefined;
+  }
+
+  const checkpoint = resourcePlan.checkpoint.resource;
+  const capability = getStoryStyleReferenceCapability({
+    baseModel: checkpoint.baseModel,
+    modelBaseModel: checkpoint.modelBaseModel,
+    modelFileName: checkpoint.modelFileName,
+    name: checkpoint.name,
+  });
+
+  return capability.mode === "ipadapter" ? styleReference : undefined;
+}
+
 function createStoryRenderPlanResourceRefs(resourcePlan: StoryResourcePlan): StoryRenderPlanResourceRefs {
   return {
     sourceNodeId: "resource-plan",
@@ -1926,6 +1965,7 @@ export function assembleStoryRenderPlan({
   samplerOptions,
   safetyPlan,
   shots,
+  styleReference,
 }: {
   detailers?: StoryDetailerSettingsSnapshot;
   img2imgDenoise?: number;
@@ -1938,12 +1978,14 @@ export function assembleStoryRenderPlan({
   samplerOptions?: TimelineSamplerOptions;
   safetyPlan: StorySafetyPlan;
   shots: readonly StoryShot[];
+  styleReference?: StoryStyleReferenceSnapshot;
 }): StoryRenderPlan {
   const nsfwContext = getNsfwContext(safetyPlan);
   const promptProfile = normalizePromptProfileId(renderPromptPlan?.promptProfile ?? rawPromptProfile);
   const defaultParameters = normalizeParameters(parameterPlan.defaults, samplerOptions);
   const normalizedImg2ImgDenoise = normalizeStoryImg2ImgDenoise(img2imgDenoise);
   const sanitizedDetailers = sanitizeStoryDetailerSettingsSnapshot(detailers);
+  const sanitizedStyleReference = sanitizeStoryStyleReferenceSnapshot(styleReference);
   const renderWarnings: string[] = [];
   const sourceImageEdges = createStorySourceImageEdgeSummaries(shots);
   renderWarnings.push(
@@ -1997,15 +2039,18 @@ export function assembleStoryRenderPlan({
           getBaseNegativePrompt(safetyPlan, shot),
           getStoryRenderPromptDraftNegativeParts(renderPromptDraft).join(", "),
         );
-    const formattedPositivePrompt = createFormattedStoryPositivePrompt({
-      animaPromptParts,
-      illustriousSections,
-      promptProfile,
-      resourceTriggerSelections: promptProfile === "illustrious"
-        ? resourceTriggerSelectionResult.selections
-        : undefined,
-      resourcePlan,
-    });
+    const formattedPositivePrompt = applyStyleReferenceToPositivePrompt(
+      createFormattedStoryPositivePrompt({
+        animaPromptParts,
+        illustriousSections,
+        promptProfile,
+        resourceTriggerSelections: promptProfile === "illustrious"
+          ? resourceTriggerSelectionResult.selections
+          : undefined,
+        resourcePlan,
+      }),
+      sanitizedStyleReference,
+    );
     const settings = createStoryComfyUiSettings({
       baseNegativePrompt,
       formattedPositivePrompt,
@@ -2030,7 +2075,7 @@ export function assembleStoryRenderPlan({
       negativePrompt: settings.request.negativePrompt ?? "",
       outputAnchors: createStoryOutputAnchors({
         baseNegativePrompt,
-        basePositivePrompt,
+        basePositivePrompt: applyStyleReferenceToPositivePrompt(basePositivePrompt, sanitizedStyleReference),
         sourceImageEdges: shotSourceImageEdges,
         sourceShotIds: shot.sourceShotIds,
       }),
@@ -2064,6 +2109,7 @@ export function assembleStoryRenderPlan({
     nsfwContext,
     promptProfile,
     resourceRefs: createStoryRenderPlanResourceRefs(resourcePlan),
+    ...(sanitizedStyleReference ? { styleReference: sanitizedStyleReference } : {}),
     preview: {
       options: {
         ...previewOptions,
@@ -2149,6 +2195,11 @@ export function createStoryExecutionRequestBatch({
         });
       }
 
+      const executionStyleReference = getStoryStyleReferenceForExecution(
+        renderPlan.styleReference,
+        requestResourcePlan,
+      );
+
       return {
         nsfwContext: renderPlan.nsfwContext,
         request: {
@@ -2165,6 +2216,7 @@ export function createStoryExecutionRequestBatch({
         },
         shotId: shot.shotId,
         sourceShotIds: [...shot.sourceShotIds],
+        ...(executionStyleReference ? { styleReference: executionStyleReference } : {}),
       };
     }),
     storyId: renderPlan.storyId,

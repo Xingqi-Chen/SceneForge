@@ -35,6 +35,9 @@ import {
   sanitizeStoryDetailerSettingsSnapshot,
 } from "./story-detailers";
 import {
+  sanitizeStoryStyleReferenceSnapshot,
+} from "./story-style-palette";
+import {
   type CommonWorkflowArtifactScope,
   type CommonWorkflowDefinitionVersion,
 } from "./workflow-definition";
@@ -449,12 +452,14 @@ function sanitizeStoryNodeResult(
   const settingsSnapshot = isRecord(sanitized.settingsSnapshot)
     ? sanitized.settingsSnapshot
     : {};
+  const styleReference = sanitizeStoryStyleReferenceSnapshot(settingsSnapshot.styleReference);
 
   return {
     ...sanitized,
     settingsSnapshot: {
       ...settingsSnapshot,
       detailers: sanitizeStoryDetailerSettingsSnapshot(settingsSnapshot.detailers),
+      ...(styleReference ? { styleReference } : {}),
     },
   };
 }

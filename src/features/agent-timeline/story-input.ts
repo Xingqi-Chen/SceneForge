@@ -40,8 +40,12 @@ import type {
 import { createStoryWorkflowState } from "./story-state";
 import { coercePromptProfileId, type PromptProfileId } from "@/shared/prompt-profile";
 import {
+  getStoryStyleReferenceFromSettingsSnapshot,
+  getStoryStyleReferenceBlockingIssue,
+  sanitizeStoryStyleReferenceSnapshot,
   sanitizeStoryStylePaletteSnapshot,
   type StoryStylePaletteLoraSnapshot,
+  type StoryStyleReferenceSnapshot,
   type StoryStylePaletteSnapshot,
 } from "./story-style-palette";
 import {
@@ -70,6 +74,7 @@ export type StoryGraphStartSettingsSnapshot = {
     loras: StoryLocalResource[];
   };
   stylePalette?: StoryStylePaletteSnapshot;
+  styleReference?: StoryStyleReferenceSnapshot;
   detailers: StoryDetailerSettingsSnapshot;
 };
 
@@ -175,10 +180,17 @@ function createSettingsSnapshot({
     detailers,
     resourceCandidates,
     stylePalette,
+    styleReference,
     ...settingsSnapshot
   } = request.settingsSnapshot ?? {};
   const sanitizedStylePalette = sanitizeStoryStylePaletteSnapshot(stylePalette);
+  const sanitizedStyleReference = sanitizeStoryStyleReferenceSnapshot(styleReference);
+  const styleReferenceBlockingIssue = getStoryStyleReferenceBlockingIssue(sanitizedStyleReference);
   const sanitizedDetailers = sanitizeStoryDetailerSettingsSnapshot(detailers);
+
+  if (styleReferenceBlockingIssue) {
+    throw new Error(styleReferenceBlockingIssue);
+  }
 
   return {
     capturedAt: settingsSnapshot.capturedAt ?? timestamp,
@@ -196,6 +208,7 @@ function createSettingsSnapshot({
       : settingsSnapshot.resourceCandidateCounts,
     detailers: sanitizedDetailers,
     ...(sanitizedStylePalette ? { stylePalette: sanitizedStylePalette } : {}),
+    ...(sanitizedStyleReference ? { styleReference: sanitizedStyleReference } : {}),
     targetShotCount,
   } as StoryGraphStartSettingsSnapshot;
 }
@@ -453,6 +466,11 @@ function getInputStylePalette(input: StoryInput): StoryStylePaletteSnapshot | un
   return sanitizeStoryStylePaletteSnapshot(snapshot?.stylePalette);
 }
 
+function getInputStyleReference(input: StoryInput): StoryStyleReferenceSnapshot | undefined {
+  const snapshot = input.settingsSnapshot as StoryGraphStartSettingsSnapshot | undefined;
+  return getStoryStyleReferenceFromSettingsSnapshot(snapshot);
+}
+
 function findStartResourceById(candidates: StoryLocalResource[], id: string) {
   return candidates.find((candidate) => candidate.id === id) ?? null;
 }
@@ -658,6 +676,7 @@ export function createStoryPlanningArtifacts(
     resourcePlan,
     safetyPlan,
     shots,
+    styleReference: getInputStyleReference(input),
   });
   const executionBatch = createStoryExecutionRequestBatch({
     mode: "final",

@@ -3,6 +3,10 @@ import {
   type StoryWorkflowNodeId,
 } from "./story-types";
 import { formatPromptProfileLabel, isPromptProfileId } from "@/shared/prompt-profile";
+import {
+  getStoryStyleReferenceFromSettingsSnapshot,
+  isStoryStyleReferenceReady,
+} from "./story-style-palette";
 
 export type StoryNodeSummaryMetric = {
   label: string;
@@ -562,10 +566,56 @@ function getResourceCandidateCounts(settingsSnapshot: unknown) {
   return { checkpoints: 0, loras: 0 };
 }
 
+function formatStoryStyleReferenceMode(settingsSnapshot: unknown) {
+  const styleReference = getStoryStyleReferenceFromSettingsSnapshot(settingsSnapshot);
+  if (!styleReference) {
+    return "None";
+  }
+
+  if (!isStoryStyleReferenceReady(styleReference)) {
+    return "Invalid";
+  }
+
+  return styleReference.mode === "ipadapter" ? "IPAdapter" : "Prompt-only";
+}
+
+function summarizeStoryStyleReference(settingsSnapshot: unknown): StoryNodeSummarySection | null {
+  const styleReference = getStoryStyleReferenceFromSettingsSnapshot(settingsSnapshot);
+
+  if (!styleReference) {
+    return null;
+  }
+
+  if (!isStoryStyleReferenceReady(styleReference)) {
+    return {
+      title: "Style reference",
+      fields: [
+        { label: "Status", value: "Invalid" },
+        { label: "Error", value: compactText(styleReference.error, 280) || "Retry analysis or remove the reference." },
+      ],
+    };
+  }
+
+  return {
+    title: "Style reference",
+    fields: [
+      { label: "Status", value: "Ready" },
+      { label: "Mode", value: styleReference.mode === "ipadapter" ? "IPAdapter" : "Prompt-only" },
+      { label: "Image", value: compactText(styleReference.metadata.filename, 120) || styleReference.metadata.storedFilename },
+      { label: "Summary", value: compactText(styleReference.analysis.summary, 360) },
+      { label: "Style prompt", value: compactText(styleReference.analysis.stylePrompt, 520) },
+      ...(styleReference.settingsSnapshot?.modeReason
+        ? [{ label: "Mode reason", value: compactText(styleReference.settingsSnapshot.modeReason, 220) }]
+        : []),
+    ],
+  };
+}
+
 function summarizeStoryInput(result: unknown): StoryNodeOutputSummary {
   const input = isRecord(result) ? result : {};
   const settingsSnapshot = input.settingsSnapshot;
   const counts = getResourceCandidateCounts(settingsSnapshot);
+  const styleReferenceSection = summarizeStoryStyleReference(settingsSnapshot);
 
   return {
     title: "Story input summary",
@@ -574,6 +624,7 @@ function summarizeStoryInput(result: unknown): StoryNodeOutputSummary {
       { label: "Rating", value: compactText(input.audienceRating, 40) || "safe" },
       { label: "Profile", value: getPromptProfile(settingsSnapshot) },
       { label: "Resources", value: `${counts.checkpoints} checkpoints, ${counts.loras} LoRAs` },
+      { label: "Style reference", value: formatStoryStyleReferenceMode(settingsSnapshot) },
     ],
     sections: [
       {
@@ -590,6 +641,7 @@ function summarizeStoryInput(result: unknown): StoryNodeOutputSummary {
           { label: "Segments", value: countLabel(Array.isArray(input.storySegments) ? input.storySegments.length : 0, "segment") },
         ],
       },
+      ...(styleReferenceSection ? [styleReferenceSection] : []),
     ],
   };
 }
