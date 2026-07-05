@@ -2073,12 +2073,20 @@ describe("story planning", () => {
 
   it("merges the global Story style prompt into every final execution request", () => {
     const resourcePlan = createResourcePlan();
+    const stylePrompt = "wide shot, soft watercolor anime rendering, clean pencil linework, pastel highlights";
+    const styleReference = {
+      ...readyStyleReference,
+      analysis: {
+        ...readyStyleReference.analysis,
+        stylePrompt,
+      },
+    };
     const renderPlan = assembleStoryRenderPlan({
       parameterPlan: createStoryParameterPlan({ storyId, defaults }),
       resourcePlan,
       safetyPlan,
       shots,
-      styleReference: readyStyleReference,
+      styleReference,
     });
     const finalBatch = createStoryExecutionRequestBatch({ mode: "final", renderPlan, resourcePlan });
 
@@ -2088,16 +2096,18 @@ describe("story planning", () => {
         storedFilename: "0123456789abcdef0123456789abcdef.png",
       },
       analysis: {
-        stylePrompt: "soft watercolor anime rendering, clean pencil linework, pastel highlights",
+        stylePrompt,
       },
     });
     for (const shot of renderPlan.shots) {
       expect(shot.positivePrompt).toContain("soft watercolor anime rendering");
       expect(shot.positivePrompt).toContain("clean pencil linework");
+      expect(shot.positivePrompt.endsWith(`, ${stylePrompt}`)).toBe(true);
     }
     for (const request of finalBatch.requests) {
       expect(request.request.positivePrompt).toContain("soft watercolor anime rendering");
       expect(request.request.positivePrompt.match(/soft watercolor anime rendering/g) ?? []).toHaveLength(1);
+      expect(request.request.positivePrompt.endsWith(`, ${stylePrompt}`)).toBe(true);
       expect(request.styleReference).toMatchObject({
         mode: "ipadapter",
         ipAdapter: {

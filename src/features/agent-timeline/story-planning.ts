@@ -903,12 +903,6 @@ function mergeStoryNegativePrompts(...values: string[]) {
   ).join(", ");
 }
 
-function mergeStoryPositivePrompts(...values: string[]) {
-  return dedupeStoryPromptParts(
-    values.flatMap((value) => splitPromptParts(value)),
-  ).join(", ");
-}
-
 function getStoryRenderPromptDraftNegativeParts(renderPromptDraft?: StoryRenderPromptDraftShot) {
   return [
     ...(renderPromptDraft?.animaPromptParts?.negativeAdditions ?? []),
@@ -1730,7 +1724,12 @@ function createFormattedStoryPositivePrompt({
 
 function applyStyleReferenceToPositivePrompt(positivePrompt: string, styleReference?: StoryStyleReferenceSnapshot) {
   const stylePrompt = getStoryStyleReferencePrompt(styleReference);
-  return stylePrompt ? mergeStoryPositivePrompts(positivePrompt, stylePrompt) : positivePrompt;
+  if (!stylePrompt.trim()) {
+    return positivePrompt;
+  }
+
+  const trimmedPositivePrompt = positivePrompt.trim();
+  return trimmedPositivePrompt ? `${trimmedPositivePrompt}, ${stylePrompt.trim()}` : stylePrompt.trim();
 }
 
 function getStoryStyleReferenceForExecution(

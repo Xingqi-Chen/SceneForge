@@ -431,6 +431,20 @@ function buildStoryStyleReferenceAnalysisRequest({
   nsfwEnabled: boolean;
   promptProfile: PromptProfileId;
 }): LlmChatRequest {
+  const modelPromptInstruction = promptProfile === "anima"
+    ? [
+        "The selected base model is Anima.",
+        "Generate an Anima-compatible stylePrompt as concise natural-language visual clauses.",
+        "Prefer readable descriptive phrases for medium, finish, light, palette, camera, texture, and atmosphere.",
+        "Do not convert the stylePrompt into Danbooru-style tag soup.",
+      ].join(" ")
+    : [
+        "The selected base model is Illustrious.",
+        "Generate an Illustrious-compatible stylePrompt as compact comma-separated style tags and short visual phrases.",
+        "Prefer SD/Danbooru-friendly fragments over prose sentences.",
+        "Do not include narrative subject, character identity, pose, or story content tags.",
+      ].join(" ");
+
   return {
     purpose: "story-style-reference-analysis",
     nsfw: nsfwEnabled,
@@ -444,6 +458,7 @@ function buildStoryStyleReferenceAnalysisRequest({
           "Do not identify or imitate living artists, copyrighted characters, logos, celebrities, or specific franchise names.",
           "Do not describe the image's subject as content to reproduce unless it is necessary to explain broad style.",
           "The stylePrompt must be directly reusable as a positive prompt addition for every Story shot.",
+          modelPromptInstruction,
           'Required shape: {"summary":"one concise sentence","stylePrompt":"comma-separated reusable visual style prompt"}',
         ].join("\n"),
       },
