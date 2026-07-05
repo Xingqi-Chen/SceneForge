@@ -15,7 +15,6 @@ import {
   LayoutDashboard,
   LoaderCircle,
   LockKeyhole,
-  Paintbrush,
   PencilLine,
   Play,
   RefreshCw,
@@ -53,7 +52,6 @@ import {
   type CharacterActionTimelineResult,
   type ComfyUiExecutionTimelineResult,
   type ParameterRecommendationTimelineResult,
-  type ResultDisplayTimelineResult,
   type ResourceRecommendationTimelineResult,
   type ScenePromptTimelineResult,
   type SceneInputTimelineResult,
@@ -75,7 +73,6 @@ import {
   makeCivitaiResourceTargetFileName,
 } from "@/features/civitai-lora-library/resource-files";
 import { parseCivitaiAiPromptResponse } from "@/features/editor/ai-prompt/civitai-ai-context";
-import type { ComfyUiGenerationLoraSetting } from "@/features/editor/ai-prompt/comfyui-generation-params";
 import {
   buildStylePaletteAdviceMessages,
   type StylePalettePromptPreset,
@@ -94,18 +91,10 @@ import {
   type PendingPromptTagImportReview,
 } from "@/features/editor/components/PromptTagImportReviewDialog";
 import {
-  InpaintMaskDialog,
   toDraft,
-  toInpaintRequestPayload,
-  type GeneratedImageItem,
   type GenerationDraft,
-  type InpaintSubmitInput,
 } from "@/features/editor/components/ImageGenerationPanel";
 import { useEditorStore } from "@/features/editor/store/editor-store";
-import type {
-  ComfyUiGeneratedImage,
-  ComfyUiPromptHistoryResponse,
-} from "@/features/comfyui";
 import {
   getLlmProxyErrorMessage,
   isLlmChatResponse,
@@ -152,6 +141,10 @@ import {
 } from "./TimelineEditorWorkspace";
 import { TimelineParameterRecommendationWorkspace } from "./TimelineParameterRecommendationWorkspace";
 import { TimelineResourceRecommendationWorkspace } from "./TimelineResourceRecommendationWorkspace";
+import {
+  isResultDisplayTimelineResult,
+  TimelineResultDisplayWorkspace,
+} from "./TimelineResultDisplayWorkspace";
 import { TimelineScenePromptWorkspace } from "./TimelineScenePromptWorkspace";
 import { TimelineWorkflowProjectMenu } from "./TimelineWorkflowProjectMenu";
 import { getTimelineNodeOutputText, timelineNodeContent } from "./timeline-node-content";
@@ -964,91 +957,6 @@ function getNewPromptTagApplyMode(
   return null;
 }
 
-function isResultDisplayTimelineResult(value: unknown): value is ResultDisplayTimelineResult {
-  return (
-    isRecord(value) &&
-    isRecord(value.image) &&
-    typeof value.image.url === "string" &&
-    typeof value.promptId === "string" &&
-    isRecord(value.storedImage)
-  );
-}
-
-function getTimelineResultImages(result: ResultDisplayTimelineResult) {
-  return result.images?.length ? result.images : [result.image];
-}
-
-function getTimelineResultStoredImages(result: ResultDisplayTimelineResult) {
-  return result.storedImages?.length ? result.storedImages : [result.storedImage];
-}
-
-function createTimelineResultImageItem({
-  image,
-  index,
-  promptId,
-  seed,
-  storedImage,
-}: {
-  image: ResultDisplayTimelineResult["image"];
-  index: number;
-  promptId: string;
-  seed: number;
-  storedImage: ResultDisplayTimelineResult["storedImage"];
-}): GeneratedImageItem {
-  return {
-    favorited: false,
-    id: `timeline-${promptId}-${index}-${image.filename}`,
-    image,
-    localFilename: storedImage.filename,
-    persisted: true,
-    promptId,
-    resultSource: "text-to-image",
-    sessionGenerated: true,
-    sourceReference: {
-      filename: image.filename,
-      ...(image.subfolder !== undefined ? { subfolder: image.subfolder } : {}),
-      ...(image.type !== undefined ? { type: image.type } : {}),
-    },
-    storage: "sceneforge",
-    seed,
-  };
-}
-
-function createTimelineInpaintImageItem({
-  image,
-  index,
-  parentImageId,
-  promptId,
-  seed,
-  storedImage,
-}: {
-  image: ComfyUiGeneratedImage;
-  index: number;
-  parentImageId: string;
-  promptId: string;
-  seed: number;
-  storedImage: ResultDisplayTimelineResult["storedImage"];
-}): GeneratedImageItem {
-  return {
-    favorited: false,
-    id: `timeline-inpaint-${promptId}-${index}-${image.filename}`,
-    localFilename: storedImage.filename,
-    persisted: true,
-    promptId,
-    resultSource: "inpaint",
-    sessionGenerated: true,
-    sourceReference: {
-      filename: image.filename,
-      ...(image.subfolder !== undefined ? { subfolder: image.subfolder } : {}),
-      ...(image.type !== undefined ? { type: image.type } : {}),
-    },
-    storage: "sceneforge",
-    seed,
-    historyId: parentImageId,
-    image,
-  };
-}
-
 function getTimelineExecutionDraft(workflow: TimelineWorkflowState): GenerationDraft | null {
   const execution = workflow.nodes["comfyui-execution"].result;
 
@@ -1082,289 +990,6 @@ function getTimelineSelectedResources(workflow: TimelineWorkflowState): Selected
     checkpoint,
     loras,
   };
-}
-
-async function waitForTimelineInpaintImages(
-  promptId: string,
-  expectedImageCount = 1,
-  onPoll?: (history: ComfyUiPromptHistoryResponse) => void,
-) {
-  const deadline = Date.now() + 60 * 60 * 1000;
-
-  while (Date.now() < deadline) {
-    const response = await fetch(`/api/comfyui/history/${encodeURIComponent(promptId)}`, {
-      cache: "no-store",
-    });
-    const payload: unknown = await response.json().catch(() => null);
-
-    if (!response.ok) {
-      throw new Error(getApiErrorMessage(payload, "Unable to read ComfyUI inpaint history."));
-    }
-
-    const history = payload as ComfyUiPromptHistoryResponse;
-    onPoll?.(history);
-
-    if (history.images.length >= expectedImageCount) {
-      return history;
-    }
-
-    if (history.completed) {
-      throw new Error("ComfyUI completed the inpaint job without returning an image.");
-    }
-
-    await new Promise((resolve) => window.setTimeout(resolve, 2000));
-  }
-
-  throw new Error("Timed out waiting for ComfyUI inpaint output.");
-}
-
-async function saveTimelineInpaintImage(image: ComfyUiGeneratedImage) {
-  const response = await fetch("/api/comfyui/generated-images", {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-    },
-    body: JSON.stringify({
-      image: {
-        filename: image.filename,
-        ...(image.subfolder !== undefined ? { subfolder: image.subfolder } : {}),
-        ...(image.type !== undefined ? { type: image.type } : {}),
-      },
-    }),
-  });
-  const payload: unknown = await response.json().catch(() => null);
-
-  if (!response.ok) {
-    throw new Error(getApiErrorMessage(payload, "Unable to store timeline inpaint image."));
-  }
-
-  return payload as ResultDisplayTimelineResult["storedImage"];
-}
-
-function TimelineResultDisplayWorkspace({
-  emptyState,
-  node,
-  workflow,
-}: {
-  emptyState: string;
-  node: TimelineWorkflowState["nodes"][TimelineNodeId];
-  workflow: TimelineWorkflowState;
-}) {
-  const result = isResultDisplayTimelineResult(node.result) ? node.result : null;
-  const draft = useMemo(() => getTimelineExecutionDraft(workflow), [workflow]);
-  const selectedResources = useMemo(() => getTimelineSelectedResources(workflow), [workflow]);
-  const [inpaintImageItem, setInpaintImageItem] = useState<GeneratedImageItem | null>(null);
-  const [inpaintItems, setInpaintItems] = useState<GeneratedImageItem[]>([]);
-  const [inpaintStatus, setInpaintStatus] = useState<"idle" | "loading" | "success" | "error">("idle");
-  const [inpaintMessage, setInpaintMessage] = useState("");
-
-  if (!result) {
-    return (
-      <div className="rounded-md border border-dashed border-slate-200 bg-slate-50 p-3 text-xs leading-relaxed text-slate-500">
-        {node.error?.message ?? emptyState}
-      </div>
-    );
-  }
-
-  const resultImages = getTimelineResultImages(result);
-  const storedImages = getTimelineResultStoredImages(result);
-  const totalBytes = storedImages.reduce((total, image) => total + image.byteLength, 0);
-  const parentSeed = draft?.seed ?? 0;
-  const parentItems = resultImages.map((image, index) => createTimelineResultImageItem({
-    image,
-    index,
-    promptId: result.promptId,
-    seed: parentSeed,
-    storedImage: storedImages[index] ?? result.storedImage,
-  }));
-  const loraSettings: ComfyUiGenerationLoraSetting[] = selectedResources.loras
-    .map((resource, index) => {
-      const draftLora = draft?.loras.find((lora) => lora.loraName === resource.modelFileName) ?? draft?.loras[index];
-
-      if (!draftLora) {
-        return null;
-      }
-
-      return {
-        enabled: draftLora.enabled,
-        loraName: draftLora.loraName,
-        resource,
-        source: "ai",
-        strengthClip: draftLora.strengthClip,
-        strengthModel: draftLora.strengthModel,
-      };
-    })
-    .filter((entry): entry is ComfyUiGenerationLoraSetting => entry !== null);
-
-  async function submitTimelineInpaint(input: InpaintSubmitInput) {
-    if (!draft || !inpaintImageItem) {
-      throw new Error("Timeline inpaint settings are not ready.");
-    }
-
-    setInpaintStatus("loading");
-    setInpaintMessage("Submitting inpaint job to ComfyUI...");
-
-    try {
-      const clientId = `timeline-inpaint-${globalThis.crypto?.randomUUID?.() ?? Date.now().toString(36)}`;
-      const requestPayload = toInpaintRequestPayload(draft, input);
-      const response = await fetch("/api/comfyui/inpaint-image", {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-        },
-        body: JSON.stringify({ ...requestPayload, clientId }),
-      });
-      const payload: unknown = await response.json().catch(() => null);
-
-      if (!response.ok) {
-        throw new Error(getApiErrorMessage(payload, "ComfyUI inpaint request failed."));
-      }
-
-      if (!isRecord(payload) || typeof payload.promptId !== "string") {
-        throw new Error("ComfyUI inpaint response did not include a prompt id.");
-      }
-
-      setInpaintMessage(`Inpaint job submitted to ComfyUI, seed ${input.seed}.`);
-      const history = await waitForTimelineInpaintImages(payload.promptId, 1, (historyUpdate) => {
-        if (historyUpdate.images.length > 0) {
-          setInpaintMessage(`Received ${historyUpdate.images.length}/1 inpaint image, seed ${input.seed}.`);
-        }
-      });
-      const image = history.images[0];
-
-      if (!image) {
-        throw new Error("ComfyUI inpaint completed without an image.");
-      }
-
-      const storedImage = await saveTimelineInpaintImage(image);
-      const inpaintItem = createTimelineInpaintImageItem({
-        image: {
-          ...image,
-          url: storedImage.url,
-        },
-        index: inpaintItems.length,
-        parentImageId: inpaintImageItem.id,
-        promptId: payload.promptId,
-        seed: input.seed,
-        storedImage,
-      });
-
-      setInpaintItems((current) => [...current, inpaintItem]);
-      setInpaintStatus("success");
-      setInpaintMessage("Inpaint image generated and stored.");
-      setInpaintImageItem(null);
-    } catch (error) {
-      setInpaintStatus("error");
-      setInpaintMessage(error instanceof Error ? error.message : "Timeline inpaint failed.");
-      throw error;
-    }
-  }
-
-  return (
-    <div className="flex flex-col gap-3" data-testid="timeline-result-workspace">
-      <div className={cn(
-        "grid gap-3 rounded-md border border-slate-200 bg-slate-50 p-3",
-        resultImages.length > 1 ? "md:grid-cols-2" : "grid-cols-1",
-      )}>
-        {parentItems.map((item, index) => (
-          <figure className="overflow-hidden rounded-md border border-slate-200 bg-white" key={`${item.image.nodeId}:${item.image.filename}:${index}`}>
-            <Image
-              alt={`Timeline generated ComfyUI result ${index + 1}`}
-              className="max-h-[42rem] w-full object-contain"
-              height={1024}
-              src={item.image.url}
-              unoptimized
-              width={1024}
-            />
-            <div className="flex items-center justify-between gap-2 border-t border-slate-100 px-3 py-2">
-              <figcaption className="text-[11px] font-semibold text-slate-500">
-                {resultImages.length > 1 ? `Image ${index + 1} of ${resultImages.length}` : "Generated image"}
-              </figcaption>
-              <Button
-                className="h-8 gap-1.5 rounded-md bg-sky-600 px-2.5 text-xs text-white hover:bg-sky-700 disabled:opacity-60"
-                disabled={!draft || inpaintStatus === "loading"}
-                onClick={() => setInpaintImageItem(item)}
-                type="button"
-              >
-                <Paintbrush className="size-3.5" />
-                Inpaint
-              </Button>
-            </div>
-          </figure>
-        ))}
-      </div>
-      {inpaintItems.length > 0 ? (
-        <div className={cn(
-          "grid gap-3 rounded-md border border-sky-200 bg-sky-50 p-3",
-          inpaintItems.length > 1 ? "md:grid-cols-2" : "grid-cols-1",
-        )}>
-          {inpaintItems.map((item, index) => (
-            <figure className="overflow-hidden rounded-md border border-sky-200 bg-white" key={item.id}>
-              <Image
-                alt={`Timeline inpaint result ${index + 1}`}
-                className="max-h-[42rem] w-full object-contain"
-                height={1024}
-                src={item.image.url}
-                unoptimized
-                width={1024}
-              />
-              <figcaption className="border-t border-sky-100 px-3 py-2 text-[11px] font-semibold text-sky-700">
-                Inpaint result {index + 1}
-              </figcaption>
-            </figure>
-          ))}
-        </div>
-      ) : null}
-      {inpaintStatus !== "idle" && inpaintMessage ? (
-        <div className={cn(
-          "rounded-md border p-3 text-xs leading-relaxed",
-          inpaintStatus === "error"
-            ? "border-rose-200 bg-rose-50 text-rose-700"
-            : "border-sky-200 bg-sky-50 text-sky-700",
-        )}>
-          {inpaintStatus === "loading" ? <LoaderCircle className="mr-1.5 inline size-3.5 animate-spin" /> : null}
-          {inpaintMessage}
-        </div>
-      ) : null}
-      {draft && inpaintImageItem ? (
-        <InpaintMaskDialog
-          busy={inpaintStatus === "loading"}
-          draft={draft}
-          imageItem={inpaintImageItem}
-          loraSettings={loraSettings}
-          onClose={() => setInpaintImageItem(null)}
-          onSubmit={submitTimelineInpaint}
-          open
-          selectedResources={selectedResources}
-        />
-      ) : null}
-      <dl className="grid gap-2 rounded-md border border-slate-200 bg-white p-3 text-xs md:grid-cols-2">
-        <div>
-          <dt className="font-semibold uppercase text-slate-500">Prompt ID</dt>
-          <dd className="mt-1 break-all text-slate-800">{result.promptId}</dd>
-        </div>
-        <div>
-          <dt className="font-semibold uppercase text-slate-500">Stored images</dt>
-          <dd className="mt-1 break-all text-slate-800">
-            {storedImages.length === 1 ? result.storedImage.filename : `${storedImages.length} images`}
-          </dd>
-        </div>
-        <div>
-          <dt className="font-semibold uppercase text-slate-500">Content type</dt>
-          <dd className="mt-1 text-slate-800">{result.storedImage.contentType}</dd>
-        </div>
-        <div>
-          <dt className="font-semibold uppercase text-slate-500">Total bytes</dt>
-          <dd className="mt-1 text-slate-800">{totalBytes.toLocaleString()}</dd>
-        </div>
-      </dl>
-      {result.warnings.length > 0 ? (
-        <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-xs leading-relaxed text-amber-800">
-          {result.warnings.join(" ")}
-        </div>
-      ) : null}
-    </div>
-  );
 }
 
 export function TimelineShell() {
@@ -1419,6 +1044,8 @@ export function TimelineShell() {
     : "json";
   const selectedRawEditable = canRawEditNode(selectedNodeId, workflow);
   const selectedIsNonEditableAiNode = nonEditableAiNodeIds.has(selectedNodeId);
+  const timelineResultDraft = useMemo(() => getTimelineExecutionDraft(activeWorkflow), [activeWorkflow]);
+  const timelineResultSelectedResources = useMemo(() => getTimelineSelectedResources(activeWorkflow), [activeWorkflow]);
   const sceneRequestIsUsable = sceneRequest.trim().length > 0;
   const selectedNodeAiDisabled =
     isRunning ||
@@ -2984,10 +2611,12 @@ export function TimelineShell() {
                 <h2 className="text-sm font-bold text-slate-900">Artifact result</h2>
                 <div className="mt-3">
                   <TimelineResultDisplayWorkspace
+                    draft={timelineResultDraft}
                     emptyState={timelineNodeContent["result-display"].emptyState}
+                    errorMessage={resultNode.error?.message}
                     key={resultNode.updatedAt}
-                    node={resultNode}
-                    workflow={activeWorkflow}
+                    result={isResultDisplayTimelineResult(resultNode.result) ? resultNode.result : null}
+                    selectedResources={timelineResultSelectedResources}
                   />
                 </div>
               </section>
@@ -3500,10 +3129,12 @@ export function TimelineShell() {
                     />
                   ) : selectedOutputDisplayMode === "visual" && selectedWorkspaceKey === "result-display" ? (
                     <TimelineResultDisplayWorkspace
+                      draft={timelineResultDraft}
                       emptyState={selectedContent.emptyState}
+                      errorMessage={selectedNode.error?.message}
                       key={selectedNode.updatedAt}
-                      node={selectedNode}
-                      workflow={activeWorkflow}
+                      result={isResultDisplayTimelineResult(selectedNode.result) ? selectedNode.result : null}
+                      selectedResources={timelineResultSelectedResources}
                     />
                   ) : selectedOutputDisplayMode === "visual" && isTimelineEditorWorkspaceNode(selectedNodeId) ? (
                     <TimelineEditorWorkspace

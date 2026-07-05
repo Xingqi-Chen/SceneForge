@@ -33,7 +33,11 @@ import type { StoryResultDisplay } from "@/features/agent-timeline/story-api";
 import type { StoryShotGraphExecutionState } from "@/features/agent-timeline/story-execution";
 import {
   DEFAULT_STORY_IMG2IMG_DENOISE,
+  createStoryExecutionRequestBatch,
+  getSelectedStoryResourcesForPrompting,
   normalizeStoryImg2ImgDenoise,
+  type StoryRenderPlan,
+  type StoryResourcePlan,
 } from "@/features/agent-timeline/story-planning";
 import {
   setStoryNodeManualResult,
@@ -58,6 +62,7 @@ import {
 import type {
   StoryWorkflowNodeId,
 } from "@/features/agent-timeline/story-types";
+import type { ResultDisplayTimelineResult } from "@/features/agent-timeline/types";
 import {
   getLlmProxyErrorMessage,
   isLlmChatResponse,
@@ -86,13 +91,19 @@ import { cn } from "@/shared/utils/cn";
 import { StoryNodeOutputSummaryView } from "./StoryNodeOutputSummaryView";
 import { StoryPlanningWorkspace } from "./StoryPlanningWorkspace";
 import { TimelineWorkflowProjectMenu } from "./TimelineWorkflowProjectMenu";
-import { ComfyUiGenerationDialog } from "@/features/editor/components/ImageGenerationPanel";
+import {
+  ComfyUiGenerationDialog,
+  toDraft,
+  type GenerationDraft,
+} from "@/features/editor/components/ImageGenerationPanel";
 import {
   EMPTY_STYLE_PALETTE_ADVICE,
   StylePaletteAiAdvicePanel,
   type StylePaletteAdviceState,
 } from "@/features/editor/components/StylePaletteAiAdvicePanel";
 import { StylePaletteCivitaiResourceSelector } from "@/features/editor/components/StylePaletteCivitaiResourceSelector";
+
+import { TimelineResultDisplayWorkspace } from "./TimelineResultDisplayWorkspace";
 
 const headerLinkClassName =
   "inline-flex h-9 shrink-0 items-center justify-center gap-2 rounded-md border border-slate-200 bg-white px-2.5 text-xs font-medium text-slate-700 transition-colors hover:border-slate-300 hover:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-400 sm:px-3";
@@ -1036,16 +1047,99 @@ function isStoryResultDisplay(value: unknown): value is StoryResultDisplay {
   return isRecord(value) && Array.isArray(value.finalReferences) && typeof value.status === "string";
 }
 
-function getStoryResultImageUrl(reference: StoryResultDisplay["finalReferences"][number]) {
-  return reference.storedImage?.url ?? reference.storedImages?.[0]?.url ?? "";
-}
-
 function getStoryExecutionImageUrl(reference: StoryShotGraphExecutionState["shots"][number]["resultReference"]) {
   return reference?.storedImage?.url ?? reference?.storedImages?.[0]?.url ?? "";
 }
 
 function getStoryReferenceImageLabel(reference: StoryShotGraphExecutionState["shots"][number]["resultReference"]) {
   return reference?.storedImage?.filename ?? reference?.storedImages?.[0]?.filename ?? reference?.image?.filename ?? "No stored image";
+}
+
+function isStoryResourcePlan(value: unknown): value is StoryResourcePlan {
+  return isRecord(value) && isRecord(value.checkpoint) && Array.isArray(value.loras);
+}
+
+function isStoryRenderPlan(value: unknown): value is StoryRenderPlan {
+  return isRecord(value) && typeof value.storyId === "string" && Array.isArray(value.shots);
+}
+
+function getStoryResultSelectedResources(workflow: StoryWorkflowState): SelectedCivitaiResourcesPreview {
+  const resourcePlan = workflow.nodes["resource-plan"].result;
+
+  if (!isStoryResourcePlan(resourcePlan)) {
+    return EMPTY_SELECTED_CIVITAI_RESOURCES;
+  }
+
+  return getSelectedStoryResourcesForPrompting(resourcePlan);
+}
+
+function getStoryResultDrafts(workflow: StoryWorkflowState): Map<string, GenerationDraft> {
+  const renderPlan = workflow.nodes["story-render-plan"].result;
+  const resourcePlan = workflow.nodes["resource-plan"].result;
+
+  if (!isStoryRenderPlan(renderPlan) || !isStoryResourcePlan(resourcePlan)) {
+    return new Map();
+  }
+
+  try {
+    const batch = createStoryExecutionRequestBatch({
+      mode: "final",
+      renderPlan,
+      resourcePlan,
+    });
+
+    return new Map(batch.requests.map((request) => [request.shotId, toDraft(request.request)]));
+  } catch {
+    return new Map();
+  }
+}
+
+function toResultImageReference(
+  image: NonNullable<StoryResultDisplay["finalReferences"][number]["image"]>,
+  storedImage?: ResultDisplayTimelineResult["storedImage"],
+): ResultDisplayTimelineResult["image"] {
+  return {
+    ...image,
+    url: storedImage?.url ?? image.url,
+  };
+}
+
+function toResultSourceImageReference(
+  image: NonNullable<StoryResultDisplay["finalReferences"][number]["image"]>,
+): ResultDisplayTimelineResult["sourceImage"] {
+  return {
+    filename: image.filename,
+    nodeId: image.nodeId,
+    ...(image.subfolder !== undefined ? { subfolder: image.subfolder } : {}),
+    ...(image.type !== undefined ? { type: image.type } : {}),
+  };
+}
+
+function toStoryTimelineResult(
+  reference: StoryResultDisplay["finalReferences"][number],
+): ResultDisplayTimelineResult | null {
+  const firstImage = reference.image ?? reference.images?.[0];
+  const firstStoredImage = reference.storedImage ?? reference.storedImages?.[0];
+
+  if (!firstImage || !firstStoredImage) {
+    return null;
+  }
+
+  const rawImages = reference.images?.length ? reference.images : [firstImage];
+  const storedImages = reference.storedImages?.length ? reference.storedImages : [firstStoredImage];
+  const images = rawImages.map((image, index) => toResultImageReference(image, storedImages[index] ?? firstStoredImage));
+
+  return {
+    completed: reference.completed,
+    image: images[0] ?? toResultImageReference(firstImage, firstStoredImage),
+    images,
+    promptId: reference.promptId,
+    sourceImage: toResultSourceImageReference(firstImage),
+    sourceImages: rawImages.map(toResultSourceImageReference),
+    storedImage: firstStoredImage,
+    storedImages,
+    warnings: [...reference.warnings],
+  };
 }
 
 function getGenerationGateReady(workflow: StoryWorkflowState | null) {
@@ -1456,7 +1550,16 @@ function StoryExecutionPanel({
   );
 }
 
-function StoryResultGrid({ result }: { result: StoryResultDisplay }) {
+function StoryResultGrid({
+  result,
+  workflow,
+}: {
+  result: StoryResultDisplay;
+  workflow: StoryWorkflowState;
+}) {
+  const draftByShotId = useMemo(() => getStoryResultDrafts(workflow), [workflow]);
+  const selectedResources = useMemo(() => getStoryResultSelectedResources(workflow), [workflow]);
+
   return (
     <section className="rounded-md border border-slate-200 bg-slate-50 p-3" data-testid="story-result-grid">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
@@ -1472,33 +1575,36 @@ function StoryResultGrid({ result }: { result: StoryResultDisplay }) {
       </div>
       <div className={cn("grid gap-3", result.finalReferences.length > 1 ? "2xl:grid-cols-2" : "")}>
         {result.finalReferences.map((reference) => {
-          const imageUrl = getStoryResultImageUrl(reference);
+          const timelineResult = toStoryTimelineResult(reference);
+          const draft = draftByShotId.get(reference.shotId) ?? null;
 
           return (
             <article className="rounded-md border border-slate-200 bg-white p-3" key={reference.shotId}>
-              {imageUrl ? (
-                <a
-                  className="flex h-72 items-center justify-center rounded-md border border-slate-200 bg-slate-100 p-2 transition-colors hover:bg-slate-50 sm:h-80 xl:h-[26rem]"
-                  href={imageUrl}
-                  rel="noreferrer"
-                  target="_blank"
-                >
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    alt={`Generated ${reference.shotId}`}
-                    className="max-h-full max-w-full rounded object-contain"
-                    src={imageUrl}
-                  />
-                </a>
-              ) : (
-                <div className="flex h-72 items-center justify-center rounded-md border border-slate-200 bg-slate-100 text-xs text-slate-500 sm:h-80 xl:h-[26rem]">
-                  No image
+              <div className="mb-3 flex flex-wrap items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <p className="text-xs font-semibold text-slate-900">{reference.shotId}</p>
+                  <p className="mt-1 break-all text-[11px] text-slate-500">
+                    {reference.storedImage?.filename ?? reference.storedImages?.[0]?.filename ?? reference.image?.filename ?? "No stored image"}
+                  </p>
                 </div>
-              )}
-              <p className="mt-2 text-xs font-semibold text-slate-900">{reference.shotId}</p>
-              <p className="mt-1 break-all text-[11px] text-slate-500">
-                {reference.storedImage?.filename ?? reference.storedImages?.[0]?.filename ?? reference.image?.filename ?? "No stored image"}
-              </p>
+                <span className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] font-medium uppercase text-slate-500">
+                  {reference.completed ? "complete" : "partial"}
+                </span>
+              </div>
+              <TimelineResultDisplayWorkspace
+                draft={draft}
+                emptyState="This story shot has no stored generated image."
+                generatedImageAlt={(_, index) =>
+                  index === 0 ? `Generated ${reference.shotId}` : `Generated ${reference.shotId} image ${index + 1}`}
+                generatedImageCaption={(_, index, total) =>
+                  total > 1 ? `${reference.shotId} image ${index + 1} of ${total}` : `${reference.shotId} generated image`}
+                inpaintClientIdPrefix={`story-inpaint-${reference.shotId}`}
+                itemIdPrefix={`story-${reference.shotId}`}
+                key={`${reference.shotId}:${reference.promptId}:${reference.storedImage?.filename ?? ""}`}
+                result={timelineResult}
+                selectedResources={selectedResources}
+                testId="story-result-workspace"
+              />
             </article>
           );
         })}
@@ -2182,7 +2288,7 @@ export function StoryPlanningPreview() {
                         ) : null}
                         {selectedNodeId === "story-result-display" && storyResult ? (
                           <div className="mt-4">
-                            <StoryResultGrid result={storyResult} />
+                            <StoryResultGrid result={storyResult} workflow={workflow} />
                           </div>
                         ) : null}
                       </>
