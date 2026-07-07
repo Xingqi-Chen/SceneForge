@@ -580,6 +580,76 @@ describe("timeline workflow persistence", () => {
     });
   });
 
+  it("sanitizes crafted Story style reference metadata on restored workflow records", () => {
+    const workflow = startStoryGraphWorkflow({
+      rawIntent: "A courier follows a signal through a neon market.",
+      targetShotCount: 2,
+      now: () => "2026-06-15T00:00:00.000Z",
+      settingsSnapshot: {
+        promptProfile: "illustrious",
+        styleReference: readyStyleReference,
+      },
+    });
+    const record = createTimelineWorkflowRecord({
+      workflow,
+      sceneRequest: "A courier follows a signal through a neon market.",
+      selectedPromptProfile: "illustrious",
+      selectedImageCount: 2,
+      selectedNodeId: "story-input",
+      outputDisplayModes: {},
+    });
+    const rawRecord = JSON.parse(JSON.stringify(record)) as {
+      workflow: {
+        nodes: {
+          "story-input": {
+            result: {
+              settingsSnapshot: {
+                styleReference: {
+                  metadata: {
+                    filename?: string;
+                    url?: string;
+                  };
+                };
+              };
+            };
+          };
+        };
+      };
+    };
+    rawRecord.workflow.nodes["story-input"].result.settingsSnapshot.styleReference.metadata = {
+      ...rawRecord.workflow.nodes["story-input"].result.settingsSnapshot.styleReference.metadata,
+      filename: "C:\\Users\\Brandon\\Workspace\\SceneForge\\data\\style.png",
+      url: "data:image/png;base64,SHOULD_NOT_PERSIST",
+    };
+
+    const parsed = sanitizeTimelineWorkflowRecord(rawRecord);
+    const serialized = JSON.stringify(parsed);
+
+    expect(serialized).not.toContain("data:image");
+    expect(serialized).not.toContain("SHOULD_NOT_PERSIST");
+    expect(serialized).not.toContain("C:\\Users");
+    if (!parsed || !isStoryGraphTimelineWorkflowRecord(parsed)) {
+      throw new Error("Expected a Story Graph workflow record.");
+    }
+
+    const storyInput = parsed.workflow.nodes["story-input"].result as {
+      settingsSnapshot?: {
+        styleReference?: {
+          metadata?: {
+            filename?: string;
+            storedFilename?: string;
+            url?: string;
+          };
+        };
+      };
+    };
+    expect(storyInput.settingsSnapshot?.styleReference?.metadata).toMatchObject({
+      storedFilename: "0123456789abcdef0123456789abcdef.png",
+      url: "/api/comfyui/sequence-references/0123456789abcdef0123456789abcdef.png",
+    });
+    expect(storyInput.settingsSnapshot?.styleReference?.metadata).not.toHaveProperty("filename");
+  });
+
   it("rejects malformed active workflow records", () => {
     expect(sanitizeTimelineWorkflowRecord({})).toBeNull();
     expect(

@@ -333,8 +333,15 @@ type StoryStyleReferenceFileInfo = {
   name: string;
 };
 
+type StoryStyleReferenceAnalysisContext = {
+  checkpointBaseModel: string | null;
+  checkpointId?: string | null;
+  promptProfile: PromptProfileId;
+};
+
 type StoryStyleReferenceDraft = {
   analysis?: StoryStyleReferenceAnalysis;
+  analysisContext?: StoryStyleReferenceAnalysisContext;
   dataUrl?: string;
   error?: string;
   fileInfo?: StoryStyleReferenceFileInfo;
@@ -346,6 +353,55 @@ const emptyStoryStyleReferenceDraft: StoryStyleReferenceDraft = {
   status: "empty",
 };
 const storyStyleReferenceAccept = "image/png,image/jpeg,image/webp";
+
+function normalizeStoryStyleReferenceContextValue(value: string | null | undefined) {
+  const normalized = value?.trim().toLowerCase();
+  return normalized || null;
+}
+
+function getStoryStyleReferenceAnalysisContext({
+  promptProfile,
+  selectedCheckpoint,
+  selectedCheckpointId,
+}: {
+  promptProfile: PromptProfileId;
+  selectedCheckpoint: SelectedCivitaiResourcesPreview["checkpoint"];
+  selectedCheckpointId?: string | null;
+}): StoryStyleReferenceAnalysisContext {
+  const checkpointBaseModel = selectedCheckpoint?.baseModel?.trim() || promptProfile;
+
+  return {
+    checkpointBaseModel,
+    ...(selectedCheckpointId ? { checkpointId: selectedCheckpointId } : {}),
+    promptProfile,
+  };
+}
+
+function getStoryStyleReferenceAnalysisMismatch(
+  draft: StoryStyleReferenceDraft,
+  currentContext: StoryStyleReferenceAnalysisContext,
+) {
+  if (draft.status !== "ready") {
+    return "";
+  }
+
+  if (!draft.analysisContext) {
+    return "Reanalyze the Story style reference for the current base model before starting planning.";
+  }
+
+  const analyzedBaseModel = normalizeStoryStyleReferenceContextValue(draft.analysisContext.checkpointBaseModel);
+  const currentBaseModel = normalizeStoryStyleReferenceContextValue(currentContext.checkpointBaseModel);
+
+  if (
+    draft.analysisContext.promptProfile !== currentContext.promptProfile ||
+    analyzedBaseModel !== currentBaseModel ||
+    (draft.analysisContext.checkpointId ?? null) !== (currentContext.checkpointId ?? null)
+  ) {
+    return "Story style reference was analyzed for a different base model or checkpoint. Retry analysis or remove the reference before starting planning.";
+  }
+
+  return "";
+}
 
 function getDataUrlContentType(dataUrl: string) {
   return /^data:([^;,]+)[;,]/.exec(dataUrl)?.[1] ?? "image/png";
@@ -1454,6 +1510,7 @@ function StoryStyleReferencePanel({
   onIpAdapterChange,
   promptProfile,
   selectedCheckpoint,
+  selectedCheckpointId,
 }: {
   draft: StoryStyleReferenceDraft;
   ipAdapter: StoryStyleReferenceIpAdapterSettings;
@@ -1462,6 +1519,7 @@ function StoryStyleReferencePanel({
   onIpAdapterChange: (settings: StoryStyleReferenceIpAdapterSettings) => void;
   promptProfile: PromptProfileId;
   selectedCheckpoint: SelectedCivitaiResourcesPreview["checkpoint"];
+  selectedCheckpointId?: string | null;
 }) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const capability = getStoryStyleReferenceCapabilityForStart({
@@ -1481,7 +1539,14 @@ function StoryStyleReferencePanel({
     fileInfo: StoryStyleReferenceFileInfo;
     metadata: StoryStyleReferenceMetadata;
   }) {
+    const analysisContext = getStoryStyleReferenceAnalysisContext({
+      promptProfile,
+      selectedCheckpoint,
+      selectedCheckpointId,
+    });
+
     onDraftChange({
+      analysisContext,
       dataUrl,
       fileInfo,
       metadata,
@@ -1497,6 +1562,7 @@ function StoryStyleReferencePanel({
 
     onDraftChange({
       analysis,
+      analysisContext,
       dataUrl,
       fileInfo,
       metadata,
@@ -1799,6 +1865,25 @@ function StartPanel({
         return;
       }
 
+      const analysisMismatch = getStoryStyleReferenceAnalysisMismatch(
+        styleReferenceDraft,
+        getStoryStyleReferenceAnalysisContext({
+          promptProfile,
+          selectedCheckpoint: selectedResources.checkpoint,
+          selectedCheckpointId,
+        }),
+      );
+
+      if (analysisMismatch) {
+        setStyleReferenceDraft({
+          ...styleReferenceDraft,
+          error: analysisMismatch,
+          status: "error",
+        });
+        setError(analysisMismatch);
+        return;
+      }
+
       const capability = getStoryStyleReferenceCapabilityForStart({
         promptProfile,
         selectedCheckpoint: selectedResources.checkpoint,
@@ -1945,6 +2030,7 @@ function StartPanel({
                 onIpAdapterChange={setStyleReferenceIpAdapter}
                 promptProfile={promptProfile}
                 selectedCheckpoint={selectedResources.checkpoint}
+                selectedCheckpointId={selectedCheckpointId}
               />
 
               <section className="rounded-md border border-indigo-100 bg-indigo-50/40 p-3">

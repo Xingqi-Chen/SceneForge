@@ -37,7 +37,7 @@ describe("LLM chat route model selection", () => {
     }
   });
 
-  it("uses the NSFW model for all AI request purposes when enabled", () => {
+  it("uses the NSFW model for ordinary AI request purposes when enabled", () => {
     expect(
       resolveDefaultModel({
         purpose: "scene-prompt-reverse",
@@ -142,5 +142,43 @@ describe("LLM chat route model selection", () => {
         messages: [{ role: "user", content: "Analyze this style reference" }],
       }),
     ).toBe("default-model");
+  });
+
+  it("keeps Story style reference analysis on a vision-capable model when NSFW is enabled", () => {
+    expect(
+      resolveDefaultModel({
+        purpose: "story-style-reference-analysis",
+        nsfw: true,
+        messages: [{ role: "user", content: "Analyze this style reference" }],
+      }),
+    ).toBe("vision-model");
+
+    expect(
+      resolveRequestModel({
+        purpose: "story-style-reference-analysis",
+        nsfw: true,
+        messages: [{ role: "user", content: "Analyze this style reference" }],
+      }),
+    ).toBe("vision-model");
+
+    expect(
+      resolveRequestModel({
+        model: "explicit-vision-model",
+        purpose: "story-style-reference-analysis",
+        nsfw: true,
+        messages: [{ role: "user", content: "Analyze this style reference" }],
+      }),
+    ).toBe("explicit-vision-model");
+  });
+
+  it("still routes ordinary NSFW requests to the NSFW model", () => {
+    expect(
+      resolveRequestModel({
+        model: "explicit-model",
+        purpose: "stable-diffusion-prompt-generation",
+        nsfw: true,
+        messages: [{ role: "user", content: "Generate a prompt" }],
+      }),
+    ).toBe("nsfw-model");
   });
 });

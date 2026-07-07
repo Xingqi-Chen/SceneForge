@@ -2,6 +2,23 @@
 
 This log records dated implementation and documentation work. Keep entries concise and evidence-oriented.
 
+## 2026-07-07
+
+### Issue #122 Reviewer Blocker Fixes
+
+Summary:
+
+- Hardened Story style reference metadata persistence so restored workflow state treats validated `storedFilename` as canonical, derives the sequence-reference URL from it, and drops unsafe display filenames such as paths, URLs, traversal strings, and data URLs.
+- Kept `story-style-reference-analysis` on explicit/vision/default model selection even when NSFW routing is enabled, while preserving the NSFW model override for ordinary request purposes.
+- Added analysis-context tracking to the `/story` style reference draft so changing Core Settings or the selected checkpoint after analysis blocks start and exposes Retry/Remove before planning can continue.
+
+Validation:
+
+- `npm test -- src/features/agent-timeline/story-input.test.ts src/features/agent-timeline/story-planning.test.ts src/features/agent-timeline/timeline-workflow-persistence.test.ts src/features/agent-timeline/components/StoryPlanningPreview.test.tsx src/app/api/llm/chat/route.test.ts src/features/llm/llm-local-log.test.ts` passed with 6 files and 108 tests.
+- `npm run typecheck` passed.
+- `npm test` passed with 122 files and 1003 tests.
+- `npm run lint` passed with 23 existing warnings.
+
 ## 2026-07-05
 
 ### Issue #122 Story Style Reference

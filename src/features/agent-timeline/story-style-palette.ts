@@ -112,6 +112,33 @@ function optionalString(value: unknown) {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
+function getSequenceReferenceUrl(storedFilename: string) {
+  return `/api/comfyui/sequence-references/${encodeURIComponent(storedFilename)}`;
+}
+
+function sanitizeDisplayFilename(value: unknown) {
+  const filename = optionalString(value);
+
+  if (!filename || filename === "[redacted]") {
+    return undefined;
+  }
+
+  const normalized = filename.toLowerCase();
+  if (
+    filename.includes("/") ||
+    filename.includes("\\") ||
+    filename.includes("\0") ||
+    filename.includes("..") ||
+    /%2f|%5c/i.test(filename) ||
+    /^[a-z][a-z0-9+.-]*:/i.test(filename) ||
+    normalized.startsWith("data:")
+  ) {
+    return undefined;
+  }
+
+  return filename.length <= 180 ? filename : undefined;
+}
+
 function fixedSeed(value: unknown) {
   const parsed = Number(value);
   return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : undefined;
@@ -148,8 +175,8 @@ function sanitizeStoryStyleReferenceMetadata(value: unknown): StoryStyleReferenc
     return null;
   }
 
-  const storedFilename = optionalString(value.storedFilename ?? value.filename);
-  const url = optionalString(value.url);
+  const storedFilename = optionalString(value.storedFilename);
+  const filename = sanitizeDisplayFilename(value.filename);
   const contentType = optionalString(value.contentType);
   const byteLength = positiveInteger(value.byteLength);
   const uploadedAt = optionalString(value.uploadedAt);
@@ -157,9 +184,8 @@ function sanitizeStoryStyleReferenceMetadata(value: unknown): StoryStyleReferenc
   if (
     !storedFilename ||
     !SEQUENCE_REFERENCE_FILENAME_PATTERN.test(storedFilename) ||
-    !url ||
     !contentType ||
-    !contentType.toLocaleLowerCase().startsWith("image/") ||
+    !contentType.toLowerCase().startsWith("image/") ||
     byteLength === undefined ||
     !uploadedAt
   ) {
@@ -169,10 +195,10 @@ function sanitizeStoryStyleReferenceMetadata(value: unknown): StoryStyleReferenc
   return {
     byteLength,
     contentType,
-    ...(optionalString(value.filename) ? { filename: optionalString(value.filename) } : {}),
+    ...(filename ? { filename } : {}),
     storedFilename,
     uploadedAt,
-    url,
+    url: getSequenceReferenceUrl(storedFilename),
   };
 }
 

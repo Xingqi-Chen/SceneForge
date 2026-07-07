@@ -419,6 +419,61 @@ describe("story input workflow start", () => {
     expect(JSON.stringify(input.settingsSnapshot)).not.toContain("base64");
   });
 
+  it("derives Story style reference URLs from stored filenames and drops unsafe display filenames", () => {
+    const unsafeMetadata = [
+      {
+        filename: "C:\\Users\\Brandon\\style.png",
+        url: "file:///C:/Users/Brandon/style.png",
+      },
+      {
+        filename: "../style.png",
+        url: "data:image/png;base64,SHOULD_NOT_PERSIST",
+      },
+      {
+        filename: "https://example.test/style.png",
+        url: "https://example.test/style.png",
+      },
+      {
+        filename: "/tmp/style.png",
+        url: "/tmp/style.png",
+      },
+    ];
+
+    unsafeMetadata.forEach((metadata, index) => {
+      const input = createStoryInputFromStartRequest({
+        rawIntent: "A two-shot story with crafted style reference metadata.",
+        storyId: `story-crafted-style-reference-${index}`,
+        now,
+        settingsSnapshot: {
+          styleReference: {
+            ...readyStyleReference,
+            metadata: {
+              ...readyStyleReference.metadata,
+              ...metadata,
+            },
+          },
+        },
+      });
+      const settingsSnapshot = input.settingsSnapshot as {
+        styleReference?: {
+          metadata?: Record<string, unknown>;
+          status?: string;
+        };
+      };
+
+      expect(settingsSnapshot.styleReference).toMatchObject({
+        status: "ready",
+        metadata: {
+          storedFilename: "0123456789abcdef0123456789abcdef.png",
+          url: "/api/comfyui/sequence-references/0123456789abcdef0123456789abcdef.png",
+        },
+      });
+      expect(settingsSnapshot.styleReference?.metadata).not.toHaveProperty("filename");
+      expect(JSON.stringify(input.settingsSnapshot)).not.toContain(metadata.filename);
+      expect(JSON.stringify(input.settingsSnapshot)).not.toContain(metadata.url);
+    });
+  });
+
   it("blocks Story start when the style reference upload or analysis state is invalid", () => {
     expect(() =>
       createStoryInputFromStartRequest({
