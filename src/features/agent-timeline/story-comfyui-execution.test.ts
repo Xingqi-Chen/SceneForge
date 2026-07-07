@@ -5,10 +5,13 @@ import type { ComfyUiGenerateImageResponse, ComfyUiTextToImageRequest } from "@/
 import {
   createStoryComfyUiExecutionAdapter,
   StoryComfyUiExecutionError,
+  type StoryComfyUiExecutionAdapterOptions,
   type StoryComfyUiExecutionClient,
 } from "./story-comfyui-execution";
 import { executeStoryShotGraph } from "./story-execution";
 import type { StoryExecutionRequestBatch } from "./story-planning";
+
+type UploadSequenceReferences = NonNullable<StoryComfyUiExecutionAdapterOptions["uploadSequenceReferences"]>;
 
 const nsfwContext = {
   audienceRating: "safe",
@@ -23,6 +26,36 @@ const baseRequest = {
   width: 1024,
   height: 768,
 } satisfies ComfyUiTextToImageRequest;
+const readyStyleReference = {
+  status: "ready",
+  mode: "ipadapter",
+  metadata: {
+    byteLength: 1234,
+    contentType: "image/png",
+    filename: "story-style.png",
+    storedFilename: "0123456789abcdef0123456789abcdef.png",
+    uploadedAt: "2026-06-14T00:00:00.000Z",
+    url: "/api/comfyui/sequence-references/0123456789abcdef0123456789abcdef.png",
+  },
+  analysis: {
+    analyzedAt: "2026-06-14T00:00:01.000Z",
+    model: "vision-model",
+    summary: "Soft watercolor anime rendering with pastel highlights.",
+    stylePrompt: "soft watercolor anime rendering, clean pencil linework, pastel highlights",
+  },
+  ipAdapter: {
+    weight: 0.45,
+    startPercent: 0,
+    endPercent: 1,
+  },
+  settingsSnapshot: {
+    capturedAt: "2026-06-14T00:00:02.000Z",
+    checkpointBaseModel: "Illustrious",
+    checkpointId: "checkpoint-local",
+    modeReason: "Illustrious base models support the sequence-style IPAdapter reference.",
+    promptProfile: "illustrious",
+  },
+} as const;
 
 function createBatch(request: ComfyUiTextToImageRequest = baseRequest): StoryExecutionRequestBatch {
   return {
@@ -318,6 +351,107 @@ describe("story ComfyUI execution adapter", () => {
     expect(validateRequest).toHaveBeenCalledWith(expect.objectContaining({
       characterReferences: expect.any(Array),
       imageName: "uploaded-shot-a.png",
+    }));
+  });
+
+  it("uploads Story style references through sequence-style IPAdapter character references", async () => {
+    const generatedRequests: ComfyUiTextToImageRequest[] = [];
+    const client = createClient();
+    client.generateImage = vi.fn<StoryComfyUiExecutionClient["generateImage"]>((request) => {
+      generatedRequests.push(request);
+      return Promise.resolve(createQueuedResponse(request));
+    });
+    const uploadSequenceReferences =
+      vi.fn<UploadSequenceReferences>(async (_client, sequenceId, characters) => {
+        expect(sequenceId).toBe("story-1");
+        expect(characters).toHaveLength(1);
+        expect(characters[0]).toMatchObject({
+          id: "story-style-reference",
+          name: "Story style reference",
+          mode: "ipadapter",
+          prompt: "soft watercolor anime rendering, clean pencil linework, pastel highlights",
+          references: [
+            {
+              id: "story-style-reference-image",
+              storedFilename: "0123456789abcdef0123456789abcdef.png",
+            },
+          ],
+          weight: 0.45,
+          startPercent: 0,
+          endPercent: 1,
+        });
+
+        return characters.map((character) => ({
+          ...character,
+          id: character.id ?? "story-style-reference",
+          references: character.references.map((reference) => ({
+            id: reference.id ?? "story-style-reference-image",
+            imageName: "uploaded-story-style.png",
+            ...(typeof reference.weight === "number" ? { weight: reference.weight } : {}),
+          })),
+        }));
+      });
+    const validateRequest = vi.fn((request: unknown) => ({
+      ok: true as const,
+      request: request as ComfyUiTextToImageRequest,
+    }));
+    const adapter = createStoryComfyUiExecutionAdapter({
+      client,
+      fetchImage: async () => ({
+        bytes: new Uint8Array([1, 2, 3]),
+        contentType: "image/png",
+      }),
+      historyPollAttempts: 2,
+      historyPollIntervalMs: 0,
+      storeImage: async (bytes: Uint8Array, contentType: string | null) => ({
+        byteLength: bytes.byteLength,
+        contentType: contentType ?? "image/png",
+        filename: "stored-shot-a.png",
+        url: "/api/comfyui/generated-images/stored-shot-a.png",
+      }),
+      uploadSequenceReferences,
+      validateObjectInfo: (request) => ({
+        errors: [],
+        request,
+        warnings: [],
+      }),
+      validateRequest,
+    });
+    const batch = createBatch();
+
+    const result = await executeStoryShotGraph({
+      ...batch,
+      requests: [
+        {
+          ...batch.requests[0],
+          styleReference: readyStyleReference,
+        },
+      ],
+    }, adapter);
+
+    expect(result.shots[0]?.status).toBe("done");
+    expect(uploadSequenceReferences).toHaveBeenCalledTimes(1);
+    expect(generatedRequests[0]).toMatchObject({
+      characterReferences: [
+        {
+          id: "story-style-reference",
+          images: [
+            {
+              id: "story-style-reference-image",
+              imageName: "uploaded-story-style.png",
+            },
+          ],
+          mode: "ipadapter",
+          name: "Story style reference",
+          prompt: "soft watercolor anime rendering, clean pencil linework, pastel highlights",
+          weight: 0.45,
+          startPercent: 0,
+          endPercent: 1,
+        },
+      ],
+    });
+    expect(validateRequest).toHaveBeenCalledWith(expect.objectContaining({
+      characterReferences: expect.any(Array),
     }));
   });
 

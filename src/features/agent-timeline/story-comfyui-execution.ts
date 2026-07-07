@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 
 import {
+  buildComfyUiSequenceCharacterReference,
   createComfyUiClient,
   createComfyUiTextToImagePreviewRequest,
   extractComfyUiHistoryImages,
@@ -21,6 +22,7 @@ import {
   sanitizeComfyUiViewImageReference,
   storeGeneratedImage,
 } from "@/features/comfyui/generated-image-storage";
+import { uploadSequenceCharacterReferences } from "@/features/comfyui/sequence-reference-upload";
 
 import type {
   StoryShotExecutionAdapter,
@@ -28,6 +30,9 @@ import type {
   StoryShotResultImageReference,
   StoryShotResultReference,
 } from "./story-execution";
+import {
+  buildStoryStyleReferenceSequenceCharacter,
+} from "./story-style-palette";
 
 const DEFAULT_COMFYUI_BASE_URL = "http://127.0.0.1:8188";
 const DEFAULT_HISTORY_POLL_INTERVAL_MS = 2000;
@@ -37,6 +42,7 @@ const DEFAULT_HISTORY_POLL_ATTEMPTS = Math.ceil(
 );
 
 type StoreGeneratedImage = typeof storeGeneratedImage;
+type UploadSequenceReferences = typeof uploadSequenceCharacterReferences;
 type FetchImage = (url: string) => Promise<{
   bytes: Uint8Array;
   contentType: string | null;
@@ -60,6 +66,7 @@ export type StoryComfyUiExecutionAdapterOptions = {
   historyPollIntervalMs?: number;
   now?: () => string;
   storeImage?: StoreGeneratedImage;
+  uploadSequenceReferences?: UploadSequenceReferences;
   validateObjectInfo?: (
     request: ComfyUiTextToImageRequest,
     objectInfo: unknown,
@@ -326,6 +333,47 @@ async function applySourceShotInputs({
   };
 }
 
+async function applyStoryStyleReferenceInput({
+  client,
+  request,
+  sequenceId,
+  styleReference,
+  uploadSequenceReferences,
+}: {
+  client: StoryComfyUiExecutionClient;
+  request: ComfyUiTextToImageRequest;
+  sequenceId: string;
+  styleReference: Parameters<typeof buildStoryStyleReferenceSequenceCharacter>[0];
+  uploadSequenceReferences: UploadSequenceReferences;
+}): Promise<ComfyUiTextToImageRequest> {
+  const character = buildStoryStyleReferenceSequenceCharacter(styleReference);
+  if (!character) {
+    return request;
+  }
+
+  const [uploadedCharacter] = await uploadSequenceReferences(client, sequenceId, [character]);
+  if (!uploadedCharacter) {
+    return request;
+  }
+
+  const characterReference = buildComfyUiSequenceCharacterReference(
+    uploadedCharacter,
+    uploadedCharacter.references.map((reference) => ({
+      id: reference.id,
+      imageName: reference.imageName,
+      weight: reference.weight,
+    })),
+  );
+
+  return {
+    ...request,
+    characterReferences: [
+      ...(request.characterReferences ?? []),
+      characterReference,
+    ],
+  };
+}
+
 async function waitForCompleteHistory({
   client,
   intervalMs,
@@ -397,10 +445,11 @@ export function createStoryComfyUiExecutionAdapter(
   const historyPollIntervalMs = options.historyPollIntervalMs ?? DEFAULT_HISTORY_POLL_INTERVAL_MS;
   const now = options.now ?? (() => new Date().toISOString());
   const storeImage = options.storeImage ?? storeGeneratedImage;
+  const uploadSequenceReferences = options.uploadSequenceReferences ?? uploadSequenceCharacterReferences;
   const validateObjectInfo = options.validateObjectInfo ?? validateComfyUiRequestAgainstObjectInfo;
   const validateRequest = options.validateRequest ?? validateComfyUiTextToImageRequest;
 
-  return async ({ request, sourceResults }) => {
+  return async ({ batch, request, sourceResults }) => {
     const validation = validateRequest(request.request);
     if (!validation.ok) {
       throw new StoryComfyUiExecutionError(validation.message, validation.details);
@@ -416,14 +465,21 @@ export function createStoryComfyUiExecutionAdapter(
       sourceResults,
       sourceShotIds: request.sourceShotIds,
     });
-    const sourceValidation = generationRequest === validation.request
+    const referenceRequest = await applyStoryStyleReferenceInput({
+      client,
+      request: generationRequest,
+      sequenceId: batch.storyId,
+      styleReference: request.styleReference,
+      uploadSequenceReferences,
+    });
+    const requestValidation = referenceRequest === validation.request
       ? validation
-      : validateRequest(generationRequest);
-    if (!sourceValidation.ok) {
-      throw new StoryComfyUiExecutionError(sourceValidation.message, sourceValidation.details);
+      : validateRequest(referenceRequest);
+    if (!requestValidation.ok) {
+      throw new StoryComfyUiExecutionError(requestValidation.message, requestValidation.details);
     }
     const objectInfo = await client.getObjectInfo();
-    const objectValidation = validateObjectInfo(sourceValidation.request, objectInfo);
+    const objectValidation = validateObjectInfo(requestValidation.request, objectInfo);
 
     if (objectValidation.errors.length > 0) {
       throw new StoryComfyUiExecutionError("ComfyUI request does not match the current ComfyUI model/node options.", {

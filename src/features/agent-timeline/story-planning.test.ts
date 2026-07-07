@@ -185,6 +185,64 @@ function createAnimaResourcePlan() {
   });
 }
 
+function createUnsupportedResourcePlan() {
+  const checkpoint: StoryLocalResource = {
+    id: "checkpoint-unsupported",
+    name: "Unsupported Checkpoint",
+    baseModel: "Pony",
+    modelFileName: "pony.safetensors",
+  };
+
+  return createStoryResourcePlan({
+    storyId,
+    candidates: {
+      checkpoints: [{ resource: checkpoint }],
+      loras: [],
+    },
+    recommendation: {
+      checkpoint: {
+        resource: checkpoint,
+        reason: "Local unsupported checkpoint.",
+      },
+      loras: [],
+      recommendationReason: "Use local unsupported resources.",
+      overallEffect: "Prompt-only storyboard panels.",
+      warnings: [],
+    },
+  });
+}
+
+const readyStyleReference = {
+  status: "ready",
+  mode: "ipadapter",
+  metadata: {
+    byteLength: 1234,
+    contentType: "image/png",
+    filename: "story-style.png",
+    storedFilename: "0123456789abcdef0123456789abcdef.png",
+    uploadedAt: "2026-06-14T00:00:00.000Z",
+    url: "/api/comfyui/sequence-references/0123456789abcdef0123456789abcdef.png",
+  },
+  analysis: {
+    analyzedAt: "2026-06-14T00:00:01.000Z",
+    model: "vision-model",
+    summary: "Soft watercolor anime rendering with pastel highlights.",
+    stylePrompt: "soft watercolor anime rendering, clean pencil linework, pastel highlights",
+  },
+  ipAdapter: {
+    weight: 0.45,
+    startPercent: 0,
+    endPercent: 1,
+  },
+  settingsSnapshot: {
+    capturedAt: "2026-06-14T00:00:02.000Z",
+    checkpointBaseModel: "Illustrious",
+    checkpointId: "checkpoint-local",
+    modeReason: "Illustrious base models support the sequence-style IPAdapter reference.",
+    promptProfile: "illustrious",
+  },
+} as const;
+
 function animaParts(overrides: Partial<ReturnType<typeof normalizeStoryAnimaPromptParts>>) {
   return normalizeStoryAnimaPromptParts(overrides);
 }
@@ -2011,6 +2069,93 @@ describe("story planning", () => {
     expect(firstRequest?.positivePrompt).toBe("manual edited anima prompt, anima_style");
     expect(firstRequest?.negativePrompt).toContain("manual edited negative");
     expect(firstRequest?.negativePrompt).toContain("worst quality");
+  });
+
+  it("merges the global Story style prompt into every final execution request", () => {
+    const resourcePlan = createResourcePlan();
+    const stylePrompt = "wide shot, soft watercolor anime rendering, clean pencil linework, pastel highlights";
+    const styleReference = {
+      ...readyStyleReference,
+      analysis: {
+        ...readyStyleReference.analysis,
+        stylePrompt,
+      },
+    };
+    const renderPlan = assembleStoryRenderPlan({
+      parameterPlan: createStoryParameterPlan({ storyId, defaults }),
+      resourcePlan,
+      safetyPlan,
+      shots,
+      styleReference,
+    });
+    const finalBatch = createStoryExecutionRequestBatch({ mode: "final", renderPlan, resourcePlan });
+
+    expect(renderPlan.styleReference).toMatchObject({
+      mode: "ipadapter",
+      metadata: {
+        storedFilename: "0123456789abcdef0123456789abcdef.png",
+      },
+      analysis: {
+        stylePrompt,
+      },
+    });
+    for (const shot of renderPlan.shots) {
+      expect(shot.positivePrompt).toContain("soft watercolor anime rendering");
+      expect(shot.positivePrompt).toContain("clean pencil linework");
+      expect(shot.positivePrompt.endsWith(`, ${stylePrompt}`)).toBe(true);
+    }
+    for (const request of finalBatch.requests) {
+      expect(request.request.positivePrompt).toContain("soft watercolor anime rendering");
+      expect(request.request.positivePrompt.match(/soft watercolor anime rendering/g) ?? []).toHaveLength(1);
+      expect(request.request.positivePrompt.endsWith(`, ${stylePrompt}`)).toBe(true);
+      expect(request.styleReference).toMatchObject({
+        mode: "ipadapter",
+        ipAdapter: {
+          weight: 0.45,
+          startPercent: 0,
+          endPercent: 1,
+        },
+      });
+    }
+    expect(JSON.stringify(finalBatch)).not.toContain("data:image");
+  });
+
+  it("keeps Anima and unsupported checkpoints prompt-only for Story style references", () => {
+    const animaResourcePlan = createAnimaResourcePlan();
+    const animaRenderPlan = assembleStoryRenderPlan({
+      parameterPlan: createStoryParameterPlan({ storyId, defaults }),
+      promptProfile: "anima",
+      resourcePlan: animaResourcePlan,
+      safetyPlan,
+      shots,
+      styleReference: readyStyleReference,
+    });
+    const animaBatch = createStoryExecutionRequestBatch({
+      mode: "final",
+      renderPlan: animaRenderPlan,
+      resourcePlan: animaResourcePlan,
+    });
+    const unsupportedResourcePlan = createUnsupportedResourcePlan();
+    const unsupportedRenderPlan = assembleStoryRenderPlan({
+      parameterPlan: createStoryParameterPlan({ storyId, defaults }),
+      promptProfile: "illustrious",
+      resourcePlan: unsupportedResourcePlan,
+      safetyPlan,
+      shots,
+      styleReference: readyStyleReference,
+    });
+    const unsupportedBatch = createStoryExecutionRequestBatch({
+      mode: "final",
+      renderPlan: unsupportedRenderPlan,
+      resourcePlan: unsupportedResourcePlan,
+    });
+
+    expect(animaBatch.requests[0]?.request.positivePrompt).toContain("soft watercolor anime rendering");
+    expect(animaBatch.requests[0]?.styleReference).toBeUndefined();
+    expect(animaBatch.requests[0]?.request.characterReferences).toBeUndefined();
+    expect(unsupportedBatch.requests[0]?.request.positivePrompt).toContain("soft watercolor anime rendering");
+    expect(unsupportedBatch.requests[0]?.styleReference).toBeUndefined();
+    expect(unsupportedBatch.requests[0]?.request.characterReferences).toBeUndefined();
   });
 
   it("tolerates legacy render plans that still carry per-shot resource objects", () => {

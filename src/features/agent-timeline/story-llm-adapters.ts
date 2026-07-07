@@ -36,6 +36,9 @@ import {
   type TimelineSamplerOptions,
 } from "./timeline-sampler-options";
 import {
+  getStoryStyleReferenceAiContext,
+  getStoryStyleReferenceBlockingIssue,
+  getStoryStyleReferenceFromSettingsSnapshot,
   sanitizeStoryStylePaletteSnapshot,
   type StoryStylePaletteLoraSnapshot,
   type StoryStylePaletteSnapshot,
@@ -265,12 +268,20 @@ function getStoryInput(workflow: StoryWorkflowState) {
 }
 
 function getStoryInputForAiPayload(input: StoryInput): StoryInput {
-  if (!isRecord(input.settingsSnapshot) || !("detailers" in input.settingsSnapshot)) {
+  if (!isRecord(input.settingsSnapshot) || (!("detailers" in input.settingsSnapshot) && !("styleReference" in input.settingsSnapshot))) {
     return input;
   }
 
   const settingsSnapshot = { ...input.settingsSnapshot };
   delete settingsSnapshot.detailers;
+  const styleReferenceContext = getStoryStyleReferenceAiContext(
+    getStoryStyleReferenceFromSettingsSnapshot(input.settingsSnapshot),
+  );
+  if (styleReferenceContext) {
+    settingsSnapshot.styleReference = styleReferenceContext;
+  } else {
+    delete settingsSnapshot.styleReference;
+  }
 
   return {
     ...input,
@@ -1028,6 +1039,10 @@ function getStoryStylePalette(input: StoryInput): StoryStylePaletteSnapshot | un
   return sanitizeStoryStylePaletteSnapshot(settingsSnapshot.stylePalette);
 }
 
+function getStoryStyleReference(input: StoryInput) {
+  return getStoryStyleReferenceFromSettingsSnapshot(input.settingsSnapshot);
+}
+
 function getEnabledStoryStyleLoras(stylePalette: StoryStylePaletteSnapshot | undefined) {
   return stylePalette?.loras.filter((lora) => lora.enabled) ?? [];
 }
@@ -1353,19 +1368,21 @@ export function createStoryRenderPlanFromWorkflow(
   workflow: StoryWorkflowState,
   samplerOptions?: TimelineSamplerOptions,
 ): StoryRenderPlan {
+  const input = getStoryInput(workflow);
   const shots = syncStoryShotsWithDependencyGraph(getShots(workflow), getDependencyGraph(workflow), {
     allowHighRiskSourceEdges: shouldAllowHighRiskSourceEdges(workflow),
   });
 
   return assembleStoryRenderPlan({
-    detailers: getStoryInputDetailers(getStoryInput(workflow)),
-    img2imgDenoise: getStoryInputImg2ImgDenoise(getStoryInput(workflow)),
+    detailers: getStoryInputDetailers(input),
+    img2imgDenoise: getStoryInputImg2ImgDenoise(input),
     parameterPlan: getParameterPlan(workflow),
-    promptProfile: getStoryPromptProfile(getStoryInput(workflow)),
+    promptProfile: getStoryPromptProfile(input),
     resourcePlan: getResourcePlan(workflow),
     samplerOptions,
     safetyPlan: getSafetyPlan(workflow),
     shots,
+    styleReference: getStoryStyleReference(input),
   });
 }
 
@@ -1422,6 +1439,16 @@ export function createStoryConsistencyCheckFromWorkflow(
         shotIds: [shot.shotId],
       });
     }
+  }
+
+  const styleReferenceIssue = getStoryStyleReferenceBlockingIssue(getStoryStyleReference(input));
+  if (styleReferenceIssue) {
+    issues.push({
+      code: "style-reference-invalid",
+      message: styleReferenceIssue,
+      severity: "error",
+      shotIds: [],
+    });
   }
 
   if (!isStoryResourcePlanExecutable(resourcePlan)) {
@@ -1915,6 +1942,7 @@ export function createStoryLlmNodeAdapters({
         samplerOptions,
         safetyPlan: getSafetyPlan(context.workflow),
         shots,
+        styleReference: getStoryStyleReference(input),
       });
     },
   })(completeChat);

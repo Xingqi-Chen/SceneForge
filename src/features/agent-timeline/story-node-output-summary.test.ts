@@ -30,6 +30,35 @@ const resourceCandidates = {
     },
   ],
 };
+const readyStyleReference = {
+  status: "ready",
+  mode: "ipadapter",
+  metadata: {
+    byteLength: 1234,
+    contentType: "image/png",
+    filename: "story-style.png",
+    storedFilename: "0123456789abcdef0123456789abcdef.png",
+    uploadedAt: "2026-06-14T00:00:00.000Z",
+    url: "/api/comfyui/sequence-references/0123456789abcdef0123456789abcdef.png",
+  },
+  analysis: {
+    analyzedAt: "2026-06-14T00:00:01.000Z",
+    summary: "Soft watercolor anime rendering with pastel highlights.",
+    stylePrompt: "soft watercolor anime rendering, clean pencil linework, pastel highlights",
+  },
+  ipAdapter: {
+    weight: 0.45,
+    startPercent: 0,
+    endPercent: 1,
+  },
+  settingsSnapshot: {
+    capturedAt: "2026-06-14T00:00:02.000Z",
+    checkpointBaseModel: "Illustrious",
+    checkpointId: "checkpoint-local",
+    modeReason: "Illustrious base models support the sequence-style IPAdapter reference.",
+    promptProfile: "illustrious",
+  },
+} as const;
 
 describe("story node output summaries", () => {
   it("creates stable compact summaries for every Story workflow node", () => {
@@ -42,6 +71,7 @@ describe("story node output summaries", () => {
       settingsSnapshot: {
         promptProfile: "illustrious",
         resourceCandidates,
+        styleReference: readyStyleReference,
       },
     });
 
@@ -55,6 +85,20 @@ describe("story node output summaries", () => {
     expect(createStoryNodeOutputSummary("story-input", workflow.nodes["story-input"].result)).toMatchObject({
       metrics: expect.arrayContaining([
         { label: "Resources", value: "1 checkpoints, 1 LoRAs" },
+        { label: "Style reference", value: "IPAdapter" },
+      ]),
+      sections: expect.arrayContaining([
+        expect.objectContaining({
+          title: "Style reference",
+          fields: expect.arrayContaining([
+            { label: "Mode", value: "IPAdapter" },
+            { label: "Image", value: "story-style.png" },
+            {
+              label: "Style prompt",
+              value: "soft watercolor anime rendering, clean pencil linework, pastel highlights",
+            },
+          ]),
+        }),
       ]),
     });
     const dependencySummary = createStoryNodeOutputSummary(

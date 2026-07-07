@@ -15,14 +15,15 @@ import {
 } from "@/features/comfyui";
 import {
   ComfyUiSequenceReferenceStorageError,
-  getSequenceReferenceContentType,
-  readSequenceReferenceImage,
 } from "@/features/comfyui/sequence-reference-storage";
+import {
+  sanitizeSequenceUploadFilenamePart,
+  uploadSequenceCharacterReferences,
+  type UploadedSequenceCharacter,
+} from "@/features/comfyui/sequence-reference-upload";
 import type {
   ComfyUiCharacterReferenceConfig,
   ComfyUiClient,
-  ComfyUiSequenceCharacter,
-  ComfyUiSequenceReferenceImage,
   ComfyUiSequenceShot,
   ComfyUiTextToImageRequest,
 } from "@/features/comfyui";
@@ -31,17 +32,6 @@ export const runtime = "nodejs";
 
 const DEFAULT_COMFYUI_BASE_URL = "http://127.0.0.1:8188";
 const RANDOM_SEED_UPPER_BOUND = 2 ** 50;
-
-type UploadedSequenceReferenceImage = {
-  id: string;
-  imageName: string;
-  weight?: number;
-};
-
-type UploadedSequenceCharacter = Omit<ComfyUiSequenceCharacter, "id" | "references"> & {
-  id: string;
-  references: UploadedSequenceReferenceImage[];
-};
 
 function errorResponse(message: string, status: number, details?: unknown) {
   return NextResponse.json(
@@ -68,29 +58,8 @@ function createRandomSeed() {
   return Math.floor(Math.random() * (RANDOM_SEED_UPPER_BOUND + 1));
 }
 
-function sanitizeFilenamePart(value: string) {
-  return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48) || "image";
-}
-
 function joinPrompt(parts: Array<string | undefined>) {
   return parts.map((part) => part?.trim()).filter(Boolean).join(", ");
-}
-
-function parseImageDataUrl(value: string) {
-  const match = /^data:(image\/(?:png|jpe?g|webp));base64,([A-Za-z0-9+/=]+)$/.exec(value.trim());
-
-  if (!match) {
-    throw new Error("Reference images must be PNG, JPEG, or WEBP data URLs.");
-  }
-
-  const mimeType = match[1] === "image/jpg" ? "image/jpeg" : match[1];
-  const extension = mimeType === "image/jpeg" ? "jpg" : mimeType.replace("image/", "");
-
-  return {
-    bytes: Buffer.from(match[2], "base64"),
-    extension,
-    mimeType,
-  };
 }
 
 function parsePngDataUrl(value: string) {
@@ -101,100 +70,6 @@ function parsePngDataUrl(value: string) {
   }
 
   return Buffer.from(match[1], "base64");
-}
-
-async function uploadReferenceImage({
-  character,
-  client,
-  image,
-  imageIndex,
-  sequenceId,
-}: {
-  character: ComfyUiSequenceCharacter;
-  client: ComfyUiClient;
-  image: ComfyUiSequenceReferenceImage;
-  imageIndex: number;
-  sequenceId: string;
-}): Promise<UploadedSequenceReferenceImage> {
-  const id = image.id ?? `${character.id ?? sanitizeFilenamePart(character.name)}-reference-${imageIndex + 1}`;
-
-  if (image.imageName) {
-    return {
-      id,
-      imageName: image.imageName,
-      ...(typeof image.weight === "number" ? { weight: image.weight } : {}),
-    };
-  }
-
-  if (image.storedFilename) {
-    const stored = await readSequenceReferenceImage(image.storedFilename);
-    const extension = image.storedFilename.split(".").pop() ?? "png";
-    const uploaded = await client.uploadImage({
-      filename: `sceneforge-sequence-${sanitizeFilenamePart(sequenceId)}-${sanitizeFilenamePart(character.name)}-${imageIndex + 1}.${extension}`,
-      bytes: stored.bytes,
-      mimeType: stored.contentType || getSequenceReferenceContentType(image.storedFilename),
-      overwrite: true,
-      type: "input",
-    });
-
-    return {
-      id,
-      imageName: uploaded.imageName,
-      ...(typeof image.weight === "number" ? { weight: image.weight } : {}),
-    };
-  }
-
-  const dataUrl = image.imageDataUrl;
-  if (!dataUrl) {
-    throw new Error(`Character "${character.name}" reference ${imageIndex + 1} did not include an image.`);
-  }
-
-  const parsed = parseImageDataUrl(dataUrl);
-  const uploaded = await client.uploadImage({
-    filename: `sceneforge-sequence-${sanitizeFilenamePart(sequenceId)}-${sanitizeFilenamePart(character.name)}-${imageIndex + 1}.${parsed.extension}`,
-    bytes: parsed.bytes,
-    mimeType: parsed.mimeType,
-    overwrite: true,
-    type: "input",
-  });
-
-  return {
-    id,
-    imageName: uploaded.imageName,
-    ...(typeof image.weight === "number" ? { weight: image.weight } : {}),
-  };
-}
-
-async function uploadCharacterReferences(
-  client: ComfyUiClient,
-  sequenceId: string,
-  characters: ComfyUiSequenceCharacter[],
-): Promise<UploadedSequenceCharacter[]> {
-  return Promise.all(
-    characters.map(async (character, characterIndex) => {
-      const id = character.id ?? `character-${characterIndex + 1}`;
-      const references = await Promise.all(
-        character.references.map((image, imageIndex) =>
-          uploadReferenceImage({
-            character: {
-              ...character,
-              id,
-            },
-            client,
-            image,
-            imageIndex,
-            sequenceId,
-          }),
-        ),
-      );
-
-      return {
-        ...character,
-        id,
-        references,
-      };
-    }),
-  );
 }
 
 async function uploadControlNetImages(
@@ -217,7 +92,7 @@ async function uploadControlNetImages(
         ? parsePngDataUrl(controlNet.imageDataUrl)
         : await sharp(Buffer.from(controlNet.svg ?? "")).png().toBuffer();
       const uploaded = await client.uploadImage({
-        filename: `sceneforge-sequence-${sanitizeFilenamePart(sequenceId)}-${sanitizeFilenamePart(shotId)}-${controlNet.type}.png`,
+        filename: `sceneforge-sequence-${sanitizeSequenceUploadFilenamePart(sequenceId)}-${sanitizeSequenceUploadFilenamePart(shotId)}-${controlNet.type}.png`,
         bytes: png,
         mimeType: "image/png",
         overwrite: true,
@@ -367,12 +242,12 @@ export async function POST(request: Request) {
       apiKey: process.env.COMFYUI_API_KEY || undefined,
     });
     const objectInfo = await client.getObjectInfo();
-    const globalCharacters = await uploadCharacterReferences(client, sequenceId, sequence.characters);
+    const globalCharacters = await uploadSequenceCharacterReferences(client, sequenceId, sequence.characters);
     const preparedShots = [];
 
     for (const [shotIndex, shot] of sequence.shots.entries()) {
       const shotCharacters = shot.characters
-        ? await uploadCharacterReferences(client, sequenceId, shot.characters)
+        ? await uploadSequenceCharacterReferences(client, sequenceId, shot.characters)
         : globalCharacters;
       const unknownCharacterIds = getUnknownShotCharacterIds(shotCharacters, shot);
       if (unknownCharacterIds.length > 0) {

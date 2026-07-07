@@ -10,6 +10,7 @@ const ENV_KEYS = [
   "LITELLM_POSE_MODEL",
   "LITELLM_COMFYUI_DIAGNOSIS_MODEL",
   "LITELLM_CLASSIFICATION_MODEL",
+  "LITELLM_VISION_MODEL",
 ] as const;
 
 describe("LLM chat route model selection", () => {
@@ -22,6 +23,7 @@ describe("LLM chat route model selection", () => {
     process.env.LITELLM_POSE_MODEL = "pose-model";
     process.env.LITELLM_COMFYUI_DIAGNOSIS_MODEL = "diagnosis-model";
     process.env.LITELLM_CLASSIFICATION_MODEL = "classification-model";
+    process.env.LITELLM_VISION_MODEL = "vision-model";
   });
 
   afterEach(() => {
@@ -35,7 +37,7 @@ describe("LLM chat route model selection", () => {
     }
   });
 
-  it("uses the NSFW model for all AI request purposes when enabled", () => {
+  it("uses the NSFW model for ordinary AI request purposes when enabled", () => {
     expect(
       resolveDefaultModel({
         purpose: "scene-prompt-reverse",
@@ -122,5 +124,61 @@ describe("LLM chat route model selection", () => {
         messages: [{ role: "user", content: "Generate a prompt" }],
       }),
     ).toBe("explicit-model");
+  });
+
+  it("uses the vision model for Story style reference analysis", () => {
+    expect(
+      resolveDefaultModel({
+        purpose: "story-style-reference-analysis",
+        messages: [{ role: "user", content: "Analyze this style reference" }],
+      }),
+    ).toBe("vision-model");
+
+    delete process.env.LITELLM_VISION_MODEL;
+
+    expect(
+      resolveDefaultModel({
+        purpose: "story-style-reference-analysis",
+        messages: [{ role: "user", content: "Analyze this style reference" }],
+      }),
+    ).toBe("default-model");
+  });
+
+  it("keeps Story style reference analysis on a vision-capable model when NSFW is enabled", () => {
+    expect(
+      resolveDefaultModel({
+        purpose: "story-style-reference-analysis",
+        nsfw: true,
+        messages: [{ role: "user", content: "Analyze this style reference" }],
+      }),
+    ).toBe("vision-model");
+
+    expect(
+      resolveRequestModel({
+        purpose: "story-style-reference-analysis",
+        nsfw: true,
+        messages: [{ role: "user", content: "Analyze this style reference" }],
+      }),
+    ).toBe("vision-model");
+
+    expect(
+      resolveRequestModel({
+        model: "explicit-vision-model",
+        purpose: "story-style-reference-analysis",
+        nsfw: true,
+        messages: [{ role: "user", content: "Analyze this style reference" }],
+      }),
+    ).toBe("explicit-vision-model");
+  });
+
+  it("still routes ordinary NSFW requests to the NSFW model", () => {
+    expect(
+      resolveRequestModel({
+        model: "explicit-model",
+        purpose: "stable-diffusion-prompt-generation",
+        nsfw: true,
+        messages: [{ role: "user", content: "Generate a prompt" }],
+      }),
+    ).toBe("nsfw-model");
   });
 });

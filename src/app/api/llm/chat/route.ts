@@ -55,6 +55,10 @@ function resolvePurposeDefaultModel(payload: LlmChatRequest) {
     return process.env.LITELLM_DEFAULT_MODEL;
   }
 
+  if (payload.purpose === "story-style-reference-analysis") {
+    return process.env.LITELLM_VISION_MODEL || process.env.LITELLM_DEFAULT_MODEL;
+  }
+
   if (payload.purpose === "comic-sequence-storyboard") {
     return process.env.LITELLM_DEFAULT_MODEL;
   }
@@ -70,7 +74,15 @@ function resolvePurposeDefaultModel(payload: LlmChatRequest) {
   return process.env.LITELLM_DEFAULT_MODEL;
 }
 
+function isStoryStyleReferenceAnalysis(payload: LlmChatRequest) {
+  return payload.purpose === "story-style-reference-analysis";
+}
+
 export function resolveDefaultModel(payload: LlmChatRequest) {
+  if (isStoryStyleReferenceAnalysis(payload)) {
+    return resolvePurposeDefaultModel(payload);
+  }
+
   if (payload.nsfw === true) {
     return process.env.LITELLM_NSFW_MODEL || resolvePurposeDefaultModel(payload);
   }
@@ -80,6 +92,10 @@ export function resolveDefaultModel(payload: LlmChatRequest) {
 
 export function resolveRequestModel(payload: LlmChatRequest) {
   const defaultModel = resolveDefaultModel(payload);
+
+  if (isStoryStyleReferenceAnalysis(payload)) {
+    return payload.model ?? defaultModel;
+  }
 
   if (payload.nsfw === true && process.env.LITELLM_NSFW_MODEL) {
     return process.env.LITELLM_NSFW_MODEL;
