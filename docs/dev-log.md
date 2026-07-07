@@ -4,6 +4,14 @@ This log records dated implementation and documentation work. Keep entries conci
 
 ## 2026-07-07
 
+### Issue #122 Merge
+
+Summary:
+
+- Merged PR #123 for Story global style reference support.
+- Issue #122 was closed by the merge.
+- Updated the development tracker to mark T33 done.
+
 ### Issue #122 Reviewer Blocker Fixes
 
 Summary:
