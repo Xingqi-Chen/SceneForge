@@ -83,6 +83,32 @@ describe("common workflow definitions", () => {
     expect(areCommonWorkflowDependenciesSatisfied(refreshed, "join", dag)).toBe(false);
   });
 
+  it("does not auto-run errored nodes", () => {
+    const dag = buildCommonWorkflowDependencyDag(nodeIds, [
+      { from: "input", to: "branch-a" },
+    ]);
+    const nodes: CommonWorkflowNodeMap<TestNodeId> = {
+      ...createNodeMap(),
+      "branch-a": {
+        nodeId: "branch-a",
+        status: "error",
+        source: "system",
+        updatedAt: "2026-06-14T00:00:01.000Z",
+        error: {
+          code: "timeline_node_failed",
+          message: "Adapter failed.",
+        },
+      },
+    };
+
+    expect(canRunCommonWorkflowNode({
+      dag,
+      executableNodeIds: nodeIds,
+      nodeId: "branch-a",
+      nodes,
+    })).toBe(false);
+  });
+
   it("marks manual edits and downstream stale nodes while preserving unrelated branches", () => {
     const dag = buildCommonWorkflowDependencyDag(nodeIds, [
       { from: "input", to: "branch-a" },

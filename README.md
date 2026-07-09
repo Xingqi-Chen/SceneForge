@@ -114,7 +114,9 @@ Important environment variables are documented in `.env.example`.
 
 ## Privacy and Local Logs
 
-SceneForge is designed for local use. The LiteLLM route writes local request, response, and error records to `data/logs/llm-chat.jsonl` by default. These records can include scene prompts, user text, image data URLs, model responses, and diagnostic details. The log directory is ignored by git, but users should still treat it as private local data.
+SceneForge is designed for local use. LLM request, response, and error records are written to split local JSONL files under `data/logs/llm/<category>/<YYYY-MM-DD>.jsonl` by default. Current categories include `chat`, `civitai-enrichment`, `civitai-recommendation`, `story-planning`, and `misc`. Records keep full text prompts and model responses for diagnosis, while image data URLs are redacted before writing. The log directory is ignored by git, but users should still treat it as private local data.
+
+Split logs are pruned after 14 days by default. Set `SCENEFORGE_LLM_LOG_RETENTION_DAYS=off` to keep split logs until manually deleted, or set `SCENEFORGE_LLM_LOG_DIR` to move the split log root. Set `SCENEFORGE_LLM_LOG_DIR=off` to disable split local logging when `SCENEFORGE_LLM_LOG_FILE` is unset.
 
 To disable LLM local logging, set:
 
@@ -122,7 +124,7 @@ To disable LLM local logging, set:
 SCENEFORGE_LLM_LOG_FILE=off
 ```
 
-To clear existing logs, delete `data/logs/llm-chat.jsonl` or the custom file configured by `SCENEFORGE_LLM_LOG_FILE`.
+`SCENEFORGE_LLM_LOG_FILE` remains available as a legacy single-file override. When it is set to a file path, SceneForge writes only that file and skips split-log pruning. Existing `data/logs/llm-chat.jsonl` files are not migrated automatically; delete that file, the split log directory, or the custom file configured by `SCENEFORGE_LLM_LOG_FILE` to clear local logs.
 
 ## Third-Party Services and Content
 

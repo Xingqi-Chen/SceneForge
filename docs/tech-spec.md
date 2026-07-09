@@ -91,7 +91,7 @@ Route expectations:
 - Avoid leaking secrets or absolute local paths in responses unless explicitly needed for local file access.
 - Normalize external service errors into user-actionable responses.
 - Use configured storage roots and reject path traversal.
-- Preserve the `/api/llm/chat` logging, validation, and model-selection semantics when wrapping existing LLM calls for LangGraph nodes.
+- Preserve the `/api/llm/chat` logging, validation, and model-selection semantics when wrapping existing LLM calls for LangGraph nodes. Story Graph planning adapters should write local request, response, and error records with workflow id, story id, and node id context.
 
 ## LangGraph Timeline MVP Contract
 
@@ -353,7 +353,7 @@ Source of truth: `.env.example`.
 - LiteLLM: `LITELLM_BASE_URL`, `LITELLM_API_KEY`, `LITELLM_DEFAULT_MODEL`, `LITELLM_NSFW_MODEL`, `LITELLM_VISION_MODEL`, `LITELLM_CLASSIFICATION_MODEL`, `LITELLM_CIVITAI_RECOMMENDATION_MODEL`, `LITELLM_CIVITAI_EMBEDDING_MODEL`, `LITELLM_COMFYUI_DIAGNOSIS_MODEL`. Requests marked `nsfw` use `LITELLM_NSFW_MODEL` if configured; Story style reference analysis uses the `story-style-reference-analysis` purpose and falls back to `LITELLM_VISION_MODEL`, then the default model, when no explicit model is provided; Civitai vector reindexing and semantic retrieval use the embedding model; timeline model-resource and render-parameter recommendation nodes keep their purpose-specific models.
 - Tavily: `TAVILY_API_KEY`, `TAVILY_BASE_URL`.
 - ComfyUI: `COMFYUI_BASE_URL`, `COMFYUI_API_KEY`, `COMFYUI_TEMP_DIR`.
-- SceneForge: `SCENEFORGE_SHOW_NSFW_BUTTON`, `SCENEFORGE_SQLITE_FILE`, `SCENEFORGE_PROJECTS_DIR`, `SCENEFORGE_GENERATED_IMAGES_DIR`, `SCENEFORGE_PROMPT_LIBRARY_FILE`.
+- SceneForge: `SCENEFORGE_SHOW_NSFW_BUTTON`, `SCENEFORGE_SQLITE_FILE`, `SCENEFORGE_PROJECTS_DIR`, `SCENEFORGE_GENERATED_IMAGES_DIR`, `SCENEFORGE_PROMPT_LIBRARY_FILE`, `SCENEFORGE_LLM_LOG_DIR`, `SCENEFORGE_LLM_LOG_RETENTION_DAYS`, `SCENEFORGE_LLM_LOG_FILE`.
 
 Rules:
 
@@ -375,7 +375,7 @@ Default runtime paths:
 - `data/comfyui-sequence-references/`: uploaded sequence reference images reused by editor sequence IPAdapter paths and Story global style references.
 - `data/civitai-lora-library/`: Civitai runtime cache and downloads.
 - `data/comfyui-generated-images/`: locally stored generated images.
-- `data/logs/`: local LLM interaction logs.
+- `data/logs/llm/<category>/<YYYY-MM-DD>.jsonl`: default split local LLM interaction logs. Supported categories include `chat`, `civitai-enrichment`, `civitai-recommendation`, `story-planning`, and `misc`. `SCENEFORGE_LLM_LOG_DIR` changes the split-log root and accepts `off` to disable split local logging when `SCENEFORGE_LLM_LOG_FILE` is unset. `SCENEFORGE_LLM_LOG_RETENTION_DAYS` defaults to `14` and accepts `off` to keep logs until manual deletion, and the legacy `SCENEFORGE_LLM_LOG_FILE` path writes one file instead of split logs. `SCENEFORGE_LLM_LOG_FILE=off` disables local LLM logging.
 
 Do not commit generated projects, logs, caches, databases, downloaded assets, or generated images.
 
