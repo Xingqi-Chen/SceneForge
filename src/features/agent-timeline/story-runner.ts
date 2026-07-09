@@ -179,6 +179,7 @@ export async function runStoryPlanning(
       } catch (error) {
         workflow = failStoryNode(workflow, nodeId, error, { now });
         options.onWorkflowUpdate?.(workflow, nodeId);
+        return refreshStoryWorkflowReadiness(workflow);
       }
     }
   }

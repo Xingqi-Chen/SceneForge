@@ -2,6 +2,23 @@
 
 This log records dated implementation and documentation work. Keep entries concise and evidence-oriented.
 
+## 2026-07-09
+
+### Issue #125 Reviewer Blocker Fixes
+
+Summary:
+
+- Stopped Story planning immediately after the first node failure so ready sibling nodes in the same planning layer are not run after an error.
+- Added regression coverage for a `story-safety-plan` failure while shot dependency, plot state, and character continuity nodes are already ready.
+- Passed `LiteLlmError` status code and details into Story planning error logs and documented `SCENEFORGE_LLM_LOG_DIR=off` for split local LLM logging.
+
+Validation:
+
+- `npm test -- src/features/agent-timeline/story-runner.test.ts src/features/llm/llm-local-log.test.ts src/features/agent-timeline/workflow-definition.test.ts` passed with 3 files and 19 tests.
+- `npm run typecheck` passed.
+- `npm run lint` passed with 23 existing warnings.
+- `npm test` passed with 123 files and 1015 tests.
+
 ## 2026-07-07
 
 ### Issue #122 Merge

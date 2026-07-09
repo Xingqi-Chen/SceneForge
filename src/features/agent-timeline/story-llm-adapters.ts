@@ -1,4 +1,5 @@
 import { isLlmChatResponse, LiteLlmError, type LlmChatRequest, type LlmChatResponse } from "@/features/llm";
+import { appendLlmChatLocalLog, createLlmLocalLogRequestId } from "@/features/llm/llm-local-log";
 import { formatSelectedCivitaiResourcesForAi } from "@/features/editor/ai-prompt/civitai-ai-context";
 
 import {
@@ -121,6 +122,7 @@ const storyNsfwModelExcludedNodeIds = new Set<StoryWorkflowNodeId>([
   "resource-plan",
   "parameter-plan",
 ]);
+const storyPlanningLogRoute = "agent-timeline/story-planning";
 const fallbackParameters = {
   width: 1024,
   height: 768,
@@ -1555,6 +1557,62 @@ function applyStoryNsfwModelOverride(
   };
 }
 
+async function completeStoryChatWithLocalLog({
+  completeChat,
+  context,
+  request,
+}: {
+  completeChat: StoryCompleteChat;
+  context: StoryNodeExecutionContext;
+  request: LlmChatRequest;
+}) {
+  const requestId = createLlmLocalLogRequestId();
+  const logContext = {
+    workflowId: context.workflow.workflowId,
+    storyId: context.workflow.storyId,
+    nodeId: context.nodeId,
+  };
+
+  await appendLlmChatLocalLog({
+    category: "story-planning",
+    context: logContext,
+    phase: "request",
+    request,
+    requestId,
+    route: storyPlanningLogRoute,
+  });
+
+  try {
+    const completion = await completeChat(request);
+
+    await appendLlmChatLocalLog({
+      category: "story-planning",
+      completion,
+      context: logContext,
+      phase: "response",
+      requestId,
+      route: storyPlanningLogRoute,
+    });
+
+    return completion;
+  } catch (error) {
+    const liteLlmError = error instanceof LiteLlmError ? error : null;
+
+    await appendLlmChatLocalLog({
+      category: "story-planning",
+      context: logContext,
+      details: liteLlmError?.details,
+      error,
+      phase: "error",
+      requestId,
+      route: storyPlanningLogRoute,
+      statusCode: liteLlmError?.statusCode,
+    });
+
+    throw error;
+  }
+}
+
 function createLlmStoryNodeAdapter<T>({
   buildRequest,
   parseResponse,
@@ -1564,7 +1622,12 @@ function createLlmStoryNodeAdapter<T>({
 }): (completeChat: StoryCompleteChat) => StoryNodeAdapter<T> {
   return (completeChat) => async (context) => {
     try {
-      const response = await completeChat(applyStoryNsfwModelOverride(buildRequest(context), context.nodeId));
+      const request = applyStoryNsfwModelOverride(buildRequest(context), context.nodeId);
+      const response = await completeStoryChatWithLocalLog({
+        completeChat,
+        context,
+        request,
+      });
 
       if (!isLlmChatResponse(response) || response.content.trim().length === 0) {
         throw malformedResponse("LLM response did not include usable text content.", { response });
@@ -1626,7 +1689,7 @@ export function createStoryLlmNodeAdapters({
       return makeJsonRequest({
         input: aiInput,
         instruction:
-          'Create a typed StoryBible with concrete visual anchors. Treat storySegments as the visual sequence and storyContext as global continuity, not as an extra shot. Create characters only for people or creatures explicitly present in the user story or storySegments; do not invent visible supporting people from implied locations or occupations. Character descriptions must include visible role/age range, silhouette, clothing, key prop, and emotional baseline when inferable. Location descriptions must include visible set pieces, materials, color accents, and recurring background anchors. visualStyle must describe renderable camera/lighting/color style, not abstract theme. Required shape: {"title":"","logline":"","genre":[""],"themes":[""],"worldSummary":"","visualStyle":"","characters":[{"id":"","name":"","role":"","description":"","continuityNotes":[""],"visualAnchors":[""]}],"locations":[{"id":"","name":"","description":"","visualAnchors":[""]}],"continuityRules":[""]}.',
+          'Create a typed StoryBible with concrete visual anchors. Treat storySegments as the visual sequence and storyContext as global continuity, not as an extra shot. Create characters only for people or creatures explicitly present in the user story or storySegments; do not invent visible supporting people from implied locations or occupations. Character descriptions must include visible role/age range, silhouette, hair color/style, exact wardrobe colors, garment materials, fit, pattern or trim when useful, footwear, key accessories, key prop, and emotional baseline when inferable. If the user gives generic clothing such as "shirt", "skirt", "jacket", or "dress" without color/material/pattern, choose concrete stable visible details and keep them consistent. Never contradict explicit user-provided clothing, colors, or wardrobe changes. Location descriptions must include visible set pieces, materials, color accents, and recurring background anchors. visualStyle must describe renderable camera/lighting/color style, not abstract theme. Required shape: {"title":"","logline":"","genre":[""],"themes":[""],"worldSummary":"","visualStyle":"","characters":[{"id":"","name":"","role":"","description":"","continuityNotes":[""],"visualAnchors":[""]}],"locations":[{"id":"","name":"","description":"","visualAnchors":[""]}],"continuityRules":[""]}.',
         payload: {
           input: aiInput,
           storyContext: input.storyContext ?? "",
@@ -1677,7 +1740,7 @@ export function createStoryLlmNodeAdapters({
           bible: getBible(context.workflow),
           outline: getOutline(context.workflow),
         },
-        maxTokens: 1800,
+        maxTokens: 8000,
       });
     },
     parseResponse: (response, context) => normalizeStoryShots(
@@ -1804,7 +1867,7 @@ export function createStoryLlmNodeAdapters({
         };
       }
 
-      const response = await completeChat(makeJsonRequest({
+      const request = makeJsonRequest({
         input: aiInput,
         instruction:
           'Choose resources only from the supplied checkpoint and LoRA candidate ids. Do not invent ids. Candidates are ordered by BM25/embedding recommendation rank when recommendationRank and recommendationScore are present; treat higher-ranked candidates as stronger evidence, but still use metadata and story context to choose the best compatible combination. Use checkpoint and LoRA names, descriptions, tags, categories, trainedWords, usageGuide, observed weight ranges, common pairings, and parameter recommendations to choose LoRA suggestedWeight values and explain tradeoffs. Do not output or recommend FaceDetailer, HandDetailer, detailers, faceDetailer, or handDetailer fields; those are controlled only by Story input checkboxes. Do not apply generic local caps by style, lighting, or resource type; if metadata conflicts, choose a finite sane weight from the selected resource evidence and explain it in reason or warnings. Required shape: {"checkpoint":{"resource":{"id":""},"reason":""},"loras":[{"resource":{"id":""},"suggestedWeight":0.7,"reason":""}],"recommendationReason":"","overallEffect":"","warnings":[""]}.',
@@ -1817,7 +1880,12 @@ export function createStoryLlmNodeAdapters({
           candidates: buildResourceCandidatePayload(candidates),
         },
         maxTokens: 900,
-      }));
+      });
+      const response = await completeStoryChatWithLocalLog({
+        completeChat,
+        context,
+        request,
+      });
 
       if (!isLlmChatResponse(response) || response.content.trim().length === 0) {
         throw malformedResponse("LLM response did not include usable text content.", { response });

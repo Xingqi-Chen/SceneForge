@@ -162,7 +162,7 @@ export type CommonWorkflowDagValidationIssue<TNodeId extends string = string> = 
 };
 
 const completeDependencyStatuses = new Set<CommonWorkflowNodeStatus>(["done", "manual"]);
-const runnableNodeStatuses = new Set<CommonWorkflowNodeStatus>(["ready", "stale", "error"]);
+const runnableNodeStatuses = new Set<CommonWorkflowNodeStatus>(["ready", "stale"]);
 
 export function buildCommonWorkflowDependencyDag<TNodeId extends string>(
   nodeIds: readonly TNodeId[],
