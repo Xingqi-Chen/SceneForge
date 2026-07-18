@@ -2517,16 +2517,17 @@ export function TimelineShell() {
     );
 
     return (
-      <div className="grid gap-3 border-t border-slate-200 bg-white p-3 lg:grid-cols-2">
+      <div className="grid items-start gap-3 border-t border-slate-200 bg-white p-3 lg:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)] xl:grid-cols-2">
         <GenerationDetailerSettingsEditor
           detailers={detailers}
           disabled={isRunning}
           idPrefix="run"
+          layout="compact"
           onChange={handleDetailersChange}
         />
-        <section className="rounded-md border border-indigo-100 bg-indigo-50/40 p-3">
-          <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
-            <div>
+        <section className="self-start rounded-md border border-indigo-100 bg-indigo-50/40 p-3">
+          <div className="mb-3 grid gap-3 border-b border-indigo-100 pb-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-start">
+            <div className="min-w-0">
               <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-600">
                 Style resources / parameters
               </h3>
@@ -2544,6 +2545,7 @@ export function TimelineShell() {
               type="button"
               variant="secondary"
             >
+              <SlidersHorizontal className="size-3.5" />
               Parameters
             </Button>
           </div>
@@ -2560,6 +2562,7 @@ export function TimelineShell() {
             readyOnly
             selectedCheckpointId={selectedStyleCheckpointId}
             selectedLoraIds={selectedStyleLoraIds}
+            summaryDensity="compact"
           />
           {savedStyleParameters ? (
             <p className="mt-2 rounded-md border border-emerald-100 bg-white px-3 py-2 text-xs leading-relaxed text-emerald-700">

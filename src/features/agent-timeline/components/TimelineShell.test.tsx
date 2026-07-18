@@ -1623,6 +1623,15 @@ describe("TimelineShell", () => {
       expect(parametersButton.disabled).toBe(true);
       expect(faceDetailer?.checked).toBe(false);
       expect(handDetailer?.checked).toBe(false);
+      const detailerFieldset = faceDetailer?.closest("fieldset");
+      const emptyResourceSummary = Array.from(container.querySelectorAll("p")).find(
+        (paragraph) => paragraph.textContent?.trim() === "No Civitai resources selected.",
+      )?.parentElement;
+      expect(detailerFieldset?.className).toContain("content-start");
+      expect(detailerFieldset?.className).toContain("md:grid-cols-2");
+      expect(emptyResourceSummary?.className).toContain("space-y-1.5");
+      expect(emptyResourceSummary?.className).toContain("p-2");
+      expect(parametersButton.textContent?.replace(/\s+/g, " ").trim()).toBe("Parameters");
       expect(container.textContent).toContain("Style resources / parameters");
       expect(container.textContent).toContain("Without saved parameters, Run keeps automatic parameter advice.");
       expect(settingsLink?.textContent).toContain("Settings");
@@ -1717,6 +1726,13 @@ describe("TimelineShell", () => {
       expect(getButtonByText("Parameters").disabled).toBe(true);
       expect((container.querySelector("#run-face-detailer-enabled") as HTMLInputElement | null)?.checked).toBe(false);
       expect((container.querySelector("#run-hand-detailer-enabled") as HTMLInputElement | null)?.checked).toBe(false);
+      const simpleDetailerFieldset = container.querySelector("#run-face-detailer-enabled")?.closest("fieldset");
+      const simpleEmptyResourceSummary = Array.from(container.querySelectorAll("p")).find(
+        (paragraph) => paragraph.textContent?.trim() === "No Civitai resources selected.",
+      )?.parentElement;
+      expect(simpleDetailerFieldset?.className).toContain("md:grid-cols-2");
+      expect(simpleEmptyResourceSummary?.className).toContain("space-y-1.5");
+      expect(simpleEmptyResourceSummary?.className).toContain("p-2");
       expect(container.textContent).toContain("Style resources / parameters");
       expect(container.querySelector(".sf-agent-workbench__nav")).toBeNull();
       expect(container.querySelector(".sf-agent-workbench__inspector")).toBeNull();

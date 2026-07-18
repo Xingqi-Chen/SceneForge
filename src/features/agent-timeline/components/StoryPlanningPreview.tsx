@@ -975,6 +975,7 @@ function StoryDetailerControls({
 }
 
 function StoryDetailerPanel({
+  compact,
   detailer,
   idPrefix,
   kind,
@@ -982,6 +983,7 @@ function StoryDetailerPanel({
   onChange,
   onEdit,
 }: {
+  compact: boolean;
   detailer: StoryDetailerConfig;
   idPrefix: string;
   kind: StoryDetailerKind;
@@ -994,7 +996,14 @@ function StoryDetailerPanel({
   } as Partial<StoryDetailerSettingsSnapshot>)[kind] as Required<StoryDetailerConfig>;
 
   return (
-    <div className="flex flex-col gap-3 rounded-md border border-slate-200 bg-white p-3 sm:flex-row sm:items-center sm:justify-between">
+    <div
+      className={cn(
+        "rounded-md border border-slate-200 bg-white",
+        compact
+          ? "grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 px-3 py-2"
+          : "flex flex-col gap-3 p-3 sm:flex-row sm:items-center sm:justify-between",
+      )}
+    >
       <label className="flex min-w-0 items-start gap-2 text-xs font-semibold text-slate-800">
         <input
           checked={resolved.enabled}
@@ -1011,7 +1020,10 @@ function StoryDetailerPanel({
         </span>
       </label>
       <button
-        className="inline-flex h-8 shrink-0 items-center justify-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50"
+        className={cn(
+          "inline-flex shrink-0 items-center justify-center gap-2 rounded-md border border-slate-200 bg-white text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50",
+          compact ? "h-7 px-2.5" : "h-8 px-3",
+        )}
         data-testid={`${idPrefix}-settings`}
         onClick={onEdit}
         type="button"
@@ -1100,14 +1112,17 @@ export function GenerationDetailerSettingsEditor({
   detailers,
   disabled = false,
   idPrefix = "story",
+  layout = "default",
   onChange,
 }: {
   detailers: StoryDetailerSettingsSnapshot;
   disabled?: boolean;
   idPrefix?: string;
+  layout?: "default" | "compact";
   onChange: (detailers: StoryDetailerSettingsSnapshot) => void;
 }) {
   const [editingDetailer, setEditingDetailer] = useState<StoryDetailerKind | null>(null);
+  const compact = layout === "compact";
 
   function patchDetailer(kind: StoryDetailerKind, patch: StoryDetailerPatch) {
     if (disabled) {
@@ -1127,11 +1142,17 @@ export function GenerationDetailerSettingsEditor({
 
   return (
     <fieldset
-      className="grid gap-3 rounded-md border border-slate-200 bg-slate-50 p-3 disabled:cursor-not-allowed disabled:opacity-60"
+      className={cn(
+        "grid rounded-md border border-slate-200 bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60",
+        compact
+          ? "content-start gap-2 p-3 md:grid-cols-2 lg:grid-cols-1 2xl:grid-cols-2"
+          : "gap-3 p-3",
+      )}
       disabled={disabled}
     >
       <legend className="px-1 text-xs font-semibold uppercase tracking-wide text-slate-600">Detailers</legend>
       <StoryDetailerPanel
+        compact={compact}
         detailer={detailers.faceDetailer}
         idPrefix={`${idPrefix}-face-detailer`}
         kind="faceDetailer"
@@ -1144,6 +1165,7 @@ export function GenerationDetailerSettingsEditor({
         }}
       />
       <StoryDetailerPanel
+        compact={compact}
         detailer={detailers.handDetailer}
         idPrefix={`${idPrefix}-hand-detailer`}
         kind="handDetailer"

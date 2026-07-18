@@ -42,3 +42,16 @@
 - Verify txt2img output counts 1-4, img2img single-output behavior, Settings navigation, reload, and named workflow restore against a live ComfyUI instance.
 - Enable each detailer with installed detector models and verify actionable `object_info` errors for missing samplers, schedulers, custom nodes, or detector models.
 - In a live browser, attempt resource, parameter, and Detailer edits during slow LLM and ComfyUI calls and confirm the controls remain locked until the active run finishes.
+
+## Single-image input layout refinement
+
+- Result: PASS (2026-07-18).
+- Added regression coverage proving the shared simple and detailed Run branches both receive the compact Detailer layout and compact selected-resource summary.
+- Covered compact Detailer responsive columns, content-start alignment, checkbox updates, disabled-state guards, and settings-dialog opening while preserving Story's default density.
+- Covered compact/default Civitai summary density, accessible remove and picker controls, checkpoint selection, ready-only filtering, and removal callbacks.
+- Confirmed the Parameters action remains checkpoint-gated and retains the accessible `Parameters` name.
+- Targeted Vitest: PASS - 4 files, 80 tests.
+- `npm run typecheck`: PASS.
+- `npm run lint`: PASS with 23 pre-existing warnings and 0 errors.
+- `git diff --check`: PASS (line-ending conversion notices only).
+- Browser evidence supplied by the implementation pass: no horizontal overflow at 1707, 1280, 1024, 768, or 390 px; visuals checked at 1707, 1024, and 390 px. Form/Detailer heights were 629/93 px at 1707, 629/153 px at 1280, 604.5/153 px at 1024, 690/93 px at 768, and 897/153 px at 390 (improved from 684/402 px at 1707 and 1017/261 px at 390).
