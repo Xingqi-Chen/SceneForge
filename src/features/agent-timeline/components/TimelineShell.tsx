@@ -264,15 +264,17 @@ const stepDisplay: Record<TimelineNodeId, StepDisplay> = {
 };
 
 const timelineHeaderClassName =
-  "grid min-h-14 shrink-0 grid-cols-1 items-center gap-3 border-b border-slate-200 bg-white px-3 py-2 sm:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] sm:px-4";
-const timelineHeaderPrimaryClassName = "flex min-w-0 items-center gap-3";
+  "grid min-h-14 shrink-0 grid-cols-1 items-center gap-2 border-b border-slate-200 bg-white px-3 py-2 sm:grid-cols-[minmax(0,1fr)_auto] sm:gap-x-3 sm:px-4 xl:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] xl:gap-x-4";
+const timelineHeaderPrimaryClassName =
+  "flex min-w-0 items-center gap-3 sm:col-start-1 sm:row-start-1 xl:col-start-1";
 const timelineHeaderIdentityClassName =
-  "flex min-w-0 max-w-[min(38rem,50vw)] items-center gap-3";
-const timelineHeaderProjectClassName = "flex min-w-0 justify-center";
+  "flex min-w-0 flex-1 items-center gap-3";
+const timelineHeaderProjectClassName =
+  "flex min-w-0 justify-center sm:col-span-2 sm:col-start-1 sm:row-start-2 xl:col-span-1 xl:col-start-2 xl:row-start-1";
 const timelineHeaderContextClassName =
-  "hidden h-9 min-w-0 max-w-[28rem] grid-cols-[auto_minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 text-xs text-slate-600 xl:grid";
+  "hidden h-9 min-w-0 max-w-72 shrink-0 items-center gap-2 whitespace-nowrap rounded-md border border-slate-200 bg-slate-50 px-3 text-xs text-slate-600 2xl:flex";
 const timelineHeaderActionsClassName =
-  "flex min-w-0 flex-wrap items-center justify-start gap-2 sm:justify-end sm:flex-nowrap";
+  "flex min-w-0 flex-wrap items-center justify-start gap-2 sm:col-start-2 sm:row-start-1 sm:flex-nowrap sm:justify-end xl:col-start-3";
 const timelineHeaderNavClassName =
   "flex h-9 shrink-0 items-center gap-1 rounded-md border border-slate-200 bg-slate-50 p-1";
 const timelineHeaderNavCurrentClassName =
@@ -2780,9 +2782,11 @@ export function TimelineShell() {
               <div className="flex size-8 shrink-0 items-center justify-center rounded-md border border-slate-200 bg-slate-50 text-slate-700">
                 <Workflow className="size-4" />
               </div>
-              <div className="min-w-0">
+              <div className="min-w-0 flex-1">
                 <h1 className="text-sm font-bold text-slate-900">SceneForge</h1>
-                <p className="break-words text-[11px] text-slate-500">{workflowTitle}</p>
+                <p className="truncate text-[11px] text-slate-500" title={workflowTitle}>
+                  {workflowTitle}
+                </p>
               </div>
             </div>
           </div>
@@ -2805,17 +2809,17 @@ export function TimelineShell() {
               New scene
             </Button>
             <nav aria-label="Workspace mode" className={timelineHeaderNavClassName}>
-              <span aria-current="page" className={cn(timelineHeaderNavCurrentClassName, "bg-white")}>
+              <span aria-current="page" aria-label="Run" className={cn(timelineHeaderNavCurrentClassName, "bg-white")}>
                 <Workflow className="size-3.5" />
-                <span className="hidden sm:inline">Run</span>
+                <span className="hidden lg:inline">Run</span>
               </span>
               <Link aria-label="Open Story Graph planning" className={timelineHeaderNavLinkClassName} href="/story" title="Open Story Graph planning">
                 <GitBranch className="size-3.5" />
-                <span className="hidden sm:inline">Story</span>
+                <span className="hidden lg:inline">Story</span>
               </Link>
               <Link aria-label="Open settings" className={timelineHeaderNavLinkClassName} href="/settings" title="Open settings">
                 <Settings className="size-3.5" />
-                <span className="hidden sm:inline">Settings</span>
+                <span className="hidden lg:inline">Settings</span>
               </Link>
             </nav>
           </div>
@@ -2928,16 +2932,20 @@ export function TimelineShell() {
             <div className="flex size-8 shrink-0 items-center justify-center rounded-md border border-slate-200 bg-slate-50 text-slate-700">
               <Workflow className="size-4" />
             </div>
-            <div className="min-w-0">
+            <div className="min-w-0 flex-1">
               <h1 className="text-sm font-bold text-slate-900">SceneForge</h1>
-              <p className="break-words text-[11px] text-slate-500">{workflowTitle}</p>
+              <p className="truncate text-[11px] text-slate-500" title={workflowTitle}>
+                {workflowTitle}
+              </p>
             </div>
           </div>
           <div className={timelineHeaderContextClassName}>
-            <CircleDot className="size-3.5 text-blue-600" />
-            <span className="break-words text-right">{workflowMode}</span>
-            <span className="text-slate-300">/</span>
-            <span className="break-words">{selectedContent.title}</span>
+            <CircleDot className="size-3.5 shrink-0 text-blue-600" />
+            <span className="shrink-0">{workflowMode}</span>
+            <span className="shrink-0 text-slate-300">/</span>
+            <span className="min-w-0 truncate" title={selectedContent.title}>
+              {selectedContent.title}
+            </span>
           </div>
         </div>
         <div className={timelineHeaderProjectClassName}>
@@ -2968,17 +2976,17 @@ export function TimelineShell() {
             {workflow ? "Run node" : "Start"}
           </Button>
           <nav aria-label="Workspace mode" className={timelineHeaderNavClassName}>
-            <span aria-current="page" className={cn(timelineHeaderNavCurrentClassName, "bg-white")}>
+            <span aria-current="page" aria-label="Run" className={cn(timelineHeaderNavCurrentClassName, "bg-white")}>
               <Workflow className="size-3.5" />
-              <span className="hidden sm:inline">Run</span>
+              <span className="hidden lg:inline">Run</span>
             </span>
             <Link aria-label="Open Story Graph planning" className={timelineHeaderNavLinkClassName} href="/story" title="Open Story Graph planning">
               <GitBranch className="size-3.5" />
-              <span className="hidden sm:inline">Story</span>
+              <span className="hidden lg:inline">Story</span>
             </Link>
             <Link aria-label="Open settings" className={timelineHeaderNavLinkClassName} href="/settings" title="Open settings">
               <Settings className="size-3.5" />
-              <span className="hidden sm:inline">Settings</span>
+              <span className="hidden lg:inline">Settings</span>
             </Link>
           </nav>
         </div>

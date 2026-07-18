@@ -793,6 +793,82 @@ afterEach(() => {
 });
 
 describe("TimelineShell", () => {
+  it.each(["simple", "detailed"] as const)(
+    "keeps the %s header compact without losing long titles or navigation labels",
+    async (displayMode) => {
+      const originalFetch = globalThis.fetch;
+      const longName =
+        "A determined silver-haired courier balancing on a rooftop above a luminous city at sunset";
+      const workflow = createTimelineWorkflowState({
+        workflowId: `timeline-responsive-header-${displayMode}`,
+        sceneRequest: longName,
+        now: () => "2026-07-18T00:00:00.000Z",
+      });
+      const activeRecord = createTimelineWorkflowRecord({
+        projectId: `workflow-responsive-header-${displayMode}`,
+        name: longName,
+        workflow,
+        sceneRequest: longName,
+        selectedPromptProfile: "illustrious",
+        selectedImageCount: 1,
+        selectedNodeId: "scene-input",
+      });
+
+      globalThis.fetch = vi.fn<typeof fetch>(async (input) => {
+        const url = getFetchUrl(input);
+
+        if (url === "/api/settings") {
+          return createTimelineSettingsResponse({ displayMode });
+        }
+
+        if (url === "/api/agent-timeline/active-workflow") {
+          return createJsonResponse(activeRecord);
+        }
+
+        return createJsonResponse({ role: "assistant", content: "{}" });
+      });
+
+      try {
+        act(() => {
+          root.render(<TimelineShell />);
+        });
+        await flushAsyncWork();
+
+        const header = container.querySelector("header");
+        const workflowTitle = header?.querySelector(`p[title="${longName}"]`);
+        const workspaceNav = header?.querySelector('nav[aria-label="Workspace mode"]');
+        const currentWorkspace = workspaceNav?.querySelector('[aria-current="page"]');
+        const storyLink = workspaceNav?.querySelector('a[href="/story"]');
+        const settingsLink = workspaceNav?.querySelector('a[href="/settings"]');
+
+        expect(header?.className).toContain("sm:grid-cols-[minmax(0,1fr)_auto]");
+        expect(header?.className).toContain("xl:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]");
+        expect(workflowTitle?.textContent).toBe(longName);
+        expect(workflowTitle?.className).toContain("truncate");
+        expect(currentWorkspace?.getAttribute("aria-label")).toBe("Run");
+        expect(storyLink?.getAttribute("aria-label")).toBe("Open Story Graph planning");
+        expect(settingsLink?.getAttribute("aria-label")).toBe("Open settings");
+        expect(currentWorkspace?.querySelector("span")?.className).toContain("hidden");
+        expect(storyLink?.querySelector("span")?.className).toContain("hidden");
+        expect(settingsLink?.querySelector("span")?.className).toContain("hidden");
+
+        if (displayMode === "detailed") {
+          const context = header?.querySelector('[title="Scene input"]')?.parentElement;
+
+          expect(context?.className).toContain("whitespace-nowrap");
+          expect(context?.className).toContain("2xl:flex");
+          expect(context?.className).not.toContain("xl:grid");
+        }
+      } finally {
+        act(() => {
+          root.unmount();
+          rootIsMounted = false;
+        });
+        globalThis.fetch = originalFetch;
+      }
+    },
+  );
+
   it("restores and autosaves the active workflow record", async () => {
     vi.useFakeTimers();
     const originalFetch = globalThis.fetch;

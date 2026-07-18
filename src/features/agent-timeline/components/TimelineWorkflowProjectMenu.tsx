@@ -214,7 +214,7 @@ export function TimelineWorkflowProjectMenu({
   }
 
   return (
-    <div className="relative flex w-[min(14rem,42vw)] shrink-0 items-center gap-2 sm:w-56">
+    <div className="relative flex w-full max-w-56 shrink-0 items-center gap-2 sm:w-56">
       <Button
         aria-expanded={open}
         aria-haspopup="listbox"
@@ -226,7 +226,9 @@ export function TimelineWorkflowProjectMenu({
         variant="secondary"
       >
         <FolderOpen className="size-3.5 shrink-0 text-slate-500" />
-        <span className="break-words text-left text-xs font-medium text-slate-800">{displayName}</span>
+        <span className="min-w-0 flex-1 truncate text-left text-xs font-medium text-slate-800" title={displayName}>
+          {displayName}
+        </span>
         <ChevronDown className={cn("size-3.5 shrink-0 text-slate-400 transition-transform", open && "rotate-180")} />
       </Button>
 
