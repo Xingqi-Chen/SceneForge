@@ -1118,11 +1118,12 @@ export function GenerationDetailerSettingsEditor({
   detailers: StoryDetailerSettingsSnapshot;
   disabled?: boolean;
   idPrefix?: string;
-  layout?: "default" | "compact";
+  layout?: "default" | "compact" | "compact-strip";
   onChange: (detailers: StoryDetailerSettingsSnapshot) => void;
 }) {
   const [editingDetailer, setEditingDetailer] = useState<StoryDetailerKind | null>(null);
-  const compact = layout === "compact";
+  const compact = layout !== "default";
+  const embeddedStrip = layout === "compact-strip";
 
   function patchDetailer(kind: StoryDetailerKind, patch: StoryDetailerPatch) {
     if (disabled) {
@@ -1143,10 +1144,12 @@ export function GenerationDetailerSettingsEditor({
   return (
     <fieldset
       className={cn(
-        "grid rounded-md border border-slate-200 bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60",
-        compact
-          ? "content-start gap-2 p-3 md:grid-cols-2 lg:grid-cols-1 2xl:grid-cols-2"
-          : "gap-3 p-3",
+        "grid disabled:cursor-not-allowed disabled:opacity-60",
+        embeddedStrip
+          ? "content-start gap-2 md:grid-cols-2"
+          : compact
+            ? "content-start gap-2 rounded-md border border-slate-200 bg-slate-50 p-3 md:grid-cols-2 lg:grid-cols-1 2xl:grid-cols-2"
+            : "gap-3 rounded-md border border-slate-200 bg-slate-50 p-3",
       )}
       disabled={disabled}
     >

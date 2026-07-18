@@ -2517,15 +2517,8 @@ export function TimelineShell() {
     );
 
     return (
-      <div className="grid items-start gap-3 border-t border-slate-200 bg-white p-3 lg:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)] xl:grid-cols-2">
-        <GenerationDetailerSettingsEditor
-          detailers={detailers}
-          disabled={isRunning}
-          idPrefix="run"
-          layout="compact"
-          onChange={handleDetailersChange}
-        />
-        <section className="self-start rounded-md border border-indigo-100 bg-indigo-50/40 p-3">
+      <div className="border-t border-slate-200 bg-white p-3">
+        <section className="rounded-md border border-indigo-100 bg-indigo-50/40 p-3">
           <div className="mb-3 grid gap-3 border-b border-indigo-100 pb-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-start">
             <div className="min-w-0">
               <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-600">
@@ -2563,6 +2556,7 @@ export function TimelineShell() {
             selectedCheckpointId={selectedStyleCheckpointId}
             selectedLoraIds={selectedStyleLoraIds}
             summaryDensity="compact"
+            summaryLayout="run-grid"
           />
           {savedStyleParameters ? (
             <p className="mt-2 rounded-md border border-emerald-100 bg-white px-3 py-2 text-xs leading-relaxed text-emerald-700">
@@ -2578,6 +2572,15 @@ export function TimelineShell() {
               Without saved parameters, Run keeps automatic parameter advice.
             </p>
           )}
+          <div className="mt-3 border-t border-indigo-100 pt-3">
+            <GenerationDetailerSettingsEditor
+              detailers={detailers}
+              disabled={isRunning}
+              idPrefix="run"
+              layout="compact-strip"
+              onChange={handleDetailersChange}
+            />
+          </div>
           <ComfyUiGenerationDialog
             activePrompt={sceneRequest || "Run generation parameter preview"}
             advice={styleAdvice.result}

@@ -1624,11 +1624,16 @@ describe("TimelineShell", () => {
       expect(faceDetailer?.checked).toBe(false);
       expect(handDetailer?.checked).toBe(false);
       const detailerFieldset = faceDetailer?.closest("fieldset");
+      const generationSetup = Array.from(container.querySelectorAll("section")).find((section) =>
+        section.querySelector("h3")?.textContent?.includes("Style resources / parameters"),
+      );
       const emptyResourceSummary = Array.from(container.querySelectorAll("p")).find(
         (paragraph) => paragraph.textContent?.trim() === "No Civitai resources selected.",
       )?.parentElement;
       expect(detailerFieldset?.className).toContain("content-start");
       expect(detailerFieldset?.className).toContain("md:grid-cols-2");
+      expect(detailerFieldset?.className).not.toContain("rounded-md");
+      expect(generationSetup?.contains(detailerFieldset ?? null)).toBe(true);
       expect(emptyResourceSummary?.className).toContain("space-y-1.5");
       expect(emptyResourceSummary?.className).toContain("p-2");
       expect(parametersButton.textContent?.replace(/\s+/g, " ").trim()).toBe("Parameters");
@@ -1727,10 +1732,15 @@ describe("TimelineShell", () => {
       expect((container.querySelector("#run-face-detailer-enabled") as HTMLInputElement | null)?.checked).toBe(false);
       expect((container.querySelector("#run-hand-detailer-enabled") as HTMLInputElement | null)?.checked).toBe(false);
       const simpleDetailerFieldset = container.querySelector("#run-face-detailer-enabled")?.closest("fieldset");
+      const simpleGenerationSetup = Array.from(container.querySelectorAll("section")).find((section) =>
+        section.querySelector("h3")?.textContent?.includes("Style resources / parameters"),
+      );
       const simpleEmptyResourceSummary = Array.from(container.querySelectorAll("p")).find(
         (paragraph) => paragraph.textContent?.trim() === "No Civitai resources selected.",
       )?.parentElement;
       expect(simpleDetailerFieldset?.className).toContain("md:grid-cols-2");
+      expect(simpleDetailerFieldset?.className).not.toContain("rounded-md");
+      expect(simpleGenerationSetup?.contains(simpleDetailerFieldset ?? null)).toBe(true);
       expect(simpleEmptyResourceSummary?.className).toContain("space-y-1.5");
       expect(simpleEmptyResourceSummary?.className).toContain("p-2");
       expect(container.textContent).toContain("Style resources / parameters");

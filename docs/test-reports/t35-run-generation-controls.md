@@ -55,3 +55,18 @@
 - `npm run lint`: PASS with 23 pre-existing warnings and 0 errors.
 - `git diff --check`: PASS (line-ending conversion notices only).
 - Browser evidence supplied by the implementation pass: no horizontal overflow at 1707, 1280, 1024, 768, or 390 px; visuals checked at 1707, 1024, and 390 px. Form/Detailer heights were 629/93 px at 1707, 629/153 px at 1280, 604.5/153 px at 1024, 690/93 px at 768, and 897/153 px at 390 (improved from 684/402 px at 1707 and 1017/261 px at 390).
+
+## Single-image generation setup refinement v2
+
+- Result: PASS (2026-07-18).
+- Verified simple and detailed Run modes share the same single-card hierarchy, with the embedded Detailer strip inside Style resources / parameters.
+- Added compact-strip coverage for mobile-first one-column behavior, the `md` two-column breakpoint, compact controls, interaction/dialog preservation, and the absence of duplicated container chrome.
+- Added Run-only selected-resource grid coverage for checkpoint-first ordering, one-column-to-`xl` two-column responsiveness, unconstrained vertical overflow, and checkpoint removal behavior.
+- Added reverse assertions proving the default compact selector keeps its constrained stacked summary and the default Story Detailer editor retains its existing density and disabled behavior.
+- Existing tests continue to cover the Parameters checkpoint gate, ready-only selection, selection/removal callbacks, and running-state disabling.
+- Targeted Vitest: PASS - 3 files, 64 tests.
+- `npm run typecheck`: PASS.
+- `npm run lint`: PASS with 23 pre-existing warnings and 0 errors.
+- `npm test`: PASS - 125 files, 1038 tests.
+- Browser evidence supplied by the Orchestrator: no horizontal overflow at 1707, 1280, 768, or 390 px.
+- Residual manual QA: verify the live breakpoint transitions and resource-card wrapping with unusually long names/localized labels; live ComfyUI generation remains outside this layout-only test pass.

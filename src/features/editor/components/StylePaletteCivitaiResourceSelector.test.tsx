@@ -145,11 +145,15 @@ describe("StylePaletteCivitaiResourceSelector", () => {
     const loraRemove = container.querySelector(
       '[aria-label="Remove LoRA Ready Detail LoRA"]',
     ) as HTMLButtonElement | null;
+    const defaultSummary = checkpointRemove?.parentElement?.parentElement;
 
     expect(checkpointRemove?.parentElement?.className).toContain("min-h-9");
     expect(checkpointRemove?.parentElement?.className).toContain("grid-cols-[28px_minmax(0,1fr)_28px]");
     expect(checkpointRemove?.className).toContain("size-6");
     expect(loraRemove).not.toBeNull();
+    expect(defaultSummary?.className).toContain("max-h-32");
+    expect(defaultSummary?.className).toContain("overflow-y-auto");
+    expect(defaultSummary?.className).not.toContain("xl:grid-cols-2");
 
     act(() => {
       loraRemove?.click();
@@ -179,6 +183,52 @@ describe("StylePaletteCivitaiResourceSelector", () => {
       "grid-cols-[32px_minmax(0,1fr)_32px]",
     );
     expect(defaultDensityCheckpointRemove?.className).toContain("size-7");
+  });
+
+  it("uses the opt-in Run summary grid without constraining resource overflow", async () => {
+    const selectedResources: SelectedCivitaiResourcesPreview = {
+      checkpoint,
+      loras: [lora],
+    };
+    const onSelectionChange = vi.fn();
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse(selectedResources)));
+
+    act(() => {
+      root.render(
+        <StylePaletteCivitaiResourceSelector
+          onSelectionChange={onSelectionChange}
+          pickerLayout="dialog"
+          selectedCheckpointId={checkpoint.id}
+          selectedLoraIds={[lora.id]}
+          summaryDensity="compact"
+          summaryLayout="run-grid"
+        />,
+      );
+    });
+    await flushTimer();
+
+    const removeButtons = Array.from(
+      container.querySelectorAll<HTMLButtonElement>('button[aria-label^="Remove "]'),
+    );
+    const summaryGrid = removeButtons[0]?.parentElement?.parentElement;
+
+    expect(removeButtons.map((button) => button.getAttribute("aria-label"))).toEqual([
+      "Remove checkpoint Ready Checkpoint",
+      "Remove LoRA Ready Detail LoRA",
+    ]);
+    expect(summaryGrid?.className).toContain("grid");
+    expect(summaryGrid?.className).toContain("grid-cols-1");
+    expect(summaryGrid?.className).toContain("xl:grid-cols-2");
+    expect(summaryGrid?.className).not.toContain("max-h-");
+    expect(summaryGrid?.className).not.toContain("overflow-y-auto");
+
+    act(() => {
+      removeButtons[0]?.click();
+    });
+    expect(onSelectionChange).toHaveBeenCalledWith({
+      checkpointId: null,
+      loraIds: [],
+    });
   });
 
   it("keeps checkpoint selection accessible in the compact dialog variant", async () => {

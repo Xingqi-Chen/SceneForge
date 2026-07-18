@@ -39,6 +39,7 @@ export type StylePaletteCivitaiResourceSelectorProps = {
   promptProfile?: PromptProfileId;
   readyOnly?: boolean;
   summaryDensity?: "default" | "compact";
+  summaryLayout?: "stack" | "run-grid";
 };
 
 const EMPTY_SELECTED_CIVITAI_RESOURCES: SelectedCivitaiResourcesPreview = {
@@ -370,6 +371,7 @@ export function StylePaletteCivitaiResourceSelector({
   selectedCheckpointId,
   selectedLoraIds,
   summaryDensity = "default",
+  summaryLayout = "stack",
 }: StylePaletteCivitaiResourceSelectorProps) {
   const [selectedResources, setSelectedResources] = useState<SelectedCivitaiResourcesPreview>(EMPTY_SELECTED_CIVITAI_RESOURCES);
   const [selectedCivitaiStatus, setSelectedCivitaiStatus] = useState<LoadStatus>("idle");
@@ -387,6 +389,7 @@ export function StylePaletteCivitaiResourceSelector({
   const selectedResourceCards = useMemo(() => selectedCivitaiResourceCards(selectedResources), [selectedResources]);
   const compactSelectedResources = pickerLayout === "dialog";
   const denseSelectedResources = compactSelectedResources && summaryDensity === "compact";
+  const runSummaryGrid = compactSelectedResources && summaryLayout === "run-grid";
   const selectedCheckpointBaseModel =
     selectedResources.checkpoint?.id === selectedCheckpointId ? (selectedResources.checkpoint.baseModel ?? null) : null;
   const loraPickerMissingBaseModel =
@@ -865,11 +868,13 @@ export function StylePaletteCivitaiResourceSelector({
           {selectedResourceCards.length > 0 ? (
             <div
               className={
-                denseSelectedResources
-                  ? "max-h-32 space-y-1 overflow-y-auto overscroll-contain pr-1"
-                  : compactSelectedResources
-                    ? "max-h-36 space-y-1.5 overflow-y-auto overscroll-contain pr-1"
-                    : "space-y-2"
+                runSummaryGrid
+                  ? "grid grid-cols-1 gap-1.5 xl:grid-cols-2"
+                  : denseSelectedResources
+                    ? "max-h-32 space-y-1 overflow-y-auto overscroll-contain pr-1"
+                    : compactSelectedResources
+                      ? "max-h-36 space-y-1.5 overflow-y-auto overscroll-contain pr-1"
+                      : "space-y-2"
               }
             >
               {selectedResourceCards.map((resource) => (
