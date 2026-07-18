@@ -14,6 +14,7 @@ import {
   serializeTimelineWorkflowRecord,
 } from "./timeline-workflow-persistence";
 import { startStoryGraphWorkflow } from "./story-input";
+import { sanitizeRunSceneInputSettingsSnapshot } from "./run-input-settings";
 
 const readyStyleReference = {
   status: "ready",
@@ -123,6 +124,133 @@ describe("timeline workflow persistence", () => {
           apiKey: "[redacted]",
         },
       },
+    });
+  });
+
+  it("round-trips Run resources, parameters, and detailers for active or named workflows", () => {
+    const workflow = createTimelineWorkflowState({
+      workflowId: "timeline-run-controls",
+      sceneRequest: "A styled greenhouse command deck",
+      promptProfile: "illustrious",
+      settingsSnapshot: sanitizeRunSceneInputSettingsSnapshot({
+        promptProfile: "illustrious",
+        stylePalette: {
+          checkpointId: "checkpoint-a",
+          loras: [
+            { id: "lora-a", enabled: true, strengthModel: 0.64, strengthClip: 0.43 },
+          ],
+          parameters: {
+            width: 960,
+            height: 1280,
+            steps: 38,
+            cfg: 5.75,
+            samplerName: "euler",
+            scheduler: "normal",
+            denoise: 0.84,
+            seed: 9876,
+          },
+        },
+        detailers: {
+          faceDetailer: {
+            enabled: true,
+            detectorModelName: "bbox/custom-face.pt",
+            steps: 18,
+            denoise: 0.42,
+          },
+          handDetailer: {
+            enabled: false,
+            detectorModelName: "bbox/custom-hand.pt",
+            steps: 21,
+          },
+        },
+      }),
+      now: () => "2026-07-18T00:00:00.000Z",
+    });
+    const serialized = serializeTimelineWorkflowRecord(createTimelineWorkflowRecord({
+      projectId: "named-run-controls",
+      name: "Named Run controls",
+      workflow,
+      sceneRequest: "A styled greenhouse command deck",
+      selectedPromptProfile: "illustrious",
+      selectedImageCount: 3,
+      selectedNodeId: "scene-input",
+    }));
+    const parsed = parseTimelineWorkflowRecordJson(serialized);
+
+    expect(parsed && isSingleImageTimelineWorkflowRecord(parsed)).toBe(true);
+    if (!parsed || !isSingleImageTimelineWorkflowRecord(parsed)) {
+      throw new Error("Expected a single-image timeline record.");
+    }
+
+    expect(parsed.projectId).toBe("named-run-controls");
+    expect(parsed.name).toBe("Named Run controls");
+    expect(parsed.workflow.nodes["scene-input"].result).toMatchObject({
+      settingsSnapshot: {
+        stylePalette: {
+          checkpointId: "checkpoint-a",
+          loras: [
+            { id: "lora-a", enabled: true, strengthModel: 0.64, strengthClip: 0.43 },
+          ],
+          parameters: {
+            width: 960,
+            height: 1280,
+            steps: 38,
+            cfg: 5.75,
+            samplerName: "euler",
+            scheduler: "normal",
+            denoise: 0.84,
+            seed: 9876,
+          },
+        },
+        detailers: {
+          faceDetailer: {
+            enabled: true,
+            detectorModelName: "bbox/custom-face.pt",
+            steps: 18,
+            denoise: 0.42,
+          },
+          handDetailer: {
+            enabled: false,
+            detectorModelName: "bbox/custom-hand.pt",
+            steps: 21,
+          },
+        },
+      },
+    });
+  });
+
+  it("restores legacy Run records with automatic resources and both detailers disabled", () => {
+    const workflow = createTimelineWorkflowState({
+      workflowId: "timeline-legacy-run-controls",
+      sceneRequest: "A legacy Run record",
+    });
+    const raw = JSON.parse(serializeTimelineWorkflowRecord(createTimelineWorkflowRecord({
+      workflow,
+      sceneRequest: "A legacy Run record",
+      selectedPromptProfile: "illustrious",
+      selectedImageCount: 1,
+      selectedNodeId: "scene-input",
+    }))) as {
+      workflow: { nodes: Record<string, { result?: { settingsSnapshot?: unknown } }> };
+    };
+    delete raw.workflow.nodes["scene-input"].result?.settingsSnapshot;
+
+    const restored = sanitizeTimelineWorkflowRecord(raw);
+    expect(restored && isSingleImageTimelineWorkflowRecord(restored)).toBe(true);
+    if (!restored || !isSingleImageTimelineWorkflowRecord(restored)) {
+      throw new Error("Expected a single-image timeline record.");
+    }
+
+    expect(restored.workflow.nodes["scene-input"].result).toMatchObject({
+      settingsSnapshot: {
+        detailers: {
+          faceDetailer: { enabled: false },
+          handDetailer: { enabled: false },
+        },
+      },
+    });
+    expect(restored.workflow.nodes["scene-input"].result).not.toMatchObject({
+      settingsSnapshot: { stylePalette: expect.anything() },
     });
   });
 

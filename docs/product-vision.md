@@ -14,11 +14,14 @@ The product direction is a visual semantic editor for AI image generation:
 
 ## MVP Direction
 
-The current MVP is a single-image, top-to-bottom timeline driven by LangGraph.
+The current MVP is a single-scene, top-to-bottom timeline driven by LangGraph. A text-to-image Run may produce 1-4 outputs for that scene; an img2img Run produces one output.
 
-The first screen contains only:
+The first screen contains:
 
 - A scene request input.
+- Optional ready local checkpoint and LoRA selection.
+- Optional saved generation parameters with user-triggered AI Style Advice.
+- Independent FaceDetailer and HandDetailer controls.
 - A start button.
 - A settings entry point.
 
@@ -52,9 +55,13 @@ Every timeline node must allow user intervention:
 - The 3D canvas can be manually dragged and adjusted.
 - Checkpoint and LoRA selections can be changed from a visible local candidate UI.
 - Generation parameters can be edited with the same style of controls used by the original ComfyUI configuration UI.
+- Explicit Run resources bypass AI resource recommendation; saved Run parameters bypass automatic parameter advice, while an unsaved parameter state preserves the automatic path.
+- FaceDetailer and HandDetailer are controlled only by the user and stay outside AI input.
 - Every node can ask AI for another suggestion based on user guidance.
 
 Manual intervention is not an escape hatch from the workflow. It is part of the workflow. When a user changes a node, dependent downstream nodes should regenerate and unrelated nodes should remain stable.
+
+Run Composer changes follow the same rule: resource edits stale from resource recommendation, while parameter and Detailer edits stale from parameter recommendation. All cancel any prior generation confirmation. Txt2img applies the selected settings to the full 1-4 output batch. Img2img forces one output, uses source dimensions, and lets source denoise override saved denoise.
 
 ## Orchestration Principle
 

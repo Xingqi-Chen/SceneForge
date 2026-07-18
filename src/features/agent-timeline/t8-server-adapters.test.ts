@@ -14,6 +14,31 @@ const comfyUiMocks = vi.hoisted(() => {
   }
 
   return {
+    COMFYUI_FACE_DETAILER_DEFAULTS: {
+      bboxCropFactor: 3,
+      bboxDilation: 10,
+      bboxThreshold: 0.5,
+      cycle: 1,
+      denoise: 0.5,
+      dropSize: 10,
+      feather: 5,
+      forceInpaint: true,
+      guideSize: 512,
+      guideSizeFor: true,
+      maxSize: 1024,
+      noiseMask: true,
+      samBBoxExpansion: 0,
+      samDetectionHint: "center-1",
+      samDilation: 0,
+      samMaskHintThreshold: 0.7,
+      samMaskHintUseNegative: "False",
+      samThreshold: 0.93,
+      wildcard: "",
+    },
+    COMFYUI_FACE_DETAILER_SAM_DETECTION_HINT_OPTIONS: [{ label: "center-1", value: "center-1" }],
+    COMFYUI_FACE_DETAILER_SAM_MASK_HINT_USE_NEGATIVE_OPTIONS: [{ label: "False", value: "False" }],
+    DEFAULT_COMFYUI_FACE_DETAILER_DETECTOR_MODEL: "bbox/face_yolov8m.pt",
+    DEFAULT_COMFYUI_HAND_DETAILER_DETECTOR_MODEL: "bbox/hand_yolov8s.pt",
     ComfyUiApiError: MockComfyUiApiError,
     createComfyUiClient: vi.fn(),
     extractComfyUiHistoryImages: vi.fn(),
@@ -206,9 +231,11 @@ describe("timeline T8 server adapters", () => {
       const workflow = confirmWorkflow(createGateReadyWorkflow());
       const result = await executeTimelineGraph(workflow, createTimelineT8ServerNodeAdapters());
 
-      expect(comfyUiMocks.validateComfyUiTextToImageRequest).toHaveBeenCalledWith({
+      expect(comfyUiMocks.validateComfyUiTextToImageRequest).toHaveBeenCalledWith(expect.objectContaining({
         batchSize: 1,
         checkpointName: "local.safetensors",
+        faceDetailer: expect.objectContaining({ enabled: false }),
+        handDetailer: expect.objectContaining({ enabled: false }),
         negativePrompt: "low detail",
         positivePrompt: "glass greenhouse pilot",
         preview: false,
@@ -217,7 +244,7 @@ describe("timeline T8 server adapters", () => {
         steps: 28,
         width: 1024,
         height: 1024,
-      });
+      }));
       expect(getObjectInfo).toHaveBeenCalledTimes(1);
       expect(comfyUiMocks.validateComfyUiRequestAgainstObjectInfo).toHaveBeenCalledWith(
         expect.objectContaining({

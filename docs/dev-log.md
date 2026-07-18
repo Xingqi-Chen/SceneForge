@@ -2,6 +2,27 @@
 
 This log records dated implementation and documentation work. Keep entries concise and evidence-oriented.
 
+## 2026-07-18
+
+### Issue #127 Run Generation Controls
+
+Summary:
+
+- Added typed, sanitized Run scene-input snapshots for explicit ready checkpoint/LoRA resources, saved generation parameters, and independent FaceDetailer/HandDetailer settings.
+- Reused workflow-neutral Story style-palette and Detailer contracts and the shared Detailer editor in the simple and detailed Run composers.
+- Added manual T7 resource/parameter branches that bypass their AI providers, targeted post-start stale propagation, restore support, img2img precedence, and authoritative Detailer overlays through preview and confirmed T8 requests.
+- Kept style references and IPAdapter out of scope for the separate T36 track.
+
+Validation:
+
+- Tester-agent Test Gate: `PASS`.
+- Targeted Vitest validation passed with 8 files and 101 tests.
+- `npm test` passed with 124 files and 1028 tests.
+- `npm run typecheck` passed.
+- `npm run lint` passed with 23 pre-existing warnings and 0 errors.
+- `npm run build` passed and generated 46 static pages.
+- Browser QA and live ComfyUI execution were not run; manual verification remains recommended.
+
 ## 2026-07-09
 
 ### Issue #125 Reviewer Blocker Fixes

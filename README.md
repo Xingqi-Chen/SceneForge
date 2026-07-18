@@ -2,7 +2,7 @@
 
 SceneForge is a local-first visual prompt workspace for AI image generation.
 
-The current MVP direction is a single-image, top-to-bottom timeline driven by LangGraph. Users enter one scene request, then review and edit scene prompt, character tags, 3D pose/canvas binding, checkpoint/LoRA selection, generation parameters, and the final ComfyUI generation gate.
+The current MVP direction is a single-scene, top-to-bottom Run timeline driven by LangGraph. Users enter one scene request, then review and edit scene prompt, character tags, 3D pose/canvas binding, checkpoint/LoRA selection, generation parameters, FaceDetailer, HandDetailer, and the final ComfyUI generation gate. A text-to-image Run can request 1-4 outputs from that one scene; an img2img Run remains one output.
 
 ## Screenshots
 
@@ -52,7 +52,7 @@ npm run build
 
 ## MVP Workflow
 
-The MVP starts with only a scene input, a start button, and a settings entry point. After the user submits the scene request, SceneForge expands a vertical timeline:
+The MVP starts with a Scene Composer, a start button, and a settings entry point. The Composer can optionally select ready local checkpoint/LoRA resources, save supported ComfyUI parameters with user-triggered AI Style Advice, configure independent FaceDetailer and HandDetailer settings, and attach an img2img source. After the user submits the scene request, SceneForge expands a vertical timeline:
 
 1. Scene prompt inference.
 2. Character tag inference.
@@ -65,6 +65,8 @@ The MVP starts with only a scene input, a start button, and a settings entry poi
 9. Result display.
 
 Every node exposes manual controls and an AI retry/suggestion action. User edits mark dependent downstream nodes stale and LangGraph regenerates only those dependent nodes. The timeline must stop before ComfyUI execution until the user explicitly clicks start image generation.
+
+Explicit Composer resources bypass the resource-recommendation provider. Saved Composer parameters require an explicit checkpoint and bypass automatic parameter advice; leaving parameters unsaved preserves the automatic path. Changing checkpoint or LoRAs clears saved parameters and prior Style Advice. After a Run starts, resource changes stale from resource recommendation, while parameter or Detailer changes stale from parameter recommendation; both cancel prior confirmation without discarding completed prompt, tag, pose, or canvas work. Detailers are user-controlled only and are never sent to AI planning. Text-to-image keeps the selected 1-4 output count. Img2img forces one output, uses source dimensions, and gives the Composer source denoise precedence over saved denoise while retaining other compatible saved parameters.
 
 The active timeline workflow is autosaved locally. After a workflow has started, SceneForge restores the active workflow when you visit Settings and return, or when you reload the Run page and the active record is still available. Interrupted running nodes restore as visible retryable errors rather than pretending background work continued while the page was away. The Run header also includes a workflow project menu for saved timeline workflows: save the current active draft as a named workflow, open a saved workflow, rename it, refresh the list, or delete saved workflow records.
 

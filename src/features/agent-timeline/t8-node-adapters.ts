@@ -1,5 +1,6 @@
 import type { ComfyUiTextToImageRequest } from "@/features/comfyui";
 
+import { getGenerationInputDetailers } from "./generation-detailers";
 import { createTimelineNodeError, normalizeTimelineImageCount } from "./state";
 import {
   TimelineNodeExecutionError,
@@ -94,9 +95,13 @@ export function createConfirmedTimelineComfyUiRequest(
 
   const parameterResult = getParameterRecommendationResult(workflow);
   const sourceImage = getTimelineSourceImage(workflow);
+  const sceneInput = workflow.nodes["scene-input"].result;
+  const detailers = getGenerationInputDetailers(isRecord(sceneInput) ? sceneInput : {});
 
   return {
     ...parameterResult.requestPreview,
+    faceDetailer: detailers.faceDetailer,
+    handDetailer: detailers.handDetailer,
     ...(sourceImage
       ? {
           sourceImageDataUrl: sourceImage.dataUrl,

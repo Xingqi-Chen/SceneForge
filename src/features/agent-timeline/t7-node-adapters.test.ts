@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type {
   CivitaiRecommendationCandidate,
@@ -97,6 +97,229 @@ function makeScenePrompt(promptProfile: PromptProfileId = "illustrious"): SceneP
 }
 
 describe("T7 timeline adapters", () => {
+  it("uses explicit Run resources without calling the recommendation provider", async () => {
+    const checkpoint = makeResource("model", "checkpoint-manual", "Manual Checkpoint", "Illustrious");
+    const lora = makeResource("lora", "lora-manual", "Manual LoRA", "Illustrious");
+    const candidates = {
+      checkpoints: [makeCandidate(checkpoint)],
+      loras: [makeCandidate(lora)],
+    };
+    const recommendResources = vi.fn();
+    let workflow = createTimelineWorkflowState({
+      promptProfile: "illustrious",
+      sceneRequest: "A manually styled courier",
+      settingsSnapshot: {
+        stylePalette: {
+          checkpointId: checkpoint.id,
+          loras: [{ id: lora.id, enabled: true, strengthModel: 0.61, strengthClip: 0.48 }],
+        },
+      },
+    });
+    workflow = completeTimelineNode(workflow, "scene-prompt", makeScenePrompt(), "ai");
+    const adapter = createTimelineT7NodeAdapters({
+      loadResourceCandidates: () => candidates,
+      recommendResources,
+    })["resource-recommendation"];
+
+    const result = await adapter?.({
+      dependencies: [workflow.nodes["scene-prompt"]],
+      nodeId: "resource-recommendation",
+      workflow,
+    });
+
+    expect(recommendResources).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      source: "manual",
+      value: {
+        checkpoint: { resource: { id: "checkpoint-manual" } },
+        loras: [{
+          resource: { id: "lora-manual" },
+          strengthModel: 0.61,
+          strengthClip: 0.48,
+          suggestedWeight: 0.61,
+        }],
+      },
+    });
+  });
+
+  it("rejects an unavailable explicit Run resource before recommendation", async () => {
+    const checkpoint = makeResource("model", "checkpoint-local", "Local Checkpoint", "Illustrious");
+    const recommendResources = vi.fn();
+    let workflow = createTimelineWorkflowState({
+      promptProfile: "illustrious",
+      sceneRequest: "A manually styled courier",
+      settingsSnapshot: {
+        stylePalette: {
+          checkpointId: "checkpoint-missing",
+          loras: [],
+        },
+      },
+    });
+    workflow = completeTimelineNode(workflow, "scene-prompt", makeScenePrompt(), "ai");
+    const adapter = createTimelineT7NodeAdapters({
+      loadResourceCandidates: () => ({ checkpoints: [makeCandidate(checkpoint)], loras: [] }),
+      recommendResources,
+    })["resource-recommendation"];
+
+    await expect(adapter?.({
+      dependencies: [workflow.nodes["scene-prompt"]],
+      nodeId: "resource-recommendation",
+      workflow,
+    })).rejects.toThrow("Selected Run checkpoint is missing, unavailable, or not a ready local checkpoint.");
+    expect(recommendResources).not.toHaveBeenCalled();
+  });
+
+  it("uses saved Run parameters and LoRA strengths without calling Style Advice", async () => {
+    const checkpoint = makeResource("model", "checkpoint-manual", "Manual Checkpoint", "Illustrious", {
+      modelFileName: "manual-checkpoint.safetensors",
+    });
+    const lora = makeResource("lora", "lora-manual", "Manual LoRA", "Illustrious", {
+      modelFileName: "manual-lora.safetensors",
+    });
+    const resourceResult: ResourceRecommendationTimelineResult = {
+      checkpoint: { resource: checkpoint, reason: "Manual checkpoint." },
+      loras: [{ resource: lora, suggestedWeight: 0.7, reason: "Manual LoRA." }],
+      candidates: {
+        checkpoints: [makeCandidate(checkpoint)],
+        loras: [makeCandidate(lora)],
+      },
+      recommendationReason: "Manual resources.",
+      overallEffect: "Manual style.",
+      warnings: [],
+    };
+    const adviseStyle = vi.fn();
+    let workflow = createTimelineWorkflowState({
+      promptProfile: "illustrious",
+      sceneRequest: "A manually parameterized courier",
+      settingsSnapshot: {
+        stylePalette: {
+          checkpointId: checkpoint.id,
+          loras: [{ id: lora.id, enabled: true, strengthModel: 0.63, strengthClip: 0.47 }],
+          parameters: {
+            width: 960,
+            height: 1280,
+            steps: 42,
+            cfg: 5.5,
+            samplerName: "euler",
+            scheduler: "normal",
+            denoise: 0.82,
+            seed: 1234,
+          },
+        },
+      },
+    });
+    workflow = completeTimelineNode(workflow, "scene-prompt", makeScenePrompt(), "ai");
+    workflow = completeTimelineNode(workflow, "resource-recommendation", resourceResult, "manual");
+    const adapter = createTimelineT7NodeAdapters({
+      adviseStyle,
+      loadResourceCandidates: () => resourceResult.candidates,
+      loadSamplerOptions: () => ({ samplers: ["euler"], schedulers: ["normal"] }),
+      recommendResources: vi.fn(),
+    })["parameter-recommendation"];
+
+    const result = await adapter?.({
+      dependencies: [workflow.nodes["scene-prompt"], workflow.nodes["resource-recommendation"]],
+      nodeId: "parameter-recommendation",
+      workflow,
+    });
+
+    expect(adviseStyle).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      source: "manual",
+      value: {
+        width: 960,
+        height: 1280,
+        steps: 42,
+        cfg: 5.5,
+        denoise: 0.82,
+        seedPolicy: { mode: "fixed", seed: 1234 },
+        requestPreview: {
+          checkpointName: "manual-checkpoint.safetensors",
+          loras: [{
+            loraName: "manual-lora.safetensors",
+            strengthModel: 0.63,
+            strengthClip: 0.47,
+          }],
+        },
+      },
+    });
+  });
+
+  it("lets img2img source dimensions and Composer denoise override saved Run values", async () => {
+    const checkpoint = makeResource("model", "checkpoint-manual", "Manual Checkpoint", "Illustrious");
+    const resourceResult: ResourceRecommendationTimelineResult = {
+      checkpoint: { resource: checkpoint, reason: "Manual checkpoint." },
+      loras: [],
+      candidates: { checkpoints: [makeCandidate(checkpoint)], loras: [] },
+      recommendationReason: "Manual resources.",
+      overallEffect: "Manual style.",
+      warnings: [],
+    };
+    const adviseStyle = vi.fn();
+    let workflow = createTimelineWorkflowState({
+      promptProfile: "illustrious",
+      sceneRequest: "A source-guided courier",
+      sourceDenoise: 0.37,
+      sourceImage: {
+        dataUrl: "data:image/png;base64,c291cmNl",
+        filename: "source.png",
+        height: 770,
+        mimeType: "image/png",
+        uploadedAt: "2026-07-18T00:00:00.000Z",
+        width: 1025,
+      },
+      settingsSnapshot: {
+        stylePalette: {
+          checkpointId: checkpoint.id,
+          loras: [],
+          parameters: {
+            width: 512,
+            height: 512,
+            steps: 44,
+            cfg: 6.25,
+            samplerName: "euler",
+            scheduler: "normal",
+            denoise: 0.91,
+          },
+        },
+      },
+    });
+    workflow = completeTimelineNode(workflow, "scene-prompt", makeScenePrompt(), "ai");
+    workflow = completeTimelineNode(workflow, "resource-recommendation", resourceResult, "manual");
+    const adapter = createTimelineT7NodeAdapters({
+      adviseStyle,
+      loadResourceCandidates: () => resourceResult.candidates,
+      loadSamplerOptions: () => ({ samplers: ["euler"], schedulers: ["normal"] }),
+      recommendResources: vi.fn(),
+    })["parameter-recommendation"];
+
+    const result = await adapter?.({
+      dependencies: [workflow.nodes["scene-prompt"], workflow.nodes["resource-recommendation"]],
+      nodeId: "parameter-recommendation",
+      workflow,
+    });
+
+    expect(adviseStyle).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      source: "manual",
+      value: {
+        width: 1024,
+        height: 768,
+        denoise: 0.37,
+        steps: 44,
+        cfg: 6.25,
+        requestPreview: {
+          batchSize: 1,
+          imageWidth: 1025,
+          imageHeight: 770,
+          width: 1024,
+          height: 768,
+          denoise: 0.37,
+        },
+      },
+    });
+  });
+
   it("rejects an invented checkpoint that is not in the local candidate set", () => {
     const checkpoint = makeResource("model", "checkpoint-local", "Local Checkpoint");
     const invented = makeResource("model", "checkpoint-invented", "Invented Checkpoint");

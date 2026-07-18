@@ -8,10 +8,15 @@ import {
   type SceneInputTimelineResult,
 } from ".";
 
-function createConfirmedWorkflow(imageCount?: number, sourceImage?: SceneInputTimelineResult["sourceImage"]) {
+function createConfirmedWorkflow(
+  imageCount?: number,
+  sourceImage?: SceneInputTimelineResult["sourceImage"],
+  settingsSnapshot?: NonNullable<Parameters<typeof createTimelineWorkflowState>[0]>["settingsSnapshot"],
+) {
   let workflow = createTimelineWorkflowState({
     imageCount,
     sceneRequest: "A pilot in a greenhouse",
+    settingsSnapshot,
     sourceImage,
     workflowId: "t8-request",
   });
@@ -57,6 +62,8 @@ describe("timeline T8 ComfyUI request conversion", () => {
     expect(createConfirmedTimelineComfyUiRequest(workflow)).toEqual({
       batchSize: 1,
       checkpointName: "local.safetensors",
+      faceDetailer: expect.objectContaining({ enabled: false }),
+      handDetailer: expect.objectContaining({ enabled: false }),
       negativePrompt: "low detail",
       positivePrompt: "glass greenhouse pilot",
       preview: false,
@@ -73,6 +80,38 @@ describe("timeline T8 ComfyUI request conversion", () => {
       batchSize: 3,
       checkpointName: "local.safetensors",
       preview: false,
+    });
+  });
+
+  it("carries independent Run detailers into the confirmed ComfyUI request", () => {
+    const workflow = confirmTimelineGeneration(createConfirmedWorkflow(undefined, undefined, {
+      detailers: {
+        faceDetailer: {
+          enabled: true,
+          detectorModelName: "bbox/custom-face.pt",
+          steps: 18,
+          denoise: 0.42,
+        } as never,
+        handDetailer: {
+          enabled: false,
+          detectorModelName: "bbox/custom-hand.pt",
+          steps: 21,
+        } as never,
+      },
+    }));
+
+    expect(createConfirmedTimelineComfyUiRequest(workflow)).toMatchObject({
+      faceDetailer: {
+        enabled: true,
+        detectorModelName: "bbox/custom-face.pt",
+        steps: 18,
+        denoise: 0.42,
+      },
+      handDetailer: {
+        enabled: false,
+        detectorModelName: "bbox/custom-hand.pt",
+        steps: 21,
+      },
     });
   });
 

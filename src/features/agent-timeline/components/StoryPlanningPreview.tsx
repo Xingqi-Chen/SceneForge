@@ -1096,16 +1096,24 @@ function StoryDetailerSettingsDialog({
   );
 }
 
-function StoryDetailerSettingsEditor({
+export function GenerationDetailerSettingsEditor({
   detailers,
+  disabled = false,
+  idPrefix = "story",
   onChange,
 }: {
   detailers: StoryDetailerSettingsSnapshot;
+  disabled?: boolean;
+  idPrefix?: string;
   onChange: (detailers: StoryDetailerSettingsSnapshot) => void;
 }) {
   const [editingDetailer, setEditingDetailer] = useState<StoryDetailerKind | null>(null);
 
   function patchDetailer(kind: StoryDetailerKind, patch: StoryDetailerPatch) {
+    if (disabled) {
+      return;
+    }
+
     onChange(
       sanitizeStoryDetailerSettingsSnapshot({
         ...detailers,
@@ -1118,42 +1126,53 @@ function StoryDetailerSettingsEditor({
   }
 
   return (
-    <fieldset className="grid gap-3 rounded-md border border-slate-200 bg-slate-50 p-3">
+    <fieldset
+      className="grid gap-3 rounded-md border border-slate-200 bg-slate-50 p-3 disabled:cursor-not-allowed disabled:opacity-60"
+      disabled={disabled}
+    >
       <legend className="px-1 text-xs font-semibold uppercase tracking-wide text-slate-600">Detailers</legend>
       <StoryDetailerPanel
         detailer={detailers.faceDetailer}
-        idPrefix="story-face-detailer"
+        idPrefix={`${idPrefix}-face-detailer`}
         kind="faceDetailer"
         label="FaceDetailer"
         onChange={(patch) => patchDetailer("faceDetailer", patch)}
-        onEdit={() => setEditingDetailer("faceDetailer")}
+        onEdit={() => {
+          if (!disabled) {
+            setEditingDetailer("faceDetailer");
+          }
+        }}
       />
       <StoryDetailerPanel
         detailer={detailers.handDetailer}
-        idPrefix="story-hand-detailer"
+        idPrefix={`${idPrefix}-hand-detailer`}
         kind="handDetailer"
         label="HandDetailer"
         onChange={(patch) => patchDetailer("handDetailer", patch)}
-        onEdit={() => setEditingDetailer("handDetailer")}
+        onEdit={() => {
+          if (!disabled) {
+            setEditingDetailer("handDetailer");
+          }
+        }}
       />
       <StoryDetailerSettingsDialog
         detailer={detailers.faceDetailer}
-        idPrefix="story-face-detailer"
+        idPrefix={`${idPrefix}-face-detailer`}
         kind="faceDetailer"
         label="FaceDetailer"
         onChange={(patch) => patchDetailer("faceDetailer", patch)}
         onClose={() => setEditingDetailer(null)}
-        open={editingDetailer === "faceDetailer"}
+        open={!disabled && editingDetailer === "faceDetailer"}
         parameterLabel="face"
       />
       <StoryDetailerSettingsDialog
         detailer={detailers.handDetailer}
-        idPrefix="story-hand-detailer"
+        idPrefix={`${idPrefix}-hand-detailer`}
         kind="handDetailer"
         label="HandDetailer"
         onChange={(patch) => patchDetailer("handDetailer", patch)}
         onClose={() => setEditingDetailer(null)}
-        open={editingDetailer === "handDetailer"}
+        open={!disabled && editingDetailer === "handDetailer"}
         parameterLabel="hand"
       />
     </fieldset>
@@ -2020,7 +2039,7 @@ function StartPanel({
             </div>
 
             <div className="grid min-h-0 content-start gap-4">
-              <StoryDetailerSettingsEditor detailers={detailers} onChange={setDetailers} />
+              <GenerationDetailerSettingsEditor detailers={detailers} onChange={setDetailers} />
 
               <StoryStyleReferencePanel
                 draft={styleReferenceDraft}

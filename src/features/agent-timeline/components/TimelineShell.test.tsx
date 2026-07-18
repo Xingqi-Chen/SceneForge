@@ -1525,7 +1525,10 @@ describe("TimelineShell", () => {
       const promptProfile = container.querySelector("#prompt-profile") as HTMLSelectElement | null;
       const imageCount = container.querySelector("#timeline-image-count") as HTMLSelectElement | null;
       const startButton = getButtonByText("Start workflow");
+      const parametersButton = getButtonByText("Parameters");
       const settingsLink = container.querySelector('a[href="/settings"]');
+      const faceDetailer = container.querySelector("#run-face-detailer-enabled") as HTMLInputElement | null;
+      const handDetailer = container.querySelector("#run-hand-detailer-enabled") as HTMLInputElement | null;
 
       expect(sceneInput).not.toBeNull();
       expect(promptProfile?.value).toBe("illustrious");
@@ -1541,6 +1544,11 @@ describe("TimelineShell", () => {
         "anima",
       ]);
       expect(startButton.disabled).toBe(true);
+      expect(parametersButton.disabled).toBe(true);
+      expect(faceDetailer?.checked).toBe(false);
+      expect(handDetailer?.checked).toBe(false);
+      expect(container.textContent).toContain("Style resources / parameters");
+      expect(container.textContent).toContain("Without saved parameters, Run keeps automatic parameter advice.");
       expect(settingsLink?.textContent).toContain("Settings");
       expect(getWorkflowStepTitles()).toEqual(nodeTitles);
       expect(container.textContent?.match(/Parallel/g)?.length ?? 0).toBeGreaterThanOrEqual(2);
@@ -1630,6 +1638,10 @@ describe("TimelineShell", () => {
       expect(container.querySelector("#prompt-profile")).not.toBeNull();
       expect(container.querySelector("#timeline-image-count")).not.toBeNull();
       expect(getButtonByText("Start workflow").disabled).toBe(true);
+      expect(getButtonByText("Parameters").disabled).toBe(true);
+      expect((container.querySelector("#run-face-detailer-enabled") as HTMLInputElement | null)?.checked).toBe(false);
+      expect((container.querySelector("#run-hand-detailer-enabled") as HTMLInputElement | null)?.checked).toBe(false);
+      expect(container.textContent).toContain("Style resources / parameters");
       expect(container.querySelector(".sf-agent-workbench__nav")).toBeNull();
       expect(container.querySelector(".sf-agent-workbench__inspector")).toBeNull();
       expect(container.textContent).not.toContain("Step output");
@@ -2134,6 +2146,143 @@ describe("TimelineShell", () => {
 
       expect(getWorkflowStepButton("scene-prompt").textContent).toContain("Done");
       expect(getWorkflowStepButton("scene-prompt").querySelector(".animate-spin")).toBeNull();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("guards Run resource, parameter, and detailer mutations while the workflow is running", async () => {
+    const originalFetch = globalThis.fetch;
+    const { fetchMock: t5FetchMock, promptRequests } = mockT5FetchWithDeferredPrompt();
+    const selectedCheckpoint = {
+      ...checkpointResource,
+      resourceType: "model" as const,
+      descriptionSnippet: "Neon resource",
+      modelFileName: "Cyber Checkpoint__v1__mv101.safetensors",
+      modelStorageKind: "checkpoint" as const,
+    };
+    const selectedResourceUrls: string[] = [];
+    const lateSelectedResourceRequests: Array<{ resolve: (response: Response) => void }> = [];
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = getFetchUrl(input);
+
+      if (url === "/api/settings") {
+        return createTimelineSettingsResponse({ characterTagNewTermDefaultOption: "temporary" });
+      }
+
+      if (url.startsWith("/api/civitai-lora-library/selected-resources?")) {
+        selectedResourceUrls.push(url);
+        if (!url.includes("loraIds=")) {
+          return createJsonResponse({ checkpoint: selectedCheckpoint, loras: [] });
+        }
+
+        return new Promise<Response>((resolve) => {
+          lateSelectedResourceRequests.push({ resolve });
+        });
+      }
+
+      return t5FetchMock(input, init);
+    });
+    globalThis.fetch = fetchMock;
+
+    try {
+      act(() => {
+        root.render(<TimelineShell />);
+      });
+      await flushAsyncWork();
+
+      act(() => {
+        getButtonByText("Select checkpoint").click();
+      });
+      await act(async () => {
+        await new Promise<void>((resolve) => window.setTimeout(resolve, 180));
+      });
+      await flushAsyncWork();
+
+      act(() => {
+        getButtonByText("Select").click();
+      });
+      await act(async () => {
+        await new Promise<void>((resolve) => window.setTimeout(resolve, 200));
+      });
+      await flushAsyncWork();
+
+      act(() => {
+        getButtonByText("Add").click();
+      });
+      await act(async () => {
+        await new Promise<void>((resolve) => window.setTimeout(resolve, 10));
+      });
+      await flushAsyncWork();
+
+      expect(lateSelectedResourceRequests).toHaveLength(1);
+
+      await submitInitialScene("A running neon courier scene");
+      expect(promptRequests).toHaveLength(1);
+
+      const faceDetailer = container.querySelector("#run-face-detailer-enabled") as HTMLInputElement | null;
+      const handDetailer = container.querySelector("#run-hand-detailer-enabled") as HTMLInputElement | null;
+      const detailerFieldset = faceDetailer?.closest("fieldset") as HTMLFieldSetElement | null;
+      const resourceFieldset = getButtonByText("Select checkpoint").closest("fieldset") as HTMLFieldSetElement | null;
+
+      expect(detailerFieldset?.disabled).toBe(true);
+      expect(resourceFieldset?.disabled).toBe(true);
+      expect(resourceFieldset?.getAttribute("aria-disabled")).toBe("true");
+      expect(faceDetailer?.disabled).toBe(false);
+      expect(handDetailer?.disabled).toBe(false);
+      expect(getButtonByText("Select checkpoint").disabled).toBe(true);
+      expect(getButtonByText("Select LoRA").disabled).toBe(true);
+      expect(getButtonByText("Parameters").disabled).toBe(true);
+      expect(getWorkflowStepButton("resource-recommendation").textContent).toContain("Blocked");
+      expect(getWorkflowStepButton("parameter-recommendation").textContent).toContain("Blocked");
+
+      act(() => {
+        if (detailerFieldset && faceDetailer) {
+          detailerFieldset.disabled = false;
+          faceDetailer.click();
+        }
+      });
+
+      expect(getWorkflowStepButton("resource-recommendation").textContent).toContain("Blocked");
+      expect(getWorkflowStepButton("parameter-recommendation").textContent).toContain("Blocked");
+      expect(getWorkflowStepButton("parameter-recommendation").textContent).not.toContain("Stale");
+
+      await act(async () => {
+        lateSelectedResourceRequests[0]?.resolve(createJsonResponse({
+          checkpoint: selectedCheckpoint,
+          loras: [],
+        }));
+        await Promise.resolve();
+      });
+      await flushAsyncWork();
+
+      expect(getWorkflowStepButton("resource-recommendation").textContent).toContain("Blocked");
+      expect(getWorkflowStepButton("parameter-recommendation").textContent).toContain("Blocked");
+      expect(getWorkflowStepButton("resource-recommendation").textContent).not.toContain("Stale");
+      expect(getWorkflowStepButton("parameter-recommendation").textContent).not.toContain("Stale");
+
+      await act(async () => {
+        promptRequests[0]?.resolve(createT5ResponseForPurpose("stable-diffusion-prompt-generation"));
+        await Promise.resolve();
+      });
+      await flushAsyncWork(12);
+      await act(async () => {
+        await new Promise<void>((resolve) => window.setTimeout(resolve, 10));
+      });
+      await flushAsyncWork();
+
+      expect((container.querySelector("#run-face-detailer-enabled") as HTMLInputElement | null)?.checked).toBe(false);
+      expect(getWorkflowStepButton("resource-recommendation").textContent).toContain("Done");
+      expect(getWorkflowStepButton("parameter-recommendation").textContent).toContain("Done");
+      expect(getWorkflowStepButton("resource-recommendation").textContent).not.toContain("Stale");
+      expect(getWorkflowStepButton("parameter-recommendation").textContent).not.toContain("Stale");
+      expect(selectedResourceUrls.at(-1)).toContain("checkpointId=checkpoint-a");
+      expect(selectedResourceUrls.at(-1)).toContain("loraIds=lora-a");
+
+      act(() => {
+        getWorkflowStepButton("resource-recommendation").click();
+      });
+      expect(getSectionByHeading("Model resources").textContent).toContain("Neon LoRA");
     } finally {
       globalThis.fetch = originalFetch;
     }

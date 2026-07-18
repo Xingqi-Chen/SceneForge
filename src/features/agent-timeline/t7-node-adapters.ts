@@ -26,6 +26,7 @@ import {
   normalizePromptProfileId,
   type PromptProfileId,
 } from "@/shared/prompt-profile";
+import type { SavedComfyUiGenerationParams } from "@/shared/types";
 
 import {
   createTimelineNodeError,
@@ -33,6 +34,12 @@ import {
   normalizeTimelineSourceDenoise,
 } from "./state";
 import { validateLocalResourcePlan } from "./resource-plan";
+import { getGenerationInputDetailers, type GenerationDetailerSettingsSnapshot } from "./generation-detailers";
+import {
+  createSavedParametersFromGenerationStylePalette,
+  type GenerationStylePaletteSnapshot,
+} from "./generation-style-palette";
+import { getRunSceneInputSettings } from "./run-input-settings";
 import {
   TimelineNodeExecutionError,
   type CanvasBindingTimelineResult,
@@ -165,6 +172,11 @@ function getSceneInputSourceDenoise(workflow: TimelineNodeExecutionContext["work
   return (sceneInput as Partial<SceneInputTimelineResult>).sourceDenoise;
 }
 
+function getSceneInputSettings(workflow: TimelineNodeExecutionContext["workflow"]) {
+  const sceneInput = workflow.nodes["scene-input"].result;
+  return getRunSceneInputSettings(isRecord(sceneInput) ? sceneInput : {});
+}
+
 function getScenePromptResult(workflow: TimelineNodeExecutionContext["workflow"]): ScenePromptTimelineResult {
   const result = workflow.nodes["scene-prompt"].result;
   const manualText = getManualTextResult(result);
@@ -276,6 +288,68 @@ function isCompatibleLora(
   checkpoint: SelectedCivitaiResourcePreview,
 ) {
   return !checkpoint.baseModel || !lora.baseModel || isSameCivitaiBaseModel(lora.baseModel, checkpoint.baseModel);
+}
+
+function createManualTimelineResourceRecommendation(
+  candidates: ResourceRecommendationTimelineResult["candidates"],
+  stylePalette: GenerationStylePaletteSnapshot | undefined,
+): ResourceRecommendationTimelineResult | null {
+  if (!stylePalette?.checkpointId) {
+    return null;
+  }
+
+  const checkpoint = candidates.checkpoints.find(
+    (candidate) => candidate.resource.id === stylePalette.checkpointId,
+  )?.resource;
+  if (!checkpoint) {
+    invalidResourceSelection("Selected Run checkpoint is missing, unavailable, or not a ready local checkpoint.", {
+      checkpointId: stylePalette.checkpointId,
+    });
+  }
+
+  const loras = stylePalette.loras
+    .filter((snapshot) => snapshot.enabled)
+    .map((snapshot) => {
+      const lora = candidates.loras.find((candidate) => candidate.resource.id === snapshot.id)?.resource;
+      if (!lora) {
+        invalidResourceSelection("Selected Run LoRA is missing, unavailable, or not a ready local LoRA.", {
+          checkpointId: checkpoint.id,
+          loraId: snapshot.id,
+        });
+      }
+
+      if (!isCompatibleLora(lora, checkpoint)) {
+        invalidResourceSelection("Selected Run LoRA is incompatible with the selected checkpoint base model.", {
+          checkpointBaseModel: checkpoint.baseModel,
+          checkpointId: checkpoint.id,
+          loraBaseModel: lora.baseModel,
+          loraId: lora.id,
+        });
+      }
+
+      const suggestedWeight = snapshot.strengthModel ?? lora.averageWeight ?? null;
+      return {
+        resource: lora,
+        suggestedWeight,
+        ...(snapshot.strengthModel !== undefined ? { strengthModel: snapshot.strengthModel } : {}),
+        ...(snapshot.strengthClip !== undefined ? { strengthClip: snapshot.strengthClip } : {}),
+        reason: snapshot.strengthModel !== undefined || snapshot.strengthClip !== undefined
+          ? "Selected from Run style resources with saved LoRA strengths."
+          : "Selected from Run style resources.",
+      };
+    });
+
+  return {
+    checkpoint: {
+      resource: checkpoint,
+      reason: "Selected from Run style resources.",
+    },
+    loras,
+    candidates,
+    recommendationReason: "Use the checkpoint and enabled LoRAs saved in the Run Scene Composer.",
+    overallEffect: "User-selected Run style resources.",
+    warnings: [],
+  };
 }
 
 export function validateTimelineResourceRecommendation({
@@ -490,6 +564,8 @@ export function createTimelineParameterRecommendation({
   supportsNsfw = false,
   sourceDenoise,
   sourceImage,
+  detailers,
+  savedParameters,
 }: {
   promptProfile?: PromptProfileId;
   resourceResult: ResourceRecommendationTimelineResult;
@@ -500,6 +576,8 @@ export function createTimelineParameterRecommendation({
   supportsNsfw?: boolean;
   sourceDenoise?: number;
   sourceImage?: SceneInputTimelineResult["sourceImage"];
+  detailers?: GenerationDetailerSettingsSnapshot;
+  savedParameters?: SavedComfyUiGenerationParams | null;
 }): ParameterRecommendationTimelineResult {
   const samplerOptions = normalizeTimelineSamplerOptions(rawSamplerOptions);
   const selectedResources = getSelectedResources(resourceResult);
@@ -518,6 +596,7 @@ export function createTimelineParameterRecommendation({
     aiAdvice: resolvedAiAdvice,
     baseNegativePrompt,
     selectedResources,
+    savedParameters,
     supportsNsfw,
   });
   const request = settings.request;
@@ -526,6 +605,13 @@ export function createTimelineParameterRecommendation({
   const denoise = sourceImage ? normalizeTimelineSourceDenoise(sourceDenoise) : request.denoise ?? 1;
   const rawRequestPreview = {
     ...request,
+    ...(savedParameters?.seedMode === "random" ? { seed: undefined } : {}),
+    ...(detailers
+      ? {
+          faceDetailer: detailers.faceDetailer,
+          handDetailer: detailers.handDetailer,
+        }
+      : {}),
     denoise,
     ...(sourceImage
       ? {
@@ -562,7 +648,9 @@ export function createTimelineParameterRecommendation({
     negativeAdditions: scenePrompt.negativeSuggestions,
     negativePrompt: requestPreview.negativePrompt ?? "",
     requestPreview,
-    reason: aiAdvice
+    reason: savedParameters
+      ? "Used generation parameters saved in the Run Scene Composer."
+      : aiAdvice
       ? (aiAdvice.parameterSuggestionReason.trim() ||
         "Used AI Style Advice with local resource metadata to create a ComfyUI text-to-image request preview.")
       : settings.parameterSource === "ai"
@@ -595,6 +683,17 @@ export function createTimelineT7NodeAdapters({
         );
       }
 
+      const manualRecommendation = createManualTimelineResourceRecommendation(
+        candidates,
+        getSceneInputSettings(context.workflow).stylePalette,
+      );
+      if (manualRecommendation) {
+        return {
+          value: manualRecommendation,
+          source: "manual",
+        };
+      }
+
       const recommendation = await recommendResources(
         {
           desiredEffect,
@@ -623,7 +722,12 @@ export function createTimelineT7NodeAdapters({
       });
       const baseNegativePrompt = scenePrompt.negativeSuggestions.join(", ");
       const sourceImage = getSceneInputSourceImage(context.workflow);
-      const aiAdvice = adviseStyle
+      const inputSettings = getSceneInputSettings(context.workflow);
+      const savedParameters = createSavedParametersFromGenerationStylePalette(
+        inputSettings.stylePalette,
+        selectedResources,
+      );
+      const aiAdvice = !savedParameters && adviseStyle
         ? await adviseStyle(
             {
               baseNegativePrompt,
@@ -649,12 +753,18 @@ export function createTimelineT7NodeAdapters({
           promptProfile,
           resourceResult,
           samplerOptions,
+          detailers: getGenerationInputDetailers(
+            isRecord(context.workflow.nodes["scene-input"].result)
+              ? context.workflow.nodes["scene-input"].result as SceneInputTimelineResult
+              : {},
+          ),
           scenePrompt,
+          savedParameters,
           sourceDenoise: sourceImage ? getSceneInputSourceDenoise(context.workflow) : undefined,
           sourceImage,
           supportsNsfw: supportsNsfw(),
         }),
-        source: "system",
+        source: savedParameters ? "manual" : "system",
       };
     },
   };

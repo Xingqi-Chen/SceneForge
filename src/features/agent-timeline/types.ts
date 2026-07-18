@@ -13,6 +13,7 @@ import type { PromptProfileId } from "@/shared/prompt-profile";
 import type { AnimaPromptSections } from "@/features/editor/ai-prompt/anima-prompt";
 import type { IllustriousPromptSections } from "@/features/editor/ai-prompt/illustrious-prompt";
 import type { TimelineWorkflowMode } from "./workflow-definitions";
+import type { RunSceneInputSettingsSnapshot } from "./run-input-settings";
 
 export type AnimaPromptProfileOptions = {
   qualityMetaTags?: string[];
@@ -126,7 +127,7 @@ export type SceneInputTimelineResult = {
     uploadedAt: string;
     width: number;
   };
-  settingsSnapshot?: unknown;
+  settingsSnapshot?: RunSceneInputSettingsSnapshot;
 };
 
 export type TimelinePromptFragment = {
@@ -198,6 +199,8 @@ export type ResourceRecommendationTimelineResult = {
   loras: Array<{
     resource: SelectedCivitaiResourcePreview;
     suggestedWeight: number | null;
+    strengthModel?: number;
+    strengthClip?: number;
     reason: string;
   }>;
   candidates: {

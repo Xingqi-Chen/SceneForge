@@ -15,6 +15,7 @@ import {
   makeCivitaiResourceTargetFileName,
 } from "@/features/civitai-lora-library/resource-files";
 import { selectedCivitaiResourceCards } from "@/features/editor/ai-prompt/civitai-ai-context";
+import type { PromptProfileId } from "@/shared/prompt-profile";
 
 type LoadStatus = "idle" | "loading" | "success" | "error";
 type CivitaiPickerKind = "checkpoint" | "lora";
@@ -29,11 +30,14 @@ export type StylePaletteCivitaiResourceSelection = {
 };
 
 export type StylePaletteCivitaiResourceSelectorProps = {
+  disabled?: boolean;
   selectedCheckpointId: string | null;
   selectedLoraIds: string[];
   onSelectionChange: (selection: StylePaletteCivitaiResourceSelection) => void;
   onSelectedResourcesChange?: (resources: SelectedCivitaiResourcesPreview) => void;
   pickerLayout?: "inline" | "dialog";
+  promptProfile?: PromptProfileId;
+  readyOnly?: boolean;
 };
 
 const EMPTY_SELECTED_CIVITAI_RESOURCES: SelectedCivitaiResourcesPreview = {
@@ -347,9 +351,12 @@ function CompactResourceRow({
 }
 
 export function StylePaletteCivitaiResourceSelector({
+  disabled = false,
   onSelectionChange,
   onSelectedResourcesChange,
   pickerLayout = "inline",
+  promptProfile,
+  readyOnly = false,
   selectedCheckpointId,
   selectedLoraIds,
 }: StylePaletteCivitaiResourceSelectorProps) {
@@ -393,13 +400,17 @@ export function StylePaletteCivitaiResourceSelector({
   }, [onSelectedResourcesChange]);
 
   function openCivitaiPicker(kind: CivitaiPickerKind) {
+    if (disabled) {
+      return;
+    }
+
     setCivitaiPickerKind(kind);
     setCivitaiPickerQuery("");
     setCivitaiPickerOpen((current) => (current && civitaiPickerKind === kind ? false : true));
   }
 
   function handleToggleCheckpoint(resource: CivitaiResourceListItem) {
-    if (resource.resourceType !== "model") {
+    if (disabled || resource.resourceType !== "model") {
       return;
     }
 
@@ -435,6 +446,10 @@ export function StylePaletteCivitaiResourceSelector({
   }
 
   function removeSelectedCivitaiResource(resource: SelectedCivitaiResourcePreview) {
+    if (disabled) {
+      return;
+    }
+
     if (resource.resourceType === "model") {
       onSelectionChange({
         checkpointId: null,
@@ -456,7 +471,7 @@ export function StylePaletteCivitaiResourceSelector({
   }
 
   function handleToggleLora(resource: CivitaiResourceListItem) {
-    if (resource.resourceType !== "lora" || !selectedCheckpointBaseModel) {
+    if (disabled || resource.resourceType !== "lora" || !selectedCheckpointBaseModel) {
       return;
     }
 
@@ -496,6 +511,10 @@ export function StylePaletteCivitaiResourceSelector({
   }
 
   useEffect(() => {
+    if (disabled) {
+      return;
+    }
+
     const controller = new AbortController();
 
     async function loadSelectedCivitaiResources() {
@@ -550,10 +569,10 @@ export function StylePaletteCivitaiResourceSelector({
       controller.abort();
       window.clearTimeout(timeout);
     };
-  }, [selectedCheckpointId, selectedLoraIdsKey]);
+  }, [disabled, selectedCheckpointId, selectedLoraIdsKey]);
 
   useEffect(() => {
-    if (!civitaiPickerOpen) {
+    if (disabled || !civitaiPickerOpen) {
       return;
     }
 
@@ -582,6 +601,12 @@ export function StylePaletteCivitaiResourceSelector({
         params.set("resourceType", civitaiPickerKind === "checkpoint" ? "model" : "lora");
         params.set("nsfw", "all");
         params.set("importedCount", "all");
+        if (readyOnly) {
+          params.set("downloaded", "ready");
+        }
+        if (promptProfile) {
+          params.set("promptProfile", promptProfile);
+        }
         if (civitaiPickerKind === "lora" && selectedCheckpointBaseModel) {
           params.set("baseModel", selectedCheckpointBaseModel);
         }
@@ -620,11 +645,14 @@ export function StylePaletteCivitaiResourceSelector({
     civitaiPickerKind,
     civitaiPickerOpen,
     civitaiPickerQuery,
+    disabled,
+    promptProfile,
+    readyOnly,
     selectedCheckpointBaseModel,
     selectedCheckpointId,
   ]);
 
-  const pickerContent = civitaiPickerOpen ? (
+  const pickerContent = !disabled && civitaiPickerOpen ? (
     <div
       className={
         pickerLayout === "dialog"
@@ -770,12 +798,17 @@ export function StylePaletteCivitaiResourceSelector({
   ) : null;
 
   return (
-    <div>
+    <fieldset
+      aria-disabled={disabled}
+      className="m-0 min-w-0 border-0 p-0 disabled:cursor-not-allowed disabled:opacity-60"
+      disabled={disabled}
+    >
       <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
         <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Selected Civitai Resources</p>
         <div className="flex flex-wrap items-center gap-2">
           <Button
             className="h-8 rounded-md border-indigo-100 bg-white px-2 text-[11px] font-medium text-indigo-700 hover:bg-indigo-50"
+            disabled={disabled}
             onClick={() => openCivitaiPicker("checkpoint")}
             size="sm"
             type="button"
@@ -786,7 +819,7 @@ export function StylePaletteCivitaiResourceSelector({
           </Button>
           <Button
             className="h-8 rounded-md border-indigo-100 bg-white px-2 text-[11px] font-medium text-indigo-700 hover:bg-indigo-50 disabled:cursor-not-allowed disabled:opacity-60"
-            disabled={!selectedCheckpointId}
+            disabled={disabled || !selectedCheckpointId}
             onClick={() => openCivitaiPicker("lora")}
             size="sm"
             type="button"
@@ -798,7 +831,7 @@ export function StylePaletteCivitaiResourceSelector({
         </div>
       </div>
       <div className="flex flex-col gap-3">
-        {pickerLayout === "dialog" && civitaiPickerOpen ? (
+        {pickerLayout === "dialog" && !disabled && civitaiPickerOpen ? (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/30 p-4 backdrop-blur-sm">
             <div className="w-full max-w-3xl">{pickerContent}</div>
           </div>
@@ -836,6 +869,6 @@ export function StylePaletteCivitaiResourceSelector({
           ) : null}
         </div>
       </div>
-    </div>
+    </fieldset>
   );
 }
