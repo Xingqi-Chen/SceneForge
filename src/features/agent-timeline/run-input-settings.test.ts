@@ -148,6 +148,7 @@ describe("Run scene input generation settings", () => {
     const settings = sanitizeRunSceneInputSettingsSnapshot(undefined);
 
     expect(settings.stylePalette).toBeUndefined();
+    expect(settings.styleReference).toBeUndefined();
     expect(settings.detailers).toMatchObject({
       faceDetailer: {
         enabled: false,
@@ -158,6 +159,57 @@ describe("Run scene input generation settings", () => {
         detectorModelName: "bbox/hand_yolov8s.pt",
       },
     });
+  });
+
+  it("round-trips only sanitized Run style-reference metadata, analysis context, and adapter settings", () => {
+    const settings = sanitizeRunSceneInputSettingsSnapshot({
+      promptProfile: "illustrious",
+      styleReference: {
+        status: "ready",
+        mode: "ipadapter",
+        metadata: {
+          byteLength: 512,
+          contentType: "image/png",
+          filename: "style.png",
+          storedFilename: "0123456789abcdef0123456789abcdef.png",
+          uploadedAt: "2026-07-19T00:00:00.000Z",
+          url: "https://forged.invalid/style.png",
+          bytes: [1, 2, 3],
+        },
+        analysis: {
+          analyzedAt: "2026-07-19T00:00:01.000Z",
+          model: "vision-model",
+          stylePrompt: "soft gouache, cobalt shadows",
+          summary: "Soft gouache.",
+          dataUrl: "data:image/png;base64,SECRET",
+        },
+        ipAdapter: { weight: 0.45, start_at: 0, end_at: 1 },
+        settingsSnapshot: {
+          capturedAt: "2026-07-19T00:00:02.000Z",
+          checkpointBaseModel: "Illustrious",
+          checkpointId: "checkpoint-a",
+          modeReason: "Illustrious supports IPAdapter.",
+          promptProfile: "illustrious",
+        },
+        dataUrl: "data:image/png;base64,SECRET",
+      },
+    });
+
+    expect(settings.styleReference).toMatchObject({
+      status: "ready",
+      mode: "ipadapter",
+      metadata: {
+        filename: "style.png",
+        storedFilename: "0123456789abcdef0123456789abcdef.png",
+        url: "/api/comfyui/sequence-references/0123456789abcdef0123456789abcdef.png",
+      },
+      analysis: {
+        stylePrompt: "soft gouache, cobalt shadows",
+      },
+      ipAdapter: { weight: 0.45, startPercent: 0, endPercent: 1 },
+    });
+    expect(JSON.stringify(settings.styleReference)).not.toContain("SECRET");
+    expect(JSON.stringify(settings.styleReference)).not.toContain("forged.invalid");
   });
 
   it("keeps FaceDetailer and HandDetailer independently configurable", () => {

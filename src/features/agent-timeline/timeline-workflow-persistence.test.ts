@@ -163,6 +163,7 @@ describe("timeline workflow persistence", () => {
             steps: 21,
           },
         },
+        styleReference: readyStyleReference,
       }),
       now: () => "2026-07-18T00:00:00.000Z",
     });
@@ -215,8 +216,22 @@ describe("timeline workflow persistence", () => {
             steps: 21,
           },
         },
+        styleReference: {
+          status: "ready",
+          mode: "ipadapter",
+          metadata: {
+            filename: "story-style.png",
+            storedFilename: "0123456789abcdef0123456789abcdef.png",
+            url: "/api/comfyui/sequence-references/0123456789abcdef0123456789abcdef.png",
+          },
+          analysis: {
+            stylePrompt: "soft watercolor anime rendering, clean pencil linework, pastel highlights",
+          },
+          ipAdapter: { weight: 0.45, startPercent: 0, endPercent: 1 },
+        },
       },
     });
+    expect(serialized).not.toContain("SHOULD_NOT_PERSIST");
   });
 
   it("restores legacy Run records with automatic resources and both detailers disabled", () => {
@@ -252,6 +267,60 @@ describe("timeline workflow persistence", () => {
     expect(restored.workflow.nodes["scene-input"].result).not.toMatchObject({
       settingsSnapshot: { stylePalette: expect.anything() },
     });
+    expect(restored.workflow.nodes["scene-input"].result).not.toMatchObject({
+      settingsSnapshot: { styleReference: expect.anything() },
+    });
+  });
+
+  it("sanitizes crafted Run style-reference payloads in active and named workflow records", () => {
+    const workflow = createTimelineWorkflowState({
+      workflowId: "timeline-run-style-crafted",
+      sceneRequest: "A crafted Run style reference",
+      promptProfile: "illustrious",
+      settingsSnapshot: sanitizeRunSceneInputSettingsSnapshot({
+        promptProfile: "illustrious",
+        styleReference: readyStyleReference,
+      }),
+    });
+    const raw = JSON.parse(serializeTimelineWorkflowRecord(createTimelineWorkflowRecord({
+      projectId: "named-run-style",
+      name: "Named Run style",
+      workflow,
+      sceneRequest: "A crafted Run style reference",
+      selectedPromptProfile: "illustrious",
+      selectedImageCount: 4,
+      selectedNodeId: "scene-input",
+    }))) as {
+      workflow: { nodes: Record<string, { result: { settingsSnapshot: Record<string, unknown> } }> };
+    };
+    const styleReference = raw.workflow.nodes["scene-input"].result.settingsSnapshot.styleReference as Record<string, unknown>;
+    styleReference.dataUrl = "data:image/png;base64,SECRET_IMAGE";
+    styleReference.bytes = [1, 2, 3];
+    styleReference.apiKey = "SECRET_KEY";
+    styleReference.cache = { path: "C:\\private\\style-cache" };
+    styleReference.metadata = {
+      ...(styleReference.metadata as Record<string, unknown>),
+      filename: "..\\private\\style.png",
+      url: "https://attacker.invalid/style.png",
+    };
+
+    const restored = sanitizeTimelineWorkflowRecord(raw);
+    expect(restored && isSingleImageTimelineWorkflowRecord(restored)).toBe(true);
+    if (!restored || !isSingleImageTimelineWorkflowRecord(restored)) {
+      throw new Error("Expected a single-image timeline record.");
+    }
+    const restoredStyle = (restored.workflow.nodes["scene-input"].result as {
+      settingsSnapshot?: { styleReference?: { metadata?: Record<string, unknown> } };
+    }).settingsSnapshot?.styleReference;
+    expect(restoredStyle?.metadata).toMatchObject({
+      storedFilename: "0123456789abcdef0123456789abcdef.png",
+      url: "/api/comfyui/sequence-references/0123456789abcdef0123456789abcdef.png",
+    });
+    expect(restoredStyle?.metadata).not.toHaveProperty("filename");
+    const serialized = JSON.stringify(restoredStyle);
+    expect(serialized).not.toContain("SECRET");
+    expect(serialized).not.toContain("attacker.invalid");
+    expect(serialized).not.toContain("private");
   });
 
   it("preserves scene input source image data through workflow sanitization", () => {

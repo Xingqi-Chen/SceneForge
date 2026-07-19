@@ -55,6 +55,12 @@ import {
   type RunSceneInputSettingsSnapshot,
 } from "@/features/agent-timeline/run-input-settings";
 import {
+  getStyleReferenceBlockingIssue,
+  getStyleReferenceContextMismatch,
+  sanitizeStyleReferenceSnapshot,
+  type StyleReferenceSnapshot,
+} from "@/features/agent-timeline/style-reference";
+import {
   createTimelineT5NodeAdapters,
   normalizeCharacterTagsTimelineResult,
   normalizeScenePromptTimelineResult,
@@ -172,6 +178,7 @@ import { TimelineScenePromptWorkspace } from "./TimelineScenePromptWorkspace";
 import { TimelineWorkflowProjectMenu } from "./TimelineWorkflowProjectMenu";
 import { getTimelineNodeOutputText, timelineNodeContent } from "./timeline-node-content";
 import { GenerationDetailerSettingsEditor } from "./StoryPlanningPreview";
+import { StyleReferencePanel } from "./StyleReferencePanel";
 
 type DraftMap = Partial<Record<TimelineNodeId, string>>;
 type NoticeMap = Partial<Record<TimelineNodeId, string>>;
@@ -1040,6 +1047,7 @@ export function TimelineShell() {
   const [selectedStyleResources, setSelectedStyleResources] =
     useState<SelectedCivitaiResourcesPreview>(EMPTY_SELECTED_CIVITAI_RESOURCES);
   const [stylePalette, setStylePalette] = useState<GenerationStylePaletteSnapshot | undefined>();
+  const [styleReference, setStyleReference] = useState<StyleReferenceSnapshot | undefined>();
   const [styleAdvice, setStyleAdvice] = useState<StylePaletteAdviceState>(EMPTY_STYLE_PALETTE_ADVICE);
   const [parametersOpen, setParametersOpen] = useState(false);
   const [workflow, setWorkflow] = useState<TimelineWorkflowState | null>(null);
@@ -1118,12 +1126,14 @@ export function TimelineShell() {
       detailers: GenerationDetailerSettingsSnapshot;
       promptProfile: PromptProfileId;
       stylePalette: GenerationStylePaletteSnapshot | undefined;
+      styleReference: StyleReferenceSnapshot | undefined;
     }> = {},
   ): RunSceneInputSettingsSnapshot {
     return createRunSceneInputSettingsSnapshot({
       detailers: overrides.detailers ?? detailers,
       promptProfile: overrides.promptProfile ?? selectedPromptProfile,
       stylePalette: "stylePalette" in overrides ? overrides.stylePalette : stylePalette,
+      styleReference: "styleReference" in overrides ? overrides.styleReference : styleReference,
     });
   }
 
@@ -1202,6 +1212,7 @@ export function TimelineShell() {
     setSelectedSourceImage(getSceneInputSourceImage(record.workflow));
     setDetailers(restoredSettings.detailers);
     setStylePalette(restoredSettings.stylePalette);
+    setStyleReference(restoredSettings.styleReference);
     setSelectedStyleCheckpointId(restoredSettings.stylePalette?.checkpointId ?? null);
     setSelectedStyleLoraIds(restoredSettings.stylePalette?.loras.map((lora) => lora.id) ?? []);
     setSelectedStyleResources(EMPTY_SELECTED_CIVITAI_RESOURCES);
@@ -1785,6 +1796,12 @@ export function TimelineShell() {
       return;
     }
 
+    const styleIssue = getCurrentStyleReferenceIssue();
+    if (styleIssue) {
+      setNotices((current) => ({ ...current, "scene-input": styleIssue }));
+      return;
+    }
+
     restoreVersionRef.current += 1;
     setWorkflowProjectId(null);
     setWorkflowProjectName("");
@@ -2083,6 +2100,37 @@ export function TimelineShell() {
     );
   }
 
+  function getCurrentStyleReferenceIssue() {
+    const blockingIssue = getStyleReferenceBlockingIssue(styleReference, "Run");
+    if (blockingIssue) {
+      return blockingIssue;
+    }
+    return getStyleReferenceContextMismatch(styleReference, {
+      checkpointBaseModel: selectedStyleResources.checkpoint
+        ? selectedStyleResources.checkpoint.baseModel ?? null
+        : (selectedStyleCheckpointId && selectedStyleCheckpointId === styleReference?.settingsSnapshot?.checkpointId
+          ? styleReference.settingsSnapshot.checkpointBaseModel
+          : selectedPromptProfile),
+      checkpointId: selectedStyleCheckpointId,
+      promptProfile: selectedPromptProfile,
+    });
+  }
+
+  function handleStyleReferenceChange(nextStyleReference: StyleReferenceSnapshot | undefined) {
+    if (isRunningRef.current) {
+      return;
+    }
+    const normalizedStyleReference = sanitizeStyleReferenceSnapshot(nextStyleReference);
+    setStyleReference(normalizedStyleReference);
+    commitComposerSettingChange(
+      getComposerSettingsSnapshot({ styleReference: normalizedStyleReference }),
+      "parameter-recommendation",
+      normalizedStyleReference
+        ? "Run style reference changed. Parameter preview and downstream nodes are stale."
+        : "Run style reference removed. Parameter preview and downstream nodes are stale.",
+    );
+  }
+
   function handleSaveStyleParameters(parameters: SavedComfyUiGenerationParams) {
     if (isRunningRef.current) {
       return;
@@ -2355,6 +2403,11 @@ export function TimelineShell() {
   }
 
   function handleConfirmGeneration() {
+    const styleIssue = getCurrentStyleReferenceIssue();
+    if (styleIssue) {
+      setNotices((current) => ({ ...current, "generation-gate": styleIssue }));
+      return;
+    }
     void runConfirmGeneration(workflow);
   }
 
@@ -2368,6 +2421,12 @@ export function TimelineShell() {
 
     if (nodeId === "scene-input") {
       void handleSceneInputAi("rewrite");
+      return;
+    }
+
+    const styleIssue = getCurrentStyleReferenceIssue();
+    if (styleIssue) {
+      setNotices((current) => ({ ...current, [nodeId]: styleIssue }));
       return;
     }
 
@@ -2404,6 +2463,7 @@ export function TimelineShell() {
     setSelectedStyleLoraIds([]);
     setSelectedStyleResources(EMPTY_SELECTED_CIVITAI_RESOURCES);
     setStylePalette(undefined);
+    setStyleReference(undefined);
     setStyleAdvice(EMPTY_STYLE_PALETTE_ADVICE);
     setParametersOpen(false);
     setSelectedNodeId("scene-input");
@@ -2581,6 +2641,16 @@ export function TimelineShell() {
               onChange={handleDetailersChange}
             />
           </div>
+          <StyleReferencePanel
+            checkpointId={selectedStyleCheckpointId}
+            disabled={isRunning}
+            nsfwEnabled={useEditorStore.getState().project.settings.supportsNsfw === true}
+            onChange={handleStyleReferenceChange}
+            promptProfile={selectedPromptProfile}
+            selectedCheckpoint={selectedStyleResources.checkpoint}
+            snapshot={styleReference}
+            workflowLabel="Run"
+          />
           <ComfyUiGenerationDialog
             activePrompt={sceneRequest || "Run generation parameter preview"}
             advice={styleAdvice.result}

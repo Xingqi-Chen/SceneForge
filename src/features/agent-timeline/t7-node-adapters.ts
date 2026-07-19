@@ -41,6 +41,12 @@ import {
 } from "./generation-style-palette";
 import { getRunSceneInputSettings } from "./run-input-settings";
 import {
+  appendStyleReferencePromptExactlyOnce,
+  getStyleReferenceBlockingIssue,
+  getStyleReferenceContextMismatch,
+  type StyleReferenceSnapshot,
+} from "./style-reference";
+import {
   TimelineNodeExecutionError,
   type CanvasBindingTimelineResult,
   type CharacterActionTimelineResult,
@@ -414,11 +420,13 @@ export function buildTimelineFinalPositivePrompt({
   promptProfile,
   resourceResult,
   scenePrompt,
+  styleReference,
   supportsNsfw = false,
 }: {
   promptProfile?: PromptProfileId;
   resourceResult: ResourceRecommendationTimelineResult;
   scenePrompt: ScenePromptTimelineResult;
+  styleReference?: StyleReferenceSnapshot;
   supportsNsfw?: boolean;
 }) {
   const resources = getSelectedResources(resourceResult);
@@ -426,26 +434,26 @@ export function buildTimelineFinalPositivePrompt({
   const sourcePrompt = scenePrompt.positivePrompt;
 
   if (resolvedProfile === "anima") {
-    return renderAnimaPrompt({
+    return appendStyleReferencePromptExactlyOnce(renderAnimaPrompt({
       resources,
       ...(hasPromptSectionContent(scenePrompt.animaSections)
         ? { sections: scenePrompt.animaSections }
         : { sourcePrompt }),
       qualityMetaTags: scenePrompt.animaPromptOptions?.qualityMetaTags,
       supportsNsfw,
-    });
+    }), styleReference);
   }
 
   if (resolvedProfile === "illustrious") {
-    return renderIllustriousPrompt({
+    return appendStyleReferencePromptExactlyOnce(renderIllustriousPrompt({
       resources,
       sections: hasPromptSectionContent(scenePrompt.illustriousSections)
         ? scenePrompt.illustriousSections
         : classifyFlatPromptToIllustriousSections(sourcePrompt),
-    });
+    }), styleReference);
   }
 
-  return sourcePrompt;
+  return appendStyleReferencePromptExactlyOnce(sourcePrompt, styleReference);
 }
 
 function getReferenceSampler(resource: SelectedCivitaiResourcePreview) {
@@ -566,6 +574,7 @@ export function createTimelineParameterRecommendation({
   sourceImage,
   detailers,
   savedParameters,
+  styleReference,
 }: {
   promptProfile?: PromptProfileId;
   resourceResult: ResourceRecommendationTimelineResult;
@@ -578,6 +587,7 @@ export function createTimelineParameterRecommendation({
   sourceImage?: SceneInputTimelineResult["sourceImage"];
   detailers?: GenerationDetailerSettingsSnapshot;
   savedParameters?: SavedComfyUiGenerationParams | null;
+  styleReference?: StyleReferenceSnapshot;
 }): ParameterRecommendationTimelineResult {
   const samplerOptions = normalizeTimelineSamplerOptions(rawSamplerOptions);
   const selectedResources = getSelectedResources(resourceResult);
@@ -585,6 +595,7 @@ export function createTimelineParameterRecommendation({
     promptProfile,
     resourceResult,
     scenePrompt,
+    styleReference,
     supportsNsfw,
   });
   const baseNegativePrompt = scenePrompt.negativeSuggestions.join(", ");
@@ -648,6 +659,7 @@ export function createTimelineParameterRecommendation({
     negativeAdditions: scenePrompt.negativeSuggestions,
     negativePrompt: requestPreview.negativePrompt ?? "",
     requestPreview,
+    ...(styleReference ? { styleReference } : {}),
     reason: savedParameters
       ? "Used generation parameters saved in the Run Scene Composer."
       : aiAdvice
@@ -718,11 +730,24 @@ export function createTimelineT7NodeAdapters({
         promptProfile,
         resourceResult,
         scenePrompt,
+        styleReference: getSceneInputSettings(context.workflow).styleReference,
         supportsNsfw: supportsNsfw(),
       });
       const baseNegativePrompt = scenePrompt.negativeSuggestions.join(", ");
       const sourceImage = getSceneInputSourceImage(context.workflow);
       const inputSettings = getSceneInputSettings(context.workflow);
+      const styleReferenceIssue = getStyleReferenceBlockingIssue(inputSettings.styleReference, "Run");
+      if (styleReferenceIssue) {
+        invalidTimelineInput(styleReferenceIssue);
+      }
+      const styleReferenceMismatch = getStyleReferenceContextMismatch(inputSettings.styleReference, {
+        checkpointBaseModel: resourceResult.checkpoint.resource.baseModel ?? promptProfile,
+        checkpointId: resourceResult.checkpoint.resource.id,
+        promptProfile,
+      });
+      if (styleReferenceMismatch) {
+        invalidTimelineInput(styleReferenceMismatch);
+      }
       const savedParameters = createSavedParametersFromGenerationStylePalette(
         inputSettings.stylePalette,
         selectedResources,
@@ -760,6 +785,7 @@ export function createTimelineT7NodeAdapters({
           ),
           scenePrompt,
           savedParameters,
+          styleReference: inputSettings.styleReference,
           sourceDenoise: sourceImage ? getSceneInputSourceDenoise(context.workflow) : undefined,
           sourceImage,
           supportsNsfw: supportsNsfw(),

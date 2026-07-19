@@ -6,15 +6,23 @@ import {
   summarizeComfyUiErrorDetails,
   validateComfyUiRequestAgainstObjectInfo,
   validateComfyUiTextToImageRequest,
+  buildComfyUiSequenceCharacterReference,
   type ComfyUiTextToImageRequest,
 } from "@/features/comfyui";
 import { uploadComfyUiTextToImageSourceImage } from "@/features/comfyui/source-image-upload";
+import { uploadSequenceCharacterReferences } from "@/features/comfyui/sequence-reference-upload";
+import { ComfyUiSequenceReferenceStorageError } from "@/features/comfyui/sequence-reference-storage";
 import {
   storeGeneratedImage,
 } from "@/features/comfyui/generated-image-storage";
 
 import { createTimelineNodeError } from "./state";
 import { createTimelineT8NodeAdapters } from "./t8-node-adapters";
+import { getRunSceneInputSettings } from "./run-input-settings";
+import {
+  buildStyleReferenceSequenceCharacter,
+  getStyleReferenceCapability,
+} from "./style-reference";
 import {
   TimelineNodeExecutionError,
   type ComfyUiExecutionTimelineResult,
@@ -68,6 +76,102 @@ function makeObjectInfoMismatchMessage(errors: string[]) {
   ].join(" ");
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function getValidatedTimelineCheckpoint(context: TimelineNodeExecutionContext) {
+  const result = context.workflow.nodes["resource-recommendation"].result;
+  if (!isRecord(result) || !isRecord(result.checkpoint) || !isRecord(result.checkpoint.resource)) {
+    return null;
+  }
+  const checkpoint = result.checkpoint.resource;
+  if (
+    typeof checkpoint.id !== "string" || !checkpoint.id.trim() ||
+    typeof checkpoint.modelFileName !== "string" || !checkpoint.modelFileName.trim()
+  ) {
+    return null;
+  }
+  return {
+    id: checkpoint.id.trim(),
+    modelFileName: checkpoint.modelFileName.trim(),
+    ...(typeof checkpoint.baseModel === "string" ? { baseModel: checkpoint.baseModel } : {}),
+    ...(typeof checkpoint.name === "string" ? { name: checkpoint.name } : {}),
+  };
+}
+
+function throwSafeStyleReferenceUploadError(error: unknown): never {
+  if (error instanceof ComfyUiSequenceReferenceStorageError) {
+    const message = error.statusCode === 404
+      ? "Stored Run style reference was not found. Retry analysis, replace it, or disable IPAdapter."
+      : "Stored Run style reference is invalid or unavailable. Retry analysis, replace it, or disable IPAdapter.";
+    throw new TimelineNodeExecutionError(createTimelineNodeError("comfyui_request_invalid", message));
+  }
+
+  console.error("[SceneForge] [timeline] Run style reference upload failed; details were redacted.");
+  throw new TimelineNodeExecutionError(
+    createTimelineNodeError(
+      "comfyui_request_invalid",
+      "Run style reference could not be prepared. Retry analysis, replace it, or disable IPAdapter.",
+    ),
+  );
+}
+
+async function applyTimelineStyleReference(
+  client: ReturnType<typeof makeClient>,
+  request: ComfyUiTextToImageRequest,
+  context: TimelineNodeExecutionContext,
+) {
+  const sceneInput = context.workflow.nodes["scene-input"].result;
+  const settings = getRunSceneInputSettings(isRecord(sceneInput) ? sceneInput : {});
+  const checkpoint = getValidatedTimelineCheckpoint(context);
+  if (!checkpoint) {
+    return request;
+  }
+  const capability = getStyleReferenceCapability({
+    baseModel: typeof checkpoint.baseModel === "string" ? checkpoint.baseModel : undefined,
+  });
+  if (capability.mode !== "ipadapter") {
+    return request;
+  }
+
+  const character = buildStyleReferenceSequenceCharacter(settings.styleReference, {
+    id: "run-style-reference",
+    name: "Run style reference",
+  });
+  if (!character) {
+    return request;
+  }
+
+  let uploaded;
+  try {
+    [uploaded] = await uploadSequenceCharacterReferences(
+      client,
+      `run-${context.workflow.workflowId}`,
+      [character],
+    );
+  } catch (error) {
+    throwSafeStyleReferenceUploadError(error);
+  }
+  if (!uploaded) {
+    throw new TimelineNodeExecutionError(
+      createTimelineNodeError("comfyui_request_invalid", "Run style reference could not be uploaded to ComfyUI."),
+    );
+  }
+  const characterReference = buildComfyUiSequenceCharacterReference(
+    uploaded,
+    uploaded.references.map((reference) => ({
+      id: reference.id,
+      imageName: reference.imageName,
+      weight: reference.weight,
+    })),
+  );
+  return {
+    ...request,
+    characterReferences: [...(request.characterReferences ?? []), characterReference],
+  };
+}
+
 async function executeTimelineTextToImage(
   request: ComfyUiTextToImageRequest,
   context: TimelineNodeExecutionContext,
@@ -83,7 +187,14 @@ async function executeTimelineTextToImage(
     const client = makeClient();
     const objectInfo = await client.getObjectInfo();
     const requestWithSourceImage = await uploadComfyUiTextToImageSourceImage(client, validation.request);
-    const objectValidation = validateComfyUiRequestAgainstObjectInfo(requestWithSourceImage, objectInfo);
+    const requestWithStyleReference = await applyTimelineStyleReference(client, requestWithSourceImage, context);
+    const styledValidation = validateComfyUiTextToImageRequest(requestWithStyleReference);
+    if (!styledValidation.ok) {
+      throw new TimelineNodeExecutionError(
+        createTimelineNodeError("comfyui_request_invalid", styledValidation.message, styledValidation.details),
+      );
+    }
+    const objectValidation = validateComfyUiRequestAgainstObjectInfo(styledValidation.request, objectInfo);
 
     if (objectValidation.errors.length > 0) {
       throw new TimelineNodeExecutionError(
