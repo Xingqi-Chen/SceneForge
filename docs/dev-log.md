@@ -2,6 +2,16 @@
 
 This log records dated implementation and documentation work. Keep entries concise and evidence-oriented.
 
+## 2026-07-19
+
+### Issue #127 Merge
+
+Summary:
+
+- Merged PR #128 for Run checkpoint/LoRA resources, generation parameters, FaceDetailer/HandDetailer controls, and the refined responsive single-image input layout.
+- Issue #127 was closed by the merge and T35 was marked done.
+- CI Validate passed before merge; the merged commit is `2978a830437c1403aa65e2e859d40a0a64e055c9`.
+
 ## 2026-07-18
 
 ### Issue #127 Run Generation Controls
