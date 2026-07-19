@@ -76,6 +76,33 @@ afterEach(() => {
 });
 
 describe("TimelineWorkflowProjectMenu", () => {
+  it("truncates a long active workflow name while preserving its tooltip", () => {
+    const longName =
+      "A very long named workflow for a silver-haired courier crossing an illuminated city at sunset";
+    storageMocks.listTimelineWorkflowSummaries.mockResolvedValue([]);
+
+    act(() => {
+      root.render(
+        <TimelineWorkflowProjectMenu
+          currentProjectId="workflow-current"
+          currentProjectName={longName}
+          getCurrentRecordInput={() => null}
+          onDeleteCurrentProject={vi.fn()}
+          onRecordOpened={vi.fn()}
+          onRecordSaved={vi.fn()}
+        />,
+      );
+    });
+
+    const trigger = container.querySelector('button[aria-haspopup="listbox"]');
+    const name = trigger?.querySelector(`span[title="${longName}"]`);
+
+    expect(trigger).not.toBeNull();
+    expect(name?.textContent).toBe(longName);
+    expect(name?.className).toContain("truncate");
+    expect(name?.className).toContain("min-w-0");
+  });
+
   it("shows loading and empty states while listing saved workflows", async () => {
     let resolveList: (value: never[]) => void = () => undefined;
     storageMocks.listTimelineWorkflowSummaries.mockReturnValue(

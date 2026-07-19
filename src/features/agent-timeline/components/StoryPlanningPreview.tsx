@@ -975,6 +975,7 @@ function StoryDetailerControls({
 }
 
 function StoryDetailerPanel({
+  compact,
   detailer,
   idPrefix,
   kind,
@@ -982,6 +983,7 @@ function StoryDetailerPanel({
   onChange,
   onEdit,
 }: {
+  compact: boolean;
   detailer: StoryDetailerConfig;
   idPrefix: string;
   kind: StoryDetailerKind;
@@ -994,7 +996,14 @@ function StoryDetailerPanel({
   } as Partial<StoryDetailerSettingsSnapshot>)[kind] as Required<StoryDetailerConfig>;
 
   return (
-    <div className="flex flex-col gap-3 rounded-md border border-slate-200 bg-white p-3 sm:flex-row sm:items-center sm:justify-between">
+    <div
+      className={cn(
+        "rounded-md border border-slate-200 bg-white",
+        compact
+          ? "grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 px-3 py-2"
+          : "flex flex-col gap-3 p-3 sm:flex-row sm:items-center sm:justify-between",
+      )}
+    >
       <label className="flex min-w-0 items-start gap-2 text-xs font-semibold text-slate-800">
         <input
           checked={resolved.enabled}
@@ -1011,7 +1020,10 @@ function StoryDetailerPanel({
         </span>
       </label>
       <button
-        className="inline-flex h-8 shrink-0 items-center justify-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50"
+        className={cn(
+          "inline-flex shrink-0 items-center justify-center gap-2 rounded-md border border-slate-200 bg-white text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50",
+          compact ? "h-7 px-2.5" : "h-8 px-3",
+        )}
         data-testid={`${idPrefix}-settings`}
         onClick={onEdit}
         type="button"
@@ -1096,16 +1108,28 @@ function StoryDetailerSettingsDialog({
   );
 }
 
-function StoryDetailerSettingsEditor({
+export function GenerationDetailerSettingsEditor({
   detailers,
+  disabled = false,
+  idPrefix = "story",
+  layout = "default",
   onChange,
 }: {
   detailers: StoryDetailerSettingsSnapshot;
+  disabled?: boolean;
+  idPrefix?: string;
+  layout?: "default" | "compact" | "compact-strip";
   onChange: (detailers: StoryDetailerSettingsSnapshot) => void;
 }) {
   const [editingDetailer, setEditingDetailer] = useState<StoryDetailerKind | null>(null);
+  const compact = layout !== "default";
+  const embeddedStrip = layout === "compact-strip";
 
   function patchDetailer(kind: StoryDetailerKind, patch: StoryDetailerPatch) {
+    if (disabled) {
+      return;
+    }
+
     onChange(
       sanitizeStoryDetailerSettingsSnapshot({
         ...detailers,
@@ -1118,42 +1142,62 @@ function StoryDetailerSettingsEditor({
   }
 
   return (
-    <fieldset className="grid gap-3 rounded-md border border-slate-200 bg-slate-50 p-3">
+    <fieldset
+      className={cn(
+        "grid disabled:cursor-not-allowed disabled:opacity-60",
+        embeddedStrip
+          ? "content-start gap-2 md:grid-cols-2"
+          : compact
+            ? "content-start gap-2 rounded-md border border-slate-200 bg-slate-50 p-3 md:grid-cols-2 lg:grid-cols-1 2xl:grid-cols-2"
+            : "gap-3 rounded-md border border-slate-200 bg-slate-50 p-3",
+      )}
+      disabled={disabled}
+    >
       <legend className="px-1 text-xs font-semibold uppercase tracking-wide text-slate-600">Detailers</legend>
       <StoryDetailerPanel
+        compact={compact}
         detailer={detailers.faceDetailer}
-        idPrefix="story-face-detailer"
+        idPrefix={`${idPrefix}-face-detailer`}
         kind="faceDetailer"
         label="FaceDetailer"
         onChange={(patch) => patchDetailer("faceDetailer", patch)}
-        onEdit={() => setEditingDetailer("faceDetailer")}
+        onEdit={() => {
+          if (!disabled) {
+            setEditingDetailer("faceDetailer");
+          }
+        }}
       />
       <StoryDetailerPanel
+        compact={compact}
         detailer={detailers.handDetailer}
-        idPrefix="story-hand-detailer"
+        idPrefix={`${idPrefix}-hand-detailer`}
         kind="handDetailer"
         label="HandDetailer"
         onChange={(patch) => patchDetailer("handDetailer", patch)}
-        onEdit={() => setEditingDetailer("handDetailer")}
+        onEdit={() => {
+          if (!disabled) {
+            setEditingDetailer("handDetailer");
+          }
+        }}
       />
       <StoryDetailerSettingsDialog
         detailer={detailers.faceDetailer}
-        idPrefix="story-face-detailer"
+        idPrefix={`${idPrefix}-face-detailer`}
         kind="faceDetailer"
         label="FaceDetailer"
         onChange={(patch) => patchDetailer("faceDetailer", patch)}
         onClose={() => setEditingDetailer(null)}
-        open={editingDetailer === "faceDetailer"}
+        open={!disabled && editingDetailer === "faceDetailer"}
         parameterLabel="face"
       />
       <StoryDetailerSettingsDialog
         detailer={detailers.handDetailer}
-        idPrefix="story-hand-detailer"
+        idPrefix={`${idPrefix}-hand-detailer`}
         kind="handDetailer"
         label="HandDetailer"
         onChange={(patch) => patchDetailer("handDetailer", patch)}
         onClose={() => setEditingDetailer(null)}
-        open={editingDetailer === "handDetailer"}
+        open={!disabled && editingDetailer === "handDetailer"}
         parameterLabel="hand"
       />
     </fieldset>
@@ -2020,7 +2064,7 @@ function StartPanel({
             </div>
 
             <div className="grid min-h-0 content-start gap-4">
-              <StoryDetailerSettingsEditor detailers={detailers} onChange={setDetailers} />
+              <GenerationDetailerSettingsEditor detailers={detailers} onChange={setDetailers} />
 
               <StoryStyleReferencePanel
                 draft={styleReferenceDraft}

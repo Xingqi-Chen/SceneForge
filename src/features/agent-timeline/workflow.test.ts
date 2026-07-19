@@ -12,10 +12,12 @@ import {
   isReservedTimelineNodeId,
   isTimelineNodeRegenerationEligible,
   setTimelineNodeManualResult,
+  updateTimelineSceneInputSettings,
   validateTimelineDependencyDag,
   type TimelineNodeAdapters,
   type TimelineWorkflowState,
 } from ".";
+import { sanitizeRunSceneInputSettingsSnapshot } from "./run-input-settings";
 
 function createClock() {
   let tick = 0;
@@ -173,6 +175,79 @@ describe("agent timeline workflow foundation", () => {
     expect(edited.nodes["generation-gate"].status).toBe("stale");
     expect(edited.nodes["comfyui-execution"].status).toBe("stale");
     expect(edited.nodes["result-display"].status).toBe("stale");
+  });
+
+  it("stales from resource recommendation after Run resource edits and preserves upstream work", () => {
+    const clock = createClock();
+    const workflow = confirmTimelineGeneration(createReadyForGateWorkflow(clock), undefined, { now: clock });
+    const edited = updateTimelineSceneInputSettings(
+      workflow,
+      sanitizeRunSceneInputSettingsSnapshot({
+        detailers: {
+          faceDetailer: { enabled: false },
+          handDetailer: { enabled: false },
+        },
+        promptProfile: "illustrious",
+        stylePalette: {
+          checkpointId: "checkpoint-new",
+          loras: [],
+        },
+      }),
+      "resource-recommendation",
+      { now: clock },
+    );
+
+    expect(edited.generationConfirmed).toBe(false);
+    expect(edited.nodes["scene-prompt"]).toMatchObject(workflow.nodes["scene-prompt"]);
+    expect(edited.nodes["character-tags"]).toMatchObject(workflow.nodes["character-tags"]);
+    expect(edited.nodes["character-action"]).toMatchObject(workflow.nodes["character-action"]);
+    expect(edited.nodes["canvas-binding"]).toMatchObject(workflow.nodes["canvas-binding"]);
+    expect(edited.nodes["resource-recommendation"].status).toBe("stale");
+    expect(edited.nodes["parameter-recommendation"].status).toBe("stale");
+    expect(edited.nodes["generation-gate"].status).toBe("stale");
+    expect(edited.nodes["comfyui-execution"].status).toBe("stale");
+    expect(edited.nodes["result-display"].status).toBe("stale");
+    expect(edited.nodes["scene-input"].result).toMatchObject({
+      settingsSnapshot: {
+        stylePalette: { checkpointId: "checkpoint-new", loras: [] },
+      },
+    });
+  });
+
+  it("stales from parameter recommendation after Run parameter or detailer edits", () => {
+    const clock = createClock();
+    const workflow = confirmTimelineGeneration(createReadyForGateWorkflow(clock), undefined, { now: clock });
+    const edited = updateTimelineSceneInputSettings(
+      workflow,
+      sanitizeRunSceneInputSettingsSnapshot({
+        detailers: {
+          faceDetailer: { enabled: true, detectorModelName: "bbox/custom-face.pt", steps: 18 },
+          handDetailer: { enabled: false },
+        },
+        promptProfile: "illustrious",
+      }),
+      "parameter-recommendation",
+      { now: clock },
+    );
+
+    expect(edited.generationConfirmed).toBe(false);
+    expect(edited.nodes["resource-recommendation"]).toMatchObject(workflow.nodes["resource-recommendation"]);
+    expect(edited.nodes["parameter-recommendation"].status).toBe("stale");
+    expect(edited.nodes["generation-gate"].status).toBe("stale");
+    expect(edited.nodes["comfyui-execution"].status).toBe("stale");
+    expect(edited.nodes["result-display"].status).toBe("stale");
+    expect(edited.nodes["scene-input"].result).toMatchObject({
+      settingsSnapshot: {
+        detailers: {
+          faceDetailer: {
+            enabled: true,
+            detectorModelName: "bbox/custom-face.pt",
+            steps: 18,
+          },
+          handDetailer: { enabled: false },
+        },
+      },
+    });
   });
 
   it("allows stale nodes to regenerate only after dependencies are valid", () => {

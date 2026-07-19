@@ -38,7 +38,22 @@ import {
   normalizeTimelineImageCount,
   normalizeTimelineSourceDenoise,
   setTimelineNodeManualResult,
+  updateTimelineSceneInputSettings,
 } from "@/features/agent-timeline/state";
+import {
+  createGenerationDetailerSettingsSnapshot,
+  type GenerationDetailerSettingsSnapshot,
+} from "@/features/agent-timeline/generation-detailers";
+import {
+  createGenerationStylePaletteSnapshot,
+  createSavedParametersFromGenerationStylePalette,
+  type GenerationStylePaletteSnapshot,
+} from "@/features/agent-timeline/generation-style-palette";
+import {
+  createRunSceneInputSettingsSnapshot,
+  getRunSceneInputSettings,
+  type RunSceneInputSettingsSnapshot,
+} from "@/features/agent-timeline/run-input-settings";
 import {
   createTimelineT5NodeAdapters,
   normalizeCharacterTagsTimelineResult,
@@ -91,9 +106,17 @@ import {
   type PendingPromptTagImportReview,
 } from "@/features/editor/components/PromptTagImportReviewDialog";
 import {
+  ComfyUiGenerationDialog,
   toDraft,
   type GenerationDraft,
 } from "@/features/editor/components/ImageGenerationPanel";
+import {
+  EMPTY_STYLE_PALETTE_ADVICE,
+  StylePaletteAiAdvicePanel,
+  type StylePaletteAdviceState,
+} from "@/features/editor/components/StylePaletteAiAdvicePanel";
+import { StylePaletteCivitaiResourceSelector } from "@/features/editor/components/StylePaletteCivitaiResourceSelector";
+import type { SavedComfyUiGenerationParams } from "@/shared/types";
 import { useEditorStore } from "@/features/editor/store/editor-store";
 import {
   getLlmProxyErrorMessage,
@@ -148,6 +171,7 @@ import {
 import { TimelineScenePromptWorkspace } from "./TimelineScenePromptWorkspace";
 import { TimelineWorkflowProjectMenu } from "./TimelineWorkflowProjectMenu";
 import { getTimelineNodeOutputText, timelineNodeContent } from "./timeline-node-content";
+import { GenerationDetailerSettingsEditor } from "./StoryPlanningPreview";
 
 type DraftMap = Partial<Record<TimelineNodeId, string>>;
 type NoticeMap = Partial<Record<TimelineNodeId, string>>;
@@ -156,6 +180,11 @@ type OutputDisplayModeMap = TimelineOutputDisplayModeMap;
 type SceneInputAiAction = "rewrite" | "suggest";
 type TimelineAutosaveStatus = "idle" | "loading" | "saved" | "error";
 type TimelineSourceImage = NonNullable<SceneInputTimelineResult["sourceImage"]>;
+
+const EMPTY_SELECTED_CIVITAI_RESOURCES: SelectedCivitaiResourcesPreview = {
+  checkpoint: null,
+  loras: [],
+};
 
 type PendingTimelinePromptTagReview = {
   input: TimelineCanvasBindingInput;
@@ -235,15 +264,17 @@ const stepDisplay: Record<TimelineNodeId, StepDisplay> = {
 };
 
 const timelineHeaderClassName =
-  "grid min-h-14 shrink-0 grid-cols-1 items-center gap-3 border-b border-slate-200 bg-white px-3 py-2 sm:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] sm:px-4";
-const timelineHeaderPrimaryClassName = "flex min-w-0 items-center gap-3";
+  "grid min-h-14 shrink-0 grid-cols-1 items-center gap-2 border-b border-slate-200 bg-white px-3 py-2 sm:grid-cols-[minmax(0,1fr)_auto] sm:gap-x-3 sm:px-4 xl:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] xl:gap-x-4";
+const timelineHeaderPrimaryClassName =
+  "flex min-w-0 items-center gap-3 sm:col-start-1 sm:row-start-1 xl:col-start-1";
 const timelineHeaderIdentityClassName =
-  "flex min-w-0 max-w-[min(38rem,50vw)] items-center gap-3";
-const timelineHeaderProjectClassName = "flex min-w-0 justify-center";
+  "flex min-w-0 flex-1 items-center gap-3";
+const timelineHeaderProjectClassName =
+  "flex min-w-0 justify-center sm:col-span-2 sm:col-start-1 sm:row-start-2 xl:col-span-1 xl:col-start-2 xl:row-start-1";
 const timelineHeaderContextClassName =
-  "hidden h-9 min-w-0 max-w-[28rem] grid-cols-[auto_minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 text-xs text-slate-600 xl:grid";
+  "hidden h-9 min-w-0 max-w-72 shrink-0 items-center gap-2 whitespace-nowrap rounded-md border border-slate-200 bg-slate-50 px-3 text-xs text-slate-600 2xl:flex";
 const timelineHeaderActionsClassName =
-  "flex min-w-0 flex-wrap items-center justify-start gap-2 sm:justify-end sm:flex-nowrap";
+  "flex min-w-0 flex-wrap items-center justify-start gap-2 sm:col-start-2 sm:row-start-1 sm:flex-nowrap sm:justify-end xl:col-start-3";
 const timelineHeaderNavClassName =
   "flex h-9 shrink-0 items-center gap-1 rounded-md border border-slate-200 bg-slate-50 p-1";
 const timelineHeaderNavCurrentClassName =
@@ -667,6 +698,7 @@ function createManualResult(
   imageCount = DEFAULT_TIMELINE_IMAGE_COUNT,
   sourceImage?: TimelineSourceImage | null,
   sourceDenoise = DEFAULT_TIMELINE_SOURCE_DENOISE,
+  settingsSnapshot?: RunSceneInputSettingsSnapshot,
 ) {
   if (nodeId === "scene-input") {
     return {
@@ -675,6 +707,7 @@ function createManualResult(
       imageCount: sourceImage ? 1 : normalizeTimelineImageCount(imageCount),
       ...(sourceImage ? { sourceDenoise: normalizeTimelineSourceDenoise(sourceDenoise) } : {}),
       ...(sourceImage ? { sourceImage } : {}),
+      ...(settingsSnapshot ? { settingsSnapshot } : {}),
     } satisfies SceneInputTimelineResult;
   }
 
@@ -999,6 +1032,16 @@ export function TimelineShell() {
   const [selectedImageCount, setSelectedImageCount] = useState(DEFAULT_TIMELINE_IMAGE_COUNT);
   const [selectedSourceDenoise, setSelectedSourceDenoise] = useState(DEFAULT_TIMELINE_SOURCE_DENOISE);
   const [selectedSourceImage, setSelectedSourceImage] = useState<TimelineSourceImage | null>(null);
+  const [detailers, setDetailers] = useState<GenerationDetailerSettingsSnapshot>(
+    () => createGenerationDetailerSettingsSnapshot(),
+  );
+  const [selectedStyleCheckpointId, setSelectedStyleCheckpointId] = useState<string | null>(null);
+  const [selectedStyleLoraIds, setSelectedStyleLoraIds] = useState<string[]>([]);
+  const [selectedStyleResources, setSelectedStyleResources] =
+    useState<SelectedCivitaiResourcesPreview>(EMPTY_SELECTED_CIVITAI_RESOURCES);
+  const [stylePalette, setStylePalette] = useState<GenerationStylePaletteSnapshot | undefined>();
+  const [styleAdvice, setStyleAdvice] = useState<StylePaletteAdviceState>(EMPTY_STYLE_PALETTE_ADVICE);
+  const [parametersOpen, setParametersOpen] = useState(false);
   const [workflow, setWorkflow] = useState<TimelineWorkflowState | null>(null);
   const [workflowProjectId, setWorkflowProjectId] = useState<string | null>(null);
   const [workflowProjectName, setWorkflowProjectName] = useState("");
@@ -1008,6 +1051,7 @@ export function TimelineShell() {
   const [outputDisplayModes, setOutputDisplayModes] = useState<OutputDisplayModeMap>({});
   const [notices, setNotices] = useState<NoticeMap>({});
   const [isRunning, setIsRunning] = useState(false);
+  const isRunningRef = useRef(false);
   const activeRunIdRef = useRef(0);
   const sourceImageInputRef = useRef<HTMLInputElement | null>(null);
   const [pendingPromptTagReview, setPendingPromptTagReview] =
@@ -1046,6 +1090,10 @@ export function TimelineShell() {
   const selectedIsNonEditableAiNode = nonEditableAiNodeIds.has(selectedNodeId);
   const timelineResultDraft = useMemo(() => getTimelineExecutionDraft(activeWorkflow), [activeWorkflow]);
   const timelineResultSelectedResources = useMemo(() => getTimelineSelectedResources(activeWorkflow), [activeWorkflow]);
+  const savedStyleParameters = useMemo(
+    () => createSavedParametersFromGenerationStylePalette(stylePalette, selectedStyleResources),
+    [selectedStyleResources, stylePalette],
+  );
   const sceneRequestIsUsable = sceneRequest.trim().length > 0;
   const selectedNodeAiDisabled =
     isRunning ||
@@ -1056,6 +1104,29 @@ export function TimelineShell() {
   const workflowTitle = workflow ? workflowProjectName.trim() || sceneRequest || "Unnamed workflow" : "Untitled workflow";
   const workflowMode = workflow ? "Run shell" : "Draft setup";
   const sceneInputAiSource = sceneRequest.trim() || getSceneInputRawIntent(workflow).trim();
+
+  function updateIsRunning(nextIsRunning: boolean) {
+    isRunningRef.current = nextIsRunning;
+    setIsRunning(nextIsRunning);
+    if (nextIsRunning) {
+      setParametersOpen(false);
+    }
+  }
+
+  function getComposerSettingsSnapshot(
+    overrides: Partial<{
+      detailers: GenerationDetailerSettingsSnapshot;
+      promptProfile: PromptProfileId;
+      stylePalette: GenerationStylePaletteSnapshot | undefined;
+    }> = {},
+  ): RunSceneInputSettingsSnapshot {
+    return createRunSceneInputSettingsSnapshot({
+      detailers: overrides.detailers ?? detailers,
+      promptProfile: overrides.promptProfile ?? selectedPromptProfile,
+      stylePalette: "stylePalette" in overrides ? overrides.stylePalette : stylePalette,
+    });
+  }
+
   function clearPendingPromptTagReview() {
     pendingPromptTagReviewRef.current = null;
     setPendingPromptTagReview(null);
@@ -1102,6 +1173,10 @@ export function TimelineShell() {
     }
 
     const restoredImageCount = normalizeTimelineImageCount(record.selectedImageCount);
+    const restoredSceneInput = record.workflow.nodes["scene-input"].result;
+    const restoredSettings = getRunSceneInputSettings(
+      isRecord(restoredSceneInput) ? restoredSceneInput : {},
+    );
     const projectId = record.projectId ?? null;
     const projectName = record.name ?? "";
     const autosaveInput: TimelineWorkflowRecordInput = {
@@ -1125,6 +1200,13 @@ export function TimelineShell() {
     setSelectedImageCount(restoredImageCount);
     setSelectedSourceDenoise(getSceneInputSourceDenoise(record.workflow));
     setSelectedSourceImage(getSceneInputSourceImage(record.workflow));
+    setDetailers(restoredSettings.detailers);
+    setStylePalette(restoredSettings.stylePalette);
+    setSelectedStyleCheckpointId(restoredSettings.stylePalette?.checkpointId ?? null);
+    setSelectedStyleLoraIds(restoredSettings.stylePalette?.loras.map((lora) => lora.id) ?? []);
+    setSelectedStyleResources(EMPTY_SELECTED_CIVITAI_RESOURCES);
+    setStyleAdvice(EMPTY_STYLE_PALETTE_ADVICE);
+    setParametersOpen(false);
     setSelectedNodeId(record.selectedNodeId);
     setEditingNodeId(null);
     setDrafts({});
@@ -1487,7 +1569,7 @@ export function TimelineShell() {
     const runId = activeRunIdRef.current + 1;
     activeRunIdRef.current = runId;
 
-    setIsRunning(true);
+    updateIsRunning(true);
     setNotices({});
 
     const handleWorkflowUpdate = (update: TimelineWorkflowUpdate) => {
@@ -1620,7 +1702,7 @@ export function TimelineShell() {
       }));
     } finally {
       if (isCurrentRun(runId)) {
-        setIsRunning(false);
+        updateIsRunning(false);
       }
     }
   }
@@ -1635,7 +1717,7 @@ export function TimelineShell() {
 
     const runId = activeRunIdRef.current + 1;
     activeRunIdRef.current = runId;
-    setIsRunning(true);
+    updateIsRunning(true);
     setSelectedNodeId("comfyui-execution");
     setWorkflow((currentWorkflow) => {
       if (!currentWorkflow || currentWorkflow.workflowId !== targetWorkflow.workflowId) {
@@ -1691,7 +1773,7 @@ export function TimelineShell() {
       }));
     } finally {
       if (isCurrentRun(runId)) {
-        setIsRunning(false);
+        updateIsRunning(false);
       }
     }
   }
@@ -1710,6 +1792,7 @@ export function TimelineShell() {
       imageCount: selectedSourceImage ? 1 : selectedImageCount,
       promptProfile: selectedPromptProfile,
       sceneRequest: trimmedSceneRequest,
+      settingsSnapshot: getComposerSettingsSnapshot(),
       sourceDenoise: selectedSourceDenoise,
       sourceImage: selectedSourceImage ?? undefined,
     });
@@ -1759,6 +1842,12 @@ export function TimelineShell() {
     const promptProfile = normalizePromptProfileId(value);
 
     setSelectedPromptProfile(promptProfile);
+    setSelectedStyleCheckpointId(null);
+    setSelectedStyleLoraIds([]);
+    setSelectedStyleResources(EMPTY_SELECTED_CIVITAI_RESOURCES);
+    setStylePalette(undefined);
+    setStyleAdvice(EMPTY_STYLE_PALETTE_ADVICE);
+    setParametersOpen(false);
 
     if (!workflow || isRunning) {
       return;
@@ -1781,6 +1870,7 @@ export function TimelineShell() {
       promptProfile,
       ...(selectedSourceImage ? { sourceDenoise: selectedSourceDenoise } : {}),
       ...(selectedSourceImage ? { sourceImage: selectedSourceImage } : {}),
+      settingsSnapshot: getComposerSettingsSnapshot({ promptProfile, stylePalette: undefined }),
     } satisfies SceneInputTimelineResult), {
       sceneRequest: rawIntent,
       selectedPromptProfile: promptProfile,
@@ -1811,6 +1901,7 @@ export function TimelineShell() {
       rawIntent,
       imageCount,
       promptProfile: selectedPromptProfile,
+      settingsSnapshot: getComposerSettingsSnapshot(),
     } satisfies SceneInputTimelineResult), {
       sceneRequest: rawIntent,
       selectedImageCount: imageCount,
@@ -1846,6 +1937,7 @@ export function TimelineShell() {
       promptProfile: selectedPromptProfile,
       ...(sourceImage ? { sourceDenoise } : {}),
       ...(sourceImage ? { sourceImage } : {}),
+      settingsSnapshot: getComposerSettingsSnapshot(),
     } satisfies SceneInputTimelineResult), {
       sceneRequest: rawIntent,
       selectedImageCount: imageCount,
@@ -1878,6 +1970,7 @@ export function TimelineShell() {
       promptProfile: selectedPromptProfile,
       sourceDenoise: denoise,
       sourceImage: selectedSourceImage,
+      settingsSnapshot: getComposerSettingsSnapshot(),
     } satisfies SceneInputTimelineResult), {
       sceneRequest: rawIntent,
       selectedImageCount: 1,
@@ -1938,6 +2031,86 @@ export function TimelineShell() {
     reader.readAsDataURL(file);
   }
 
+  function commitComposerSettingChange(
+    nextSettings: RunSceneInputSettingsSnapshot,
+    staleFromNodeId: "resource-recommendation" | "parameter-recommendation",
+    message: string,
+  ) {
+    if (!workflow || isRunningRef.current) {
+      return;
+    }
+
+    commitWorkflow(updateTimelineSceneInputSettings(workflow, nextSettings, staleFromNodeId));
+    setNotices((current) => ({
+      ...current,
+      "scene-input": message,
+    }));
+  }
+
+  function handleStyleResourceSelection(selection: { checkpointId: string | null; loraIds: string[] }) {
+    if (isRunningRef.current) {
+      return;
+    }
+
+    const nextStylePalette = createGenerationStylePaletteSnapshot({
+      checkpointId: selection.checkpointId,
+      loraIds: selection.loraIds,
+    });
+
+    setSelectedStyleCheckpointId(selection.checkpointId);
+    setSelectedStyleLoraIds(selection.loraIds);
+    setSelectedStyleResources(EMPTY_SELECTED_CIVITAI_RESOURCES);
+    setStylePalette(nextStylePalette);
+    setStyleAdvice(EMPTY_STYLE_PALETTE_ADVICE);
+    setParametersOpen(false);
+    commitComposerSettingChange(
+      getComposerSettingsSnapshot({ stylePalette: nextStylePalette }),
+      "resource-recommendation",
+      "Run style resources changed. Resource recommendation and downstream nodes are stale.",
+    );
+  }
+
+  function handleDetailersChange(nextDetailers: GenerationDetailerSettingsSnapshot) {
+    if (isRunningRef.current) {
+      return;
+    }
+
+    setDetailers(nextDetailers);
+    commitComposerSettingChange(
+      getComposerSettingsSnapshot({ detailers: nextDetailers }),
+      "parameter-recommendation",
+      "Run detailers changed. Parameter preview and downstream nodes are stale.",
+    );
+  }
+
+  function handleSaveStyleParameters(parameters: SavedComfyUiGenerationParams) {
+    if (isRunningRef.current) {
+      return;
+    }
+
+    const nextStylePalette = createGenerationStylePaletteSnapshot({
+      checkpointId: selectedStyleCheckpointId,
+      loraIds: selectedStyleLoraIds,
+      savedParameters: parameters,
+    });
+
+    if (!nextStylePalette?.checkpointId) {
+      setNotices((current) => ({
+        ...current,
+        "scene-input": "Select a ready checkpoint before saving Run parameters.",
+      }));
+      return;
+    }
+
+    setStylePalette(nextStylePalette);
+    setParametersOpen(false);
+    commitComposerSettingChange(
+      getComposerSettingsSnapshot({ stylePalette: nextStylePalette }),
+      "parameter-recommendation",
+      "Run parameters saved. Parameter recommendation and downstream nodes are stale.",
+    );
+  }
+
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     startWorkflow();
@@ -1990,7 +2163,7 @@ export function TimelineShell() {
     }
 
     invalidateTimelineRun();
-    setIsRunning(false);
+    updateIsRunning(false);
     commitWorkflow(setTimelineNodeManualResult(
       workflow,
       nodeId,
@@ -2001,6 +2174,7 @@ export function TimelineShell() {
         selectedImageCount,
         selectedSourceImage,
         selectedSourceDenoise,
+        getComposerSettingsSnapshot(),
       ),
     ), {
       sceneRequest: nodeId === "scene-input" ? draft : sceneRequest,
@@ -2022,7 +2196,7 @@ export function TimelineShell() {
     }
 
     invalidateTimelineRun();
-    setIsRunning(false);
+    updateIsRunning(false);
     const nextWorkflow = setTimelineNodeManualResult(workflow, "scene-prompt", result);
     const nextDraft = JSON.stringify(result, null, 2);
 
@@ -2044,7 +2218,7 @@ export function TimelineShell() {
     }
 
     invalidateTimelineRun();
-    setIsRunning(false);
+    updateIsRunning(false);
     const nextWorkflow = setTimelineNodeManualResult(workflow, "resource-recommendation", result);
 
     commitWorkflow(nextWorkflow);
@@ -2065,7 +2239,7 @@ export function TimelineShell() {
     }
 
     invalidateTimelineRun();
-    setIsRunning(false);
+    updateIsRunning(false);
     const nextWorkflow = setTimelineNodeManualResult(workflow, "parameter-recommendation", result);
 
     commitWorkflow(nextWorkflow);
@@ -2099,7 +2273,7 @@ export function TimelineShell() {
 
     const runId = activeRunIdRef.current + 1;
     activeRunIdRef.current = runId;
-    setIsRunning(true);
+    updateIsRunning(true);
     setEditingNodeId(null);
     if (workflow) {
       commitWorkflow(markTimelineNodeRunning(workflow, "scene-input"));
@@ -2135,6 +2309,7 @@ export function TimelineShell() {
             promptProfile: selectedPromptProfile,
             ...(selectedSourceImage ? { sourceDenoise: selectedSourceDenoise } : {}),
             ...(selectedSourceImage ? { sourceImage: selectedSourceImage } : {}),
+            settingsSnapshot: getComposerSettingsSnapshot(),
           } satisfies SceneInputTimelineResult)
         : null;
 
@@ -2174,7 +2349,7 @@ export function TimelineShell() {
       }));
     } finally {
       if (isCurrentRun(runId)) {
-        setIsRunning(false);
+        updateIsRunning(false);
       }
     }
   }
@@ -2224,12 +2399,19 @@ export function TimelineShell() {
     setSelectedImageCount(DEFAULT_TIMELINE_IMAGE_COUNT);
     setSelectedSourceDenoise(DEFAULT_TIMELINE_SOURCE_DENOISE);
     setSelectedSourceImage(null);
+    setDetailers(createGenerationDetailerSettingsSnapshot());
+    setSelectedStyleCheckpointId(null);
+    setSelectedStyleLoraIds([]);
+    setSelectedStyleResources(EMPTY_SELECTED_CIVITAI_RESOURCES);
+    setStylePalette(undefined);
+    setStyleAdvice(EMPTY_STYLE_PALETTE_ADVICE);
+    setParametersOpen(false);
     setSelectedNodeId("scene-input");
     setEditingNodeId(null);
     setDrafts({});
     setOutputDisplayModes({});
     setNotices({});
-    setIsRunning(false);
+    updateIsRunning(false);
     setAutosaveStatus("idle");
     setAutosaveMessage("");
     void deleteActiveTimelineWorkflowRecord().catch((error) => {
@@ -2246,7 +2428,7 @@ export function TimelineShell() {
     if (autosaveTimeoutRef.current) {
       window.clearTimeout(autosaveTimeoutRef.current);
     }
-    setIsRunning(false);
+    updateIsRunning(false);
     applyTimelineWorkflowRecord(record, "Opened the saved timeline workflow.", { saveActive: true });
   }
 
@@ -2327,6 +2509,116 @@ export function TimelineShell() {
         title="导入新的部位提示词"
       />
     ) : null;
+  }
+
+  function renderGenerationControls() {
+    const canEditParameters = Boolean(
+      selectedStyleCheckpointId && selectedStyleResources.checkpoint?.id === selectedStyleCheckpointId,
+    );
+
+    return (
+      <div className="border-t border-slate-200 bg-white p-3">
+        <section className="rounded-md border border-indigo-100 bg-indigo-50/40 p-3">
+          <div className="mb-3 grid gap-3 border-b border-indigo-100 pb-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-start">
+            <div className="min-w-0">
+              <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-600">
+                Style resources / parameters
+              </h3>
+              <p className="mt-1 text-xs leading-relaxed text-slate-500">
+                Optional ready local checkpoint, LoRAs, and generation settings for this Run.
+              </p>
+            </div>
+            <Button
+              className="h-8 px-3 text-xs shadow-none"
+              disabled={isRunning || !canEditParameters}
+              onClick={() => setParametersOpen(true)}
+              title={canEditParameters
+                ? "Edit Run generation parameters"
+                : "Select a ready checkpoint before editing Run parameters"}
+              type="button"
+              variant="secondary"
+            >
+              <SlidersHorizontal className="size-3.5" />
+              Parameters
+            </Button>
+          </div>
+          <StylePaletteCivitaiResourceSelector
+            disabled={isRunning}
+            onSelectedResourcesChange={(resources) => {
+              if (!isRunningRef.current) {
+                setSelectedStyleResources(resources);
+              }
+            }}
+            onSelectionChange={handleStyleResourceSelection}
+            pickerLayout="dialog"
+            promptProfile={selectedPromptProfile}
+            readyOnly
+            selectedCheckpointId={selectedStyleCheckpointId}
+            selectedLoraIds={selectedStyleLoraIds}
+            summaryDensity="compact"
+            summaryLayout="run-grid"
+          />
+          {savedStyleParameters ? (
+            <p className="mt-2 rounded-md border border-emerald-100 bg-white px-3 py-2 text-xs leading-relaxed text-emerald-700">
+              Saved parameters: {savedStyleParameters.width}x{savedStyleParameters.height},{" "}
+              {savedStyleParameters.steps} steps, CFG {savedStyleParameters.cfg},{" "}
+              {savedStyleParameters.samplerName}/{savedStyleParameters.scheduler}
+              {savedStyleParameters.seedMode === "fixed"
+                ? `, fixed seed ${savedStyleParameters.seed}`
+                : ", random seed"}
+            </p>
+          ) : (
+            <p className="mt-2 text-xs leading-relaxed text-slate-500">
+              Without saved parameters, Run keeps automatic parameter advice.
+            </p>
+          )}
+          <div className="mt-3 border-t border-indigo-100 pt-3">
+            <GenerationDetailerSettingsEditor
+              detailers={detailers}
+              disabled={isRunning}
+              idPrefix="run"
+              layout="compact-strip"
+              onChange={handleDetailersChange}
+            />
+          </div>
+          <ComfyUiGenerationDialog
+            activePrompt={sceneRequest || "Run generation parameter preview"}
+            advice={styleAdvice.result}
+            allowControlNet={false}
+            allowDiagnosis={false}
+            allowInpaint={false}
+            baseNegativePrompt=""
+            description="Save Run generation parameters without submitting a ComfyUI test generation."
+            introContent={
+              <StylePaletteAiAdvicePanel
+                advice={styleAdvice}
+                disabled={isRunning}
+                emptyMessage="Advice uses only the selected ready local resources for this Run."
+                onAdviceChange={(nextAdvice) => {
+                  if (!isRunningRef.current) {
+                    setStyleAdvice(nextAdvice);
+                  }
+                }}
+                resources={selectedStyleResources}
+              />
+            }
+            onClose={() => setParametersOpen(false)}
+            onSaveParameters={handleSaveStyleParameters}
+            open={!isRunning && parametersOpen && canEditParameters}
+            parametersOnly
+            promptRefreshKey={[
+              sceneRequest,
+              selectedStyleCheckpointId ?? "",
+              selectedStyleLoraIds.join(","),
+            ].join("\u0000")}
+            savedParameters={savedStyleParameters}
+            selectedCheckpointId={selectedStyleCheckpointId}
+            selectedLoraIds={selectedStyleLoraIds}
+            title="Run generation parameters"
+          />
+        </section>
+      </div>
+    );
   }
 
   function renderSceneComposer(className = "rounded-md border border-slate-200 bg-slate-50") {
@@ -2448,6 +2740,7 @@ export function TimelineShell() {
             </Button>
           </div>
         ) : null}
+        {renderGenerationControls()}
         <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-200 px-3 py-2">
           <div className="flex flex-wrap items-center gap-1.5">
             <Button
@@ -2495,9 +2788,11 @@ export function TimelineShell() {
               <div className="flex size-8 shrink-0 items-center justify-center rounded-md border border-slate-200 bg-slate-50 text-slate-700">
                 <Workflow className="size-4" />
               </div>
-              <div className="min-w-0">
+              <div className="min-w-0 flex-1">
                 <h1 className="text-sm font-bold text-slate-900">SceneForge</h1>
-                <p className="break-words text-[11px] text-slate-500">{workflowTitle}</p>
+                <p className="truncate text-[11px] text-slate-500" title={workflowTitle}>
+                  {workflowTitle}
+                </p>
               </div>
             </div>
           </div>
@@ -2520,17 +2815,17 @@ export function TimelineShell() {
               New scene
             </Button>
             <nav aria-label="Workspace mode" className={timelineHeaderNavClassName}>
-              <span aria-current="page" className={cn(timelineHeaderNavCurrentClassName, "bg-white")}>
+              <span aria-current="page" aria-label="Run" className={cn(timelineHeaderNavCurrentClassName, "bg-white")}>
                 <Workflow className="size-3.5" />
-                <span className="hidden sm:inline">Run</span>
+                <span className="hidden lg:inline">Run</span>
               </span>
               <Link aria-label="Open Story Graph planning" className={timelineHeaderNavLinkClassName} href="/story" title="Open Story Graph planning">
                 <GitBranch className="size-3.5" />
-                <span className="hidden sm:inline">Story</span>
+                <span className="hidden lg:inline">Story</span>
               </Link>
               <Link aria-label="Open settings" className={timelineHeaderNavLinkClassName} href="/settings" title="Open settings">
                 <Settings className="size-3.5" />
-                <span className="hidden sm:inline">Settings</span>
+                <span className="hidden lg:inline">Settings</span>
               </Link>
             </nav>
           </div>
@@ -2583,9 +2878,15 @@ export function TimelineShell() {
 
             {generationCanBeConfirmed ? (
               <section className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-amber-200 bg-amber-50 p-4 text-xs leading-relaxed text-amber-800 shadow-sm">
-                <div className="flex min-w-0 gap-2">
+                <div className="grid min-w-0 gap-1">
+                  <div className="flex min-w-0 gap-2">
                   <LockKeyhole className="mt-0.5 size-4 shrink-0" />
                   <p>Review is complete. Confirm before SceneForge queues ComfyUI for rendering.</p>
+                  </div>
+                  <p className="pl-6 text-[11px] text-amber-700">
+                    FaceDetailer {detailers.faceDetailer.enabled ? "enabled" : "disabled"}; HandDetailer{" "}
+                    {detailers.handDetailer.enabled ? "enabled" : "disabled"}.
+                  </p>
                 </div>
                 <Button
                   className="h-9 shrink-0 px-3 text-xs shadow-none"
@@ -2637,16 +2938,20 @@ export function TimelineShell() {
             <div className="flex size-8 shrink-0 items-center justify-center rounded-md border border-slate-200 bg-slate-50 text-slate-700">
               <Workflow className="size-4" />
             </div>
-            <div className="min-w-0">
+            <div className="min-w-0 flex-1">
               <h1 className="text-sm font-bold text-slate-900">SceneForge</h1>
-              <p className="break-words text-[11px] text-slate-500">{workflowTitle}</p>
+              <p className="truncate text-[11px] text-slate-500" title={workflowTitle}>
+                {workflowTitle}
+              </p>
             </div>
           </div>
           <div className={timelineHeaderContextClassName}>
-            <CircleDot className="size-3.5 text-blue-600" />
-            <span className="break-words text-right">{workflowMode}</span>
-            <span className="text-slate-300">/</span>
-            <span className="break-words">{selectedContent.title}</span>
+            <CircleDot className="size-3.5 shrink-0 text-blue-600" />
+            <span className="shrink-0">{workflowMode}</span>
+            <span className="shrink-0 text-slate-300">/</span>
+            <span className="min-w-0 truncate" title={selectedContent.title}>
+              {selectedContent.title}
+            </span>
           </div>
         </div>
         <div className={timelineHeaderProjectClassName}>
@@ -2677,17 +2982,17 @@ export function TimelineShell() {
             {workflow ? "Run node" : "Start"}
           </Button>
           <nav aria-label="Workspace mode" className={timelineHeaderNavClassName}>
-            <span aria-current="page" className={cn(timelineHeaderNavCurrentClassName, "bg-white")}>
+            <span aria-current="page" aria-label="Run" className={cn(timelineHeaderNavCurrentClassName, "bg-white")}>
               <Workflow className="size-3.5" />
-              <span className="hidden sm:inline">Run</span>
+              <span className="hidden lg:inline">Run</span>
             </span>
             <Link aria-label="Open Story Graph planning" className={timelineHeaderNavLinkClassName} href="/story" title="Open Story Graph planning">
               <GitBranch className="size-3.5" />
-              <span className="hidden sm:inline">Story</span>
+              <span className="hidden lg:inline">Story</span>
             </Link>
             <Link aria-label="Open settings" className={timelineHeaderNavLinkClassName} href="/settings" title="Open settings">
               <Settings className="size-3.5" />
-              <span className="hidden sm:inline">Settings</span>
+              <span className="hidden lg:inline">Settings</span>
             </Link>
           </nav>
         </div>
@@ -2927,6 +3232,7 @@ export function TimelineShell() {
                         </Button>
                       </div>
                     ) : null}
+                    {renderGenerationControls()}
                     <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-200 px-3 py-2">
                       <div className="flex flex-wrap items-center gap-1.5">
                         <Button
@@ -2983,11 +3289,17 @@ export function TimelineShell() {
 
                 {selectedNodeId === "generation-gate" ? (
                   <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-amber-200 bg-amber-50 p-3 text-xs leading-relaxed text-amber-800">
-                    <div className="flex min-w-0 gap-2">
+                    <div className="grid min-w-0 gap-1">
+                      <div className="flex min-w-0 gap-2">
                       <LockKeyhole className="mt-0.5 size-4 shrink-0" />
                       <p>
                         ComfyUI execution requires explicit confirmation. The timeline stops here until you confirm the
                         render request.
+                      </p>
+                      </div>
+                      <p className="pl-6 text-[11px] text-amber-700">
+                        FaceDetailer {detailers.faceDetailer.enabled ? "enabled" : "disabled"}; HandDetailer{" "}
+                        {detailers.handDetailer.enabled ? "enabled" : "disabled"}.
                       </p>
                     </div>
                     <Button

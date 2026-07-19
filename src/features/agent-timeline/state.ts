@@ -1,6 +1,7 @@
 import {
   areCommonWorkflowDependenciesSatisfied,
   canRunCommonWorkflowNode,
+  getCommonWorkflowDownstreamClosure,
   refreshCommonWorkflowReadiness,
   setCommonWorkflowNodeManualResult,
 } from "./workflow-definition";
@@ -21,6 +22,7 @@ import {
   type TimelineWorkflowState,
 } from "./types";
 import { normalizePromptProfileId, type PromptProfileId } from "@/shared/prompt-profile";
+import { sanitizeRunSceneInputSettingsSnapshot, type RunSceneInputSettingsSnapshot } from "./run-input-settings";
 
 type TimelineClock = () => string;
 
@@ -31,7 +33,7 @@ type TimelineWorkflowOptions = {
   sceneRequest?: string;
   sourceDenoise?: number;
   sourceImage?: SceneInputTimelineResult["sourceImage"];
-  settingsSnapshot?: unknown;
+  settingsSnapshot?: Partial<RunSceneInputSettingsSnapshot>;
   now?: TimelineClock;
 };
 
@@ -207,7 +209,7 @@ export function createTimelineWorkflowState(options: TimelineWorkflowOptions = {
       imageCount: options.sourceImage ? 1 : normalizeTimelineImageCount(options.imageCount),
       ...(options.sourceImage ? { sourceDenoise: normalizeTimelineSourceDenoise(options.sourceDenoise) } : {}),
       ...(options.sourceImage ? { sourceImage: options.sourceImage } : {}),
-      settingsSnapshot: options.settingsSnapshot,
+      settingsSnapshot: sanitizeRunSceneInputSettingsSnapshot(options.settingsSnapshot),
     } satisfies SceneInputTimelineResult,
     source: "manual",
     updatedAt: timestamp,
@@ -358,6 +360,49 @@ export function setTimelineNodeManualResult<T>(
       : workflow.generationConfirmed;
 
   return refreshTimelineReadiness(withUpdatedWorkflow(workflow, nodes, updatedAt, generationConfirmed));
+}
+
+export function updateTimelineSceneInputSettings(
+  workflow: TimelineWorkflowState,
+  settingsSnapshot: RunSceneInputSettingsSnapshot,
+  staleFromNodeId: "resource-recommendation" | "parameter-recommendation",
+  options: TimelineMutationOptions = {},
+): TimelineWorkflowState {
+  const sceneInput = workflow.nodes["scene-input"].result;
+  if (!isRecord(sceneInput)) {
+    throw new TimelineNodeExecutionError(
+      createTimelineNodeError("timeline_request_invalid", "Scene input settings require a completed scene input."),
+    );
+  }
+
+  const now = options.now ?? defaultNow;
+  const updatedAt = now();
+  const definition = getTimelineWorkflowDefinition(workflow.workflowMode);
+  const nodes = cloneNodeMap(workflow.nodes);
+  const staleNodeIds = [
+    staleFromNodeId,
+    ...getCommonWorkflowDownstreamClosure(staleFromNodeId, definition.nodeIds, definition.dependencyDag),
+  ];
+
+  nodes["scene-input"] = {
+    ...nodes["scene-input"],
+    result: {
+      ...sceneInput,
+      settingsSnapshot: sanitizeRunSceneInputSettingsSnapshot(settingsSnapshot),
+    } as SceneInputTimelineResult,
+    updatedAt,
+  };
+
+  for (const nodeId of staleNodeIds) {
+    nodes[nodeId] = {
+      ...nodes[nodeId],
+      status: "stale",
+      error: undefined,
+      updatedAt,
+    };
+  }
+
+  return refreshTimelineReadiness(withUpdatedWorkflow(workflow, nodes, updatedAt, false));
 }
 
 export function confirmTimelineGeneration(

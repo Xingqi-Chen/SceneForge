@@ -15,6 +15,7 @@ import {
   makeCivitaiResourceTargetFileName,
 } from "@/features/civitai-lora-library/resource-files";
 import { selectedCivitaiResourceCards } from "@/features/editor/ai-prompt/civitai-ai-context";
+import type { PromptProfileId } from "@/shared/prompt-profile";
 
 type LoadStatus = "idle" | "loading" | "success" | "error";
 type CivitaiPickerKind = "checkpoint" | "lora";
@@ -29,11 +30,16 @@ export type StylePaletteCivitaiResourceSelection = {
 };
 
 export type StylePaletteCivitaiResourceSelectorProps = {
+  disabled?: boolean;
   selectedCheckpointId: string | null;
   selectedLoraIds: string[];
   onSelectionChange: (selection: StylePaletteCivitaiResourceSelection) => void;
   onSelectedResourcesChange?: (resources: SelectedCivitaiResourcesPreview) => void;
   pickerLayout?: "inline" | "dialog";
+  promptProfile?: PromptProfileId;
+  readyOnly?: boolean;
+  summaryDensity?: "default" | "compact";
+  summaryLayout?: "stack" | "run-grid";
 };
 
 const EMPTY_SELECTED_CIVITAI_RESOURCES: SelectedCivitaiResourcesPreview = {
@@ -282,9 +288,11 @@ function ResourceCard({
 }
 
 function CompactResourceRow({
+  density,
   onRemove,
   resource,
 }: {
+  density: "default" | "compact";
   onRemove: () => void;
   resource: SelectedCivitaiResourcePreview;
 }) {
@@ -292,10 +300,17 @@ function CompactResourceRow({
     ? (getCivitaiImageVariantUrl(resource.previewImage, 160) ?? resource.previewImage)
     : null;
   const trainedWords = resource.trainedWords.slice(0, 4);
+  const compact = density === "compact";
 
   return (
-    <div className="grid min-h-10 grid-cols-[32px_minmax(0,1fr)_32px] items-center gap-2 rounded-md border border-slate-200 bg-white px-2 py-1.5">
-      <div className="flex size-8 overflow-hidden rounded-md bg-slate-100">
+    <div
+      className={`grid items-center rounded-md border border-slate-200 bg-white ${
+        compact
+          ? "min-h-9 grid-cols-[28px_minmax(0,1fr)_28px] gap-1.5 px-1.5 py-1"
+          : "min-h-10 grid-cols-[32px_minmax(0,1fr)_32px] gap-2 px-2 py-1.5"
+      }`}
+    >
+      <div className={`flex overflow-hidden rounded-md bg-slate-100 ${compact ? "size-7" : "size-8"}`}>
         {previewImage ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img alt={`${resource.name} preview`} className="h-full w-full object-cover" src={previewImage} />
@@ -315,7 +330,7 @@ function CompactResourceRow({
               {weightLabel(resource)}
             </span>
           ) : null}
-          <p className="min-w-0 truncate text-sm font-semibold text-slate-900" title={resource.name}>
+          <p className={`min-w-0 truncate font-semibold text-slate-900 ${compact ? "text-xs" : "text-sm"}`} title={resource.name}>
             {resource.name}
           </p>
         </div>
@@ -333,7 +348,7 @@ function CompactResourceRow({
       </div>
       <Button
         aria-label={`Remove ${resource.resourceType === "model" ? "checkpoint" : "LoRA"} ${resource.name}`}
-        className="size-7 rounded-md border border-rose-100 bg-white p-0 text-rose-700 hover:bg-rose-50"
+        className={`${compact ? "size-6" : "size-7"} rounded-md border border-rose-100 bg-white p-0 text-rose-700 hover:bg-rose-50`}
         onClick={onRemove}
         size="sm"
         title="Remove selected resource"
@@ -347,11 +362,16 @@ function CompactResourceRow({
 }
 
 export function StylePaletteCivitaiResourceSelector({
+  disabled = false,
   onSelectionChange,
   onSelectedResourcesChange,
   pickerLayout = "inline",
+  promptProfile,
+  readyOnly = false,
   selectedCheckpointId,
   selectedLoraIds,
+  summaryDensity = "default",
+  summaryLayout = "stack",
 }: StylePaletteCivitaiResourceSelectorProps) {
   const [selectedResources, setSelectedResources] = useState<SelectedCivitaiResourcesPreview>(EMPTY_SELECTED_CIVITAI_RESOURCES);
   const [selectedCivitaiStatus, setSelectedCivitaiStatus] = useState<LoadStatus>("idle");
@@ -368,6 +388,8 @@ export function StylePaletteCivitaiResourceSelector({
   const selectedLoraIdSet = useMemo(() => new Set(selectedLoraIds), [selectedLoraIds]);
   const selectedResourceCards = useMemo(() => selectedCivitaiResourceCards(selectedResources), [selectedResources]);
   const compactSelectedResources = pickerLayout === "dialog";
+  const denseSelectedResources = compactSelectedResources && summaryDensity === "compact";
+  const runSummaryGrid = compactSelectedResources && summaryLayout === "run-grid";
   const selectedCheckpointBaseModel =
     selectedResources.checkpoint?.id === selectedCheckpointId ? (selectedResources.checkpoint.baseModel ?? null) : null;
   const loraPickerMissingBaseModel =
@@ -393,13 +415,17 @@ export function StylePaletteCivitaiResourceSelector({
   }, [onSelectedResourcesChange]);
 
   function openCivitaiPicker(kind: CivitaiPickerKind) {
+    if (disabled) {
+      return;
+    }
+
     setCivitaiPickerKind(kind);
     setCivitaiPickerQuery("");
     setCivitaiPickerOpen((current) => (current && civitaiPickerKind === kind ? false : true));
   }
 
   function handleToggleCheckpoint(resource: CivitaiResourceListItem) {
-    if (resource.resourceType !== "model") {
+    if (disabled || resource.resourceType !== "model") {
       return;
     }
 
@@ -435,6 +461,10 @@ export function StylePaletteCivitaiResourceSelector({
   }
 
   function removeSelectedCivitaiResource(resource: SelectedCivitaiResourcePreview) {
+    if (disabled) {
+      return;
+    }
+
     if (resource.resourceType === "model") {
       onSelectionChange({
         checkpointId: null,
@@ -456,7 +486,7 @@ export function StylePaletteCivitaiResourceSelector({
   }
 
   function handleToggleLora(resource: CivitaiResourceListItem) {
-    if (resource.resourceType !== "lora" || !selectedCheckpointBaseModel) {
+    if (disabled || resource.resourceType !== "lora" || !selectedCheckpointBaseModel) {
       return;
     }
 
@@ -496,6 +526,10 @@ export function StylePaletteCivitaiResourceSelector({
   }
 
   useEffect(() => {
+    if (disabled) {
+      return;
+    }
+
     const controller = new AbortController();
 
     async function loadSelectedCivitaiResources() {
@@ -550,10 +584,10 @@ export function StylePaletteCivitaiResourceSelector({
       controller.abort();
       window.clearTimeout(timeout);
     };
-  }, [selectedCheckpointId, selectedLoraIdsKey]);
+  }, [disabled, selectedCheckpointId, selectedLoraIdsKey]);
 
   useEffect(() => {
-    if (!civitaiPickerOpen) {
+    if (disabled || !civitaiPickerOpen) {
       return;
     }
 
@@ -582,6 +616,12 @@ export function StylePaletteCivitaiResourceSelector({
         params.set("resourceType", civitaiPickerKind === "checkpoint" ? "model" : "lora");
         params.set("nsfw", "all");
         params.set("importedCount", "all");
+        if (readyOnly) {
+          params.set("downloaded", "ready");
+        }
+        if (promptProfile) {
+          params.set("promptProfile", promptProfile);
+        }
         if (civitaiPickerKind === "lora" && selectedCheckpointBaseModel) {
           params.set("baseModel", selectedCheckpointBaseModel);
         }
@@ -620,11 +660,14 @@ export function StylePaletteCivitaiResourceSelector({
     civitaiPickerKind,
     civitaiPickerOpen,
     civitaiPickerQuery,
+    disabled,
+    promptProfile,
+    readyOnly,
     selectedCheckpointBaseModel,
     selectedCheckpointId,
   ]);
 
-  const pickerContent = civitaiPickerOpen ? (
+  const pickerContent = !disabled && civitaiPickerOpen ? (
     <div
       className={
         pickerLayout === "dialog"
@@ -770,12 +813,17 @@ export function StylePaletteCivitaiResourceSelector({
   ) : null;
 
   return (
-    <div>
+    <fieldset
+      aria-disabled={disabled}
+      className="m-0 min-w-0 border-0 p-0 disabled:cursor-not-allowed disabled:opacity-60"
+      disabled={disabled}
+    >
       <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
         <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Selected Civitai Resources</p>
         <div className="flex flex-wrap items-center gap-2">
           <Button
             className="h-8 rounded-md border-indigo-100 bg-white px-2 text-[11px] font-medium text-indigo-700 hover:bg-indigo-50"
+            disabled={disabled}
             onClick={() => openCivitaiPicker("checkpoint")}
             size="sm"
             type="button"
@@ -786,7 +834,7 @@ export function StylePaletteCivitaiResourceSelector({
           </Button>
           <Button
             className="h-8 rounded-md border-indigo-100 bg-white px-2 text-[11px] font-medium text-indigo-700 hover:bg-indigo-50 disabled:cursor-not-allowed disabled:opacity-60"
-            disabled={!selectedCheckpointId}
+            disabled={disabled || !selectedCheckpointId}
             onClick={() => openCivitaiPicker("lora")}
             size="sm"
             type="button"
@@ -797,13 +845,17 @@ export function StylePaletteCivitaiResourceSelector({
           </Button>
         </div>
       </div>
-      <div className="flex flex-col gap-3">
-        {pickerLayout === "dialog" && civitaiPickerOpen ? (
+      <div className={denseSelectedResources ? "flex flex-col gap-2" : "flex flex-col gap-3"}>
+        {pickerLayout === "dialog" && !disabled && civitaiPickerOpen ? (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/30 p-4 backdrop-blur-sm">
             <div className="w-full max-w-3xl">{pickerContent}</div>
           </div>
         ) : pickerContent}
-        <div className="space-y-2 rounded-md border border-indigo-100 bg-indigo-50/50 p-3">
+        <div
+          className={`rounded-md border border-indigo-100 bg-indigo-50/50 ${
+            denseSelectedResources ? "space-y-1.5 p-2" : "space-y-2 p-3"
+          }`}
+        >
           {selectedCivitaiStatus === "loading" && selectedResourceCards.length === 0 ? (
             <p className="text-xs leading-relaxed text-indigo-700">
               <Loader2 className="mr-1.5 inline size-3.5 animate-spin" />
@@ -814,10 +866,21 @@ export function StylePaletteCivitaiResourceSelector({
             <p className="text-xs leading-relaxed text-rose-700">{selectedCivitaiError}</p>
           ) : null}
           {selectedResourceCards.length > 0 ? (
-            <div className={compactSelectedResources ? "max-h-36 space-y-1.5 overflow-y-auto overscroll-contain pr-1" : "space-y-2"}>
+            <div
+              className={
+                runSummaryGrid
+                  ? "grid grid-cols-1 gap-1.5 xl:grid-cols-2"
+                  : denseSelectedResources
+                    ? "max-h-32 space-y-1 overflow-y-auto overscroll-contain pr-1"
+                    : compactSelectedResources
+                      ? "max-h-36 space-y-1.5 overflow-y-auto overscroll-contain pr-1"
+                      : "space-y-2"
+              }
+            >
               {selectedResourceCards.map((resource) => (
                 compactSelectedResources ? (
                   <CompactResourceRow
+                    density={summaryDensity}
                     key={resource.id}
                     onRemove={() => removeSelectedCivitaiResource(resource)}
                     resource={resource}
@@ -836,6 +899,6 @@ export function StylePaletteCivitaiResourceSelector({
           ) : null}
         </div>
       </div>
-    </div>
+    </fieldset>
   );
 }

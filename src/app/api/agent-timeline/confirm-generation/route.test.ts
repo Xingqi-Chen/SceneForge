@@ -1,6 +1,31 @@
 import { describe, expect, it, vi, afterEach } from "vitest";
 
 const comfyUiMocks = vi.hoisted(() => ({
+  COMFYUI_FACE_DETAILER_DEFAULTS: {
+    bboxCropFactor: 3,
+    bboxDilation: 10,
+    bboxThreshold: 0.5,
+    cycle: 1,
+    denoise: 0.5,
+    dropSize: 10,
+    feather: 5,
+    forceInpaint: true,
+    guideSize: 512,
+    guideSizeFor: true,
+    maxSize: 1024,
+    noiseMask: true,
+    samBBoxExpansion: 0,
+    samDetectionHint: "center-1",
+    samDilation: 0,
+    samMaskHintThreshold: 0.7,
+    samMaskHintUseNegative: "False",
+    samThreshold: 0.93,
+    wildcard: "",
+  },
+  COMFYUI_FACE_DETAILER_SAM_DETECTION_HINT_OPTIONS: [{ label: "center-1", value: "center-1" }],
+  COMFYUI_FACE_DETAILER_SAM_MASK_HINT_USE_NEGATIVE_OPTIONS: [{ label: "False", value: "False" }],
+  DEFAULT_COMFYUI_FACE_DETAILER_DETECTOR_MODEL: "bbox/face_yolov8m.pt",
+  DEFAULT_COMFYUI_HAND_DETAILER_DETECTOR_MODEL: "bbox/hand_yolov8s.pt",
   createComfyUiClient: vi.fn(),
   extractComfyUiHistoryImages: vi.fn(),
   isComfyUiPromptHistoryComplete: vi.fn(),
@@ -66,7 +91,11 @@ function createGateReadyWorkflow() {
 afterEach(() => {
   vi.restoreAllMocks();
   storeGeneratedImageMock.mockReset();
-  Object.values(comfyUiMocks).forEach((mock) => mock.mockReset());
+  Object.values(comfyUiMocks).forEach((mock) => {
+    if (typeof mock === "function" && "mockReset" in mock) {
+      mock.mockReset();
+    }
+  });
 });
 
 describe("POST /api/agent-timeline/confirm-generation", () => {

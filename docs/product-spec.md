@@ -2,7 +2,7 @@
 
 ## Product Summary
 
-SceneForge is a visual prompt creation workspace for AI image generation. The near-term MVP is a single-image, top-to-bottom AI-assisted timeline: the user enters one scene request, then SceneForge uses existing LLM and generation modules to infer scene prompt text, character tags, character action, 3D canvas binding, checkpoint/LoRA selection, and generation parameters.
+SceneForge is a visual prompt creation workspace for AI image generation. The near-term MVP is a single-scene, top-to-bottom AI-assisted Run timeline: the user enters one scene request, then SceneForge uses existing LLM and generation modules to infer scene prompt text, character tags, character action, 3D canvas binding, checkpoint/LoRA selection, and generation parameters. A text-to-image Run may produce one to four outputs from that shared scene request; an image-to-image Run produces one output.
 
 The timeline is not a hidden automation script. Every node exposes its result, lets the user intervene, and can call AI again with the user's correction. The workflow stops at the "start image generation" gate until the user explicitly confirms.
 
@@ -39,11 +39,11 @@ The old standalone Agent draft PR and Issue were rejected. The new MVP should no
 
 ## MVP Definition
 
-The MVP is a single-image workflow with these boundaries:
+The MVP is a single-scene Run workflow with these boundaries:
 
 - Initial screen: only a scene request input, a start button, and a settings entry point.
 - Workflow display: a vertical timeline of nodes from top to bottom.
-- Generation scope: one image request at a time.
+- Generation scope: one scene request at a time, with one to four text-to-image outputs or one image-to-image output.
 - Character scope: one primary character in the 3D canvas. Additional people in the input may be represented as prompt or scene context until a later multi-character track.
 - Orchestration: LangGraph owns node execution, dependency edges, parallelism, stale downstream regeneration, and errors.
 - LLM access: reuse existing LLM interfaces through graph-friendly adapters; do not add a bespoke LLM path unless an existing interface cannot support the node.
@@ -66,7 +66,34 @@ The MVP is a single-image workflow with these boundaries:
 12. User reviews or edits any node.
 13. If the user edits a node, dependent downstream nodes become stale and regenerate; unrelated nodes remain unchanged.
 14. User clicks start image generation.
-15. SceneForge calls the existing single-image ComfyUI path and advances to execution and result nodes.
+15. SceneForge calls the existing Run ComfyUI path and advances to execution and result nodes for the configured output count.
+
+## Run Scene Composer Generation Controls
+
+Simple and detailed Run modes use the same Scene Composer state and controls. Switching display modes must not create a second settings source or discard the current scene request, output count, source image, explicit style resources, saved generation parameters, or Detailer settings.
+
+Run generation controls follow these rules:
+
+- Checkpoint and LoRA selection is optional and limited to ready local resources. Explicit selections must be validated for resource type, availability, prompt profile or base model, and LoRA compatibility.
+- When the user explicitly selects a checkpoint, that checkpoint and its enabled compatible LoRAs become the manual `resource-recommendation` result. The resource recommendation LLM is not called. Without an explicit checkpoint, Run retains the existing AI resource recommendation path.
+- The Parameters dialog is available only after an explicit checkpoint is selected. It exposes supported ComfyUI generation settings and user-triggered AI Style Advice for the selected resources.
+- Saved parameters become the manual `parameter-recommendation` result and bypass automatic parameter advice. If the user does not save parameters, Run retains the existing AI parameter recommendation path.
+- Changing checkpoint or LoRA selection clears saved parameters and prior AI Style Advice so advice and settings cannot silently survive a different resource context.
+- FaceDetailer and HandDetailer are independent user-controlled settings. They do not require resource or parameter selection, may be enabled separately, and AI must not enable, disable, recommend, or modify either Detailer.
+- Enabled Detailer settings are visible in the generation request preview and confirmation summary and are applied to the confirmed Run request.
+
+After a workflow has started, these Composer settings remain editable. Resource changes mark `resource-recommendation` and its downstream nodes stale. Parameter or Detailer changes mark `parameter-recommendation` and its downstream nodes stale. Either change cancels the existing generation confirmation, preserves unrelated prompt, character-tag, pose, and canvas results, and must not call ComfyUI until the user confirms the regenerated request again.
+
+Output precedence is explicit:
+
+- Text-to-image Run keeps the Composer output count of one to four, and its selected resources, parameters, and Detailers apply to every output in that Run.
+- Attaching an image-to-image source forces the output count to one and uses the source image dimensions.
+- The Composer source-image denoise value overrides saved parameter denoise for image-to-image generation. Other compatible saved parameters remain effective.
+- A saved parameter payload must not override the Composer output count.
+
+Active autosave and named workflows persist the normalized explicit resource ids, supported saved parameters, and Detailer settings needed to restore the Composer. Restored legacy Run workflows that lack these settings keep the automatic resource and parameter recommendation paths and default both Detailers to disabled. Restoring a stale or previously confirmed workflow must not automatically submit a generation request.
+
+Run style reference and IPAdapter controls are explicitly excluded from this behavior and remain scoped to the dependent T36 track.
 
 ## Timeline Nodes
 
@@ -81,7 +108,7 @@ The MVP is a single-image workflow with these boundaries:
 | Generation parameters | Prompt draft, selected resources, settings | Width, height, steps, cfg, sampler, scheduler, denoise, seed policy, negative additions | Checkpoint and LoRA, prompt data, canvas summary | Edit parameters with existing controls | Re-run parameter node with quality/speed/aspect guidance |
 | Start image generation | Prompt, resources, parameters, canvas summary | Confirmed ComfyUI request preview | Previous nodes done or manual | Click start image generation | AI may explain risk or suggest final adjustment, but must not call ComfyUI |
 | ComfyUI execution | Confirmed request | Queue metadata, execution status | Start image generation confirmation | Retry or cancel where supported | Existing diagnosis helpers on failure |
-| Result display | ComfyUI output | Single image, metadata, reusable prompt and parameters | ComfyUI execution | Save, copy prompt, or return to upstream nodes | Use result feedback to re-enter upstream nodes |
+| Result display | ComfyUI output | One to four text-to-image results or one image-to-image result, metadata, reusable prompt and parameters | ComfyUI execution | Save, copy prompt, or return to upstream nodes | Use result feedback to re-enter upstream nodes |
 
 ## Dependency and Regeneration Rules
 
@@ -117,11 +144,13 @@ Security expectations:
 
 Timeline runtime state is durable for the active workflow once the persistence/autosave track is implemented. The active workflow record saves and restores a timeline workflow across expected Run and Settings navigation, including node outputs, manual edits, stale/error statuses, selected resources and parameters, generation gate state, execution metadata, result references, selected node, and display mode. Interrupted `running` nodes must restore as visible recoverable errors rather than pretending that background work continued reliably.
 
+Run workflow persistence also restores Scene Composer output count, source-image settings, explicit style resources, supported saved generation parameters, and FaceDetailer/HandDetailer settings. Records without the newer resource, parameter, or Detailer snapshot fields remain valid; they use automatic recommendations and restore both Detailers disabled. Persisted settings must be sanitized and must not include full resource candidate collections, secrets, logs, downloaded resources, or generated image bytes.
+
 Workflow project management UI is a separate follow-up track. It should provide project list/open/save/rename/delete affordances comparable to the editor only after timeline workflow persistence exists. The persistence track owns the durable data contract; the project management UI track owns user-facing organization and navigation around saved workflow projects.
 
 ## Non-goals for MVP
 
-- Multi-image batch generation.
+- Multiple independent scene requests or arbitrary multi-scene batch queues.
 - Comic sequence generation.
 - Inpainting.
 - ControlNet.
@@ -143,7 +172,12 @@ Workflow project management UI is a separate follow-up track. It should provide 
 - Generation parameters use existing ComfyUI-style controls and can be manually edited.
 - LangGraph drives node execution, dependencies, stale state, and regeneration.
 - Timeline stops before ComfyUI execution until explicit user confirmation.
-- Clicking start image generation advances to single-image ComfyUI execution and result display.
+- Clicking start image generation advances to confirmation-gated ComfyUI execution and displays one to four text-to-image results or one image-to-image result.
+- Simple and detailed Run modes edit the same Scene Composer resource, parameter, and Detailer settings.
+- Explicit ready local resources bypass AI resource recommendation; saved parameters require a checkpoint and bypass AI parameter recommendation; absent manual settings preserve the existing AI paths.
+- FaceDetailer and HandDetailer remain independent user controls, are not controlled by AI, and default disabled for legacy workflow records.
+- Post-start resource edits stale from `resource-recommendation`; parameter or Detailer edits stale from `parameter-recommendation`; both reset generation confirmation without invalidating unrelated prompt, tag, pose, or canvas results.
+- Text-to-image output count remains one to four, while an image-to-image source forces one output and takes precedence for dimensions and denoise.
 - Settings are outside the main workflow and include NSFW plus required path/integration configuration.
 - After the scoped persistence/autosave track lands, timeline workflow state survives expected Run and Settings navigation according to its durable storage contract.
 - After the follow-up project management track lands, saved timeline workflow projects can be found and managed through visible project management UI comparable to the editor.

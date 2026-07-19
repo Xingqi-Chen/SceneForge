@@ -37,6 +37,7 @@ import {
 import {
   sanitizeStoryStyleReferenceSnapshot,
 } from "./story-style-palette";
+import { sanitizeRunSceneInputSettingsSnapshot } from "./run-input-settings";
 import {
   type CommonWorkflowArtifactScope,
   type CommonWorkflowDefinitionVersion,
@@ -235,6 +236,13 @@ function sanitizeTimelineNode(
   const updatedAt = sanitizeDateString(raw.updatedAt, fallbackUpdatedAt);
   const source = sanitizeNodeSource(raw.source);
   const error = sanitizeNodeError(raw.error, {});
+  const sanitizedResult = raw.result !== undefined ? sanitizeJsonValue(raw.result) : undefined;
+  const result = nodeId === "scene-input" && isRecord(sanitizedResult)
+    ? {
+        ...sanitizedResult,
+        settingsSnapshot: sanitizeRunSceneInputSettingsSnapshot(sanitizedResult.settingsSnapshot),
+      }
+    : sanitizedResult;
 
   if (status === "running") {
     return {
@@ -243,7 +251,7 @@ function sanitizeTimelineNode(
       source: "system",
       updatedAt,
       error: createInterruptedNodeError(),
-      ...(raw.result !== undefined ? { result: sanitizeJsonValue(raw.result) } : {}),
+      ...(result !== undefined ? { result } : {}),
     };
   }
 
@@ -252,7 +260,7 @@ function sanitizeTimelineNode(
     status,
     source,
     updatedAt,
-    ...(raw.result !== undefined ? { result: sanitizeJsonValue(raw.result) } : {}),
+    ...(result !== undefined ? { result } : {}),
     ...(error ? { error: error as TimelineNodeResult["error"] } : {}),
   };
 }

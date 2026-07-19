@@ -7,6 +7,7 @@ import {
   startStoryGraphWorkflow,
   type StoryWorkflowState,
 } from "@/features/agent-timeline";
+import { createStoryDetailerSettingsSnapshot } from "@/features/agent-timeline/story-detailers";
 
 const dialogProps = vi.hoisted(() => [] as Array<Record<string, unknown>>);
 
@@ -78,7 +79,7 @@ vi.mock("@/features/editor/components/ImageGenerationPanel", () => ({
   toInpaintRequestPayload: () => ({}),
 }));
 
-import { StoryPlanningPreview } from "./StoryPlanningPreview";
+import { GenerationDetailerSettingsEditor, StoryPlanningPreview } from "./StoryPlanningPreview";
 
 let container: HTMLDivElement;
 let root: Root;
@@ -476,6 +477,128 @@ afterEach(() => {
 });
 
 describe("StoryPlanningPreview", () => {
+  it("keeps the compact detailer editor content-aligned, responsive, and interactive", async () => {
+    const detailers = createStoryDetailerSettingsSnapshot();
+    const onChange = vi.fn();
+
+    act(() => {
+      root.render(
+        <GenerationDetailerSettingsEditor
+          detailers={detailers}
+          idPrefix="compact-test"
+          layout="compact"
+          onChange={onChange}
+        />,
+      );
+    });
+
+    const fieldset = container.querySelector("fieldset") as HTMLFieldSetElement | null;
+    const faceInput = container.querySelector("#compact-test-face-detailer-enabled") as HTMLInputElement | null;
+    const facePanel = faceInput?.closest("div");
+    const faceSettings = container.querySelector('[data-testid="compact-test-face-detailer-settings"]') as HTMLButtonElement | null;
+
+    expect(fieldset?.className).toContain("content-start");
+    expect(fieldset?.className).toContain("md:grid-cols-2");
+    expect(fieldset?.className).toContain("lg:grid-cols-1");
+    expect(fieldset?.className).toContain("2xl:grid-cols-2");
+    expect(facePanel?.className).toContain("grid-cols-[minmax(0,1fr)_auto]");
+    expect(faceSettings?.className).toContain("h-7");
+
+    act(() => {
+      faceInput?.click();
+    });
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({
+      faceDetailer: expect.objectContaining({ enabled: true }),
+    }));
+
+    await act(async () => {
+      faceSettings?.click();
+      await Promise.resolve();
+    });
+    expect(document.body.querySelector('[role="dialog"]')?.textContent).toContain("FaceDetailer settings");
+  });
+
+  it("preserves the default Story detailer density and disabled behavior", () => {
+    const detailers = createStoryDetailerSettingsSnapshot();
+    const onChange = vi.fn();
+
+    act(() => {
+      root.render(
+        <GenerationDetailerSettingsEditor
+          detailers={detailers}
+          disabled
+          idPrefix="default-test"
+          onChange={onChange}
+        />,
+      );
+    });
+
+    const fieldset = container.querySelector("fieldset") as HTMLFieldSetElement | null;
+    const faceInput = container.querySelector("#default-test-face-detailer-enabled") as HTMLInputElement | null;
+    const facePanel = faceInput?.closest("div");
+    const faceSettings = container.querySelector('[data-testid="default-test-face-detailer-settings"]') as HTMLButtonElement | null;
+
+    expect(fieldset?.disabled).toBe(true);
+    expect(fieldset?.className).toContain("gap-3");
+    expect(fieldset?.className).not.toContain("content-start");
+    expect(fieldset?.className).not.toContain("md:grid-cols-2");
+    expect(facePanel?.className).toContain("sm:flex-row");
+    expect(faceSettings?.className).toContain("h-8");
+
+    act(() => {
+      faceInput?.click();
+      faceSettings?.click();
+    });
+    expect(onChange).not.toHaveBeenCalled();
+    expect(document.body.querySelector('[role="dialog"]')).toBeNull();
+  });
+
+  it("renders the opt-in compact strip as a mobile-first embedded detailer grid", async () => {
+    const detailers = createStoryDetailerSettingsSnapshot();
+    const onChange = vi.fn();
+
+    act(() => {
+      root.render(
+        <GenerationDetailerSettingsEditor
+          detailers={detailers}
+          idPrefix="strip-test"
+          layout="compact-strip"
+          onChange={onChange}
+        />,
+      );
+    });
+
+    const fieldset = container.querySelector("fieldset") as HTMLFieldSetElement | null;
+    const faceInput = container.querySelector("#strip-test-face-detailer-enabled") as HTMLInputElement | null;
+    const facePanel = faceInput?.closest("div");
+    const faceSettings = container.querySelector(
+      '[data-testid="strip-test-face-detailer-settings"]',
+    ) as HTMLButtonElement | null;
+
+    expect(fieldset?.className).toContain("content-start");
+    expect(fieldset?.className).toContain("md:grid-cols-2");
+    expect(fieldset?.className).not.toContain("lg:grid-cols-1");
+    expect(fieldset?.className).not.toContain("rounded-md");
+    expect(fieldset?.className).not.toContain("border-slate-200");
+    expect(fieldset?.className).not.toContain("bg-slate-50");
+    expect(fieldset?.className).not.toContain("p-3");
+    expect(facePanel?.className).toContain("grid-cols-[minmax(0,1fr)_auto]");
+    expect(faceSettings?.className).toContain("h-7");
+
+    act(() => {
+      faceInput?.click();
+    });
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({
+      faceDetailer: expect.objectContaining({ enabled: true }),
+    }));
+
+    await act(async () => {
+      faceSettings?.click();
+      await Promise.resolve();
+    });
+    expect(document.body.querySelector('[role="dialog"]')?.textContent).toContain("FaceDetailer settings");
+  });
+
   it("opens a saved Story Graph workflow from the empty Story toolbar project menu", async () => {
     const savedWorkflow = createPlannedWorkflow("A saved Story Graph project opens from the toolbar.");
     const savedRecord = createTimelineWorkflowRecord({
