@@ -1,6 +1,5 @@
 import {
   buildCommonWorkflowDependencyDag,
-  commonWorkflowDefinitionVersion,
   type CommonWorkflowDagEdge,
   type CommonWorkflowDefinition,
   type CommonWorkflowNodeMetadata,
@@ -33,6 +32,8 @@ type TimelineWorkspaceKey =
   | "resource-recommendation"
   | "parameter-recommendation"
   | "generation-gate"
+  | "preview-execution"
+  | "preview-scoring"
   | "comfyui-execution"
   | "result-display";
 
@@ -95,7 +96,9 @@ export const singleImageWorkflowEdges = [
   { from: "canvas-binding", to: "generation-gate" },
   { from: "resource-recommendation", to: "generation-gate" },
   { from: "parameter-recommendation", to: "generation-gate" },
-  { from: "generation-gate", to: "comfyui-execution" },
+  { from: "generation-gate", to: "preview-execution" },
+  { from: "preview-execution", to: "preview-scoring" },
+  { from: "preview-scoring", to: "comfyui-execution" },
   { from: "comfyui-execution", to: "result-display" },
 ] as const satisfies readonly CommonWorkflowDagEdge<TimelineNodeId>[];
 
@@ -106,7 +109,7 @@ export const singleImageWorkflowDependencyDag = buildCommonWorkflowDependencyDag
 
 export const singleImageWorkflowDefinition = {
   mode: singleImageWorkflowMode,
-  version: commonWorkflowDefinitionVersion,
+  version: 2,
   nodeIds: timelineNodeIds,
   executableNodeIds: executableTimelineNodeIds,
   reservedNodeIds: reservedTimelineNodeIds,
@@ -176,6 +179,22 @@ export const singleImageWorkflowDefinition = {
       nodeId: "generation-gate",
       title: "Review / export",
       workspaceKey: "generation-gate",
+    }),
+    "preview-execution": createTimelineNodeMetadata({
+      aiLabel: "Retry previews",
+      editLabel: "Previews locked",
+      inputKind: "visual",
+      nodeId: "preview-execution",
+      title: "Preview generation",
+      workspaceKey: "preview-execution",
+    }),
+    "preview-scoring": createTimelineNodeMetadata({
+      aiLabel: "Retry scoring",
+      editLabel: "Select previews",
+      inputKind: "visual",
+      nodeId: "preview-scoring",
+      title: "Preview scoring",
+      workspaceKey: "preview-scoring",
     }),
     "comfyui-execution": createTimelineNodeMetadata({
       aiLabel: "Diagnose",

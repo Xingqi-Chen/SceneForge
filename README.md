@@ -2,7 +2,7 @@
 
 SceneForge is a local-first visual prompt workspace for AI image generation.
 
-The current MVP direction is a single-scene, top-to-bottom Run timeline driven by LangGraph. Users enter one scene request, then review and edit scene prompt, character tags, 3D pose/canvas binding, checkpoint/LoRA selection, generation parameters, FaceDetailer, HandDetailer, and the final ComfyUI generation gate. A text-to-image Run can request 1-4 outputs from that one scene; an img2img Run remains one output.
+The current MVP direction is a single-scene, top-to-bottom Run timeline driven by LangGraph. Users enter one scene request, then review and edit scene prompt, character tags, 3D pose/canvas binding, checkpoint/LoRA selection, generation parameters, FaceDetailer, HandDetailer, and the final ComfyUI generation gate. Both text-to-image and img2img Runs deliver 1-4 selected final images.
 
 ## Screenshots
 
@@ -61,12 +61,14 @@ The MVP starts with a Scene Composer, a start button, and a settings entry point
 5. Checkpoint and LoRA recommendation.
 6. Generation parameter recommendation.
 7. Start image generation gate.
-8. Confirmed single-image ComfyUI execution.
-9. Result display.
+8. Confirmed low-step, longest-edge-512 preview generation.
+9. Structured Vision scoring and Top-K selection.
+10. Full-resolution img2img second-pass execution.
+11. Result display.
 
 Every node exposes manual controls and an AI retry/suggestion action. User edits mark dependent downstream nodes stale and LangGraph regenerates only those dependent nodes. The timeline must stop before ComfyUI execution until the user explicitly clicks start image generation.
 
-Explicit Composer resources bypass the resource-recommendation provider. Saved Composer parameters require an explicit checkpoint and bypass automatic parameter advice; leaving parameters unsaved preserves the automatic path. Changing checkpoint or LoRAs clears saved parameters and prior Style Advice. After a Run starts, resource changes stale from resource recommendation, while parameter or Detailer changes stale from parameter recommendation; both cancel prior confirmation without discarding completed prompt, tag, pose, or canvas work. Detailers are user-controlled only and are never sent to AI planning. Text-to-image keeps the selected 1-4 output count. Img2img forces one output, uses source dimensions, and gives the Composer source denoise precedence over saved denoise while retaining other compatible saved parameters.
+Explicit Composer resources bypass the resource-recommendation provider. Saved Composer parameters require an explicit checkpoint and bypass automatic parameter advice; leaving parameters unsaved preserves the automatic path. Changing checkpoint or LoRAs clears saved parameters and prior Style Advice. After a Run starts, resource changes stale from resource recommendation, while parameter or Detailer changes stale from parameter recommendation; both cancel prior confirmation without discarding completed prompt, tag, pose, or canvas work. Detailers are user-controlled only and are never sent to AI planning. Both text-to-image and img2img keep the selected 1-4 final output count. A Run generates 4/4/6/8 independent previews for K=1/2/3/4, scores them with a Vision model, and renders the selected K previews at formal dimensions with fixed second-pass denoise 0.50. Source-img2img previews use the Composer source dimensions and denoise.
 
 The shared Run Scene Composer also accepts one optional PNG, JPEG, or WEBP global style reference. SceneForge stores it through the existing sequence-reference boundary and analyzes it through LiteLLM vision into one reusable `stylePrompt` segment. The segment is appended exactly once after Run resource-aware prompt formatting. Illustrious-capable checkpoints may additionally enable IPAdapter with defaults `weight=0.45`, `start_at=0`, and `end_at=1`; Anima, unknown, and unsupported checkpoints remain prompt-only. Pending, failed, or model-mismatched analysis blocks start, regeneration, and confirmation until the reference is retried, replaced, or removed. Workflow JSON stores only sanitized metadata, analysis context/status, and adapter settings—not image bytes or data URLs.
 
@@ -89,7 +91,7 @@ LITELLM_CIVITAI_RECOMMENDATION_MODEL=optional-civitai-recommendation-model
 LITELLM_CIVITAI_EMBEDDING_MODEL=required-civitai-embedding-model
 ```
 
-The endpoint accepts `model`, `messages`, `temperature`, `maxTokens`, and optional `nsfw`. Requests marked `nsfw` use `LITELLM_NSFW_MODEL` when it is configured before forwarding to LiteLLM's OpenAI-compatible `/v1/chat/completions` API. Story Graph LLM planning nodes also use `LITELLM_NSFW_MODEL` for NSFW workflows, except `shot-dependency-graph`, `resource-plan`, and `parameter-plan`. Run and Story style-reference analysis reuse the `story-style-reference-analysis` purpose and fall back to `LITELLM_VISION_MODEL`, then `LITELLM_DEFAULT_MODEL`, when no explicit model is provided. Civitai semantic candidate retrieval requires `LITELLM_CIVITAI_EMBEDDING_MODEL` through LiteLLM's `/v1/embeddings` API during `npm run civitai:reindex-embeddings` and recommendation requests. Long Civitai source text is embedded in overlapping chunks, and recommendation ranking uses each resource's nearest chunk. Timeline model-resource and render-parameter recommendation nodes keep their purpose-specific models.
+The endpoint accepts `model`, `messages`, `temperature`, `maxTokens`, and optional `nsfw`. Requests marked `nsfw` use `LITELLM_NSFW_MODEL` when it is configured before forwarding to LiteLLM's OpenAI-compatible `/v1/chat/completions` API. Story Graph LLM planning nodes also use `LITELLM_NSFW_MODEL` for NSFW workflows, except `shot-dependency-graph`, `resource-plan`, and `parameter-plan`. Run preview scoring uses `LITELLM_VISION_MODEL`, then the default model, for ordinary Runs. NSFW preview scoring requires a multimodal `LITELLM_NSFW_MODEL` and never sends those preview images to the ordinary Vision/default model. Run and Story style-reference analysis reuse the `story-style-reference-analysis` purpose and fall back to `LITELLM_VISION_MODEL`, then `LITELLM_DEFAULT_MODEL`, when no explicit model is provided. Civitai semantic candidate retrieval requires `LITELLM_CIVITAI_EMBEDDING_MODEL` through LiteLLM's `/v1/embeddings` API during `npm run civitai:reindex-embeddings` and recommendation requests. Long Civitai source text is embedded in overlapping chunks, and recommendation ranking uses each resource's nearest chunk. Timeline model-resource and render-parameter recommendation nodes keep their purpose-specific models.
 
 ## Settings
 

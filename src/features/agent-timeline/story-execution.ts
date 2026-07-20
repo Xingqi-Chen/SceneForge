@@ -369,13 +369,13 @@ function normalizeQueueMetadata(
   metadata: StoryShotQueueMetadata | ComfyUiExecutionTimelineResult | undefined,
   timestamp: string,
 ): StoryShotQueueMetadata | undefined {
-  if (!metadata) {
+  if (!metadata || typeof metadata.promptId !== "string" || typeof metadata.outputNodeId !== "string") {
     return undefined;
   }
 
   return {
     nodeErrors: metadata.nodeErrors,
-    nodeIds: metadata.nodeIds,
+    nodeIds: metadata.nodeIds ?? {},
     number: metadata.number,
     outputNodeId: metadata.outputNodeId,
     promptId: metadata.promptId,

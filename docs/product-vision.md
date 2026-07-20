@@ -14,7 +14,7 @@ The product direction is a visual semantic editor for AI image generation:
 
 ## MVP Direction
 
-The current MVP is a single-scene, top-to-bottom timeline driven by LangGraph. A text-to-image Run may produce 1-4 outputs for that scene; an img2img Run produces one output.
+The current MVP is a single-scene, top-to-bottom timeline driven by LangGraph. Text-to-image and img2img Runs both deliver 1-4 outputs selected from scored low-cost previews.
 
 The first screen contains:
 
@@ -41,8 +41,10 @@ The MVP workflow is:
 6. Checkpoint and LoRA recommendation.
 7. Generation parameter recommendation.
 8. Start image generation gate.
-9. ComfyUI single-image execution.
-10. Result display.
+9. Low-cost preview execution.
+10. Structured Vision scoring and Top-K selection.
+11. Full-quality img2img second-pass execution.
+12. Result display.
 
 The timeline stops at the start image generation gate. ComfyUI execution starts only after the user clicks the confirmation control.
 
@@ -57,12 +59,12 @@ Every timeline node must allow user intervention:
 - Generation parameters can be edited with the same style of controls used by the original ComfyUI configuration UI.
 - Explicit Run resources bypass AI resource recommendation; saved Run parameters bypass automatic parameter advice, while an unsaved parameter state preserves the automatic path.
 - FaceDetailer and HandDetailer are controlled only by the user and stay outside AI input.
-- One optional global Run style reference is shared across simple and detailed Composer modes. Its analyzed style prompt applies to every txt2img output or the single img2img output; Illustrious may optionally add the same stored image through IPAdapter, while Anima and unsupported contexts remain prompt-only.
+- One optional global Run style reference is shared across simple and detailed Composer modes. Its analyzed style prompt applies to every preview and final output; Illustrious may optionally add the same stored image through IPAdapter, while Anima and unsupported contexts remain prompt-only.
 - Every node can ask AI for another suggestion based on user guidance.
 
 Manual intervention is not an escape hatch from the workflow. It is part of the workflow. When a user changes a node, dependent downstream nodes should regenerate and unrelated nodes should remain stable.
 
-Run Composer changes follow the same rule: resource edits stale from resource recommendation, while parameter, Detailer, and style-reference edits stale from parameter recommendation. All cancel any prior generation confirmation. Txt2img applies the selected settings and reference to the full 1-4 output batch. Img2img forces one output, uses source dimensions, keeps its source separate from the style image, and lets source denoise override saved denoise.
+Run Composer changes follow the same rule: resource edits stale from resource recommendation, while parameter, Detailer, style-reference, source, and output-count edits stale from parameter recommendation. All cancel any prior generation confirmation. Txt2img and img2img use the selected 1-4 delivery count. The original img2img source and denoise apply only to previews; selected previews become the final-stage sources at fixed denoise 0.50.
 
 ## Orchestration Principle
 

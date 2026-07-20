@@ -59,6 +59,12 @@ function resolvePurposeDefaultModel(payload: LlmChatRequest) {
     return process.env.LITELLM_VISION_MODEL || process.env.LITELLM_DEFAULT_MODEL;
   }
 
+  if (payload.purpose === "single-image-preview-scoring") {
+    return payload.nsfw === true
+      ? process.env.LITELLM_NSFW_MODEL
+      : process.env.LITELLM_VISION_MODEL || process.env.LITELLM_DEFAULT_MODEL;
+  }
+
   if (payload.purpose === "comic-sequence-storyboard") {
     return process.env.LITELLM_DEFAULT_MODEL;
   }
@@ -74,12 +80,13 @@ function resolvePurposeDefaultModel(payload: LlmChatRequest) {
   return process.env.LITELLM_DEFAULT_MODEL;
 }
 
-function isStoryStyleReferenceAnalysis(payload: LlmChatRequest) {
-  return payload.purpose === "story-style-reference-analysis";
+function isVisionPurposeWithExplicitRouting(payload: LlmChatRequest) {
+  return payload.purpose === "story-style-reference-analysis" ||
+    payload.purpose === "single-image-preview-scoring";
 }
 
 export function resolveDefaultModel(payload: LlmChatRequest) {
-  if (isStoryStyleReferenceAnalysis(payload)) {
+  if (isVisionPurposeWithExplicitRouting(payload)) {
     return resolvePurposeDefaultModel(payload);
   }
 
@@ -93,7 +100,11 @@ export function resolveDefaultModel(payload: LlmChatRequest) {
 export function resolveRequestModel(payload: LlmChatRequest) {
   const defaultModel = resolveDefaultModel(payload);
 
-  if (isStoryStyleReferenceAnalysis(payload)) {
+  if (payload.purpose === "single-image-preview-scoring" && payload.nsfw === true) {
+    return defaultModel;
+  }
+
+  if (isVisionPurposeWithExplicitRouting(payload)) {
     return payload.model ?? defaultModel;
   }
 

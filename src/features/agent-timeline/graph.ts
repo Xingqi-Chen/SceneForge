@@ -32,6 +32,7 @@ type TimelineGraphState = {
 type TimelineGraphOptions = {
   now?: () => string;
   onWorkflowUpdate?: (update: TimelineWorkflowUpdate) => void;
+  executableNodeIds?: readonly TimelineExecutableNodeId[];
 };
 
 type TimelineGraphNodeHandler = ReturnType<typeof createTimelineGraphNode>;
@@ -102,6 +103,9 @@ function createTimelineGraphNode(
   options: TimelineGraphOptions,
 ) {
   return async (state: TimelineGraphState): Promise<{ workflow?: TimelineWorkflowUpdate }> => {
+    if (options.executableNodeIds && !options.executableNodeIds.includes(nodeId)) {
+      return {};
+    }
     const refreshedWorkflow = refreshTimelineReadiness(state.workflow);
     const definition = getTimelineWorkflowDefinition(refreshedWorkflow.workflowMode);
 

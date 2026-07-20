@@ -4,6 +4,25 @@ This log records dated implementation and documentation work. Keep entries conci
 
 ## 2026-07-20
 
+### Issue #133 Scored Run Previews
+
+Summary:
+
+- Upgraded the Run-only single-image definition to v2 with confirmation-gated preview execution, strict multimodal scoring, Top-K selection, and independent final img2img passes.
+- Added deterministic pool/dimension/seed contracts, safe preview/final references, partial-final recovery, phase retry actions, legacy Run migration, and Detailed-mode exact-K reselection while leaving Story and Editor execution unchanged.
+- Reviewer hardening bound the HMAC confirmation contract to the workflow identity, split Simple generation into server-validated preview/scoring/final stages, and added strict typed restore validation for managed image references and structured scoring.
+- Restored scoring now recomputes fixed-weight totals and validates global ranking, AI Top-K selection, manual exact-K selection, and preview/final/result cross-node linkage before allowing continuation or display.
+- Removed source-img2img's forced-one delivery behavior and documented the multimodal NSFW model requirement.
+
+Validation:
+
+- `npm run typecheck` passed.
+- `npm run lint` passed with 23 pre-existing warnings and 0 errors.
+- `npm run build` passed.
+- Focused validation passed 204 tests and the full Vitest suite passed 1,175 tests.
+- Test Gate and Review Gate passed; browser QA covered Detailed scoring output, Simple/Detailed switching, and desktop/390px layouts without horizontal overflow.
+- Live LiteLLM Vision/NSFW and ComfyUI generation remain environment-dependent manual validation.
+
 ### Issue #130 Merge
 
 Summary:

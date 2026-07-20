@@ -67,6 +67,20 @@ export const timelineNodeContent: Record<TimelineNodeId, TimelineNodeContent> = 
     editLabel: singleImageWorkflowDefinition.metadata["generation-gate"].manualEdit.label,
     aiLabel: singleImageWorkflowDefinition.metadata["generation-gate"].aiRetry.label,
   },
+  "preview-execution": {
+    title: singleImageWorkflowDefinition.metadata["preview-execution"].title,
+    shellState: "Low-cost preview generation",
+    emptyState: "Waiting for explicit confirmation before generating preview candidates.",
+    editLabel: singleImageWorkflowDefinition.metadata["preview-execution"].manualEdit.label,
+    aiLabel: singleImageWorkflowDefinition.metadata["preview-execution"].aiRetry.label,
+  },
+  "preview-scoring": {
+    title: singleImageWorkflowDefinition.metadata["preview-scoring"].title,
+    shellState: "Structured Vision ranking",
+    emptyState: "Waiting for enough successful preview candidates.",
+    editLabel: singleImageWorkflowDefinition.metadata["preview-scoring"].manualEdit.label,
+    aiLabel: singleImageWorkflowDefinition.metadata["preview-scoring"].aiRetry.label,
+  },
   "comfyui-execution": {
     title: singleImageWorkflowDefinition.metadata["comfyui-execution"].title,
     shellState: "Confirmed ComfyUI execution",
@@ -119,6 +133,18 @@ export function getTimelineNodeOutputText(node: TimelineNodeResult) {
 
     if (typeof node.result.promptId === "string" && typeof node.result.outputNodeId === "string") {
       return `Queued prompt ${node.result.promptId}.`;
+    }
+
+    if (Array.isArray(node.result.candidates) && typeof node.result.successfulCount === "number") {
+      return `${node.result.successfulCount} preview candidates are ready.`;
+    }
+
+    if (Array.isArray(node.result.scores) && Array.isArray(node.result.selectedCandidateIds)) {
+      return `${node.result.scores.length} previews scored; ${node.result.selectedCandidateIds.length} selected.`;
+    }
+
+    if (Array.isArray(node.result.finals) && typeof node.result.finalCount === "number") {
+      return `${node.result.finals.filter((item) => isRecord(item) && item.status === "done").length}/${node.result.finalCount} final images completed.`;
     }
 
     if (

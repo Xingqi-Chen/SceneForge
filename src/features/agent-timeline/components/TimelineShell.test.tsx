@@ -12,6 +12,7 @@ import {
   failTimelineNode,
   startStoryGraphWorkflow,
   type ScenePromptTimelineResult,
+  type TimelineNodeId,
   type TimelineNodeResult,
   type TimelineWorkflowState,
 } from "@/features/agent-timeline";
@@ -224,6 +225,124 @@ function createMultiImageConfirmedGenerationWorkflow(workflow: TimelineWorkflowS
   );
 
   return confirmedWorkflow;
+}
+
+function createSimpleGenerationPhaseErrorWorkflow(
+  phase: Extract<TimelineNodeId, "preview-execution" | "preview-scoring" | "comfyui-execution">,
+) {
+  let workflow = createTimelineWorkflowState({
+    workflowId: `simple-${phase}-error`,
+    sceneRequest: "A simple mode retry scene",
+    imageCount: 2,
+  });
+  workflow = confirmTimelineGeneration(workflow, {
+    confirmationRequired: false,
+    confirmed: true,
+    confirmationFingerprint: `hmac-sha256:${"a".repeat(64)}`,
+  });
+  const candidates = [1, 2, 3, 4].map((number, index) => {
+    const filename = `${number.toString(16).repeat(32)}.png`;
+    return {
+      candidateId: `preview-${number}`,
+      index,
+      seed: 99 + number,
+      status: "done" as const,
+      promptId: `preview-prompt-${number}`,
+      sourceImage: { filename: `preview-output-${number}.png`, nodeId: "9", type: "output" },
+      storedImage: {
+        byteLength: number,
+        contentType: "image/png",
+        filename,
+        url: `/api/comfyui/generated-images/${filename}`,
+      },
+    };
+  });
+  const previews = {
+    baseSeed: 100,
+    candidateCount: 4,
+    finalCount: 2,
+    previewHeight: 512,
+    previewWidth: 512,
+    previewSteps: 10,
+    candidates,
+    successfulCount: 4,
+    warnings: [],
+  };
+  const scoring = {
+    rubricVersion: 1 as const,
+    scores: candidates.map((candidate, index) => ({
+      candidateId: candidate.candidateId,
+      adherence: 100 - index,
+      composition: 100 - index,
+      anatomy: 100 - index,
+      style: 100 - index,
+      technical: 100 - index,
+      total: 100 - index,
+      rank: index + 1,
+    })),
+    selectedCandidateIds: ["preview-1", "preview-2"],
+    selectionSource: "ai" as const,
+  };
+
+  if (phase === "preview-execution") {
+    return failTimelineNode(workflow, phase, {
+      code: "comfyui_execution_failed",
+      message: "Only 1 preview succeeded; 2 are required.",
+      details: { recoverable: true },
+    });
+  }
+
+  workflow = completeTimelineNode(workflow, "preview-execution", previews, "system");
+  if (phase === "preview-scoring") {
+    return failTimelineNode(workflow, phase, {
+      code: "llm_malformed_response",
+      message: "Preview scoring failed twice.",
+      details: { recoverable: true },
+    });
+  }
+
+  workflow = completeTimelineNode(workflow, "preview-scoring", scoring, "ai");
+  const finalFilename = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png";
+  const partialResult = {
+    completed: false,
+    finalCount: 2,
+    finals: [
+      {
+        candidateId: "preview-1",
+        seed: 100,
+        rank: 1,
+        status: "done" as const,
+        promptId: "final-prompt-1",
+        sourceImage: { filename: "final-output-1.png", nodeId: "9", type: "output" },
+        storedImage: {
+          byteLength: 10,
+          contentType: "image/png",
+          filename: finalFilename,
+          url: `/api/comfyui/generated-images/${finalFilename}`,
+        },
+      },
+      {
+        candidateId: "preview-2",
+        seed: 101,
+        rank: 2,
+        status: "error" as const,
+        error: { code: "comfyui_execution_failed", message: "Final 2 failed." },
+      },
+    ],
+    request: {
+      batchSize: 1,
+      checkpointName: "local.safetensors",
+      positivePrompt: "simple retry scene",
+      width: 1024,
+      height: 1024,
+    },
+    warnings: [],
+  };
+  return failTimelineNode(workflow, phase, {
+    code: "comfyui_execution_failed",
+    message: "1 of 2 final images completed.",
+    details: { recoverable: true, partialResult },
+  });
 }
 
 function createObjectInfoMismatchWorkflow(workflow: TimelineWorkflowState) {
@@ -975,6 +1094,54 @@ describe("TimelineShell", () => {
     }
   });
 
+  it("fails closed when restoring malformed preview scoring without crashing visual score formatting", async () => {
+    const originalFetch = globalThis.fetch;
+    const workflow = createSimpleGenerationPhaseErrorWorkflow("comfyui-execution");
+    const activeRecord = createTimelineWorkflowRecord({
+      workflow,
+      sceneRequest: "A malformed persisted scoring scene",
+      selectedPromptProfile: "illustrious",
+      selectedImageCount: 2,
+      selectedNodeId: "preview-scoring",
+      outputDisplayModes: { "preview-scoring": "visual" },
+    });
+    const malformedRecord = JSON.parse(JSON.stringify(activeRecord)) as typeof activeRecord;
+    const malformedWorkflow = malformedRecord.workflow as TimelineWorkflowState;
+    const malformedScoring = malformedWorkflow.nodes["preview-scoring"].result as {
+      scores: Array<{ total: unknown }>;
+    };
+    malformedScoring.scores[0]!.total = "not-a-number";
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    globalThis.fetch = vi.fn<typeof fetch>(async (input, init) => {
+      const url = getFetchUrl(input);
+      if (url === "/api/settings") return createTimelineSettingsResponse({ displayMode: "detailed" });
+      if (url === "/api/agent-timeline/active-workflow") {
+        return init?.method === "PUT"
+          ? createJsonResponse({ ok: true, record: malformedRecord })
+          : createJsonResponse(malformedRecord);
+      }
+      return createJsonResponse({ role: "assistant", content: "{}" });
+    });
+
+    try {
+      act(() => root.render(<TimelineShell />));
+      await flushAsyncWork();
+
+      expect(container.textContent).toContain("A malformed persisted scoring scene");
+      expect(container.textContent).toContain("4/4 previews");
+      expect(container.textContent).toContain("seed 100");
+      expect(container.textContent).not.toContain("#1");
+      const previewButton = Array.from(container.querySelectorAll("button")).find((button) =>
+        button.textContent?.includes("preview-1"),
+      );
+      expect(previewButton?.disabled).toBe(true);
+      expect(consoleError.mock.calls.flat().join(" ")).not.toContain("toFixed");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("does not restore Story Graph active workflow records on the Run page", async () => {
     const originalFetch = globalThis.fetch;
     const storyRecord = createTimelineWorkflowRecord({
@@ -1685,7 +1852,10 @@ describe("TimelineShell", () => {
   it("defaults legacy settings to simple mode and auto-renders when auto review is enabled", async () => {
     const originalFetch = globalThis.fetch;
     const t5FetchMock = mockT5Fetch();
-    const confirmPayloads: TimelineWorkflowState[] = [];
+    const confirmRequests: Array<{
+      body: Record<string, unknown>;
+      resolve: (response: Response) => void;
+    }> = [];
     const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
       const url = getFetchUrl(input);
 
@@ -1705,11 +1875,9 @@ describe("TimelineShell", () => {
       }
 
       if (url === "/api/agent-timeline/confirm-generation") {
-        const payload = typeof init?.body === "string" ? JSON.parse(init.body) : {};
-        confirmPayloads.push(payload.workflow as TimelineWorkflowState);
-
-        return createJsonResponse({
-          workflow: createConfirmedGenerationWorkflow(payload.workflow as TimelineWorkflowState),
+        const body = typeof init?.body === "string" ? JSON.parse(init.body) as Record<string, unknown> : {};
+        return new Promise<Response>((resolve) => {
+          confirmRequests.push({ body, resolve });
         });
       }
 
@@ -1753,7 +1921,42 @@ describe("TimelineShell", () => {
       await flushAsyncWork();
 
       expect(container.textContent).toContain("Workflow progress");
-      expect(confirmPayloads).toHaveLength(1);
+      expect(confirmRequests).toHaveLength(1);
+      expect(confirmRequests[0]!.body).toMatchObject({
+        action: "confirm",
+        stage: "preview-execution",
+      });
+      expect(container.textContent).toContain("Preview generation is running.");
+
+      act(() => confirmRequests[0]!.resolve(createJsonResponse({
+        workflow: createConfirmedGenerationWorkflow(confirmRequests[0]!.body.workflow as TimelineWorkflowState),
+      })));
+      await flushAsyncWork();
+
+      expect(confirmRequests).toHaveLength(2);
+      expect(confirmRequests[1]!.body).toMatchObject({
+        action: "continue",
+        stage: "preview-scoring",
+      });
+      expect(container.textContent).toContain("Preview scoring is running.");
+
+      act(() => confirmRequests[1]!.resolve(createJsonResponse({
+        workflow: createConfirmedGenerationWorkflow(confirmRequests[1]!.body.workflow as TimelineWorkflowState),
+      })));
+      await flushAsyncWork();
+
+      expect(confirmRequests).toHaveLength(3);
+      expect(confirmRequests[2]!.body).toMatchObject({
+        action: "continue",
+        stage: "comfyui-execution",
+      });
+      expect(container.textContent).toContain("Render execution is running.");
+
+      act(() => confirmRequests[2]!.resolve(createJsonResponse({
+        workflow: createConfirmedGenerationWorkflow(confirmRequests[2]!.body.workflow as TimelineWorkflowState),
+      })));
+      await flushAsyncWork();
+
       expect(container.textContent).toContain("Generated result ready.");
       expect(container.textContent).toContain("100%");
       expect(container.textContent).toContain("timeline-confirmed.png");
@@ -1813,6 +2016,65 @@ describe("TimelineShell", () => {
       );
       expect((container.querySelector("#prompt-profile") as HTMLSelectElement | null)?.value).toBe("anima");
       expect((container.querySelector("#timeline-image-count") as HTMLSelectElement | null)?.value).toBe("3");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it.each([
+    ["preview-execution", "Preview generation", "Only 1 preview succeeded; 2 are required."],
+    ["preview-scoring", "Preview scoring", "Preview scoring failed twice."],
+    ["comfyui-execution", "Render execution", "1 of 2 final images completed."],
+  ] as const)("keeps Simple-mode %s errors visible and retryable", async (phase, title, message) => {
+    const originalFetch = globalThis.fetch;
+    const workflow = createSimpleGenerationPhaseErrorWorkflow(phase);
+    const activeRecord = createTimelineWorkflowRecord({
+      workflow,
+      sceneRequest: "A simple mode retry scene",
+      selectedPromptProfile: "illustrious",
+      selectedImageCount: 2,
+      selectedNodeId: phase,
+    });
+    let resolveRetry!: (response: Response) => void;
+    const retryResponse = new Promise<Response>((resolve) => {
+      resolveRetry = resolve;
+    });
+    const retryBodies: Array<Record<string, unknown>> = [];
+    globalThis.fetch = vi.fn<typeof fetch>(async (input, init) => {
+      const url = getFetchUrl(input);
+      if (url === "/api/settings") return createTimelineSettingsResponse({ displayMode: "simple" });
+      if (url === "/api/agent-timeline/active-workflow") {
+        return init?.method === "PUT"
+          ? createJsonResponse({ ok: true, record: activeRecord })
+          : createJsonResponse(activeRecord);
+      }
+      if (url === "/api/agent-timeline/confirm-generation") {
+        retryBodies.push(typeof init?.body === "string" ? JSON.parse(init.body) : {});
+        return retryResponse;
+      }
+      return createJsonResponse({ role: "assistant", content: "{}" });
+    });
+
+    try {
+      act(() => root.render(<TimelineShell />));
+      await flushAsyncWork();
+
+      expect(container.textContent).toContain(`${title} needs attention.`);
+      expect(container.textContent).toContain(message);
+      if (phase === "comfyui-execution") {
+        expect(container.textContent).toContain("1/2 finals are safely stored.");
+        expect(container.textContent).toContain("Retry renders only missing or invalid selections.");
+      }
+
+      act(() => getButtonByText(`Retry ${title.toLowerCase()}`).click());
+      await flushAsyncWork();
+
+      expect(retryBodies).toHaveLength(1);
+      expect(retryBodies[0]).toMatchObject({ action: "retry", retryNodeId: phase });
+      expect(container.textContent).toContain(`${title} is running.`);
+
+      resolveRetry(createJsonResponse({ workflow }));
+      await flushAsyncWork();
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -1890,8 +2152,8 @@ describe("TimelineShell", () => {
 
       await uploadSourceImage();
 
-      expect(imageCount?.value).toBe("1");
-      expect(imageCount?.disabled).toBe(true);
+      expect(imageCount?.value).toBe("4");
+      expect(imageCount?.disabled).toBe(false);
       expect(container.textContent).toContain("source.webp");
       expect(container.textContent).toContain("640x480 source image");
       expect(container.textContent).toContain("Denoise");
@@ -1915,8 +2177,8 @@ describe("TimelineShell", () => {
 
       await uploadSourceImage();
 
-      expect(imageCount?.value).toBe("1");
-      expect(imageCount?.disabled).toBe(true);
+      expect(imageCount?.value).toBe("4");
+      expect(imageCount?.disabled).toBe(false);
       expect(container.textContent).toContain("source.webp");
       expect((container.querySelector('input[type="number"]') as HTMLInputElement | null)?.value).toBe("0.35");
 
@@ -1934,12 +2196,12 @@ describe("TimelineShell", () => {
         sceneRequest: "A source-guided courier portrait",
       });
       expect(activeSaveBodies.at(-1)).toMatchObject({
-        selectedImageCount: 1,
+        selectedImageCount: 4,
         workflow: {
           nodes: {
             "scene-input": {
               result: {
-                imageCount: 1,
+                imageCount: 4,
                 sourceDenoise: 0.35,
                 sourceImage: {
                   dataUrl: imageDataUrl,
@@ -2707,7 +2969,7 @@ describe("TimelineShell", () => {
       });
       await flushAsyncWork();
 
-      expect(confirmPayloads).toHaveLength(1);
+      expect(confirmPayloads).toHaveLength(3);
       expect(confirmPayloads[0]?.generationConfirmed).toBe(false);
       expect(confirmPayloads[0]?.nodes["scene-input"].result).toMatchObject({
         imageCount: 3,
@@ -2716,7 +2978,7 @@ describe("TimelineShell", () => {
       expect(confirmPayloads[0]?.nodes["generation-gate"].error?.code).toBe("confirmation_required");
 
       const fetchUrls = fetchMock.mock.calls.map(([input]) => getFetchUrl(input));
-      expect(fetchUrls.filter((url) => url === "/api/agent-timeline/confirm-generation")).toHaveLength(1);
+      expect(fetchUrls.filter((url) => url === "/api/agent-timeline/confirm-generation")).toHaveLength(3);
       expect(fetchUrls).not.toContain("/api/comfyui/generate-image");
       expect(fetchUrls).not.toContain("/api/comfyui/generated-images");
 
@@ -2828,7 +3090,7 @@ describe("TimelineShell", () => {
       await submitInitialScene("A neon market alley with a courier at sunrise");
       await flushAsyncWork();
 
-      expect(confirmPayloads).toHaveLength(1);
+      expect(confirmPayloads).toHaveLength(3);
       expect(container.textContent).not.toContain("Review 2 new prompt tags");
       expect(confirmPayloads[0]?.nodes["generation-gate"].error?.code).toBe("confirmation_required");
       expect(getSectionByHeading("Artifact result").textContent).toContain("timeline-confirmed.png");

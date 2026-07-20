@@ -120,6 +120,8 @@ type TimelineNodeId =
   | "resource-recommendation"
   | "parameter-recommendation"
   | "generation-gate"
+  | "preview-execution"
+  | "preview-scoring"
   | "comfyui-execution"
   | "result-display";
 
@@ -145,7 +147,9 @@ type TimelineNodeResult<T> = {
 | `resource-recommendation` | `scene-prompt`, `character-tags`, `character-action`, settings/resource snapshot | canvas-binding if resource recommendation does not consume canvas summary |
 | `parameter-recommendation` | `resource-recommendation`, prompt data, optional canvas summary | none |
 | `generation-gate` | all prompt/resource/parameter nodes complete or manual | none |
-| `comfyui-execution` | user confirmation at `generation-gate` | none |
+| `preview-execution` | user confirmation at `generation-gate` | none |
+| `preview-scoring` | `preview-execution` | none |
+| `comfyui-execution` | `preview-scoring` | none |
 | `result-display` | `comfyui-execution` | none |
 
 ### Regeneration Rules
@@ -161,7 +165,7 @@ type TimelineNodeResult<T> = {
 ### Shared Workflow Primitives
 
 - `src/features/agent-timeline/workflow-definition.ts` owns reusable workflow contracts for mode, definition version, node metadata, dependency DAGs, node status, readiness, manual-edit stale propagation, raw JSON display, workspace routing, AI retry affordance, and adapter result normalization.
-- Adapter contracts must support current workflow-scoped single artifacts and future story-scoped or shot-scoped artifacts through explicit artifact scopes. Current single-image execution remains hard-coded until the definition-driven migration track.
+- Adapter contracts support workflow-scoped single artifacts and story/shot-scoped artifacts through explicit artifact scopes. Single-image v2 registration and stale propagation are definition-driven.
 - `src/features/agent-timeline/workflow-definitions.ts` exposes the extracted single-image workflow definition data for future migration without changing the current LangGraph registration path.
 - `src/features/agent-timeline/generation-detailers.ts`, `generation-style-palette.ts`, and `style-reference.ts` own workflow-neutral sanitized Detailer, style-palette, and global style-reference contracts shared by Run and Story. `story-style-palette.ts` preserves the Story-named re-export surface. `run-input-settings.ts` composes the single-scene Run snapshot; legacy Run records receive disabled FaceDetailer and HandDetailer defaults and no style reference.
 - Run scene input may hold an explicit ready local checkpoint, enabled LoRAs with model/clip strengths, supported saved generation parameters, and independent Detailer configurations. An explicit checkpoint produces a manual `resource-recommendation` result without calling the recommendation provider. Saved parameters produce a manual `parameter-recommendation` result without calling automatic Style Advice; unsaved parameters retain the existing AI path. Detailers never enter AI requests.
@@ -312,7 +316,15 @@ Execution should reuse the current single-image path:
 4. Return queue metadata compatible with existing ComfyUI responses: `clientId`, `promptId`, `number`, `nodeErrors`, `workflow`, `nodeIds`, `outputNodeId`, `warnings`, and sanitized resolved `request`.
 5. Read completion through existing history or event helpers when needed.
 
-Run text-to-image execution applies the selected resources, parameters, and Detailers to a batch size of 1-4. Run img2img execution forces batch size 1, uses the source image width and height, and gives the Scene Composer source denoise precedence over saved denoise. Request preview and confirmed execution requests carry both Detailer configurations; existing `object_info` validation remains responsible for actionable checkpoint, LoRA, sampler, scheduler, Detailer node, and detector-model failures, and workflow construction keeps HandDetailer before FaceDetailer.
+Run single-image definition v2 executes `generation-gate → preview-execution → preview-scoring → comfyui-execution → result-display`. K is 1-4 for txt2img and img2img and maps to candidate pools 4/4/6/8. Each preview is a batch-size-1 request with a materialized base seed plus candidate index, at most 10 steps, disabled Detailers, and formal context retained. Dimensions remain unchanged when already within 512; otherwise both dimensions are scaled by the longest-edge ratio and floored to 64-pixel multiples with minimum 64. Source-img2img previews use the original source and Composer denoise.
+
+`single-image-preview-scoring` sends all successful candidate images in one multimodal request, strictly validates exact candidate coverage and finite 0-100 rubric values, computes weighted totals locally at 30/25/20/15/10, and sorts by total, composition, then candidate index. The identical request is attempted at most twice. Ordinary Runs route to `LITELLM_VISION_MODEL` with default fallback; NSFW Runs require `LITELLM_NSFW_MODEL` and fail closed when it is unavailable or not multimodal.
+
+Final execution uses each selected preview as the only img2img source, restores formal dimensions/steps/CFG/sampler/scheduler/resources/style context and Detailers, reuses the candidate seed, and applies internal denoise 0.50 without mutating the formal parameter result. Final records preserve candidate linkage and each candidate's unique global scoring rank within the preview pool, so a Detailed K=2 selection may legitimately retain ranks 1 and 3. Partial success is stored as safe structured state and a final retry executes only missing or failed selections. Preview and final persisted state contains generated-image references rather than bytes, data URLs, local paths, or full ComfyUI workflows.
+
+Confirmation persists a server-signed HMAC-SHA-256 fingerprint of a domain-separated, versioned canonical Run generation contract. The contract binds the workflow ID plus scene input/source/NSFW/settings, prompt, tags, action, canvas, resources, and parameters, so confirmation cannot be replayed across otherwise identical Runs. Every continuation or phase retry recomputes and timing-safely compares this fingerprint after workflow sanitization; clients cannot mint a valid replacement, and missing legacy fingerprints, server restarts, or any contract mismatch require explicit reconfirmation. Persisted v2 preview, scoring, partial-final, final, and result-display records use typed validation. Restored scoring must cover every successful preview exactly once, recomputes raw weighted totals, and verifies each persisted rank against the fixed raw-total, composition, then preview-index ordering. AI selection must equal the ordered top K; manual selection may choose any valid exact-K subset. Image records additionally use the shared ComfyUI path-safe reference and managed generated-image filename/URL contract. Invalid scoring or `done` image references become recoverable errors and are never displayed or reused as completed retry inputs.
+
+The confirmation endpoint accepts an explicit preview, scoring, or final stage. Simple mode confirms and executes preview first, merges that persisted workflow, then continues scoring and final rendering in separate requests; the final-stage request also resolves result display. The server verifies the confirmation fingerprint and target dependencies on every continuation, rejects skipped stages, and scopes retries to their requested stage before the client advances through only the remaining downstream stages. The UI marks each stage running before its request and retains partial/failure state after each response; every preview/scoring/final error exposes an in-place retry, and partial final state reports the safely stored count. Background jobs and streaming phase events remain out of scope.
 
 Out of scope for MVP execution:
 
@@ -356,7 +368,7 @@ Use stable categories in timeline responses while preserving useful upstream det
 
 Source of truth: `.env.example`.
 
-- LiteLLM: `LITELLM_BASE_URL`, `LITELLM_API_KEY`, `LITELLM_DEFAULT_MODEL`, `LITELLM_NSFW_MODEL`, `LITELLM_VISION_MODEL`, `LITELLM_CLASSIFICATION_MODEL`, `LITELLM_CIVITAI_RECOMMENDATION_MODEL`, `LITELLM_CIVITAI_EMBEDDING_MODEL`, `LITELLM_COMFYUI_DIAGNOSIS_MODEL`. Requests marked `nsfw` use `LITELLM_NSFW_MODEL` if configured; Story style reference analysis uses the `story-style-reference-analysis` purpose and falls back to `LITELLM_VISION_MODEL`, then the default model, when no explicit model is provided; Civitai vector reindexing and semantic retrieval use the embedding model; timeline model-resource and render-parameter recommendation nodes keep their purpose-specific models.
+- LiteLLM: `LITELLM_BASE_URL`, `LITELLM_API_KEY`, `LITELLM_DEFAULT_MODEL`, `LITELLM_NSFW_MODEL`, `LITELLM_VISION_MODEL`, `LITELLM_CLASSIFICATION_MODEL`, `LITELLM_CIVITAI_RECOMMENDATION_MODEL`, `LITELLM_CIVITAI_EMBEDDING_MODEL`, `LITELLM_COMFYUI_DIAGNOSIS_MODEL`. Requests marked `nsfw` use `LITELLM_NSFW_MODEL` if configured. NSFW Run preview scoring requires that model to accept multimodal image input and has no ordinary-model fallback. Ordinary Run preview scoring uses `LITELLM_VISION_MODEL`, then the default. Story style reference analysis uses the `story-style-reference-analysis` purpose and falls back to `LITELLM_VISION_MODEL`, then the default model, when no explicit model is provided; Civitai vector reindexing and semantic retrieval use the embedding model; timeline model-resource and render-parameter recommendation nodes keep their purpose-specific models.
 - Tavily: `TAVILY_API_KEY`, `TAVILY_BASE_URL`.
 - ComfyUI: `COMFYUI_BASE_URL`, `COMFYUI_API_KEY`, `COMFYUI_TEMP_DIR`.
 - SceneForge: `SCENEFORGE_SHOW_NSFW_BUTTON`, `SCENEFORGE_SQLITE_FILE`, `SCENEFORGE_PROJECTS_DIR`, `SCENEFORGE_GENERATED_IMAGES_DIR`, `SCENEFORGE_PROMPT_LIBRARY_FILE`, `SCENEFORGE_LLM_LOG_DIR`, `SCENEFORGE_LLM_LOG_RETENTION_DAYS`, `SCENEFORGE_LLM_LOG_FILE`.

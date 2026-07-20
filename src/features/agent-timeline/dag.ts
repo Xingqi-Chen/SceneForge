@@ -66,11 +66,15 @@ export function validateTimelineDependencyDag(dag: TimelineDependencyDag = mvpTi
     }),
   );
 
-  if (!dag["comfyui-execution"].includes("generation-gate")) {
+  if (!dag["preview-execution"].includes("generation-gate")) {
     issues.push({
-      nodeId: "comfyui-execution",
-      message: "ComfyUI execution must remain downstream of the generation gate.",
+      nodeId: "preview-execution",
+      message: "Preview execution must remain downstream of the generation gate.",
     });
+  }
+
+  if (!dag["comfyui-execution"].includes("preview-scoring")) {
+    issues.push({ nodeId: "comfyui-execution", message: "Final execution must remain downstream of preview scoring." });
   }
 
   if (!dag["result-display"].includes("comfyui-execution")) {

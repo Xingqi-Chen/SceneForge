@@ -33,6 +33,7 @@ export type LlmChatRequest = {
     | "civitai-combination-recommendation"
     | "stable-diffusion-prompt-generation"
     | "story-style-reference-analysis"
+    | "single-image-preview-scoring"
     | "comfyui-generation-diagnosis"
     | "comfyui-inpaint-diagnosis";
   messages: LlmChatMessage[];

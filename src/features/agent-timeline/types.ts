@@ -41,6 +41,8 @@ export const timelineNodeIds = [
   "resource-recommendation",
   "parameter-recommendation",
   "generation-gate",
+  "preview-execution",
+  "preview-scoring",
   "comfyui-execution",
   "result-display",
 ] as const;
@@ -56,6 +58,8 @@ export const executableTimelineNodeIds = [
   "resource-recommendation",
   "parameter-recommendation",
   "generation-gate",
+  "preview-execution",
+  "preview-scoring",
   "comfyui-execution",
   "result-display",
 ] as const satisfies readonly TimelineNodeId[];
@@ -119,6 +123,7 @@ export type SceneInputTimelineResult = {
   rawIntent: string;
   promptProfile: PromptProfileId;
   imageCount: number;
+  nsfw?: boolean;
   sourceDenoise?: number;
   sourceImage?: {
     dataUrl: string;
@@ -246,17 +251,92 @@ export type ParameterRecommendationTimelineResult = {
 export type GenerationGateTimelineResult = {
   confirmationRequired: boolean;
   confirmed: boolean;
+  confirmationFingerprint?: string;
+};
+
+export const previewScoringRubric = {
+  adherence: 0.3,
+  composition: 0.25,
+  anatomy: 0.2,
+  style: 0.15,
+  technical: 0.1,
+} as const;
+
+export type TimelinePreviewScore = {
+  adherence: number;
+  composition: number;
+  anatomy: number;
+  style: number;
+  technical: number;
+  total: number;
+  rationale?: string;
+};
+
+export type TimelinePreviewCandidate = {
+  candidateId: string;
+  index: number;
+  seed: number;
+  status: "done" | "error";
+  promptId?: string;
+  sourceImage?: {
+    filename: string;
+    nodeId: string;
+    subfolder?: string;
+    type?: string;
+  };
+  storedImage?: TimelineStoredGeneratedImage;
+  error?: TimelineNodeError;
+};
+
+export type PreviewExecutionTimelineResult = {
+  baseSeed: number;
+  candidateCount: number;
+  finalCount: number;
+  previewHeight: number;
+  previewWidth: number;
+  previewSteps: number;
+  candidates: TimelinePreviewCandidate[];
+  successfulCount: number;
+  warnings: string[];
+};
+
+export type PreviewScoringTimelineResult = {
+  rubricVersion: 1;
+  scores: Array<TimelinePreviewScore & {
+    candidateId: string;
+    rank: number;
+  }>;
+  selectedCandidateIds: string[];
+  selectionSource: "ai" | "manual";
+};
+
+export type TimelineFinalExecutionRecord = {
+  candidateId: string;
+  seed: number;
+  rank: number;
+  status: "done" | "error";
+  promptId?: string;
+  sourceImage?: {
+    filename: string;
+    nodeId: string;
+    subfolder?: string;
+    type?: string;
+  };
+  storedImage?: TimelineStoredGeneratedImage;
+  error?: TimelineNodeError;
 };
 
 export type ComfyUiExecutionTimelineResult = {
+  completed: boolean;
+  finalCount: number;
+  finals: TimelineFinalExecutionRecord[];
   nodeErrors?: unknown;
-  nodeIds: unknown;
+  nodeIds?: unknown;
   number?: number;
-  outputNodeId: string;
-  promptId: string;
+  outputNodeId?: string;
+  promptId?: string;
   request: ComfyUiTextToImageRequest;
   warnings: string[];
-  workflow?: unknown;
 };
 
 export type TimelineStoredGeneratedImage = {
@@ -298,6 +378,12 @@ export type ResultDisplayTimelineResult = {
   storedImage: TimelineStoredGeneratedImage;
   storedImages?: TimelineStoredGeneratedImage[];
   warnings: string[];
+  finalLinks?: Array<{
+    candidateId: string;
+    promptId: string;
+    rank: number;
+    seed: number;
+  }>;
 };
 
 export type TimelineNodeExecutionContext = {

@@ -52,11 +52,21 @@ const comfyUiMocks = vi.hoisted(() => {
 
 const storeGeneratedImageMock = vi.hoisted(() => vi.fn());
 const uploadSequenceCharacterReferencesMock = vi.hoisted(() => vi.fn());
+const readFileMock = vi.hoisted(() => vi.fn().mockResolvedValue(new Uint8Array([9, 8, 7])));
+const uploadSourceImageMock = vi.hoisted(() => vi.fn((_client: unknown, request: unknown) => request));
+
+vi.mock("node:fs/promises", () => ({ default: { readFile: readFileMock } }));
 
 vi.mock("@/features/comfyui", () => comfyUiMocks);
 
 vi.mock("@/features/comfyui/generated-image-storage", () => ({
+  getGeneratedImageContentType: vi.fn(() => "image/png"),
+  getGeneratedImagePath: vi.fn((filename: string) => `C:\\safe\\${filename}`),
   storeGeneratedImage: storeGeneratedImageMock,
+}));
+
+vi.mock("@/features/comfyui/source-image-upload", () => ({
+  uploadComfyUiTextToImageSourceImage: uploadSourceImageMock,
 }));
 
 vi.mock("@/features/comfyui/sequence-reference-upload", () => ({
@@ -68,6 +78,7 @@ import {
   confirmTimelineGeneration,
   createTimelineWorkflowState,
   executeTimelineGraph,
+  retryTimelineGenerationFrom,
   setTimelineNodeManualResult,
 } from ".";
 import { ComfyUiSequenceReferenceStorageError } from "@/features/comfyui/sequence-reference-storage";
@@ -116,8 +127,16 @@ function createGateReadyWorkflow(clock = createClock(), imageCount = 1) {
     workflow,
     "parameter-recommendation",
     {
+      width: 1024,
+      height: 1024,
+      steps: 28,
+      cfg: 6,
+      samplerName: "euler",
+      scheduler: "normal",
+      denoise: 1,
+      seedPolicy: { mode: "fixed", seed: 100 },
       requestPreview: {
-        batchSize: 4,
+        batchSize: 1,
         checkpointName: "local.safetensors",
         negativePrompt: "low detail",
         positivePrompt: "glass greenhouse pilot",
@@ -137,7 +156,49 @@ function createGateReadyWorkflow(clock = createClock(), imageCount = 1) {
 }
 
 function confirmWorkflow(workflow: TimelineWorkflowState, clock = createClock()) {
-  return confirmTimelineGeneration(workflow, undefined, { now: clock });
+  let confirmed = confirmTimelineGeneration(workflow, undefined, { now: clock });
+  const sceneInput = confirmed.nodes["scene-input"].result as { imageCount?: number };
+  const finalCount = Math.min(4, Math.max(1, Math.round(sceneInput.imageCount ?? 1)));
+  const candidateCount = Math.min(8, Math.max(4, finalCount * 2));
+  const candidates = Array.from({ length: candidateCount }, (_, index) => ({
+    candidateId: `preview-${index + 1}`,
+    index,
+    seed: 100 + index,
+    status: "done" as const,
+    storedImage: {
+      byteLength: index + 1,
+      contentType: "image/png",
+      filename: `preview-${index + 1}.png`,
+      url: `/api/comfyui/generated-images/preview-${index + 1}.png`,
+    },
+  }));
+  confirmed = completeTimelineNode(confirmed, "preview-execution", {
+    baseSeed: 100,
+    candidateCount,
+    finalCount,
+    previewHeight: 512,
+    previewWidth: 512,
+    previewSteps: 10,
+    candidates,
+    successfulCount: candidateCount,
+    warnings: [],
+  }, "system", { now: clock });
+  confirmed = completeTimelineNode(confirmed, "preview-scoring", {
+    rubricVersion: 1,
+    scores: candidates.map((candidate, index) => ({
+      candidateId: candidate.candidateId,
+      adherence: 100 - index,
+      composition: 100 - index,
+      anatomy: 100 - index,
+      style: 100 - index,
+      technical: 100 - index,
+      total: 100 - index,
+      rank: index + 1,
+    })),
+    selectedCandidateIds: candidates.slice(0, finalCount).map((candidate) => candidate.candidateId),
+    selectionSource: "ai",
+  }, "ai", { now: clock });
+  return confirmed;
 }
 
 function createStyleReferenceWorkflow({
@@ -244,6 +305,8 @@ afterEach(() => {
   vi.restoreAllMocks();
   storeGeneratedImageMock.mockReset();
   uploadSequenceCharacterReferencesMock.mockReset();
+  readFileMock.mockClear();
+  uploadSourceImageMock.mockClear();
   Object.values(comfyUiMocks).forEach((mock) => {
     if (typeof mock === "function" && "mockReset" in mock) {
       mock.mockReset();
@@ -367,7 +430,7 @@ describe("timeline T8 server adapters", () => {
           checkpointName: "local.safetensors",
           preview: false,
         }),
-        { clientId: "timeline-timeline-t8-server" },
+        { clientId: "timeline-timeline-t8-server-final-preview-1" },
       );
       expect(getHistory).toHaveBeenCalledWith("prompt-confirmed");
       expect(buildViewUrl).toHaveBeenCalledWith({
@@ -385,7 +448,8 @@ describe("timeline T8 server adapters", () => {
       expect(result.nodes["comfyui-execution"]).toMatchObject({
         status: "done",
         result: {
-          promptId: "prompt-confirmed",
+          completed: true,
+          finals: [expect.objectContaining({ candidateId: "preview-1", promptId: "prompt-confirmed" })],
           request: {
             batchSize: 1,
             preview: false,
@@ -414,7 +478,7 @@ describe("timeline T8 server adapters", () => {
       outputNodeId: "9",
       promptId: "prompt-four-images",
       request: {
-        batchSize: 4,
+        batchSize: 1,
         checkpointName: "local.safetensors",
         negativePrompt: "low detail",
         positivePrompt: "glass greenhouse pilot",
@@ -434,7 +498,7 @@ describe("timeline T8 server adapters", () => {
     comfyUiMocks.validateComfyUiTextToImageRequest.mockReturnValue({
       ok: true,
       request: {
-        batchSize: 4,
+        batchSize: 1,
         checkpointName: "local.safetensors",
         negativePrompt: "low detail",
         positivePrompt: "glass greenhouse pilot",
@@ -444,7 +508,7 @@ describe("timeline T8 server adapters", () => {
     comfyUiMocks.validateComfyUiRequestAgainstObjectInfo.mockReturnValue({
       errors: [],
       request: {
-        batchSize: 4,
+        batchSize: 1,
         checkpointName: "local.safetensors",
         negativePrompt: "low detail",
         positivePrompt: "glass greenhouse pilot",
@@ -452,11 +516,15 @@ describe("timeline T8 server adapters", () => {
       },
       warnings: [],
     });
-    comfyUiMocks.extractComfyUiHistoryImages.mockReturnValue([1, 2, 3, 4].map((index) => ({
-      filename: `output-${index}.png`,
-      nodeId: "9",
-      type: "output",
-    })));
+    let extractedImageIndex = 0;
+    comfyUiMocks.extractComfyUiHistoryImages.mockImplementation(() => {
+      extractedImageIndex += 1;
+      return [{
+        filename: `output-${extractedImageIndex}.png`,
+        nodeId: "9",
+        type: "output",
+      }];
+    });
     comfyUiMocks.isComfyUiPromptHistoryComplete.mockReturnValue(true);
     [1, 2, 3, 4].forEach((index) => {
       storeGeneratedImageMock.mockResolvedValueOnce({
@@ -480,11 +548,12 @@ describe("timeline T8 server adapters", () => {
 
       expect(generateImage).toHaveBeenCalledWith(
         expect.objectContaining({
-          batchSize: 4,
+          batchSize: 1,
           preview: false,
         }),
-        { clientId: "timeline-timeline-t8-server" },
+        { clientId: "timeline-timeline-t8-server-final-preview-1" },
       );
+      expect(generateImage).toHaveBeenCalledTimes(4);
       expect(buildViewUrl).toHaveBeenCalledTimes(4);
       expect(globalThis.fetch).toHaveBeenCalledTimes(4);
       expect(storeGeneratedImageMock).toHaveBeenCalledTimes(4);
@@ -550,9 +619,8 @@ describe("timeline T8 server adapters", () => {
       status: "error",
       error: {
         code: "comfyui_upstream",
-        message: "ComfyUI prompt validation failed: checkpoint missing",
+        message: "ComfyUI request failed: checkpoint missing",
         details: {
-          details: upstreamDetails,
           statusCode: 502,
         },
       },
@@ -595,14 +663,24 @@ describe("timeline T8 server adapters", () => {
     expect(result.nodes["comfyui-execution"]).toMatchObject({
       status: "error",
       error: {
-        code: "comfyui_object_info_mismatch",
-        message: "ComfyUI request does not match the current ComfyUI model/node options. Checkpoint is not available in ComfyUI: missing.safetensors LoRA 1 is not available in ComfyUI: missing-lora.safetensors",
         details: {
-          errors: [
-            "Checkpoint is not available in ComfyUI: missing.safetensors",
-            "LoRA 1 is not available in ComfyUI: missing-lora.safetensors",
-          ],
-          warnings: ["using default sampler"],
+          recoverable: true,
+          partialResult: {
+            finals: [expect.objectContaining({
+              status: "error",
+              error: {
+                code: "comfyui_object_info_mismatch",
+                message: "ComfyUI request does not match current model/node options. Checkpoint is not available in ComfyUI: missing.safetensors LoRA 1 is not available in ComfyUI: missing-lora.safetensors",
+                details: {
+                  errors: [
+                    "Checkpoint is not available in ComfyUI: missing.safetensors",
+                    "LoRA 1 is not available in ComfyUI: missing-lora.safetensors",
+                  ],
+                  warnings: ["using default sampler"],
+                },
+              },
+            })],
+          },
         },
       },
     });
@@ -739,8 +817,16 @@ describe("timeline T8 server adapters", () => {
     expect(result.nodes["comfyui-execution"]).toMatchObject({
       status: "error",
       error: {
-        code: "comfyui_object_info_mismatch",
-        message: expect.stringContaining("IPAdapter model file is unavailable"),
+        details: {
+          partialResult: {
+            finals: [expect.objectContaining({
+              error: expect.objectContaining({
+                code: "comfyui_object_info_mismatch",
+                message: expect.stringContaining("IPAdapter model file is unavailable"),
+              }),
+            })],
+          },
+        },
       },
     });
   });
@@ -777,7 +863,7 @@ describe("timeline T8 server adapters", () => {
 
   it.each([
     [404, "Stored Run style reference was not found. Retry analysis, replace it, or disable IPAdapter."],
-    [500, "Stored Run style reference is invalid or unavailable. Retry analysis, replace it, or disable IPAdapter."],
+    [500, "Run style reference could not be prepared. Retry analysis, replace it, or disable IPAdapter."],
   ])("redacts storage diagnostics from the client-visible error for status %i", async (statusCode, expectedMessage) => {
     prepareStyleReferenceValidation();
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
@@ -795,8 +881,16 @@ describe("timeline T8 server adapters", () => {
     expect(result.nodes["comfyui-execution"]).toMatchObject({
       status: "error",
       error: {
-        code: "comfyui_request_invalid",
-        message: expectedMessage,
+        details: {
+          partialResult: {
+            finals: [expect.objectContaining({
+              error: expect.objectContaining({
+                code: "comfyui_request_invalid",
+                message: expectedMessage,
+              }),
+            })],
+          },
+        },
       },
     });
     expect(serializedResult).not.toContain("C:\\private");
@@ -824,8 +918,16 @@ describe("timeline T8 server adapters", () => {
     expect(result.nodes["comfyui-execution"]).toMatchObject({
       status: "error",
       error: {
-        code: "comfyui_request_invalid",
-        message: "Run style reference could not be prepared. Retry analysis, replace it, or disable IPAdapter.",
+        details: {
+          partialResult: {
+            finals: [expect.objectContaining({
+              error: expect.objectContaining({
+                code: "comfyui_request_invalid",
+                message: "Run style reference could not be prepared. Retry analysis, replace it, or disable IPAdapter.",
+              }),
+            })],
+          },
+        },
       },
     });
     expect(serializedResult).not.toContain("C:\\private");
@@ -833,10 +935,7 @@ describe("timeline T8 server adapters", () => {
     expect(serializedResult).not.toContain("secret-name");
     expect(serializedResult).not.toContain("raw upstream message diagnostics");
     expect(serializedResult).not.toContain("raw upstream name diagnostics");
-    expect(consoleError).toHaveBeenCalledTimes(1);
-    expect(consoleError.mock.calls).toEqual([
-      ["[SceneForge] [timeline] Run style reference upload failed; details were redacted."],
-    ]);
+    expect(consoleError).not.toHaveBeenCalled();
     expect(serializedLogArguments).not.toContain("C:\\private");
     expect(serializedLogArguments).not.toContain("secret-message");
     expect(serializedLogArguments).not.toContain("secret-name");
@@ -897,5 +996,142 @@ describe("timeline T8 server adapters", () => {
     expect(edited.nodes["generation-gate"].status).toBe("stale");
     expect(edited.nodes["comfyui-execution"].status).toBe("stale");
     expect(edited.nodes["result-display"].status).toBe("stale");
+  });
+
+  it("preserves successful finals and retries only the missing selection", async () => {
+    const getObjectInfo = vi.fn().mockResolvedValue({ CheckpointLoaderSimple: {} });
+    const generateImage = vi.fn()
+      .mockResolvedValueOnce({ promptId: "final-1" })
+      .mockRejectedValueOnce(new Error("candidate two failed"));
+    const getHistory = vi.fn().mockResolvedValue({ prompt: "history" });
+    const buildViewUrl = vi.fn().mockReturnValue("http://127.0.0.1:8188/view?filename=final.png&type=output");
+    comfyUiMocks.createComfyUiClient.mockReturnValue({ buildViewUrl, generateImage, getHistory, getObjectInfo });
+    comfyUiMocks.validateComfyUiTextToImageRequest.mockImplementation((request: unknown) => ({ ok: true, request }));
+    comfyUiMocks.validateComfyUiRequestAgainstObjectInfo.mockImplementation((request: unknown) => ({
+      errors: [], request, warnings: [],
+    }));
+    comfyUiMocks.extractComfyUiHistoryImages.mockReturnValue([{ filename: "final.png", nodeId: "9", type: "output" }]);
+    comfyUiMocks.isComfyUiPromptHistoryComplete.mockReturnValue(true);
+    storeGeneratedImageMock.mockResolvedValue({
+      byteLength: 3,
+      contentType: "image/png",
+      filename: "stored-final.png",
+      url: "/api/comfyui/generated-images/stored-final.png",
+    });
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn<typeof fetch>(async () => new Response(new Uint8Array([1, 2, 3]), {
+      headers: { "content-type": "image/png" }, status: 200,
+    }));
+
+    try {
+      const first = await executeTimelineGraph(
+        confirmWorkflow(createGateReadyWorkflow(createClock(), 2)),
+        createTimelineT8ServerNodeAdapters(),
+      );
+      expect(first.nodes["comfyui-execution"]).toMatchObject({
+        status: "error",
+        error: {
+          details: {
+            recoverable: true,
+            partialResult: {
+              completed: false,
+              finals: [
+                expect.objectContaining({ candidateId: "preview-1", status: "done" }),
+                expect.objectContaining({ candidateId: "preview-2", status: "error" }),
+              ],
+            },
+          },
+        },
+      });
+
+      generateImage.mockReset().mockResolvedValue({ promptId: "final-2" });
+      storeGeneratedImageMock.mockClear();
+      const retried = retryTimelineGenerationFrom(first, "comfyui-execution");
+      const second = await executeTimelineGraph(retried, createTimelineT8ServerNodeAdapters());
+
+      expect(generateImage).toHaveBeenCalledTimes(1);
+      expect(generateImage).toHaveBeenCalledWith(
+        expect.objectContaining({ seed: 101, batchSize: 1, denoise: 0.5 }),
+        { clientId: "timeline-timeline-t8-server-final-preview-2" },
+      );
+      expect(storeGeneratedImageMock).toHaveBeenCalledTimes(1);
+      expect(second.nodes["comfyui-execution"]).toMatchObject({
+        status: "done",
+        result: {
+          completed: true,
+          finalCount: 2,
+          finals: [
+            expect.objectContaining({ candidateId: "preview-1", status: "done" }),
+            expect.objectContaining({ candidateId: "preview-2", status: "done" }),
+          ],
+        },
+      });
+      expect(second.nodes["result-display"].status).toBe("done");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it.each([
+    [2, "done"],
+    [1, "error"],
+  ] as const)("retains partial previews when %i of K=2 candidates succeed", async (successLimit, expectedStatus) => {
+    delete process.env.LITELLM_VISION_MODEL;
+    delete process.env.LITELLM_DEFAULT_MODEL;
+    const getObjectInfo = vi.fn().mockResolvedValue({ CheckpointLoaderSimple: {} });
+    let queueCount = 0;
+    const generateImage = vi.fn().mockImplementation(() => {
+      queueCount += 1;
+      return queueCount <= successLimit
+        ? Promise.resolve({ promptId: `preview-${queueCount}` })
+        : Promise.reject(new Error("preview failed"));
+    });
+    const getHistory = vi.fn().mockResolvedValue({ prompt: "history" });
+    const buildViewUrl = vi.fn().mockReturnValue("http://127.0.0.1:8188/view?filename=preview.png&type=output");
+    comfyUiMocks.createComfyUiClient.mockReturnValue({ buildViewUrl, generateImage, getHistory, getObjectInfo });
+    comfyUiMocks.validateComfyUiTextToImageRequest.mockImplementation((request: unknown) => ({ ok: true, request }));
+    comfyUiMocks.validateComfyUiRequestAgainstObjectInfo.mockImplementation((request: unknown) => ({
+      errors: [], request, warnings: [],
+    }));
+    comfyUiMocks.extractComfyUiHistoryImages.mockReturnValue([{ filename: "preview.png", nodeId: "9", type: "output" }]);
+    comfyUiMocks.isComfyUiPromptHistoryComplete.mockReturnValue(true);
+    storeGeneratedImageMock.mockResolvedValue({
+      byteLength: 3,
+      contentType: "image/png",
+      filename: "stored-preview.png",
+      url: "/api/comfyui/generated-images/stored-preview.png",
+    });
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn<typeof fetch>(async () => new Response(new Uint8Array([1, 2, 3]), {
+      headers: { "content-type": "image/png" }, status: 200,
+    }));
+
+    try {
+      const workflow = confirmTimelineGeneration(createGateReadyWorkflow(createClock(), 2));
+      const result = await executeTimelineGraph(workflow, createTimelineT8ServerNodeAdapters());
+      const previewNode = result.nodes["preview-execution"];
+      const partial = expectedStatus === "done"
+        ? previewNode.result
+        : (previewNode.error?.details as { partialResult?: unknown } | undefined)?.partialResult;
+
+      expect(previewNode.status).toBe(expectedStatus);
+      expect(partial).toMatchObject({
+        candidateCount: 4,
+        finalCount: 2,
+        successfulCount: successLimit,
+        candidates: expect.arrayContaining([
+          expect.objectContaining({ status: "done", storedImage: expect.objectContaining({ filename: "stored-preview.png" }) }),
+          expect.objectContaining({ status: "error" }),
+        ]),
+      });
+      if (expectedStatus === "done") {
+        expect(result.nodes["preview-scoring"]).toMatchObject({ status: "error", error: { code: "llm_config" } });
+      } else {
+        expect(result.nodes["preview-scoring"].status).toBe("blocked");
+      }
+      expect(result.nodes["comfyui-execution"].status).toBe("blocked");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 });

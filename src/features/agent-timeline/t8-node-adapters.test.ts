@@ -1,9 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   confirmTimelineGeneration,
   createConfirmedTimelineComfyUiRequest,
+  createTimelineFinalRequests,
+  createTimelinePreviewRequests,
   createTimelineWorkflowState,
+  getTimelinePreviewCandidateCount,
+  getTimelinePreviewDimensions,
   setTimelineNodeManualResult,
   type SceneInputTimelineResult,
 } from ".";
@@ -41,9 +45,19 @@ function createConfirmedWorkflow(
     loras: [],
   });
   workflow = setTimelineNodeManualResult(workflow, "parameter-recommendation", {
+    width: 1024,
+    height: 1024,
+    steps: 30,
+    cfg: 6,
+    samplerName: "euler",
+    scheduler: "normal",
+    denoise: 0.72,
+    seedPolicy: { mode: "fixed", seed: 100 },
     requestPreview: {
       batchSize: 4,
       checkpointName: "local.safetensors",
+      cfg: 6,
+      denoise: 0.72,
       negativePrompt: "low detail",
       positivePrompt: stylePrompt
         ? `glass greenhouse pilot, ${stylePrompt}`
@@ -99,7 +113,9 @@ describe("timeline T8 ComfyUI request conversion", () => {
 
     expect(createConfirmedTimelineComfyUiRequest(workflow)).toEqual({
       batchSize: 1,
+      cfg: 6,
       checkpointName: "local.safetensors",
+      denoise: 0.72,
       faceDetailer: expect.objectContaining({ enabled: false }),
       handDetailer: expect.objectContaining({ enabled: false }),
       negativePrompt: "low detail",
@@ -111,11 +127,11 @@ describe("timeline T8 ComfyUI request conversion", () => {
     });
   });
 
-  it("uses the T1 image count as the confirmed execution batch size", () => {
+  it("keeps each confirmed execution request at batch size one", () => {
     const workflow = confirmTimelineGeneration(createConfirmedWorkflow(3));
 
     expect(createConfirmedTimelineComfyUiRequest(workflow)).toMatchObject({
-      batchSize: 3,
+      batchSize: 1,
       checkpointName: "local.safetensors",
       preview: false,
     });
@@ -179,7 +195,7 @@ describe("timeline T8 ComfyUI request conversion", () => {
     }));
 
     expect(createConfirmedTimelineComfyUiRequest(workflow)).toMatchObject({
-      batchSize: 4,
+      batchSize: 1,
       positivePrompt: "glass greenhouse pilot, soft gouache, cobalt shadows",
       preview: false,
     });
@@ -312,7 +328,7 @@ describe("timeline T8 ComfyUI request conversion", () => {
     });
     malformedPrompt = confirmTimelineGeneration(malformedPrompt);
     expect(() => createConfirmedTimelineComfyUiRequest(malformedPrompt)).toThrow(
-      "complete style reference prompt exactly once",
+      "complete style prompt exactly once",
     );
 
     let duplicatedShortPrompt = createConfirmedWorkflow(1, undefined, {
@@ -334,7 +350,218 @@ describe("timeline T8 ComfyUI request conversion", () => {
       },
     });
     expect(() => createConfirmedTimelineComfyUiRequest(confirmTimelineGeneration(duplicatedShortPrompt))).toThrow(
-      "complete style reference prompt exactly once",
+      "complete style prompt exactly once",
     );
+  });
+
+  it.each([
+    [1, 4],
+    [2, 4],
+    [3, 6],
+    [4, 8],
+  ])("maps K=%i to %i preview candidates", (finalCount, candidateCount) => {
+    expect(getTimelinePreviewCandidateCount(finalCount)).toBe(candidateCount);
+  });
+
+  it.each([
+    [1024, 1024, 512, 512],
+    [1536, 1024, 512, 320],
+    [1024, 1536, 320, 512],
+    [768, 1344, 256, 512],
+    [500, 257, 500, 257],
+  ])("scales %ix%i previews to exactly %ix%i", (width, height, previewWidth, previewHeight) => {
+    expect(getTimelinePreviewDimensions(width, height)).toEqual({
+      width: previewWidth,
+      height: previewHeight,
+    });
+  });
+
+  it.each([1, 2, 3, 4])("creates deterministic independent preview requests for txt2img K=%i", (imageCount) => {
+    const workflow = confirmTimelineGeneration(createConfirmedWorkflow(imageCount));
+    const requests = createTimelinePreviewRequests(workflow);
+
+    expect(requests).toHaveLength(getTimelinePreviewCandidateCount(imageCount));
+    expect(requests.map((item) => item.seed)).toEqual(
+      Array.from({ length: requests.length }, (_, index) => 100 + index),
+    );
+    expect(requests.every(({ request }) =>
+      request.batchSize === 1 &&
+      request.steps === 10 &&
+      request.width === 512 &&
+      request.height === 512 &&
+      request.preview === true &&
+      request.faceDetailer?.enabled === false &&
+      request.handDetailer?.enabled === false
+    )).toBe(true);
+    expect((workflow.nodes["parameter-recommendation"].result as { requestPreview: { batchSize: number; steps: number } }).requestPreview)
+      .toMatchObject({ batchSize: 4, steps: 30 });
+  });
+
+  it("materializes one random base seed per preview round", () => {
+    const random = vi.spyOn(Math, "random").mockReturnValue(0.25);
+    let workflow = createConfirmedWorkflow(2);
+    workflow = setTimelineNodeManualResult(workflow, "parameter-recommendation", {
+      ...(workflow.nodes["parameter-recommendation"].result as object),
+      seedPolicy: { mode: "random" },
+    });
+    const requests = createTimelinePreviewRequests(confirmTimelineGeneration(workflow));
+
+    expect(random).toHaveBeenCalledTimes(1);
+    expect(requests.map((item) => item.seed)).toEqual(
+      requests.map((_, index) => requests[0]!.seed + index),
+    );
+  });
+
+  it("keeps source-img2img K and source denoise for previews", () => {
+    const workflow = confirmTimelineGeneration(createConfirmedWorkflow(4, {
+      dataUrl: "data:image/png;base64,aGVsbG8=",
+      filename: "source.png",
+      height: 768,
+      mimeType: "image/png",
+      uploadedAt: "2026-07-20T00:00:00.000Z",
+      width: 1024,
+    }));
+    const requests = createTimelinePreviewRequests(workflow);
+
+    expect(requests).toHaveLength(8);
+    expect(requests.every(({ request }) =>
+      request.sourceImageDataUrl === "data:image/png;base64,aGVsbG8=" && request.denoise === 0.72
+    )).toBe(true);
+  });
+
+  it("builds ranked Top-K final img2img requests from stored previews with formal settings", () => {
+    let workflow = confirmTimelineGeneration(createConfirmedWorkflow(2));
+    workflow = setTimelineNodeManualResult(workflow, "preview-execution", {
+      baseSeed: 100,
+      candidateCount: 4,
+      finalCount: 2,
+      previewHeight: 512,
+      previewWidth: 512,
+      previewSteps: 10,
+      candidates: [1, 2, 3, 4].map((number, index) => ({
+        candidateId: `preview-${number}`,
+        index,
+        seed: 99 + number,
+        status: "done" as const,
+        storedImage: {
+          byteLength: number,
+          contentType: "image/png",
+          filename: `preview-${number}.png`,
+          url: `/api/comfyui/generated-images/preview-${number}.png`,
+        },
+      })),
+      successfulCount: 4,
+      warnings: [],
+    });
+    workflow = setTimelineNodeManualResult(workflow, "preview-scoring", {
+      rubricVersion: 1,
+      scores: [
+        { candidateId: "preview-3", adherence: 90, composition: 91, anatomy: 92, style: 93, technical: 94, total: 91.5, rank: 1 },
+        { candidateId: "preview-1", adherence: 80, composition: 81, anatomy: 82, style: 83, technical: 84, total: 81.5, rank: 2 },
+      ],
+      selectedCandidateIds: ["preview-3", "preview-1"],
+      selectionSource: "ai",
+    });
+
+    expect(createTimelineFinalRequests(workflow)).toMatchObject([
+      {
+        candidateId: "preview-3",
+        rank: 1,
+        seed: 102,
+        storedPreview: { filename: "preview-3.png" },
+        request: { batchSize: 1, denoise: 0.5, height: 1024, preview: false, seed: 102, steps: 30, width: 1024 },
+      },
+      {
+        candidateId: "preview-1",
+        rank: 2,
+        seed: 100,
+        storedPreview: { filename: "preview-1.png" },
+        request: { batchSize: 1, denoise: 0.5, height: 1024, preview: false, seed: 100, steps: 30, width: 1024 },
+      },
+    ]);
+  });
+
+  it("preserves global scoring ranks when Detailed mode manually selects ranks 1 and 3 for K=2", () => {
+    let workflow = confirmTimelineGeneration(createConfirmedWorkflow(2));
+    workflow = setTimelineNodeManualResult(workflow, "preview-execution", {
+      baseSeed: 100,
+      candidateCount: 4,
+      finalCount: 2,
+      previewHeight: 512,
+      previewWidth: 512,
+      previewSteps: 10,
+      candidates: [1, 2, 3, 4].map((number, index) => ({
+        candidateId: `preview-${number}`,
+        index,
+        seed: 99 + number,
+        status: "done" as const,
+        storedImage: {
+          byteLength: number,
+          contentType: "image/png",
+          filename: `preview-${number}.png`,
+          url: `/api/comfyui/generated-images/preview-${number}.png`,
+        },
+      })),
+      successfulCount: 4,
+      warnings: [],
+    });
+    workflow = setTimelineNodeManualResult(workflow, "preview-scoring", {
+      rubricVersion: 1,
+      scores: [1, 2, 3, 4].map((number) => ({
+        candidateId: `preview-${number}`,
+        adherence: 100 - number,
+        composition: 100 - number,
+        anatomy: 100 - number,
+        style: 100 - number,
+        technical: 100 - number,
+        total: 100 - number,
+        rank: number,
+      })),
+      selectedCandidateIds: ["preview-1", "preview-3"],
+      selectionSource: "manual",
+    });
+
+    expect(createTimelineFinalRequests(workflow)).toMatchObject([
+      { candidateId: "preview-1", rank: 1, seed: 100 },
+      { candidateId: "preview-3", rank: 3, seed: 102 },
+    ]);
+  });
+
+  it.each([
+    ["too few", ["preview-1"]],
+    ["duplicate", ["preview-1", "preview-1"]],
+    ["unknown", ["preview-1", "preview-9"]],
+  ])("rejects a persisted/manual %s Top-K selection server-side", (_case, selectedCandidateIds) => {
+    let workflow = confirmTimelineGeneration(createConfirmedWorkflow(2));
+    workflow = setTimelineNodeManualResult(workflow, "preview-execution", {
+      baseSeed: 100,
+      candidateCount: 4,
+      finalCount: 2,
+      previewHeight: 512,
+      previewWidth: 512,
+      previewSteps: 10,
+      candidates: [1, 2].map((number, index) => ({
+        candidateId: `preview-${number}`,
+        index,
+        seed: 99 + number,
+        status: "done" as const,
+        storedImage: {
+          byteLength: number,
+          contentType: "image/png",
+          filename: `preview-${number}.png`,
+          url: `/api/comfyui/generated-images/preview-${number}.png`,
+        },
+      })),
+      successfulCount: 2,
+      warnings: [],
+    });
+    workflow = setTimelineNodeManualResult(workflow, "preview-scoring", {
+      rubricVersion: 1,
+      scores: [],
+      selectedCandidateIds,
+      selectionSource: "manual",
+    });
+
+    expect(() => createTimelineFinalRequests(workflow)).toThrow(/requires exactly 2/i);
   });
 });
