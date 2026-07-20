@@ -48,6 +48,7 @@ import {
   type TimelineWorkflowState,
 } from "@/features/agent-timeline";
 import { createTimelineGenerationConfirmationFingerprint } from "@/features/agent-timeline/generation-confirmation.server";
+import { timelineFinalGenerationPolicy } from "@/features/agent-timeline/final-generation-policy";
 
 import { POST } from "./route";
 
@@ -104,6 +105,7 @@ function createSignedConfirmedWorkflow() {
     confirmationRequired: false,
     confirmed: true,
     confirmationFingerprint: createTimelineGenerationConfirmationFingerprint(workflow),
+    finalPolicyVersion: timelineFinalGenerationPolicy.version,
   });
 }
 
@@ -469,6 +471,31 @@ describe("POST /api/agent-timeline/confirm-generation", () => {
   it("does not let a staged continuation bypass confirmation fingerprint validation", async () => {
     const workflow = JSON.parse(JSON.stringify(createSignedConfirmedWorkflow())) as TimelineWorkflowState;
     workflow.nodes["scene-prompt"].result = { positivePrompt: "tampered staged prompt" };
+
+    const response = await POST(new Request("http://localhost/api/agent-timeline/confirm-generation", {
+      body: JSON.stringify({
+        action: "continue",
+        stage: "preview-scoring",
+        workflow,
+      }),
+      method: "POST",
+    }));
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { details: { code: "confirmation_required" } },
+    });
+    expect(comfyUiMocks.createComfyUiClient).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["missing", undefined],
+    ["altered", 999],
+  ] as const)("rejects an otherwise signed continuation when Final policy version data is %s", async (_case, version) => {
+    const workflow = JSON.parse(JSON.stringify(createSignedConfirmedWorkflow())) as TimelineWorkflowState;
+    const gate = workflow.nodes["generation-gate"].result as { finalPolicyVersion?: number };
+    if (version === undefined) delete gate.finalPolicyVersion;
+    else gate.finalPolicyVersion = version;
 
     const response = await POST(new Request("http://localhost/api/agent-timeline/confirm-generation", {
       body: JSON.stringify({

@@ -6,6 +6,7 @@ import {
   createTimelineGenerationConfirmationFingerprint,
   isTimelineGenerationConfirmationCurrent,
 } from "@/features/agent-timeline/generation-confirmation.server";
+import { timelineFinalGenerationPolicy } from "@/features/agent-timeline/final-generation-policy";
 import {
   areTimelineNodeDependenciesSatisfied,
   confirmTimelineGeneration,
@@ -121,6 +122,7 @@ export async function POST(request: Request) {
           confirmationRequired: false,
           confirmed: true,
           confirmationFingerprint: createTimelineGenerationConfirmationFingerprint(workflow),
+          finalPolicyVersion: timelineFinalGenerationPolicy.version,
         }) : workflow;
     if (stage && !areTimelineNodeDependenciesSatisfied(runnableWorkflow, stage)) {
       return errorResponse(`Generation stage "${stage}" cannot run until its dependencies are complete.`, 409, {

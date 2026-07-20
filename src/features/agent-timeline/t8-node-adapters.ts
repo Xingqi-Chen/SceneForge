@@ -1,5 +1,10 @@
 import type { ComfyUiTextToImageRequest } from "@/features/comfyui";
 
+import {
+  getTimelineFinalDenoise,
+  getTimelineFinalGenerationFamily,
+  resolveTimelineFinalDimensions,
+} from "./final-generation-policy";
 import { getGenerationInputDetailers } from "./generation-detailers";
 import { getRunSceneInputSettings } from "./run-input-settings";
 import { createTimelineNodeError, normalizeTimelineImageCount } from "./state";
@@ -36,14 +41,12 @@ export type TimelineBalancedGenerationPolicy = {
 export function getTimelineBalancedGenerationPolicy(
   request: ComfyUiTextToImageRequest,
 ): TimelineBalancedGenerationPolicy {
-  const baseModel = request.modelBaseModel?.trim().toLocaleLowerCase() ?? "";
-  if (request.workflowProfile === "anima" || baseModel.includes("anima")) {
-    return { family: "anima", finalDenoise: 0.65, previewLongestEdge: 768, previewStepCap: 20 };
-  }
-  if (typeof request.modelBaseModel === "string" && request.modelBaseModel.toLocaleLowerCase().includes("illustrious")) {
-    return { family: "illustrious", finalDenoise: 0.6, previewLongestEdge: 768, previewStepCap: 20 };
-  }
-  return { family: "fallback", finalDenoise: 0.65, previewLongestEdge: 768, previewStepCap: 20 };
+  return {
+    family: getTimelineFinalGenerationFamily(request),
+    finalDenoise: getTimelineFinalDenoise(request),
+    previewLongestEdge: 768,
+    previewStepCap: 20,
+  };
 }
 
 export type TimelinePreviewExecutionProvider = (
@@ -62,6 +65,8 @@ export type TimelineFinalExecutionProvider = (
     rank: number;
     request: ComfyUiTextToImageRequest;
     seed: number;
+    formalWidth: number;
+    formalHeight: number;
     storedPreview: NonNullable<PreviewExecutionTimelineResult["candidates"][number]["storedImage"]>;
   }>,
   context: TimelineNodeExecutionContext,
@@ -327,6 +332,11 @@ function requireScoringResult(workflow: TimelineWorkflowState): PreviewScoringTi
 export function createTimelineFinalRequests(workflow: TimelineWorkflowState) {
   const formal = createConfirmedTimelineComfyUiRequest(workflow);
   const policy = getTimelineBalancedGenerationPolicy(formal);
+  const dimensions = resolveTimelineFinalDimensions({
+    request: formal,
+    sourceImage: getTimelineSourceImage(workflow),
+  });
+  if (!dimensions) invalidComfyUiRequest("Confirmed Final dimensions must be positive integers.");
   const previews = requirePreviewResult(workflow);
   const scoring = requireScoringResult(workflow);
   const finalCount = previews.finalCount;
@@ -391,12 +401,16 @@ export function createTimelineFinalRequests(workflow: TimelineWorkflowState) {
       candidateId,
       rank: score.rank,
       seed: candidate.seed,
+      formalWidth: dimensions.width,
+      formalHeight: dimensions.height,
       request: {
         ...formal,
         sourceImageDataUrl: undefined,
         imageName: undefined,
-        imageWidth: formal.width,
-        imageHeight: formal.height,
+        width: dimensions.width,
+        height: dimensions.height,
+        imageWidth: dimensions.width,
+        imageHeight: dimensions.height,
         seed: candidate.seed,
         denoise: policy.finalDenoise,
         batchSize: 1,

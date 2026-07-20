@@ -175,6 +175,7 @@ import {
 import { TimelineParameterRecommendationWorkspace } from "./TimelineParameterRecommendationWorkspace";
 import { TimelineResourceRecommendationWorkspace } from "./TimelineResourceRecommendationWorkspace";
 import {
+  getTimelineExecutionFallbacks,
   isResultDisplayTimelineResult,
   TimelineResultDisplayWorkspace,
 } from "./TimelineResultDisplayWorkspace";
@@ -359,6 +360,16 @@ async function completeTimelineChatViaApi(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function getTimelineFinalExecutionState(workflow: TimelineWorkflowState | null) {
+  if (!workflow) return null;
+  const node = workflow.nodes["comfyui-execution"];
+  if (isRecord(node.result) && Array.isArray(node.result.finals)) return node.result;
+  const details = node.error?.details;
+  return isRecord(details) && isRecord(details.partialResult) && Array.isArray(details.partialResult.finals)
+    ? details.partialResult
+    : null;
 }
 
 function isPreviewExecutionResult(value: unknown): value is PreviewExecutionTimelineResult {
@@ -2996,7 +3007,8 @@ export function TimelineShell() {
       (isRunning && (selectedNodeId === "preview-execution" || selectedNodeId === "preview-scoring" || selectedNodeId === "comfyui-execution")
         ? selectedNodeId
         : undefined);
-    const simpleFinalResult = activeWorkflow.nodes["comfyui-execution"].result;
+    const simpleFinalResult = getTimelineFinalExecutionState(activeWorkflow);
+    const simpleFallbacks = getTimelineExecutionFallbacks(simpleFinalResult);
     const simpleFinalDoneCount = isRecord(simpleFinalResult) && Array.isArray(simpleFinalResult.finals)
       ? simpleFinalResult.finals.filter((item) => isRecord(item) && item.status === "done").length
       : 0;
@@ -3177,7 +3189,7 @@ export function TimelineShell() {
               </section>
             ) : null}
 
-            {workflow && (resultNode.status === "done" || resultNode.status === "error") ? (
+            {workflow && (resultNode.status === "done" || resultNode.status === "error" || simpleFallbacks.length > 0) ? (
               <section className="rounded-md border border-slate-200 bg-white p-4 shadow-sm">
                 <h2 className="text-sm font-bold text-slate-900">Artifact result</h2>
                 <div className="mt-3">
@@ -3185,6 +3197,7 @@ export function TimelineShell() {
                     draft={timelineResultDraft}
                     emptyState={timelineNodeContent["result-display"].emptyState}
                     errorMessage={resultNode.error?.message}
+                    fallbacks={simpleFallbacks}
                     key={resultNode.updatedAt}
                     result={isResultDisplayTimelineResult(resultNode.result) ? resultNode.result : null}
                     selectedResources={timelineResultSelectedResources}
@@ -3725,6 +3738,7 @@ export function TimelineShell() {
                       draft={timelineResultDraft}
                       emptyState={selectedContent.emptyState}
                       errorMessage={selectedNode.error?.message}
+                      fallbacks={getTimelineExecutionFallbacks(getTimelineFinalExecutionState(activeWorkflow))}
                       key={selectedNode.updatedAt}
                       result={isResultDisplayTimelineResult(selectedNode.result) ? selectedNode.result : null}
                       selectedResources={timelineResultSelectedResources}

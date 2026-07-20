@@ -24,6 +24,7 @@ import { ComfyUiSequenceReferenceStorageError } from "@/features/comfyui/sequenc
 import { createLiteLlmClient, LiteLlmError } from "@/features/llm";
 
 import { getRunSceneInputSettings } from "./run-input-settings";
+import { timelineFinalGenerationPolicy } from "./final-generation-policy";
 import { createTimelineNodeError, normalizeTimelineError } from "./state";
 import {
   buildStyleReferenceSequenceCharacter,
@@ -45,6 +46,7 @@ import {
   type TimelineNodeExecutionContext,
   type TimelinePreviewCriticalDefectCategory,
   type TimelinePreviewCandidate,
+  type TimelinePreviewUpscaleArtifact,
   type TimelineStoredGeneratedImage,
 } from "./types";
 
@@ -298,6 +300,156 @@ async function storedImageDataUrl(stored: TimelineStoredGeneratedImage) {
       "image_storage_failed",
       "Stored preview image could not be read. Retry preview generation.",
     ));
+  }
+}
+
+function sameStoredImageReference(
+  left: TimelineStoredGeneratedImage,
+  right: TimelineStoredGeneratedImage,
+) {
+  return left.byteLength === right.byteLength && left.contentType === right.contentType &&
+    left.filename === right.filename && left.url === right.url;
+}
+
+function samePreviewUpscaleArtifact(
+  left: TimelinePreviewUpscaleArtifact | undefined,
+  right: TimelinePreviewUpscaleArtifact,
+) {
+  return Boolean(left && left.policyVersion === right.policyVersion && left.resizeMode === right.resizeMode &&
+    left.width === right.width && left.height === right.height &&
+    sameStoredImageReference(left.sourcePreview, right.sourcePreview) &&
+    sameStoredImageReference(left.storedImage, right.storedImage));
+}
+
+function getOrientedDimensions(metadata: Awaited<ReturnType<ReturnType<typeof sharp>["metadata"]>>) {
+  const orientation = metadata.orientation ?? 1;
+  const swapsAxes = orientation >= 5 && orientation <= 8;
+  return {
+    width: swapsAxes ? metadata.height : metadata.width,
+    height: swapsAxes ? metadata.width : metadata.height,
+  };
+}
+
+async function isReusablePreviewUpscale(
+  artifact: TimelinePreviewUpscaleArtifact | undefined,
+  storedPreview: TimelineStoredGeneratedImage,
+  width: number,
+  height: number,
+) {
+  if (!artifact || artifact.policyVersion !== timelineFinalGenerationPolicy.version ||
+      artifact.resizeMode !== timelineFinalGenerationPolicy.resizeMode ||
+      artifact.width !== width || artifact.height !== height ||
+      !sameStoredImageReference(artifact.sourcePreview, storedPreview)) return false;
+  const filePath = getGeneratedImagePath(artifact.storedImage.filename);
+  if (!filePath) return false;
+  try {
+    const [stat, bytes] = await Promise.all([
+      fs.stat(/*turbopackIgnore: true*/ filePath),
+      fs.readFile(/*turbopackIgnore: true*/ filePath),
+    ]);
+    if (!stat.isFile() || stat.size !== artifact.storedImage.byteLength ||
+        bytes.byteLength !== artifact.storedImage.byteLength) return false;
+    const metadata = await sharp(bytes, { failOn: "error" }).metadata();
+    if (metadata.format !== "png") return false;
+    const decoded = await sharp(bytes, { failOn: "error" })
+      .rotate()
+      .png()
+      .toBuffer({ resolveWithObject: true });
+    return decoded.info.width === width && decoded.info.height === height;
+  } catch {
+    return false;
+  }
+}
+
+async function preparePreviewUpscale(
+  storedPreview: TimelineStoredGeneratedImage,
+  candidateId: string,
+  width: number,
+  height: number,
+  previous?: TimelinePreviewUpscaleArtifact,
+): Promise<TimelinePreviewUpscaleArtifact> {
+  if (![width, height].every((value) => Number.isSafeInteger(value) && value > 0)) {
+    throw new TimelineNodeExecutionError(createTimelineNodeError(
+      "comfyui_request_invalid",
+      "Formal Final dimensions must be positive integers before preparing the Preview fallback.",
+      { candidateId, recoverable: true },
+    ));
+  }
+  if (await isReusablePreviewUpscale(previous, storedPreview, width, height)) return previous!;
+
+  const sourcePath = getGeneratedImagePath(storedPreview.filename);
+  if (!sourcePath) {
+    throw new TimelineNodeExecutionError(createTimelineNodeError(
+      "image_storage_invalid",
+      "Stored preview reference is invalid and cannot be resized for Final generation.",
+      { candidateId, recoverable: true, stage: "preview_upscale" },
+    ));
+  }
+  let sourceBytes: Buffer;
+  try {
+    sourceBytes = await fs.readFile(/*turbopackIgnore: true*/ sourcePath);
+  } catch {
+    throw new TimelineNodeExecutionError(createTimelineNodeError(
+      "image_storage_failed",
+      "Stored preview image could not be read for the formal-size fallback. Retry preview generation.",
+      { candidateId, recoverable: true, stage: "preview_upscale" },
+    ));
+  }
+
+  try {
+    const sourceDimensions = getOrientedDimensions(await sharp(sourceBytes).metadata());
+    if (!sourceDimensions.width || !sourceDimensions.height ||
+        sourceDimensions.width * height !== sourceDimensions.height * width) {
+      throw new TimelineNodeExecutionError(createTimelineNodeError(
+        "comfyui_request_invalid",
+        "Stored preview aspect ratio does not match the confirmed formal dimensions. Regenerate previews before Final generation.",
+        {
+          candidateId,
+          formalHeight: height,
+          formalWidth: width,
+          previewHeight: sourceDimensions.height,
+          previewWidth: sourceDimensions.width,
+          recoverable: true,
+          stage: "preview_upscale",
+        },
+      ));
+    }
+    const resizedBytes = await sharp(sourceBytes)
+      .rotate()
+      .resize(width, height, { fit: "fill", kernel: sharp.kernel.lanczos3 })
+      .png()
+      .toBuffer();
+    const resizedDimensions = getOrientedDimensions(await sharp(resizedBytes).metadata());
+    if (resizedDimensions.width !== width || resizedDimensions.height !== height) {
+      throw new Error("Unexpected resized dimensions.");
+    }
+    return {
+      policyVersion: timelineFinalGenerationPolicy.version,
+      resizeMode: timelineFinalGenerationPolicy.resizeMode,
+      width,
+      height,
+      sourcePreview: storedPreview,
+      storedImage: await storeGeneratedImage(resizedBytes, "image/png"),
+    };
+  } catch (error) {
+    if (error instanceof TimelineNodeExecutionError) throw error;
+    throw new TimelineNodeExecutionError(createTimelineNodeError(
+      "image_storage_failed",
+      "Stored preview image could not be resized for the formal-size fallback.",
+      { candidateId, recoverable: true, stage: "preview_upscale" },
+    ));
+  }
+}
+
+async function isReusableStoredFinal(record: TimelineFinalExecutionRecord) {
+  if (record.status !== "done" || !record.storedImage || !record.promptId || !record.sourceImage) return false;
+  const filePath = getGeneratedImagePath(record.storedImage.filename);
+  if (!filePath) return false;
+  try {
+    const stat = await fs.stat(/*turbopackIgnore: true*/ filePath);
+    return stat.isFile() && stat.size === record.storedImage.byteLength;
+  } catch {
+    return false;
   }
 }
 
@@ -673,39 +825,59 @@ async function scorePreviews(
 }
 
 async function executeFinals(
-  requests: Array<{ candidateId: string; rank: number; request: ComfyUiTextToImageRequest; seed: number; storedPreview: TimelineStoredGeneratedImage }>,
+  requests: Array<{
+    candidateId: string;
+    rank: number;
+    request: ComfyUiTextToImageRequest;
+    seed: number;
+    formalWidth: number;
+    formalHeight: number;
+    storedPreview: TimelineStoredGeneratedImage;
+  }>,
   context: TimelineNodeExecutionContext,
   previous?: ComfyUiExecutionTimelineResult,
 ): Promise<ComfyUiExecutionTimelineResult> {
   const client = makeClient();
-  let objectInfo: unknown;
-  try {
-    objectInfo = await client.getObjectInfo();
-  } catch (error) {
-    throw toComfyError(error);
-  }
-  const previousDone = new Map((previous?.finals ?? [])
-    .filter((item) => item.status === "done" && requests.some((request) => request.candidateId === item.candidateId))
+  let objectInfoPromise: Promise<unknown> | undefined;
+  const getObjectInfo = () => {
+    objectInfoPromise ??= client.getObjectInfo().catch((error) => { throw toComfyError(error); });
+    return objectInfoPromise;
+  };
+  const previousByCandidate = new Map((previous?.finals ?? [])
+    .filter((item) => requests.some((request) => request.candidateId === item.candidateId))
     .map((item) => [item.candidateId, item]));
   const finals: TimelineFinalExecutionRecord[] = [];
   const warnings: string[] = [...(previous?.warnings ?? [])];
   for (const item of requests) {
-    const preserved = previousDone.get(item.candidateId);
-    if (preserved) {
-      finals.push({ ...preserved, rank: item.rank });
-      continue;
-    }
+    const previousRecord = previousByCandidate.get(item.candidateId);
+    let previewUpscale: TimelinePreviewUpscaleArtifact | undefined;
     try {
-      const request = { ...item.request, sourceImageDataUrl: await storedImageDataUrl(item.storedPreview) };
-      const result = await queueAndStore(client, objectInfo, request, context, `final-${item.candidateId}`);
-      if (haveSameManagedImageContent(result.storedImage, item.storedPreview)) {
+      previewUpscale = await preparePreviewUpscale(
+        item.storedPreview,
+        item.candidateId,
+        item.formalWidth,
+        item.formalHeight,
+        previousRecord?.previewUpscale,
+      );
+      if (previousRecord?.seed === item.seed && previousRecord.rank === item.rank &&
+          samePreviewUpscaleArtifact(previousRecord.previewUpscale, previewUpscale) &&
+          await isReusableStoredFinal(previousRecord)) {
+        finals.push(previousRecord);
+        continue;
+      }
+      const request = {
+        ...item.request,
+        sourceImageDataUrl: await storedImageDataUrl(previewUpscale.storedImage),
+      };
+      const result = await queueAndStore(client, await getObjectInfo(), request, context, `final-${item.candidateId}`);
+      if (haveSameManagedImageContent(result.storedImage, previewUpscale.storedImage)) {
         throw new TimelineNodeExecutionError(createTimelineNodeError(
           "comfyui_execution_failed",
-          "Final generation returned the unchanged preview image. Retry this selection.",
+          "Final generation returned the unchanged formal-size Preview fallback. Retry this selection.",
           {
             candidateId: item.candidateId,
+            fallbackFilename: previewUpscale.storedImage.filename,
             noOp: true,
-            previewFilename: item.storedPreview.filename,
             recoverable: true,
           },
         ));
@@ -719,6 +891,7 @@ async function executeFinals(
         promptId: result.promptId,
         sourceImage: result.sourceImage,
         storedImage: result.storedImage,
+        previewUpscale,
       });
     } catch (error) {
       finals.push({
@@ -726,6 +899,7 @@ async function executeFinals(
         seed: item.seed,
         rank: item.rank,
         status: "error",
+        ...(previewUpscale ? { previewUpscale } : {}),
         error: normalizeTimelineError(error, "comfyui_execution_failed"),
       });
     }
@@ -736,6 +910,10 @@ async function executeFinals(
     completed: finals.every((item) => item.status === "done") && finals.length === requests.length,
     finalCount: requests.length,
     finals,
+    finalPolicy: {
+      version: timelineFinalGenerationPolicy.version,
+      resizeMode: timelineFinalGenerationPolicy.resizeMode,
+    },
     request: { ...firstRequest!, sourceImageDataUrl: undefined, imageName: undefined },
     warnings: [...new Set(warnings)],
   };
@@ -764,6 +942,12 @@ function loadResultDisplay(execution: ComfyUiExecutionTimelineResult): ResultDis
     sourceImages: completed.map((item) => item.sourceImage!),
     storedImage: first.storedImage!,
     storedImages: completed.map((item) => item.storedImage!),
+    fallbacks: completed.flatMap((item) => item.previewUpscale ? [{
+      candidateId: item.candidateId,
+      rank: item.rank,
+      seed: item.seed,
+      storedImage: item.previewUpscale.storedImage,
+    }] : []),
     warnings: execution.warnings,
     finalLinks: completed.map((item) => ({
       candidateId: item.candidateId,

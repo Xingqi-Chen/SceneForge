@@ -313,6 +313,7 @@ function createSimpleGenerationPhaseErrorWorkflow(
 
   workflow = completeTimelineNode(workflow, "preview-scoring", scoring, "ai");
   const finalFilename = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png";
+  const fallbackFilename = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.png";
   const partialResult = {
     completed: false,
     finalCount: 2,
@@ -329,6 +330,19 @@ function createSimpleGenerationPhaseErrorWorkflow(
           contentType: "image/png",
           filename: finalFilename,
           url: `/api/comfyui/generated-images/${finalFilename}`,
+        },
+        previewUpscale: {
+          policyVersion: 1,
+          resizeMode: "lanczos3-exact" as const,
+          width: 1024,
+          height: 1024,
+          sourcePreview: candidates[0]!.storedImage,
+          storedImage: {
+            byteLength: 20,
+            contentType: "image/png",
+            filename: fallbackFilename,
+            url: `/api/comfyui/generated-images/${fallbackFilename}`,
+          },
         },
       },
       {
@@ -2091,6 +2105,44 @@ describe("TimelineShell", () => {
     }
   });
 
+  it("keeps a partial Final fallback openable from the Detailed result workspace", async () => {
+    const originalFetch = globalThis.fetch;
+    const workflow = createSimpleGenerationPhaseErrorWorkflow("comfyui-execution");
+    const activeRecord = createTimelineWorkflowRecord({
+      workflow,
+      sceneRequest: "A detailed partial Final scene",
+      selectedPromptProfile: "illustrious",
+      selectedImageCount: 2,
+      selectedNodeId: "result-display",
+      outputDisplayModes: { "result-display": "visual" },
+    });
+    globalThis.fetch = vi.fn<typeof fetch>(async (input, init) => {
+      const url = getFetchUrl(input);
+      if (url === "/api/settings") return createTimelineSettingsResponse({ displayMode: "detailed" });
+      if (url === "/api/agent-timeline/active-workflow") {
+        return init?.method === "PUT"
+          ? createJsonResponse({ ok: true, record: activeRecord })
+          : createJsonResponse(activeRecord);
+      }
+      return createJsonResponse({ role: "assistant", content: "{}" });
+    });
+
+    try {
+      act(() => root.render(<TimelineShell />));
+      await flushAsyncWork();
+
+      const fallbackLink = container.querySelector<HTMLAnchorElement>(
+        "[data-testid='timeline-fallback-gallery'] a",
+      );
+      expect(fallbackLink).not.toBeNull();
+      expect(fallbackLink?.getAttribute("href")).toBe(
+        "/api/comfyui/generated-images/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.png",
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it.each([
     ["preview-execution", "Preview generation", "Preview generation", "Only 1 preview succeeded; 2 are required.", false, "preview-execution"],
     ["preview-scoring", "Preview scoring", "Preview scoring", "Preview scoring failed twice.", false, "preview-scoring"],
@@ -2135,6 +2187,7 @@ describe("TimelineShell", () => {
       if (phase === "comfyui-execution") {
         expect(container.textContent).toContain("1/2 finals are safely stored.");
         expect(container.textContent).toContain("Retry renders only missing or invalid selections.");
+        expect(container.querySelector("[data-testid='timeline-fallback-gallery']")).not.toBeNull();
       }
 
       act(() => getButtonByText(`Retry ${retryTitle.toLowerCase()}`).click());

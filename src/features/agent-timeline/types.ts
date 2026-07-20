@@ -252,6 +252,7 @@ export type GenerationGateTimelineResult = {
   confirmationRequired: boolean;
   confirmed: boolean;
   confirmationFingerprint?: string;
+  finalPolicyVersion?: number;
 };
 
 export const previewScoringRubric = {
@@ -384,13 +385,27 @@ export type TimelineFinalExecutionRecord = {
     type?: string;
   };
   storedImage?: TimelineStoredGeneratedImage;
+  previewUpscale?: TimelinePreviewUpscaleArtifact;
   error?: TimelineNodeError;
+};
+
+export type TimelinePreviewUpscaleArtifact = {
+  policyVersion: number;
+  resizeMode: "lanczos3-exact";
+  width: number;
+  height: number;
+  sourcePreview: TimelineStoredGeneratedImage;
+  storedImage: TimelineStoredGeneratedImage;
 };
 
 export type ComfyUiExecutionTimelineResult = {
   completed: boolean;
   finalCount: number;
   finals: TimelineFinalExecutionRecord[];
+  finalPolicy?: {
+    version: number;
+    resizeMode: "lanczos3-exact";
+  };
   nodeErrors?: unknown;
   nodeIds?: unknown;
   number?: number;
@@ -438,6 +453,12 @@ export type ResultDisplayTimelineResult = {
   }>;
   storedImage: TimelineStoredGeneratedImage;
   storedImages?: TimelineStoredGeneratedImage[];
+  fallbacks?: Array<{
+    candidateId: string;
+    rank: number;
+    seed: number;
+    storedImage: TimelineStoredGeneratedImage;
+  }>;
   warnings: string[];
   finalLinks?: Array<{
     candidateId: string;

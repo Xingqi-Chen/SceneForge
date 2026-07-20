@@ -39,6 +39,10 @@ import {
 } from "./story-style-palette";
 import { sanitizeRunSceneInputSettingsSnapshot } from "./run-input-settings";
 import {
+  resolveTimelineFinalDimensions,
+  timelineFinalGenerationPolicy,
+} from "./final-generation-policy";
+import {
   type CommonWorkflowArtifactScope,
   type CommonWorkflowDefinitionVersion,
 } from "./workflow-definition";
@@ -999,6 +1003,32 @@ function sanitizeFinalExecutionResult(value: unknown) {
   if (!isRecord(value) || !Array.isArray(value.finals)) return undefined;
   const finalCount = safeNonNegativeInteger(value.finalCount);
   if (!finalCount || finalCount > 4) return undefined;
+  const finalPolicy = isRecord(value.finalPolicy) &&
+      value.finalPolicy.version === timelineFinalGenerationPolicy.version &&
+      value.finalPolicy.resizeMode === timelineFinalGenerationPolicy.resizeMode
+    ? {
+        version: timelineFinalGenerationPolicy.version,
+        resizeMode: timelineFinalGenerationPolicy.resizeMode,
+      }
+    : undefined;
+  const sanitizePreviewUpscale = (raw: unknown) => {
+    if (!isRecord(raw) || raw.policyVersion !== timelineFinalGenerationPolicy.version ||
+        raw.resizeMode !== timelineFinalGenerationPolicy.resizeMode) return undefined;
+    const width = safeNonNegativeInteger(raw.width);
+    const height = safeNonNegativeInteger(raw.height);
+    const sourcePreview = sanitizeTimelineStoredImage(raw.sourcePreview);
+    const storedImage = sanitizeTimelineStoredImage(raw.storedImage);
+    return width && height && sourcePreview && storedImage
+      ? {
+          policyVersion: timelineFinalGenerationPolicy.version,
+          resizeMode: timelineFinalGenerationPolicy.resizeMode,
+          width,
+          height,
+          sourcePreview,
+          storedImage,
+        }
+      : undefined;
+  };
   const finals = value.finals.slice(0, finalCount).map((entry, index) => {
     const raw = isRecord(entry) ? entry : {};
     const candidateId = safePreviewCandidateId(raw.candidateId);
@@ -1007,16 +1037,27 @@ function sanitizeFinalExecutionResult(value: unknown) {
     const sourceImage = sanitizeTimelineSourceImageReference(raw.sourceImage);
     const storedImage = sanitizeTimelineStoredImage(raw.storedImage);
     const promptId = safeIdentifier(raw.promptId) ?? undefined;
+    const previewUpscale = sanitizePreviewUpscale(raw.previewUpscale);
     const validDone = raw.status === "done" && candidateId && seed !== null && rank !== null && rank >= 1 && rank <= 8 &&
-      sourceImage && storedImage && promptId;
+      sourceImage && storedImage && promptId && (!finalPolicy || previewUpscale);
     if (validDone) {
-      return { candidateId, seed, rank, status: "done" as const, promptId, sourceImage, storedImage };
+      return {
+        candidateId,
+        seed,
+        rank,
+        status: "done" as const,
+        promptId,
+        sourceImage,
+        storedImage,
+        ...(previewUpscale ? { previewUpscale } : {}),
+      };
     }
     return {
       candidateId: candidateId ?? `invalid-final-${index + 1}`,
       seed: seed ?? 0,
       rank: rank && rank >= 1 ? rank : index + 1,
       status: "error" as const,
+      ...(previewUpscale ? { previewUpscale } : {}),
       error: createTimelineNodeError(
         "image_storage_invalid",
         "A persisted final reference was invalid and must be rendered again.",
@@ -1035,6 +1076,7 @@ function sanitizeFinalExecutionResult(value: unknown) {
     completed: value.completed === true && validCompleteSet,
     finalCount,
     finals,
+    ...(finalPolicy ? { finalPolicy } : {}),
     request,
     warnings: sanitizeStringArray(value.warnings),
   };
@@ -1075,6 +1117,23 @@ function sanitizeResultDisplayResult(value: unknown) {
   if (finalLinks && (finalLinks.length !== storedImages.length || finalLinks.some((entry) => !entry) ||
       new Set(finalLinks.map((entry) => entry?.candidateId)).size !== finalLinks.length ||
       new Set(finalLinks.map((entry) => entry?.rank)).size !== finalLinks.length)) return undefined;
+  const fallbacks = Array.isArray(value.fallbacks)
+    ? value.fallbacks.map((entry) => {
+        if (!isRecord(entry) || !safePreviewCandidateId(entry.candidateId) ||
+            safeNonNegativeInteger(entry.seed) === null || safeNonNegativeInteger(entry.rank) === null ||
+            (entry.rank as number) < 1 || (entry.rank as number) > 8) return null;
+        const storedImage = sanitizeTimelineStoredImage(entry.storedImage);
+        return storedImage ? {
+          candidateId: entry.candidateId as string,
+          rank: entry.rank as number,
+          seed: entry.seed as number,
+          storedImage,
+        } : null;
+      })
+    : undefined;
+  if (fallbacks && (fallbacks.length !== storedImages.length || fallbacks.some((entry) => !entry) ||
+      new Set(fallbacks.map((entry) => entry?.candidateId)).size !== fallbacks.length ||
+      new Set(fallbacks.map((entry) => entry?.rank)).size !== fallbacks.length)) return undefined;
   return {
     completed: true,
     image: images[0],
@@ -1084,6 +1143,7 @@ function sanitizeResultDisplayResult(value: unknown) {
     sourceImages,
     storedImage: storedImages[0],
     storedImages,
+    ...(fallbacks ? { fallbacks } : {}),
     warnings: sanitizeStringArray(value.warnings),
     ...(finalLinks ? { finalLinks } : {}),
   };
@@ -1243,6 +1303,9 @@ type PersistedFinalLink = {
   candidateId: string;
   rank: number;
   seed: number;
+  formalHeight: number | null;
+  formalWidth: number | null;
+  sourcePreview: unknown;
 };
 
 function getPersistedExpectedFinalLinks(nodes: TimelineNodeMap) {
@@ -1256,6 +1319,24 @@ function getPersistedExpectedFinalLinks(nodes: TimelineNodeMap) {
   const previewCandidates = preview.candidates as unknown[];
   const scoringScores = scoring.scores as unknown[];
   const selectedCandidateIds = scoring.selectedCandidateIds;
+  const parameters = nodes["parameter-recommendation"].result;
+  const requestPreview = isRecord(parameters) && isRecord(parameters.requestPreview)
+    ? parameters.requestPreview
+    : {};
+  const sceneInput = nodes["scene-input"].result;
+  const sourceImage = isRecord(sceneInput) && isRecord(sceneInput.sourceImage)
+    ? {
+        width: safeNonNegativeInteger(sceneInput.sourceImage.width) ?? 0,
+        height: safeNonNegativeInteger(sceneInput.sourceImage.height) ?? 0,
+      }
+    : undefined;
+  const formalDimensions = resolveTimelineFinalDimensions({
+    request: {
+      width: safeNonNegativeInteger(requestPreview.width) ?? undefined,
+      height: safeNonNegativeInteger(requestPreview.height) ?? undefined,
+    },
+    ...(sourceImage?.width && sourceImage.height ? { sourceImage } : {}),
+  });
   if (!finalCount || finalCount > 4 || selectedCandidateIds.length !== finalCount ||
       new Set(selectedCandidateIds).size !== finalCount ||
       selectedCandidateIds.some((candidateId) => !safePreviewCandidateId(candidateId))) return null;
@@ -1270,8 +1351,19 @@ function getPersistedExpectedFinalLinks(nodes: TimelineNodeMap) {
     if (candidates.length !== 1 || scores.length !== 1) return [];
     const seed = safeNonNegativeInteger(isRecord(candidates[0]) ? candidates[0].seed : undefined);
     const rank = safeNonNegativeInteger(isRecord(scores[0]) ? scores[0].rank : undefined);
-    if (seed === null || rank === null || rank < 1 || rank > scoringScores.length) return [];
-    return [{ candidateId: candidateId as string, rank, seed }];
+    const storedImage = isRecord(candidates[0]) && isRecord(candidates[0].storedImage)
+      ? candidates[0].storedImage
+      : null;
+    if (seed === null || rank === null || rank < 1 || rank > scoringScores.length ||
+        !storedImage || typeof storedImage.filename !== "string") return [];
+    return [{
+      candidateId: candidateId as string,
+      rank,
+      seed,
+      formalHeight: formalDimensions?.height ?? null,
+      formalWidth: formalDimensions?.width ?? null,
+      sourcePreview: storedImage,
+    }];
   });
   if (links.length !== finalCount || new Set(links.map((link) => link.rank)).size !== finalCount) return null;
 
@@ -1282,8 +1374,11 @@ function getPersistedExpectedFinalLinks(nodes: TimelineNodeMap) {
 }
 
 function createUntrustedPersistedFinal(link: PersistedFinalLink) {
+  const { candidateId, rank, seed } = link;
   return {
-    ...link,
+    candidateId,
+    rank,
+    seed,
     status: "error" as const,
     error: createTimelineNodeError(
       "image_storage_invalid",
@@ -1300,12 +1395,27 @@ function reconcilePersistedFinalResult(
   if (!expected || !isRecord(value) || !Array.isArray(value.finals) ||
       value.finalCount !== expected.finalCount) return null;
 
-  const rawDone = value.finals.filter((item) => isRecord(item) && item.status === "done");
+  const rawRecords = value.finals.filter(isRecord);
+  const rawDone = rawRecords.filter((item) => item.status === "done");
+  const currentPolicy = isRecord(value.finalPolicy) &&
+    value.finalPolicy.version === timelineFinalGenerationPolicy.version &&
+    value.finalPolicy.resizeMode === timelineFinalGenerationPolicy.resizeMode;
+  const matchesCurrentFallback = (item: Record<string, unknown>, link: PersistedFinalLink) =>
+    link.formalWidth !== null && link.formalHeight !== null &&
+    isRecord(item.previewUpscale) && item.previewUpscale.policyVersion === timelineFinalGenerationPolicy.version &&
+    item.previewUpscale.resizeMode === timelineFinalGenerationPolicy.resizeMode &&
+    item.previewUpscale.width === link.formalWidth && item.previewUpscale.height === link.formalHeight &&
+    samePersistedStoredImage(item.previewUpscale.sourcePreview, link.sourcePreview) &&
+    isRecord(item.previewUpscale.storedImage);
   const trustedFinals = expected.links.map((link) => {
-    const matches = rawDone.filter((item) =>
+    const matches = rawRecords.filter((item) =>
       item.candidateId === link.candidateId && item.seed === link.seed && item.rank === link.rank,
     );
-    return matches.length === 1 ? matches[0] : createUntrustedPersistedFinal(link);
+    const trusted = matches.filter((item) =>
+      item.status === "done" ? (!currentPolicy || matchesCurrentFallback(item, link))
+        : item.status === "error" && currentPolicy && matchesCurrentFallback(item, link),
+    );
+    return matches.length === 1 && trusted.length === 1 ? trusted[0] : createUntrustedPersistedFinal(link);
   });
   const trustedDoneCount = trustedFinals.filter((item) => item.status === "done").length;
   const invalidDone = rawDone.length !== trustedDoneCount || rawDone.some((item) =>
@@ -1350,16 +1460,26 @@ function resultDisplayMatchesFinals(display: unknown, finalResult: unknown) {
   const sourceImages = display.sourceImages as unknown[];
   const storedImages = display.storedImages as unknown[];
   const finalLinks = display.finalLinks as unknown[];
+  const fallbackFinals = finals.filter((final) => isRecord(final) && isRecord(final.previewUpscale));
+  const fallbacks = Array.isArray(display.fallbacks) ? display.fallbacks : [];
   if (finals.length !== finalResult.finalCount || images.length !== finals.length ||
       sourceImages.length !== finals.length || storedImages.length !== finals.length ||
-      finalLinks.length !== finals.length) return false;
+      finalLinks.length !== finals.length ||
+      (fallbackFinals.length > 0 && fallbacks.length !== finals.length) ||
+      (fallbackFinals.length === 0 && fallbacks.length > 0)) return false;
 
   return finals.every((final, index) => {
     if (!isRecord(final) || final.status !== "done" || !isRecord(images[index]) ||
         !isRecord(finalLinks[index])) return false;
     const image = images[index];
     const link = finalLinks[index];
-    return samePersistedSourceImage(sourceImages[index], final.sourceImage) &&
+    const fallbackMatches = fallbackFinals.length === 0 || (
+      isRecord(fallbacks[index]) && isRecord(final.previewUpscale) &&
+      fallbacks[index].candidateId === final.candidateId && fallbacks[index].seed === final.seed &&
+      fallbacks[index].rank === final.rank &&
+      samePersistedStoredImage(fallbacks[index].storedImage, final.previewUpscale.storedImage)
+    );
+    return fallbackMatches && samePersistedSourceImage(sourceImages[index], final.sourceImage) &&
       samePersistedStoredImage(storedImages[index], final.storedImage) &&
       samePersistedSourceImage(image, final.sourceImage) &&
       image.url === (isRecord(final.storedImage) ? final.storedImage.url : undefined) &&

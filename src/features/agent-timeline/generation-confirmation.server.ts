@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 
 import type { TimelineWorkflowState } from "./types";
+import { timelineFinalGenerationPolicy } from "./final-generation-policy";
 
 const CONFIRMATION_CONTRACT_VERSION = 1;
 const CONFIRMATION_CONTRACT_DOMAIN = "sceneforge.timeline.single-image-generation-confirmation";
@@ -31,6 +32,7 @@ export function createTimelineGenerationConfirmationFingerprint(workflow: Timeli
     canvasBinding: workflow.nodes["canvas-binding"].result,
     resources: workflow.nodes["resource-recommendation"].result,
     parameters: workflow.nodes["parameter-recommendation"].result,
+    finalPolicy: timelineFinalGenerationPolicy,
   });
   return `hmac-sha256:${crypto.createHmac("sha256", confirmationSigningKey).update(JSON.stringify(contract)).digest("hex")}`;
 }
@@ -39,6 +41,7 @@ export function isTimelineGenerationConfirmationCurrent(workflow: TimelineWorkfl
   const result = workflow.nodes["generation-gate"].result;
   if (typeof result !== "object" || result === null || Array.isArray(result)) return false;
   const fingerprint = (result as Record<string, unknown>).confirmationFingerprint;
+  if ((result as Record<string, unknown>).finalPolicyVersion !== timelineFinalGenerationPolicy.version) return false;
   if (typeof fingerprint !== "string" || !/^hmac-sha256:[a-f0-9]{64}$/.test(fingerprint)) return false;
   const expected = createTimelineGenerationConfirmationFingerprint(workflow);
   return crypto.timingSafeEqual(Buffer.from(fingerprint), Buffer.from(expected));

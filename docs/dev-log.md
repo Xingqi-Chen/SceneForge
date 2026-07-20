@@ -4,6 +4,15 @@ This log records dated implementation and documentation work. Keep entries conci
 
 ## 2026-07-20
 
+### T38A / Issue #136 Preserve Preview Structure in Final Generation
+
+Summary:
+
+- Added a versioned Run Final policy to the signed confirmation contract: selected Previews are deterministically resized with server-side Sharp Lanczos3 to exact formal dimensions and stored as candidate-linked managed `preview-upscale` fallbacks before queueing.
+- Made the managed fallback the sole Final img2img source, lowered internal Final denoise to 0.30 for Illustrious and 0.35 for Anima/unknown fallback, and preserved formal settings, seeds, resources, style/IPAdapter context, and enabled Detailers.
+- Added safe persistence and reconciliation for Preview/fallback/Final linkage, partial failure, retry reuse, unchanged-fallback no-op detection, incompatible legacy aspect rejection, and completed legacy result display.
+- Kept Preview-Final Vision review, automatic fallback quality selection, ControlNet/model upscaling, and repair/inpaint orchestration out of this issue.
+
 ### Issue #133 Scored Run Previews
 
 Summary:
