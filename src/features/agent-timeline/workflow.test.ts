@@ -28,6 +28,32 @@ function createClock() {
   };
 }
 
+const runStyleReference = {
+  status: "ready" as const,
+  mode: "ipadapter" as const,
+  metadata: {
+    byteLength: 512,
+    contentType: "image/png",
+    filename: "style.png",
+    storedFilename: "0123456789abcdef0123456789abcdef.png",
+    uploadedAt: "2026-07-19T00:00:00.000Z",
+    url: "/api/comfyui/sequence-references/0123456789abcdef0123456789abcdef.png",
+  },
+  analysis: {
+    analyzedAt: "2026-07-19T00:00:01.000Z",
+    stylePrompt: "soft gouache, cobalt shadows",
+    summary: "Soft gouache.",
+  },
+  ipAdapter: { weight: 0.45, startPercent: 0, endPercent: 1 },
+  settingsSnapshot: {
+    capturedAt: "2026-07-19T00:00:02.000Z",
+    checkpointBaseModel: "Illustrious",
+    checkpointId: "checkpoint-a",
+    modeReason: "Illustrious supports IPAdapter.",
+    promptProfile: "illustrious" as const,
+  },
+};
+
 function createReadyForGateWorkflow(clock = createClock()) {
   let workflow = createTimelineWorkflowState({
     workflowId: "workflow-ready-for-gate",
@@ -247,6 +273,46 @@ describe("agent timeline workflow foundation", () => {
           handDetailer: { enabled: false },
         },
       },
+    });
+  });
+
+  it("stales only from parameter recommendation and cancels confirmation after a Run style-reference edit", () => {
+    const clock = createClock();
+    const workflow = confirmTimelineGeneration(createReadyForGateWorkflow(clock), undefined, { now: clock });
+    const edited = updateTimelineSceneInputSettings(
+      workflow,
+      sanitizeRunSceneInputSettingsSnapshot({
+        detailers: {
+          faceDetailer: { enabled: false },
+          handDetailer: { enabled: false },
+        },
+        promptProfile: "illustrious",
+        styleReference: runStyleReference,
+      }),
+      "parameter-recommendation",
+      { now: clock },
+    );
+
+    expect(edited.generationConfirmed).toBe(false);
+    for (const nodeId of [
+      "scene-prompt",
+      "character-tags",
+      "character-action",
+      "canvas-binding",
+      "resource-recommendation",
+    ] as const) {
+      expect(edited.nodes[nodeId]).toMatchObject(workflow.nodes[nodeId]);
+    }
+    for (const nodeId of [
+      "parameter-recommendation",
+      "generation-gate",
+      "comfyui-execution",
+      "result-display",
+    ] as const) {
+      expect(edited.nodes[nodeId].status).toBe("stale");
+    }
+    expect(edited.nodes["scene-input"].result).toMatchObject({
+      settingsSnapshot: { styleReference: runStyleReference },
     });
   });
 

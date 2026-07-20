@@ -14,6 +14,7 @@ import type { AnimaPromptSections } from "@/features/editor/ai-prompt/anima-prom
 import type { IllustriousPromptSections } from "@/features/editor/ai-prompt/illustrious-prompt";
 import type { TimelineWorkflowMode } from "./workflow-definitions";
 import type { RunSceneInputSettingsSnapshot } from "./run-input-settings";
+import type { StyleReferenceSnapshot } from "./style-reference";
 
 export type AnimaPromptProfileOptions = {
   qualityMetaTags?: string[];
@@ -237,6 +238,7 @@ export type ParameterRecommendationTimelineResult = {
   negativeAdditions: string[];
   negativePrompt: string;
   requestPreview: ComfyUiTextToImageRequest;
+  styleReference?: StyleReferenceSnapshot;
   reason: string;
   warnings: string[];
 };

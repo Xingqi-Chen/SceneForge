@@ -3,6 +3,7 @@ export * from "./graph";
 export * from "./llm-adapter";
 export * from "./resource-plan";
 export * from "./state";
+export * from "./style-reference";
 export * from "./story-input";
 export * from "./story-execution";
 export * from "./story-planning";

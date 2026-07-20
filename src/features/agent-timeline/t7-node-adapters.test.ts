@@ -96,6 +96,35 @@ function makeScenePrompt(promptProfile: PromptProfileId = "illustrious"): SceneP
   };
 }
 
+function makeStyleReference(status: "pending" | "ready" | "failed" | "invalid" | "mismatch" = "ready") {
+  return {
+    status,
+    mode: "ipadapter" as const,
+    ...(status !== "ready" ? { error: `${status} Run style reference` } : {}),
+    metadata: {
+      byteLength: 512,
+      contentType: "image/png",
+      filename: "style.png",
+      storedFilename: "0123456789abcdef0123456789abcdef.png",
+      uploadedAt: "2026-07-19T00:00:00.000Z",
+      url: "/api/comfyui/sequence-references/0123456789abcdef0123456789abcdef.png",
+    },
+    analysis: {
+      analyzedAt: "2026-07-19T00:00:01.000Z",
+      stylePrompt: "soft gouache, cobalt shadows",
+      summary: "Soft gouache.",
+    },
+    ipAdapter: { weight: 0.45, startPercent: 0, endPercent: 1 },
+    settingsSnapshot: {
+      capturedAt: "2026-07-19T00:00:02.000Z",
+      checkpointBaseModel: "Illustrious",
+      checkpointId: "checkpoint-local",
+      modeReason: "Illustrious supports IPAdapter.",
+      promptProfile: "illustrious" as const,
+    },
+  };
+}
+
 describe("T7 timeline adapters", () => {
   it("uses explicit Run resources without calling the recommendation provider", async () => {
     const checkpoint = makeResource("model", "checkpoint-manual", "Manual Checkpoint", "Illustrious");
@@ -684,6 +713,89 @@ describe("T7 timeline adapters", () => {
       resourceResult,
       scenePrompt: makeScenePrompt(),
     })).toBe("masterpiece, best quality, amazing quality, very aesthetic, newest, cinematic anime, neon_style, courier, neon alley");
+  });
+
+  it("appends the Run style prompt exactly once after resource-aware formatting for every profile", () => {
+    const styleReference = makeStyleReference();
+    for (const promptProfile of ["illustrious", "anima"] as const) {
+      const checkpoint = makeResource("model", "checkpoint-local", "Local Checkpoint", promptProfile);
+      const resourceResult: ResourceRecommendationTimelineResult = {
+        checkpoint: { resource: checkpoint, reason: "Local checkpoint." },
+        loras: [],
+        candidates: { checkpoints: [makeCandidate(checkpoint)], loras: [] },
+        recommendationReason: "Local recommendation.",
+        overallEffect: "Portrait.",
+        warnings: [],
+      };
+      const first = buildTimelineFinalPositivePrompt({
+        promptProfile,
+        resourceResult,
+        scenePrompt: makeScenePrompt(promptProfile),
+        styleReference,
+      });
+      const second = buildTimelineFinalPositivePrompt({
+        promptProfile,
+        resourceResult,
+        scenePrompt: { ...makeScenePrompt(promptProfile), positivePrompt: first },
+        styleReference,
+      });
+      expect(first.endsWith("soft gouache, cobalt shadows")).toBe(true);
+      expect(first.match(/soft gouache, cobalt shadows/g)).toHaveLength(1);
+      expect(second.match(/soft gouache, cobalt shadows/g)).toHaveLength(1);
+    }
+  });
+
+  it("blocks parameter preview for pending, failed, invalid, or mismatched Run references", async () => {
+    const checkpoint = makeResource("model", "checkpoint-local", "Local Checkpoint", "Illustrious");
+    const resourceResult: ResourceRecommendationTimelineResult = {
+      checkpoint: { resource: checkpoint, reason: "Local checkpoint." },
+      loras: [],
+      candidates: { checkpoints: [makeCandidate(checkpoint)], loras: [] },
+      recommendationReason: "Local recommendation.",
+      overallEffect: "Portrait.",
+      warnings: [],
+    };
+    const adapter = createTimelineT7NodeAdapters({
+      adviseStyle: vi.fn(),
+      loadResourceCandidates: () => resourceResult.candidates,
+      recommendResources: vi.fn(),
+    })["parameter-recommendation"];
+
+    for (const status of ["pending", "failed", "invalid"] as const) {
+      let workflow = createTimelineWorkflowState({
+        promptProfile: "illustrious",
+        sceneRequest: "A referenced courier",
+        settingsSnapshot: { styleReference: makeStyleReference(status) },
+      });
+      workflow = completeTimelineNode(workflow, "scene-prompt", makeScenePrompt(), "ai");
+      workflow = completeTimelineNode(workflow, "resource-recommendation", resourceResult, "manual");
+      await expect(adapter?.({
+        dependencies: [workflow.nodes["scene-prompt"], workflow.nodes["resource-recommendation"]],
+        nodeId: "parameter-recommendation",
+        workflow,
+      })).rejects.toThrow(`${status} Run style reference`);
+    }
+
+    let mismatched = createTimelineWorkflowState({
+      promptProfile: "illustrious",
+      sceneRequest: "A mismatched referenced courier",
+      settingsSnapshot: {
+        styleReference: {
+          ...makeStyleReference(),
+          settingsSnapshot: {
+            ...makeStyleReference().settingsSnapshot,
+            checkpointId: "checkpoint-other",
+          },
+        },
+      },
+    });
+    mismatched = completeTimelineNode(mismatched, "scene-prompt", makeScenePrompt(), "ai");
+    mismatched = completeTimelineNode(mismatched, "resource-recommendation", resourceResult, "manual");
+    await expect(adapter?.({
+      dependencies: [mismatched.nodes["scene-prompt"], mismatched.nodes["resource-recommendation"]],
+      nodeId: "parameter-recommendation",
+      workflow: mismatched,
+    })).rejects.toThrow("different base model or checkpoint");
   });
 
   it("creates a ComfyUI request preview from the final formatted prompt", () => {

@@ -1,7 +1,14 @@
 import type { ComfyUiTextToImageRequest } from "@/features/comfyui";
 
 import { getGenerationInputDetailers } from "./generation-detailers";
+import { getRunSceneInputSettings } from "./run-input-settings";
 import { createTimelineNodeError, normalizeTimelineImageCount } from "./state";
+import {
+  getStyleReferenceBlockingIssue,
+  getStyleReferenceContextMismatch,
+  isStyleReferenceReady,
+  sanitizeStyleReferenceSnapshot,
+} from "./style-reference";
 import {
   TimelineNodeExecutionError,
   type ComfyUiExecutionTimelineResult,
@@ -88,12 +95,98 @@ function assertGenerationConfirmed(workflow: TimelineWorkflowState) {
   }
 }
 
+function hasOpaqueStylePromptExactlyOnceAtTail(promptValue: string, stylePromptValue: string) {
+  const prompt = promptValue.trim();
+  const stylePrompt = stylePromptValue.trim();
+  if (!stylePrompt) {
+    return false;
+  }
+  if (prompt === stylePrompt) {
+    return true;
+  }
+
+  const suffix = `, ${stylePrompt}`;
+  if (!prompt.endsWith(suffix)) {
+    return false;
+  }
+
+  const prefix = prompt.slice(0, -suffix.length).trimEnd();
+  const escapedStylePrompt = stylePrompt.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const completeSegmentPattern = new RegExp(`(?:^|, )${escapedStylePrompt}(?:, |$)`);
+  return !completeSegmentPattern.test(prefix);
+}
+
+function getValidatedStyleReferenceCheckpoint(workflow: TimelineWorkflowState) {
+  const result = workflow.nodes["resource-recommendation"].result;
+  if (!isRecord(result) || !isRecord(result.checkpoint) || !isRecord(result.checkpoint.resource)) {
+    return null;
+  }
+
+  const checkpoint = result.checkpoint.resource;
+  if (
+    typeof checkpoint.id !== "string" || !checkpoint.id.trim() ||
+    typeof checkpoint.modelFileName !== "string" || !checkpoint.modelFileName.trim()
+  ) {
+    return null;
+  }
+  return {
+    id: checkpoint.id.trim(),
+    modelFileName: checkpoint.modelFileName.trim(),
+    ...(typeof checkpoint.baseModel === "string" ? { baseModel: checkpoint.baseModel } : {}),
+  };
+}
+
+function assertStyleReferenceUsable(
+  workflow: TimelineWorkflowState,
+  parameterResult: ParameterRecommendationTimelineResult,
+) {
+  const sceneInput = workflow.nodes["scene-input"].result;
+  const settings = getRunSceneInputSettings(isRecord(sceneInput) ? sceneInput : {});
+  const blockingIssue = getStyleReferenceBlockingIssue(settings.styleReference, "Run");
+  if (blockingIssue) {
+    invalidComfyUiRequest(blockingIssue);
+  }
+  const currentStyleReference = sanitizeStyleReferenceSnapshot(settings.styleReference);
+  const reviewedStyleReference = sanitizeStyleReferenceSnapshot(parameterResult.styleReference);
+  if (JSON.stringify(reviewedStyleReference) !== JSON.stringify(currentStyleReference)) {
+    invalidComfyUiRequest(
+      "Run style reference changed after parameter review. Regenerate the parameter recommendation before confirmation.",
+    );
+  }
+  if (currentStyleReference) {
+    if (isStyleReferenceReady(currentStyleReference)) {
+      const stylePrompt = currentStyleReference.analysis.stylePrompt.trim();
+      const previewPrompt = parameterResult.requestPreview.positivePrompt.trim();
+      if (!hasOpaqueStylePromptExactlyOnceAtTail(previewPrompt, stylePrompt)) {
+        invalidComfyUiRequest(
+          "Run request preview must include the complete style reference prompt exactly once after prompt formatting.",
+        );
+      }
+    }
+    const checkpoint = getValidatedStyleReferenceCheckpoint(workflow);
+    if (!checkpoint) {
+      invalidComfyUiRequest(
+        "Run style reference confirmation requires a validated checkpoint recommendation. Regenerate resources before confirmation.",
+      );
+    }
+    const mismatch = getStyleReferenceContextMismatch(currentStyleReference, {
+      checkpointBaseModel: typeof checkpoint.baseModel === "string" ? checkpoint.baseModel : undefined,
+      checkpointId: checkpoint.id,
+      promptProfile: settings.promptProfile,
+    });
+    if (mismatch) {
+      invalidComfyUiRequest(mismatch);
+    }
+  }
+}
+
 export function createConfirmedTimelineComfyUiRequest(
   workflow: TimelineWorkflowState,
 ): ComfyUiTextToImageRequest {
   assertGenerationConfirmed(workflow);
 
   const parameterResult = getParameterRecommendationResult(workflow);
+  assertStyleReferenceUsable(workflow, parameterResult);
   const sourceImage = getTimelineSourceImage(workflow);
   const sceneInput = workflow.nodes["scene-input"].result;
   const detailers = getGenerationInputDetailers(isRecord(sceneInput) ? sceneInput : {});

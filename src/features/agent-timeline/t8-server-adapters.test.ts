@@ -40,6 +40,7 @@ const comfyUiMocks = vi.hoisted(() => {
     DEFAULT_COMFYUI_FACE_DETAILER_DETECTOR_MODEL: "bbox/face_yolov8m.pt",
     DEFAULT_COMFYUI_HAND_DETAILER_DETECTOR_MODEL: "bbox/hand_yolov8s.pt",
     ComfyUiApiError: MockComfyUiApiError,
+    buildComfyUiSequenceCharacterReference: vi.fn(),
     createComfyUiClient: vi.fn(),
     extractComfyUiHistoryImages: vi.fn(),
     isComfyUiPromptHistoryComplete: vi.fn(),
@@ -50,11 +51,16 @@ const comfyUiMocks = vi.hoisted(() => {
 });
 
 const storeGeneratedImageMock = vi.hoisted(() => vi.fn());
+const uploadSequenceCharacterReferencesMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@/features/comfyui", () => comfyUiMocks);
 
 vi.mock("@/features/comfyui/generated-image-storage", () => ({
   storeGeneratedImage: storeGeneratedImageMock,
+}));
+
+vi.mock("@/features/comfyui/sequence-reference-upload", () => ({
+  uploadSequenceCharacterReferences: uploadSequenceCharacterReferencesMock,
 }));
 
 import {
@@ -64,6 +70,7 @@ import {
   executeTimelineGraph,
   setTimelineNodeManualResult,
 } from ".";
+import { ComfyUiSequenceReferenceStorageError } from "@/features/comfyui/sequence-reference-storage";
 import { createTimelineT8ServerNodeAdapters } from "./t8-server-adapters";
 import type { TimelineWorkflowState } from "./types";
 
@@ -133,9 +140,110 @@ function confirmWorkflow(workflow: TimelineWorkflowState, clock = createClock())
   return confirmTimelineGeneration(workflow, undefined, { now: clock });
 }
 
+function createStyleReferenceWorkflow({
+  baseModel = "Illustrious",
+  mode = "ipadapter",
+  modelFileName = "illustrious.safetensors",
+  name = "Illustrious checkpoint",
+  promptProfile = "illustrious",
+}: {
+  baseModel?: string;
+  mode?: "ipadapter" | "prompt-only";
+  modelFileName?: string;
+  name?: string;
+  promptProfile?: "anima" | "illustrious";
+} = {}) {
+  const styleReference = {
+    status: "ready" as const,
+    mode,
+    metadata: {
+      byteLength: 512,
+      contentType: "image/png",
+      filename: "style.png",
+      storedFilename: "0123456789abcdef0123456789abcdef.png",
+      uploadedAt: "2026-07-19T00:00:00.000Z",
+      url: "/api/comfyui/sequence-references/0123456789abcdef0123456789abcdef.png",
+    },
+    analysis: {
+      analyzedAt: "2026-07-19T00:00:01.000Z",
+      stylePrompt: "soft gouache, cobalt shadows",
+      summary: "Soft gouache.",
+    },
+    ipAdapter: { weight: 0.45, startPercent: 0, endPercent: 1 },
+    settingsSnapshot: {
+      capturedAt: "2026-07-19T00:00:02.000Z",
+      checkpointBaseModel: baseModel,
+      checkpointId: "checkpoint-a",
+      modeReason: "Reviewed style-reference capability.",
+      promptProfile,
+    },
+  };
+  const base = createGateReadyWorkflow();
+
+  return confirmWorkflow({
+    ...base,
+    nodes: {
+      ...base.nodes,
+      "scene-input": {
+        ...base.nodes["scene-input"],
+        result: {
+          ...(base.nodes["scene-input"].result as object),
+          settingsSnapshot: {
+            promptProfile,
+            styleReference,
+          },
+        },
+      },
+      "resource-recommendation": {
+        ...base.nodes["resource-recommendation"],
+        result: {
+          checkpoint: {
+            resource: {
+              baseModel,
+              id: "checkpoint-a",
+              modelFileName,
+              name,
+            },
+          },
+          loras: [],
+        },
+      },
+      "parameter-recommendation": {
+        ...base.nodes["parameter-recommendation"],
+        result: {
+          ...(base.nodes["parameter-recommendation"].result as object),
+          styleReference,
+          requestPreview: {
+            ...((base.nodes["parameter-recommendation"].result as { requestPreview: object }).requestPreview),
+            checkpointName: modelFileName,
+            positivePrompt: "glass greenhouse pilot, soft gouache, cobalt shadows",
+          },
+        },
+      },
+    },
+  });
+}
+
+function prepareStyleReferenceValidation() {
+  const getObjectInfo = vi.fn().mockResolvedValue({ CheckpointLoaderSimple: {} });
+  comfyUiMocks.createComfyUiClient.mockReturnValue({ getObjectInfo });
+  comfyUiMocks.validateComfyUiTextToImageRequest.mockImplementation((request: unknown) => ({
+    ok: true,
+    request,
+  }));
+  comfyUiMocks.validateComfyUiRequestAgainstObjectInfo.mockReturnValue({
+    errors: ["Stop before queueing."],
+    request: {},
+    warnings: [],
+  });
+
+  return getObjectInfo;
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
   storeGeneratedImageMock.mockReset();
+  uploadSequenceCharacterReferencesMock.mockReset();
   Object.values(comfyUiMocks).forEach((mock) => {
     if (typeof mock === "function" && "mockReset" in mock) {
       mock.mockReset();
@@ -498,6 +606,242 @@ describe("timeline T8 server adapters", () => {
         },
       },
     });
+  });
+
+  it("injects one Illustrious Run style reference before object_info validation and queueing", async () => {
+    const getObjectInfo = vi.fn().mockResolvedValue({ CheckpointLoaderSimple: {}, IPAdapterAdvanced: {} });
+    comfyUiMocks.createComfyUiClient.mockReturnValue({ getObjectInfo });
+    comfyUiMocks.validateComfyUiTextToImageRequest.mockImplementation((request: unknown) => ({
+      ok: true,
+      request,
+    }));
+    comfyUiMocks.validateComfyUiRequestAgainstObjectInfo.mockReturnValue({
+      errors: ["IPAdapter model file is unavailable."],
+      request: {},
+      warnings: [],
+    });
+    uploadSequenceCharacterReferencesMock.mockResolvedValue([{
+      id: "run-style-reference",
+      name: "Run style reference",
+      prompt: "soft gouache, cobalt shadows",
+      enabled: true,
+      mode: "ipadapter",
+      references: [{
+        id: "run-style-reference-image",
+        imageName: "sceneforge-style.png",
+        storedFilename: "0123456789abcdef0123456789abcdef.png",
+        weight: 0.45,
+      }],
+      weight: 0.45,
+      startPercent: 0,
+      endPercent: 1,
+    }]);
+    comfyUiMocks.buildComfyUiSequenceCharacterReference.mockReturnValue({
+      id: "run-style-reference",
+      name: "Run style reference",
+      referenceImages: [{ imageName: "sceneforge-style.png", weight: 0.45 }],
+      weight: 0.45,
+      startPercent: 0,
+      endPercent: 1,
+    });
+
+    const styleReference = {
+      status: "ready" as const,
+      mode: "ipadapter" as const,
+      metadata: {
+        byteLength: 512,
+        contentType: "image/png",
+        filename: "style.png",
+        storedFilename: "0123456789abcdef0123456789abcdef.png",
+        uploadedAt: "2026-07-19T00:00:00.000Z",
+        url: "/api/comfyui/sequence-references/0123456789abcdef0123456789abcdef.png",
+      },
+      analysis: {
+        analyzedAt: "2026-07-19T00:00:01.000Z",
+        stylePrompt: "soft gouache, cobalt shadows",
+        summary: "Soft gouache.",
+      },
+      ipAdapter: { weight: 0.45, startPercent: 0, endPercent: 1 },
+      settingsSnapshot: {
+        capturedAt: "2026-07-19T00:00:02.000Z",
+        checkpointBaseModel: "Illustrious",
+        modeReason: "Illustrious supports IPAdapter.",
+        promptProfile: "illustrious" as const,
+      },
+    };
+    const base = createGateReadyWorkflow();
+    const workflow = confirmWorkflow({
+      ...base,
+      nodes: {
+        ...base.nodes,
+        "scene-input": {
+          ...base.nodes["scene-input"],
+          result: {
+            ...(base.nodes["scene-input"].result as object),
+            settingsSnapshot: {
+              detailers: {
+                faceDetailer: { enabled: false },
+                handDetailer: { enabled: false },
+              },
+              promptProfile: "illustrious",
+              styleReference,
+            },
+          },
+        },
+        "resource-recommendation": {
+          ...base.nodes["resource-recommendation"],
+          result: {
+            checkpoint: {
+              resource: {
+                id: "checkpoint-a",
+                name: "Illustrious checkpoint",
+                baseModel: "Illustrious",
+                modelFileName: "illustrious.safetensors",
+              },
+            },
+            loras: [],
+          },
+        },
+        "parameter-recommendation": {
+          ...base.nodes["parameter-recommendation"],
+          result: {
+            ...(base.nodes["parameter-recommendation"].result as object),
+            styleReference,
+            requestPreview: {
+              ...((base.nodes["parameter-recommendation"].result as { requestPreview: object }).requestPreview),
+              checkpointName: "illustrious.safetensors",
+              positivePrompt: "glass greenhouse pilot, soft gouache, cobalt shadows",
+            },
+          },
+        },
+      },
+    });
+
+    const result = await executeTimelineGraph(workflow, createTimelineT8ServerNodeAdapters());
+
+    expect(uploadSequenceCharacterReferencesMock).toHaveBeenCalledWith(
+      expect.anything(),
+      "run-timeline-t8-server",
+      [expect.objectContaining({
+        id: "run-style-reference",
+        mode: "ipadapter",
+        weight: 0.45,
+        startPercent: 0,
+        endPercent: 1,
+      })],
+    );
+    expect(comfyUiMocks.validateComfyUiRequestAgainstObjectInfo).toHaveBeenCalledWith(
+      expect.objectContaining({
+        characterReferences: [expect.objectContaining({ id: "run-style-reference" })],
+      }),
+      expect.anything(),
+    );
+    expect(result.nodes["comfyui-execution"]).toMatchObject({
+      status: "error",
+      error: {
+        code: "comfyui_object_info_mismatch",
+        message: expect.stringContaining("IPAdapter model file is unavailable"),
+      },
+    });
+  });
+
+  it.each([
+    ["Anima", "Anima", "anima.safetensors", "Anima checkpoint", "anima"],
+    ["unsupported", "SDXL", "sdxl.safetensors", "SDXL checkpoint", "illustrious"],
+    ["unknown", "Custom", "mystery.safetensors", "Mystery checkpoint", "illustrious"],
+  ] as const)("keeps %s style references prompt-only without upload or IPAdapter injection", async (
+    _label,
+    baseModel,
+    modelFileName,
+    name,
+    promptProfile,
+  ) => {
+    prepareStyleReferenceValidation();
+
+    const result = await executeTimelineGraph(createStyleReferenceWorkflow({
+      baseModel,
+      mode: "ipadapter",
+      modelFileName,
+      name,
+      promptProfile,
+    }), createTimelineT8ServerNodeAdapters());
+
+    expect(uploadSequenceCharacterReferencesMock).not.toHaveBeenCalled();
+    expect(comfyUiMocks.buildComfyUiSequenceCharacterReference).not.toHaveBeenCalled();
+    expect(comfyUiMocks.validateComfyUiRequestAgainstObjectInfo).toHaveBeenCalledWith(
+      expect.not.objectContaining({ characterReferences: expect.anything() }),
+      expect.anything(),
+    );
+    expect(result.nodes["comfyui-execution"].status).toBe("error");
+  });
+
+  it.each([
+    [404, "Stored Run style reference was not found. Retry analysis, replace it, or disable IPAdapter."],
+    [500, "Stored Run style reference is invalid or unavailable. Retry analysis, replace it, or disable IPAdapter."],
+  ])("redacts storage diagnostics from the client-visible error for status %i", async (statusCode, expectedMessage) => {
+    prepareStyleReferenceValidation();
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const sensitiveDiagnostic = "C:\\private\\style.png token=secret-value raw upstream diagnostics";
+    uploadSequenceCharacterReferencesMock.mockRejectedValue(
+      new ComfyUiSequenceReferenceStorageError(sensitiveDiagnostic, statusCode),
+    );
+
+    const result = await executeTimelineGraph(
+      createStyleReferenceWorkflow(),
+      createTimelineT8ServerNodeAdapters(),
+    );
+    const serializedResult = JSON.stringify(result.nodes["comfyui-execution"]);
+
+    expect(result.nodes["comfyui-execution"]).toMatchObject({
+      status: "error",
+      error: {
+        code: "comfyui_request_invalid",
+        message: expectedMessage,
+      },
+    });
+    expect(serializedResult).not.toContain("C:\\private");
+    expect(serializedResult).not.toContain("secret-value");
+    expect(serializedResult).not.toContain("raw upstream diagnostics");
+    expect(consoleError).not.toHaveBeenCalled();
+  });
+
+  it("redacts sensitive upload error names and messages from the client result and fixed console log", async () => {
+    prepareStyleReferenceValidation();
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const sensitiveMessage = "C:\\private\\style.png token=secret-message raw upstream message diagnostics";
+    const sensitiveName = "C:\\private\\CustomError token=secret-name raw upstream name diagnostics";
+    const sensitiveError = new Error(sensitiveMessage);
+    sensitiveError.name = sensitiveName;
+    uploadSequenceCharacterReferencesMock.mockRejectedValue(sensitiveError);
+
+    const result = await executeTimelineGraph(
+      createStyleReferenceWorkflow(),
+      createTimelineT8ServerNodeAdapters(),
+    );
+    const serializedResult = JSON.stringify(result.nodes["comfyui-execution"]);
+    const serializedLogArguments = JSON.stringify(consoleError.mock.calls);
+
+    expect(result.nodes["comfyui-execution"]).toMatchObject({
+      status: "error",
+      error: {
+        code: "comfyui_request_invalid",
+        message: "Run style reference could not be prepared. Retry analysis, replace it, or disable IPAdapter.",
+      },
+    });
+    expect(serializedResult).not.toContain("C:\\private");
+    expect(serializedResult).not.toContain("secret-message");
+    expect(serializedResult).not.toContain("secret-name");
+    expect(serializedResult).not.toContain("raw upstream message diagnostics");
+    expect(serializedResult).not.toContain("raw upstream name diagnostics");
+    expect(consoleError).toHaveBeenCalledTimes(1);
+    expect(consoleError.mock.calls).toEqual([
+      ["[SceneForge] [timeline] Run style reference upload failed; details were redacted."],
+    ]);
+    expect(serializedLogArguments).not.toContain("C:\\private");
+    expect(serializedLogArguments).not.toContain("secret-message");
+    expect(serializedLogArguments).not.toContain("secret-name");
+    expect(serializedLogArguments).not.toContain("raw upstream message diagnostics");
+    expect(serializedLogArguments).not.toContain("raw upstream name diagnostics");
   });
 
   it("invalidates confirmed execution and result nodes after an upstream manual edit", async () => {

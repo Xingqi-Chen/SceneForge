@@ -70,7 +70,7 @@ The MVP is a single-scene Run workflow with these boundaries:
 
 ## Run Scene Composer Generation Controls
 
-Simple and detailed Run modes use the same Scene Composer state and controls. Switching display modes must not create a second settings source or discard the current scene request, output count, source image, explicit style resources, saved generation parameters, or Detailer settings.
+Simple and detailed Run modes use the same Scene Composer state and controls. Switching display modes must not create a second settings source or discard the current scene request, output count, source image, explicit style resources, saved generation parameters, Detailer settings, or global style reference.
 
 Run generation controls follow these rules:
 
@@ -81,8 +81,11 @@ Run generation controls follow these rules:
 - Changing checkpoint or LoRA selection clears saved parameters and prior AI Style Advice so advice and settings cannot silently survive a different resource context.
 - FaceDetailer and HandDetailer are independent user-controlled settings. They do not require resource or parameter selection, may be enabled separately, and AI must not enable, disable, recommend, or modify either Detailer.
 - Enabled Detailer settings are visible in the generation request preview and confirmation summary and are applied to the confirmed Run request.
+- One optional PNG/JPEG/WEBP style reference is stored through the safe sequence-reference boundary and analyzed into one opaque base-model-compatible `stylePrompt`. The segment is appended exactly once after resource-aware formatting for preview, regeneration, restore, and confirmed execution.
+- Illustrious-capable checkpoints always keep the style prompt and may additionally enable sequence-style IPAdapter with normalized `weight/start_at/end_at` defaults of `0.45/0/1`, values in `0..1`, and `start_at <= end_at`. Anima, unknown, and unsupported contexts are visibly prompt-only and must not receive hidden adapter nodes.
+- Pending, failed, invalid, or context-mismatched references block start, regeneration, and confirmation without queueing ComfyUI. Retry/reanalysis, replacement, and removal remain available.
 
-After a workflow has started, these Composer settings remain editable. Resource changes mark `resource-recommendation` and its downstream nodes stale. Parameter or Detailer changes mark `parameter-recommendation` and its downstream nodes stale. Either change cancels the existing generation confirmation, preserves unrelated prompt, character-tag, pose, and canvas results, and must not call ComfyUI until the user confirms the regenerated request again.
+After a workflow has started, these Composer settings remain editable. Resource changes mark `resource-recommendation` and its downstream nodes stale. Parameter, Detailer, or style-reference changes mark `parameter-recommendation` and its downstream nodes stale. Either change cancels the existing generation confirmation, preserves unrelated prompt, character-tag, pose, and canvas results, and must not call ComfyUI until the user confirms the regenerated request again.
 
 Output precedence is explicit:
 
@@ -91,9 +94,7 @@ Output precedence is explicit:
 - The Composer source-image denoise value overrides saved parameter denoise for image-to-image generation. Other compatible saved parameters remain effective.
 - A saved parameter payload must not override the Composer output count.
 
-Active autosave and named workflows persist the normalized explicit resource ids, supported saved parameters, and Detailer settings needed to restore the Composer. Restored legacy Run workflows that lack these settings keep the automatic resource and parameter recommendation paths and default both Detailers to disabled. Restoring a stale or previously confirmed workflow must not automatically submit a generation request.
-
-Run style reference and IPAdapter controls are explicitly excluded from this behavior and remain scoped to the dependent T36 track.
+Active autosave and named workflows persist the normalized explicit resource ids, supported saved parameters, Detailer settings, and sanitized style-reference metadata/analysis/context/status/settings needed to restore the Composer. Style-reference records never persist bytes, base64/data URLs, secrets, unsafe paths, or full resource collections. Restored legacy Run workflows that lack these settings keep the automatic resource and parameter recommendation paths, default both Detailers to disabled, and restore no reference. Restoring a stale or previously confirmed workflow must not automatically submit a generation request.
 
 ## Timeline Nodes
 

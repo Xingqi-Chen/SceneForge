@@ -4,6 +4,23 @@ This log records dated implementation and documentation work. Keep entries conci
 
 ## 2026-07-19
 
+### Issue #130 Run Global Style Reference
+
+Summary:
+
+- Extracted the T33 style-reference metadata, analysis, capability, context, prompt, and sequence-style IPAdapter contracts into a workflow-neutral module while retaining the Story-named API surface.
+- Added one shared Run style-reference upload/analyze/retry/replace/remove state to simple and detailed Composer modes, including editable analyzed prompt text, prompt-only/IPAdapter capability, defaults `0.45/0/1`, safe persistence/restore, and context mismatch handling.
+- Appended the analyzed prompt exactly once after T7 resource-aware formatting, blocked invalid reference states through start/regeneration/confirmation, staled post-start edits from parameter recommendation, and added optional Illustrious IPAdapter upload/validation to confirmed T8 execution without changing img2img, batch, or Detailer ownership.
+- Reviewer fix loops tightened confirmation parity in both directions, validate opaque style segments only at comma-delimited boundaries, require a formal checkpoint result whenever a style reference exists, and map reference upload failures to fixed safe client guidance and a static redacted server log without echoing exception names, filesystem paths, tokens, or upstream diagnostics.
+
+Validation:
+
+- `npm run typecheck` passed.
+- Focused existing Vitest validation passed with 9 files and 163 tests; full `npm test` passed with 125 files and 1038 tests.
+- `npm run lint` passed with 23 pre-existing warnings and 0 errors.
+- `npm run build` passed and generated 46 static pages.
+- Live LiteLLM vision analysis, live ComfyUI IPAdapter execution, and browser QA remain environment-dependent and were not run during implementation.
+
 ### Issue #127 Merge
 
 Summary:

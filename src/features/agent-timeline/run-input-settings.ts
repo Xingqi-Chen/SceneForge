@@ -8,11 +8,16 @@ import {
   type GenerationStylePaletteSnapshot,
 } from "./generation-style-palette";
 import { coercePromptProfileId, normalizePromptProfileId, type PromptProfileId } from "@/shared/prompt-profile";
+import {
+  sanitizeStyleReferenceSnapshot,
+  type StyleReferenceSnapshot,
+} from "./style-reference";
 
 export type RunSceneInputSettingsSnapshot = {
   detailers: GenerationDetailerSettingsSnapshot;
   promptProfile?: PromptProfileId;
   stylePalette?: GenerationStylePaletteSnapshot;
+  styleReference?: StyleReferenceSnapshot;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -24,25 +29,30 @@ export function createRunSceneInputSettingsSnapshot(
     detailers?: Partial<GenerationDetailerSettingsSnapshot>;
     promptProfile?: PromptProfileId;
     stylePalette?: GenerationStylePaletteSnapshot;
+    styleReference?: StyleReferenceSnapshot;
   } = {},
 ): RunSceneInputSettingsSnapshot {
   const stylePalette = sanitizeGenerationStylePaletteSnapshot(value.stylePalette);
+  const styleReference = sanitizeStyleReferenceSnapshot(value.styleReference);
   return {
     detailers: createGenerationDetailerSettingsSnapshot(value.detailers),
     ...(value.promptProfile ? { promptProfile: normalizePromptProfileId(value.promptProfile) } : {}),
     ...(stylePalette ? { stylePalette } : {}),
+    ...(styleReference ? { styleReference } : {}),
   };
 }
 
 export function sanitizeRunSceneInputSettingsSnapshot(value: unknown): RunSceneInputSettingsSnapshot {
   const raw = isRecord(value) ? value : {};
   const stylePalette = sanitizeGenerationStylePaletteSnapshot(raw.stylePalette);
+  const styleReference = sanitizeStyleReferenceSnapshot(raw.styleReference);
   return {
     detailers: sanitizeGenerationDetailerSettingsSnapshot(raw.detailers),
     ...(typeof raw.promptProfile === "string"
       ? { promptProfile: coercePromptProfileId(raw.promptProfile) }
       : {}),
     ...(stylePalette ? { stylePalette } : {}),
+    ...(styleReference ? { styleReference } : {}),
   };
 }
 

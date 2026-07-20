@@ -1,5 +1,6 @@
 export * from "./TimelineAiRetry";
 export * from "./StoryPlanningWorkspace";
+export * from "./StyleReferencePanel";
 export * from "./TimelineNodeCard";
 export * from "./TimelineNodeEditor";
 export * from "./TimelineNodeStatus";

@@ -57,11 +57,12 @@ Every timeline node must allow user intervention:
 - Generation parameters can be edited with the same style of controls used by the original ComfyUI configuration UI.
 - Explicit Run resources bypass AI resource recommendation; saved Run parameters bypass automatic parameter advice, while an unsaved parameter state preserves the automatic path.
 - FaceDetailer and HandDetailer are controlled only by the user and stay outside AI input.
+- One optional global Run style reference is shared across simple and detailed Composer modes. Its analyzed style prompt applies to every txt2img output or the single img2img output; Illustrious may optionally add the same stored image through IPAdapter, while Anima and unsupported contexts remain prompt-only.
 - Every node can ask AI for another suggestion based on user guidance.
 
 Manual intervention is not an escape hatch from the workflow. It is part of the workflow. When a user changes a node, dependent downstream nodes should regenerate and unrelated nodes should remain stable.
 
-Run Composer changes follow the same rule: resource edits stale from resource recommendation, while parameter and Detailer edits stale from parameter recommendation. All cancel any prior generation confirmation. Txt2img applies the selected settings to the full 1-4 output batch. Img2img forces one output, uses source dimensions, and lets source denoise override saved denoise.
+Run Composer changes follow the same rule: resource edits stale from resource recommendation, while parameter, Detailer, and style-reference edits stale from parameter recommendation. All cancel any prior generation confirmation. Txt2img applies the selected settings and reference to the full 1-4 output batch. Img2img forces one output, uses source dimensions, keeps its source separate from the style image, and lets source denoise override saved denoise.
 
 ## Orchestration Principle
 
