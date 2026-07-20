@@ -98,9 +98,9 @@ function createPersistedV2GenerationWorkflow(finalCount = 2) {
     baseSeed: 100,
     candidateCount,
     finalCount,
-    previewHeight: 512,
-    previewWidth: 512,
-    previewSteps: 10,
+    previewHeight: 768,
+    previewWidth: 768,
+    previewSteps: 16,
     candidates,
     successfulCount: candidateCount,
     warnings: [],
@@ -715,6 +715,46 @@ describe("timeline workflow persistence", () => {
     expect(restored.workflow.nodes["preview-scoring"].status).toBe("done");
     expect(restored.workflow.nodes["comfyui-execution"].status).toBe("done");
     expect(restored.workflow.nodes["result-display"].status).toBe("done");
+  });
+
+  it("preserves exact-aspect 8-aligned preview dimensions in a current-v2 round trip", () => {
+    const workflow = createPersistedV2GenerationWorkflow(2);
+    const parameters = workflow.nodes["parameter-recommendation"].result as {
+      width: number;
+      height: number;
+      requestPreview: { width: number; height: number };
+    };
+    parameters.width = 832;
+    parameters.height = 1216;
+    parameters.requestPreview.width = 832;
+    parameters.requestPreview.height = 1216;
+    const preview = workflow.nodes["preview-execution"].result as {
+      previewWidth: number;
+      previewHeight: number;
+    };
+    preview.previewWidth = 520;
+    preview.previewHeight = 760;
+
+    const record = createTimelineWorkflowRecord({
+      workflow,
+      sceneRequest: "An exact-aspect portrait preview Run",
+      selectedPromptProfile: "illustrious",
+      selectedImageCount: 2,
+      selectedNodeId: "preview-execution",
+    });
+    const restored = parseTimelineWorkflowRecordJson(serializeTimelineWorkflowRecord(record));
+    expect(restored && isSingleImageTimelineWorkflowRecord(restored)).toBe(true);
+    if (!restored || !isSingleImageTimelineWorkflowRecord(restored)) throw new Error("Expected a single-image Run record.");
+    const restoredPreview = restored.workflow.nodes["preview-execution"].result as {
+      previewWidth: number;
+      previewHeight: number;
+    };
+
+    expect(restored.workflow.nodes["preview-execution"].status).toBe("done");
+    expect(restoredPreview).toMatchObject({ previewWidth: 520, previewHeight: 760 });
+    expect(restoredPreview.previewWidth % 8).toBe(0);
+    expect(restoredPreview.previewHeight % 8).toBe(0);
+    expect(restoredPreview.previewWidth * 1216).toBe(restoredPreview.previewHeight * 832);
   });
 
   it.each([

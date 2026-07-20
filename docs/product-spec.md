@@ -184,7 +184,7 @@ Workflow project management UI is a separate follow-up track. It should provide 
 
 ### Run preview selection
 
-- Preview requests use batch size 1, Detailers disabled, and model-family Balanced settings: Illustrious/fallback cap formal steps at 16, Anima caps them at 18, and all use longest-edge 768 dimensions floored to 64-pixel multiples only when downscaling. Inputs already within that bound are never upscaled.
+- Preview requests use batch size 1, Detailers disabled, and model-family Balanced settings: Illustrious/fallback cap formal steps at 16 and Anima caps them at 18. Inputs above longest-edge 768 are reduced to the largest exact-formal-aspect dimensions that fit the limit and align both axes to 8 pixels; axes are never rounded independently or stretched. Inputs already within the limit remain unchanged and are never upscaled. An extreme ratio with no exact 8-pixel-aligned downscale inside the limit fails with an actionable validation error.
 - Vision scoring compares every successful current-round preview in one request. Scene adherence, composition, anatomy/structure, style/identity, and technical quality use fixed local weights of 30/25/20/15/10 percent.
 - Ordinary scoring uses the Vision model with default fallback. NSFW scoring requires the multimodal NSFW model and must never fall back to an ordinary model.
 - The selected Top-K previews are rendered independently at formal settings with their candidate seeds and enabled Detailers. Internal final denoise is 0.60 for Illustrious and 0.65 for Anima or unknown/default fallback. A fresh final whose managed content hash is unchanged from its preview is a recoverable failure and must rerender on retry. Detailed mode may override the selection with exactly K successful candidates.

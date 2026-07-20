@@ -22,7 +22,7 @@ import {
   type TimelineWorkflowState,
 } from "./types";
 
-const DIMENSION_MULTIPLE = 64;
+const PREVIEW_DIMENSION_ALIGNMENT = 8;
 const MAX_SEED = Number.MAX_SAFE_INTEGER;
 
 export type TimelineBalancedGenerationPolicy = {
@@ -106,17 +106,50 @@ export function getTimelinePreviewCandidateCount(finalCount: number) {
   return Math.min(8, Math.max(4, normalizeTimelineImageCount(finalCount) * 2));
 }
 
+function greatestCommonDivisor(left: number, right: number) {
+  let first = left;
+  let second = right;
+  while (second !== 0) {
+    const remainder = first % second;
+    first = second;
+    second = remainder;
+  }
+  return first;
+}
+
+function leastCommonMultiple(left: number, right: number) {
+  return (left / greatestCommonDivisor(left, right)) * right;
+}
+
 export function getTimelinePreviewDimensions(width: number, height: number, longestEdge = 768) {
+  if (![width, height, longestEdge].every((value) => Number.isSafeInteger(value) && value > 0)) {
+    invalidComfyUiRequest("Preview width, height, and longest-edge limit must be positive integers.");
+  }
   if (Math.max(width, height) <= longestEdge) {
     return { width, height };
   }
-  const scale = longestEdge / Math.max(width, height);
-  const floor = (value: number, finalValue: number) => Math.min(
-    finalValue,
-    longestEdge,
-    Math.max(DIMENSION_MULTIPLE, Math.floor((value * scale) / DIMENSION_MULTIPLE) * DIMENSION_MULTIPLE),
-  );
-  return { width: floor(width, width), height: floor(height, height) };
+
+  const ratioDivisor = greatestCommonDivisor(width, height);
+  const ratioWidth = width / ratioDivisor;
+  const ratioHeight = height / ratioDivisor;
+  const widthAlignmentMultiplier = PREVIEW_DIMENSION_ALIGNMENT /
+    greatestCommonDivisor(ratioWidth, PREVIEW_DIMENSION_ALIGNMENT);
+  const heightAlignmentMultiplier = PREVIEW_DIMENSION_ALIGNMENT /
+    greatestCommonDivisor(ratioHeight, PREVIEW_DIMENSION_ALIGNMENT);
+  const alignmentMultiplier = leastCommonMultiple(widthAlignmentMultiplier, heightAlignmentMultiplier);
+  const maximumMultiplier = Math.floor(longestEdge / Math.max(ratioWidth, ratioHeight));
+  const multiplier = Math.floor(maximumMultiplier / alignmentMultiplier) * alignmentMultiplier;
+
+  if (multiplier < alignmentMultiplier) {
+    invalidComfyUiRequest(
+      `Preview dimensions ${width}x${height} cannot be downscaled to an exact-aspect, ` +
+      `${PREVIEW_DIMENSION_ALIGNMENT}-pixel-aligned size within longest edge ${longestEdge}. ` +
+      "Choose a less extreme aspect ratio or dimensions already within the preview limit.",
+      { height, longestEdge, width },
+    );
+  }
+
+  return { width: ratioWidth * multiplier, height: ratioHeight * multiplier };
 }
 
 function getTimelineSourceImage(workflow: TimelineWorkflowState) {

@@ -364,18 +364,53 @@ describe("timeline T8 ComfyUI request conversion", () => {
   });
 
   it.each([
+    [832, 1216, 520, 760],
+    [1216, 832, 760, 520],
     [1024, 1024, 768, 768],
+    [1024, 576, 768, 432],
+    [576, 1024, 432, 768],
     [1536, 1024, 768, 512],
     [1024, 1536, 512, 768],
-    [768, 1344, 384, 768],
-    [4096, 128, 768, 64],
+    [768, 1344, 416, 728],
+    [1344, 768, 728, 416],
+    [1920, 800, 768, 320],
+    [800, 1920, 320, 768],
+    [4096, 128, 768, 24],
+    [128, 4096, 24, 768],
     [500, 257, 500, 257],
+    [768, 513, 768, 513],
     [63, 31, 63, 31],
   ])("scales %ix%i previews to exactly %ix%i", (width, height, previewWidth, previewHeight) => {
-    expect(getTimelinePreviewDimensions(width, height)).toEqual({
+    const preview = getTimelinePreviewDimensions(width, height);
+    expect(preview).toEqual({
       width: previewWidth,
       height: previewHeight,
     });
+    expect(preview.width * height).toBe(preview.height * width);
+    expect(Math.max(preview.width, preview.height)).toBeLessThanOrEqual(768);
+    if (Math.max(width, height) > 768) {
+      expect(preview.width % 8).toBe(0);
+      expect(preview.height % 8).toBe(0);
+    } else {
+      expect(preview).toEqual({ width, height });
+    }
+  });
+
+  it.each([
+    [997, 991],
+    [991, 997],
+    [10_000, 1],
+    [1, 10_000],
+  ])("fails closed when pathological %ix%i cannot be exactly ratio-preserved and 8-aligned", (width, height) => {
+    expect(() => getTimelinePreviewDimensions(width, height)).toThrow(/exact-aspect.*8-pixel-aligned/i);
+    try {
+      getTimelinePreviewDimensions(width, height);
+    } catch (error) {
+      expect(error).toMatchObject({
+        code: "comfyui_request_invalid",
+        details: { width, height, longestEdge: 768 },
+      });
+    }
   });
 
   it.each([1, 2, 3, 4])("creates deterministic independent preview requests for txt2img K=%i", (imageCount) => {

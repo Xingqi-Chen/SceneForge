@@ -5,7 +5,7 @@
 - Scope source: Track `T37`, GitHub Issue `#133`.
 - Branch: `issue-133-scored-run-previews`.
 - Date: 2026-07-20.
-- Result: the focused matrix, relevant timeline/API/LLM regressions, full Vitest suite, TypeScript, lint, and production build passed after Fix Loop 8 restored compatibility with real ComfyUI empty-subfolder image references.
+- Result: the focused matrix, relevant timeline/API/LLM regressions, full Vitest suite, TypeScript, lint, and production build passed after Fix Loop 9 enforced exact-aspect, 8-pixel-aligned preview dimensions without upscaling.
 
 ## Automated Coverage Added
 
@@ -243,6 +243,40 @@ Post-fix evidence:
 6. `npm run build`
    - PASS: Next.js production build, TypeScript, page-data collection, and 46 static pages.
 7. `git diff --check`
+   - PASS; only line-ending notices were printed.
+
+## Fix Loop 9
+
+The preview-dimension follow-up replaces independent-axis rounding with exact-ratio integer scaling:
+
+- Oversized inputs use the largest common integer scale whose width and height are both divisible by 8 and whose longest edge is at most 768px. The matrix includes `832x1216 -> 520x760`, its reverse, `1024x1024 -> 768x768`, `1024x576 -> 768x432`, portrait/wide cases, and extreme-but-representable ratios such as `4096x128 -> 768x24`.
+- Every downscaled case asserts both axes are 8-pixel aligned and uses integer cross-multiplication (`previewWidth * finalHeight === previewHeight * finalWidth`) to prove exact aspect-ratio preservation without floating-point tolerance or independent-axis distortion.
+- Positive safe dimensions already at or below the 768px longest-edge limit are returned unchanged, including non-8-aligned examples, so previews are never upscaled or unnecessarily resampled.
+- Coprime and extreme ratios that cannot satisfy exact aspect ratio plus 8-pixel alignment within the bound, including `997x991` and `10000x1` in both orientations, fail closed with `comfyui_request_invalid`, actionable exact-aspect guidance, and structured width/height/longest-edge details.
+- Current-v2 persistence round-trips exact-aspect `520x760` dimensions, and staged API/server fixtures now expect the 768px quality profile while retaining bounds validation.
+- This contract supersedes Fix Loop 7's interim 64px-grid behavior; exact aspect ratio is now the controlling invariant.
+
+Post-fix evidence:
+
+1. Targeted adapter/server/persistence/API matrix:
+   - `npx vitest run src/features/agent-timeline/t8-node-adapters.test.ts src/features/agent-timeline/t8-server-adapters.test.ts src/features/agent-timeline/timeline-workflow-persistence.test.ts src/app/api/agent-timeline/confirm-generation/route.test.ts`
+   - PASS: 4 files, 152 tests.
+2. Extended T37 focused matrix:
+   - `npx vitest run src/features/comfyui/generated-image-reference.test.ts src/features/agent-timeline/t37-preview-scoring.test.ts src/features/agent-timeline/timeline-workflow-persistence.test.ts src/app/api/agent-timeline/confirm-generation/route.test.ts src/features/agent-timeline/components/TimelineShell.test.tsx src/features/agent-timeline/t8-node-adapters.test.ts src/features/agent-timeline/t8-server-adapters.test.ts src/features/agent-timeline/workflow-definition.test.ts src/features/agent-timeline/workflow.test.ts src/features/agent-timeline/components/TimelinePreviewWorkspace.test.tsx`
+   - PASS: 10 files, 240 tests.
+3. Related timeline/API/LLM/generated-image/history suite:
+   - `npx vitest run src/features/agent-timeline src/app/api/agent-timeline src/app/api/llm/chat/route.test.ts src/features/llm src/features/comfyui/generated-image-storage.test.ts src/features/comfyui/generated-image-reference.test.ts src/features/comfyui/history.test.ts`
+   - PASS: 46 files, 573 tests.
+4. Full suite:
+   - `npm test`
+   - PASS: 130 files, 1211 tests.
+5. `npm run typecheck`
+   - PASS.
+6. `npm run lint`
+   - PASS with 0 errors and 23 pre-existing warnings.
+7. `npm run build`
+   - PASS: Next.js production build, TypeScript, page-data collection, and 46 static pages.
+8. `git diff --check`
    - PASS; only line-ending notices were printed.
 
 ## Manual QA Still Needed

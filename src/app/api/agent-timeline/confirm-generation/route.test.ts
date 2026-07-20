@@ -132,9 +132,9 @@ function createSignedWorkflowWithCompletedPreviews(finalCount = 1) {
     baseSeed: 100,
     candidateCount,
     finalCount,
-    previewHeight: 512,
-    previewWidth: 512,
-    previewSteps: 10,
+    previewHeight: 768,
+    previewWidth: 768,
+    previewSteps: 16,
     candidates,
     successfulCount: candidateCount,
     warnings: [],
@@ -526,6 +526,9 @@ describe("POST /api/agent-timeline/confirm-generation", () => {
       status: "done",
       result: {
         successfulCount: 4,
+        previewWidth: 768,
+        previewHeight: 768,
+        previewSteps: 16,
         candidates: expect.arrayContaining([
           expect.objectContaining({
             candidateId: "preview-1",
