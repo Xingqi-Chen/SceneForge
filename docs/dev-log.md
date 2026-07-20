@@ -2,6 +2,16 @@
 
 This log records dated implementation and documentation work. Keep entries concise and evidence-oriented.
 
+## 2026-07-20
+
+### Issue #130 Merge
+
+Summary:
+
+- Merged PR #131 for the Run global style-reference prompt and optional Illustrious IPAdapter workflow.
+- Issue #130 was closed automatically by the merge and T36 was marked done.
+- GitHub CI Validate passed before merge; the merged commit is `6cba2862e861397674a78c7907fb22cce062efca`.
+
 ## 2026-07-19
 
 ### Issue #130 Run Global Style Reference
