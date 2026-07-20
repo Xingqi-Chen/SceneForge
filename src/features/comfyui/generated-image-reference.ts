@@ -8,9 +8,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function safePathPart(value: unknown, allowSlash: boolean) {
+function safePathPart(value: unknown, allowSlash: boolean, allowBlank = false) {
   if (value === undefined) return undefined;
-  if (typeof value !== "string" || !value.trim()) return null;
+  if (typeof value !== "string") return null;
+  if (!value.trim()) return allowBlank ? undefined : null;
   const normalized = value.trim().replace(/\\/g, "/");
   if (normalized.startsWith("/") || /^[a-z]:/i.test(normalized) || normalized.includes(":") ||
       normalized.includes("..") || normalized.split("/").some((part) => !part || part === ".") ||
@@ -21,7 +22,7 @@ function safePathPart(value: unknown, allowSlash: boolean) {
 export function normalizeComfyUiViewImageReference(value: unknown): ComfyUiViewImageReference | null {
   if (!isRecord(value)) return null;
   const filename = safePathPart(value.filename, false);
-  const subfolder = safePathPart(value.subfolder, true);
+  const subfolder = safePathPart(value.subfolder, true, true);
   const type = typeof value.type === "string" && /^(?:input|output|temp)$/.test(value.type.trim())
     ? value.type.trim()
     : value.type === undefined ? undefined : null;

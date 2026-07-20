@@ -301,6 +301,41 @@ function prepareStyleReferenceValidation() {
   return getObjectInfo;
 }
 
+function prepareFinalExecutionHarness({
+  images,
+  outputNodeId = "9",
+  storedFilename = "fresh-final.png",
+}: {
+  images: Array<{ filename: string; nodeId: string; type: string }>;
+  outputNodeId?: string;
+  storedFilename?: string;
+}) {
+  const getObjectInfo = vi.fn().mockResolvedValue({ CheckpointLoaderSimple: {} });
+  const generateImage = vi.fn().mockResolvedValue({ outputNodeId, promptId: "prompt-target-output" });
+  const getHistory = vi.fn().mockResolvedValue({ prompt: "history" });
+  const buildViewUrl = vi.fn((image: { filename: string }) =>
+    `http://127.0.0.1:8188/view?filename=${image.filename}&type=output`,
+  );
+  comfyUiMocks.createComfyUiClient.mockReturnValue({ buildViewUrl, generateImage, getHistory, getObjectInfo });
+  comfyUiMocks.validateComfyUiTextToImageRequest.mockImplementation((request: unknown) => ({ ok: true, request }));
+  comfyUiMocks.validateComfyUiRequestAgainstObjectInfo.mockImplementation((request: unknown) => ({
+    errors: [], request, warnings: [],
+  }));
+  comfyUiMocks.extractComfyUiHistoryImages.mockReturnValue(images);
+  comfyUiMocks.isComfyUiPromptHistoryComplete.mockReturnValue(true);
+  storeGeneratedImageMock.mockResolvedValue({
+    byteLength: 3,
+    contentType: "image/png",
+    filename: storedFilename,
+    url: `/api/comfyui/generated-images/${storedFilename}`,
+  });
+  globalThis.fetch = vi.fn<typeof fetch>(async () => new Response(new Uint8Array([1, 2, 3]), {
+    headers: { "content-type": "image/png" },
+    status: 200,
+  }));
+  return { buildViewUrl, generateImage };
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
   storeGeneratedImageMock.mockReset();
@@ -465,6 +500,129 @@ describe("timeline T8 server adapters", () => {
           warnings: ["using default VAE"],
         },
       });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("selects the queued output node when history contains images from multiple output nodes", async () => {
+    const originalFetch = globalThis.fetch;
+    const target = { filename: "target.png", nodeId: "9", type: "output" };
+    const decoy = { filename: "decoy.png", nodeId: "5", type: "output" };
+    const { buildViewUrl } = prepareFinalExecutionHarness({ images: [decoy, target] });
+
+    try {
+      const result = await executeTimelineGraph(
+        confirmWorkflow(createGateReadyWorkflow()),
+        createTimelineT8ServerNodeAdapters(),
+      );
+
+      expect(buildViewUrl).toHaveBeenCalledTimes(1);
+      expect(buildViewUrl).toHaveBeenCalledWith(target);
+      expect(buildViewUrl).not.toHaveBeenCalledWith(decoy);
+      expect(result.nodes["comfyui-execution"].status).toBe("done");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("fails when completed history has images but none from the queued output node", async () => {
+    const originalFetch = globalThis.fetch;
+    const { buildViewUrl } = prepareFinalExecutionHarness({
+      images: [{ filename: "decoy.png", nodeId: "5", type: "output" }],
+      outputNodeId: "9",
+    });
+
+    try {
+      const result = await executeTimelineGraph(
+        confirmWorkflow(createGateReadyWorkflow()),
+        createTimelineT8ServerNodeAdapters(),
+      );
+      const partial = (result.nodes["comfyui-execution"].error?.details as {
+        partialResult?: { finals: Array<{ error?: unknown }> };
+      }).partialResult;
+
+      expect(result.nodes["comfyui-execution"]).toMatchObject({
+        status: "error",
+        error: { details: { recoverable: true } },
+      });
+      expect(partial?.finals[0]).toMatchObject({
+        status: "error",
+        error: {
+          code: "comfyui_execution_failed",
+          message: "ComfyUI completed without an image from the expected output node.",
+          details: { outputNodeId: "9", promptId: "prompt-target-output" },
+        },
+      });
+      expect(buildViewUrl).not.toHaveBeenCalled();
+      expect(storeGeneratedImageMock).not.toHaveBeenCalled();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it.each([
+    ["identical filename", "preview-1.png", "preview-1.png"],
+    ["identical managed content hash", `${"a".repeat(32)}.png`, `${"a".repeat(32)}.webp`],
+  ])("fails closed for a fresh final with %s and succeeds when retried with changed content", async (
+    _case,
+    previewFilename,
+    noOpFinalFilename,
+  ) => {
+    const originalFetch = globalThis.fetch;
+    const { generateImage } = prepareFinalExecutionHarness({
+      images: [{ filename: "final-output.png", nodeId: "9", type: "output" }],
+      storedFilename: noOpFinalFilename,
+    });
+    const workflow = confirmWorkflow(createGateReadyWorkflow());
+    const preview = workflow.nodes["preview-execution"].result as {
+      candidates: Array<{ storedImage?: { filename: string; url: string } }>;
+    };
+    preview.candidates[0]!.storedImage = {
+      ...preview.candidates[0]!.storedImage!,
+      filename: previewFilename,
+      url: `/api/comfyui/generated-images/${previewFilename}`,
+    };
+
+    try {
+      const first = await executeTimelineGraph(workflow, createTimelineT8ServerNodeAdapters());
+      const partial = (first.nodes["comfyui-execution"].error?.details as {
+        partialResult?: { finals: Array<{ error?: unknown }> };
+      }).partialResult;
+      expect(first.nodes["comfyui-execution"]).toMatchObject({
+        status: "error",
+        error: { details: { recoverable: true } },
+      });
+      expect(partial?.finals[0]).toMatchObject({
+        status: "error",
+        error: {
+          code: "comfyui_execution_failed",
+          message: "Final generation returned the unchanged preview image. Retry this selection.",
+          details: {
+            candidateId: "preview-1",
+            noOp: true,
+            previewFilename,
+            recoverable: true,
+          },
+        },
+      });
+
+      generateImage.mockClear();
+      storeGeneratedImageMock.mockReset().mockResolvedValue({
+        byteLength: 4,
+        contentType: "image/png",
+        filename: "changed-final.png",
+        url: "/api/comfyui/generated-images/changed-final.png",
+      });
+      const retried = retryTimelineGenerationFrom(first, "comfyui-execution");
+      const second = await executeTimelineGraph(retried, createTimelineT8ServerNodeAdapters());
+
+      expect(generateImage).toHaveBeenCalledTimes(1);
+      expect(second.nodes["comfyui-execution"]).toMatchObject({
+        status: "done",
+        result: { finals: [expect.objectContaining({ candidateId: "preview-1", status: "done" })] },
+      });
+      expect(second.nodes["result-display"].status).toBe("done");
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -1001,8 +1159,8 @@ describe("timeline T8 server adapters", () => {
   it("preserves successful finals and retries only the missing selection", async () => {
     const getObjectInfo = vi.fn().mockResolvedValue({ CheckpointLoaderSimple: {} });
     const generateImage = vi.fn()
-      .mockResolvedValueOnce({ promptId: "final-1" })
-      .mockRejectedValueOnce(new Error("candidate two failed"));
+      .mockResolvedValueOnce({ outputNodeId: "9", promptId: "final-1" })
+      .mockResolvedValueOnce({ outputNodeId: "9", promptId: "final-2" });
     const getHistory = vi.fn().mockResolvedValue({ prompt: "history" });
     const buildViewUrl = vi.fn().mockReturnValue("http://127.0.0.1:8188/view?filename=final.png&type=output");
     comfyUiMocks.createComfyUiClient.mockReturnValue({ buildViewUrl, generateImage, getHistory, getObjectInfo });
@@ -1012,12 +1170,19 @@ describe("timeline T8 server adapters", () => {
     }));
     comfyUiMocks.extractComfyUiHistoryImages.mockReturnValue([{ filename: "final.png", nodeId: "9", type: "output" }]);
     comfyUiMocks.isComfyUiPromptHistoryComplete.mockReturnValue(true);
-    storeGeneratedImageMock.mockResolvedValue({
-      byteLength: 3,
-      contentType: "image/png",
-      filename: "stored-final.png",
-      url: "/api/comfyui/generated-images/stored-final.png",
-    });
+    storeGeneratedImageMock
+      .mockResolvedValueOnce({
+        byteLength: 3,
+        contentType: "image/png",
+        filename: "stored-final.png",
+        url: "/api/comfyui/generated-images/stored-final.png",
+      })
+      .mockResolvedValueOnce({
+        byteLength: 3,
+        contentType: "image/png",
+        filename: "preview-2.png",
+        url: "/api/comfyui/generated-images/preview-2.png",
+      });
     const originalFetch = globalThis.fetch;
     globalThis.fetch = vi.fn<typeof fetch>(async () => new Response(new Uint8Array([1, 2, 3]), {
       headers: { "content-type": "image/png" }, status: 200,
@@ -1037,21 +1202,32 @@ describe("timeline T8 server adapters", () => {
               completed: false,
               finals: [
                 expect.objectContaining({ candidateId: "preview-1", status: "done" }),
-                expect.objectContaining({ candidateId: "preview-2", status: "error" }),
+                expect.objectContaining({
+                  candidateId: "preview-2",
+                  status: "error",
+                  error: expect.objectContaining({
+                    details: expect.objectContaining({ noOp: true, recoverable: true }),
+                  }),
+                }),
               ],
             },
           },
         },
       });
 
-      generateImage.mockReset().mockResolvedValue({ promptId: "final-2" });
-      storeGeneratedImageMock.mockClear();
+      generateImage.mockReset().mockResolvedValue({ outputNodeId: "9", promptId: "final-2" });
+      storeGeneratedImageMock.mockReset().mockResolvedValue({
+        byteLength: 4,
+        contentType: "image/png",
+        filename: "stored-final-2.png",
+        url: "/api/comfyui/generated-images/stored-final-2.png",
+      });
       const retried = retryTimelineGenerationFrom(first, "comfyui-execution");
       const second = await executeTimelineGraph(retried, createTimelineT8ServerNodeAdapters());
 
       expect(generateImage).toHaveBeenCalledTimes(1);
       expect(generateImage).toHaveBeenCalledWith(
-        expect.objectContaining({ seed: 101, batchSize: 1, denoise: 0.5 }),
+        expect.objectContaining({ seed: 101, batchSize: 1, denoise: 0.65 }),
         { clientId: "timeline-timeline-t8-server-final-preview-2" },
       );
       expect(storeGeneratedImageMock).toHaveBeenCalledTimes(1);
@@ -1083,7 +1259,7 @@ describe("timeline T8 server adapters", () => {
     const generateImage = vi.fn().mockImplementation(() => {
       queueCount += 1;
       return queueCount <= successLimit
-        ? Promise.resolve({ promptId: `preview-${queueCount}` })
+        ? Promise.resolve({ outputNodeId: "9", promptId: `preview-${queueCount}` })
         : Promise.reject(new Error("preview failed"));
     });
     const getHistory = vi.fn().mockResolvedValue({ prompt: "history" });

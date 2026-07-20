@@ -22,11 +22,28 @@ import {
   type TimelineWorkflowState,
 } from "./types";
 
-const MAX_PREVIEW_DIMENSION = 512;
 const DIMENSION_MULTIPLE = 64;
-const MAX_PREVIEW_STEPS = 10;
-const FINAL_DENOISE = 0.5;
 const MAX_SEED = Number.MAX_SAFE_INTEGER;
+
+export type TimelineBalancedGenerationPolicy = {
+  family: "illustrious" | "anima" | "fallback";
+  finalDenoise: number;
+  previewLongestEdge: number;
+  previewStepCap: number;
+};
+
+export function getTimelineBalancedGenerationPolicy(
+  request: ComfyUiTextToImageRequest,
+): TimelineBalancedGenerationPolicy {
+  const baseModel = request.modelBaseModel?.trim().toLocaleLowerCase() ?? "";
+  if (request.workflowProfile === "anima" || baseModel.includes("anima")) {
+    return { family: "anima", finalDenoise: 0.65, previewLongestEdge: 768, previewStepCap: 18 };
+  }
+  if (typeof request.modelBaseModel === "string" && request.modelBaseModel.toLocaleLowerCase().includes("illustrious")) {
+    return { family: "illustrious", finalDenoise: 0.6, previewLongestEdge: 768, previewStepCap: 16 };
+  }
+  return { family: "fallback", finalDenoise: 0.65, previewLongestEdge: 768, previewStepCap: 16 };
+}
 
 export type TimelinePreviewExecutionProvider = (
   requests: Array<{ candidateId: string; index: number; request: ComfyUiTextToImageRequest; seed: number }>,
@@ -89,14 +106,14 @@ export function getTimelinePreviewCandidateCount(finalCount: number) {
   return Math.min(8, Math.max(4, normalizeTimelineImageCount(finalCount) * 2));
 }
 
-export function getTimelinePreviewDimensions(width: number, height: number) {
-  if (Math.max(width, height) <= MAX_PREVIEW_DIMENSION) {
+export function getTimelinePreviewDimensions(width: number, height: number, longestEdge = 768) {
+  if (Math.max(width, height) <= longestEdge) {
     return { width, height };
   }
-  const scale = MAX_PREVIEW_DIMENSION / Math.max(width, height);
+  const scale = longestEdge / Math.max(width, height);
   const floor = (value: number, finalValue: number) => Math.min(
     finalValue,
-    MAX_PREVIEW_DIMENSION,
+    longestEdge,
     Math.max(DIMENSION_MULTIPLE, Math.floor((value * scale) / DIMENSION_MULTIPLE) * DIMENSION_MULTIPLE),
   );
   return { width: floor(width, width), height: floor(height, height) };
@@ -198,10 +215,11 @@ export function createConfirmedTimelineComfyUiRequest(workflow: TimelineWorkflow
 
 export function createTimelinePreviewRequests(workflow: TimelineWorkflowState) {
   const formal = createConfirmedTimelineComfyUiRequest(workflow);
+  const policy = getTimelineBalancedGenerationPolicy(formal);
   const parameterResult = getParameterRecommendationResult(workflow);
   const finalCount = getTimelineFinalImageCount(workflow);
   const candidateCount = getTimelinePreviewCandidateCount(finalCount);
-  const dimensions = getTimelinePreviewDimensions(parameterResult.width, parameterResult.height);
+  const dimensions = getTimelinePreviewDimensions(parameterResult.width, parameterResult.height, policy.previewLongestEdge);
   const baseSeed = materializeBaseSeed(parameterResult, candidateCount);
   return Array.from({ length: candidateCount }, (_, index) => {
     const seed = baseSeed + index;
@@ -215,7 +233,7 @@ export function createTimelinePreviewRequests(workflow: TimelineWorkflowState) {
         imageWidth: dimensions.width,
         imageHeight: dimensions.height,
         seed,
-        steps: Math.min(formal.steps ?? parameterResult.steps, MAX_PREVIEW_STEPS),
+        steps: Math.min(formal.steps ?? parameterResult.steps, policy.previewStepCap),
         batchSize: 1,
         faceDetailer: { ...formal.faceDetailer, enabled: false },
         handDetailer: { ...formal.handDetailer, enabled: false },
@@ -239,6 +257,7 @@ function requireScoringResult(workflow: TimelineWorkflowState): PreviewScoringTi
 
 export function createTimelineFinalRequests(workflow: TimelineWorkflowState) {
   const formal = createConfirmedTimelineComfyUiRequest(workflow);
+  const policy = getTimelineBalancedGenerationPolicy(formal);
   const previews = requirePreviewResult(workflow);
   const scoring = requireScoringResult(workflow);
   const finalCount = previews.finalCount;
@@ -295,7 +314,7 @@ export function createTimelineFinalRequests(workflow: TimelineWorkflowState) {
         imageWidth: formal.width,
         imageHeight: formal.height,
         seed: candidate.seed,
-        denoise: FINAL_DENOISE,
+        denoise: policy.finalDenoise,
         batchSize: 1,
         preview: false,
       },

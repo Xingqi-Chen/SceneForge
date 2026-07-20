@@ -12,6 +12,7 @@ Summary:
 - Added deterministic pool/dimension/seed contracts, safe preview/final references, partial-final recovery, phase retry actions, legacy Run migration, and Detailed-mode exact-K reselection while leaving Story and Editor execution unchanged.
 - Reviewer hardening bound the HMAC confirmation contract to the workflow identity, split Simple generation into server-validated preview/scoring/final stages, and added strict typed restore validation for managed image references and structured scoring.
 - Restored scoring now recomputes fixed-weight totals and validates global ranking, AI Top-K selection, manual exact-K selection, and preview/final/result cross-node linkage before allowing continuation or display.
+- Live-quality follow-up added model-family Balanced previews (longest-edge 768, 16-step Illustrious/fallback or 18-step Anima caps), raised final img2img denoise to 0.60/0.65 by family, bound history reads to the queued output node, and turns unchanged fresh final hashes into recoverable rerenders.
 - Removed source-img2img's forced-one delivery behavior and documented the multimodal NSFW model requirement.
 
 Validation:

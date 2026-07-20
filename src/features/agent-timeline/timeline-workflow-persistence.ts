@@ -837,8 +837,8 @@ function sanitizePreviewExecutionResult(value: unknown) {
   const previewWidth = safeNonNegativeInteger(value.previewWidth);
   const previewSteps = safeNonNegativeInteger(value.previewSteps);
   if (!finalCount || finalCount > 4 || candidateCount !== expectedCandidateCount ||
-      value.candidates.length !== candidateCount || !previewHeight || previewHeight > 512 ||
-      !previewWidth || previewWidth > 512 || !previewSteps || previewSteps > 10) return undefined;
+      value.candidates.length !== candidateCount || !previewHeight || previewHeight > 768 ||
+      !previewWidth || previewWidth > 768 || !previewSteps || previewSteps > 18) return undefined;
   const candidates = value.candidates.slice(0, candidateCount).map((entry, fallbackIndex) => {
     const raw = isRecord(entry) ? entry : {};
     const index = safeNonNegativeInteger(raw.index);

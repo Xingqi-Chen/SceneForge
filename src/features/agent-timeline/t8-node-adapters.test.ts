@@ -364,11 +364,13 @@ describe("timeline T8 ComfyUI request conversion", () => {
   });
 
   it.each([
-    [1024, 1024, 512, 512],
-    [1536, 1024, 512, 320],
-    [1024, 1536, 320, 512],
-    [768, 1344, 256, 512],
+    [1024, 1024, 768, 768],
+    [1536, 1024, 768, 512],
+    [1024, 1536, 512, 768],
+    [768, 1344, 384, 768],
+    [4096, 128, 768, 64],
     [500, 257, 500, 257],
+    [63, 31, 63, 31],
   ])("scales %ix%i previews to exactly %ix%i", (width, height, previewWidth, previewHeight) => {
     expect(getTimelinePreviewDimensions(width, height)).toEqual({
       width: previewWidth,
@@ -386,9 +388,9 @@ describe("timeline T8 ComfyUI request conversion", () => {
     );
     expect(requests.every(({ request }) =>
       request.batchSize === 1 &&
-      request.steps === 10 &&
-      request.width === 512 &&
-      request.height === 512 &&
+      request.steps === 16 &&
+      request.width === 768 &&
+      request.height === 768 &&
       request.preview === true &&
       request.faceDetailer?.enabled === false &&
       request.handDetailer?.enabled === false
@@ -428,6 +430,111 @@ describe("timeline T8 ComfyUI request conversion", () => {
       request.sourceImageDataUrl === "data:image/png;base64,aGVsbG8=" && request.denoise === 0.72
     )).toBe(true);
   });
+
+  it.each([
+    ["Illustrious", "illustrious", 16, 0.6],
+    ["Anima", "anima", 18, 0.65],
+    ["Future XL", "future-profile", 16, 0.65],
+  ] as const)(
+    "applies balanced %s preview/final quality while inheriting formal sampler settings",
+    (modelBaseModel, promptProfile, previewSteps, finalDenoise) => {
+      let workflow = createConfirmedWorkflow(1, undefined, {
+        promptProfile: promptProfile as never,
+        detailers: {
+          faceDetailer: { enabled: true, detectorModelName: "bbox/face.pt", steps: 19 } as never,
+          handDetailer: { enabled: true, detectorModelName: "bbox/hand.pt", steps: 21 } as never,
+        },
+      });
+      const parameters = workflow.nodes["parameter-recommendation"].result as {
+        requestPreview: Record<string, unknown>;
+      } & Record<string, unknown>;
+      workflow = setTimelineNodeManualResult(workflow, "parameter-recommendation", {
+        ...parameters,
+        width: 1536,
+        height: 1024,
+        steps: 30,
+        cfg: 7.25,
+        samplerName: "dpmpp_2m",
+        scheduler: "karras",
+        seedPolicy: { mode: "fixed", seed: 321 },
+        requestPreview: {
+          ...parameters.requestPreview,
+          modelBaseModel,
+          width: 1536,
+          height: 1024,
+          steps: 30,
+          cfg: 7.25,
+          samplerName: "dpmpp_2m",
+          scheduler: "karras",
+        },
+      });
+      workflow = confirmTimelineGeneration(workflow);
+
+      const previewRequests = createTimelinePreviewRequests(workflow);
+      expect(previewRequests).toHaveLength(4);
+      expect(previewRequests.map((item) => item.seed)).toEqual([321, 322, 323, 324]);
+      expect(previewRequests.every(({ request }) =>
+        request.width === 768 && request.height === 512 && request.steps === previewSteps &&
+        request.cfg === 7.25 && request.samplerName === "dpmpp_2m" && request.scheduler === "karras" &&
+        request.faceDetailer?.enabled === false && request.handDetailer?.enabled === false
+      )).toBe(true);
+
+      workflow = setTimelineNodeManualResult(workflow, "preview-execution", {
+        baseSeed: 321,
+        candidateCount: 4,
+        finalCount: 1,
+        previewHeight: 512,
+        previewWidth: 768,
+        previewSteps,
+        candidates: previewRequests.map((item) => ({
+          candidateId: item.candidateId,
+          index: item.index,
+          seed: item.seed,
+          status: "done" as const,
+          storedImage: {
+            byteLength: item.index + 1,
+            contentType: "image/png",
+            filename: `preview-${item.index + 1}.png`,
+            url: `/api/comfyui/generated-images/preview-${item.index + 1}.png`,
+          },
+        })),
+        successfulCount: 4,
+        warnings: [],
+      });
+      workflow = setTimelineNodeManualResult(workflow, "preview-scoring", {
+        rubricVersion: 1,
+        scores: previewRequests.map((item) => ({
+          candidateId: item.candidateId,
+          adherence: 100 - item.index,
+          composition: 100 - item.index,
+          anatomy: 100 - item.index,
+          style: 100 - item.index,
+          technical: 100 - item.index,
+          total: 100 - item.index,
+          rank: item.index + 1,
+        })),
+        selectedCandidateIds: ["preview-1"],
+        selectionSource: "ai",
+      });
+
+      expect(createTimelineFinalRequests(workflow)).toMatchObject([{
+        candidateId: "preview-1",
+        seed: 321,
+        request: {
+          width: 1536,
+          height: 1024,
+          steps: 30,
+          cfg: 7.25,
+          samplerName: "dpmpp_2m",
+          scheduler: "karras",
+          denoise: finalDenoise,
+          faceDetailer: { enabled: true, detectorModelName: "bbox/face.pt", steps: 19 },
+          handDetailer: { enabled: true, detectorModelName: "bbox/hand.pt", steps: 21 },
+          preview: false,
+        },
+      }]);
+    },
+  );
 
   it("builds ranked Top-K final img2img requests from stored previews with formal settings", () => {
     let workflow = confirmTimelineGeneration(createConfirmedWorkflow(2));
@@ -469,14 +576,14 @@ describe("timeline T8 ComfyUI request conversion", () => {
         rank: 1,
         seed: 102,
         storedPreview: { filename: "preview-3.png" },
-        request: { batchSize: 1, denoise: 0.5, height: 1024, preview: false, seed: 102, steps: 30, width: 1024 },
+        request: { batchSize: 1, denoise: 0.65, height: 1024, preview: false, seed: 102, steps: 30, width: 1024 },
       },
       {
         candidateId: "preview-1",
         rank: 2,
         seed: 100,
         storedPreview: { filename: "preview-1.png" },
-        request: { batchSize: 1, denoise: 0.5, height: 1024, preview: false, seed: 100, steps: 30, width: 1024 },
+        request: { batchSize: 1, denoise: 0.65, height: 1024, preview: false, seed: 100, steps: 30, width: 1024 },
       },
     ]);
   });

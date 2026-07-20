@@ -130,11 +130,12 @@ async function applyTimelineStyleReference(
 async function waitForStoredImage(
   client: ReturnType<typeof makeClient>,
   promptId: string,
+  outputNodeId: string,
 ): Promise<{ sourceImage: NonNullable<TimelinePreviewCandidate["sourceImage"]>; storedImage: TimelineStoredGeneratedImage }> {
   const deadline = Date.now() + HISTORY_POLL_TIMEOUT_MS;
   while (Date.now() < deadline) {
     const raw = await client.getHistory(promptId);
-    const image = extractComfyUiHistoryImages(raw, promptId)[0];
+    const image = extractComfyUiHistoryImages(raw, promptId).find((candidate) => candidate.nodeId === outputNodeId);
     if (image) {
       const response = await fetch(client.buildViewUrl(image), {
         cache: "no-store",
@@ -161,8 +162,8 @@ async function waitForStoredImage(
     if (isComfyUiPromptHistoryComplete(raw, promptId)) {
       throw new TimelineNodeExecutionError(createTimelineNodeError(
         "comfyui_execution_failed",
-        "ComfyUI completed without a returned image.",
-        { promptId },
+        "ComfyUI completed without an image from the expected output node.",
+        { outputNodeId, promptId },
       ));
     }
     await delay(HISTORY_POLL_INTERVAL_MS);
@@ -209,7 +210,7 @@ async function queueAndStore(
       ));
     }
     const queued = await client.generateImage(objectValidation.request, { clientId: readClientId(context, suffix) });
-    const image = await waitForStoredImage(client, queued.promptId);
+    const image = await waitForStoredImage(client, queued.promptId, queued.outputNodeId);
     return { ...image, promptId: queued.promptId, warnings: objectValidation.warnings };
   } catch (error) {
     throw toComfyError(error);
@@ -292,6 +293,16 @@ async function storedImageDataUrl(stored: TimelineStoredGeneratedImage) {
       "Stored preview image could not be read. Retry preview generation.",
     ));
   }
+}
+
+function haveSameManagedImageContent(
+  left: TimelineStoredGeneratedImage,
+  right: TimelineStoredGeneratedImage,
+) {
+  const contentHash = (filename: string) => /^([a-f0-9]{32})\.[a-z0-9]+$/i.exec(filename)?.[1]?.toLocaleLowerCase();
+  const leftHash = contentHash(left.filename);
+  const rightHash = contentHash(right.filename);
+  return left.filename === right.filename || Boolean(leftHash && rightHash && leftHash === rightHash);
 }
 
 function parseJsonObject(content: string): Record<string, unknown> {
@@ -449,6 +460,18 @@ async function executeFinals(
     try {
       const request = { ...item.request, sourceImageDataUrl: await storedImageDataUrl(item.storedPreview) };
       const result = await queueAndStore(client, objectInfo, request, context, `final-${item.candidateId}`);
+      if (haveSameManagedImageContent(result.storedImage, item.storedPreview)) {
+        throw new TimelineNodeExecutionError(createTimelineNodeError(
+          "comfyui_execution_failed",
+          "Final generation returned the unchanged preview image. Retry this selection.",
+          {
+            candidateId: item.candidateId,
+            noOp: true,
+            previewFilename: item.storedPreview.filename,
+            recoverable: true,
+          },
+        ));
+      }
       warnings.push(...result.warnings);
       finals.push({
         candidateId: item.candidateId,

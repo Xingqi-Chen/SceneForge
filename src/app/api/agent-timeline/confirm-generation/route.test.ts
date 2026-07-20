@@ -497,10 +497,19 @@ describe("POST /api/agent-timeline/confirm-generation", () => {
     expect(comfyUiMocks.createComfyUiClient).not.toHaveBeenCalled();
   });
 
-  it("continues scoring without regenerating an already completed preview stage", async () => {
+  it("continues scoring without invalidating a real temp preview whose ComfyUI subfolder is empty", async () => {
     vi.stubEnv("LITELLM_VISION_MODEL", "");
     vi.stubEnv("LITELLM_DEFAULT_MODEL", "");
     const workflow = createSignedWorkflowWithCompletedPreviews(1);
+    const preview = workflow.nodes["preview-execution"].result as {
+      candidates: Array<Record<string, unknown>>;
+    };
+    preview.candidates[0]!.sourceImage = {
+      filename: "ComfyUI_temp_00001_.png",
+      subfolder: "",
+      type: "temp",
+      nodeId: "23",
+    };
 
     const response = await POST(new Request("http://localhost/api/agent-timeline/confirm-generation", {
       body: JSON.stringify({
@@ -515,7 +524,20 @@ describe("POST /api/agent-timeline/confirm-generation", () => {
     expect(response.status).toBe(200);
     expect(payload.workflow.nodes["preview-execution"]).toMatchObject({
       status: "done",
-      result: { successfulCount: 4 },
+      result: {
+        successfulCount: 4,
+        candidates: expect.arrayContaining([
+          expect.objectContaining({
+            candidateId: "preview-1",
+            status: "done",
+            sourceImage: {
+              filename: "ComfyUI_temp_00001_.png",
+              type: "temp",
+              nodeId: "23",
+            },
+          }),
+        ]),
+      },
     });
     expect(payload.workflow.nodes["preview-scoring"]).toMatchObject({
       status: "error",

@@ -184,10 +184,10 @@ Workflow project management UI is a separate follow-up track. It should provide 
 
 ### Run preview selection
 
-- Preview requests use batch size 1, at most 10 steps, Detailers disabled, and longest-edge 512 dimensions floored to 64-pixel multiples only when downscaling.
+- Preview requests use batch size 1, Detailers disabled, and model-family Balanced settings: Illustrious/fallback cap formal steps at 16, Anima caps them at 18, and all use longest-edge 768 dimensions floored to 64-pixel multiples only when downscaling. Inputs already within that bound are never upscaled.
 - Vision scoring compares every successful current-round preview in one request. Scene adherence, composition, anatomy/structure, style/identity, and technical quality use fixed local weights of 30/25/20/15/10 percent.
 - Ordinary scoring uses the Vision model with default fallback. NSFW scoring requires the multimodal NSFW model and must never fall back to an ordinary model.
-- The selected Top-K previews are rendered independently at formal settings with their candidate seeds, enabled Detailers, and internal denoise 0.50. Detailed mode may override the selection with exactly K successful candidates.
+- The selected Top-K previews are rendered independently at formal settings with their candidate seeds and enabled Detailers. Internal final denoise is 0.60 for Illustrious and 0.65 for Anima or unknown/default fallback. A fresh final whose managed content hash is unchanged from its preview is a recoverable failure and must rerender on retry. Detailed mode may override the selection with exactly K successful candidates.
 - Settings are outside the main workflow and include NSFW plus required path/integration configuration.
 - After the scoped persistence/autosave track lands, timeline workflow state survives expected Run and Settings navigation according to its durable storage contract.
 - After the follow-up project management track lands, saved timeline workflow projects can be found and managed through visible project management UI comparable to the editor.

@@ -667,6 +667,56 @@ describe("timeline workflow persistence", () => {
     expect(serialized).not.toContain("C:\\private");
   });
 
+  it("round-trips real ComfyUI temp preview references with an empty subfolder", () => {
+    const workflow = createPersistedV2GenerationWorkflow(2);
+    const preview = workflow.nodes["preview-execution"].result as {
+      candidates: Array<Record<string, unknown>>;
+    };
+    preview.candidates.forEach((candidate, index) => {
+      candidate.sourceImage = {
+        filename: `ComfyUI_temp_0000${index + 1}_.png`,
+        subfolder: index % 2 === 0 ? "" : "   ",
+        type: "temp",
+        nodeId: String(20 + index),
+      };
+    });
+    const record = createTimelineWorkflowRecord({
+      workflow,
+      sceneRequest: "A persisted real ComfyUI temp preview Run",
+      selectedPromptProfile: "illustrious",
+      selectedImageCount: 2,
+      selectedNodeId: "preview-execution",
+    });
+    const restored = parseTimelineWorkflowRecordJson(serializeTimelineWorkflowRecord(record));
+    expect(restored && isSingleImageTimelineWorkflowRecord(restored)).toBe(true);
+    if (!restored || !isSingleImageTimelineWorkflowRecord(restored)) throw new Error("Expected a single-image Run record.");
+
+    expect(restored.workflow.nodes["preview-execution"]).toMatchObject({
+      status: "done",
+      result: {
+        successfulCount: 4,
+        candidates: expect.arrayContaining([
+          expect.objectContaining({
+            candidateId: "preview-1",
+            status: "done",
+            sourceImage: {
+              filename: "ComfyUI_temp_00001_.png",
+              type: "temp",
+              nodeId: "20",
+            },
+          }),
+        ]),
+      },
+    });
+    const restoredPreview = restored.workflow.nodes["preview-execution"].result as {
+      candidates: Array<{ sourceImage?: { subfolder?: string } }>;
+    };
+    expect(restoredPreview.candidates.every((candidate) => candidate.sourceImage?.subfolder === undefined)).toBe(true);
+    expect(restored.workflow.nodes["preview-scoring"].status).toBe("done");
+    expect(restored.workflow.nodes["comfyui-execution"].status).toBe("done");
+    expect(restored.workflow.nodes["result-display"].status).toBe("done");
+  });
+
   it.each([
     ["path traversal", (candidate: Record<string, unknown>) => {
       candidate.storedImage = {

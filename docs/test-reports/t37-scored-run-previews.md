@@ -5,7 +5,7 @@
 - Scope source: Track `T37`, GitHub Issue `#133`.
 - Branch: `issue-133-scored-run-previews`.
 - Date: 2026-07-20.
-- Result: the focused matrix, relevant timeline/API/LLM regressions, full Vitest suite, TypeScript, lint, and production build passed after Fix Loop 6 closed persisted scoring semantic-integrity boundaries.
+- Result: the focused matrix, relevant timeline/API/LLM regressions, full Vitest suite, TypeScript, lint, and production build passed after Fix Loop 8 restored compatibility with real ComfyUI empty-subfolder image references.
 
 ## Automated Coverage Added
 
@@ -183,6 +183,66 @@ Post-fix evidence:
 5. `npm run build`
    - PASS: Next.js production build, TypeScript, page-data collection, and 46 static pages.
 6. `git diff --check`
+   - PASS; only line-ending notices were printed.
+
+## Fix Loop 7
+
+The model-family quality policy and final-output integrity follow-up passed:
+
+- Illustrious uses 768px longest-edge previews, a 16-step cap, and 0.60 final denoise. Anima uses 768/18/0.65; unknown models safely fall back to 768/16/0.65.
+- Preview resizing preserves aspect ratio on a 64px grid after downscaling, floors extreme short edges at 64px, and does not upscale inputs already below the longest-edge limit.
+- Preview and final requests retain the reviewed sampler, scheduler, CFG, and materialized seed. Detailers are disabled only for preview candidates and restored for the final request.
+- When ComfyUI history contains multiple output nodes, only the image matching the queued `outputNodeId` is fetched and stored. Completed history without that target fails recoverably rather than selecting another node.
+- A fresh final whose filename is identical to its preview, or whose managed filename carries the same content hash under another extension, fails recoverably as a no-op. Retrying queues that missing selection again and succeeds only with changed content.
+- Retry preserves prior legitimate done finals while rerendering only the no-op/missing selection.
+
+Post-fix evidence:
+
+1. Focused T37/API/UI/persistence matrix:
+   - `npx vitest run src/features/agent-timeline/t37-preview-scoring.test.ts src/features/agent-timeline/timeline-workflow-persistence.test.ts src/app/api/agent-timeline/confirm-generation/route.test.ts src/features/agent-timeline/components/TimelineShell.test.tsx src/features/agent-timeline/t8-node-adapters.test.ts src/features/agent-timeline/t8-server-adapters.test.ts src/features/agent-timeline/workflow-definition.test.ts src/features/agent-timeline/workflow.test.ts src/features/agent-timeline/components/TimelinePreviewWorkspace.test.tsx`
+   - PASS: 9 files, 213 tests.
+2. Related timeline/API/LLM/generated-image/history suite:
+   - `npx vitest run src/features/agent-timeline src/app/api/agent-timeline src/app/api/llm/chat/route.test.ts src/features/llm src/features/comfyui/generated-image-storage.test.ts src/features/comfyui/history.test.ts`
+   - PASS: 45 files, 546 tests.
+3. Full suite:
+   - `npm test`
+   - PASS: 129 files, 1184 tests.
+4. `npm run typecheck`
+   - PASS.
+5. `npm run lint`
+   - PASS with 0 errors and 23 pre-existing warnings.
+6. `npm run build`
+   - PASS: Next.js production build, TypeScript, page-data collection, and 46 static pages.
+7. `git diff --check`
+   - PASS; only line-ending notices were printed.
+
+## Fix Loop 8
+
+The live-Run empty-subfolder regression is closed without weakening path safety:
+
+- `normalizeComfyUiViewImageReference` treats `subfolder: ""` and whitespace-only subfolders as absent, matching real ComfyUI temp/output history references.
+- A real-shaped reference such as `{ filename: "ComfyUI_temp_00001_.png", subfolder: "", type: "temp", nodeId: "23" }` remains a done preview through persistence serialization/restore and the staged confirmation API sanitizer.
+- Empty or whitespace-only filenames, filename paths, absolute and drive-prefixed subfolders, colons, parent traversal, and empty path segments remain rejected.
+- Restored preview scoring, final execution, and result display remain done when every persisted reference is otherwise valid.
+
+Post-fix evidence:
+
+1. Focused empty-subfolder regression:
+   - `npx vitest run src/features/comfyui/generated-image-reference.test.ts src/features/agent-timeline/timeline-workflow-persistence.test.ts src/app/api/agent-timeline/confirm-generation/route.test.ts`
+   - PASS: 3 files, 92 tests.
+2. Extended T37 focused matrix:
+   - `npx vitest run src/features/comfyui/generated-image-reference.test.ts src/features/agent-timeline/t37-preview-scoring.test.ts src/features/agent-timeline/timeline-workflow-persistence.test.ts src/app/api/agent-timeline/confirm-generation/route.test.ts src/features/agent-timeline/components/TimelineShell.test.tsx src/features/agent-timeline/t8-node-adapters.test.ts src/features/agent-timeline/t8-server-adapters.test.ts src/features/agent-timeline/workflow-definition.test.ts src/features/agent-timeline/workflow.test.ts src/features/agent-timeline/components/TimelinePreviewWorkspace.test.tsx`
+   - PASS: 10 files, 226 tests.
+3. Full suite:
+   - `npm test`
+   - PASS: 130 files, 1197 tests.
+4. `npm run typecheck`
+   - PASS.
+5. `npm run lint`
+   - PASS with 0 errors and 23 pre-existing warnings.
+6. `npm run build`
+   - PASS: Next.js production build, TypeScript, page-data collection, and 46 static pages.
+7. `git diff --check`
    - PASS; only line-ending notices were printed.
 
 ## Manual QA Still Needed
