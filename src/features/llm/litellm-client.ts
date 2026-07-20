@@ -43,6 +43,7 @@ function summarizeContentForLog(content: LlmChatContent): string | Array<Record<
 
 /** Safe structured summary for logs (no raw image bytes). */
 export function summarizeLlmChatRequestForLog(request: LlmChatRequest): Record<string, unknown> {
+  const redactContent = request.purpose === "single-image-preview-scoring";
   return {
     model: request.model ?? "(default)",
     nsfw: request.nsfw,
@@ -51,7 +52,17 @@ export function summarizeLlmChatRequestForLog(request: LlmChatRequest): Record<s
     messageCount: request.messages.length,
     messages: request.messages.map((message: LlmChatMessage) => ({
       role: message.role,
-      content: summarizeContentForLog(message.content),
+      content: redactContent
+        ? typeof message.content === "string"
+          ? { type: "text", length: message.content.length }
+          : message.content.map((part) => part.type === "text"
+              ? { type: "text", length: part.text.length }
+              : {
+                  type: "image_url",
+                  detail: part.image_url.detail ?? "auto",
+                  dataUrlChars: part.image_url.url.length,
+                })
+        : summarizeContentForLog(message.content),
     })),
   };
 }
@@ -418,7 +429,9 @@ export function createLiteLlmClient(options: LiteLlmClientOptions) {
         model: completion.model,
         role: completion.role,
         contentChars: completion.content.length,
-        contentPreview: truncateForLog(completion.content, 280),
+        ...(request.purpose === "single-image-preview-scoring"
+          ? { contentRedacted: true }
+          : { contentPreview: truncateForLog(completion.content, 280) }),
         finishReason: completion.finishReason,
         usage: completion.usage,
       });

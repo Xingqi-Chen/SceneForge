@@ -43,7 +43,7 @@ The MVP is a single-scene Run workflow with these boundaries:
 
 - Initial screen: only a scene request input, a start button, and a settings entry point.
 - Workflow display: a vertical timeline of nodes from top to bottom.
-- Generation scope: one scene request at a time, with one to four text-to-image outputs or one image-to-image output.
+- Generation scope: one scene request at a time, with one to four final outputs for text-to-image or image-to-image.
 - Character scope: one primary character in the 3D canvas. Additional people in the input may be represented as prompt or scene context until a later multi-character track.
 - Orchestration: LangGraph owns node execution, dependency edges, parallelism, stale downstream regeneration, and errors.
 - LLM access: reuse existing LLM interfaces through graph-friendly adapters; do not add a bespoke LLM path unless an existing interface cannot support the node.
@@ -108,8 +108,10 @@ Active autosave and named workflows persist the normalized explicit resource ids
 | Checkpoint and LoRA | Prompt data, tags, action, NSFW setting, local Civitai candidates | Selected checkpoint, LoRAs, reasons, suggested weights | Scene prompt, character tags, character action, settings/resources | Re-select checkpoint or LoRAs from local candidate UI | Re-run recommendation with style/model preference |
 | Generation parameters | Prompt draft, selected resources, settings | Width, height, steps, cfg, sampler, scheduler, denoise, seed policy, negative additions | Checkpoint and LoRA, prompt data, canvas summary | Edit parameters with existing controls | Re-run parameter node with quality/speed/aspect guidance |
 | Start image generation | Prompt, resources, parameters, canvas summary | Confirmed ComfyUI request preview | Previous nodes done or manual | Click start image generation | AI may explain risk or suggest final adjustment, but must not call ComfyUI |
-| ComfyUI execution | Confirmed request | Queue metadata, execution status | Start image generation confirmation | Retry or cancel where supported | Existing diagnosis helpers on failure |
-| Result display | ComfyUI output | One to four text-to-image results or one image-to-image result, metadata, reusable prompt and parameters | ComfyUI execution | Save, copy prompt, or return to upstream nodes | Use result feedback to re-enter upstream nodes |
+| Preview execution | Confirmed request | Four to eight low-cost candidate references and seeds | Start image generation confirmation | Retry the preview round | Retain successful safe references when fewer than K complete |
+| Preview scoring | Successful previews | Fixed-rubric scores, ranking, and Top-K selection | At least K previews | Retry scoring or manually choose exactly K in Detailed mode | Send one safe schema-repair retry, then fail closed |
+| ComfyUI execution | Selected previews | One independent second-pass result per selection | Preview scoring | Retry missing or failed finals | Preserve successful finals across retry |
+| Result display | Completed finals | One to four final images, metadata, and candidate linkage | All K final executions | Save, copy prompt, or return to upstream nodes | Use result feedback to re-enter upstream nodes |
 
 ## Dependency and Regeneration Rules
 
@@ -173,12 +175,21 @@ Workflow project management UI is a separate follow-up track. It should provide 
 - Generation parameters use existing ComfyUI-style controls and can be manually edited.
 - LangGraph drives node execution, dependencies, stale state, and regeneration.
 - Timeline stops before ComfyUI execution until explicit user confirmation.
-- Clicking start image generation advances to confirmation-gated ComfyUI execution and displays one to four text-to-image results or one image-to-image result.
+- Clicking start image generation authorizes preview generation, structured scoring, and the selected second-pass renders; it displays one to four final results for txt2img or img2img.
 - Simple and detailed Run modes edit the same Scene Composer resource, parameter, and Detailer settings.
 - Explicit ready local resources bypass AI resource recommendation; saved parameters require a checkpoint and bypass AI parameter recommendation; absent manual settings preserve the existing AI paths.
 - FaceDetailer and HandDetailer remain independent user controls, are not controlled by AI, and default disabled for legacy workflow records.
 - Post-start resource edits stale from `resource-recommendation`; parameter or Detailer edits stale from `parameter-recommendation`; both reset generation confirmation without invalidating unrelated prompt, tag, pose, or canvas results.
-- Text-to-image output count remains one to four, while an image-to-image source forces one output and takes precedence for dimensions and denoise.
+- Final output count remains one to four for both text-to-image and image-to-image. K maps to 4/4/6/8 previews; an image-to-image source takes precedence for preview dimensions and denoise.
+
+### Run preview selection
+
+- Preview requests use batch size 1, Detailers disabled, and model-family Balanced settings with `min(formal steps, 20)` for every Run profile. Inputs above longest-edge 768 are reduced to the largest exact-formal-aspect dimensions that fit the limit and align both axes to 8 pixels; axes are never rounded independently or stretched. Inputs already within the limit remain unchanged and are never upscaled. An extreme ratio with no exact 8-pixel-aligned downscale inside the limit fails with an actionable validation error. Initial fixed-seed execution starts at the formal seed; retrying preview execution advances from the retained base seed by the candidate count with safe maximum-seed wraparound, so consecutive retries use non-overlapping windows. Random policy always materializes a fresh base seed.
+- High-detail Vision scoring compares every successful current-round preview in one request. All 4/6/8 candidates stay in that single comparative request, but each managed preview is transcoded only in memory to a quality-85 JPEG with longest edge at most 768 for provider-compatible bounded payloads; this never replaces or persists over the preview used by final rendering. The model returns defect-category strings; SceneForge derives eligibility locally, accepts finite 0-100 numeric strings, and normalizes only case/space/hyphen variants that map exactly to an allowed category. Missing or unknown defects and incomplete candidate coverage still fail closed. Blocking eligibility is rare and limited to major anatomy/structural failure that makes the render unusable, unmistakable physical impossibility/contradiction that makes it unusable, or catastrophic exposure/technical corruption. Missing prompt details, prop/contact omissions, character appearance mismatch, gaze/action mismatch, and subject scale/framing mismatch normally reduce adherence, composition, style, or technical scores instead of blocking; supported soft categories remain visible as annotations. Candidates retain the fixed scene-adherence, composition, anatomy/structure, style/identity, and technical-quality weights of 30/25/20/15/10 percent.
+- A malformed first scoring response receives one bounded schema-repair instruction containing only a safe validation reason. Final error details distinguish malformed schema from upstream failure and never include raw responses, prompts, image data, or secrets.
+- AI Top-K ranks eligible candidates first, followed by ineligible candidates using the same weighted total, composition, and stable candidate order. If fewer than K are eligible, the exact Top-K is filled with the highest-ranked annotated fallback candidates and scoring persists safe `eligibleCount`, `fallbackCandidateIds`, and a visible warning instead of ending the workflow. Detailed-mode manual reselection accepts any exact-K successful scored candidates, including an explicit annotated fallback; rubric-v1 remains read-only.
+- Ordinary scoring uses the Vision model with default fallback. NSFW scoring requires the multimodal NSFW model and must never fall back to an ordinary model.
+- The selected Top-K previews are rendered independently at formal settings with their candidate seeds and enabled Detailers. Internal final denoise is 0.60 for Illustrious and 0.65 for Anima or unknown/default fallback. A fresh final whose managed content hash is unchanged from its preview is a recoverable failure and must rerender on retry. Detailed mode may override the selection with exactly K successful candidates.
 - Settings are outside the main workflow and include NSFW plus required path/integration configuration.
 - After the scoped persistence/autosave track lands, timeline workflow state survives expected Run and Settings navigation according to its durable storage contract.
 - After the follow-up project management track lands, saved timeline workflow projects can be found and managed through visible project management UI comparable to the editor.

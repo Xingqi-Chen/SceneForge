@@ -11,10 +11,167 @@ import {
   isSingleImageTimelineWorkflowRecord,
   parseTimelineWorkflowRecordJson,
   sanitizeTimelineWorkflowRecord,
+  sanitizeTimelineWorkflowState,
   serializeTimelineWorkflowRecord,
 } from "./timeline-workflow-persistence";
 import { startStoryGraphWorkflow } from "./story-input";
 import { sanitizeRunSceneInputSettingsSnapshot } from "./run-input-settings";
+import { createTimelineFinalRequests } from "./t8-node-adapters";
+import type { TimelineWorkflowState } from "./types";
+
+const managedPreviewFilename = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png";
+const managedFinalFilename = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.png";
+
+function managedStoredImage(hex: string) {
+  const filename = `${hex.repeat(32)}.png`;
+  return {
+    byteLength: 128,
+    contentType: "image/png",
+    filename,
+    url: `/api/comfyui/generated-images/${filename}`,
+  };
+}
+
+function createPersistedV2GenerationWorkflow(finalCount = 2) {
+  let workflow = createTimelineWorkflowState({
+    workflowId: `persisted-v2-${finalCount}`,
+    sceneRequest: "A persisted scored-preview Run",
+    imageCount: finalCount,
+  });
+  workflow = completeTimelineNode(workflow, "scene-prompt", { positivePrompt: "persisted scene" }, "ai");
+  workflow = completeTimelineNode(workflow, "character-tags", { items: [] }, "ai");
+  workflow = completeTimelineNode(workflow, "character-action", { action: "standing" }, "ai");
+  workflow = completeTimelineNode(workflow, "canvas-binding", { spatialSummary: "centered" }, "system");
+  workflow = completeTimelineNode(workflow, "resource-recommendation", {
+    checkpoint: { resource: { id: "checkpoint-a", modelFileName: "local.safetensors" } },
+    loras: [],
+  }, "ai");
+  workflow = completeTimelineNode(workflow, "parameter-recommendation", {
+    width: 1024,
+    height: 1024,
+    steps: 24,
+    cfg: 6,
+    samplerName: "euler",
+    scheduler: "normal",
+    denoise: 1,
+    seedPolicy: { mode: "fixed", seed: 100 },
+    requestPreview: {
+      batchSize: 1,
+      checkpointName: "local.safetensors",
+      positivePrompt: "persisted scene",
+      steps: 24,
+      width: 1024,
+      height: 1024,
+    },
+  }, "system");
+  const candidateCount = Math.min(8, Math.max(4, finalCount * 2));
+  const candidates = Array.from({ length: candidateCount }, (_, index) => ({
+    candidateId: `preview-${index + 1}`,
+    index,
+    seed: 100 + index,
+    status: "done" as const,
+    promptId: `preview-prompt-${index + 1}`,
+    sourceImage: { filename: `preview-output-${index + 1}.png`, nodeId: "9", type: "output" },
+    storedImage: managedStoredImage((index + 1).toString(16)),
+  }));
+  const selected = candidates.slice(0, finalCount);
+  const scores = candidates.map((candidate, index) => ({
+    candidateId: candidate.candidateId,
+    adherence: 100 - index,
+    composition: 100 - index,
+    anatomy: 100 - index,
+    style: 100 - index,
+    technical: 100 - index,
+    total: 100 - index,
+    criticalDefects: [],
+    eligible: true,
+    rank: index + 1,
+  }));
+  const finals = selected.map((candidate, index) => ({
+    candidateId: candidate.candidateId,
+    seed: candidate.seed,
+    rank: index + 1,
+    status: "done" as const,
+    promptId: `final-prompt-${index + 1}`,
+    sourceImage: { filename: `final-output-${index + 1}.png`, nodeId: "9", type: "output" },
+    storedImage: managedStoredImage((index + 9).toString(16)),
+  }));
+  workflow = completeTimelineNode(workflow, "preview-execution", {
+    baseSeed: 100,
+    candidateCount,
+    finalCount,
+    previewHeight: 768,
+    previewWidth: 768,
+    previewSteps: 20,
+    candidates,
+    successfulCount: candidateCount,
+    warnings: [],
+  }, "system");
+  workflow = completeTimelineNode(workflow, "preview-scoring", {
+    rubricVersion: 2,
+    scores,
+    selectedCandidateIds: selected.map((candidate) => candidate.candidateId),
+    selectionSource: "ai",
+  }, "ai");
+  workflow = completeTimelineNode(workflow, "comfyui-execution", {
+    completed: true,
+    finalCount,
+    finals,
+    request: { checkpointName: "local.safetensors", positivePrompt: "persisted scene" },
+    warnings: [],
+  }, "system");
+  workflow = completeTimelineNode(workflow, "result-display", {
+    completed: true,
+    image: { ...finals[0]!.sourceImage, url: finals[0]!.storedImage.url },
+    images: finals.map((item) => ({ ...item.sourceImage, url: item.storedImage.url })),
+    promptId: finals[0]!.promptId,
+    sourceImage: finals[0]!.sourceImage,
+    sourceImages: finals.map((item) => item.sourceImage),
+    storedImage: finals[0]!.storedImage,
+    storedImages: finals.map((item) => item.storedImage),
+    warnings: [],
+    finalLinks: finals.map((item) => ({
+      candidateId: item.candidateId,
+      promptId: item.promptId,
+      rank: item.rank,
+      seed: item.seed,
+    })),
+  }, "system");
+  return {
+    ...workflow,
+    generationConfirmed: true,
+    nodes: {
+      ...workflow.nodes,
+      "generation-gate": {
+        nodeId: "generation-gate" as const,
+        status: "manual" as const,
+        source: "manual" as const,
+        updatedAt: workflow.updatedAt,
+        result: {
+          confirmationRequired: false,
+          confirmed: true,
+          confirmationFingerprint: `hmac-sha256:${"a".repeat(64)}`,
+        },
+      },
+    },
+  } satisfies TimelineWorkflowState;
+}
+
+type MutablePersistedPreviewScore = Record<string, unknown>;
+
+type MutablePersistedPreviewScoring = {
+  eligibleCount?: unknown;
+  fallbackCandidateIds?: unknown;
+  rubricVersion: unknown;
+  scores: MutablePersistedPreviewScore[];
+  selectedCandidateIds: unknown[];
+  selectionWarning?: unknown;
+  selectionSource: unknown;
+};
+
+function getMutablePersistedPreviewScoring(workflow: TimelineWorkflowState) {
+  return workflow.nodes["preview-scoring"].result as MutablePersistedPreviewScoring;
+}
 
 const readyStyleReference = {
   status: "ready",
@@ -372,7 +529,7 @@ describe("timeline workflow persistence", () => {
 
     expect(serialized.match(/data:image\/png;base64,aGVsbG8=/g) ?? []).toHaveLength(1);
     expect(parsed?.workflow.nodes["scene-input"].result).toMatchObject({
-      imageCount: 1,
+      imageCount: 4,
       sourceImage: {
         dataUrl: sourceImageDataUrl,
         filename: "source.png",
@@ -393,6 +550,989 @@ describe("timeline workflow persistence", () => {
     expect(parsed?.workflow.nodes["parameter-recommendation"].result).not.toHaveProperty(
       "requestPreview.sourceImageDataUrl",
     );
+  });
+
+  it("round-trips v2 preview and final references separately while redacting unsafe payloads", () => {
+    let workflow = createTimelineWorkflowState({
+      workflowId: "timeline-v2-previews",
+      sceneRequest: "A scored preview run",
+      imageCount: 1,
+    });
+    workflow = completeTimelineNode(workflow, "preview-execution", {
+      baseSeed: 5,
+      candidateCount: 4,
+      finalCount: 1,
+      previewHeight: 512,
+      previewWidth: 512,
+      previewSteps: 10,
+      successfulCount: 4,
+      candidates: [
+        {
+          candidateId: "preview-1",
+          index: 0,
+          seed: 5,
+          status: "done",
+          promptId: "preview-prompt",
+          sourceImage: {
+            filename: "preview-output.png",
+            nodeId: "9",
+            type: "output",
+          },
+          storedImage: {
+            byteLength: 3,
+            contentType: "image/png",
+            filename: managedPreviewFilename,
+            url: `/api/comfyui/generated-images/${managedPreviewFilename}`,
+          },
+          imageBytes: "data:image/png;base64,SECRET_PREVIEW",
+          apiKey: "SECRET_API_KEY",
+          downloadedModelPath: "C:\\private\\model.safetensors",
+        },
+        ...[2, 3, 4].map((number, index) => ({
+          candidateId: `preview-${number}`,
+          index: index + 1,
+          seed: 5 + number - 1,
+          status: "done",
+          promptId: `preview-prompt-${number}`,
+          sourceImage: {
+            filename: `preview-output-${number}.png`,
+            nodeId: "9",
+            type: "output",
+          },
+          storedImage: managedStoredImage(number.toString(16)),
+        })),
+      ],
+      warnings: [],
+    }, "system");
+    workflow = completeTimelineNode(workflow, "preview-scoring", {
+      rubricVersion: 1,
+      scores: [1, 2, 3, 4].map((number) => ({
+        candidateId: `preview-${number}`,
+        adherence: 91 - number,
+        composition: 91 - number,
+        anatomy: 91 - number,
+        style: 91 - number,
+        technical: 91 - number,
+        total: 91 - number,
+        rank: number,
+      })),
+      selectedCandidateIds: ["preview-1"],
+      selectionSource: "ai",
+    }, "ai");
+    workflow = completeTimelineNode(workflow, "comfyui-execution", {
+      completed: true,
+      finalCount: 1,
+      finals: [{
+        candidateId: "preview-1",
+        rank: 1,
+        seed: 5,
+        status: "done",
+        promptId: "final-prompt",
+        sourceImage: {
+          filename: "final-output.png",
+          nodeId: "9",
+          type: "output",
+        },
+        storedImage: {
+          byteLength: 4,
+          contentType: "image/png",
+          filename: managedFinalFilename,
+          url: `/api/comfyui/generated-images/${managedFinalFilename}`,
+        },
+      }],
+      request: { positivePrompt: "safe prompt" },
+      warnings: [],
+      workflow: { secretNode: { class_type: "SaveImage" } },
+    }, "system");
+
+    const record = createTimelineWorkflowRecord({
+      workflow,
+      sceneRequest: "A scored preview run",
+      selectedPromptProfile: "illustrious",
+      selectedImageCount: 1,
+      selectedNodeId: "preview-scoring",
+    });
+    const serialized = serializeTimelineWorkflowRecord(record);
+    const restored = parseTimelineWorkflowRecordJson(serialized);
+    expect(restored && isSingleImageTimelineWorkflowRecord(restored)).toBe(true);
+    if (!restored || !isSingleImageTimelineWorkflowRecord(restored)) throw new Error("Expected v2 Run record.");
+
+    expect(restored.definitionVersion).toBe(2);
+    expect(restored.workflow.nodes["preview-execution"].result).toMatchObject({
+      candidates: expect.arrayContaining([
+        expect.objectContaining({ storedImage: expect.objectContaining({ filename: managedPreviewFilename }) }),
+      ]),
+    });
+    expect(restored.workflow.nodes["comfyui-execution"].result).toMatchObject({
+      finals: [expect.objectContaining({ candidateId: "preview-1", storedImage: expect.objectContaining({ filename: managedFinalFilename }) })],
+    });
+    expect(restored.workflow.nodes["comfyui-execution"].result).not.toHaveProperty("workflow");
+    expect(serialized).not.toContain("SECRET_PREVIEW");
+    expect(serialized).not.toContain("SECRET_API_KEY");
+    expect(serialized).not.toContain("C:\\private");
+  });
+
+  it("round-trips real ComfyUI temp preview references with an empty subfolder", () => {
+    const workflow = createPersistedV2GenerationWorkflow(2);
+    const preview = workflow.nodes["preview-execution"].result as {
+      candidates: Array<Record<string, unknown>>;
+    };
+    preview.candidates.forEach((candidate, index) => {
+      candidate.sourceImage = {
+        filename: `ComfyUI_temp_0000${index + 1}_.png`,
+        subfolder: index % 2 === 0 ? "" : "   ",
+        type: "temp",
+        nodeId: String(20 + index),
+      };
+    });
+    const record = createTimelineWorkflowRecord({
+      workflow,
+      sceneRequest: "A persisted real ComfyUI temp preview Run",
+      selectedPromptProfile: "illustrious",
+      selectedImageCount: 2,
+      selectedNodeId: "preview-execution",
+    });
+    const restored = parseTimelineWorkflowRecordJson(serializeTimelineWorkflowRecord(record));
+    expect(restored && isSingleImageTimelineWorkflowRecord(restored)).toBe(true);
+    if (!restored || !isSingleImageTimelineWorkflowRecord(restored)) throw new Error("Expected a single-image Run record.");
+
+    expect(restored.workflow.nodes["preview-execution"]).toMatchObject({
+      status: "done",
+      result: {
+        successfulCount: 4,
+        candidates: expect.arrayContaining([
+          expect.objectContaining({
+            candidateId: "preview-1",
+            status: "done",
+            sourceImage: {
+              filename: "ComfyUI_temp_00001_.png",
+              type: "temp",
+              nodeId: "20",
+            },
+          }),
+        ]),
+      },
+    });
+    const restoredPreview = restored.workflow.nodes["preview-execution"].result as {
+      candidates: Array<{ sourceImage?: { subfolder?: string } }>;
+    };
+    expect(restoredPreview.candidates.every((candidate) => candidate.sourceImage?.subfolder === undefined)).toBe(true);
+    expect(restored.workflow.nodes["preview-scoring"].status).toBe("done");
+    expect(restored.workflow.nodes["comfyui-execution"].status).toBe("done");
+    expect(restored.workflow.nodes["result-display"].status).toBe("done");
+  });
+
+  it("preserves exact-aspect 8-aligned preview dimensions in a current-v2 round trip", () => {
+    const workflow = createPersistedV2GenerationWorkflow(2);
+    const parameters = workflow.nodes["parameter-recommendation"].result as {
+      width: number;
+      height: number;
+      requestPreview: { width: number; height: number };
+    };
+    parameters.width = 832;
+    parameters.height = 1216;
+    parameters.requestPreview.width = 832;
+    parameters.requestPreview.height = 1216;
+    const preview = workflow.nodes["preview-execution"].result as {
+      previewWidth: number;
+      previewHeight: number;
+    };
+    preview.previewWidth = 520;
+    preview.previewHeight = 760;
+
+    const record = createTimelineWorkflowRecord({
+      workflow,
+      sceneRequest: "An exact-aspect portrait preview Run",
+      selectedPromptProfile: "illustrious",
+      selectedImageCount: 2,
+      selectedNodeId: "preview-execution",
+    });
+    const restored = parseTimelineWorkflowRecordJson(serializeTimelineWorkflowRecord(record));
+    expect(restored && isSingleImageTimelineWorkflowRecord(restored)).toBe(true);
+    if (!restored || !isSingleImageTimelineWorkflowRecord(restored)) throw new Error("Expected a single-image Run record.");
+    const restoredPreview = restored.workflow.nodes["preview-execution"].result as {
+      previewWidth: number;
+      previewHeight: number;
+    };
+
+    expect(restored.workflow.nodes["preview-execution"].status).toBe("done");
+    expect(restoredPreview).toMatchObject({ previewWidth: 520, previewHeight: 760 });
+    expect(restoredPreview.previewWidth % 8).toBe(0);
+    expect(restoredPreview.previewHeight % 8).toBe(0);
+    expect(restoredPreview.previewWidth * 1216).toBe(restoredPreview.previewHeight * 832);
+  });
+
+  it.each([
+    ["path traversal", (candidate: Record<string, unknown>) => {
+      candidate.storedImage = {
+        ...candidate.storedImage as object,
+        filename: "../preview.png",
+        url: "/api/comfyui/generated-images/../preview.png",
+      };
+    }],
+    ["arbitrary URL", (candidate: Record<string, unknown>) => {
+      candidate.storedImage = {
+        ...candidate.storedImage as object,
+        url: "https://attacker.invalid/preview.png",
+      };
+    }],
+    ["missing references", (candidate: Record<string, unknown>) => {
+      delete candidate.storedImage;
+      delete candidate.sourceImage;
+    }],
+  ] as const)("fails closed for persisted preview %s", (_case, mutate) => {
+    const raw = JSON.parse(JSON.stringify(createPersistedV2GenerationWorkflow())) as TimelineWorkflowState;
+    const preview = raw.nodes["preview-execution"].result as { candidates: Array<Record<string, unknown>> };
+    mutate(preview.candidates[0]!);
+
+    const restored = sanitizeTimelineWorkflowState(raw) as TimelineWorkflowState;
+    expect((restored.nodes["preview-execution"].result as {
+      candidates: Array<{ status: string; error?: { code: string } }>;
+    }).candidates[0]).toMatchObject({
+      status: "error",
+      error: { code: "image_storage_invalid" },
+    });
+    expect(() => createTimelineFinalRequests(restored)).toThrow(/preview scoring|required|exactly 2/i);
+    expect(JSON.stringify(restored)).not.toContain("attacker.invalid");
+    expect(JSON.stringify(restored)).not.toContain("../preview.png");
+  });
+
+  it.each([
+    ["path traversal", { filename: "..\\final.png", url: "/api/comfyui/generated-images/../final.png" }],
+    ["arbitrary URL", { url: "https://attacker.invalid/final.png" }],
+    ["missing reference", null],
+  ])("marks completed final/result nodes recoverable when a stored final has %s", (_case, replacement) => {
+    const raw = JSON.parse(JSON.stringify(createPersistedV2GenerationWorkflow())) as TimelineWorkflowState;
+    const final = (raw.nodes["comfyui-execution"].result as {
+      finals: Array<Record<string, unknown>>;
+    }).finals[0]!;
+    if (replacement === null) {
+      delete final.storedImage;
+    } else {
+      final.storedImage = { ...(final.storedImage as object), ...replacement };
+    }
+
+    const restored = sanitizeTimelineWorkflowState(raw) as TimelineWorkflowState;
+    expect(restored.nodes["comfyui-execution"]).toMatchObject({
+      status: "error",
+      error: { code: "image_storage_invalid", details: { recoverable: true } },
+    });
+    expect(restored.nodes["result-display"]).toMatchObject({
+      status: "error",
+      error: { code: "image_storage_invalid", details: { recoverable: true } },
+    });
+  });
+
+  it.each([
+    ["seed", (workflow: TimelineWorkflowState) => {
+      const final = (workflow.nodes["comfyui-execution"].result as { finals: Array<{ seed: number }> }).finals[0]!;
+      final.seed += 999;
+    }],
+    ["rank", (workflow: TimelineWorkflowState) => {
+      const finals = (workflow.nodes["comfyui-execution"].result as { finals: Array<{ rank: number }> }).finals;
+      [finals[0]!.rank, finals[1]!.rank] = [finals[1]!.rank, finals[0]!.rank];
+    }],
+    ["selection", (workflow: TimelineWorkflowState) => {
+      const scoring = workflow.nodes["preview-scoring"].result as {
+        selectedCandidateIds: string[];
+        selectionSource: string;
+      };
+      scoring.selectedCandidateIds = [
+        "preview-1",
+        "preview-3",
+      ];
+      scoring.selectionSource = "manual";
+    }],
+  ] as const)("fails closed when persisted final %s linkage disagrees with selection", (_case, mutate) => {
+    const raw = JSON.parse(JSON.stringify(createPersistedV2GenerationWorkflow())) as TimelineWorkflowState;
+    mutate(raw);
+
+    const restored = sanitizeTimelineWorkflowState(raw) as TimelineWorkflowState;
+    expect(restored.nodes["comfyui-execution"]).toMatchObject({
+      status: "error",
+      error: { code: "image_storage_invalid", details: { recoverable: true } },
+    });
+    expect(restored.nodes["result-display"].status).toBe("error");
+  });
+
+  it("round-trips a Detailed K=2 manual selection with global scoring ranks 1 and 3", () => {
+    const raw = JSON.parse(JSON.stringify(createPersistedV2GenerationWorkflow(2))) as TimelineWorkflowState;
+    const scoring = raw.nodes["preview-scoring"].result as {
+      selectedCandidateIds: string[];
+      selectionSource: string;
+    };
+    scoring.selectedCandidateIds = ["preview-1", "preview-3"];
+    scoring.selectionSource = "manual";
+
+    const execution = raw.nodes["comfyui-execution"].result as {
+      finals: Array<Record<string, unknown>>;
+    };
+    const resultDisplay = raw.nodes["result-display"].result as {
+      finalLinks: Array<Record<string, unknown>>;
+      image: Record<string, unknown>;
+      images: Array<Record<string, unknown>>;
+      promptId: string;
+      sourceImage: Record<string, unknown>;
+      sourceImages: Array<Record<string, unknown>>;
+      storedImage: Record<string, unknown>;
+      storedImages: Array<Record<string, unknown>>;
+    };
+    const candidates = (raw.nodes["preview-execution"].result as {
+      candidates: Array<Record<string, unknown>>;
+    }).candidates;
+    const selectedIndexes = [0, 2];
+    execution.finals = selectedIndexes.map((candidateIndex) => {
+      const candidate = candidates[candidateIndex]!;
+      const rank = candidateIndex + 1;
+      return {
+        candidateId: candidate.candidateId,
+        seed: candidate.seed,
+        rank,
+        status: "done",
+        promptId: `final-prompt-${rank}`,
+        sourceImage: { filename: `final-output-${rank}.png`, nodeId: "9", type: "output" },
+        storedImage: managedStoredImage((rank + 8).toString(16)),
+      };
+    });
+    resultDisplay.finalLinks = execution.finals.map((item) => ({
+      candidateId: item.candidateId,
+      promptId: item.promptId,
+      rank: item.rank,
+      seed: item.seed,
+    }));
+    resultDisplay.promptId = execution.finals[0]!.promptId as string;
+    resultDisplay.sourceImages = execution.finals.map((item) => item.sourceImage as Record<string, unknown>);
+    resultDisplay.sourceImage = resultDisplay.sourceImages[0]!;
+    resultDisplay.storedImages = execution.finals.map((item) => item.storedImage as Record<string, unknown>);
+    resultDisplay.storedImage = resultDisplay.storedImages[0]!;
+    resultDisplay.images = execution.finals.map((item) => ({
+      ...(item.sourceImage as Record<string, unknown>),
+      url: (item.storedImage as { url: string }).url,
+    }));
+    resultDisplay.image = resultDisplay.images[0]!;
+
+    const record = createTimelineWorkflowRecord({
+      workflow: raw,
+      sceneRequest: "A persisted scored-preview Run",
+      selectedPromptProfile: "illustrious",
+      selectedImageCount: 2,
+      selectedNodeId: "result-display",
+    });
+    const restored = parseTimelineWorkflowRecordJson(serializeTimelineWorkflowRecord(record));
+    expect(restored && isSingleImageTimelineWorkflowRecord(restored)).toBe(true);
+    if (!restored || !isSingleImageTimelineWorkflowRecord(restored)) throw new Error("Expected a single-image Run record.");
+
+    expect(restored.workflow.nodes["preview-scoring"].result).toMatchObject({
+      selectedCandidateIds: ["preview-1", "preview-3"],
+      selectionSource: "manual",
+    });
+    expect(restored.workflow.nodes["comfyui-execution"]).toMatchObject({
+      status: "done",
+      result: {
+        finals: [
+          { candidateId: "preview-1", rank: 1 },
+          { candidateId: "preview-3", rank: 3 },
+        ],
+      },
+    });
+    expect(restored.workflow.nodes["result-display"]).toMatchObject({
+      status: "done",
+      result: {
+        finalLinks: [
+          { candidateId: "preview-1", rank: 1 },
+          { candidateId: "preview-3", rank: 3 },
+        ],
+      },
+    });
+  });
+
+  it.each([
+    ["unsupported rubric version", (scoring: MutablePersistedPreviewScoring) => {
+      scoring.rubricVersion = 3;
+    }],
+    ["missing candidate coverage", (scoring: MutablePersistedPreviewScoring) => {
+      scoring.scores.pop();
+    }],
+    ["duplicate candidate coverage", (scoring: MutablePersistedPreviewScoring) => {
+      scoring.scores[1]!.candidateId = scoring.scores[0]!.candidateId;
+    }],
+    ["unknown candidate coverage", (scoring: MutablePersistedPreviewScoring) => {
+      scoring.scores[0]!.candidateId = "preview-8";
+    }],
+    ["NaN score dimension", (scoring: MutablePersistedPreviewScoring) => {
+      scoring.scores[0]!.adherence = Number.NaN;
+    }],
+    ["string score dimension", (scoring: MutablePersistedPreviewScoring) => {
+      scoring.scores[0]!.composition = "90";
+    }],
+    ["negative score dimension", (scoring: MutablePersistedPreviewScoring) => {
+      scoring.scores[0]!.anatomy = -1;
+    }],
+    ["score dimension over 100", (scoring: MutablePersistedPreviewScoring) => {
+      scoring.scores[0]!.style = 101;
+    }],
+    ["NaN total", (scoring: MutablePersistedPreviewScoring) => {
+      scoring.scores[0]!.total = Number.NaN;
+    }],
+    ["string total", (scoring: MutablePersistedPreviewScoring) => {
+      scoring.scores[0]!.total = "100";
+    }],
+    ["negative total", (scoring: MutablePersistedPreviewScoring) => {
+      scoring.scores[0]!.total = -1;
+    }],
+    ["total over 100", (scoring: MutablePersistedPreviewScoring) => {
+      scoring.scores[0]!.total = 101;
+    }],
+    ["duplicate rank", (scoring: MutablePersistedPreviewScoring) => {
+      scoring.scores[1]!.rank = scoring.scores[0]!.rank;
+    }],
+    ["rank gap", (scoring: MutablePersistedPreviewScoring) => {
+      scoring.scores.at(-1)!.rank = scoring.scores.length + 1;
+    }],
+    ["rank out of range", (scoring: MutablePersistedPreviewScoring) => {
+      scoring.scores[0]!.rank = 0;
+    }],
+    ["too few selected candidates", (scoring: MutablePersistedPreviewScoring) => {
+      scoring.selectedCandidateIds.pop();
+    }],
+    ["too many selected candidates", (scoring: MutablePersistedPreviewScoring) => {
+      scoring.selectedCandidateIds.push("preview-3");
+    }],
+    ["duplicate selected candidates", (scoring: MutablePersistedPreviewScoring) => {
+      scoring.selectedCandidateIds[1] = scoring.selectedCandidateIds[0];
+    }],
+    ["unknown selected candidate", (scoring: MutablePersistedPreviewScoring) => {
+      scoring.selectedCandidateIds[0] = "preview-8";
+    }],
+    ["unsupported selection source", (scoring: MutablePersistedPreviewScoring) => {
+      scoring.selectionSource = "system";
+    }],
+    ["missing v2 eligibility", (scoring: MutablePersistedPreviewScoring) => {
+      delete scoring.scores[0]!.eligible;
+    }],
+    ["missing v2 critical defects", (scoring: MutablePersistedPreviewScoring) => {
+      delete scoring.scores[0]!.criticalDefects;
+    }],
+    ["eligible with a critical defect", (scoring: MutablePersistedPreviewScoring) => {
+      scoring.scores[0]!.criticalDefects = [{ category: "severe_exposure", description: "blown highlights" }];
+    }],
+    ["ineligible without a critical defect", (scoring: MutablePersistedPreviewScoring) => {
+      scoring.scores[0]!.eligible = false;
+    }],
+    ["unknown critical defect category", (scoring: MutablePersistedPreviewScoring) => {
+      scoring.scores[0]!.eligible = false;
+      scoring.scores[0]!.criticalDefects = [{ category: "unknown", description: "unsupported" }];
+    }],
+    ["duplicate critical defect category", (scoring: MutablePersistedPreviewScoring) => {
+      scoring.scores[0]!.eligible = false;
+      scoring.scores[0]!.criticalDefects = [
+        { category: "anatomy_or_structure", description: "first" },
+        { category: "anatomy_or_structure", description: "second" },
+      ];
+    }],
+    ["blank critical defect description", (scoring: MutablePersistedPreviewScoring) => {
+      scoring.scores[0]!.eligible = false;
+      scoring.scores[0]!.criticalDefects = [{ category: "gaze_or_action_mismatch", description: "   " }];
+    }],
+  ] as const)("fails closed for persisted preview scoring with %s", (_case, mutate) => {
+    const raw = createPersistedV2GenerationWorkflow(2);
+    mutate(getMutablePersistedPreviewScoring(raw));
+
+    const restored = sanitizeTimelineWorkflowState(raw) as TimelineWorkflowState;
+    expect(restored.nodes["preview-scoring"]).toMatchObject({
+      status: "error",
+      error: { code: "timeline_request_invalid", details: { recoverable: true } },
+    });
+    expect(restored.nodes["preview-scoring"].result).toBeUndefined();
+    for (const nodeId of ["comfyui-execution", "result-display"] as const) {
+      expect(restored.nodes[nodeId]).toMatchObject({
+        status: "error",
+        error: { code: "timeline_request_invalid", details: { recoverable: true } },
+      });
+      expect(restored.nodes[nodeId].result).toBeUndefined();
+    }
+    expect(() => createTimelineFinalRequests(restored)).toThrow();
+  });
+
+  it.each([
+    ["swapped ranks", (scoring: MutablePersistedPreviewScoring) => {
+      [scoring.scores[0]!.rank, scoring.scores[1]!.rank] = [
+        scoring.scores[1]!.rank,
+        scoring.scores[0]!.rank,
+      ];
+    }],
+    ["AI non-Top-K selection", (scoring: MutablePersistedPreviewScoring) => {
+      scoring.selectedCandidateIds = ["preview-1", "preview-3"];
+    }],
+    ["incorrect composition tie-break", (scoring: MutablePersistedPreviewScoring) => {
+      Object.assign(scoring.scores[0]!, {
+        adherence: 80,
+        composition: 80,
+        anatomy: 80,
+        style: 80,
+        technical: 80,
+        total: 80,
+        rank: 1,
+      });
+      Object.assign(scoring.scores[1]!, {
+        adherence: 63.333333333333336,
+        composition: 100,
+        anatomy: 80,
+        style: 80,
+        technical: 80,
+        total: 80,
+        rank: 2,
+      });
+      Object.assign(scoring.scores[2]!, {
+        adherence: 60, composition: 60, anatomy: 60, style: 60, technical: 60, total: 60, rank: 3,
+      });
+      Object.assign(scoring.scores[3]!, {
+        adherence: 50, composition: 50, anatomy: 50, style: 50, technical: 50, total: 50, rank: 4,
+      });
+      scoring.selectedCandidateIds = ["preview-2", "preview-1"];
+    }],
+    ["incorrect preview-index tie-break", (scoring: MutablePersistedPreviewScoring) => {
+      for (const [index, score] of scoring.scores.entries()) {
+        const value = index < 2 ? 80 : 60 - index;
+        Object.assign(score, {
+          adherence: value,
+          composition: value,
+          anatomy: value,
+          style: value,
+          technical: value,
+          total: value,
+        });
+      }
+      scoring.scores[0]!.rank = 2;
+      scoring.scores[1]!.rank = 1;
+      scoring.scores[2]!.rank = 3;
+      scoring.scores[3]!.rank = 4;
+      scoring.selectedCandidateIds = ["preview-1", "preview-2"];
+    }],
+    ["dimension drift with stale ranks", (scoring: MutablePersistedPreviewScoring) => {
+      scoring.scores[0]!.adherence = 90;
+    }],
+  ] as const)("fails closed for semantically inconsistent persisted scoring with %s", (_case, mutate) => {
+    const raw = createPersistedV2GenerationWorkflow(2);
+    mutate(getMutablePersistedPreviewScoring(raw));
+
+    const restored = sanitizeTimelineWorkflowState(raw) as TimelineWorkflowState;
+    expect(restored.nodes["preview-scoring"]).toMatchObject({
+      status: "error",
+      error: { code: "timeline_request_invalid", details: { recoverable: true } },
+    });
+    expect(restored.nodes["preview-scoring"].result).toBeUndefined();
+    for (const nodeId of ["comfyui-execution", "result-display"] as const) {
+      expect(restored.nodes[nodeId]).toMatchObject({
+        status: "error",
+        error: { code: "timeline_request_invalid", details: { recoverable: true } },
+      });
+      expect(restored.nodes[nodeId].result).toBeUndefined();
+    }
+    expect(() => createTimelineFinalRequests(restored)).toThrow(/preview scoring|required/i);
+  });
+
+  it("recomputes a forged persisted total from the fixed scoring weights", () => {
+    const raw = createPersistedV2GenerationWorkflow(2);
+    const scoring = getMutablePersistedPreviewScoring(raw);
+    scoring.scores[0]!.total = 0;
+
+    const restored = sanitizeTimelineWorkflowState(raw) as TimelineWorkflowState;
+    const restoredScoring = restored.nodes["preview-scoring"].result as {
+      scores: Array<{ candidateId: string; total: number }>;
+    };
+    expect(restored.nodes["preview-scoring"].status).toBe("done");
+    expect(restoredScoring.scores.find((score) => score.candidateId === "preview-1")?.total).toBe(100);
+    expect(restored.nodes["comfyui-execution"].status).toBe("done");
+    expect(restored.nodes["result-display"].status).toBe("done");
+  });
+
+  it("restores rubric v1 for historical display but blocks fresh final continuation", () => {
+    const raw = createPersistedV2GenerationWorkflow(2);
+    const scoring = getMutablePersistedPreviewScoring(raw);
+    scoring.rubricVersion = 1;
+    for (const score of scoring.scores) {
+      delete score.eligible;
+      delete score.criticalDefects;
+    }
+    raw.nodes["comfyui-execution"] = {
+      ...raw.nodes["comfyui-execution"],
+      status: "blocked",
+      result: undefined,
+      error: undefined,
+    };
+    raw.nodes["result-display"] = {
+      ...raw.nodes["result-display"],
+      status: "blocked",
+      result: undefined,
+      error: undefined,
+    };
+
+    const restored = sanitizeTimelineWorkflowState(raw) as TimelineWorkflowState;
+    expect(restored.nodes["preview-scoring"]).toMatchObject({
+      status: "done",
+      result: { rubricVersion: 1, selectedCandidateIds: ["preview-1", "preview-2"] },
+    });
+    expect(() => createTimelineFinalRequests(restored)).toThrow(/eligibility-aware preview scoring is required/i);
+  });
+
+  it("rewrites a persisted legacy eligibility shortfall to retry preview scoring", () => {
+    const raw = createPersistedV2GenerationWorkflow(2);
+    raw.nodes["preview-scoring"] = {
+      nodeId: "preview-scoring",
+      status: "error",
+      source: "system",
+      updatedAt: raw.updatedAt,
+      error: {
+        code: "timeline_request_invalid",
+        message: "Only 1 of 2 required previews passed critical visual checks.",
+        details: {
+          recoverable: true,
+          retryFrom: "preview-execution",
+          eligibleCount: 1,
+          finalCount: 2,
+        },
+      },
+    };
+
+    const restored = sanitizeTimelineWorkflowState(raw) as TimelineWorkflowState;
+
+    expect(restored.nodes["preview-scoring"]).toMatchObject({
+      status: "error",
+      error: {
+        code: "timeline_request_invalid",
+        message: expect.stringContaining("Retry preview scoring"),
+        details: {
+          recoverable: true,
+          eligibleCount: 1,
+          finalCount: 2,
+        },
+      },
+    });
+    expect(restored.nodes["preview-scoring"].error?.details).not.toHaveProperty("retryFrom");
+    expect(restored.nodes["comfyui-execution"].status).toBe("error");
+    expect(restored.nodes["result-display"].status).toBe("error");
+  });
+
+  it("accepts previewSteps=20 and rejects persisted preview steps above the cap", () => {
+    const valid = createPersistedV2GenerationWorkflow(1);
+    (valid.nodes["preview-execution"].result as { advanceSeedOnRetry?: true }).advanceSeedOnRetry = true;
+    const restored = sanitizeTimelineWorkflowState(valid) as TimelineWorkflowState;
+    expect(restored.nodes["preview-execution"]).toMatchObject({
+      status: "done",
+      result: { previewSteps: 20 },
+    });
+    expect(restored.nodes["preview-execution"].result).not.toHaveProperty("advanceSeedOnRetry");
+
+    const invalid = createPersistedV2GenerationWorkflow(1);
+    (invalid.nodes["preview-execution"].result as { previewSteps: number }).previewSteps = 21;
+    const rejected = sanitizeTimelineWorkflowState(invalid) as TimelineWorkflowState;
+    expect(rejected.nodes["preview-execution"]).toMatchObject({
+      status: "error",
+    });
+    expect(rejected.nodes["preview-execution"].result).toBeUndefined();
+    expect(rejected.nodes["preview-scoring"].status).toBe("error");
+  });
+
+  it("keeps a manual exact-K non-Top-K selection valid", () => {
+    const raw = createPersistedV2GenerationWorkflow(2);
+    const scoring = getMutablePersistedPreviewScoring(raw);
+    scoring.selectedCandidateIds = ["preview-1", "preview-3"];
+    scoring.selectionSource = "manual";
+    raw.nodes["comfyui-execution"] = {
+      ...raw.nodes["comfyui-execution"],
+      status: "blocked",
+      result: undefined,
+      error: undefined,
+    };
+    raw.nodes["result-display"] = {
+      ...raw.nodes["result-display"],
+      status: "blocked",
+      result: undefined,
+      error: undefined,
+    };
+
+    const restored = sanitizeTimelineWorkflowState(raw) as TimelineWorkflowState;
+    expect(restored.nodes["preview-scoring"]).toMatchObject({
+      status: "done",
+      result: {
+        selectionSource: "manual",
+        selectedCandidateIds: ["preview-1", "preview-3"],
+      },
+    });
+    expect(createTimelineFinalRequests(restored)).toMatchObject([
+      { candidateId: "preview-1", rank: 1 },
+      { candidateId: "preview-3", rank: 3 },
+    ]);
+  });
+
+  it("preserves eligible-first ranking even when an ineligible candidate has the highest weighted total", () => {
+    const raw = createPersistedV2GenerationWorkflow(2);
+    const scoring = getMutablePersistedPreviewScoring(raw);
+    scoring.scores[0]!.eligible = false;
+    scoring.scores[0]!.criticalDefects = [{
+      category: "spatial_physical_contradiction",
+      description: "Subject contradicts the requested placement.",
+    }];
+    scoring.scores[0]!.rank = 4;
+    scoring.scores[1]!.rank = 1;
+    scoring.scores[2]!.rank = 2;
+    scoring.scores[3]!.rank = 3;
+    scoring.selectedCandidateIds = ["preview-2", "preview-3"];
+    for (const nodeId of ["comfyui-execution", "result-display"] as const) {
+      raw.nodes[nodeId] = { ...raw.nodes[nodeId], status: "blocked", result: undefined, error: undefined };
+    }
+
+    const restored = sanitizeTimelineWorkflowState(raw) as TimelineWorkflowState;
+    expect(restored.nodes["preview-scoring"]).toMatchObject({
+      status: "done",
+      result: { selectedCandidateIds: ["preview-2", "preview-3"] },
+    });
+    const restoredScores = (restored.nodes["preview-scoring"].result as {
+      scores: Array<{ candidateId: string; eligible: boolean; rank: number }>;
+    }).scores;
+    expect(restoredScores.find((score) => score.candidateId === "preview-1")).toMatchObject({ eligible: false, rank: 4 });
+    expect(restoredScores.find((score) => score.candidateId === "preview-2")).toMatchObject({ eligible: true, rank: 1 });
+    expect(restoredScores.find((score) => score.candidateId === "preview-3")).toMatchObject({ eligible: true, rank: 2 });
+    expect(restoredScores.find((score) => score.candidateId === "preview-4")).toMatchObject({ eligible: true, rank: 3 });
+    expect(createTimelineFinalRequests(restored)).toMatchObject([
+      { candidateId: "preview-2", rank: 1 },
+      { candidateId: "preview-3", rank: 2 },
+    ]);
+  });
+
+  it("restores an old-v2 soft-only ineligible manual fallback and recomputes selection metadata", () => {
+    const raw = createPersistedV2GenerationWorkflow(2);
+    const scoring = getMutablePersistedPreviewScoring(raw);
+    scoring.scores[0]!.eligible = false;
+    scoring.scores[0]!.criticalDefects = [{
+      category: "gaze_or_action_mismatch",
+      description: "The subject performs the wrong action.",
+    }];
+    scoring.scores[0]!.rank = 4;
+    scoring.scores[1]!.rank = 1;
+    scoring.scores[2]!.rank = 2;
+    scoring.scores[3]!.rank = 3;
+    scoring.selectedCandidateIds = ["preview-1", "preview-2"];
+    scoring.selectionSource = "manual";
+    scoring.eligibleCount = 99;
+    scoring.fallbackCandidateIds = ["preview-4"];
+    scoring.selectionWarning = "FORGED WARNING";
+    for (const nodeId of ["comfyui-execution", "result-display"] as const) {
+      raw.nodes[nodeId] = { ...raw.nodes[nodeId], status: "blocked", result: undefined, error: undefined };
+    }
+
+    const restored = sanitizeTimelineWorkflowState(raw) as TimelineWorkflowState;
+    expect(restored.nodes["preview-scoring"]).toMatchObject({
+      status: "done",
+      result: {
+        eligibleCount: 3,
+        fallbackCandidateIds: ["preview-1"],
+        selectedCandidateIds: ["preview-1", "preview-2"],
+        selectionSource: "manual",
+        selectionWarning: expect.stringContaining("1 annotated fallback candidate was selected"),
+      },
+    });
+    expect(JSON.stringify(restored.nodes["preview-scoring"].result)).not.toContain("FORGED WARNING");
+    expect(createTimelineFinalRequests(restored)).toMatchObject([
+      { candidateId: "preview-1", rank: 4 },
+      { candidateId: "preview-2", rank: 1 },
+    ]);
+  });
+
+  it("restores current soft annotations as eligible and keeps them in strict AI Top-K", () => {
+    const raw = createPersistedV2GenerationWorkflow(2);
+    const scoring = getMutablePersistedPreviewScoring(raw);
+    scoring.scores[0]!.criticalDefects = [{
+      category: "subject_scale_or_framing",
+      description: "Non-blocking framing mismatch.",
+    }];
+
+    const restored = sanitizeTimelineWorkflowState(raw) as TimelineWorkflowState;
+    expect(restored.nodes["preview-scoring"]).toMatchObject({
+      status: "done",
+      result: {
+        eligibleCount: 4,
+        fallbackCandidateIds: [],
+        selectedCandidateIds: ["preview-1", "preview-2"],
+        scores: expect.arrayContaining([expect.objectContaining({
+          candidateId: "preview-1",
+          eligible: true,
+          criticalDefects: [expect.objectContaining({ category: "subject_scale_or_framing" })],
+        })]),
+      },
+    });
+  });
+
+  it("restores zero-eligible strict AI Top-K with recomputed fallback metadata", () => {
+    const raw = createPersistedV2GenerationWorkflow(2);
+    const scoring = getMutablePersistedPreviewScoring(raw);
+    for (const score of scoring.scores) {
+      score.eligible = false;
+      score.criticalDefects = [{ category: "anatomy_or_structure", description: "Unusable structure." }];
+    }
+    scoring.eligibleCount = 4;
+    scoring.fallbackCandidateIds = [];
+    delete scoring.selectionWarning;
+    for (const nodeId of ["comfyui-execution", "result-display"] as const) {
+      raw.nodes[nodeId] = { ...raw.nodes[nodeId], status: "blocked", result: undefined, error: undefined };
+    }
+
+    const restored = sanitizeTimelineWorkflowState(raw) as TimelineWorkflowState;
+    expect(restored.nodes["preview-scoring"]).toMatchObject({
+      status: "done",
+      result: {
+        eligibleCount: 0,
+        fallbackCandidateIds: ["preview-1", "preview-2"],
+        selectedCandidateIds: ["preview-1", "preview-2"],
+        selectionWarning: expect.stringContaining("Only 0 preview candidates passed blocking-defect checks"),
+      },
+    });
+    expect(createTimelineFinalRequests(restored)).toHaveLength(2);
+  });
+
+  it("preserves only cross-node-valid done records from a persisted partial final", () => {
+    const raw = JSON.parse(JSON.stringify(createPersistedV2GenerationWorkflow())) as TimelineWorkflowState;
+    const complete = raw.nodes["comfyui-execution"].result as {
+      completed: boolean;
+      finals: Array<{ seed: number }>;
+    };
+    complete.completed = false;
+    complete.finals[1]!.seed += 500;
+    raw.nodes["comfyui-execution"] = {
+      ...raw.nodes["comfyui-execution"],
+      status: "error",
+      result: undefined,
+      error: {
+        code: "comfyui_execution_failed",
+        message: "1 of 2 final images completed.",
+        details: { recoverable: true, partialResult: complete },
+      },
+    };
+    raw.nodes["result-display"] = {
+      ...raw.nodes["result-display"],
+      status: "blocked",
+      result: undefined,
+    };
+
+    const restored = sanitizeTimelineWorkflowState(raw) as TimelineWorkflowState;
+    const partial = (restored.nodes["comfyui-execution"].error?.details as {
+      partialResult?: { completed: boolean; finals: Array<{ candidateId: string; status: string }> };
+    }).partialResult;
+    expect(partial).toMatchObject({
+      completed: false,
+      finals: [
+        { candidateId: "preview-1", status: "done" },
+        { candidateId: "preview-2", status: "error" },
+      ],
+    });
+  });
+
+  it.each([
+    ["missing", undefined],
+    ["old", `sha256:${"a".repeat(64)}`],
+  ])("revokes an incomplete confirmed v2 Run with a %s confirmation fingerprint", (_case, fingerprint) => {
+    const raw = JSON.parse(JSON.stringify(createPersistedV2GenerationWorkflow())) as TimelineWorkflowState;
+    raw.nodes["result-display"].status = "blocked";
+    raw.nodes["result-display"].result = undefined;
+    const gate = raw.nodes["generation-gate"].result as Record<string, unknown>;
+    if (fingerprint === undefined) delete gate.confirmationFingerprint;
+    else gate.confirmationFingerprint = fingerprint;
+
+    const restored = sanitizeTimelineWorkflowState(raw) as TimelineWorkflowState;
+    expect(restored.generationConfirmed).toBe(false);
+    expect(restored.nodes["generation-gate"]).toMatchObject({
+      status: "blocked",
+      error: { code: "confirmation_required" },
+    });
+    for (const nodeId of ["preview-execution", "preview-scoring", "comfyui-execution", "result-display"] as const) {
+      expect(restored.nodes[nodeId].status, nodeId).toBe("blocked");
+    }
+  });
+
+  it("preserves a completed legacy Run only when its generated-image references are safe", () => {
+    const base = createTimelineWorkflowState({
+      workflowId: "legacy-v1-run",
+      sceneRequest: "A legacy run",
+    });
+    const completed = JSON.parse(JSON.stringify(base)) as TimelineWorkflowState;
+    delete (completed.nodes as Partial<typeof completed.nodes>)["preview-execution"];
+    delete (completed.nodes as Partial<typeof completed.nodes>)["preview-scoring"];
+    completed.generationConfirmed = true;
+    completed.nodes["generation-gate"] = {
+      nodeId: "generation-gate",
+      status: "manual",
+      result: { confirmed: true, confirmationRequired: false },
+      source: "manual",
+      updatedAt: completed.updatedAt,
+    };
+    completed.nodes["result-display"] = JSON.parse(JSON.stringify(
+      createPersistedV2GenerationWorkflow(1).nodes["result-display"],
+    )) as TimelineWorkflowState["nodes"]["result-display"];
+    const restoredCompleted = sanitizeTimelineWorkflowState(completed) as TimelineWorkflowState;
+    expect(restoredCompleted.generationConfirmed).toBe(true);
+    expect(restoredCompleted.nodes["result-display"]).toMatchObject({
+      status: "done",
+      result: {
+        completed: true,
+        storedImage: {
+          filename: expect.stringMatching(/^[a-f0-9]{32}\.png$/),
+          url: expect.stringMatching(/^\/api\/comfyui\/generated-images\/[a-f0-9]{32}\.png$/),
+        },
+      },
+    });
+  });
+
+  it.each([
+    ["missing image", (result: Record<string, unknown>) => {
+      delete result.image;
+      delete result.images;
+    }],
+    ["arbitrary URL", (result: Record<string, unknown>) => {
+      (result.images as Array<Record<string, unknown>>)[0]!.url = "https://attacker.invalid/final.png";
+    }],
+    ["unsafe filename", (result: Record<string, unknown>) => {
+      (result.sourceImages as Array<Record<string, unknown>>)[0]!.filename = "../final.png";
+    }],
+    ["unsafe subfolder", (result: Record<string, unknown>) => {
+      (result.sourceImages as Array<Record<string, unknown>>)[0]!.subfolder = "../private";
+    }],
+    ["unsafe prompt id", (result: Record<string, unknown>) => {
+      result.promptId = "../../private/prompt";
+    }],
+    ["Windows drive-shaped path", (result: Record<string, unknown>) => {
+      (result.sourceImages as Array<Record<string, unknown>>)[0]!.filename = "C:/private/final.png";
+    }],
+  ] as const)("fails closed for a completed legacy Run with %s", (_case, mutate) => {
+    const completed = JSON.parse(JSON.stringify(createPersistedV2GenerationWorkflow(1))) as TimelineWorkflowState;
+    delete (completed.nodes as Partial<typeof completed.nodes>)["preview-execution"];
+    delete (completed.nodes as Partial<typeof completed.nodes>)["preview-scoring"];
+    const result = completed.nodes["result-display"].result as Record<string, unknown>;
+    mutate(result);
+
+    const restored = sanitizeTimelineWorkflowState(completed) as TimelineWorkflowState;
+    expect(restored.generationConfirmed).toBe(false);
+    expect(restored.nodes["result-display"].status).not.toBe("done");
+    expect(JSON.stringify(restored)).not.toContain("attacker.invalid");
+    expect(JSON.stringify(restored)).not.toContain("../");
+    expect(JSON.stringify(restored)).not.toContain("C:/private");
+  });
+
+  it("requires reconfirmation for an incomplete confirmed legacy Run", () => {
+    const incomplete = JSON.parse(JSON.stringify(createPersistedV2GenerationWorkflow(1))) as TimelineWorkflowState;
+    delete (incomplete.nodes as Partial<typeof incomplete.nodes>)["preview-execution"];
+    delete (incomplete.nodes as Partial<typeof incomplete.nodes>)["preview-scoring"];
+    incomplete.nodes["result-display"].status = "blocked";
+    incomplete.nodes["result-display"].result = undefined;
+
+    const restoredIncomplete = sanitizeTimelineWorkflowState(incomplete) as TimelineWorkflowState;
+    expect(restoredIncomplete.generationConfirmed).toBe(false);
+    expect(restoredIncomplete.nodes["generation-gate"]).toMatchObject({
+      status: "blocked",
+      error: { code: "confirmation_required" },
+    });
+    expect(restoredIncomplete.nodes["preview-execution"].status).toBe("blocked");
+    expect(restoredIncomplete.nodes["preview-scoring"].status).toBe("blocked");
   });
 
   it("restores interrupted running nodes as visible errors", () => {

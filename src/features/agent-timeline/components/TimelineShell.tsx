@@ -37,6 +37,7 @@ import {
   markTimelineNodeRunning,
   normalizeTimelineImageCount,
   normalizeTimelineSourceDenoise,
+  requireTimelineGenerationReconfirmation,
   setTimelineNodeManualResult,
   updateTimelineSceneInputSettings,
 } from "@/features/agent-timeline/state";
@@ -68,11 +69,14 @@ import {
 } from "@/features/agent-timeline/t5-node-adapters";
 import { createTimelineT7NodeAdapters } from "@/features/agent-timeline/t7-node-adapters";
 import {
+  createTimelinePreviewSelectionFallbackMetadata,
   TimelineNodeExecutionError,
   type CanvasBindingTimelineResult,
   type CharacterActionTimelineResult,
   type ComfyUiExecutionTimelineResult,
   type ParameterRecommendationTimelineResult,
+  type PreviewExecutionTimelineResult,
+  type PreviewScoringTimelineResult,
   type ResourceRecommendationTimelineResult,
   type ScenePromptTimelineResult,
   type SceneInputTimelineResult,
@@ -176,6 +180,7 @@ import {
 } from "./TimelineResultDisplayWorkspace";
 import { TimelineScenePromptWorkspace } from "./TimelineScenePromptWorkspace";
 import { TimelineWorkflowProjectMenu } from "./TimelineWorkflowProjectMenu";
+import { TimelinePreviewWorkspace } from "./TimelinePreviewWorkspace";
 import { getTimelineNodeOutputText, timelineNodeContent } from "./timeline-node-content";
 import { GenerationDetailerSettingsEditor } from "./StoryPlanningPreview";
 import { StyleReferencePanel } from "./StyleReferencePanel";
@@ -256,6 +261,18 @@ const stepDisplay: Record<TimelineNodeId, StepDisplay> = {
     icon: CheckCircle2,
     transform: "Hold final request for explicit user confirmation",
   },
+  "preview-execution": {
+    agent: "Preview agent",
+    artifact: "Low-cost candidate gallery",
+    icon: ImageIcon,
+    transform: "Generate independent low-resolution preview candidates",
+  },
+  "preview-scoring": {
+    agent: "Vision reviewer",
+    artifact: "Structured candidate ranking",
+    icon: Bot,
+    transform: "Score previews and select the strongest candidates",
+  },
   "comfyui-execution": {
     agent: "ComfyUI agent",
     artifact: "Queue metadata",
@@ -295,6 +312,8 @@ const visualOutputNodeIds = new Set<TimelineNodeId>([
   "canvas-binding",
   "resource-recommendation",
   "parameter-recommendation",
+  "preview-execution",
+  "preview-scoring",
   "result-display",
 ]);
 const nonEditableAiNodeIds = new Set<TimelineNodeId>(["character-tags", "character-action"]);
@@ -340,6 +359,14 @@ async function completeTimelineChatViaApi(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isPreviewExecutionResult(value: unknown): value is PreviewExecutionTimelineResult {
+  return isRecord(value) && Array.isArray(value.candidates) && typeof value.finalCount === "number";
+}
+
+function isPreviewScoringResult(value: unknown): value is PreviewScoringTimelineResult {
+  return isRecord(value) && Array.isArray(value.scores) && Array.isArray(value.selectedCandidateIds);
 }
 
 function isStringArray(value: unknown): value is string[] {
@@ -614,7 +641,7 @@ function getSceneInputImageCount(workflow: TimelineWorkflowState | null) {
   const result = workflow?.nodes["scene-input"].result;
 
   return isRecord(result)
-    ? (result.sourceImage ? 1 : normalizeTimelineImageCount(result.imageCount))
+    ? normalizeTimelineImageCount(result.imageCount)
     : DEFAULT_TIMELINE_IMAGE_COUNT;
 }
 
@@ -711,7 +738,8 @@ function createManualResult(
     return {
       rawIntent: value,
       promptProfile,
-      imageCount: sourceImage ? 1 : normalizeTimelineImageCount(imageCount),
+      imageCount: normalizeTimelineImageCount(imageCount),
+      ...(useEditorStore.getState().project.settings.supportsNsfw === true ? { nsfw: true } : {}),
       ...(sourceImage ? { sourceDenoise: normalizeTimelineSourceDenoise(sourceDenoise) } : {}),
       ...(sourceImage ? { sourceImage } : {}),
       ...(settingsSnapshot ? { settingsSnapshot } : {}),
@@ -947,13 +975,25 @@ function mergeTimelineWorkflowUpdate(
   };
 }
 
-async function confirmTimelineGenerationViaApi(workflow: TimelineWorkflowState) {
+type TimelineGenerationStage = "preview-execution" | "preview-scoring" | "comfyui-execution";
+
+async function confirmTimelineGenerationViaApi(
+  workflow: TimelineWorkflowState,
+  options: {
+    action: "confirm" | "continue" | "retry";
+    stage: TimelineGenerationStage;
+    retryNodeId?: TimelineGenerationStage;
+  },
+) {
   const response = await fetch("/api/agent-timeline/confirm-generation", {
     method: "POST",
     headers: {
       "content-type": "application/json",
     },
-    body: JSON.stringify({ workflow }),
+    body: JSON.stringify({
+      workflow,
+      ...options,
+    }),
   });
   const payload: unknown = await response.json();
 
@@ -1718,6 +1758,74 @@ export function TimelineShell() {
     }
   }
 
+  async function runGenerationStages(
+    targetWorkflow: TimelineWorkflowState,
+    stages: readonly TimelineGenerationStage[],
+    firstAction: "confirm" | "retry",
+    runId: number,
+  ) {
+    let currentWorkflow = targetWorkflow;
+    for (let index = 0; index < stages.length; index += 1) {
+      const stage = stages[index]!;
+      if (!isCurrentRun(runId)) return null;
+      setSelectedNodeId(stage);
+      const runningWorkflow = markTimelineNodeRunning(currentWorkflow, stage);
+      setWorkflow(runningWorkflow);
+      rememberLatestTimelineAutosaveInput(runningWorkflow, { selectedNodeId: stage });
+      setNotices((current) => ({
+        ...current,
+        [stage]: index === 0 && firstAction === "retry"
+          ? `Retrying ${timelineNodeContent[stage].title.toLowerCase()}.`
+          : `${timelineNodeContent[stage].title} is running.`,
+      }));
+
+      let result: TimelineWorkflowState;
+      try {
+        result = await confirmTimelineGenerationViaApi(currentWorkflow, {
+          action: index === 0 ? firstAction : "continue",
+          stage,
+          ...(index === 0 && firstAction === "retry" ? { retryNodeId: stage } : {}),
+        });
+      } catch (error) {
+        if (isCurrentRun(runId)) {
+          setWorkflow(currentWorkflow);
+          rememberLatestTimelineAutosaveInput(currentWorkflow, { selectedNodeId: stage });
+        }
+        throw error;
+      }
+      if (!isCurrentRun(runId)) return null;
+      currentWorkflow = result;
+      const failedNodeId = result.nodes[stage].status === "error"
+        ? stage
+        : stage === "comfyui-execution" && result.nodes["result-display"].status === "error"
+          ? "result-display" as const
+          : null;
+      const selectedAfterStage = failedNodeId ??
+        (stage === "comfyui-execution" && result.nodes["result-display"].status === "done"
+          ? "result-display" as const
+          : stage);
+      commitWorkflow(result, {
+        selectedNodeId: selectedAfterStage,
+        outputDisplayModes: {
+          ...outputDisplayModes,
+          "preview-execution": "visual",
+          "preview-scoring": "visual",
+          "result-display": "visual",
+        },
+      });
+      setSelectedNodeId(selectedAfterStage);
+      if (failedNodeId) {
+        setNotices((current) => ({
+          ...current,
+          [failedNodeId]: result.nodes[failedNodeId].error?.message ?? "Generation phase failed.",
+        }));
+        return { failedNodeId, workflow: result };
+      }
+    }
+
+    return { failedNodeId: null, workflow: currentWorkflow };
+  }
+
   async function runConfirmGeneration(
     targetWorkflow: TimelineWorkflowState | null,
     options: { allowWhileRunning?: boolean } = {},
@@ -1729,48 +1837,15 @@ export function TimelineShell() {
     const runId = activeRunIdRef.current + 1;
     activeRunIdRef.current = runId;
     updateIsRunning(true);
-    setSelectedNodeId("comfyui-execution");
-    setWorkflow((currentWorkflow) => {
-      if (!currentWorkflow || currentWorkflow.workflowId !== targetWorkflow.workflowId) {
-        return currentWorkflow;
-      }
-
-      const runningWorkflow = markTimelineNodeRunning(currentWorkflow, "comfyui-execution");
-      rememberLatestTimelineAutosaveInput(runningWorkflow, {
-        selectedNodeId: "comfyui-execution",
-      });
-      return runningWorkflow;
-    });
-    setNotices((current) => ({
-      ...current,
-      "comfyui-execution": "Confirmed request is being validated and queued in ComfyUI.",
-    }));
-
     try {
-      const result = await confirmTimelineGenerationViaApi(targetWorkflow);
-
-      if (!isCurrentRun(runId)) {
-        return;
-      }
-
-      commitWorkflow(result, {
-        selectedNodeId: result.nodes["result-display"].status === "done" ? "result-display" : "comfyui-execution",
-        outputDisplayModes: {
-          ...outputDisplayModes,
-          "result-display": "visual",
-        },
-      });
-      const executionNode = result.nodes["comfyui-execution"];
-      const executionErrorMessage = executionNode.status === "error" ? executionNode.error?.message : null;
-      setSelectedNodeId(result.nodes["result-display"].status === "done" ? "result-display" : "comfyui-execution");
-      setOutputDisplayModes((current) => ({
-        ...current,
-        "result-display": "visual",
-      }));
-      setNotices((current) => ({
-        ...current,
-        "comfyui-execution": executionErrorMessage ?? "Confirmed ComfyUI request finished graph execution.",
-      }));
+      const outcome = await runGenerationStages(
+        targetWorkflow,
+        ["preview-execution", "preview-scoring", "comfyui-execution"],
+        "confirm",
+        runId,
+      );
+      if (!outcome || outcome.failedNodeId) return;
+      setNotices((current) => ({ ...current, "result-display": "Preview selection and second-pass generation finished." }));
     } catch (error) {
       if (!isCurrentRun(runId)) {
         return;
@@ -1787,6 +1862,68 @@ export function TimelineShell() {
         updateIsRunning(false);
       }
     }
+  }
+
+  async function runGenerationRetry(
+    targetWorkflow: TimelineWorkflowState,
+    retryNodeId: "preview-execution" | "preview-scoring" | "comfyui-execution",
+  ) {
+    if (isRunningRef.current) return;
+    const runId = activeRunIdRef.current + 1;
+    activeRunIdRef.current = runId;
+    updateIsRunning(true);
+    try {
+      const allStages: readonly TimelineGenerationStage[] = ["preview-execution", "preview-scoring", "comfyui-execution"];
+      const outcome = await runGenerationStages(
+        targetWorkflow,
+        allStages.slice(allStages.indexOf(retryNodeId)),
+        "retry",
+        runId,
+      );
+      if (!outcome || outcome.failedNodeId) return;
+      setNotices((current) => ({ ...current, "result-display": "Generation retry completed." }));
+    } catch (error) {
+      if (!isCurrentRun(runId)) return;
+      const message = error instanceof Error ? error.message : "Generation retry failed.";
+      if (message.includes("confirm the Run again")) {
+        const reconfirmationWorkflow = requireTimelineGenerationReconfirmation(targetWorkflow, message);
+        commitWorkflow(reconfirmationWorkflow, { selectedNodeId: "generation-gate" });
+        setSelectedNodeId("generation-gate");
+      }
+      setNotices((current) => ({ ...current, [retryNodeId]: message, "generation-gate": message }));
+    } finally {
+      if (isCurrentRun(runId)) updateIsRunning(false);
+    }
+  }
+
+  function handlePreviewSelection(selectedCandidateIds: string[]) {
+    if (!workflow || isRunningRef.current) return;
+    const scoring = workflow.nodes["preview-scoring"].result;
+    const previews = workflow.nodes["preview-execution"].result;
+    if (!isPreviewScoringResult(scoring) || scoring.rubricVersion !== 2 || !isPreviewExecutionResult(previews) ||
+        selectedCandidateIds.length !== previews.finalCount || new Set(selectedCandidateIds).size !== previews.finalCount) return;
+    const successfulIds = new Set(previews.candidates.filter((candidate) => candidate.status === "done").map((candidate) => candidate.candidateId));
+    const scoredIds = new Set(scoring.scores.map((score) => score.candidateId));
+    if (!selectedCandidateIds.every((id) => successfulIds.has(id) && scoredIds.has(id))) return;
+    const manuallySelected = setTimelineNodeManualResult(workflow, "preview-scoring", {
+      ...scoring,
+      selectedCandidateIds,
+      selectionSource: "manual",
+      ...createTimelinePreviewSelectionFallbackMetadata(scoring.scores, selectedCandidateIds),
+    } satisfies PreviewScoringTimelineResult);
+    const reselectionWorkflow: TimelineWorkflowState = {
+      ...manuallySelected,
+      nodes: {
+        ...manuallySelected.nodes,
+        "comfyui-execution": {
+          ...manuallySelected.nodes["comfyui-execution"],
+          result: undefined,
+          error: undefined,
+        },
+      },
+    };
+    commitWorkflow(reselectionWorkflow, { selectedNodeId: "preview-scoring" });
+    void runGenerationRetry(reselectionWorkflow, "comfyui-execution");
   }
 
   function startWorkflow() {
@@ -1806,7 +1943,8 @@ export function TimelineShell() {
     setWorkflowProjectId(null);
     setWorkflowProjectName("");
     const nextWorkflow = createTimelineWorkflowState({
-      imageCount: selectedSourceImage ? 1 : selectedImageCount,
+      imageCount: selectedImageCount,
+      nsfw: useEditorStore.getState().project.settings.supportsNsfw === true,
       promptProfile: selectedPromptProfile,
       sceneRequest: trimmedSceneRequest,
       settingsSnapshot: getComposerSettingsSnapshot(),
@@ -1817,7 +1955,7 @@ export function TimelineShell() {
       workflow: nextWorkflow,
       sceneRequest: trimmedSceneRequest,
       selectedPromptProfile,
-      selectedImageCount: selectedSourceImage ? 1 : selectedImageCount,
+      selectedImageCount,
       selectedNodeId: "scene-input",
       outputDisplayModes: {},
     };
@@ -1844,9 +1982,6 @@ export function TimelineShell() {
       });
     commitWorkflow(nextWorkflow, initialAutosaveInput);
     setSceneRequest(trimmedSceneRequest);
-    if (selectedSourceImage) {
-      setSelectedImageCount(1);
-    }
     setSelectedNodeId("scene-input");
     setEditingNodeId(null);
     setDrafts({});
@@ -1883,7 +2018,8 @@ export function TimelineShell() {
     invalidateTimelineRun();
     commitWorkflow(setTimelineNodeManualResult(workflow, "scene-input", {
       rawIntent,
-      imageCount: selectedSourceImage ? 1 : selectedImageCount,
+      imageCount: selectedImageCount,
+      ...(useEditorStore.getState().project.settings.supportsNsfw === true ? { nsfw: true } : {}),
       promptProfile,
       ...(selectedSourceImage ? { sourceDenoise: selectedSourceDenoise } : {}),
       ...(selectedSourceImage ? { sourceImage: selectedSourceImage } : {}),
@@ -1891,16 +2027,11 @@ export function TimelineShell() {
     } satisfies SceneInputTimelineResult), {
       sceneRequest: rawIntent,
       selectedPromptProfile: promptProfile,
-      selectedImageCount: selectedSourceImage ? 1 : selectedImageCount,
+      selectedImageCount,
     });
   }
 
   function handleImageCountChange(value: string) {
-    if (selectedSourceImage) {
-      setSelectedImageCount(1);
-      return;
-    }
-
     const imageCount = normalizeTimelineImageCount(value);
     setSelectedImageCount(imageCount);
 
@@ -1917,7 +2048,9 @@ export function TimelineShell() {
     commitWorkflow(setTimelineNodeManualResult(workflow, "scene-input", {
       rawIntent,
       imageCount,
+      ...(useEditorStore.getState().project.settings.supportsNsfw === true ? { nsfw: true } : {}),
       promptProfile: selectedPromptProfile,
+      ...(selectedSourceImage ? { sourceDenoise: selectedSourceDenoise, sourceImage: selectedSourceImage } : {}),
       settingsSnapshot: getComposerSettingsSnapshot(),
     } satisfies SceneInputTimelineResult), {
       sceneRequest: rawIntent,
@@ -1933,7 +2066,6 @@ export function TimelineShell() {
     const sourceDenoise = normalizeTimelineSourceDenoise(selectedSourceDenoise);
     setSelectedSourceImage(sourceImage);
     if (sourceImage) {
-      setSelectedImageCount(1);
       setSelectedSourceDenoise(sourceDenoise);
     }
 
@@ -1947,10 +2079,11 @@ export function TimelineShell() {
     }
 
     invalidateTimelineRun();
-    const imageCount = sourceImage ? 1 : selectedImageCount;
+    const imageCount = selectedImageCount;
     commitWorkflow(setTimelineNodeManualResult(workflow, "scene-input", {
       rawIntent,
       imageCount,
+      ...(useEditorStore.getState().project.settings.supportsNsfw === true ? { nsfw: true } : {}),
       promptProfile: selectedPromptProfile,
       ...(sourceImage ? { sourceDenoise } : {}),
       ...(sourceImage ? { sourceImage } : {}),
@@ -1962,7 +2095,7 @@ export function TimelineShell() {
     setNotices((current) => ({
       ...current,
       "scene-input": sourceImage
-        ? "Source image attached. Downstream generation will use img2img with one output."
+        ? `Source image attached. Downstream previews will use img2img and deliver ${imageCount} final image${imageCount === 1 ? "" : "s"}.`
         : "Source image removed. Downstream generation will return to text-to-image.",
     }));
   }
@@ -1983,14 +2116,15 @@ export function TimelineShell() {
     invalidateTimelineRun();
     commitWorkflow(setTimelineNodeManualResult(workflow, "scene-input", {
       rawIntent,
-      imageCount: 1,
+      imageCount: selectedImageCount,
+      ...(useEditorStore.getState().project.settings.supportsNsfw === true ? { nsfw: true } : {}),
       promptProfile: selectedPromptProfile,
       sourceDenoise: denoise,
       sourceImage: selectedSourceImage,
       settingsSnapshot: getComposerSettingsSnapshot(),
     } satisfies SceneInputTimelineResult), {
       sceneRequest: rawIntent,
-      selectedImageCount: 1,
+      selectedImageCount,
     });
     setNotices((current) => ({
       ...current,
@@ -2353,7 +2487,8 @@ export function TimelineShell() {
       const nextWorkflow = workflow
         ? setTimelineNodeManualResult(workflow, "scene-input", {
             rawIntent: nextSceneRequest,
-            imageCount: selectedSourceImage ? 1 : selectedImageCount,
+            imageCount: selectedImageCount,
+            ...(useEditorStore.getState().project.settings.supportsNsfw === true ? { nsfw: true } : {}),
             promptProfile: selectedPromptProfile,
             ...(selectedSourceImage ? { sourceDenoise: selectedSourceDenoise } : {}),
             ...(selectedSourceImage ? { sourceImage: selectedSourceImage } : {}),
@@ -2364,7 +2499,7 @@ export function TimelineShell() {
       if (nextWorkflow) {
         commitWorkflow(nextWorkflow, {
           sceneRequest: nextSceneRequest,
-          selectedImageCount: selectedSourceImage ? 1 : selectedImageCount,
+          selectedImageCount,
         });
       }
       setSceneRequest(nextSceneRequest);
@@ -2421,6 +2556,11 @@ export function TimelineShell() {
 
     if (nodeId === "scene-input") {
       void handleSceneInputAi("rewrite");
+      return;
+    }
+
+    if (nodeId === "preview-execution" || nodeId === "preview-scoring" || nodeId === "comfyui-execution") {
+      void runGenerationRetry(workflow, nodeId);
       return;
     }
 
@@ -2727,10 +2867,10 @@ export function TimelineShell() {
           </label>
           <select
             className="h-8 rounded-md border border-slate-200 bg-white px-2 text-xs text-slate-800 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
-            disabled={isRunning || Boolean(selectedSourceImage)}
+            disabled={isRunning}
             id="timeline-image-count"
             onChange={(event) => handleImageCountChange(event.target.value)}
-            value={selectedSourceImage ? 1 : selectedImageCount}
+            value={selectedImageCount}
           >
             {timelineImageCountOptions.map((count) => (
               <option key={count} value={count}>
@@ -2776,8 +2916,8 @@ export function TimelineShell() {
             <div className="min-w-0 flex-1 text-xs leading-relaxed text-slate-600">
               <p className="break-all font-medium text-slate-800">{selectedSourceImage.filename}</p>
               <p>
-                {selectedSourceImage.width}x{selectedSourceImage.height} source image. Img2img uses one
-                output.
+                {selectedSourceImage.width}x{selectedSourceImage.height} source image. Img2img delivers the selected
+                {` ${selectedImageCount}`} final output{selectedImageCount === 1 ? "" : "s"}.
               </p>
               <label className="mt-2 flex max-w-48 flex-col gap-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
                 Denoise
@@ -2849,6 +2989,27 @@ export function TimelineShell() {
     const simpleProgress = getSimpleTimelineProgress(workflow);
     const simpleNotice = notices["generation-gate"] ?? notices["scene-input"] ?? notices[selectedNodeId];
     const resultNode = activeWorkflow.nodes["result-display"];
+    const simpleGenerationErrorNodeId = (["preview-execution", "preview-scoring", "comfyui-execution"] as const)
+      .find((nodeId) => activeWorkflow.nodes[nodeId].status === "error");
+    const simpleGenerationPhaseNodeId = (["preview-execution", "preview-scoring", "comfyui-execution"] as const)
+      .find((nodeId) => activeWorkflow.nodes[nodeId].status === "running") ??
+      (isRunning && (selectedNodeId === "preview-execution" || selectedNodeId === "preview-scoring" || selectedNodeId === "comfyui-execution")
+        ? selectedNodeId
+        : undefined);
+    const simpleFinalResult = activeWorkflow.nodes["comfyui-execution"].result;
+    const simpleFinalDoneCount = isRecord(simpleFinalResult) && Array.isArray(simpleFinalResult.finals)
+      ? simpleFinalResult.finals.filter((item) => isRecord(item) && item.status === "done").length
+      : 0;
+    const simpleFinalCount = isRecord(simpleFinalResult) && typeof simpleFinalResult.finalCount === "number"
+      ? simpleFinalResult.finalCount
+      : selectedImageCount;
+    const simpleScoringResult = activeWorkflow.nodes["preview-scoring"].result;
+    const simpleSelectionWarning = isPreviewScoringResult(simpleScoringResult) && simpleScoringResult.rubricVersion === 2
+      ? createTimelinePreviewSelectionFallbackMetadata(
+          simpleScoringResult.scores,
+          simpleScoringResult.selectedCandidateIds,
+        ).selectionWarning
+      : undefined;
 
     return (
       <main className="sf-app-shell flex min-h-0 flex-col overflow-hidden bg-slate-100 font-sans text-slate-950 selection:bg-blue-100 selection:text-blue-900">
@@ -2974,6 +3135,45 @@ export function TimelineShell() {
               <section className="flex gap-2 rounded-md border border-blue-200 bg-blue-50 p-3 text-xs leading-relaxed text-blue-700">
                 <Bot className="mt-0.5 size-4 shrink-0" />
                 <p>{simpleNotice}</p>
+              </section>
+            ) : null}
+
+            {simpleSelectionWarning ? (
+              <section className="flex gap-2 rounded-md border border-amber-200 bg-amber-50 p-3 text-xs leading-relaxed text-amber-800">
+                <Bot className="mt-0.5 size-4 shrink-0" />
+                <p>{simpleSelectionWarning}</p>
+              </section>
+            ) : null}
+
+            {simpleGenerationPhaseNodeId ? (
+              <section className="rounded-md border border-blue-200 bg-blue-50 p-3 text-xs leading-relaxed text-blue-800">
+                <p className="font-semibold">{timelineNodeContent[simpleGenerationPhaseNodeId].title} is running.</p>
+                <p className="mt-1 text-blue-700">
+                  Confirmed generation advances one persisted server stage at a time. Completed previews and scores are
+                  retained before the next stage starts, so a later failure never repeats a successful upstream stage.
+                </p>
+              </section>
+            ) : null}
+
+            {workflow && simpleGenerationErrorNodeId ? (
+              <section className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-red-200 bg-red-50 p-4 text-xs text-red-800 shadow-sm">
+                <div className="min-w-0">
+                  <p className="font-semibold">{timelineNodeContent[simpleGenerationErrorNodeId].title} needs attention.</p>
+                  <p className="mt-1 leading-relaxed">{activeWorkflow.nodes[simpleGenerationErrorNodeId].error?.message}</p>
+                  {simpleGenerationErrorNodeId === "comfyui-execution" && simpleFinalDoneCount > 0 ? (
+                    <p className="mt-1 text-red-700">{simpleFinalDoneCount}/{simpleFinalCount} finals are safely stored. Retry renders only missing or invalid selections.</p>
+                  ) : null}
+                </div>
+                <Button
+                  className="h-9 shrink-0 px-3 text-xs shadow-none"
+                  disabled={isRunning}
+                  onClick={() => void runGenerationRetry(workflow, simpleGenerationErrorNodeId)}
+                  type="button"
+                  variant="secondary"
+                >
+                  <RefreshCw className="size-3.5" />
+                  Retry {timelineNodeContent[simpleGenerationErrorNodeId].title.toLowerCase()}
+                </Button>
               </section>
             ) : null}
 
@@ -3219,10 +3419,10 @@ export function TimelineShell() {
                       </label>
                       <select
                         className="h-8 rounded-md border border-slate-200 bg-white px-2 text-xs text-slate-800 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
-                        disabled={isRunning || Boolean(selectedSourceImage)}
+                        disabled={isRunning}
                         id="timeline-image-count"
                         onChange={(event) => handleImageCountChange(event.target.value)}
-                        value={selectedSourceImage ? 1 : selectedImageCount}
+                        value={selectedImageCount}
                       >
                         {timelineImageCountOptions.map((count) => (
                           <option key={count} value={count}>
@@ -3268,8 +3468,8 @@ export function TimelineShell() {
                         <div className="min-w-0 flex-1 text-xs leading-relaxed text-slate-600">
                           <p className="break-all font-medium text-slate-800">{selectedSourceImage.filename}</p>
                           <p>
-                            {selectedSourceImage.width}x{selectedSourceImage.height} source image. Img2img uses one
-                            output.
+                            {selectedSourceImage.width}x{selectedSourceImage.height} source image. Img2img uses the
+                            selected {selectedImageCount} final output{selectedImageCount === 1 ? "" : "s"}.
                           </p>
                           <label className="mt-2 flex max-w-48 flex-col gap-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
                             Denoise
@@ -3508,6 +3708,17 @@ export function TimelineShell() {
                       key={selectedNode.updatedAt}
                       node={selectedNode}
                       onSave={handleSaveParameterRecommendationVisual}
+                    />
+                  ) : selectedOutputDisplayMode === "visual" &&
+                      (selectedWorkspaceKey === "preview-execution" || selectedWorkspaceKey === "preview-scoring") ? (
+                    <TimelinePreviewWorkspace
+                      disabled={isRunning}
+                      key={`${activeWorkflow.nodes["preview-execution"].updatedAt}-${activeWorkflow.nodes["preview-scoring"].updatedAt}`}
+                      onRegenerate={handlePreviewSelection}
+                      previews={isPreviewExecutionResult(activeWorkflow.nodes["preview-execution"].result)
+                        ? activeWorkflow.nodes["preview-execution"].result : null}
+                      scoring={isPreviewScoringResult(activeWorkflow.nodes["preview-scoring"].result)
+                        ? activeWorkflow.nodes["preview-scoring"].result : null}
                     />
                   ) : selectedOutputDisplayMode === "visual" && selectedWorkspaceKey === "result-display" ? (
                     <TimelineResultDisplayWorkspace

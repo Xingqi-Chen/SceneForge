@@ -3,12 +3,15 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import type { ComfyUiViewImageReference } from "./types";
+import {
+  MANAGED_GENERATED_IMAGE_FILENAME_PATTERN,
+  MAX_MANAGED_GENERATED_IMAGE_BYTES,
+  normalizeComfyUiViewImageReference,
+} from "./generated-image-reference";
 
 export const COMFYUI_GENERATED_IMAGE_ROUTE_PREFIX = "/api/comfyui/generated-images";
 
 const DEFAULT_GENERATED_IMAGE_DIR = path.join(/*turbopackIgnore: true*/ process.cwd(), "data", "comfyui-generated-images");
-const GENERATED_IMAGE_FILENAME_PATTERN = /^[a-f0-9]{32}\.(?:gif|jpg|jpeg|png|webp)$/i;
-const MAX_GENERATED_IMAGE_BYTES = 64 * 1024 * 1024;
 
 const CONTENT_TYPE_EXTENSIONS = new Map([
   ["image/gif", "gif"],
@@ -28,14 +31,6 @@ export class ComfyUiGeneratedImageStorageError extends Error {
   }
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function readOptionalString(value: unknown) {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
 export function getResolvedGeneratedImagesDir() {
   return path.resolve(/*turbopackIgnore: true*/ process.env.SCENEFORGE_GENERATED_IMAGES_DIR || DEFAULT_GENERATED_IMAGE_DIR);
 }
@@ -53,50 +48,14 @@ function assertInsideDirectory(root: string, target: string) {
   }
 }
 
-function sanitizePathPart(value: string | undefined, fieldName: string) {
-  if (value === undefined) {
-    return undefined;
-  }
-
-  const normalized = value.replace(/\\/g, "/");
-  if (
-    normalized.startsWith("/") ||
-    normalized.includes("..") ||
-    normalized.split("/").some((part) => part.length === 0)
-  ) {
-    throw new ComfyUiGeneratedImageStorageError(`Invalid ${fieldName}.`);
-  }
-
+export function sanitizeComfyUiViewImageReference(value: unknown): ComfyUiViewImageReference {
+  const normalized = normalizeComfyUiViewImageReference(value);
+  if (!normalized) throw new ComfyUiGeneratedImageStorageError("Invalid image reference.");
   return normalized;
 }
 
-export function sanitizeComfyUiViewImageReference(value: unknown): ComfyUiViewImageReference {
-  if (!isRecord(value)) {
-    throw new ComfyUiGeneratedImageStorageError("image reference is required.");
-  }
-
-  const filename = readOptionalString(value.filename);
-  if (!filename) {
-    throw new ComfyUiGeneratedImageStorageError("image filename is required.");
-  }
-
-  const safeFilename = sanitizePathPart(filename, "filename");
-  if (!safeFilename || safeFilename.includes("/")) {
-    throw new ComfyUiGeneratedImageStorageError("Invalid image filename.");
-  }
-
-  const subfolder = sanitizePathPart(readOptionalString(value.subfolder), "subfolder");
-  const type = readOptionalString(value.type);
-
-  return {
-    filename: safeFilename,
-    ...(subfolder !== undefined ? { subfolder } : {}),
-    ...(type !== undefined ? { type } : {}),
-  };
-}
-
 export function getGeneratedImagePath(filename: string) {
-  if (!GENERATED_IMAGE_FILENAME_PATTERN.test(filename)) {
+  if (!MANAGED_GENERATED_IMAGE_FILENAME_PATTERN.test(filename)) {
     return null;
   }
 
@@ -136,7 +95,7 @@ export async function storeGeneratedImage(bytes: Uint8Array, contentType: string
     throw new ComfyUiGeneratedImageStorageError("ComfyUI returned an empty image.", 502);
   }
 
-  if (bytes.byteLength > MAX_GENERATED_IMAGE_BYTES) {
+  if (bytes.byteLength > MAX_MANAGED_GENERATED_IMAGE_BYTES) {
     throw new ComfyUiGeneratedImageStorageError("Generated image is too large to save.", 413);
   }
 

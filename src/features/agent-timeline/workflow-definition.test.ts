@@ -209,7 +209,7 @@ describe("common workflow definitions", () => {
 
   it("exposes single-image node metadata for definition-driven runtime orchestration", () => {
     expect(singleImageWorkflowDefinition.mode).toBe("single-image");
-    expect(singleImageWorkflowDefinition.version).toBe(1);
+    expect(singleImageWorkflowDefinition.version).toBe(2);
     expect(singleImageWorkflowDefinition.nodeIds).toEqual(timelineNodeIds);
     expect(singleImageWorkflowDefinition.dependencyDag["generation-gate"]).toEqual([
       "scene-prompt",
@@ -219,6 +219,9 @@ describe("common workflow definitions", () => {
       "resource-recommendation",
       "parameter-recommendation",
     ]);
+    expect(singleImageWorkflowDefinition.dependencyDag["preview-execution"]).toEqual(["generation-gate"]);
+    expect(singleImageWorkflowDefinition.dependencyDag["preview-scoring"]).toEqual(["preview-execution"]);
+    expect(singleImageWorkflowDefinition.dependencyDag["comfyui-execution"]).toEqual(["preview-scoring"]);
     expect(singleImageWorkflowDefinition.adapterFactory({
       "scene-prompt": () => ({ prompt: "adapter" }),
     })["scene-prompt"]).toBeDefined();

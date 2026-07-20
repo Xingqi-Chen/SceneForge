@@ -11,6 +11,8 @@ import {
   getTimelineNodeDependencies,
   isReservedTimelineNodeId,
   isTimelineNodeRegenerationEligible,
+  requireTimelineGenerationReconfirmation,
+  retryTimelineGenerationFrom,
   setTimelineNodeManualResult,
   updateTimelineSceneInputSettings,
   validateTimelineDependencyDag,
@@ -99,10 +101,14 @@ describe("agent timeline workflow foundation", () => {
       "resource-recommendation",
       "parameter-recommendation",
     ]);
-    expect(getTimelineNodeDependencies("comfyui-execution")).toEqual(["generation-gate"]);
+    expect(getTimelineNodeDependencies("preview-execution")).toEqual(["generation-gate"]);
+    expect(getTimelineNodeDependencies("preview-scoring")).toEqual(["preview-execution"]);
+    expect(getTimelineNodeDependencies("comfyui-execution")).toEqual(["preview-scoring"]);
     expect(getTimelineDownstreamClosure("canvas-binding")).toEqual([
       "parameter-recommendation",
       "generation-gate",
+      "preview-execution",
+      "preview-scoring",
       "comfyui-execution",
       "result-display",
     ]);
@@ -556,6 +562,26 @@ describe("agent timeline workflow foundation", () => {
     workflow = confirmTimelineGeneration(workflow, undefined, { now: clock });
 
     const adapters: TimelineNodeAdapters = {
+      "preview-execution": (context) => {
+        expect(context.workflow.generationConfirmed).toBe(true);
+        return {
+          value: {
+            finalCount: 1,
+            candidates: [{ candidateId: "preview-1", status: "done" }],
+          },
+          source: "system",
+        };
+      },
+      "preview-scoring": (context) => {
+        expect(context.workflow.nodes["preview-execution"].status).toBe("done");
+        return {
+          value: {
+            selectedCandidateIds: ["preview-1"],
+            scores: [],
+          },
+          source: "ai",
+        };
+      },
       "comfyui-execution": (context) => {
         expect(context.workflow.generationConfirmed).toBe(true);
         expect(context.workflow.nodes["generation-gate"].status).toBe("manual");
@@ -622,5 +648,100 @@ describe("agent timeline workflow foundation", () => {
         },
       },
     });
+  });
+
+  it.each([
+    ["preview-execution", ["preview-execution", "preview-scoring", "comfyui-execution", "result-display"]],
+    ["preview-scoring", ["preview-scoring", "comfyui-execution", "result-display"]],
+    ["comfyui-execution", ["comfyui-execution", "result-display"]],
+  ] as const)("stales only the %s retry phase and its descendants", (nodeId, expectedStale) => {
+    const clock = createClock();
+    let workflow = confirmTimelineGeneration(createReadyForGateWorkflow(clock), undefined, { now: clock });
+    for (const phase of ["preview-execution", "preview-scoring", "comfyui-execution", "result-display"] as const) {
+      workflow = completeTimelineNode(workflow, phase, { phase }, "system", { now: clock });
+    }
+
+    const retried = retryTimelineGenerationFrom(workflow, nodeId, { now: clock });
+    for (const phase of ["preview-execution", "preview-scoring", "comfyui-execution", "result-display"] as const) {
+      expect(retried.nodes[phase].status, phase).toBe((expectedStale as readonly string[]).includes(phase) ? "stale" : "done");
+    }
+    expect(retried.generationConfirmed).toBe(true);
+    expect(retried.nodes["generation-gate"].status).toBe("manual");
+    expect(retried.nodes["preview-execution"].result).toMatchObject({ phase: "preview-execution" });
+    expect(retried.nodes["preview-execution"].result).not.toHaveProperty("advanceSeedOnRetry");
+  });
+
+  it("strips legacy preview retry markers across upstream edits, settings staleness, and reconfirmation", () => {
+    const createMarkedWorkflow = () => {
+      const clock = createClock();
+      let workflow = confirmTimelineGeneration(createReadyForGateWorkflow(clock), undefined, { now: clock });
+      workflow = completeTimelineNode(workflow, "preview-execution", {
+        advanceSeedOnRetry: true,
+        baseSeed: 100,
+        candidateCount: 4,
+        finalCount: 1,
+        previewHeight: 768,
+        previewWidth: 768,
+        previewSteps: 20,
+        candidates: [],
+        successfulCount: 0,
+        warnings: [],
+      }, "system", { now: clock });
+      return { clock, workflow };
+    };
+
+    const upstream = createMarkedWorkflow();
+    const afterUpstreamEdit = setTimelineNodeManualResult(
+      upstream.workflow,
+      "scene-prompt",
+      { prompt: "revised glass greenhouse" },
+      { now: upstream.clock },
+    );
+    expect(afterUpstreamEdit.nodes["preview-execution"].result).not.toHaveProperty("advanceSeedOnRetry");
+
+    const settings = createMarkedWorkflow();
+    const afterSettingsEdit = updateTimelineSceneInputSettings(
+      settings.workflow,
+      sanitizeRunSceneInputSettingsSnapshot({
+        detailers: { faceDetailer: { enabled: true }, handDetailer: { enabled: false } },
+        promptProfile: "illustrious",
+      }),
+      "parameter-recommendation",
+      { now: settings.clock },
+    );
+    expect(afterSettingsEdit.nodes["preview-execution"].result).not.toHaveProperty("advanceSeedOnRetry");
+
+    const reconfirmation = createMarkedWorkflow();
+    const afterReconfirmation = requireTimelineGenerationReconfirmation(
+      reconfirmation.workflow,
+      undefined,
+      { now: reconfirmation.clock },
+    );
+    expect(afterReconfirmation.nodes["preview-execution"].result).not.toHaveProperty("advanceSeedOnRetry");
+  });
+
+  it("manual preview selection stales only final execution and result display", () => {
+    const clock = createClock();
+    let workflow = confirmTimelineGeneration(createReadyForGateWorkflow(clock), undefined, { now: clock });
+    workflow = completeTimelineNode(workflow, "preview-execution", { finalCount: 1, candidates: [] }, "system", { now: clock });
+    workflow = completeTimelineNode(workflow, "preview-scoring", {
+      selectedCandidateIds: ["preview-1"],
+      selectionSource: "ai",
+      scores: [],
+    }, "ai", { now: clock });
+    workflow = completeTimelineNode(workflow, "comfyui-execution", { completed: true }, "system", { now: clock });
+    workflow = completeTimelineNode(workflow, "result-display", { completed: true }, "system", { now: clock });
+
+    const edited = setTimelineNodeManualResult(workflow, "preview-scoring", {
+      selectedCandidateIds: ["preview-2"],
+      selectionSource: "manual",
+      scores: [],
+    }, { now: clock });
+
+    expect(edited.nodes["preview-execution"].status).toBe("done");
+    expect(edited.nodes["preview-scoring"]).toMatchObject({ status: "manual", source: "manual" });
+    expect(edited.nodes["comfyui-execution"].status).toBe("stale");
+    expect(edited.nodes["result-display"].status).toBe("stale");
+    expect(edited.generationConfirmed).toBe(true);
   });
 });

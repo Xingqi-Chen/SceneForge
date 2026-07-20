@@ -41,6 +41,8 @@ export const timelineNodeIds = [
   "resource-recommendation",
   "parameter-recommendation",
   "generation-gate",
+  "preview-execution",
+  "preview-scoring",
   "comfyui-execution",
   "result-display",
 ] as const;
@@ -56,6 +58,8 @@ export const executableTimelineNodeIds = [
   "resource-recommendation",
   "parameter-recommendation",
   "generation-gate",
+  "preview-execution",
+  "preview-scoring",
   "comfyui-execution",
   "result-display",
 ] as const satisfies readonly TimelineNodeId[];
@@ -119,6 +123,7 @@ export type SceneInputTimelineResult = {
   rawIntent: string;
   promptProfile: PromptProfileId;
   imageCount: number;
+  nsfw?: boolean;
   sourceDenoise?: number;
   sourceImage?: {
     dataUrl: string;
@@ -246,17 +251,153 @@ export type ParameterRecommendationTimelineResult = {
 export type GenerationGateTimelineResult = {
   confirmationRequired: boolean;
   confirmed: boolean;
+  confirmationFingerprint?: string;
+};
+
+export const previewScoringRubric = {
+  adherence: 0.3,
+  composition: 0.25,
+  anatomy: 0.2,
+  style: 0.15,
+  technical: 0.1,
+} as const;
+
+export type TimelinePreviewScore = {
+  adherence: number;
+  composition: number;
+  anatomy: number;
+  style: number;
+  technical: number;
+  total: number;
+  rationale?: string;
+};
+
+export const timelinePreviewCriticalDefectCategories = [
+  "spatial_physical_contradiction",
+  "gaze_or_action_mismatch",
+  "subject_scale_or_framing",
+  "severe_exposure",
+  "anatomy_or_structure",
+] as const;
+
+export type TimelinePreviewCriticalDefectCategory =
+  (typeof timelinePreviewCriticalDefectCategories)[number];
+
+export const timelinePreviewBlockingDefectCategories = [
+  "spatial_physical_contradiction",
+  "severe_exposure",
+  "anatomy_or_structure",
+] as const satisfies readonly TimelinePreviewCriticalDefectCategory[];
+
+export type TimelinePreviewCriticalDefect = {
+  category: TimelinePreviewCriticalDefectCategory;
+  description: string;
+};
+
+export type TimelinePreviewEligibleScore = TimelinePreviewScore & {
+  criticalDefects: TimelinePreviewCriticalDefect[];
+  eligible: boolean;
+};
+
+export type TimelinePreviewCandidate = {
+  candidateId: string;
+  index: number;
+  seed: number;
+  status: "done" | "error";
+  promptId?: string;
+  sourceImage?: {
+    filename: string;
+    nodeId: string;
+    subfolder?: string;
+    type?: string;
+  };
+  storedImage?: TimelineStoredGeneratedImage;
+  error?: TimelineNodeError;
+};
+
+export type PreviewExecutionTimelineResult = {
+  baseSeed: number;
+  candidateCount: number;
+  finalCount: number;
+  previewHeight: number;
+  previewWidth: number;
+  previewSteps: number;
+  candidates: TimelinePreviewCandidate[];
+  successfulCount: number;
+  warnings: string[];
+};
+
+type PreviewScoringTimelineResultBase = {
+  selectedCandidateIds: string[];
+  selectionSource: "ai" | "manual";
+};
+
+export type TimelinePreviewSelectionFallbackMetadata = {
+  eligibleCount: number;
+  fallbackCandidateIds: string[];
+  selectionWarning?: string;
+};
+
+export function createTimelinePreviewSelectionFallbackMetadata(
+  scores: ReadonlyArray<{ candidateId: string; eligible: boolean }>,
+  selectedCandidateIds: readonly string[],
+): TimelinePreviewSelectionFallbackMetadata {
+  const eligibleCount = scores.filter((score) => score.eligible).length;
+  const eligibilityById = new Map(scores.map((score) => [score.candidateId, score.eligible]));
+  const fallbackCandidateIds = selectedCandidateIds.filter(
+    (candidateId) => eligibilityById.get(candidateId) === false,
+  );
+  return {
+    eligibleCount,
+    fallbackCandidateIds,
+    ...(fallbackCandidateIds.length > 0 ? {
+      selectionWarning:
+        `Only ${eligibleCount} preview candidate${eligibleCount === 1 ? "" : "s"} passed blocking-defect checks; ` +
+        `${fallbackCandidateIds.length} annotated fallback candidate${fallbackCandidateIds.length === 1 ? " was" : "s were"} selected. ` +
+        "Review the preserved defect annotations before final use.",
+    } : {}),
+  };
+}
+
+export type PreviewScoringTimelineResultV1 = PreviewScoringTimelineResultBase & {
+  rubricVersion: 1;
+  scores: Array<TimelinePreviewScore & { candidateId: string; rank: number }>;
+};
+
+export type PreviewScoringTimelineResultV2 = PreviewScoringTimelineResultBase & {
+  rubricVersion: 2;
+  scores: Array<TimelinePreviewEligibleScore & { candidateId: string; rank: number }>;
+} & Partial<TimelinePreviewSelectionFallbackMetadata>;
+
+export type PreviewScoringTimelineResult = PreviewScoringTimelineResultV1 | PreviewScoringTimelineResultV2;
+
+export type TimelineFinalExecutionRecord = {
+  candidateId: string;
+  seed: number;
+  rank: number;
+  status: "done" | "error";
+  promptId?: string;
+  sourceImage?: {
+    filename: string;
+    nodeId: string;
+    subfolder?: string;
+    type?: string;
+  };
+  storedImage?: TimelineStoredGeneratedImage;
+  error?: TimelineNodeError;
 };
 
 export type ComfyUiExecutionTimelineResult = {
+  completed: boolean;
+  finalCount: number;
+  finals: TimelineFinalExecutionRecord[];
   nodeErrors?: unknown;
-  nodeIds: unknown;
+  nodeIds?: unknown;
   number?: number;
-  outputNodeId: string;
-  promptId: string;
+  outputNodeId?: string;
+  promptId?: string;
   request: ComfyUiTextToImageRequest;
   warnings: string[];
-  workflow?: unknown;
 };
 
 export type TimelineStoredGeneratedImage = {
@@ -298,6 +439,12 @@ export type ResultDisplayTimelineResult = {
   storedImage: TimelineStoredGeneratedImage;
   storedImages?: TimelineStoredGeneratedImage[];
   warnings: string[];
+  finalLinks?: Array<{
+    candidateId: string;
+    promptId: string;
+    rank: number;
+    seed: number;
+  }>;
 };
 
 export type TimelineNodeExecutionContext = {

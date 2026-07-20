@@ -29,6 +29,7 @@ type TimelineClock = () => string;
 type TimelineWorkflowOptions = {
   workflowId?: string;
   imageCount?: number;
+  nsfw?: boolean;
   promptProfile?: PromptProfileId;
   sceneRequest?: string;
   sourceDenoise?: number;
@@ -206,7 +207,8 @@ export function createTimelineWorkflowState(options: TimelineWorkflowOptions = {
     result: {
       rawIntent: options.sceneRequest,
       promptProfile: normalizePromptProfileId(options.promptProfile),
-      imageCount: options.sourceImage ? 1 : normalizeTimelineImageCount(options.imageCount),
+      imageCount: normalizeTimelineImageCount(options.imageCount),
+      ...(options.nsfw === true ? { nsfw: true } : {}),
       ...(options.sourceImage ? { sourceDenoise: normalizeTimelineSourceDenoise(options.sourceDenoise) } : {}),
       ...(options.sourceImage ? { sourceImage: options.sourceImage } : {}),
       settingsSnapshot: sanitizeRunSceneInputSettingsSnapshot(options.settingsSnapshot),
@@ -304,10 +306,15 @@ export function failTimelineNode(
   const now = options.now ?? defaultNow;
   const updatedAt = now();
   const nodes = cloneNodeMap(workflow.nodes);
+  const normalizedError = normalizeTimelineError(error);
+  const partialResult = isRecord(normalizedError.details) && isRecord(normalizedError.details.partialResult)
+    ? normalizedError.details.partialResult
+    : undefined;
   nodes[nodeId] = {
     ...nodes[nodeId],
     status: "error",
-    error: normalizeTimelineError(error),
+    error: normalizedError,
+    ...(partialResult !== undefined ? { result: partialResult } : {}),
     updatedAt,
   };
 
@@ -353,6 +360,12 @@ export function setTimelineNodeManualResult<T>(
     trackManualEdit: false,
   });
   const nodes = edit.nodes as TimelineNodeMap;
+  if (edit.staleNodeIds.includes("preview-execution")) {
+    nodes["preview-execution"] = {
+      ...nodes["preview-execution"],
+      result: stripLegacyPreviewSeedRetryMarker(nodes["preview-execution"].result),
+    };
+  }
 
   const generationConfirmed =
     nodeId === "generation-gate" || edit.staleNodeIds.includes("generation-gate")
@@ -397,6 +410,9 @@ export function updateTimelineSceneInputSettings(
     nodes[nodeId] = {
       ...nodes[nodeId],
       status: "stale",
+      ...(nodeId === "preview-execution"
+        ? { result: stripLegacyPreviewSeedRetryMarker(nodes[nodeId].result) }
+        : {}),
       error: undefined,
       updatedAt,
     };
@@ -426,4 +442,79 @@ export function confirmTimelineGeneration(
   };
 
   return refreshTimelineReadiness(withUpdatedWorkflow(workflow, nodes, updatedAt, true));
+}
+
+export function requireTimelineGenerationReconfirmation(
+  workflow: TimelineWorkflowState,
+  message = "The generation contract changed. Review and confirm the Run again.",
+  options: TimelineMutationOptions = {},
+): TimelineWorkflowState {
+  const now = options.now ?? defaultNow;
+  const updatedAt = now();
+  const nodes = cloneNodeMap(workflow.nodes);
+  nodes["generation-gate"] = {
+    ...nodes["generation-gate"],
+    status: "blocked",
+    source: "system",
+    error: createTimelineNodeError("confirmation_required", message),
+    updatedAt,
+  };
+  for (const nodeId of ["preview-execution", "preview-scoring", "comfyui-execution", "result-display"] as const) {
+    nodes[nodeId] = {
+      ...nodes[nodeId],
+      status: "stale",
+      ...(nodeId === "preview-execution"
+        ? { result: stripLegacyPreviewSeedRetryMarker(nodes[nodeId].result) }
+        : {}),
+      error: undefined,
+      updatedAt,
+    };
+  }
+  return withUpdatedWorkflow(workflow, nodes, updatedAt, false);
+}
+
+export type TimelineGenerationRetryNodeId = "preview-execution" | "preview-scoring" | "comfyui-execution";
+
+function stripLegacyPreviewSeedRetryMarker(value: unknown) {
+  if (!isRecord(value) || !("advanceSeedOnRetry" in value)) return value;
+  const safeResult = { ...value };
+  delete safeResult.advanceSeedOnRetry;
+  return safeResult;
+}
+
+export function retryTimelineGenerationFrom(
+  workflow: TimelineWorkflowState,
+  nodeId: TimelineGenerationRetryNodeId,
+  options: TimelineMutationOptions = {},
+): TimelineWorkflowState {
+  const now = options.now ?? defaultNow;
+  const updatedAt = now();
+  const definition = getTimelineWorkflowDefinition(workflow.workflowMode);
+  const nodes = cloneNodeMap(workflow.nodes);
+  const staleNodeIds = [
+    nodeId,
+    ...getCommonWorkflowDownstreamClosure(nodeId, definition.nodeIds, definition.dependencyDag),
+  ];
+
+  for (const staleNodeId of staleNodeIds) {
+    const partialResult = staleNodeId === nodeId && isRecord(nodes[staleNodeId].error?.details) &&
+      isRecord(nodes[staleNodeId].error?.details?.partialResult)
+      ? nodes[staleNodeId].error?.details?.partialResult
+      : undefined;
+    nodes[staleNodeId] = {
+      ...nodes[staleNodeId],
+      status: "stale",
+      ...(partialResult !== undefined
+        ? { result: staleNodeId === "preview-execution"
+            ? stripLegacyPreviewSeedRetryMarker(partialResult)
+            : partialResult }
+        : staleNodeId === "preview-execution"
+          ? { result: stripLegacyPreviewSeedRetryMarker(nodes[staleNodeId].result) }
+          : {}),
+      ...(staleNodeId === nodeId ? {} : { error: undefined }),
+      updatedAt,
+    };
+  }
+
+  return refreshTimelineReadiness(withUpdatedWorkflow(workflow, nodes, updatedAt));
 }
