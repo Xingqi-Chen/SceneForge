@@ -8,6 +8,7 @@ import {
   createTimelineWorkflowState,
   getTimelinePreviewCandidateCount,
   getTimelinePreviewDimensions,
+  retryTimelineGenerationFrom,
   setTimelineNodeManualResult,
   type SceneInputTimelineResult,
 } from ".";
@@ -423,7 +424,7 @@ describe("timeline T8 ComfyUI request conversion", () => {
     );
     expect(requests.every(({ request }) =>
       request.batchSize === 1 &&
-      request.steps === 16 &&
+      request.steps === 20 &&
       request.width === 768 &&
       request.height === 768 &&
       request.preview === true &&
@@ -449,6 +450,132 @@ describe("timeline T8 ComfyUI request conversion", () => {
     );
   });
 
+  it("advances a fixed seed range on explicit preview retries and keeps consecutive ranges disjoint", () => {
+    let workflow = confirmTimelineGeneration(createConfirmedWorkflow(2));
+    workflow = setTimelineNodeManualResult(workflow, "preview-execution", {
+      baseSeed: 100,
+      candidateCount: 4,
+      finalCount: 2,
+      previewHeight: 768,
+      previewWidth: 768,
+      previewSteps: 20,
+      candidates: [],
+      successfulCount: 0,
+      warnings: [],
+    });
+
+    const firstRetry = retryTimelineGenerationFrom(workflow, "preview-execution");
+    expect(firstRetry.nodes["preview-execution"].result).not.toHaveProperty("advanceSeedOnRetry");
+    expect(createTimelinePreviewRequests(firstRetry).map((item) => item.seed)).toEqual([100, 101, 102, 103]);
+    expect(createTimelinePreviewRequests(firstRetry, { advancePreviewSeedOnRetry: true })
+      .map((item) => item.seed)).toEqual([104, 105, 106, 107]);
+
+    workflow = setTimelineNodeManualResult(firstRetry, "preview-execution", {
+      ...(firstRetry.nodes["preview-execution"].result as object),
+      baseSeed: 104,
+    });
+    const secondRetry = retryTimelineGenerationFrom(workflow, "preview-execution");
+    expect(createTimelinePreviewRequests(secondRetry, { advancePreviewSeedOnRetry: true })
+      .map((item) => item.seed)).toEqual([108, 109, 110, 111]);
+  });
+
+  it("wraps an explicitly retried fixed preview range to zero at MAX_SAFE_INTEGER", () => {
+    let workflow = confirmTimelineGeneration(createConfirmedWorkflow(2));
+    workflow = setTimelineNodeManualResult(workflow, "preview-execution", {
+      baseSeed: Number.MAX_SAFE_INTEGER - 3,
+      candidateCount: 4,
+      finalCount: 2,
+      previewHeight: 768,
+      previewWidth: 768,
+      previewSteps: 20,
+      candidates: [],
+      successfulCount: 0,
+      warnings: [],
+    });
+
+    const retried = retryTimelineGenerationFrom(workflow, "preview-execution");
+    expect(createTimelinePreviewRequests(retried).map((item) => item.seed)).toEqual([100, 101, 102, 103]);
+    expect(createTimelinePreviewRequests(retried, { advancePreviewSeedOnRetry: true })
+      .map((item) => item.seed)).toEqual([0, 1, 2, 3]);
+  });
+
+  it("does not advance a retained fixed seed during inspection or ordinary upstream stale/reconfirmation", () => {
+    let workflow = confirmTimelineGeneration(createConfirmedWorkflow(2));
+    workflow = setTimelineNodeManualResult(workflow, "preview-execution", {
+      baseSeed: 100,
+      candidateCount: 4,
+      finalCount: 2,
+      previewHeight: 768,
+      previewWidth: 768,
+      previewSteps: 20,
+      candidates: [],
+      successfulCount: 0,
+      warnings: [],
+    });
+    expect(createTimelinePreviewRequests(workflow).map((item) => item.seed)).toEqual([100, 101, 102, 103]);
+
+    workflow = setTimelineNodeManualResult(workflow, "scene-prompt", { positivePrompt: "revised greenhouse pilot" });
+    workflow = confirmTimelineGeneration(workflow);
+    expect(workflow.nodes["preview-execution"].result).not.toMatchObject({ advanceSeedOnRetry: true });
+    expect(createTimelinePreviewRequests(workflow).map((item) => item.seed)).toEqual([100, 101, 102, 103]);
+  });
+
+  it("uses a newly reviewed fixed seed after upstream staleness and strips a forged legacy retry marker", () => {
+    let workflow = confirmTimelineGeneration(createConfirmedWorkflow(2));
+    workflow = setTimelineNodeManualResult(workflow, "preview-execution", {
+      advanceSeedOnRetry: true,
+      baseSeed: 100,
+      candidateCount: 4,
+      finalCount: 2,
+      previewHeight: 768,
+      previewWidth: 768,
+      previewSteps: 20,
+      candidates: [],
+      successfulCount: 0,
+      warnings: [],
+    });
+    const parameters = workflow.nodes["parameter-recommendation"].result as Record<string, unknown>;
+    workflow = setTimelineNodeManualResult(workflow, "parameter-recommendation", {
+      ...parameters,
+      seedPolicy: { mode: "fixed", seed: 500 },
+    });
+
+    expect(workflow.nodes["preview-execution"].status).toBe("stale");
+    expect(workflow.nodes["preview-execution"].result).not.toHaveProperty("advanceSeedOnRetry");
+    workflow = confirmTimelineGeneration(workflow);
+    expect(createTimelinePreviewRequests(workflow).map((item) => item.seed)).toEqual([500, 501, 502, 503]);
+  });
+
+  it("materializes a fresh random seed instead of advancing retained retry state", () => {
+    const random = vi.spyOn(Math, "random").mockReturnValue(0.5);
+    let workflow = createConfirmedWorkflow(2);
+    workflow = setTimelineNodeManualResult(workflow, "parameter-recommendation", {
+      ...(workflow.nodes["parameter-recommendation"].result as object),
+      seedPolicy: { mode: "random" },
+    });
+    workflow = confirmTimelineGeneration(workflow);
+    workflow = setTimelineNodeManualResult(workflow, "preview-execution", {
+      baseSeed: 100,
+      candidateCount: 4,
+      finalCount: 2,
+      previewHeight: 768,
+      previewWidth: 768,
+      previewSteps: 20,
+      candidates: [],
+      successfulCount: 0,
+      warnings: [],
+    });
+    workflow = retryTimelineGenerationFrom(workflow, "preview-execution");
+    expect(workflow.nodes["preview-execution"].result).not.toHaveProperty("advanceSeedOnRetry");
+
+    random.mockClear();
+    const seeds = createTimelinePreviewRequests(workflow, { advancePreviewSeedOnRetry: true })
+      .map((item) => item.seed);
+    expect(random).toHaveBeenCalledTimes(1);
+    expect(seeds[0]).toBe(Math.floor(0.5 * (Number.MAX_SAFE_INTEGER - 4)));
+    expect(seeds).not.toEqual([104, 105, 106, 107]);
+  });
+
   it("keeps source-img2img K and source denoise for previews", () => {
     const workflow = confirmTimelineGeneration(createConfirmedWorkflow(4, {
       dataUrl: "data:image/png;base64,aGVsbG8=",
@@ -467,9 +594,9 @@ describe("timeline T8 ComfyUI request conversion", () => {
   });
 
   it.each([
-    ["Illustrious", "illustrious", 16, 0.6],
-    ["Anima", "anima", 18, 0.65],
-    ["Future XL", "future-profile", 16, 0.65],
+    ["Illustrious", "illustrious", 20, 0.6],
+    ["Anima", "anima", 20, 0.65],
+    ["Future XL", "future-profile", 20, 0.65],
   ] as const)(
     "applies balanced %s preview/final quality while inheriting formal sampler settings",
     (modelBaseModel, promptProfile, previewSteps, finalDenoise) => {
@@ -537,7 +664,7 @@ describe("timeline T8 ComfyUI request conversion", () => {
         warnings: [],
       });
       workflow = setTimelineNodeManualResult(workflow, "preview-scoring", {
-        rubricVersion: 1,
+        rubricVersion: 2,
         scores: previewRequests.map((item) => ({
           candidateId: item.candidateId,
           adherence: 100 - item.index,
@@ -546,6 +673,8 @@ describe("timeline T8 ComfyUI request conversion", () => {
           style: 100 - item.index,
           technical: 100 - item.index,
           total: 100 - item.index,
+          criticalDefects: [],
+          eligible: true,
           rank: item.index + 1,
         })),
         selectedCandidateIds: ["preview-1"],
@@ -596,10 +725,10 @@ describe("timeline T8 ComfyUI request conversion", () => {
       warnings: [],
     });
     workflow = setTimelineNodeManualResult(workflow, "preview-scoring", {
-      rubricVersion: 1,
+      rubricVersion: 2,
       scores: [
-        { candidateId: "preview-3", adherence: 90, composition: 91, anatomy: 92, style: 93, technical: 94, total: 91.5, rank: 1 },
-        { candidateId: "preview-1", adherence: 80, composition: 81, anatomy: 82, style: 83, technical: 84, total: 81.5, rank: 2 },
+        { candidateId: "preview-3", adherence: 90, composition: 91, anatomy: 92, style: 93, technical: 94, total: 91.5, criticalDefects: [], eligible: true, rank: 1 },
+        { candidateId: "preview-1", adherence: 80, composition: 81, anatomy: 82, style: 83, technical: 84, total: 81.5, criticalDefects: [], eligible: true, rank: 2 },
       ],
       selectedCandidateIds: ["preview-3", "preview-1"],
       selectionSource: "ai",
@@ -648,7 +777,7 @@ describe("timeline T8 ComfyUI request conversion", () => {
       warnings: [],
     });
     workflow = setTimelineNodeManualResult(workflow, "preview-scoring", {
-      rubricVersion: 1,
+      rubricVersion: 2,
       scores: [1, 2, 3, 4].map((number) => ({
         candidateId: `preview-${number}`,
         adherence: 100 - number,
@@ -657,6 +786,8 @@ describe("timeline T8 ComfyUI request conversion", () => {
         style: 100 - number,
         technical: 100 - number,
         total: 100 - number,
+        criticalDefects: [],
+        eligible: true,
         rank: number,
       })),
       selectedCandidateIds: ["preview-1", "preview-3"],
@@ -698,12 +829,78 @@ describe("timeline T8 ComfyUI request conversion", () => {
       warnings: [],
     });
     workflow = setTimelineNodeManualResult(workflow, "preview-scoring", {
-      rubricVersion: 1,
+      rubricVersion: 2,
       scores: [],
       selectedCandidateIds,
       selectionSource: "manual",
     });
 
     expect(() => createTimelineFinalRequests(workflow)).toThrow(/requires exactly 2/i);
+  });
+
+  it("accepts an ineligible fallback in a manual exact-K selection and rejects forged fallback metadata", () => {
+    let workflow = confirmTimelineGeneration(createConfirmedWorkflow(1));
+    workflow = setTimelineNodeManualResult(workflow, "preview-execution", {
+      baseSeed: 100,
+      candidateCount: 4,
+      finalCount: 1,
+      previewHeight: 512,
+      previewWidth: 512,
+      previewSteps: 20,
+      candidates: [{
+        candidateId: "preview-1",
+        index: 0,
+        seed: 100,
+        status: "done",
+        storedImage: { byteLength: 1, contentType: "image/png", filename: "preview-1.png", url: "/api/comfyui/generated-images/preview-1.png" },
+      }],
+      successfulCount: 1,
+      warnings: [],
+    });
+    workflow = setTimelineNodeManualResult(workflow, "preview-scoring", {
+      rubricVersion: 2,
+      scores: [{
+        candidateId: "preview-1",
+        adherence: 100,
+        composition: 100,
+        anatomy: 100,
+        style: 100,
+        technical: 100,
+        total: 100,
+        criticalDefects: [{ category: "anatomy_or_structure", description: "missing hand" }],
+        eligible: false,
+        rank: 1,
+      }],
+      selectedCandidateIds: ["preview-1"],
+      selectionSource: "manual",
+      eligibleCount: 0,
+      fallbackCandidateIds: ["preview-1"],
+      selectionWarning: "Only 0 preview candidates passed blocking-defect checks; 1 annotated fallback candidate was selected. Review the preserved defect annotations before final use.",
+    });
+
+    expect(createTimelineFinalRequests(workflow)).toMatchObject([
+      { candidateId: "preview-1", rank: 1, seed: 100 },
+    ]);
+
+    workflow = setTimelineNodeManualResult(workflow, "preview-scoring", {
+      ...(workflow.nodes["preview-scoring"].result as object),
+      eligibleCount: 1,
+    });
+    expect(() => createTimelineFinalRequests(workflow)).toThrow(/requires exactly 1/i);
+  });
+
+  it("allows final steps below 20 without increasing the preview step count", () => {
+    let workflow = createConfirmedWorkflow(1);
+    const parameters = workflow.nodes["parameter-recommendation"].result as {
+      requestPreview: Record<string, unknown>;
+    } & Record<string, unknown>;
+    workflow = setTimelineNodeManualResult(workflow, "parameter-recommendation", {
+      ...parameters,
+      steps: 12,
+      requestPreview: { ...parameters.requestPreview, steps: 12 },
+    });
+
+    const requests = createTimelinePreviewRequests(confirmTimelineGeneration(workflow));
+    expect(requests.every(({ request }) => request.steps === 12)).toBe(true);
   });
 });

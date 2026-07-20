@@ -360,6 +360,12 @@ export function setTimelineNodeManualResult<T>(
     trackManualEdit: false,
   });
   const nodes = edit.nodes as TimelineNodeMap;
+  if (edit.staleNodeIds.includes("preview-execution")) {
+    nodes["preview-execution"] = {
+      ...nodes["preview-execution"],
+      result: stripLegacyPreviewSeedRetryMarker(nodes["preview-execution"].result),
+    };
+  }
 
   const generationConfirmed =
     nodeId === "generation-gate" || edit.staleNodeIds.includes("generation-gate")
@@ -404,6 +410,9 @@ export function updateTimelineSceneInputSettings(
     nodes[nodeId] = {
       ...nodes[nodeId],
       status: "stale",
+      ...(nodeId === "preview-execution"
+        ? { result: stripLegacyPreviewSeedRetryMarker(nodes[nodeId].result) }
+        : {}),
       error: undefined,
       updatedAt,
     };
@@ -451,12 +460,27 @@ export function requireTimelineGenerationReconfirmation(
     updatedAt,
   };
   for (const nodeId of ["preview-execution", "preview-scoring", "comfyui-execution", "result-display"] as const) {
-    nodes[nodeId] = { ...nodes[nodeId], status: "stale", error: undefined, updatedAt };
+    nodes[nodeId] = {
+      ...nodes[nodeId],
+      status: "stale",
+      ...(nodeId === "preview-execution"
+        ? { result: stripLegacyPreviewSeedRetryMarker(nodes[nodeId].result) }
+        : {}),
+      error: undefined,
+      updatedAt,
+    };
   }
   return withUpdatedWorkflow(workflow, nodes, updatedAt, false);
 }
 
 export type TimelineGenerationRetryNodeId = "preview-execution" | "preview-scoring" | "comfyui-execution";
+
+function stripLegacyPreviewSeedRetryMarker(value: unknown) {
+  if (!isRecord(value) || !("advanceSeedOnRetry" in value)) return value;
+  const safeResult = { ...value };
+  delete safeResult.advanceSeedOnRetry;
+  return safeResult;
+}
 
 export function retryTimelineGenerationFrom(
   workflow: TimelineWorkflowState,
@@ -480,7 +504,13 @@ export function retryTimelineGenerationFrom(
     nodes[staleNodeId] = {
       ...nodes[staleNodeId],
       status: "stale",
-      ...(partialResult !== undefined ? { result: partialResult } : {}),
+      ...(partialResult !== undefined
+        ? { result: staleNodeId === "preview-execution"
+            ? stripLegacyPreviewSeedRetryMarker(partialResult)
+            : partialResult }
+        : staleNodeId === "preview-execution"
+          ? { result: stripLegacyPreviewSeedRetryMarker(nodes[staleNodeId].result) }
+          : {}),
       ...(staleNodeId === nodeId ? {} : { error: undefined }),
       updatedAt,
     };

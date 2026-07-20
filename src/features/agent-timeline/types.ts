@@ -272,6 +272,33 @@ export type TimelinePreviewScore = {
   rationale?: string;
 };
 
+export const timelinePreviewCriticalDefectCategories = [
+  "spatial_physical_contradiction",
+  "gaze_or_action_mismatch",
+  "subject_scale_or_framing",
+  "severe_exposure",
+  "anatomy_or_structure",
+] as const;
+
+export type TimelinePreviewCriticalDefectCategory =
+  (typeof timelinePreviewCriticalDefectCategories)[number];
+
+export const timelinePreviewBlockingDefectCategories = [
+  "spatial_physical_contradiction",
+  "severe_exposure",
+  "anatomy_or_structure",
+] as const satisfies readonly TimelinePreviewCriticalDefectCategory[];
+
+export type TimelinePreviewCriticalDefect = {
+  category: TimelinePreviewCriticalDefectCategory;
+  description: string;
+};
+
+export type TimelinePreviewEligibleScore = TimelinePreviewScore & {
+  criticalDefects: TimelinePreviewCriticalDefect[];
+  eligible: boolean;
+};
+
 export type TimelinePreviewCandidate = {
   candidateId: string;
   index: number;
@@ -300,15 +327,49 @@ export type PreviewExecutionTimelineResult = {
   warnings: string[];
 };
 
-export type PreviewScoringTimelineResult = {
-  rubricVersion: 1;
-  scores: Array<TimelinePreviewScore & {
-    candidateId: string;
-    rank: number;
-  }>;
+type PreviewScoringTimelineResultBase = {
   selectedCandidateIds: string[];
   selectionSource: "ai" | "manual";
 };
+
+export type TimelinePreviewSelectionFallbackMetadata = {
+  eligibleCount: number;
+  fallbackCandidateIds: string[];
+  selectionWarning?: string;
+};
+
+export function createTimelinePreviewSelectionFallbackMetadata(
+  scores: ReadonlyArray<{ candidateId: string; eligible: boolean }>,
+  selectedCandidateIds: readonly string[],
+): TimelinePreviewSelectionFallbackMetadata {
+  const eligibleCount = scores.filter((score) => score.eligible).length;
+  const eligibilityById = new Map(scores.map((score) => [score.candidateId, score.eligible]));
+  const fallbackCandidateIds = selectedCandidateIds.filter(
+    (candidateId) => eligibilityById.get(candidateId) === false,
+  );
+  return {
+    eligibleCount,
+    fallbackCandidateIds,
+    ...(fallbackCandidateIds.length > 0 ? {
+      selectionWarning:
+        `Only ${eligibleCount} preview candidate${eligibleCount === 1 ? "" : "s"} passed blocking-defect checks; ` +
+        `${fallbackCandidateIds.length} annotated fallback candidate${fallbackCandidateIds.length === 1 ? " was" : "s were"} selected. ` +
+        "Review the preserved defect annotations before final use.",
+    } : {}),
+  };
+}
+
+export type PreviewScoringTimelineResultV1 = PreviewScoringTimelineResultBase & {
+  rubricVersion: 1;
+  scores: Array<TimelinePreviewScore & { candidateId: string; rank: number }>;
+};
+
+export type PreviewScoringTimelineResultV2 = PreviewScoringTimelineResultBase & {
+  rubricVersion: 2;
+  scores: Array<TimelinePreviewEligibleScore & { candidateId: string; rank: number }>;
+} & Partial<TimelinePreviewSelectionFallbackMetadata>;
+
+export type PreviewScoringTimelineResult = PreviewScoringTimelineResultV1 | PreviewScoringTimelineResultV2;
 
 export type TimelineFinalExecutionRecord = {
   candidateId: string;

@@ -134,7 +134,9 @@ export async function POST(request: Request) {
     const executableNodeIds: readonly TimelineExecutableNodeId[] | undefined = stage === "comfyui-execution"
       ? ["comfyui-execution", "result-display"]
       : stage ? [stage] : undefined;
-    const result = await executeTimelineGraph(runnableWorkflow, createTimelineT8ServerNodeAdapters(), {
+    const result = await executeTimelineGraph(runnableWorkflow, createTimelineT8ServerNodeAdapters({
+      advancePreviewSeedOnRetry: action === "retry" && retryNodeId === "preview-execution",
+    }), {
       ...(executableNodeIds ? { executableNodeIds } : {}),
     });
 

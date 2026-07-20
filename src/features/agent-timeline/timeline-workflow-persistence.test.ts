@@ -83,6 +83,8 @@ function createPersistedV2GenerationWorkflow(finalCount = 2) {
     style: 100 - index,
     technical: 100 - index,
     total: 100 - index,
+    criticalDefects: [],
+    eligible: true,
     rank: index + 1,
   }));
   const finals = selected.map((candidate, index) => ({
@@ -100,13 +102,13 @@ function createPersistedV2GenerationWorkflow(finalCount = 2) {
     finalCount,
     previewHeight: 768,
     previewWidth: 768,
-    previewSteps: 16,
+    previewSteps: 20,
     candidates,
     successfulCount: candidateCount,
     warnings: [],
   }, "system");
   workflow = completeTimelineNode(workflow, "preview-scoring", {
-    rubricVersion: 1,
+    rubricVersion: 2,
     scores,
     selectedCandidateIds: selected.map((candidate) => candidate.candidateId),
     selectionSource: "ai",
@@ -158,9 +160,12 @@ function createPersistedV2GenerationWorkflow(finalCount = 2) {
 type MutablePersistedPreviewScore = Record<string, unknown>;
 
 type MutablePersistedPreviewScoring = {
+  eligibleCount?: unknown;
+  fallbackCandidateIds?: unknown;
   rubricVersion: unknown;
   scores: MutablePersistedPreviewScore[];
   selectedCandidateIds: unknown[];
+  selectionWarning?: unknown;
   selectionSource: unknown;
 };
 
@@ -943,7 +948,7 @@ describe("timeline workflow persistence", () => {
 
   it.each([
     ["unsupported rubric version", (scoring: MutablePersistedPreviewScoring) => {
-      scoring.rubricVersion = 2;
+      scoring.rubricVersion = 3;
     }],
     ["missing candidate coverage", (scoring: MutablePersistedPreviewScoring) => {
       scoring.scores.pop();
@@ -1001,6 +1006,33 @@ describe("timeline workflow persistence", () => {
     }],
     ["unsupported selection source", (scoring: MutablePersistedPreviewScoring) => {
       scoring.selectionSource = "system";
+    }],
+    ["missing v2 eligibility", (scoring: MutablePersistedPreviewScoring) => {
+      delete scoring.scores[0]!.eligible;
+    }],
+    ["missing v2 critical defects", (scoring: MutablePersistedPreviewScoring) => {
+      delete scoring.scores[0]!.criticalDefects;
+    }],
+    ["eligible with a critical defect", (scoring: MutablePersistedPreviewScoring) => {
+      scoring.scores[0]!.criticalDefects = [{ category: "severe_exposure", description: "blown highlights" }];
+    }],
+    ["ineligible without a critical defect", (scoring: MutablePersistedPreviewScoring) => {
+      scoring.scores[0]!.eligible = false;
+    }],
+    ["unknown critical defect category", (scoring: MutablePersistedPreviewScoring) => {
+      scoring.scores[0]!.eligible = false;
+      scoring.scores[0]!.criticalDefects = [{ category: "unknown", description: "unsupported" }];
+    }],
+    ["duplicate critical defect category", (scoring: MutablePersistedPreviewScoring) => {
+      scoring.scores[0]!.eligible = false;
+      scoring.scores[0]!.criticalDefects = [
+        { category: "anatomy_or_structure", description: "first" },
+        { category: "anatomy_or_structure", description: "second" },
+      ];
+    }],
+    ["blank critical defect description", (scoring: MutablePersistedPreviewScoring) => {
+      scoring.scores[0]!.eligible = false;
+      scoring.scores[0]!.criticalDefects = [{ category: "gaze_or_action_mismatch", description: "   " }];
     }],
   ] as const)("fails closed for persisted preview scoring with %s", (_case, mutate) => {
     const raw = createPersistedV2GenerationWorkflow(2);
@@ -1115,6 +1147,93 @@ describe("timeline workflow persistence", () => {
     expect(restored.nodes["result-display"].status).toBe("done");
   });
 
+  it("restores rubric v1 for historical display but blocks fresh final continuation", () => {
+    const raw = createPersistedV2GenerationWorkflow(2);
+    const scoring = getMutablePersistedPreviewScoring(raw);
+    scoring.rubricVersion = 1;
+    for (const score of scoring.scores) {
+      delete score.eligible;
+      delete score.criticalDefects;
+    }
+    raw.nodes["comfyui-execution"] = {
+      ...raw.nodes["comfyui-execution"],
+      status: "blocked",
+      result: undefined,
+      error: undefined,
+    };
+    raw.nodes["result-display"] = {
+      ...raw.nodes["result-display"],
+      status: "blocked",
+      result: undefined,
+      error: undefined,
+    };
+
+    const restored = sanitizeTimelineWorkflowState(raw) as TimelineWorkflowState;
+    expect(restored.nodes["preview-scoring"]).toMatchObject({
+      status: "done",
+      result: { rubricVersion: 1, selectedCandidateIds: ["preview-1", "preview-2"] },
+    });
+    expect(() => createTimelineFinalRequests(restored)).toThrow(/eligibility-aware preview scoring is required/i);
+  });
+
+  it("rewrites a persisted legacy eligibility shortfall to retry preview scoring", () => {
+    const raw = createPersistedV2GenerationWorkflow(2);
+    raw.nodes["preview-scoring"] = {
+      nodeId: "preview-scoring",
+      status: "error",
+      source: "system",
+      updatedAt: raw.updatedAt,
+      error: {
+        code: "timeline_request_invalid",
+        message: "Only 1 of 2 required previews passed critical visual checks.",
+        details: {
+          recoverable: true,
+          retryFrom: "preview-execution",
+          eligibleCount: 1,
+          finalCount: 2,
+        },
+      },
+    };
+
+    const restored = sanitizeTimelineWorkflowState(raw) as TimelineWorkflowState;
+
+    expect(restored.nodes["preview-scoring"]).toMatchObject({
+      status: "error",
+      error: {
+        code: "timeline_request_invalid",
+        message: expect.stringContaining("Retry preview scoring"),
+        details: {
+          recoverable: true,
+          eligibleCount: 1,
+          finalCount: 2,
+        },
+      },
+    });
+    expect(restored.nodes["preview-scoring"].error?.details).not.toHaveProperty("retryFrom");
+    expect(restored.nodes["comfyui-execution"].status).toBe("error");
+    expect(restored.nodes["result-display"].status).toBe("error");
+  });
+
+  it("accepts previewSteps=20 and rejects persisted preview steps above the cap", () => {
+    const valid = createPersistedV2GenerationWorkflow(1);
+    (valid.nodes["preview-execution"].result as { advanceSeedOnRetry?: true }).advanceSeedOnRetry = true;
+    const restored = sanitizeTimelineWorkflowState(valid) as TimelineWorkflowState;
+    expect(restored.nodes["preview-execution"]).toMatchObject({
+      status: "done",
+      result: { previewSteps: 20 },
+    });
+    expect(restored.nodes["preview-execution"].result).not.toHaveProperty("advanceSeedOnRetry");
+
+    const invalid = createPersistedV2GenerationWorkflow(1);
+    (invalid.nodes["preview-execution"].result as { previewSteps: number }).previewSteps = 21;
+    const rejected = sanitizeTimelineWorkflowState(invalid) as TimelineWorkflowState;
+    expect(rejected.nodes["preview-execution"]).toMatchObject({
+      status: "error",
+    });
+    expect(rejected.nodes["preview-execution"].result).toBeUndefined();
+    expect(rejected.nodes["preview-scoring"].status).toBe("error");
+  });
+
   it("keeps a manual exact-K non-Top-K selection valid", () => {
     const raw = createPersistedV2GenerationWorkflow(2);
     const scoring = getMutablePersistedPreviewScoring(raw);
@@ -1145,6 +1264,131 @@ describe("timeline workflow persistence", () => {
       { candidateId: "preview-1", rank: 1 },
       { candidateId: "preview-3", rank: 3 },
     ]);
+  });
+
+  it("preserves eligible-first ranking even when an ineligible candidate has the highest weighted total", () => {
+    const raw = createPersistedV2GenerationWorkflow(2);
+    const scoring = getMutablePersistedPreviewScoring(raw);
+    scoring.scores[0]!.eligible = false;
+    scoring.scores[0]!.criticalDefects = [{
+      category: "spatial_physical_contradiction",
+      description: "Subject contradicts the requested placement.",
+    }];
+    scoring.scores[0]!.rank = 4;
+    scoring.scores[1]!.rank = 1;
+    scoring.scores[2]!.rank = 2;
+    scoring.scores[3]!.rank = 3;
+    scoring.selectedCandidateIds = ["preview-2", "preview-3"];
+    for (const nodeId of ["comfyui-execution", "result-display"] as const) {
+      raw.nodes[nodeId] = { ...raw.nodes[nodeId], status: "blocked", result: undefined, error: undefined };
+    }
+
+    const restored = sanitizeTimelineWorkflowState(raw) as TimelineWorkflowState;
+    expect(restored.nodes["preview-scoring"]).toMatchObject({
+      status: "done",
+      result: { selectedCandidateIds: ["preview-2", "preview-3"] },
+    });
+    const restoredScores = (restored.nodes["preview-scoring"].result as {
+      scores: Array<{ candidateId: string; eligible: boolean; rank: number }>;
+    }).scores;
+    expect(restoredScores.find((score) => score.candidateId === "preview-1")).toMatchObject({ eligible: false, rank: 4 });
+    expect(restoredScores.find((score) => score.candidateId === "preview-2")).toMatchObject({ eligible: true, rank: 1 });
+    expect(restoredScores.find((score) => score.candidateId === "preview-3")).toMatchObject({ eligible: true, rank: 2 });
+    expect(restoredScores.find((score) => score.candidateId === "preview-4")).toMatchObject({ eligible: true, rank: 3 });
+    expect(createTimelineFinalRequests(restored)).toMatchObject([
+      { candidateId: "preview-2", rank: 1 },
+      { candidateId: "preview-3", rank: 2 },
+    ]);
+  });
+
+  it("restores an old-v2 soft-only ineligible manual fallback and recomputes selection metadata", () => {
+    const raw = createPersistedV2GenerationWorkflow(2);
+    const scoring = getMutablePersistedPreviewScoring(raw);
+    scoring.scores[0]!.eligible = false;
+    scoring.scores[0]!.criticalDefects = [{
+      category: "gaze_or_action_mismatch",
+      description: "The subject performs the wrong action.",
+    }];
+    scoring.scores[0]!.rank = 4;
+    scoring.scores[1]!.rank = 1;
+    scoring.scores[2]!.rank = 2;
+    scoring.scores[3]!.rank = 3;
+    scoring.selectedCandidateIds = ["preview-1", "preview-2"];
+    scoring.selectionSource = "manual";
+    scoring.eligibleCount = 99;
+    scoring.fallbackCandidateIds = ["preview-4"];
+    scoring.selectionWarning = "FORGED WARNING";
+    for (const nodeId of ["comfyui-execution", "result-display"] as const) {
+      raw.nodes[nodeId] = { ...raw.nodes[nodeId], status: "blocked", result: undefined, error: undefined };
+    }
+
+    const restored = sanitizeTimelineWorkflowState(raw) as TimelineWorkflowState;
+    expect(restored.nodes["preview-scoring"]).toMatchObject({
+      status: "done",
+      result: {
+        eligibleCount: 3,
+        fallbackCandidateIds: ["preview-1"],
+        selectedCandidateIds: ["preview-1", "preview-2"],
+        selectionSource: "manual",
+        selectionWarning: expect.stringContaining("1 annotated fallback candidate was selected"),
+      },
+    });
+    expect(JSON.stringify(restored.nodes["preview-scoring"].result)).not.toContain("FORGED WARNING");
+    expect(createTimelineFinalRequests(restored)).toMatchObject([
+      { candidateId: "preview-1", rank: 4 },
+      { candidateId: "preview-2", rank: 1 },
+    ]);
+  });
+
+  it("restores current soft annotations as eligible and keeps them in strict AI Top-K", () => {
+    const raw = createPersistedV2GenerationWorkflow(2);
+    const scoring = getMutablePersistedPreviewScoring(raw);
+    scoring.scores[0]!.criticalDefects = [{
+      category: "subject_scale_or_framing",
+      description: "Non-blocking framing mismatch.",
+    }];
+
+    const restored = sanitizeTimelineWorkflowState(raw) as TimelineWorkflowState;
+    expect(restored.nodes["preview-scoring"]).toMatchObject({
+      status: "done",
+      result: {
+        eligibleCount: 4,
+        fallbackCandidateIds: [],
+        selectedCandidateIds: ["preview-1", "preview-2"],
+        scores: expect.arrayContaining([expect.objectContaining({
+          candidateId: "preview-1",
+          eligible: true,
+          criticalDefects: [expect.objectContaining({ category: "subject_scale_or_framing" })],
+        })]),
+      },
+    });
+  });
+
+  it("restores zero-eligible strict AI Top-K with recomputed fallback metadata", () => {
+    const raw = createPersistedV2GenerationWorkflow(2);
+    const scoring = getMutablePersistedPreviewScoring(raw);
+    for (const score of scoring.scores) {
+      score.eligible = false;
+      score.criticalDefects = [{ category: "anatomy_or_structure", description: "Unusable structure." }];
+    }
+    scoring.eligibleCount = 4;
+    scoring.fallbackCandidateIds = [];
+    delete scoring.selectionWarning;
+    for (const nodeId of ["comfyui-execution", "result-display"] as const) {
+      raw.nodes[nodeId] = { ...raw.nodes[nodeId], status: "blocked", result: undefined, error: undefined };
+    }
+
+    const restored = sanitizeTimelineWorkflowState(raw) as TimelineWorkflowState;
+    expect(restored.nodes["preview-scoring"]).toMatchObject({
+      status: "done",
+      result: {
+        eligibleCount: 0,
+        fallbackCandidateIds: ["preview-1", "preview-2"],
+        selectedCandidateIds: ["preview-1", "preview-2"],
+        selectionWarning: expect.stringContaining("Only 0 preview candidates passed blocking-defect checks"),
+      },
+    });
+    expect(createTimelineFinalRequests(restored)).toHaveLength(2);
   });
 
   it("preserves only cross-node-valid done records from a persisted partial final", () => {

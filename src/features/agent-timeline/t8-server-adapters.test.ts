@@ -143,6 +143,7 @@ function createGateReadyWorkflow(clock = createClock(), imageCount = 1) {
         preview: true,
         samplerName: "euler",
         scheduler: "normal",
+        sourceImageDataUrl: "data:image/png;base64,CQgH",
         steps: 28,
         width: 1024,
         height: 1024,
@@ -178,13 +179,13 @@ function confirmWorkflow(workflow: TimelineWorkflowState, clock = createClock())
     finalCount,
     previewHeight: 768,
     previewWidth: 768,
-    previewSteps: 16,
+    previewSteps: 20,
     candidates,
     successfulCount: candidateCount,
     warnings: [],
   }, "system", { now: clock });
   confirmed = completeTimelineNode(confirmed, "preview-scoring", {
-    rubricVersion: 1,
+    rubricVersion: 2,
     scores: candidates.map((candidate, index) => ({
       candidateId: candidate.candidateId,
       adherence: 100 - index,
@@ -193,6 +194,8 @@ function confirmWorkflow(workflow: TimelineWorkflowState, clock = createClock())
       style: 100 - index,
       technical: 100 - index,
       total: 100 - index,
+      criticalDefects: [],
+      eligible: true,
       rank: index + 1,
     })),
     selectedCandidateIds: candidates.slice(0, finalCount).map((candidate) => candidate.candidateId),

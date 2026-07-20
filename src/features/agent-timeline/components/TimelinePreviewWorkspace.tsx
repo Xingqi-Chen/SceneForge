@@ -8,6 +8,7 @@ import type {
   PreviewExecutionTimelineResult,
   PreviewScoringTimelineResult,
 } from "@/features/agent-timeline/types";
+import { createTimelinePreviewSelectionFallbackMetadata } from "@/features/agent-timeline/types";
 import { cn } from "@/shared/utils/cn";
 
 export function TimelinePreviewWorkspace({
@@ -27,6 +28,13 @@ export function TimelinePreviewWorkspace({
     () => new Map(scoring?.scores.map((score) => [score.candidateId, score]) ?? []),
     [scoring],
   );
+  const legacyRubric = scoring?.rubricVersion === 1;
+  const fallbackMetadata = scoring?.rubricVersion === 2
+    ? createTimelinePreviewSelectionFallbackMetadata(scoring.scores, scoring.selectedCandidateIds)
+    : null;
+  const pendingSelectionFallbackIds = scoring?.rubricVersion === 2
+    ? createTimelinePreviewSelectionFallbackMetadata(scoring.scores, selection).fallbackCandidateIds
+    : [];
 
   if (!previews) {
     return <div className="rounded-md border border-dashed border-slate-200 bg-slate-50 p-3 text-xs text-slate-500">Preview candidates are not available yet.</div>;
@@ -46,6 +54,7 @@ export function TimelinePreviewWorkspace({
           <Button
             className="h-8 px-3 text-xs shadow-none"
             disabled={disabled || selection.length !== requiredCount ||
+              legacyRubric ||
               selection.every((id, index) => id === scoring.selectedCandidateIds[index])}
             onClick={() => onRegenerate(selection)}
             type="button"
@@ -54,18 +63,33 @@ export function TimelinePreviewWorkspace({
           </Button>
         ) : null}
       </div>
+      {fallbackMetadata?.selectionWarning ? (
+        <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-xs leading-relaxed text-amber-800">
+          {fallbackMetadata.selectionWarning}
+        </div>
+      ) : null}
+      {pendingSelectionFallbackIds.length > 0 &&
+          !pendingSelectionFallbackIds.every((candidateId) => fallbackMetadata?.fallbackCandidateIds.includes(candidateId)) ? (
+        <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-xs leading-relaxed text-amber-800">
+          This manual selection includes {pendingSelectionFallbackIds.length} candidate{pendingSelectionFallbackIds.length === 1 ? "" : "s"} with
+          blocking-defect annotations. Final generation is allowed, but review the visible defects before continuing.
+        </div>
+      ) : null}
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
         {previews.candidates.map((candidate) => {
           const score = scoreById.get(candidate.candidateId);
           const selected = selection.includes(candidate.candidateId);
+          const eligible = score && "eligible" in score ? score.eligible : false;
+          const criticalDefects = score && "criticalDefects" in score ? score.criticalDefects : [];
           return (
             <button
               className={cn(
                 "overflow-hidden rounded-md border bg-white text-left transition",
                 selected ? "border-blue-500 ring-2 ring-blue-100" : "border-slate-200",
                 candidate.status !== "done" && "cursor-not-allowed opacity-60",
+                candidate.status === "done" && score && !eligible && "border-amber-300",
               )}
-              disabled={disabled || candidate.status !== "done" || !scoring}
+              disabled={disabled || candidate.status !== "done" || !score || legacyRubric}
               key={candidate.candidateId}
               onClick={() => toggle(candidate.candidateId)}
               type="button"
@@ -89,8 +113,20 @@ export function TimelinePreviewWorkspace({
                   <div className="grid grid-cols-2 gap-x-3 gap-y-1">
                     <span>Adherence {score.adherence}</span><span>Composition {score.composition}</span>
                     <span>Anatomy {score.anatomy}</span><span>Style {score.style}</span>
-                    <span>Technical {score.technical}</span><span>{selected ? "Selected" : "Not selected"}</span>
+                    <span>Technical {score.technical}</span>
+                    <span>{legacyRubric
+                      ? "Legacy rubric · eligibility not assessed"
+                      : eligible
+                        ? criticalDefects.length > 0 ? "Eligible · non-blocking annotations" : "Eligible"
+                        : "Ineligible · fallback allowed"}</span>
                   </div>
+                ) : null}
+                {criticalDefects.length > 0 ? (
+                  <ul className="grid gap-1 text-amber-700">
+                    {criticalDefects.map((defect) => (
+                      <li key={defect.category}>{defect.description}</li>
+                    ))}
+                  </ul>
                 ) : null}
                 {score?.rationale ? <p className="leading-relaxed text-slate-500">{score.rationale}</p> : null}
               </div>

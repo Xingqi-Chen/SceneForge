@@ -10,7 +10,9 @@ import {
   createTimelineWorkflowRecord,
   createTimelineWorkflowState,
   failTimelineNode,
+  setTimelineNodeManualResult,
   startStoryGraphWorkflow,
+  type PreviewScoringTimelineResultV2,
   type ScenePromptTimelineResult,
   type TimelineNodeId,
   type TimelineNodeResult,
@@ -229,6 +231,7 @@ function createMultiImageConfirmedGenerationWorkflow(workflow: TimelineWorkflowS
 
 function createSimpleGenerationPhaseErrorWorkflow(
   phase: Extract<TimelineNodeId, "preview-execution" | "preview-scoring" | "comfyui-execution">,
+  retryFromPreviewExecution = false,
 ) {
   let workflow = createTimelineWorkflowState({
     workflowId: `simple-${phase}-error`,
@@ -269,7 +272,7 @@ function createSimpleGenerationPhaseErrorWorkflow(
     warnings: [],
   };
   const scoring = {
-    rubricVersion: 1 as const,
+    rubricVersion: 2 as const,
     scores: candidates.map((candidate, index) => ({
       candidateId: candidate.candidateId,
       adherence: 100 - index,
@@ -278,6 +281,8 @@ function createSimpleGenerationPhaseErrorWorkflow(
       style: 100 - index,
       technical: 100 - index,
       total: 100 - index,
+      criticalDefects: [],
+      eligible: true,
       rank: index + 1,
     })),
     selectedCandidateIds: ["preview-1", "preview-2"],
@@ -295,9 +300,14 @@ function createSimpleGenerationPhaseErrorWorkflow(
   workflow = completeTimelineNode(workflow, "preview-execution", previews, "system");
   if (phase === "preview-scoring") {
     return failTimelineNode(workflow, phase, {
-      code: "llm_malformed_response",
-      message: "Preview scoring failed twice.",
-      details: { recoverable: true },
+      code: retryFromPreviewExecution ? "timeline_request_invalid" : "llm_malformed_response",
+      message: retryFromPreviewExecution
+        ? "Only 1 of 2 required previews passed critical visual checks."
+        : "Preview scoring failed twice.",
+      details: {
+        recoverable: true,
+        ...(retryFromPreviewExecution ? { retryFrom: "preview-execution" } : {}),
+      },
     });
   }
 
@@ -2021,13 +2031,74 @@ describe("TimelineShell", () => {
     }
   });
 
-  it.each([
-    ["preview-execution", "Preview generation", "Only 1 preview succeeded; 2 are required."],
-    ["preview-scoring", "Preview scoring", "Preview scoring failed twice."],
-    ["comfyui-execution", "Render execution", "1 of 2 final images completed."],
-  ] as const)("keeps Simple-mode %s errors visible and retryable", async (phase, title, message) => {
+  it("shows the exact-K fallback selection warning in Simple mode", async () => {
     const originalFetch = globalThis.fetch;
-    const workflow = createSimpleGenerationPhaseErrorWorkflow(phase);
+    let workflow = createSimpleGenerationPhaseErrorWorkflow("comfyui-execution");
+    const currentScoring = workflow.nodes["preview-scoring"].result as PreviewScoringTimelineResultV2;
+    const fallbackScoring: PreviewScoringTimelineResultV2 = {
+      ...currentScoring,
+      scores: currentScoring.scores.map((score) =>
+        score.candidateId === "preview-2"
+          ? { ...score, rank: 1 }
+          : {
+              ...score,
+              criticalDefects: [
+                {
+                  category: "anatomy_or_structure",
+                  description: "A blocking structural defect makes this preview unsuitable for final use.",
+                },
+              ],
+              eligible: false,
+              rank: score.candidateId === "preview-1" ? 2 : score.rank,
+            },
+      ),
+      selectedCandidateIds: ["preview-2", "preview-1"],
+      selectionSource: "manual",
+      eligibleCount: 1,
+      fallbackCandidateIds: ["preview-1"],
+      selectionWarning:
+        "Only 1 preview candidate passed blocking-defect checks; 1 annotated fallback candidate was selected. Review the preserved defect annotations before final use.",
+    };
+    workflow = setTimelineNodeManualResult(workflow, "preview-scoring", fallbackScoring);
+    const activeRecord = createTimelineWorkflowRecord({
+      workflow,
+      sceneRequest: "A simple exact-K fallback scene",
+      selectedPromptProfile: "illustrious",
+      selectedImageCount: 2,
+      selectedNodeId: "preview-scoring",
+    });
+
+    globalThis.fetch = vi.fn<typeof fetch>(async (input, init) => {
+      const url = getFetchUrl(input);
+      if (url === "/api/settings") return createTimelineSettingsResponse({ displayMode: "simple" });
+      if (url === "/api/agent-timeline/active-workflow") {
+        return init?.method === "PUT"
+          ? createJsonResponse({ ok: true, record: activeRecord })
+          : createJsonResponse(activeRecord);
+      }
+      return createJsonResponse({ role: "assistant", content: "{}" });
+    });
+
+    try {
+      act(() => root.render(<TimelineShell />));
+      await flushAsyncWork();
+
+      expect(container.textContent).toContain("Only 1 preview candidate passed blocking-defect checks");
+      expect(container.textContent).toContain("1 annotated fallback candidate was selected");
+      expect(container.textContent).toContain("Review the preserved defect annotations before final use");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it.each([
+    ["preview-execution", "Preview generation", "Preview generation", "Only 1 preview succeeded; 2 are required.", false, "preview-execution"],
+    ["preview-scoring", "Preview scoring", "Preview scoring", "Preview scoring failed twice.", false, "preview-scoring"],
+    ["preview-scoring", "Preview scoring", "Preview scoring", "This preview round can now use annotated fallback selection. Retry preview scoring to continue.", true, "preview-scoring"],
+    ["comfyui-execution", "Render execution", "Render execution", "1 of 2 final images completed.", false, "comfyui-execution"],
+  ] as const)("keeps Simple-mode %s errors visible and retryable", async (phase, title, retryTitle, message, retryFromPreview, expectedRetryNodeId) => {
+    const originalFetch = globalThis.fetch;
+    const workflow = createSimpleGenerationPhaseErrorWorkflow(phase, retryFromPreview);
     const activeRecord = createTimelineWorkflowRecord({
       workflow,
       sceneRequest: "A simple mode retry scene",
@@ -2066,12 +2137,12 @@ describe("TimelineShell", () => {
         expect(container.textContent).toContain("Retry renders only missing or invalid selections.");
       }
 
-      act(() => getButtonByText(`Retry ${title.toLowerCase()}`).click());
+      act(() => getButtonByText(`Retry ${retryTitle.toLowerCase()}`).click());
       await flushAsyncWork();
 
       expect(retryBodies).toHaveLength(1);
-      expect(retryBodies[0]).toMatchObject({ action: "retry", retryNodeId: phase });
-      expect(container.textContent).toContain(`${title} is running.`);
+      expect(retryBodies[0]).toMatchObject({ action: "retry", retryNodeId: expectedRetryNodeId });
+      expect(container.textContent).toContain(`${retryTitle} is running.`);
 
       resolveRetry(createJsonResponse({ workflow }));
       await flushAsyncWork();

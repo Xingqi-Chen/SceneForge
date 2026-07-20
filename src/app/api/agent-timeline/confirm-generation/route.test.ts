@@ -134,7 +134,7 @@ function createSignedWorkflowWithCompletedPreviews(finalCount = 1) {
     finalCount,
     previewHeight: 768,
     previewWidth: 768,
-    previewSteps: 16,
+    previewSteps: 20,
     candidates,
     successfulCount: candidateCount,
     warnings: [],
@@ -314,6 +314,36 @@ describe("POST /api/agent-timeline/confirm-generation", () => {
     });
   });
 
+  it("advances the retained fixed preview seed only for an authorized preview-execution retry", async () => {
+    const observedSeeds: number[] = [];
+    comfyUiMocks.createComfyUiClient.mockReturnValue({
+      getObjectInfo: vi.fn().mockResolvedValue({ CheckpointLoaderSimple: {} }),
+    });
+    comfyUiMocks.validateComfyUiTextToImageRequest.mockImplementation((request: { seed?: number }) => {
+      if (typeof request.seed === "number") observedSeeds.push(request.seed);
+      return {
+        ok: false,
+        message: "Stop after observing the authorized request-local seed.",
+        details: { recoverable: true },
+      };
+    });
+
+    const response = await POST(new Request("http://localhost/api/agent-timeline/confirm-generation", {
+      body: JSON.stringify({
+        action: "retry",
+        retryNodeId: "preview-execution",
+        workflow: createSignedWorkflowWithCompletedPreviews(2),
+      }),
+      method: "POST",
+    }));
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(observedSeeds).toEqual([104, 105, 106, 107]);
+    expect(payload.workflow.nodes["preview-execution"].result).toMatchObject({ baseSeed: 104 });
+    expect(payload.workflow.nodes["preview-execution"].result).not.toHaveProperty("advanceSeedOnRetry");
+  });
+
   it.each([
     ["prompt", (workflow: TimelineWorkflowState) => {
       workflow.nodes["scene-prompt"].result = { positivePrompt: "tampered prompt" };
@@ -372,6 +402,7 @@ describe("POST /api/agent-timeline/confirm-generation", () => {
       },
     });
     expect(comfyUiMocks.createComfyUiClient).not.toHaveBeenCalled();
+    expect(comfyUiMocks.validateComfyUiTextToImageRequest).not.toHaveBeenCalled();
   });
 
   it("rejects a valid signed confirmation replayed onto a different workflow id", async () => {
@@ -458,7 +489,7 @@ describe("POST /api/agent-timeline/confirm-generation", () => {
   it("blocks final-stage continuation after semantically swapped scoring ranks are sanitized", async () => {
     let workflow = createSignedWorkflowWithCompletedPreviews(2);
     workflow = completeTimelineNode(workflow, "preview-scoring", {
-      rubricVersion: 1,
+      rubricVersion: 2,
       scores: [1, 2, 3, 4].map((number) => ({
         candidateId: `preview-${number}`,
         adherence: 90,
@@ -467,6 +498,8 @@ describe("POST /api/agent-timeline/confirm-generation", () => {
         style: 90,
         technical: 90,
         total: 90,
+        criticalDefects: [],
+        eligible: true,
         rank: number === 1 ? 2 : number === 2 ? 1 : number,
       })),
       selectedCandidateIds: ["preview-1", "preview-2"],
@@ -528,7 +561,7 @@ describe("POST /api/agent-timeline/confirm-generation", () => {
         successfulCount: 4,
         previewWidth: 768,
         previewHeight: 768,
-        previewSteps: 16,
+        previewSteps: 20,
         candidates: expect.arrayContaining([
           expect.objectContaining({
             candidateId: "preview-1",

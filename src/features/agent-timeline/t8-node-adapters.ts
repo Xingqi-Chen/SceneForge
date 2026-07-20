@@ -10,11 +10,12 @@ import {
   sanitizeStyleReferenceSnapshot,
 } from "./style-reference";
 import {
+  createTimelinePreviewSelectionFallbackMetadata,
   TimelineNodeExecutionError,
   type ComfyUiExecutionTimelineResult,
   type ParameterRecommendationTimelineResult,
   type PreviewExecutionTimelineResult,
-  type PreviewScoringTimelineResult,
+  type PreviewScoringTimelineResultV2,
   type ResultDisplayTimelineResult,
   type SceneInputTimelineResult,
   type TimelineNodeAdapters,
@@ -37,12 +38,12 @@ export function getTimelineBalancedGenerationPolicy(
 ): TimelineBalancedGenerationPolicy {
   const baseModel = request.modelBaseModel?.trim().toLocaleLowerCase() ?? "";
   if (request.workflowProfile === "anima" || baseModel.includes("anima")) {
-    return { family: "anima", finalDenoise: 0.65, previewLongestEdge: 768, previewStepCap: 18 };
+    return { family: "anima", finalDenoise: 0.65, previewLongestEdge: 768, previewStepCap: 20 };
   }
   if (typeof request.modelBaseModel === "string" && request.modelBaseModel.toLocaleLowerCase().includes("illustrious")) {
-    return { family: "illustrious", finalDenoise: 0.6, previewLongestEdge: 768, previewStepCap: 16 };
+    return { family: "illustrious", finalDenoise: 0.6, previewLongestEdge: 768, previewStepCap: 20 };
   }
-  return { family: "fallback", finalDenoise: 0.65, previewLongestEdge: 768, previewStepCap: 16 };
+  return { family: "fallback", finalDenoise: 0.65, previewLongestEdge: 768, previewStepCap: 20 };
 }
 
 export type TimelinePreviewExecutionProvider = (
@@ -53,7 +54,7 @@ export type TimelinePreviewExecutionProvider = (
 export type TimelinePreviewScoringProvider = (
   previews: PreviewExecutionTimelineResult,
   context: TimelineNodeExecutionContext,
-) => Promise<PreviewScoringTimelineResult>;
+) => Promise<PreviewScoringTimelineResultV2>;
 
 export type TimelineFinalExecutionProvider = (
   requests: Array<{
@@ -73,6 +74,7 @@ export type TimelineResultDisplayProvider = (
 ) => Promise<ResultDisplayTimelineResult> | ResultDisplayTimelineResult;
 
 export type TimelineT8NodeAdapterOptions = {
+  advancePreviewSeedOnRetry?: boolean;
   executePreviews: TimelinePreviewExecutionProvider;
   scorePreviews: TimelinePreviewScoringProvider;
   executeFinals: TimelineFinalExecutionProvider;
@@ -217,12 +219,33 @@ function assertStyleReferenceUsable(workflow: TimelineWorkflowState, parameterRe
   if (mismatch) invalidComfyUiRequest(mismatch);
 }
 
-function materializeBaseSeed(parameterResult: ParameterRecommendationTimelineResult, candidateCount: number) {
+function materializeBaseSeed(
+  workflow: TimelineWorkflowState,
+  parameterResult: ParameterRecommendationTimelineResult,
+  candidateCount: number,
+  advancePreviewSeedOnRetry: boolean,
+) {
   const fixed = parameterResult.seedPolicy.mode === "fixed" ? parameterResult.seedPolicy.seed : undefined;
-  const base = Number.isSafeInteger(fixed) && (fixed ?? -1) >= 0
+  const previousPreview = workflow.nodes["preview-execution"];
+  const previousResult = advancePreviewSeedOnRetry &&
+      (previousPreview.status === "stale" || previousPreview.status === "running") &&
+      isRecord(previousPreview.result)
+    ? previousPreview.result
+    : null;
+  const previousBaseSeed = previousResult?.baseSeed;
+  if (Number.isSafeInteger(fixed) && (fixed ?? -1) >= 0 &&
+      Number.isSafeInteger(previousBaseSeed) && (previousBaseSeed as number) >= 0 &&
+      (previousBaseSeed as number) <= MAX_SEED && previousResult?.candidateCount === candidateCount) {
+    return advanceTimelineSeed(previousBaseSeed as number, candidateCount);
+  }
+  return Number.isSafeInteger(fixed) && (fixed ?? -1) >= 0 && (fixed as number) <= MAX_SEED
     ? fixed as number
     : Math.floor(Math.random() * (MAX_SEED - candidateCount));
-  return Math.min(base, MAX_SEED - candidateCount);
+}
+
+function advanceTimelineSeed(seed: number, offset: number) {
+  const remaining = MAX_SEED - seed;
+  return offset <= remaining ? seed + offset : offset - remaining - 1;
 }
 
 export function createConfirmedTimelineComfyUiRequest(workflow: TimelineWorkflowState): ComfyUiTextToImageRequest {
@@ -246,16 +269,24 @@ export function createConfirmedTimelineComfyUiRequest(workflow: TimelineWorkflow
   };
 }
 
-export function createTimelinePreviewRequests(workflow: TimelineWorkflowState) {
+export function createTimelinePreviewRequests(
+  workflow: TimelineWorkflowState,
+  options: { advancePreviewSeedOnRetry?: boolean } = {},
+) {
   const formal = createConfirmedTimelineComfyUiRequest(workflow);
   const policy = getTimelineBalancedGenerationPolicy(formal);
   const parameterResult = getParameterRecommendationResult(workflow);
   const finalCount = getTimelineFinalImageCount(workflow);
   const candidateCount = getTimelinePreviewCandidateCount(finalCount);
   const dimensions = getTimelinePreviewDimensions(parameterResult.width, parameterResult.height, policy.previewLongestEdge);
-  const baseSeed = materializeBaseSeed(parameterResult, candidateCount);
+  const baseSeed = materializeBaseSeed(
+    workflow,
+    parameterResult,
+    candidateCount,
+    options.advancePreviewSeedOnRetry === true,
+  );
   return Array.from({ length: candidateCount }, (_, index) => {
-    const seed = baseSeed + index;
+    const seed = advanceTimelineSeed(baseSeed, index);
     return {
       candidateId: `preview-${index + 1}`,
       index,
@@ -282,10 +313,15 @@ function requirePreviewResult(workflow: TimelineWorkflowState): PreviewExecution
   throw new TimelineNodeExecutionError(createTimelineNodeError("timeline_node_blocked", "Preview results are required."));
 }
 
-function requireScoringResult(workflow: TimelineWorkflowState): PreviewScoringTimelineResult {
+function requireScoringResult(workflow: TimelineWorkflowState): PreviewScoringTimelineResultV2 {
   const value = workflow.nodes["preview-scoring"].result;
-  if (isRecord(value) && Array.isArray(value.selectedCandidateIds)) return value as PreviewScoringTimelineResult;
-  throw new TimelineNodeExecutionError(createTimelineNodeError("timeline_node_blocked", "Preview scoring is required."));
+  if (isRecord(value) && value.rubricVersion === 2 && Array.isArray(value.selectedCandidateIds)) {
+    return value as PreviewScoringTimelineResultV2;
+  }
+  throw new TimelineNodeExecutionError(createTimelineNodeError(
+    "timeline_node_blocked",
+    "Current eligibility-aware preview scoring is required. Retry preview scoring before final generation.",
+  ));
 }
 
 export function createTimelineFinalRequests(workflow: TimelineWorkflowState) {
@@ -316,7 +352,22 @@ export function createTimelineFinalRequests(workflow: TimelineWorkflowState) {
     scores: scoring.scores.filter((score) => score.candidateId === candidateId),
   }));
   const selectedRanks = selected.map((item) => item.scores[0]?.rank);
+  const expectedFallbackMetadata = createTimelinePreviewSelectionFallbackMetadata(scoring.scores, selectedIds);
+  const fallbackMetadataMatches =
+    (scoring.eligibleCount === undefined || (
+      Number.isSafeInteger(scoring.eligibleCount) &&
+      scoring.eligibleCount === expectedFallbackMetadata.eligibleCount
+    )) &&
+    (scoring.fallbackCandidateIds === undefined || (
+      Array.isArray(scoring.fallbackCandidateIds) &&
+      scoring.fallbackCandidateIds.length === expectedFallbackMetadata.fallbackCandidateIds.length &&
+      scoring.fallbackCandidateIds.every(
+        (candidateId, index) => candidateId === expectedFallbackMetadata.fallbackCandidateIds[index],
+      )
+    )) &&
+    (scoring.selectionWarning === undefined || scoring.selectionWarning === expectedFallbackMetadata.selectionWarning);
   if (
+    !fallbackMetadataMatches ||
     selected.some((item) =>
       item.candidates.length !== 1 ||
       item.candidates[0]?.status !== "done" ||
@@ -368,7 +419,9 @@ function getPreviousFinalResult(workflow: TimelineWorkflowState) {
 export function createTimelineT8NodeAdapters(options: TimelineT8NodeAdapterOptions): TimelineNodeAdapters {
   return {
     "preview-execution": async (context) => ({
-      value: await options.executePreviews(createTimelinePreviewRequests(context.workflow), context),
+      value: await options.executePreviews(createTimelinePreviewRequests(context.workflow, {
+        advancePreviewSeedOnRetry: options.advancePreviewSeedOnRetry,
+      }), context),
       source: "system",
     }),
     "preview-scoring": async (context) => ({

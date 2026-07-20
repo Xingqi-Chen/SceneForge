@@ -43,7 +43,10 @@ import {
   type CommonWorkflowDefinitionVersion,
 } from "./workflow-definition";
 import {
+  createTimelinePreviewSelectionFallbackMetadata,
   previewScoringRubric,
+  timelinePreviewBlockingDefectCategories,
+  timelinePreviewCriticalDefectCategories,
   timelineNodeIds,
   timelineNodeStatuses,
   type TimelineNodeId,
@@ -838,7 +841,7 @@ function sanitizePreviewExecutionResult(value: unknown) {
   const previewSteps = safeNonNegativeInteger(value.previewSteps);
   if (!finalCount || finalCount > 4 || candidateCount !== expectedCandidateCount ||
       value.candidates.length !== candidateCount || !previewHeight || previewHeight > 768 ||
-      !previewWidth || previewWidth > 768 || !previewSteps || previewSteps > 18) return undefined;
+      !previewWidth || previewWidth > 768 || !previewSteps || previewSteps > 20) return undefined;
   const candidates = value.candidates.slice(0, candidateCount).map((entry, fallbackIndex) => {
     const raw = isRecord(entry) ? entry : {};
     const index = safeNonNegativeInteger(raw.index);
@@ -892,10 +895,28 @@ function calculatePreviewScoreRawTotal(score: {
     score.technical * previewScoringRubric.technical;
 }
 
+function isCompatiblePreviewEligibility(
+  eligible: boolean,
+  criticalDefects: ReadonlyArray<{ category: (typeof timelinePreviewCriticalDefectCategories)[number] }>,
+) {
+  const hasBlockingDefect = criticalDefects.some((defect) =>
+    timelinePreviewBlockingDefectCategories.includes(
+      defect.category as (typeof timelinePreviewBlockingDefectCategories)[number],
+    ));
+  if (hasBlockingDefect) return !eligible;
+  if (criticalDefects.length === 0) return eligible;
+  // Rubric-v2 records created before soft annotations were introduced marked every
+  // defect ineligible. Both that conservative legacy state and the current
+  // soft-annotation state remain readable.
+  return true;
+}
+
 function sanitizePreviewScoringResult(value: unknown) {
-  if (!isRecord(value) || value.rubricVersion !== 1 || !Array.isArray(value.scores) ||
+  if (!isRecord(value) || (value.rubricVersion !== 1 && value.rubricVersion !== 2) || !Array.isArray(value.scores) ||
       !Array.isArray(value.selectedCandidateIds) ||
       (value.selectionSource !== "ai" && value.selectionSource !== "manual")) return undefined;
+  const rubricVersion = value.rubricVersion;
+  const criticalDefectCategorySet = new Set<string>(timelinePreviewCriticalDefectCategories);
   const scores = value.scores.map((entry) => {
     if (!isRecord(entry)) return null;
     const candidateId = safePreviewCandidateId(entry.candidateId);
@@ -917,6 +938,29 @@ function sanitizePreviewScoringResult(value: unknown) {
       style,
       technical,
     }).toFixed(2));
+    const eligibility = (() => {
+      if (rubricVersion === 1) return {};
+      if (typeof entry.eligible !== "boolean" || !Array.isArray(entry.criticalDefects) ||
+          entry.criticalDefects.length > timelinePreviewCriticalDefectCategories.length) return null;
+      const seenCategories = new Set<string>();
+      const criticalDefects = entry.criticalDefects.map((defect) => {
+        if (!isRecord(defect) || typeof defect.category !== "string" ||
+            !criticalDefectCategorySet.has(defect.category) || seenCategories.has(defect.category) ||
+            typeof defect.description !== "string" || !defect.description.trim()) return null;
+        seenCategories.add(defect.category);
+        return {
+          category: defect.category as (typeof timelinePreviewCriticalDefectCategories)[number],
+          description: defect.description.trim().slice(0, 500),
+        };
+      });
+      if (criticalDefects.some((defect) => !defect) ||
+          !isCompatiblePreviewEligibility(
+            entry.eligible,
+            criticalDefects as Array<{ category: (typeof timelinePreviewCriticalDefectCategories)[number] }>,
+          )) return null;
+      return { criticalDefects, eligible: entry.eligible };
+    })();
+    if (!eligibility) return null;
     return {
       adherence,
       anatomy,
@@ -926,6 +970,7 @@ function sanitizePreviewScoringResult(value: unknown) {
       style,
       technical,
       total,
+      ...eligibility,
       ...(typeof entry.rationale === "string" && entry.rationale.trim()
         ? { rationale: entry.rationale.trim().slice(0, 2_000) }
         : {}),
@@ -934,11 +979,19 @@ function sanitizePreviewScoringResult(value: unknown) {
   if (scores.some((score) => !score)) return undefined;
   const selectedCandidateIds = value.selectedCandidateIds.map(safePreviewCandidateId);
   if (selectedCandidateIds.some((candidateId) => !candidateId)) return undefined;
+  const safeScores = scores as Array<NonNullable<(typeof scores)[number]>>;
+  const safeSelectedCandidateIds = selectedCandidateIds as string[];
   return {
-    rubricVersion: 1 as const,
-    scores,
-    selectedCandidateIds,
+    rubricVersion,
+    scores: safeScores,
+    selectedCandidateIds: safeSelectedCandidateIds,
     selectionSource: value.selectionSource,
+    ...(rubricVersion === 2
+      ? createTimelinePreviewSelectionFallbackMetadata(
+          safeScores.map((score) => ({ candidateId: score.candidateId, eligible: score.eligible === true })),
+          safeSelectedCandidateIds,
+        )
+      : {}),
   };
 }
 
@@ -1039,6 +1092,24 @@ function sanitizeResultDisplayResult(value: unknown) {
 function reconcilePersistedPreviewScoring(nodes: TimelineNodeMap, updatedAt: string) {
   const scoringNode = nodes["preview-scoring"];
   if (scoringNode.status === "error" && scoringNode.error?.code === "timeline_request_invalid") {
+    const details = scoringNode.error.details;
+    if (isRecord(details) && details.retryFrom === "preview-execution") {
+      const eligibleCount = safeNonNegativeInteger(details.eligibleCount);
+      const finalCount = safeNonNegativeInteger(details.finalCount);
+      nodes["preview-scoring"] = {
+        ...scoringNode,
+        updatedAt,
+        error: createTimelineNodeError(
+          "timeline_request_invalid",
+          "This preview round can now use annotated fallback selection. Retry preview scoring to continue.",
+          {
+            recoverable: true,
+            ...(eligibleCount !== null ? { eligibleCount } : {}),
+            ...(finalCount !== null ? { finalCount } : {}),
+          },
+        ),
+      };
+    }
     return false;
   }
   if (scoringNode.status !== "done" && scoringNode.status !== "manual") return true;
@@ -1047,7 +1118,7 @@ function reconcilePersistedPreviewScoring(nodes: TimelineNodeMap, updatedAt: str
   const scoring = scoringNode.result;
   let valid = nodes["preview-execution"].status === "done" &&
     isRecord(preview) && Array.isArray(preview.candidates) &&
-    isRecord(scoring) && scoring.rubricVersion === 1 && Array.isArray(scoring.scores) &&
+    isRecord(scoring) && (scoring.rubricVersion === 1 || scoring.rubricVersion === 2) && Array.isArray(scoring.scores) &&
     Array.isArray(scoring.selectedCandidateIds) &&
     (scoring.selectionSource === "ai" || scoring.selectionSource === "manual");
   if (valid && isRecord(preview) && Array.isArray(preview.candidates) &&
@@ -1071,17 +1142,33 @@ function reconcilePersistedPreviewScoring(nodes: TimelineNodeMap, updatedAt: str
           typeof score.technical !== "number" || !Number.isFinite(score.technical)) return [];
       const rank = safeNonNegativeInteger(score.rank);
       if (rank === null || rank < 1) return [];
+      const eligible = scoring.rubricVersion === 2 ? score.eligible : true;
+      if (typeof eligible !== "boolean" ||
+          (scoring.rubricVersion === 2 && (!Array.isArray(score.criticalDefects) ||
+            score.criticalDefects.some((defect) => !isRecord(defect) ||
+              typeof defect.category !== "string" ||
+              !timelinePreviewCriticalDefectCategories.includes(
+                defect.category as (typeof timelinePreviewCriticalDefectCategories)[number],
+              ) || typeof defect.description !== "string" || !defect.description.trim()) ||
+            !isCompatiblePreviewEligibility(
+              eligible,
+              score.criticalDefects as Array<{
+                category: (typeof timelinePreviewCriticalDefectCategories)[number];
+              }>,
+            )))) return [];
       return [{
         adherence: score.adherence,
         anatomy: score.anatomy,
         candidateId: score.candidateId as string,
         composition: score.composition,
+        eligible,
         rank,
         style: score.style,
         technical: score.technical,
       }];
     });
     const expectedOrder = [...validatedScores].sort((left, right) =>
+      Number(right.eligible) - Number(left.eligible) ||
       calculatePreviewScoreRawTotal(right) - calculatePreviewScoreRawTotal(left) ||
       right.composition - left.composition ||
       (previewIndexById.get(left.candidateId) ?? Number.MAX_SAFE_INTEGER) -
@@ -1090,6 +1177,19 @@ function reconcilePersistedPreviewScoring(nodes: TimelineNodeMap, updatedAt: str
     const expectedCandidateIds = expectedOrder.map((score) => score.candidateId);
     const ranksMatchExpectedOrder = expectedOrder.every((score, index) => score.rank === index + 1);
     const finalCount = safeNonNegativeInteger(preview.finalCount);
+    const selectedFallbackMetadata = createTimelinePreviewSelectionFallbackMetadata(
+      expectedOrder,
+      scoring.selectedCandidateIds as string[],
+    );
+    const fallbackMetadataMatches = scoring.rubricVersion === 1 || (
+      scoring.eligibleCount === selectedFallbackMetadata.eligibleCount &&
+      Array.isArray(scoring.fallbackCandidateIds) &&
+      scoring.fallbackCandidateIds.length === selectedFallbackMetadata.fallbackCandidateIds.length &&
+      scoring.fallbackCandidateIds.every(
+        (candidateId, index) => candidateId === selectedFallbackMetadata.fallbackCandidateIds[index],
+      ) &&
+      scoring.selectionWarning === selectedFallbackMetadata.selectionWarning
+    );
     valid = Boolean(finalCount && finalCount <= 4 && successfulIds.length >= finalCount &&
       successful.length === successfulCandidates.length &&
       successfulIds.length === new Set(successfulIds).size &&
@@ -1102,8 +1202,10 @@ function reconcilePersistedPreviewScoring(nodes: TimelineNodeMap, updatedAt: str
       scoring.selectedCandidateIds.length === finalCount &&
       new Set(scoring.selectedCandidateIds).size === finalCount &&
       scoring.selectedCandidateIds.every((candidateId) => typeof candidateId === "string" && successfulIds.includes(candidateId)) &&
-      (scoring.selectionSource === "manual" ||
-        scoring.selectedCandidateIds.every((candidateId, index) => candidateId === expectedCandidateIds[index])));
+      fallbackMetadataMatches &&
+      (scoring.selectionSource === "manual"
+        ? true
+        : scoring.selectedCandidateIds.every((candidateId, index) => candidateId === expectedCandidateIds[index])));
   }
   if (valid) return true;
 

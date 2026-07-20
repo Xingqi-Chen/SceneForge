@@ -69,6 +69,7 @@ import {
 } from "@/features/agent-timeline/t5-node-adapters";
 import { createTimelineT7NodeAdapters } from "@/features/agent-timeline/t7-node-adapters";
 import {
+  createTimelinePreviewSelectionFallbackMetadata,
   TimelineNodeExecutionError,
   type CanvasBindingTimelineResult,
   type CharacterActionTimelineResult,
@@ -1899,14 +1900,16 @@ export function TimelineShell() {
     if (!workflow || isRunningRef.current) return;
     const scoring = workflow.nodes["preview-scoring"].result;
     const previews = workflow.nodes["preview-execution"].result;
-    if (!isPreviewScoringResult(scoring) || !isPreviewExecutionResult(previews) ||
+    if (!isPreviewScoringResult(scoring) || scoring.rubricVersion !== 2 || !isPreviewExecutionResult(previews) ||
         selectedCandidateIds.length !== previews.finalCount || new Set(selectedCandidateIds).size !== previews.finalCount) return;
     const successfulIds = new Set(previews.candidates.filter((candidate) => candidate.status === "done").map((candidate) => candidate.candidateId));
-    if (!selectedCandidateIds.every((id) => successfulIds.has(id))) return;
+    const scoredIds = new Set(scoring.scores.map((score) => score.candidateId));
+    if (!selectedCandidateIds.every((id) => successfulIds.has(id) && scoredIds.has(id))) return;
     const manuallySelected = setTimelineNodeManualResult(workflow, "preview-scoring", {
       ...scoring,
       selectedCandidateIds,
       selectionSource: "manual",
+      ...createTimelinePreviewSelectionFallbackMetadata(scoring.scores, selectedCandidateIds),
     } satisfies PreviewScoringTimelineResult);
     const reselectionWorkflow: TimelineWorkflowState = {
       ...manuallySelected,
@@ -3000,6 +3003,13 @@ export function TimelineShell() {
     const simpleFinalCount = isRecord(simpleFinalResult) && typeof simpleFinalResult.finalCount === "number"
       ? simpleFinalResult.finalCount
       : selectedImageCount;
+    const simpleScoringResult = activeWorkflow.nodes["preview-scoring"].result;
+    const simpleSelectionWarning = isPreviewScoringResult(simpleScoringResult) && simpleScoringResult.rubricVersion === 2
+      ? createTimelinePreviewSelectionFallbackMetadata(
+          simpleScoringResult.scores,
+          simpleScoringResult.selectedCandidateIds,
+        ).selectionWarning
+      : undefined;
 
     return (
       <main className="sf-app-shell flex min-h-0 flex-col overflow-hidden bg-slate-100 font-sans text-slate-950 selection:bg-blue-100 selection:text-blue-900">
@@ -3125,6 +3135,13 @@ export function TimelineShell() {
               <section className="flex gap-2 rounded-md border border-blue-200 bg-blue-50 p-3 text-xs leading-relaxed text-blue-700">
                 <Bot className="mt-0.5 size-4 shrink-0" />
                 <p>{simpleNotice}</p>
+              </section>
+            ) : null}
+
+            {simpleSelectionWarning ? (
+              <section className="flex gap-2 rounded-md border border-amber-200 bg-amber-50 p-3 text-xs leading-relaxed text-amber-800">
+                <Bot className="mt-0.5 size-4 shrink-0" />
+                <p>{simpleSelectionWarning}</p>
               </section>
             ) : null}
 

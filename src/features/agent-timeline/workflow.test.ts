@@ -11,6 +11,7 @@ import {
   getTimelineNodeDependencies,
   isReservedTimelineNodeId,
   isTimelineNodeRegenerationEligible,
+  requireTimelineGenerationReconfirmation,
   retryTimelineGenerationFrom,
   setTimelineNodeManualResult,
   updateTimelineSceneInputSettings,
@@ -666,6 +667,57 @@ describe("agent timeline workflow foundation", () => {
     }
     expect(retried.generationConfirmed).toBe(true);
     expect(retried.nodes["generation-gate"].status).toBe("manual");
+    expect(retried.nodes["preview-execution"].result).toMatchObject({ phase: "preview-execution" });
+    expect(retried.nodes["preview-execution"].result).not.toHaveProperty("advanceSeedOnRetry");
+  });
+
+  it("strips legacy preview retry markers across upstream edits, settings staleness, and reconfirmation", () => {
+    const createMarkedWorkflow = () => {
+      const clock = createClock();
+      let workflow = confirmTimelineGeneration(createReadyForGateWorkflow(clock), undefined, { now: clock });
+      workflow = completeTimelineNode(workflow, "preview-execution", {
+        advanceSeedOnRetry: true,
+        baseSeed: 100,
+        candidateCount: 4,
+        finalCount: 1,
+        previewHeight: 768,
+        previewWidth: 768,
+        previewSteps: 20,
+        candidates: [],
+        successfulCount: 0,
+        warnings: [],
+      }, "system", { now: clock });
+      return { clock, workflow };
+    };
+
+    const upstream = createMarkedWorkflow();
+    const afterUpstreamEdit = setTimelineNodeManualResult(
+      upstream.workflow,
+      "scene-prompt",
+      { prompt: "revised glass greenhouse" },
+      { now: upstream.clock },
+    );
+    expect(afterUpstreamEdit.nodes["preview-execution"].result).not.toHaveProperty("advanceSeedOnRetry");
+
+    const settings = createMarkedWorkflow();
+    const afterSettingsEdit = updateTimelineSceneInputSettings(
+      settings.workflow,
+      sanitizeRunSceneInputSettingsSnapshot({
+        detailers: { faceDetailer: { enabled: true }, handDetailer: { enabled: false } },
+        promptProfile: "illustrious",
+      }),
+      "parameter-recommendation",
+      { now: settings.clock },
+    );
+    expect(afterSettingsEdit.nodes["preview-execution"].result).not.toHaveProperty("advanceSeedOnRetry");
+
+    const reconfirmation = createMarkedWorkflow();
+    const afterReconfirmation = requireTimelineGenerationReconfirmation(
+      reconfirmation.workflow,
+      undefined,
+      { now: reconfirmation.clock },
+    );
+    expect(afterReconfirmation.nodes["preview-execution"].result).not.toHaveProperty("advanceSeedOnRetry");
   });
 
   it("manual preview selection stales only final execution and result display", () => {
