@@ -26,6 +26,15 @@ Validation:
 - Test Gate and Review Gate passed; browser QA covered Detailed scoring output, Simple/Detailed switching, and desktop/390px layouts without horizontal overflow.
 - Live LiteLLM Vision/NSFW and ComfyUI generation remain environment-dependent manual validation.
 
+### Issue #133 Merge
+
+Summary:
+
+- Merged PR #134 for scored Run previews, structured Vision ranking, exact Top-K selection, and second-pass final generation.
+- Issue #133 was closed automatically by the merge and T37 was marked done.
+- The final Test Gate passed 289 focused tests and all 1,260 tests; typecheck, lint, production build, diff-check, reviewer approval, and GitHub CI Validate passed before merge.
+- The merged commit is `d3c6d05500659ae6a841a56252df743488c41451`.
+
 ### Issue #130 Merge
 
 Summary:
