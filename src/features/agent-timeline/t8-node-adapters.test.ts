@@ -594,9 +594,9 @@ describe("timeline T8 ComfyUI request conversion", () => {
   });
 
   it.each([
-    ["Illustrious", "illustrious", 20, 0.3],
-    ["Anima", "anima", 20, 0.35],
-    ["Future XL", "future-profile", 20, 0.35],
+    ["Illustrious", "illustrious", 20, 0.4],
+    ["Anima", "anima", 20, 0.45],
+    ["Future XL", "future-profile", 20, 0.45],
   ] as const)(
     "applies balanced %s preview/final quality while inheriting formal sampler settings",
     (modelBaseModel, promptProfile, previewSteps, finalDenoise) => {
@@ -740,14 +740,14 @@ describe("timeline T8 ComfyUI request conversion", () => {
         rank: 1,
         seed: 102,
         storedPreview: { filename: "preview-3.png" },
-        request: { batchSize: 1, denoise: 0.35, height: 1024, preview: false, seed: 102, steps: 30, width: 1024 },
+        request: { batchSize: 1, denoise: 0.45, height: 1024, preview: false, seed: 102, steps: 30, width: 1024 },
       },
       {
         candidateId: "preview-1",
         rank: 2,
         seed: 100,
         storedPreview: { filename: "preview-1.png" },
-        request: { batchSize: 1, denoise: 0.35, height: 1024, preview: false, seed: 100, steps: 30, width: 1024 },
+        request: { batchSize: 1, denoise: 0.45, height: 1024, preview: false, seed: 100, steps: 30, width: 1024 },
       },
     ]);
   });

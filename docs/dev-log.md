@@ -12,6 +12,10 @@ Summary:
 - Made the managed fallback the sole Final img2img source, lowered internal Final denoise to 0.30 for Illustrious and 0.35 for Anima/unknown fallback, and preserved formal settings, seeds, resources, style/IPAdapter context, and enabled Detailers.
 - Added safe persistence and reconciliation for Preview/fallback/Final linkage, partial failure, retry reuse, unchanged-fallback no-op detection, incompatible legacy aspect rejection, and completed legacy result display.
 - Kept Preview-Final Vision review, automatic fallback quality selection, ControlNet/model upscaling, and repair/inpaint orchestration out of this issue.
+- Follow-up upgraded the Final policy to v2 with Conservative, Balanced, and Strong redraw presets. Balanced is the default; Illustrious resolves to 0.30/0.40/0.50 and Anima/fallback to 0.35/0.45/0.55.
+- Added one shared Simple/Detailed Composer control with resolved denoise and Strong risk messaging. Preset-only changes retain valid Preview/scoring/selection/seed state, require reconfirmation, and resume from Final without cross-preset Final reuse.
+- Restricted persistence to the preset enum, bound resolved preset/family/denoise metadata into confirmation and execution, kept completed v1 results read-only, and requires incomplete v1 Runs to reconfirm.
+- Validation: focused Final-policy, settings, workflow, persistence, API, server-adapter, and Simple/Detailed UI coverage passed with 8 files and 271 tests; `npm run typecheck` passed; `npm run lint` passed with 23 pre-existing warnings and no errors.
 
 ### Issue #133 Scored Run Previews
 

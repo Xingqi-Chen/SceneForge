@@ -833,6 +833,7 @@ async function executeFinals(
     formalWidth: number;
     formalHeight: number;
     storedPreview: TimelineStoredGeneratedImage;
+    finalPolicy: NonNullable<ComfyUiExecutionTimelineResult["finalPolicy"]>;
   }>,
   context: TimelineNodeExecutionContext,
   previous?: ComfyUiExecutionTimelineResult,
@@ -860,6 +861,7 @@ async function executeFinals(
         previousRecord?.previewUpscale,
       );
       if (previousRecord?.seed === item.seed && previousRecord.rank === item.rank &&
+          JSON.stringify(previousRecord.finalPolicy) === JSON.stringify(item.finalPolicy) &&
           samePreviewUpscaleArtifact(previousRecord.previewUpscale, previewUpscale) &&
           await isReusableStoredFinal(previousRecord)) {
         finals.push(previousRecord);
@@ -892,6 +894,7 @@ async function executeFinals(
         sourceImage: result.sourceImage,
         storedImage: result.storedImage,
         previewUpscale,
+        finalPolicy: item.finalPolicy,
       });
     } catch (error) {
       finals.push({
@@ -900,6 +903,7 @@ async function executeFinals(
         rank: item.rank,
         status: "error",
         ...(previewUpscale ? { previewUpscale } : {}),
+        finalPolicy: item.finalPolicy,
         error: normalizeTimelineError(error, "comfyui_execution_failed"),
       });
     }
@@ -910,10 +914,7 @@ async function executeFinals(
     completed: finals.every((item) => item.status === "done") && finals.length === requests.length,
     finalCount: requests.length,
     finals,
-    finalPolicy: {
-      version: timelineFinalGenerationPolicy.version,
-      resizeMode: timelineFinalGenerationPolicy.resizeMode,
-    },
+    finalPolicy: requests[0]?.finalPolicy,
     request: { ...firstRequest!, sourceImageDataUrl: undefined, imageName: undefined },
     warnings: [...new Set(warnings)],
   };

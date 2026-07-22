@@ -1,8 +1,7 @@
 import type { ComfyUiTextToImageRequest } from "@/features/comfyui";
 
 import {
-  getTimelineFinalDenoise,
-  getTimelineFinalGenerationFamily,
+  resolveTimelineFinalGenerationPolicy,
   resolveTimelineFinalDimensions,
 } from "./final-generation-policy";
 import { getGenerationInputDetailers } from "./generation-detailers";
@@ -40,10 +39,12 @@ export type TimelineBalancedGenerationPolicy = {
 
 export function getTimelineBalancedGenerationPolicy(
   request: ComfyUiTextToImageRequest,
+  preset?: unknown,
 ): TimelineBalancedGenerationPolicy {
+  const finalPolicy = resolveTimelineFinalGenerationPolicy(request, preset);
   return {
-    family: getTimelineFinalGenerationFamily(request),
-    finalDenoise: getTimelineFinalDenoise(request),
+    family: finalPolicy.family,
+    finalDenoise: finalPolicy.denoise,
     previewLongestEdge: 768,
     previewStepCap: 20,
   };
@@ -68,6 +69,7 @@ export type TimelineFinalExecutionProvider = (
     formalWidth: number;
     formalHeight: number;
     storedPreview: NonNullable<PreviewExecutionTimelineResult["candidates"][number]["storedImage"]>;
+    finalPolicy: ReturnType<typeof resolveTimelineFinalGenerationPolicy>;
   }>,
   context: TimelineNodeExecutionContext,
   previous?: ComfyUiExecutionTimelineResult,
@@ -331,7 +333,10 @@ function requireScoringResult(workflow: TimelineWorkflowState): PreviewScoringTi
 
 export function createTimelineFinalRequests(workflow: TimelineWorkflowState) {
   const formal = createConfirmedTimelineComfyUiRequest(workflow);
-  const policy = getTimelineBalancedGenerationPolicy(formal);
+  const sceneInput = workflow.nodes["scene-input"].result;
+  const settings = getRunSceneInputSettings(isRecord(sceneInput) ? sceneInput : {});
+  const finalPolicy = resolveTimelineFinalGenerationPolicy(formal, settings.finalRedrawPreset);
+  const policy = getTimelineBalancedGenerationPolicy(formal, settings.finalRedrawPreset);
   const dimensions = resolveTimelineFinalDimensions({
     request: formal,
     sourceImage: getTimelineSourceImage(workflow),
@@ -417,6 +422,7 @@ export function createTimelineFinalRequests(workflow: TimelineWorkflowState) {
         preview: false,
       },
       storedPreview: candidate.storedImage!,
+      finalPolicy,
     };
   });
 }

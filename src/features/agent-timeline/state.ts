@@ -421,6 +421,49 @@ export function updateTimelineSceneInputSettings(
   return refreshTimelineReadiness(withUpdatedWorkflow(workflow, nodes, updatedAt, false));
 }
 
+export function updateTimelineFinalRedrawPreset(
+  workflow: TimelineWorkflowState,
+  settingsSnapshot: RunSceneInputSettingsSnapshot,
+  options: TimelineMutationOptions = {},
+): TimelineWorkflowState {
+  const sceneInput = workflow.nodes["scene-input"].result;
+  if (!isRecord(sceneInput)) {
+    throw new TimelineNodeExecutionError(
+      createTimelineNodeError("timeline_request_invalid", "Final redraw settings require a completed scene input."),
+    );
+  }
+  const now = options.now ?? defaultNow;
+  const updatedAt = now();
+  const nodes = cloneNodeMap(workflow.nodes);
+  nodes["scene-input"] = {
+    ...nodes["scene-input"],
+    result: {
+      ...sceneInput,
+      settingsSnapshot: sanitizeRunSceneInputSettingsSnapshot(settingsSnapshot),
+    } as SceneInputTimelineResult,
+    updatedAt,
+  };
+  nodes["generation-gate"] = {
+    ...nodes["generation-gate"],
+    status: "blocked",
+    source: "system",
+    error: createTimelineNodeError(
+      "confirmation_required",
+      "Final redraw strength changed. Review the resolved denoise and confirm the Run again.",
+    ),
+    updatedAt,
+  };
+  for (const nodeId of ["comfyui-execution", "result-display"] as const) {
+    nodes[nodeId] = {
+      ...nodes[nodeId],
+      status: "stale",
+      error: undefined,
+      updatedAt,
+    };
+  }
+  return refreshTimelineReadiness(withUpdatedWorkflow(workflow, nodes, updatedAt, false));
+}
+
 export function confirmTimelineGeneration(
   workflow: TimelineWorkflowState,
   result: GenerationGateTimelineResult = {

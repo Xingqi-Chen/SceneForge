@@ -15,6 +15,7 @@ import {
   retryTimelineGenerationFrom,
   setTimelineNodeManualResult,
   updateTimelineSceneInputSettings,
+  updateTimelineFinalRedrawPreset,
   validateTimelineDependencyDag,
   type TimelineNodeAdapters,
   type TimelineWorkflowState,
@@ -743,5 +744,69 @@ describe("agent timeline workflow foundation", () => {
     expect(edited.nodes["comfyui-execution"].status).toBe("stale");
     expect(edited.nodes["result-display"].status).toBe("stale");
     expect(edited.generationConfirmed).toBe(true);
+  });
+
+  it("changes Final redraw strength without staling the selected Preview pool or advancing its seed", () => {
+    const clock = createClock();
+    let workflow = confirmTimelineGeneration(createReadyForGateWorkflow(clock), undefined, { now: clock });
+    workflow = completeTimelineNode(workflow, "preview-execution", {
+      baseSeed: 100,
+      candidateCount: 4,
+      finalCount: 1,
+      candidates: [{ candidateId: "preview-1", seed: 100 }],
+    }, "system", { now: clock });
+    workflow = completeTimelineNode(workflow, "preview-scoring", {
+      selectedCandidateIds: ["preview-1"],
+      selectionSource: "ai",
+      scores: [{ candidateId: "preview-1", rank: 1 }],
+    }, "ai", { now: clock });
+    workflow = setTimelineNodeManualResult(
+      workflow,
+      "preview-scoring",
+      workflow.nodes["preview-scoring"].result,
+      { now: clock },
+    );
+    workflow = completeTimelineNode(workflow, "comfyui-execution", { completed: true }, "system", { now: clock });
+    workflow = completeTimelineNode(workflow, "result-display", { completed: true }, "system", { now: clock });
+
+    const edited = updateTimelineFinalRedrawPreset(workflow, sanitizeRunSceneInputSettingsSnapshot({
+      finalRedrawPreset: "strong",
+    }), { now: clock });
+
+    expect(edited.generationConfirmed).toBe(false);
+    expect(edited.nodes["generation-gate"]).toMatchObject({
+      status: "blocked",
+      error: { code: "confirmation_required" },
+    });
+    expect(edited.nodes["preview-execution"]).toMatchObject({
+      status: "done",
+      result: { baseSeed: 100 },
+    });
+    expect(edited.nodes["preview-scoring"]).toMatchObject({
+      status: "manual",
+      result: { selectedCandidateIds: ["preview-1"] },
+    });
+    expect(edited.nodes["comfyui-execution"].status).toBe("stale");
+    expect(edited.nodes["result-display"].status).toBe("stale");
+  });
+
+  it("changes Final redraw strength before Preview without staling completed parameters", () => {
+    const clock = createClock();
+    const workflow = createReadyForGateWorkflow(clock);
+    const parameters = workflow.nodes["parameter-recommendation"].result;
+
+    const edited = updateTimelineFinalRedrawPreset(workflow, sanitizeRunSceneInputSettingsSnapshot({
+      finalRedrawPreset: "strong",
+    }), { now: clock });
+
+    expect(edited.nodes["parameter-recommendation"]).toMatchObject({
+      status: "manual",
+      result: parameters,
+    });
+    expect(edited.nodes["preview-execution"].status).toBe("stale");
+    expect(edited.nodes["generation-gate"]).toMatchObject({
+      status: "blocked",
+      error: { code: "confirmation_required" },
+    });
   });
 });

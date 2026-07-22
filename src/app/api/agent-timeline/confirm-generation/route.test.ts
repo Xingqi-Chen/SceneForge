@@ -48,7 +48,10 @@ import {
   type TimelineWorkflowState,
 } from "@/features/agent-timeline";
 import { createTimelineGenerationConfirmationFingerprint } from "@/features/agent-timeline/generation-confirmation.server";
-import { timelineFinalGenerationPolicy } from "@/features/agent-timeline/final-generation-policy";
+import {
+  resolveTimelineFinalGenerationPolicy,
+  timelineFinalGenerationPolicy,
+} from "@/features/agent-timeline/final-generation-policy";
 
 import { POST } from "./route";
 
@@ -101,11 +104,15 @@ function createGateReadyWorkflow() {
 
 function createSignedConfirmedWorkflow() {
   const workflow = createGateReadyWorkflow();
+  const finalPolicy = resolveTimelineFinalGenerationPolicy({}, "balanced");
   return confirmTimelineGeneration(workflow, {
     confirmationRequired: false,
     confirmed: true,
     confirmationFingerprint: createTimelineGenerationConfirmationFingerprint(workflow),
     finalPolicyVersion: timelineFinalGenerationPolicy.version,
+    finalRedrawPreset: finalPolicy.preset,
+    finalGenerationFamily: finalPolicy.family,
+    finalDenoise: finalPolicy.denoise,
   });
 }
 
@@ -189,6 +196,15 @@ describe("POST /api/agent-timeline/confirm-generation", () => {
     const payload = await response.json();
 
     expect(response.status).toBe(200);
+    expect(payload.workflow.nodes["generation-gate"]).toMatchObject({
+      status: "manual",
+      result: {
+        finalPolicyVersion: 2,
+        finalRedrawPreset: "balanced",
+        finalGenerationFamily: "fallback",
+        finalDenoise: 0.45,
+      },
+    });
     expect(payload.workflow.nodes["preview-execution"]).toMatchObject({
       status: "error",
       error: {
@@ -509,6 +525,33 @@ describe("POST /api/agent-timeline/confirm-generation", () => {
     expect(response.status).toBe(409);
     await expect(response.json()).resolves.toMatchObject({
       error: { details: { code: "confirmation_required" } },
+    });
+    expect(comfyUiMocks.createComfyUiClient).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["preset", (gate: Record<string, unknown>) => { gate.finalRedrawPreset = "strong"; }],
+    ["family", (gate: Record<string, unknown>) => { gate.finalGenerationFamily = "illustrious"; }],
+    ["denoise", (gate: Record<string, unknown>) => { gate.finalDenoise = 0.99; }],
+  ] as const)("rejects retry when signed Final policy %s metadata is tampered", async (_case, mutate) => {
+    const workflow = JSON.parse(JSON.stringify(createSignedConfirmedWorkflow())) as TimelineWorkflowState;
+    mutate(workflow.nodes["generation-gate"].result as Record<string, unknown>);
+
+    const response = await POST(new Request("http://localhost/api/agent-timeline/confirm-generation", {
+      body: JSON.stringify({
+        action: "retry",
+        retryNodeId: "preview-execution",
+        workflow,
+      }),
+      method: "POST",
+    }));
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({
+      error: {
+        message: expect.stringContaining("contract changed"),
+        details: { code: "confirmation_required" },
+      },
     });
     expect(comfyUiMocks.createComfyUiClient).not.toHaveBeenCalled();
   });

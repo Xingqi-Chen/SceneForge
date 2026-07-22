@@ -39,6 +39,7 @@ import {
 } from "./story-style-palette";
 import { sanitizeRunSceneInputSettingsSnapshot } from "./run-input-settings";
 import {
+  isTimelineFinalRedrawPreset,
   resolveTimelineFinalDimensions,
   timelineFinalGenerationPolicy,
 } from "./final-generation-policy";
@@ -234,6 +235,7 @@ function sanitizeTimelineNode(
   nodeId: TimelineNodeId,
   raw: unknown,
   fallbackUpdatedAt: string,
+  options: { requireCurrentFinalPolicy?: boolean } = {},
 ): TimelineNodeResult {
   if (!isRecord(raw)) {
     return {
@@ -252,7 +254,7 @@ function sanitizeTimelineNode(
       isRecord(raw.error) && isRecord(raw.error.details)) {
     const partialResult = nodeId === "preview-execution"
       ? sanitizePreviewExecutionResult(raw.error.details.partialResult)
-      : sanitizeFinalExecutionResult(raw.error.details.partialResult);
+      : sanitizeFinalExecutionResult(raw.error.details.partialResult, options);
     if (error) {
       const safeDetails = isRecord(error.details)
         ? Object.fromEntries(Object.entries(error.details).filter(([key]) => key !== "partialResult"))
@@ -271,7 +273,7 @@ function sanitizeTimelineNode(
     : nodeId === "preview-scoring"
       ? sanitizePreviewScoringResult(raw.result)
     : nodeId === "comfyui-execution"
-      ? sanitizeFinalExecutionResult(raw.result)
+      ? sanitizeFinalExecutionResult(raw.result, options)
       : nodeId === "result-display"
         ? sanitizeResultDisplayResult(raw.result)
         : raw.result !== undefined
@@ -621,11 +623,14 @@ function sanitizeSingleImageWorkflowState(raw: Record<string, unknown>): Timelin
   const updatedAt = sanitizeDateString(raw.updatedAt, fallback.updatedAt);
   const rawNodes = isRecord(raw.nodes) ? raw.nodes : {};
   const isLegacyWorkflow = !("preview-execution" in rawNodes) || !("preview-scoring" in rawNodes);
+  const rawGateNode = isRecord(rawNodes["generation-gate"]) ? rawNodes["generation-gate"] : {};
+  const rawGateResult = isRecord(rawGateNode.result) ? rawGateNode.result : {};
+  const requireCurrentFinalPolicy = rawGateResult.finalPolicyVersion === timelineFinalGenerationPolicy.version;
   const definition = getTimelineWorkflowDefinition(singleImageWorkflowMode);
   const nodes = Object.fromEntries(
     definition.nodeIds.map((nodeId) => [
       nodeId,
-      sanitizeTimelineNode(nodeId, rawNodes[nodeId], updatedAt),
+      sanitizeTimelineNode(nodeId, rawNodes[nodeId], updatedAt, { requireCurrentFinalPolicy }),
     ]),
   ) as TimelineNodeMap;
   if (!isLegacyWorkflow) {
@@ -655,7 +660,9 @@ function sanitizeSingleImageWorkflowState(raw: Record<string, unknown>): Timelin
     typeof gateResult.confirmationFingerprint === "string" &&
     /^hmac-sha256:[a-f0-9]{64}$/.test(gateResult.confirmationFingerprint);
   const requiresReconfirmation = !legacyCompleted &&
-    (isLegacyWorkflow || raw.generationConfirmed === true && !hasConfirmationFingerprint);
+    (isLegacyWorkflow || raw.generationConfirmed === true && (
+      !hasConfirmationFingerprint || (isRecord(gateResult) && gateResult.finalPolicyVersion === 1)
+    ));
   const generationConfirmed = requiresReconfirmation
     ? false
     : typeof raw.generationConfirmed === "boolean" ? raw.generationConfirmed : false;
@@ -999,20 +1006,32 @@ function sanitizePreviewScoringResult(value: unknown) {
   };
 }
 
-function sanitizeFinalExecutionResult(value: unknown) {
+function sanitizeFinalExecutionResult(
+  value: unknown,
+  options: { requireCurrentFinalPolicy?: boolean } = {},
+) {
   if (!isRecord(value) || !Array.isArray(value.finals)) return undefined;
   const finalCount = safeNonNegativeInteger(value.finalCount);
   if (!finalCount || finalCount > 4) return undefined;
-  const finalPolicy = isRecord(value.finalPolicy) &&
-      value.finalPolicy.version === timelineFinalGenerationPolicy.version &&
-      value.finalPolicy.resizeMode === timelineFinalGenerationPolicy.resizeMode
-    ? {
-        version: timelineFinalGenerationPolicy.version,
-        resizeMode: timelineFinalGenerationPolicy.resizeMode,
-      }
-    : undefined;
+  const sanitizeFinalPolicy = (raw: unknown) => {
+    if (!isRecord(raw) || raw.version !== timelineFinalGenerationPolicy.version ||
+        raw.resizeMode !== timelineFinalGenerationPolicy.resizeMode ||
+        !isTimelineFinalRedrawPreset(raw.preset) ||
+        (raw.family !== "illustrious" && raw.family !== "anima" && raw.family !== "fallback")) return undefined;
+    const preset = raw.preset;
+    const family = raw.family;
+    const denoise = timelineFinalGenerationPolicy.denoiseByPreset[preset][family];
+    return raw.denoise === denoise ? {
+      version: timelineFinalGenerationPolicy.version,
+      resizeMode: timelineFinalGenerationPolicy.resizeMode,
+      preset,
+      family,
+      denoise,
+    } : undefined;
+  };
+  const finalPolicy = sanitizeFinalPolicy(value.finalPolicy);
   const sanitizePreviewUpscale = (raw: unknown) => {
-    if (!isRecord(raw) || raw.policyVersion !== timelineFinalGenerationPolicy.version ||
+    if (!isRecord(raw) || (raw.policyVersion !== 1 && raw.policyVersion !== timelineFinalGenerationPolicy.version) ||
         raw.resizeMode !== timelineFinalGenerationPolicy.resizeMode) return undefined;
     const width = safeNonNegativeInteger(raw.width);
     const height = safeNonNegativeInteger(raw.height);
@@ -1020,7 +1039,7 @@ function sanitizeFinalExecutionResult(value: unknown) {
     const storedImage = sanitizeTimelineStoredImage(raw.storedImage);
     return width && height && sourcePreview && storedImage
       ? {
-          policyVersion: timelineFinalGenerationPolicy.version,
+          policyVersion: raw.policyVersion as 1 | typeof timelineFinalGenerationPolicy.version,
           resizeMode: timelineFinalGenerationPolicy.resizeMode,
           width,
           height,
@@ -1038,8 +1057,11 @@ function sanitizeFinalExecutionResult(value: unknown) {
     const storedImage = sanitizeTimelineStoredImage(raw.storedImage);
     const promptId = safeIdentifier(raw.promptId) ?? undefined;
     const previewUpscale = sanitizePreviewUpscale(raw.previewUpscale);
+    const recordFinalPolicy = sanitizeFinalPolicy(raw.finalPolicy);
     const validDone = raw.status === "done" && candidateId && seed !== null && rank !== null && rank >= 1 && rank <= 8 &&
-      sourceImage && storedImage && promptId && (!finalPolicy || previewUpscale);
+      sourceImage && storedImage && promptId && (!options.requireCurrentFinalPolicy || finalPolicy) && (!finalPolicy || (
+        previewUpscale && recordFinalPolicy && JSON.stringify(recordFinalPolicy) === JSON.stringify(finalPolicy)
+      ));
     if (validDone) {
       return {
         candidateId,
@@ -1050,6 +1072,7 @@ function sanitizeFinalExecutionResult(value: unknown) {
         sourceImage,
         storedImage,
         ...(previewUpscale ? { previewUpscale } : {}),
+        ...(recordFinalPolicy ? { finalPolicy: recordFinalPolicy } : {}),
       };
     }
     return {
@@ -1058,6 +1081,7 @@ function sanitizeFinalExecutionResult(value: unknown) {
       rank: rank && rank >= 1 ? rank : index + 1,
       status: "error" as const,
       ...(previewUpscale ? { previewUpscale } : {}),
+      ...(recordFinalPolicy ? { finalPolicy: recordFinalPolicy } : {}),
       error: createTimelineNodeError(
         "image_storage_invalid",
         "A persisted final reference was invalid and must be rendered again.",

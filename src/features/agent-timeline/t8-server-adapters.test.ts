@@ -93,7 +93,9 @@ import {
   executeTimelineGraph,
   retryTimelineGenerationFrom,
   setTimelineNodeManualResult,
+  updateTimelineFinalRedrawPreset,
 } from ".";
+import { getRunSceneInputSettings } from "./run-input-settings";
 import { ComfyUiSequenceReferenceStorageError } from "@/features/comfyui/sequence-reference-storage";
 import { createTimelineT8ServerNodeAdapters } from "./t8-server-adapters";
 import type { TimelineWorkflowState } from "./types";
@@ -483,7 +485,7 @@ describe("timeline T8 server adapters", () => {
         checkpointName: "local.safetensors",
         faceDetailer: expect.objectContaining({ enabled: false }),
         handDetailer: expect.objectContaining({ enabled: false }),
-        denoise: 0.35,
+        denoise: 0.45,
         negativePrompt: "low detail",
         positivePrompt: "glass greenhouse pilot",
         preview: false,
@@ -526,7 +528,13 @@ describe("timeline T8 server adapters", () => {
         status: "done",
         result: {
           completed: true,
-          finalPolicy: { resizeMode: "lanczos3-exact", version: 1 },
+          finalPolicy: {
+            denoise: 0.45,
+            family: "fallback",
+            preset: "balanced",
+            resizeMode: "lanczos3-exact",
+            version: 2,
+          },
           finals: [expect.objectContaining({
             candidateId: "preview-1",
             promptId: "prompt-confirmed",
@@ -1413,9 +1421,16 @@ describe("timeline T8 server adapters", () => {
   });
 
   it.each([
-    ["valid stored Final", 3, 1],
-    ["truncated stored Final", 99, 2],
-  ] as const)("retries only missing or invalid work with a %s", async (_case, persistedFinalSize, expectedQueueCount) => {
+    ["valid stored Final", 3, 1, false, 0.45],
+    ["truncated stored Final", 99, 2, false, 0.45],
+    ["valid stored Final from another redraw preset", 3, 2, true, 0.55],
+  ] as const)("retries only missing or invalid work with a %s", async (
+    _case,
+    persistedFinalSize,
+    expectedQueueCount,
+    changePreset,
+    expectedDenoise,
+  ) => {
     const getObjectInfo = vi.fn().mockResolvedValue({ CheckpointLoaderSimple: {} });
     const generateImage = vi.fn()
       .mockResolvedValueOnce({ outputNodeId: "9", promptId: "final-1" })
@@ -1508,12 +1523,17 @@ describe("timeline T8 server adapters", () => {
             : managedImageMocks.pngBytes,
       );
       const restored = JSON.parse(JSON.stringify(first)) as TimelineWorkflowState;
-      const retried = retryTimelineGenerationFrom(restored, "comfyui-execution");
+      const retried = changePreset
+        ? confirmTimelineGeneration(updateTimelineFinalRedrawPreset(restored, {
+            ...getRunSceneInputSettings(restored.nodes["scene-input"].result as { settingsSnapshot?: unknown }),
+            finalRedrawPreset: "strong",
+          }))
+        : retryTimelineGenerationFrom(restored, "comfyui-execution");
       const second = await executeTimelineGraph(retried, createTimelineT8ServerNodeAdapters());
 
       expect(generateImage).toHaveBeenCalledTimes(expectedQueueCount);
       expect(generateImage).toHaveBeenLastCalledWith(
-        expect.objectContaining({ seed: 101, batchSize: 1, denoise: 0.35 }),
+        expect.objectContaining({ seed: 101, batchSize: 1, denoise: expectedDenoise }),
         { clientId: "timeline-timeline-t8-server-final-preview-2" },
       );
       expect(storeGeneratedImageMock).toHaveBeenCalledTimes(expectedQueueCount);

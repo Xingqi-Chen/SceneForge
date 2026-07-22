@@ -14,6 +14,7 @@ import type { AnimaPromptSections } from "@/features/editor/ai-prompt/anima-prom
 import type { IllustriousPromptSections } from "@/features/editor/ai-prompt/illustrious-prompt";
 import type { TimelineWorkflowMode } from "./workflow-definitions";
 import type { RunSceneInputSettingsSnapshot } from "./run-input-settings";
+import type { TimelineFinalGenerationFamily, TimelineFinalRedrawPreset } from "./final-generation-policy";
 import type { StyleReferenceSnapshot } from "./style-reference";
 
 export type AnimaPromptProfileOptions = {
@@ -253,6 +254,9 @@ export type GenerationGateTimelineResult = {
   confirmed: boolean;
   confirmationFingerprint?: string;
   finalPolicyVersion?: number;
+  finalRedrawPreset?: TimelineFinalRedrawPreset;
+  finalGenerationFamily?: TimelineFinalGenerationFamily;
+  finalDenoise?: number;
 };
 
 export const previewScoringRubric = {
@@ -386,7 +390,16 @@ export type TimelineFinalExecutionRecord = {
   };
   storedImage?: TimelineStoredGeneratedImage;
   previewUpscale?: TimelinePreviewUpscaleArtifact;
+  finalPolicy?: TimelineResolvedFinalPolicy;
   error?: TimelineNodeError;
+};
+
+export type TimelineResolvedFinalPolicy = {
+  version: number;
+  resizeMode: "lanczos3-exact";
+  preset: TimelineFinalRedrawPreset;
+  family: TimelineFinalGenerationFamily;
+  denoise: number;
 };
 
 export type TimelinePreviewUpscaleArtifact = {
@@ -405,6 +418,9 @@ export type ComfyUiExecutionTimelineResult = {
   finalPolicy?: {
     version: number;
     resizeMode: "lanczos3-exact";
+    preset: TimelineFinalRedrawPreset;
+    family: TimelineFinalGenerationFamily;
+    denoise: number;
   };
   nodeErrors?: unknown;
   nodeIds?: unknown;
