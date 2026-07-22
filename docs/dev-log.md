@@ -15,7 +15,8 @@ Summary:
 - Follow-up upgraded the Final policy to v2 with Conservative, Balanced, and Strong redraw presets. Balanced is the default; Illustrious resolves to 0.30/0.40/0.50 and Anima/fallback to 0.35/0.45/0.55.
 - Added one shared Simple/Detailed Composer control with resolved denoise and Strong risk messaging. Preset-only changes retain valid Preview/scoring/selection/seed state, require reconfirmation, and resume from Final without cross-preset Final reuse.
 - Restricted persistence to the preset enum, bound resolved preset/family/denoise metadata into confirmation and execution, kept completed v1 results read-only, and requires incomplete v1 Runs to reconfirm.
-- Validation: focused Final-policy, settings, workflow, persistence, API, server-adapter, and Simple/Detailed UI coverage passed with 8 files and 271 tests; `npm run typecheck` passed; `npm run lint` passed with 23 pre-existing warnings and no errors.
+- Validation: focused Final-policy, settings, workflow, persistence, API, server-adapter, and Simple/Detailed UI coverage passed with 9 files and 290 tests; the full Vitest suite passed 1,313 tests; typecheck, lint, production build, diff-check, Test Gate, Review Gate, and GitHub CI passed.
+- Merged PR `#137` into `master`; Issue `#136` closed.
 
 ### Issue #133 Scored Run Previews
 
