@@ -19,6 +19,7 @@ Validation:
 - Focused T38B validation passed 8 files and 255 tests; the final mixed-attempt review suite passed 29 tests.
 - The full Vitest suite passed 1,347 tests across 134 files; `npm run typecheck`, `npm run lint`, `npm run build`, and `git diff --check` passed. Lint reported 23 pre-existing warnings and no errors.
 - Test Gate returned PASS and Review Gate returned APPROVE. Browser runtime had no available session, so desktop/mobile visual QA and live LiteLLM Vision/NSFW plus ComfyUI quality validation remain environment-dependent manual follow-ups.
+- Merged PR `#140` into `master`; Issue `#139` closed.
 
 ## 2026-07-20
 
