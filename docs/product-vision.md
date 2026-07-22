@@ -44,7 +44,8 @@ The MVP workflow is:
 9. Low-cost preview execution.
 10. Structured Vision scoring and Top-K selection.
 11. Full-quality img2img second-pass execution.
-12. Result display.
+12. Paired Preview/Final Vision review and local recommendation.
+13. User-selected result display.
 
 The timeline stops at the start image generation gate. ComfyUI execution starts only after the user clicks the confirmation control.
 
@@ -64,7 +65,7 @@ Every timeline node must allow user intervention:
 
 Manual intervention is not an escape hatch from the workflow. It is part of the workflow. When a user changes a node, dependent downstream nodes should regenerate and unrelated nodes should remain stable.
 
-Run Composer changes follow the same rule: resource edits stale from resource recommendation, while parameter, Detailer, style-reference, source, and output-count edits stale from parameter recommendation. All cancel any prior generation confirmation. Txt2img and img2img use the selected 1-4 delivery count. The original img2img source and denoise apply only to previews; downscaled previews preserve the formal aspect ratio exactly with 8-pixel-aligned axes and no upscaling or stretching. Before Final, each selected preview is deterministically resized to the confirmed formal dimensions with Lanczos3 and stored as a managed `preview-upscale` PNG. Final img2img must use only that artifact. Users choose Conservative, Balanced, or Strong Final redraw strength; Balanced is the default. Illustrious resolves these presets to 0.30/0.40/0.50, while Anima and unknown/default fallback resolve to 0.35/0.45/0.55. A Final-only preset change requires reconfirmation but retains valid previews, scoring, selection, and seeds, and never reuses a Final created under another preset. The deterministic artifact remains available when Final fails or only partially completes, but the UI keeps completed Final images as the default result and does not automatically choose a fallback.
+Run Composer changes follow the same rule: resource edits stale from resource recommendation, while parameter, Detailer, style-reference, source, and output-count edits stale from parameter recommendation. All cancel any prior generation confirmation. Txt2img and img2img use the selected 1-4 delivery count. The original img2img source and denoise apply only to previews; downscaled previews preserve the formal aspect ratio exactly with 8-pixel-aligned axes and no upscaling or stretching. Before Final, each selected preview is deterministically resized to the confirmed formal dimensions with Lanczos3 and stored as a managed `preview-upscale` PNG. Final img2img must use only that artifact. Users choose Conservative, Balanced, or Strong Final redraw strength; Balanced is the default. Illustrious resolves these presets to 0.30/0.40/0.50, while Anima and unknown/default fallback resolve to 0.35/0.45/0.55. A Final-only preset change requires reconfirmation but retains valid previews, scoring, selection, and seeds, and never reuses a Final created under another preset. After complete Final execution, one bounded Vision request compares every Preview/Final pair; SceneForge computes the default locally and lets the user choose either managed variant without rerunning generation. Review failure keeps both variants visible and supports review-only retry.
 
 ## Orchestration Principle
 

@@ -241,7 +241,7 @@ describe("T37 structured preview scoring", () => {
 
     expect(error).toMatchObject({
       code: "image_storage_failed",
-      details: { candidateId: "preview-1", stage: "scoring_image_read", recoverable: true },
+      details: { itemId: "preview-1", stage: "preview-scoring", recoverable: true },
     });
     const exposed = `${String(error)} ${JSON.stringify(error)}`;
     expect(exposed).not.toContain("PRIVATE");
@@ -259,7 +259,7 @@ describe("T37 structured preview scoring", () => {
 
     expect(error).toMatchObject({
       code: "image_storage_failed",
-      details: { candidateId: "preview-1", stage: "scoring_image_transcode", recoverable: true },
+      details: { itemId: "preview-1", stage: "preview-scoring", recoverable: true },
     });
     const exposed = `${String(error)} ${JSON.stringify(error)}`;
     expect(exposed).not.toContain("PRIVATE_BYTES");

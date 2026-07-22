@@ -8,6 +8,7 @@ import {
 import {
   getTimelineWorkflowDefinition,
   singleImageWorkflowMode,
+  type SingleImageGenerationStageNodeId,
 } from "./workflow-definitions";
 import {
   TimelineNodeExecutionError,
@@ -453,7 +454,12 @@ export function updateTimelineFinalRedrawPreset(
     ),
     updatedAt,
   };
-  for (const nodeId of ["comfyui-execution", "result-display"] as const) {
+  const definition = getTimelineWorkflowDefinition(workflow.workflowMode);
+  const finalNodeIds = [
+    "comfyui-execution" as const,
+    ...getCommonWorkflowDownstreamClosure("comfyui-execution", definition.nodeIds, definition.dependencyDag),
+  ];
+  for (const nodeId of finalNodeIds) {
     nodes[nodeId] = {
       ...nodes[nodeId],
       status: "stale",
@@ -502,7 +508,12 @@ export function requireTimelineGenerationReconfirmation(
     error: createTimelineNodeError("confirmation_required", message),
     updatedAt,
   };
-  for (const nodeId of ["preview-execution", "preview-scoring", "comfyui-execution", "result-display"] as const) {
+  const definition = getTimelineWorkflowDefinition(workflow.workflowMode);
+  const generationNodeIds = [
+    "preview-execution" as const,
+    ...getCommonWorkflowDownstreamClosure("preview-execution", definition.nodeIds, definition.dependencyDag),
+  ];
+  for (const nodeId of generationNodeIds) {
     nodes[nodeId] = {
       ...nodes[nodeId],
       status: "stale",
@@ -516,7 +527,7 @@ export function requireTimelineGenerationReconfirmation(
   return withUpdatedWorkflow(workflow, nodes, updatedAt, false);
 }
 
-export type TimelineGenerationRetryNodeId = "preview-execution" | "preview-scoring" | "comfyui-execution";
+export type TimelineGenerationRetryNodeId = SingleImageGenerationStageNodeId;
 
 function stripLegacyPreviewSeedRetryMarker(value: unknown) {
   if (!isRecord(value) || !("advanceSeedOnRetry" in value)) return value;

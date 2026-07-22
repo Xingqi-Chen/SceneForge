@@ -105,12 +105,15 @@ describe("agent timeline workflow foundation", () => {
     expect(getTimelineNodeDependencies("preview-execution")).toEqual(["generation-gate"]);
     expect(getTimelineNodeDependencies("preview-scoring")).toEqual(["preview-execution"]);
     expect(getTimelineNodeDependencies("comfyui-execution")).toEqual(["preview-scoring"]);
+    expect(getTimelineNodeDependencies("final-review")).toEqual(["comfyui-execution"]);
+    expect(getTimelineNodeDependencies("result-display")).toEqual(["final-review"]);
     expect(getTimelineDownstreamClosure("canvas-binding")).toEqual([
       "parameter-recommendation",
       "generation-gate",
       "preview-execution",
       "preview-scoring",
       "comfyui-execution",
+      "final-review",
       "result-display",
     ]);
   });
@@ -601,7 +604,19 @@ describe("agent timeline workflow foundation", () => {
           source: "system",
         };
       },
+      "final-review": (context) => {
+        expect(context.workflow.nodes["comfyui-execution"].status).toBe("done");
+        return {
+          value: {
+            reviewVersion: 1,
+            status: "unavailable",
+            pairs: [],
+          },
+          source: "ai",
+        };
+      },
       "result-display": (context) => {
+        expect(context.workflow.nodes["final-review"].status).toBe("done");
         expect(context.workflow.nodes["comfyui-execution"].result).toMatchObject({
           promptId: "prompt-1",
         });
@@ -641,6 +656,10 @@ describe("agent timeline workflow foundation", () => {
         promptId: "prompt-1",
       },
     });
+    expect(result.nodes["final-review"]).toMatchObject({
+      status: "done",
+      result: { reviewVersion: 1, status: "unavailable" },
+    });
     expect(result.nodes["result-display"]).toMatchObject({
       status: "done",
       result: {
@@ -652,24 +671,83 @@ describe("agent timeline workflow foundation", () => {
   });
 
   it.each([
-    ["preview-execution", ["preview-execution", "preview-scoring", "comfyui-execution", "result-display"]],
-    ["preview-scoring", ["preview-scoring", "comfyui-execution", "result-display"]],
-    ["comfyui-execution", ["comfyui-execution", "result-display"]],
+    ["preview-execution", ["preview-execution", "preview-scoring", "comfyui-execution", "final-review", "result-display"]],
+    ["preview-scoring", ["preview-scoring", "comfyui-execution", "final-review", "result-display"]],
+    ["comfyui-execution", ["comfyui-execution", "final-review", "result-display"]],
+    ["final-review", ["final-review", "result-display"]],
   ] as const)("stales only the %s retry phase and its descendants", (nodeId, expectedStale) => {
     const clock = createClock();
     let workflow = confirmTimelineGeneration(createReadyForGateWorkflow(clock), undefined, { now: clock });
-    for (const phase of ["preview-execution", "preview-scoring", "comfyui-execution", "result-display"] as const) {
+    for (const phase of ["preview-execution", "preview-scoring", "comfyui-execution", "final-review", "result-display"] as const) {
       workflow = completeTimelineNode(workflow, phase, { phase }, "system", { now: clock });
     }
 
     const retried = retryTimelineGenerationFrom(workflow, nodeId, { now: clock });
-    for (const phase of ["preview-execution", "preview-scoring", "comfyui-execution", "result-display"] as const) {
+    for (const phase of ["preview-execution", "preview-scoring", "comfyui-execution", "final-review", "result-display"] as const) {
       expect(retried.nodes[phase].status, phase).toBe((expectedStale as readonly string[]).includes(phase) ? "stale" : "done");
     }
     expect(retried.generationConfirmed).toBe(true);
     expect(retried.nodes["generation-gate"].status).toBe("manual");
     expect(retried.nodes["preview-execution"].result).toMatchObject({ phase: "preview-execution" });
     expect(retried.nodes["preview-execution"].result).not.toHaveProperty("advanceSeedOnRetry");
+  });
+
+  it("runs a failed review and result display in isolation without rerunning Preview, scoring, or Final", async () => {
+    const clock = createClock();
+    let workflow = confirmTimelineGeneration(createReadyForGateWorkflow(clock), undefined, { now: clock });
+    workflow = completeTimelineNode(workflow, "preview-execution", { finalCount: 1, candidates: [] }, "system", { now: clock });
+    workflow = completeTimelineNode(workflow, "preview-scoring", {
+      selectedCandidateIds: ["preview-1"],
+      selectionSource: "ai",
+      scores: [],
+    }, "ai", { now: clock });
+    workflow = completeTimelineNode(workflow, "comfyui-execution", { completed: true }, "system", { now: clock });
+
+    const preview = vi.fn();
+    const scoring = vi.fn();
+    const final = vi.fn();
+    const review = vi.fn(() => ({
+      value: {
+        reviewVersion: 1,
+        status: "failed",
+        pairs: [{
+          candidateId: "preview-1",
+          rank: 1,
+          seed: 100,
+          variants: {
+            final: { byteLength: 10, contentType: "image/png", filename: "a.png", url: "/final.png" },
+            previewUpscale: { byteLength: 10, contentType: "image/png", filename: "b.png", url: "/preview.png" },
+          },
+          recommendedVariant: null,
+          defaultVariant: "final",
+        }],
+        error: { code: "llm_upstream", message: "Review unavailable.", details: { recoverable: true } },
+      },
+      source: "ai" as const,
+    }));
+    const display = vi.fn(() => ({ value: { completed: true, reviewUnavailable: true }, source: "system" as const }));
+
+    const result = await executeTimelineGraph(workflow, {
+      "preview-execution": preview,
+      "preview-scoring": scoring,
+      "comfyui-execution": final,
+      "final-review": review,
+      "result-display": display,
+    }, {
+      executableNodeIds: ["final-review", "result-display"],
+      now: clock,
+    });
+
+    expect(preview).not.toHaveBeenCalled();
+    expect(scoring).not.toHaveBeenCalled();
+    expect(final).not.toHaveBeenCalled();
+    expect(review).toHaveBeenCalledTimes(1);
+    expect(display).toHaveBeenCalledTimes(1);
+    expect(result.nodes["final-review"]).toMatchObject({ status: "done", result: { status: "failed" } });
+    expect(result.nodes["result-display"]).toMatchObject({
+      status: "done",
+      result: { completed: true, reviewUnavailable: true },
+    });
   });
 
   it("strips legacy preview retry markers across upstream edits, settings staleness, and reconfirmation", () => {
@@ -731,6 +809,7 @@ describe("agent timeline workflow foundation", () => {
       scores: [],
     }, "ai", { now: clock });
     workflow = completeTimelineNode(workflow, "comfyui-execution", { completed: true }, "system", { now: clock });
+    workflow = completeTimelineNode(workflow, "final-review", { reviewVersion: 1, status: "unavailable", pairs: [] }, "ai", { now: clock });
     workflow = completeTimelineNode(workflow, "result-display", { completed: true }, "system", { now: clock });
 
     const edited = setTimelineNodeManualResult(workflow, "preview-scoring", {
@@ -742,6 +821,7 @@ describe("agent timeline workflow foundation", () => {
     expect(edited.nodes["preview-execution"].status).toBe("done");
     expect(edited.nodes["preview-scoring"]).toMatchObject({ status: "manual", source: "manual" });
     expect(edited.nodes["comfyui-execution"].status).toBe("stale");
+    expect(edited.nodes["final-review"].status).toBe("stale");
     expect(edited.nodes["result-display"].status).toBe("stale");
     expect(edited.generationConfirmed).toBe(true);
   });
@@ -787,6 +867,7 @@ describe("agent timeline workflow foundation", () => {
       result: { selectedCandidateIds: ["preview-1"] },
     });
     expect(edited.nodes["comfyui-execution"].status).toBe("stale");
+    expect(edited.nodes["final-review"].status).toBe("stale");
     expect(edited.nodes["result-display"].status).toBe("stale");
   });
 

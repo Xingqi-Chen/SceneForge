@@ -88,6 +88,13 @@ export const timelineNodeContent: Record<TimelineNodeId, TimelineNodeContent> = 
     editLabel: singleImageWorkflowDefinition.metadata["comfyui-execution"].manualEdit.label,
     aiLabel: singleImageWorkflowDefinition.metadata["comfyui-execution"].aiRetry.label,
   },
+  "final-review": {
+    title: singleImageWorkflowDefinition.metadata["final-review"].title,
+    shellState: "Preview and Final comparison",
+    emptyState: "Waiting for complete Preview/Final pairs.",
+    editLabel: singleImageWorkflowDefinition.metadata["final-review"].manualEdit.label,
+    aiLabel: singleImageWorkflowDefinition.metadata["final-review"].aiRetry.label,
+  },
   "result-display": {
     title: singleImageWorkflowDefinition.metadata["result-display"].title,
     shellState: "Standalone timeline images",
@@ -145,6 +152,12 @@ export function getTimelineNodeOutputText(node: TimelineNodeResult) {
 
     if (Array.isArray(node.result.finals) && typeof node.result.finalCount === "number") {
       return `${node.result.finals.filter((item) => isRecord(item) && item.status === "done").length}/${node.result.finalCount} final images completed.`;
+    }
+
+    if (node.result.reviewVersion === 1 && Array.isArray(node.result.pairs)) {
+      return node.result.status === "reviewed"
+        ? `${node.result.pairs.length} Preview/Final pairs reviewed.`
+        : `Final review ${String(node.result.status)}; variants remain selectable.`;
     }
 
     if (

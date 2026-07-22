@@ -80,6 +80,7 @@ import {
   type CanvasBindingTimelineResult,
   type CharacterActionTimelineResult,
   type ComfyUiExecutionTimelineResult,
+  type FinalReviewTimelineResult,
   type ParameterRecommendationTimelineResult,
   type PreviewExecutionTimelineResult,
   type PreviewScoringTimelineResult,
@@ -90,7 +91,12 @@ import {
   type TimelineNodeStatus,
   type TimelineWorkflowState,
 } from "@/features/agent-timeline/types";
-import { singleImageWorkflowDefinition } from "@/features/agent-timeline/workflow-definitions";
+import {
+  singleImageGenerationStageNodeIds,
+  singleImageWorkflowDefinition,
+  type SingleImageGenerationStageNodeId,
+} from "@/features/agent-timeline/workflow-definitions";
+import { selectFinalReviewVariant } from "@/features/agent-timeline/final-review";
 import type {
   CivitaiAiRecommendationResponse,
   CivitaiResourceListItem,
@@ -286,6 +292,12 @@ const stepDisplay: Record<TimelineNodeId, StepDisplay> = {
     icon: Braces,
     transform: "Validate and queue the confirmed ComfyUI render request",
   },
+  "final-review": {
+    agent: "Vision reviewer",
+    artifact: "Preview / Final paired review",
+    icon: Bot,
+    transform: "Compare structure and choose a safe local default",
+  },
   "result-display": {
     agent: "Artifact agent",
     artifact: "Generated image results",
@@ -321,6 +333,7 @@ const visualOutputNodeIds = new Set<TimelineNodeId>([
   "parameter-recommendation",
   "preview-execution",
   "preview-scoring",
+  "final-review",
   "result-display",
 ]);
 const nonEditableAiNodeIds = new Set<TimelineNodeId>(["character-tags", "character-action"]);
@@ -384,6 +397,23 @@ function isPreviewExecutionResult(value: unknown): value is PreviewExecutionTime
 
 function isPreviewScoringResult(value: unknown): value is PreviewScoringTimelineResult {
   return isRecord(value) && Array.isArray(value.scores) && Array.isArray(value.selectedCandidateIds);
+}
+
+function isFinalReviewResult(value: unknown): value is FinalReviewTimelineResult {
+  return isRecord(value) && value.reviewVersion === 1 && Array.isArray(value.pairs) &&
+    (value.status === "reviewed" || value.status === "failed" || value.status === "unavailable");
+}
+
+function getSelectedTimelineArtifactUrl(workflow: TimelineWorkflowState) {
+  const display = workflow.nodes["result-display"].result;
+  if (!isResultDisplayTimelineResult(display)) return null;
+  const review = workflow.nodes["final-review"].result;
+  if (!isFinalReviewResult(review) || !review.pairs.length) return display.image.url;
+  const pair = [...review.pairs].sort((left, right) => left.rank - right.rank)[0]!;
+  const selected = pair.userSelectedVariant ?? pair.defaultVariant;
+  if (selected === "preview-upscale") return pair.variants.previewUpscale.url;
+  const index = display.finalLinks?.findIndex((link) => link.candidateId === pair.candidateId) ?? -1;
+  return index >= 0 ? display.images?.[index]?.url ?? display.image.url : display.image.url;
 }
 
 function isStringArray(value: unknown): value is string[] {
@@ -992,7 +1022,7 @@ function mergeTimelineWorkflowUpdate(
   };
 }
 
-type TimelineGenerationStage = "preview-execution" | "preview-scoring" | "comfyui-execution";
+type TimelineGenerationStage = SingleImageGenerationStageNodeId;
 
 async function confirmTimelineGenerationViaApi(
   workflow: TimelineWorkflowState,
@@ -1140,6 +1170,7 @@ export function TimelineShell() {
 
   const previewWorkflow = useMemo(() => createTimelineWorkflowState({ workflowId: "draft-workflow" }), []);
   const activeWorkflow = workflow ?? previewWorkflow;
+  const selectedArtifactUrl = getSelectedTimelineArtifactUrl(activeWorkflow);
   const selectedNode = activeWorkflow.nodes[selectedNodeId];
   const selectedContent = timelineNodeContent[selectedNodeId];
   const selectedWorkspaceKey = singleImageWorkflowDefinition.metadata[selectedNodeId].workspace.key;
@@ -1820,11 +1851,11 @@ export function TimelineShell() {
       currentWorkflow = result;
       const failedNodeId = result.nodes[stage].status === "error"
         ? stage
-        : stage === "comfyui-execution" && result.nodes["result-display"].status === "error"
+        : stage === "final-review" && result.nodes["result-display"].status === "error"
           ? "result-display" as const
           : null;
       const selectedAfterStage = failedNodeId ??
-        (stage === "comfyui-execution" && result.nodes["result-display"].status === "done"
+        (stage === "final-review" && result.nodes["result-display"].status === "done"
           ? "result-display" as const
           : stage);
       commitWorkflow(result, {
@@ -1833,6 +1864,7 @@ export function TimelineShell() {
           ...outputDisplayModes,
           "preview-execution": "visual",
           "preview-scoring": "visual",
+          "final-review": "visual",
           "result-display": "visual",
         },
       });
@@ -1865,13 +1897,13 @@ export function TimelineShell() {
       const outcome = await runGenerationStages(
         targetWorkflow,
         reusablePreviewSelection
-          ? ["comfyui-execution"]
-          : ["preview-execution", "preview-scoring", "comfyui-execution"],
+          ? singleImageGenerationStageNodeIds.slice(singleImageGenerationStageNodeIds.indexOf("comfyui-execution"))
+          : singleImageGenerationStageNodeIds,
         "confirm",
         runId,
       );
       if (!outcome || outcome.failedNodeId) return;
-      setNotices((current) => ({ ...current, "result-display": "Preview selection and second-pass generation finished." }));
+      setNotices((current) => ({ ...current, "result-display": "Preview/Final review and result selection are ready." }));
     } catch (error) {
       if (!isCurrentRun(runId)) {
         return;
@@ -1892,14 +1924,14 @@ export function TimelineShell() {
 
   async function runGenerationRetry(
     targetWorkflow: TimelineWorkflowState,
-    retryNodeId: "preview-execution" | "preview-scoring" | "comfyui-execution",
+    retryNodeId: TimelineGenerationStage,
   ) {
     if (isRunningRef.current) return;
     const runId = activeRunIdRef.current + 1;
     activeRunIdRef.current = runId;
     updateIsRunning(true);
     try {
-      const allStages: readonly TimelineGenerationStage[] = ["preview-execution", "preview-scoring", "comfyui-execution"];
+      const allStages = singleImageGenerationStageNodeIds;
       const outcome = await runGenerationStages(
         targetWorkflow,
         allStages.slice(allStages.indexOf(retryNodeId)),
@@ -1907,7 +1939,7 @@ export function TimelineShell() {
         runId,
       );
       if (!outcome || outcome.failedNodeId) return;
-      setNotices((current) => ({ ...current, "result-display": "Generation retry completed." }));
+      setNotices((current) => ({ ...current, "result-display": "Generation or review retry completed." }));
     } catch (error) {
       if (!isCurrentRun(runId)) return;
       const message = error instanceof Error ? error.message : "Generation retry failed.";
@@ -1950,6 +1982,13 @@ export function TimelineShell() {
     };
     commitWorkflow(reselectionWorkflow, { selectedNodeId: "preview-scoring" });
     void runGenerationRetry(reselectionWorkflow, "comfyui-execution");
+  }
+
+  function handleFinalVariantSelection(candidateId: string, variant: "final" | "preview-upscale") {
+    if (!workflow || isRunningRef.current) return;
+    const selected = selectFinalReviewVariant(workflow, candidateId, variant);
+    if (selected === workflow) return;
+    commitWorkflow(selected, { selectedNodeId });
   }
 
   function startWorkflow() {
@@ -2619,8 +2658,8 @@ export function TimelineShell() {
       return;
     }
 
-    if (nodeId === "preview-execution" || nodeId === "preview-scoring" || nodeId === "comfyui-execution") {
-      void runGenerationRetry(workflow, nodeId);
+    if (singleImageGenerationStageNodeIds.includes(nodeId as TimelineGenerationStage)) {
+      void runGenerationRetry(workflow, nodeId as TimelineGenerationStage);
       return;
     }
 
@@ -3137,12 +3176,12 @@ export function TimelineShell() {
     const simpleProgress = getSimpleTimelineProgress(workflow);
     const simpleNotice = notices["generation-gate"] ?? notices["scene-input"] ?? notices[selectedNodeId];
     const resultNode = activeWorkflow.nodes["result-display"];
-    const simpleGenerationErrorNodeId = (["preview-execution", "preview-scoring", "comfyui-execution"] as const)
+    const simpleGenerationErrorNodeId = singleImageGenerationStageNodeIds
       .find((nodeId) => activeWorkflow.nodes[nodeId].status === "error");
-    const simpleGenerationPhaseNodeId = (["preview-execution", "preview-scoring", "comfyui-execution"] as const)
+    const simpleGenerationPhaseNodeId = singleImageGenerationStageNodeIds
       .find((nodeId) => activeWorkflow.nodes[nodeId].status === "running") ??
-      (isRunning && (selectedNodeId === "preview-execution" || selectedNodeId === "preview-scoring" || selectedNodeId === "comfyui-execution")
-        ? selectedNodeId
+      (isRunning && singleImageGenerationStageNodeIds.includes(selectedNodeId as TimelineGenerationStage)
+        ? selectedNodeId as TimelineGenerationStage
         : undefined);
     const simpleFinalResult = getTimelineFinalExecutionState(activeWorkflow);
     const simpleFallbacks = getTimelineExecutionFallbacks(simpleFinalResult);
@@ -3153,6 +3192,9 @@ export function TimelineShell() {
       ? simpleFinalResult.finalCount
       : selectedImageCount;
     const simpleScoringResult = activeWorkflow.nodes["preview-scoring"].result;
+    const simpleFinalReview = isFinalReviewResult(activeWorkflow.nodes["final-review"].result)
+      ? activeWorkflow.nodes["final-review"].result
+      : null;
     const simpleSelectionWarning = isPreviewScoringResult(simpleScoringResult) && simpleScoringResult.rubricVersion === 2
       ? createTimelinePreviewSelectionFallbackMetadata(
           simpleScoringResult.scores,
@@ -3299,8 +3341,8 @@ export function TimelineShell() {
               <section className="rounded-md border border-blue-200 bg-blue-50 p-3 text-xs leading-relaxed text-blue-800">
                 <p className="font-semibold">{timelineNodeContent[simpleGenerationPhaseNodeId].title} is running.</p>
                 <p className="mt-1 text-blue-700">
-                  Confirmed generation advances one persisted server stage at a time. Completed previews and scores are
-                  retained before the next stage starts, so a later failure never repeats a successful upstream stage.
+                  Confirmed generation advances one definition-declared server stage at a time. Completed images are
+                  retained before Final review, so review retry never repeats generation.
                 </p>
               </section>
             ) : null}
@@ -3327,6 +3369,25 @@ export function TimelineShell() {
               </section>
             ) : null}
 
+            {workflow && simpleFinalReview?.status === "failed" ? (
+              <section className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-amber-200 bg-amber-50 p-4 text-xs text-amber-900 shadow-sm">
+                <div className="min-w-0">
+                  <p className="font-semibold">Final review recommendation is unavailable.</p>
+                  <p className="mt-1 leading-relaxed">{simpleFinalReview.error?.message}</p>
+                </div>
+                <Button
+                  className="h-9 shrink-0 px-3 text-xs shadow-none"
+                  disabled={isRunning}
+                  onClick={() => void runGenerationRetry(workflow, "final-review")}
+                  type="button"
+                  variant="secondary"
+                >
+                  <RefreshCw className="size-3.5" />
+                  Retry review
+                </Button>
+              </section>
+            ) : null}
+
             {workflow && (resultNode.status === "done" || resultNode.status === "error" || simpleFallbacks.length > 0) ? (
               <section className="rounded-md border border-slate-200 bg-white p-4 shadow-sm">
                 <h2 className="text-sm font-bold text-slate-900">Artifact result</h2>
@@ -3336,7 +3397,9 @@ export function TimelineShell() {
                     emptyState={timelineNodeContent["result-display"].emptyState}
                     errorMessage={resultNode.error?.message}
                     fallbacks={simpleFallbacks}
+                    finalReview={simpleFinalReview}
                     key={resultNode.updatedAt}
+                    onSelectVariant={handleFinalVariantSelection}
                     result={isResultDisplayTimelineResult(resultNode.result) ? resultNode.result : null}
                     selectedResources={timelineResultSelectedResources}
                   />
@@ -3872,14 +3935,20 @@ export function TimelineShell() {
                       scoring={isPreviewScoringResult(activeWorkflow.nodes["preview-scoring"].result)
                         ? activeWorkflow.nodes["preview-scoring"].result : null}
                     />
-                  ) : selectedOutputDisplayMode === "visual" && selectedWorkspaceKey === "result-display" ? (
+                  ) : selectedOutputDisplayMode === "visual" &&
+                      (selectedWorkspaceKey === "final-review" || selectedWorkspaceKey === "result-display") ? (
                     <TimelineResultDisplayWorkspace
                       draft={timelineResultDraft}
                       emptyState={selectedContent.emptyState}
-                      errorMessage={selectedNode.error?.message}
+                      detailedReview
+                      errorMessage={activeWorkflow.nodes["final-review"].error?.message ?? selectedNode.error?.message}
                       fallbacks={getTimelineExecutionFallbacks(getTimelineFinalExecutionState(activeWorkflow))}
+                      finalReview={isFinalReviewResult(activeWorkflow.nodes["final-review"].result)
+                        ? activeWorkflow.nodes["final-review"].result : null}
                       key={selectedNode.updatedAt}
-                      result={isResultDisplayTimelineResult(selectedNode.result) ? selectedNode.result : null}
+                      onSelectVariant={handleFinalVariantSelection}
+                      result={isResultDisplayTimelineResult(activeWorkflow.nodes["result-display"].result)
+                        ? activeWorkflow.nodes["result-display"].result : null}
                       selectedResources={timelineResultSelectedResources}
                     />
                   ) : selectedOutputDisplayMode === "visual" && isTimelineEditorWorkspaceNode(selectedNodeId) ? (
@@ -3978,12 +4047,12 @@ export function TimelineShell() {
                 <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Generated artifacts</h2>
               </header>
               <div className="p-3">
-                {isResultDisplayTimelineResult(activeWorkflow.nodes["result-display"].result) ? (
+                {selectedArtifactUrl ? (
                   <Image
                     alt="Timeline generated artifact"
                     className="aspect-square w-full rounded-md border border-slate-200 object-cover"
                     height={320}
-                    src={activeWorkflow.nodes["result-display"].result.image.url}
+                    src={selectedArtifactUrl}
                     unoptimized
                     width={320}
                   />

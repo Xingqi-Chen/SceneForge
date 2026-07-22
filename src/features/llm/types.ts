@@ -34,6 +34,7 @@ export type LlmChatRequest = {
     | "stable-diffusion-prompt-generation"
     | "story-style-reference-analysis"
     | "single-image-preview-scoring"
+    | "single-image-final-review"
     | "comfyui-generation-diagnosis"
     | "comfyui-inpaint-diagnosis";
   messages: LlmChatMessage[];

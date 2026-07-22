@@ -31,6 +31,9 @@ import {
   getStyleReferenceCapability,
 } from "./style-reference";
 import { createTimelineT8NodeAdapters } from "./t8-node-adapters";
+import { reviewFinalExecution } from "./final-review.server";
+import { getFinalReviewResult } from "./final-review";
+import { createStoredImageVisionDataUrl } from "./vision-image-transcode.server";
 import {
   createTimelinePreviewSelectionFallbackMetadata,
   previewScoringRubric,
@@ -453,47 +456,6 @@ async function isReusableStoredFinal(record: TimelineFinalExecutionRecord) {
   }
 }
 
-async function storedImageScoringDataUrl(
-  stored: TimelineStoredGeneratedImage,
-  candidateId: string,
-) {
-  const filePath = getGeneratedImagePath(stored.filename);
-  if (!filePath) {
-    throw new TimelineNodeExecutionError(createTimelineNodeError(
-      "image_storage_invalid",
-      "Stored preview reference is invalid and could not be prepared for scoring.",
-      { candidateId, stage: "scoring_image_read", recoverable: true },
-    ));
-  }
-
-  let sourceBytes: Buffer;
-  try {
-    sourceBytes = await fs.readFile(/*turbopackIgnore: true*/ filePath);
-  } catch {
-    throw new TimelineNodeExecutionError(createTimelineNodeError(
-      "image_storage_failed",
-      "Stored preview image could not be read for scoring. Retry preview generation.",
-      { candidateId, stage: "scoring_image_read", recoverable: true },
-    ));
-  }
-
-  try {
-    const scoringBytes = await sharp(sourceBytes)
-      .rotate()
-      .resize({ width: 768, height: 768, fit: "inside", withoutEnlargement: true })
-      .flatten({ background: { r: 255, g: 255, b: 255 } })
-      .jpeg({ quality: 85 })
-      .toBuffer();
-    return `data:image/jpeg;base64,${scoringBytes.toString("base64")}`;
-  } catch {
-    throw new TimelineNodeExecutionError(createTimelineNodeError(
-      "image_storage_failed",
-      "Stored preview image could not be transcoded for scoring. Retry preview generation.",
-      { candidateId, stage: "scoring_image_transcode", recoverable: true },
-    ));
-  }
-}
-
 function haveSameManagedImageContent(
   left: TimelineStoredGeneratedImage,
   right: TimelineStoredGeneratedImage,
@@ -743,7 +705,7 @@ async function scorePreviews(
     content.push({
       type: "image_url",
       image_url: {
-        url: await storedImageScoringDataUrl(candidate.storedImage!, candidate.candidateId),
+        url: await createStoredImageVisionDataUrl(candidate.storedImage!, candidate.candidateId, "preview-scoring"),
         detail: "high",
       },
     });
@@ -962,11 +924,41 @@ function loadResultDisplay(execution: ComfyUiExecutionTimelineResult): ResultDis
 export function createTimelineT8ServerNodeAdapters(
   options: { advancePreviewSeedOnRetry?: boolean } = {},
 ): TimelineNodeAdapters {
-  return createTimelineT8NodeAdapters({
+  const adapters = createTimelineT8NodeAdapters({
     advancePreviewSeedOnRetry: options.advancePreviewSeedOnRetry,
     executePreviews,
     scorePreviews,
     executeFinals,
     loadResultDisplay,
   });
+  return {
+    ...adapters,
+    "final-review": async (context) => {
+      const previous = getFinalReviewResult(context.workflow);
+      const reviewed = await reviewFinalExecution(getCompletedFinalExecution(context), context);
+      const selectionByCandidate = new Map(previous?.pairs.flatMap((pair) =>
+        pair.userSelectedVariant ? [[pair.candidateId, pair.userSelectedVariant] as const] : []));
+      return {
+        value: {
+          ...reviewed,
+          pairs: reviewed.pairs.map((pair) => {
+            const userSelectedVariant = selectionByCandidate.get(pair.candidateId);
+            return userSelectedVariant ? { ...pair, userSelectedVariant } : pair;
+          }),
+        },
+        source: "ai",
+      };
+    },
+  };
+}
+
+function getCompletedFinalExecution(context: TimelineNodeExecutionContext) {
+  const result = context.workflow.nodes["comfyui-execution"].result;
+  if (isRecord(result) && result.completed === true && Array.isArray(result.finals)) {
+    return result as ComfyUiExecutionTimelineResult;
+  }
+  throw new TimelineNodeExecutionError(createTimelineNodeError(
+    "timeline_node_blocked",
+    "Complete Final execution is required before Final review.",
+  ));
 }

@@ -35,6 +35,7 @@ type TimelineWorkspaceKey =
   | "preview-execution"
   | "preview-scoring"
   | "comfyui-execution"
+  | "final-review"
   | "result-display";
 
 function createTimelineNodeMetadata({
@@ -99,7 +100,8 @@ export const singleImageWorkflowEdges = [
   { from: "generation-gate", to: "preview-execution" },
   { from: "preview-execution", to: "preview-scoring" },
   { from: "preview-scoring", to: "comfyui-execution" },
-  { from: "comfyui-execution", to: "result-display" },
+  { from: "comfyui-execution", to: "final-review" },
+  { from: "final-review", to: "result-display" },
 ] as const satisfies readonly CommonWorkflowDagEdge<TimelineNodeId>[];
 
 export const singleImageWorkflowDependencyDag = buildCommonWorkflowDependencyDag(
@@ -109,7 +111,7 @@ export const singleImageWorkflowDependencyDag = buildCommonWorkflowDependencyDag
 
 export const singleImageWorkflowDefinition = {
   mode: singleImageWorkflowMode,
-  version: 2,
+  version: 3,
   nodeIds: timelineNodeIds,
   executableNodeIds: executableTimelineNodeIds,
   reservedNodeIds: reservedTimelineNodeIds,
@@ -204,6 +206,14 @@ export const singleImageWorkflowDefinition = {
       title: "Render execution",
       workspaceKey: "comfyui-execution",
     }),
+    "final-review": createTimelineNodeMetadata({
+      aiLabel: "Retry review",
+      editLabel: "Select result",
+      inputKind: "visual",
+      nodeId: "final-review",
+      title: "Final review",
+      workspaceKey: "final-review",
+    }),
     "result-display": createTimelineNodeMetadata({
       aiLabel: "Review result",
       editLabel: "Result locked",
@@ -214,6 +224,23 @@ export const singleImageWorkflowDefinition = {
     }),
   },
 } as const satisfies TimelineWorkflowDefinition;
+
+const generationGateIndex = singleImageWorkflowDefinition.nodeIds.indexOf("generation-gate");
+const resultDisplayIndex = singleImageWorkflowDefinition.nodeIds.indexOf("result-display");
+
+export const singleImageGenerationStageNodeIds = singleImageWorkflowDefinition.nodeIds.slice(
+  generationGateIndex + 1,
+  resultDisplayIndex,
+) as readonly ("preview-execution" | "preview-scoring" | "comfyui-execution" | "final-review")[];
+
+export type SingleImageGenerationStageNodeId = (typeof singleImageGenerationStageNodeIds)[number];
+
+export function getSingleImageStageExecutionNodeIds(stage: SingleImageGenerationStageNodeId) {
+  const finalStage = singleImageGenerationStageNodeIds.at(-1);
+  return stage === finalStage
+    ? [stage, "result-display"] as const
+    : [stage] as const;
+}
 
 export function getTimelineWorkflowDefinition(
   mode: TimelineWorkflowMode = singleImageWorkflowMode,

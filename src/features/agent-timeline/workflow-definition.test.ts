@@ -12,7 +12,11 @@ import {
   type CommonWorkflowArtifact,
   type CommonWorkflowNodeMap,
 } from "./workflow-definition";
-import { singleImageWorkflowDefinition } from "./workflow-definitions";
+import {
+  getSingleImageStageExecutionNodeIds,
+  singleImageGenerationStageNodeIds,
+  singleImageWorkflowDefinition,
+} from "./workflow-definitions";
 import { timelineNodeIds } from "./types";
 
 const nodeIds = ["input", "branch-a", "branch-b", "join", "result"] as const;
@@ -209,7 +213,7 @@ describe("common workflow definitions", () => {
 
   it("exposes single-image node metadata for definition-driven runtime orchestration", () => {
     expect(singleImageWorkflowDefinition.mode).toBe("single-image");
-    expect(singleImageWorkflowDefinition.version).toBe(2);
+    expect(singleImageWorkflowDefinition.version).toBe(3);
     expect(singleImageWorkflowDefinition.nodeIds).toEqual(timelineNodeIds);
     expect(singleImageWorkflowDefinition.dependencyDag["generation-gate"]).toEqual([
       "scene-prompt",
@@ -222,6 +226,16 @@ describe("common workflow definitions", () => {
     expect(singleImageWorkflowDefinition.dependencyDag["preview-execution"]).toEqual(["generation-gate"]);
     expect(singleImageWorkflowDefinition.dependencyDag["preview-scoring"]).toEqual(["preview-execution"]);
     expect(singleImageWorkflowDefinition.dependencyDag["comfyui-execution"]).toEqual(["preview-scoring"]);
+    expect(singleImageWorkflowDefinition.dependencyDag["final-review"]).toEqual(["comfyui-execution"]);
+    expect(singleImageWorkflowDefinition.dependencyDag["result-display"]).toEqual(["final-review"]);
+    expect(singleImageGenerationStageNodeIds).toEqual([
+      "preview-execution",
+      "preview-scoring",
+      "comfyui-execution",
+      "final-review",
+    ]);
+    expect(getSingleImageStageExecutionNodeIds("comfyui-execution")).toEqual(["comfyui-execution"]);
+    expect(getSingleImageStageExecutionNodeIds("final-review")).toEqual(["final-review", "result-display"]);
     expect(singleImageWorkflowDefinition.adapterFactory({
       "scene-prompt": () => ({ prompt: "adapter" }),
     })["scene-prompt"]).toBeDefined();

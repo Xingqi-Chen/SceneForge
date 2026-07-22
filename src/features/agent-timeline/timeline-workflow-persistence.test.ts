@@ -230,6 +230,150 @@ const readyStyleReference = {
 } as const;
 
 describe("timeline workflow persistence", () => {
+  it("round-trips Final review variants, local defaults, and explicit user selection without unsafe payloads", () => {
+    let workflow: TimelineWorkflowState = createPersistedV2GenerationWorkflow(2);
+    const finals = (workflow.nodes["comfyui-execution"].result as {
+      finals: Array<{
+        candidateId: string;
+        rank: number;
+        seed: number;
+        storedImage: ReturnType<typeof managedStoredImage>;
+        previewUpscale: { storedImage: ReturnType<typeof managedStoredImage> };
+      }>;
+    }).finals;
+    const displayResult = workflow.nodes["result-display"].result;
+    workflow = completeTimelineNode(workflow, "final-review", {
+      reviewVersion: 1,
+      status: "reviewed",
+      pairs: finals.map((final, index) => ({
+        candidateId: final.candidateId,
+        rank: final.rank,
+        seed: final.seed,
+        variants: {
+          final: { ...final.storedImage, dataUrl: "data:image/png;base64,SECRET_BYTES", absolutePath: "C:\\PRIVATE\\final.png" },
+          previewUpscale: final.previewUpscale.storedImage,
+        },
+        scores: {
+          final: { adherence: 80, composition: 80, anatomy: 80, style: 80, technical: 80, total: 80 },
+          previewUpscale: { adherence: 70, composition: 70, anatomy: 70, style: 70, technical: 70, total: 70 },
+        },
+        findings: [
+          { operation: "pose", severity: index === 0 ? "major" : "none", scope: index === 0 ? "final" : "pair", introducedByFinal: index === 0, description: "Pose comparison." },
+          { operation: "contact", severity: "none", scope: "pair", introducedByFinal: false, description: "Contact comparison." },
+          { operation: "object-count", severity: "none", scope: "pair", introducedByFinal: false, description: "Object count comparison." },
+          { operation: "composition-consistency", severity: "none", scope: "pair", introducedByFinal: false, description: "Composition comparison." },
+        ],
+        rationale: "Safe normalized rationale.",
+        recommendedVariant: index === 0 ? "preview-upscale" : "final",
+        defaultVariant: index === 0 ? "preview-upscale" : "final",
+        ...(index === 0 ? { userSelectedVariant: "final" } : {}),
+        rawResponse: "PRIVATE_RAW_RESPONSE",
+        prompt: "PRIVATE_PROMPT",
+      })),
+      rawResponse: "PRIVATE_RAW_RESPONSE",
+    }, "ai");
+    workflow = completeTimelineNode(workflow, "result-display", displayResult, "system");
+
+    const serialized = serializeTimelineWorkflowRecord(createTimelineWorkflowRecord({
+      projectId: "t38b-review-persistence",
+      name: "Final review persistence",
+      workflow,
+      sceneRequest: "A persisted scored-preview Run",
+      selectedPromptProfile: "illustrious",
+      selectedImageCount: 2,
+      selectedNodeId: "result-display",
+      outputDisplayModes: { "final-review": "visual", "result-display": "visual" },
+    }));
+    const restored = parseTimelineWorkflowRecordJson(serialized);
+
+    expect(restored && isSingleImageTimelineWorkflowRecord(restored)).toBe(true);
+    if (!restored || !isSingleImageTimelineWorkflowRecord(restored)) throw new Error("Expected Run record.");
+    expect(restored.workflow.nodes["final-review"]).toMatchObject({
+      status: "done",
+      result: {
+        reviewVersion: 1,
+        status: "reviewed",
+        pairs: [
+          {
+            candidateId: "preview-1",
+            recommendedVariant: "preview-upscale",
+            defaultVariant: "preview-upscale",
+            userSelectedVariant: "final",
+          },
+          {
+            candidateId: "preview-2",
+            recommendedVariant: "final",
+            defaultVariant: "final",
+          },
+        ],
+      },
+    });
+    expect(serialized).not.toContain("SECRET_BYTES");
+    expect(serialized).not.toContain("PRIVATE_RAW_RESPONSE");
+    expect(serialized).not.toContain("PRIVATE_PROMPT");
+    expect(serialized).not.toContain("C:\\\\PRIVATE");
+  });
+
+  it("rejects tampered Final-review linkage against verified generated variants", () => {
+    const raw = JSON.parse(JSON.stringify(createPersistedV2GenerationWorkflow(1))) as TimelineWorkflowState;
+    const final = (raw.nodes["comfyui-execution"].result as {
+      finals: Array<{
+        candidateId: string;
+        rank: number;
+        seed: number;
+        storedImage: ReturnType<typeof managedStoredImage>;
+        previewUpscale: { storedImage: ReturnType<typeof managedStoredImage> };
+      }>;
+    }).finals[0]!;
+    raw.nodes["final-review"] = {
+      nodeId: "final-review",
+      status: "done",
+      source: "ai",
+      updatedAt: raw.updatedAt,
+      result: {
+        reviewVersion: 1,
+        status: "unavailable",
+        pairs: [{
+          candidateId: final.candidateId,
+          rank: final.rank,
+          seed: final.seed,
+          variants: {
+            final: managedStoredImage("c"),
+            previewUpscale: final.previewUpscale.storedImage,
+          },
+          recommendedVariant: null,
+          defaultVariant: "final",
+        }],
+      },
+    };
+
+    const restored = sanitizeTimelineWorkflowState(raw) as TimelineWorkflowState;
+
+    expect(restored.nodes["final-review"]).toMatchObject({
+      status: "error",
+      error: { code: "image_storage_invalid", details: { recoverable: true } },
+    });
+  });
+
+  it("restores a completed legacy workflow without initiating review and keeps its managed variants visible", () => {
+    const raw = JSON.parse(JSON.stringify(createPersistedV2GenerationWorkflow(1))) as TimelineWorkflowState;
+    delete (raw.nodes as Partial<TimelineWorkflowState["nodes"]>)["final-review"];
+
+    const restored = sanitizeTimelineWorkflowState(raw) as TimelineWorkflowState;
+
+    expect(restored.nodes["comfyui-execution"].status).toBe("done");
+    expect(restored.nodes["final-review"]).toMatchObject({
+      status: "done",
+      source: "system",
+      result: {
+        reviewVersion: 1,
+        status: "unavailable",
+        pairs: [{ recommendedVariant: null, defaultVariant: "final" }],
+      },
+    });
+    expect(restored.nodes["result-display"].status).toBe("done");
+  });
+
   it("keeps completed pre-policy results displayable without authorizing their old confirmation", () => {
     const raw = JSON.parse(JSON.stringify(createPersistedV2GenerationWorkflow(1))) as TimelineWorkflowState;
     const execution = raw.nodes["comfyui-execution"].result as {
@@ -793,7 +937,7 @@ describe("timeline workflow persistence", () => {
     expect(restored && isSingleImageTimelineWorkflowRecord(restored)).toBe(true);
     if (!restored || !isSingleImageTimelineWorkflowRecord(restored)) throw new Error("Expected v2 Run record.");
 
-    expect(restored.definitionVersion).toBe(2);
+    expect(restored.definitionVersion).toBe(3);
     expect(restored.workflow.nodes["preview-execution"].result).toMatchObject({
       candidates: expect.arrayContaining([
         expect.objectContaining({ storedImage: expect.objectContaining({ filename: managedPreviewFilename }) }),

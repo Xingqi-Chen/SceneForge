@@ -52,6 +52,10 @@ import {
   previewScoringRubric,
   timelinePreviewBlockingDefectCategories,
   timelinePreviewCriticalDefectCategories,
+  timelineFinalReviewOperations,
+  timelineFinalReviewScopes,
+  timelineFinalReviewSeverities,
+  timelineFinalReviewVariants,
   timelineNodeIds,
   timelineNodeStatuses,
   type TimelineNodeId,
@@ -274,6 +278,8 @@ function sanitizeTimelineNode(
       ? sanitizePreviewScoringResult(raw.result)
     : nodeId === "comfyui-execution"
       ? sanitizeFinalExecutionResult(raw.result, options)
+      : nodeId === "final-review"
+        ? sanitizeFinalReviewResult(raw.result)
       : nodeId === "result-display"
         ? sanitizeResultDisplayResult(raw.result)
         : raw.result !== undefined
@@ -306,6 +312,7 @@ function sanitizeTimelineNode(
     nodeId === "preview-scoring" && (status === "done" || status === "manual") && !isRecord(result) ||
     nodeId === "comfyui-execution" && status === "done" &&
       (!isRecord(result) || result.completed !== true) ||
+    nodeId === "final-review" && status === "done" && !isRecord(result) ||
     nodeId === "result-display" && status === "done" && result === undefined;
   if (invalidCompletedResult) {
     return {
@@ -315,9 +322,11 @@ function sanitizeTimelineNode(
       updatedAt,
       ...(result !== undefined ? { result } : {}),
       error: createTimelineNodeError(
-        nodeId === "preview-scoring" ? "timeline_request_invalid" : "image_storage_invalid",
+        nodeId === "preview-scoring" || nodeId === "final-review" ? "timeline_request_invalid" : "image_storage_invalid",
         nodeId === "preview-scoring"
           ? "Persisted preview scoring was invalid. Retry preview scoring."
+          : nodeId === "final-review"
+            ? "Persisted Final review was invalid. Both generated variants were retained; retry Final review."
           : "Persisted generated-image references were invalid. Retry this generation phase.",
         { recoverable: true },
       ),
@@ -623,6 +632,7 @@ function sanitizeSingleImageWorkflowState(raw: Record<string, unknown>): Timelin
   const updatedAt = sanitizeDateString(raw.updatedAt, fallback.updatedAt);
   const rawNodes = isRecord(raw.nodes) ? raw.nodes : {};
   const isLegacyWorkflow = !("preview-execution" in rawNodes) || !("preview-scoring" in rawNodes);
+  const isLegacyFinalReview = !("final-review" in rawNodes);
   const rawGateNode = isRecord(rawNodes["generation-gate"]) ? rawNodes["generation-gate"] : {};
   const rawGateResult = isRecord(rawGateNode.result) ? rawGateNode.result : {};
   const requireCurrentFinalPolicy = rawGateResult.finalPolicyVersion === timelineFinalGenerationPolicy.version;
@@ -638,6 +648,31 @@ function sanitizeSingleImageWorkflowState(raw: Record<string, unknown>): Timelin
     reconcilePersistedGenerationLinkage(nodes, updatedAt);
     if (!scoringIsTrusted) {
       invalidatePersistedScoringDownstream(nodes, updatedAt);
+    }
+  }
+  if (isLegacyFinalReview && nodes["comfyui-execution"].status === "done") {
+    const execution = nodes["comfyui-execution"].result;
+    const finals = isRecord(execution) && Array.isArray(execution.finals) ? execution.finals : [];
+    const pairs = finals.flatMap((entry) => {
+      if (!isRecord(entry) || entry.status !== "done" || !isRecord(entry.previewUpscale) ||
+          !isRecord(entry.storedImage) || !isRecord(entry.previewUpscale.storedImage)) return [];
+      return [{
+        candidateId: entry.candidateId,
+        rank: entry.rank,
+        seed: entry.seed,
+        variants: { final: entry.storedImage, previewUpscale: entry.previewUpscale.storedImage },
+        recommendedVariant: null,
+        defaultVariant: "final" as const,
+      }];
+    });
+    if (pairs.length > 0 && pairs.length === finals.length) {
+      nodes["final-review"] = {
+        nodeId: "final-review",
+        status: "done",
+        source: "system",
+        updatedAt,
+        result: { reviewVersion: 1, status: "unavailable", pairs },
+      };
     }
   }
   if (!isLegacyWorkflow && nodes["comfyui-execution"].status !== "done" && nodes["result-display"].status === "done") {
@@ -681,7 +716,7 @@ function sanitizeSingleImageWorkflowState(raw: Record<string, unknown>): Timelin
       status: "blocked",
       error: undefined,
     };
-    for (const nodeId of ["preview-execution", "preview-scoring", "result-display"] as const) {
+    for (const nodeId of ["preview-execution", "preview-scoring", "final-review", "result-display"] as const) {
       nodes[nodeId] = {
         ...nodes[nodeId],
         status: "blocked",
@@ -1106,6 +1141,87 @@ function sanitizeFinalExecutionResult(
   };
 }
 
+function sanitizeFinalReviewResult(value: unknown) {
+  if (!isRecord(value) || value.reviewVersion !== 1 ||
+      (value.status !== "reviewed" && value.status !== "failed" && value.status !== "unavailable") ||
+      !Array.isArray(value.pairs) || value.pairs.length < 1 || value.pairs.length > 4) return undefined;
+  const variantSet = new Set<string>(timelineFinalReviewVariants);
+  const severitySet = new Set<string>(timelineFinalReviewSeverities);
+  const scopeSet = new Set<string>(timelineFinalReviewScopes);
+  const operationSet = new Set<string>(timelineFinalReviewOperations);
+  const seen = new Set<string>();
+  const pairs = value.pairs.map((entry) => {
+    if (!isRecord(entry) || !safePreviewCandidateId(entry.candidateId) || seen.has(entry.candidateId as string) ||
+        safeNonNegativeInteger(entry.rank) === null || (entry.rank as number) < 1 || (entry.rank as number) > 8 ||
+        safeNonNegativeInteger(entry.seed) === null || !isRecord(entry.variants)) return null;
+    seen.add(entry.candidateId as string);
+    const final = sanitizeTimelineStoredImage(entry.variants.final);
+    const previewUpscale = sanitizeTimelineStoredImage(entry.variants.previewUpscale);
+    if (!final || !previewUpscale || !variantSet.has(entry.defaultVariant as string) ||
+        !(entry.recommendedVariant === null || variantSet.has(entry.recommendedVariant as string)) ||
+        !(entry.userSelectedVariant === undefined || variantSet.has(entry.userSelectedVariant as string))) return null;
+    const normalizeScores = (raw: unknown) => {
+      if (!isRecord(raw)) return null;
+      const keys = ["adherence", "composition", "anatomy", "style", "technical", "total"] as const;
+      if (keys.some((key) => typeof raw[key] !== "number" || !Number.isFinite(raw[key]) ||
+          (raw[key] as number) < 0 || (raw[key] as number) > 100)) return null;
+      const expectedTotal = Number(calculatePreviewScoreRawTotal(raw as {
+        adherence: number; anatomy: number; composition: number; style: number; technical: number;
+      }).toFixed(2));
+      return raw.total === expectedTotal ? Object.fromEntries(keys.map((key) => [key, raw[key]])) : null;
+    };
+    const scores = isRecord(entry.scores) ? {
+      final: normalizeScores(entry.scores.final),
+      previewUpscale: normalizeScores(entry.scores.previewUpscale),
+    } : null;
+    const findings = Array.isArray(entry.findings) ? entry.findings.map((finding) => {
+      if (!isRecord(finding) || !operationSet.has(finding.operation as string) ||
+          !severitySet.has(finding.severity as string) || !scopeSet.has(finding.scope as string) ||
+          typeof finding.introducedByFinal !== "boolean" || typeof finding.description !== "string" ||
+          !finding.description.trim() || (finding.severity === "none" && finding.introducedByFinal === true)) return null;
+      return {
+        operation: finding.operation,
+        severity: finding.severity,
+        scope: finding.scope,
+        introducedByFinal: finding.introducedByFinal,
+        description: finding.description.trim().slice(0, 500),
+      };
+    }) : null;
+    if (value.status === "reviewed" && (!scores || !scores.final || !scores.previewUpscale || !findings ||
+        findings.length !== timelineFinalReviewOperations.length ||
+        new Set(findings.map((finding) => finding?.operation)).size !== timelineFinalReviewOperations.length ||
+        findings.some((finding) => !finding) || entry.recommendedVariant !== entry.defaultVariant)) return null;
+    const locallyRecommended = findings?.some((finding) => finding?.introducedByFinal === true &&
+      (finding.severity === "major" || finding.severity === "blocking")) ? "preview-upscale" : "final";
+    if (value.status === "reviewed" && entry.recommendedVariant !== locallyRecommended) return null;
+    if (value.status !== "reviewed" && (entry.recommendedVariant !== null || entry.defaultVariant !== "final" ||
+        entry.scores !== undefined || entry.findings !== undefined)) return null;
+    return {
+      candidateId: entry.candidateId as string,
+      rank: entry.rank as number,
+      seed: entry.seed as number,
+      variants: { final, previewUpscale },
+      ...(scores?.final && scores.previewUpscale ? { scores } : {}),
+      ...(findings && findings.every(Boolean) ? { findings } : {}),
+      ...(typeof entry.rationale === "string" && entry.rationale.trim()
+        ? { rationale: entry.rationale.trim().slice(0, 1_000) }
+        : {}),
+      recommendedVariant: entry.recommendedVariant as "final" | "preview-upscale" | null,
+      defaultVariant: entry.defaultVariant as "final" | "preview-upscale",
+      ...(entry.userSelectedVariant ? { userSelectedVariant: entry.userSelectedVariant as "final" | "preview-upscale" } : {}),
+    };
+  });
+  if (pairs.some((pair) => !pair)) return undefined;
+  const error = sanitizeNodeError(value.error, { redactDataUrls: true });
+  if (value.status === "failed" && !error) return undefined;
+  return {
+    reviewVersion: 1 as const,
+    status: value.status,
+    pairs,
+    ...(error ? { error } : {}),
+  };
+}
+
 function sanitizeResultDisplayResult(value: unknown) {
   if (!isRecord(value) || value.completed !== true) return undefined;
   const rawStoredImages = Array.isArray(value.storedImages) ? value.storedImages : [value.storedImage];
@@ -1308,7 +1424,7 @@ function reconcilePersistedPreviewScoring(nodes: TimelineNodeMap, updatedAt: str
 }
 
 function invalidatePersistedScoringDownstream(nodes: TimelineNodeMap, updatedAt: string) {
-  for (const nodeId of ["comfyui-execution", "result-display"] as const) {
+  for (const nodeId of ["comfyui-execution", "final-review", "result-display"] as const) {
     nodes[nodeId] = {
       nodeId,
       status: "error",
@@ -1570,6 +1686,32 @@ function reconcilePersistedGenerationLinkage(nodes: TimelineNodeMap, updatedAt: 
 
   const trustedFinalNode = nodes["comfyui-execution"];
   const trustedFinalResult = trustedFinalNode.result;
+  const reviewNode = nodes["final-review"];
+  if (reviewNode.status === "done" && isRecord(reviewNode.result) && Array.isArray(reviewNode.result.pairs) &&
+      isRecord(trustedFinalResult) && Array.isArray(trustedFinalResult.finals)) {
+    const finalByCandidate = new Map(trustedFinalResult.finals.flatMap((entry) =>
+      isRecord(entry) && typeof entry.candidateId === "string" ? [[entry.candidateId, entry] as const] : []));
+    const reviewMatches = reviewNode.result.pairs.length === finalByCandidate.size && reviewNode.result.pairs.every((entry) => {
+      if (!isRecord(entry) || typeof entry.candidateId !== "string" || !isRecord(entry.variants)) return false;
+      const final = finalByCandidate.get(entry.candidateId);
+      return Boolean(final && entry.rank === final.rank && entry.seed === final.seed &&
+        samePersistedStoredImage(entry.variants.final, final.storedImage) && isRecord(final.previewUpscale) &&
+        samePersistedStoredImage(entry.variants.previewUpscale, final.previewUpscale.storedImage));
+    });
+    if (!reviewMatches) {
+      nodes["final-review"] = {
+        nodeId: "final-review",
+        status: "error",
+        source: "system",
+        updatedAt,
+        error: createTimelineNodeError(
+          "image_storage_invalid",
+          "Persisted Final review variants did not match the verified generated images. Retry Final review.",
+          { recoverable: true },
+        ),
+      };
+    }
+  }
   const displayNode = nodes["result-display"];
   if (displayNode.status === "done" &&
       (trustedFinalNode.status !== "done" || !resultDisplayMatchesFinals(displayNode.result, trustedFinalResult))) {
