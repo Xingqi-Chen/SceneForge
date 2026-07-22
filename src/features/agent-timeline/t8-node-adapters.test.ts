@@ -594,9 +594,9 @@ describe("timeline T8 ComfyUI request conversion", () => {
   });
 
   it.each([
-    ["Illustrious", "illustrious", 20, 0.6],
-    ["Anima", "anima", 20, 0.65],
-    ["Future XL", "future-profile", 20, 0.65],
+    ["Illustrious", "illustrious", 20, 0.4],
+    ["Anima", "anima", 20, 0.45],
+    ["Future XL", "future-profile", 20, 0.45],
   ] as const)(
     "applies balanced %s preview/final quality while inheriting formal sampler settings",
     (modelBaseModel, promptProfile, previewSteps, finalDenoise) => {
@@ -740,16 +740,101 @@ describe("timeline T8 ComfyUI request conversion", () => {
         rank: 1,
         seed: 102,
         storedPreview: { filename: "preview-3.png" },
-        request: { batchSize: 1, denoise: 0.65, height: 1024, preview: false, seed: 102, steps: 30, width: 1024 },
+        request: { batchSize: 1, denoise: 0.45, height: 1024, preview: false, seed: 102, steps: 30, width: 1024 },
       },
       {
         candidateId: "preview-1",
         rank: 2,
         seed: 100,
         storedPreview: { filename: "preview-1.png" },
-        request: { batchSize: 1, denoise: 0.65, height: 1024, preview: false, seed: 100, steps: 30, width: 1024 },
+        request: { batchSize: 1, denoise: 0.45, height: 1024, preview: false, seed: 100, steps: 30, width: 1024 },
       },
     ]);
+  });
+
+  it("uses the T7 source-img2img dimension precedence as the confirmed formal Final size", () => {
+    const sourceImage = {
+      dataUrl: "data:image/png;base64,aGVsbG8=",
+      filename: "portrait-source.png",
+      height: 1216,
+      mimeType: "image/png" as const,
+      uploadedAt: "2026-07-20T00:00:00.000Z",
+      width: 832,
+    };
+    let workflow = createConfirmedWorkflow(1, sourceImage);
+    const parameters = workflow.nodes["parameter-recommendation"].result as {
+      requestPreview: Record<string, unknown>;
+    } & Record<string, unknown>;
+    workflow = setTimelineNodeManualResult(workflow, "parameter-recommendation", {
+      ...parameters,
+      width: 2048,
+      height: 512,
+      requestPreview: {
+        ...parameters.requestPreview,
+        width: 2048,
+        height: 512,
+        imageWidth: 2048,
+        imageHeight: 512,
+      },
+    });
+    workflow = confirmTimelineGeneration(workflow);
+    workflow = setTimelineNodeManualResult(workflow, "preview-execution", {
+      baseSeed: 100,
+      candidateCount: 4,
+      finalCount: 1,
+      previewHeight: 760,
+      previewWidth: 520,
+      previewSteps: 20,
+      candidates: [1, 2, 3, 4].map((number, index) => ({
+        candidateId: `preview-${number}`,
+        index,
+        seed: 99 + number,
+        status: "done" as const,
+        storedImage: {
+          byteLength: number,
+          contentType: "image/png",
+          filename: `preview-${number}.png`,
+          url: `/api/comfyui/generated-images/preview-${number}.png`,
+        },
+      })),
+      successfulCount: 4,
+      warnings: [],
+    });
+    workflow = setTimelineNodeManualResult(workflow, "preview-scoring", {
+      rubricVersion: 2,
+      scores: [1, 2, 3, 4].map((number) => ({
+        candidateId: `preview-${number}`,
+        adherence: 100 - number,
+        composition: 100 - number,
+        anatomy: 100 - number,
+        style: 100 - number,
+        technical: 100 - number,
+        total: 100 - number,
+        criticalDefects: [],
+        eligible: true,
+        rank: number,
+      })),
+      selectedCandidateIds: ["preview-1"],
+      selectionSource: "ai",
+    });
+
+    expect(createConfirmedTimelineComfyUiRequest(workflow)).toMatchObject({
+      width: 2048,
+      height: 512,
+      imageWidth: 832,
+      imageHeight: 1216,
+    });
+    expect(createTimelineFinalRequests(workflow)).toMatchObject([{
+      formalWidth: 832,
+      formalHeight: 1216,
+      request: {
+        width: 832,
+        height: 1216,
+        imageWidth: 832,
+        imageHeight: 1216,
+        sourceImageDataUrl: undefined,
+      },
+    }]);
   });
 
   it("preserves global scoring ranks when Detailed mode manually selects ranks 1 and 3 for K=2", () => {

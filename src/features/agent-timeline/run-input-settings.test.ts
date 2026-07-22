@@ -149,6 +149,7 @@ describe("Run scene input generation settings", () => {
 
     expect(settings.stylePalette).toBeUndefined();
     expect(settings.styleReference).toBeUndefined();
+    expect(settings.finalRedrawPreset).toBe("balanced");
     expect(settings.detailers).toMatchObject({
       faceDetailer: {
         enabled: false,
@@ -159,6 +160,17 @@ describe("Run scene input generation settings", () => {
         detectorModelName: "bbox/hand_yolov8s.pt",
       },
     });
+  });
+
+  it("persists only supported Final redraw presets and rejects numeric denoise injection", () => {
+    expect(sanitizeRunSceneInputSettingsSnapshot({ finalRedrawPreset: "strong" }).finalRedrawPreset).toBe("strong");
+    expect(sanitizeRunSceneInputSettingsSnapshot({ finalRedrawPreset: "conservative" }).finalRedrawPreset)
+      .toBe("conservative");
+    expect(sanitizeRunSceneInputSettingsSnapshot({ finalRedrawPreset: 0.99, finalDenoise: 0.99 }).finalRedrawPreset)
+      .toBe("balanced");
+    for (const finalRedrawPreset of [undefined, "__proto__", "constructor", "toString", 1]) {
+      expect(sanitizeRunSceneInputSettingsSnapshot({ finalRedrawPreset }).finalRedrawPreset).toBe("balanced");
+    }
   });
 
   it("round-trips only sanitized Run style-reference metadata, analysis context, and adapter settings", () => {

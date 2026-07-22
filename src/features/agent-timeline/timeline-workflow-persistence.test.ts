@@ -17,10 +17,12 @@ import {
 import { startStoryGraphWorkflow } from "./story-input";
 import { sanitizeRunSceneInputSettingsSnapshot } from "./run-input-settings";
 import { createTimelineFinalRequests } from "./t8-node-adapters";
+import { resolveTimelineFinalGenerationPolicy, timelineFinalGenerationPolicy } from "./final-generation-policy";
 import type { TimelineWorkflowState } from "./types";
 
 const managedPreviewFilename = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png";
 const managedFinalFilename = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.png";
+const persistedBalancedFallbackPolicy = resolveTimelineFinalGenerationPolicy({}, "balanced");
 
 function managedStoredImage(hex: string) {
   const filename = `${hex.repeat(32)}.png`;
@@ -95,6 +97,15 @@ function createPersistedV2GenerationWorkflow(finalCount = 2) {
     promptId: `final-prompt-${index + 1}`,
     sourceImage: { filename: `final-output-${index + 1}.png`, nodeId: "9", type: "output" },
     storedImage: managedStoredImage((index + 9).toString(16)),
+    previewUpscale: {
+      policyVersion: timelineFinalGenerationPolicy.version,
+      resizeMode: timelineFinalGenerationPolicy.resizeMode,
+      width: 1024,
+      height: 1024,
+      sourcePreview: candidate.storedImage,
+      storedImage: managedStoredImage(["d", "e", "f", "0"][index]!),
+    },
+    finalPolicy: persistedBalancedFallbackPolicy,
   }));
   workflow = completeTimelineNode(workflow, "preview-execution", {
     baseSeed: 100,
@@ -117,6 +128,7 @@ function createPersistedV2GenerationWorkflow(finalCount = 2) {
     completed: true,
     finalCount,
     finals,
+    finalPolicy: persistedBalancedFallbackPolicy,
     request: { checkpointName: "local.safetensors", positivePrompt: "persisted scene" },
     warnings: [],
   }, "system");
@@ -129,6 +141,12 @@ function createPersistedV2GenerationWorkflow(finalCount = 2) {
     sourceImages: finals.map((item) => item.sourceImage),
     storedImage: finals[0]!.storedImage,
     storedImages: finals.map((item) => item.storedImage),
+    fallbacks: finals.map((item) => ({
+      candidateId: item.candidateId,
+      rank: item.rank,
+      seed: item.seed,
+      storedImage: item.previewUpscale.storedImage,
+    })),
     warnings: [],
     finalLinks: finals.map((item) => ({
       candidateId: item.candidateId,
@@ -151,6 +169,10 @@ function createPersistedV2GenerationWorkflow(finalCount = 2) {
           confirmationRequired: false,
           confirmed: true,
           confirmationFingerprint: `hmac-sha256:${"a".repeat(64)}`,
+          finalPolicyVersion: timelineFinalGenerationPolicy.version,
+          finalRedrawPreset: persistedBalancedFallbackPolicy.preset,
+          finalGenerationFamily: persistedBalancedFallbackPolicy.family,
+          finalDenoise: persistedBalancedFallbackPolicy.denoise,
         },
       },
     },
@@ -208,6 +230,118 @@ const readyStyleReference = {
 } as const;
 
 describe("timeline workflow persistence", () => {
+  it("keeps completed pre-policy results displayable without authorizing their old confirmation", () => {
+    const raw = JSON.parse(JSON.stringify(createPersistedV2GenerationWorkflow(1))) as TimelineWorkflowState;
+    const execution = raw.nodes["comfyui-execution"].result as {
+      finalPolicy?: unknown;
+      finals: Array<{ previewUpscale?: unknown }>;
+    };
+    const gate = raw.nodes["generation-gate"].result as Record<string, unknown>;
+    const display = raw.nodes["result-display"].result as { fallbacks?: unknown };
+    delete execution.finalPolicy;
+    execution.finals.forEach((final) => delete final.previewUpscale);
+    delete gate.finalPolicyVersion;
+    delete gate.finalRedrawPreset;
+    delete gate.finalGenerationFamily;
+    delete gate.finalDenoise;
+    delete display.fallbacks;
+
+    const restored = sanitizeTimelineWorkflowState(raw) as TimelineWorkflowState;
+
+    expect(restored.nodes["comfyui-execution"].status).toBe("done");
+    expect(restored.nodes["result-display"].status).toBe("done");
+  });
+
+  it.each([
+    ["missing execution policy", (execution: Record<string, unknown>) => {
+      delete execution.finalPolicy;
+    }],
+    ["tampered execution denoise", (execution: Record<string, unknown>) => {
+      (execution.finalPolicy as Record<string, unknown>).denoise = 0.99;
+    }],
+    ["missing candidate policy", (execution: Record<string, unknown>) => {
+      delete ((execution.finals as Array<Record<string, unknown>>)[0]!).finalPolicy;
+    }],
+    ["cross-preset candidate policy", (execution: Record<string, unknown>) => {
+      const candidatePolicy = ((execution.finals as Array<Record<string, unknown>>)[0]!).finalPolicy as Record<string, unknown>;
+      candidatePolicy.preset = "strong";
+      candidatePolicy.denoise = 0.55;
+    }],
+    ...(["__proto__", "constructor", "toString", 1] as const).map((preset) => [
+      `invalid aggregate preset ${String(preset)}`,
+      (execution: Record<string, unknown>) => {
+        (execution.finalPolicy as Record<string, unknown>).preset = preset;
+      },
+    ] as const),
+    ...(["__proto__", "constructor", "toString", 1] as const).map((preset) => [
+      `invalid candidate preset ${String(preset)}`,
+      (execution: Record<string, unknown>) => {
+        const candidatePolicy = ((execution.finals as Array<Record<string, unknown>>)[0]!).finalPolicy as Record<string, unknown>;
+        candidatePolicy.preset = preset;
+      },
+    ] as const),
+  ] as const)("fails closed for a current policy-v2 result with %s", (_case, mutate) => {
+    const raw = JSON.parse(JSON.stringify(createPersistedV2GenerationWorkflow(1))) as TimelineWorkflowState;
+    mutate(raw.nodes["comfyui-execution"].result as Record<string, unknown>);
+
+    const restored = sanitizeTimelineWorkflowState(raw) as TimelineWorkflowState;
+
+    expect(restored.nodes["comfyui-execution"]).toMatchObject({
+      status: "error",
+      error: { code: "image_storage_invalid", details: { recoverable: true } },
+    });
+    expect(restored.nodes["result-display"].status).toBe("error");
+  });
+
+  it("persists only normalized managed Preview-upscale linkage and strips embedded payloads", () => {
+    const raw = JSON.parse(JSON.stringify(createPersistedV2GenerationWorkflow(1))) as TimelineWorkflowState;
+    const execution = raw.nodes["comfyui-execution"].result as {
+      finals: Array<{ previewUpscale: Record<string, unknown> }>;
+    };
+    const artifact = execution.finals[0]!.previewUpscale;
+    artifact.imageBytes = "data:image/png;base64,SECRET_FALLBACK_BYTES";
+    artifact.absolutePath = "C:\\private\\fallback.png";
+    artifact.workflow = { "9": { class_type: "SaveImage" } };
+    artifact.apiKey = "SECRET_FALLBACK_KEY";
+    artifact.sourcePreview = {
+      ...(artifact.sourcePreview as object),
+      dataUrl: "data:image/png;base64,SECRET_SOURCE_BYTES",
+      path: "C:\\private\\preview.png",
+    };
+    artifact.storedImage = {
+      ...(artifact.storedImage as object),
+      bytes: [1, 2, 3],
+      path: "C:\\private\\formal.png",
+    };
+
+    const restored = sanitizeTimelineWorkflowState(raw) as TimelineWorkflowState;
+    const serialized = JSON.stringify(restored);
+
+    expect(restored.nodes["comfyui-execution"]).toMatchObject({
+      status: "done",
+      result: {
+        finalPolicy: { version: timelineFinalGenerationPolicy.version, resizeMode: "lanczos3-exact" },
+        finals: [expect.objectContaining({
+          status: "done",
+          previewUpscale: {
+            policyVersion: timelineFinalGenerationPolicy.version,
+            resizeMode: "lanczos3-exact",
+            width: 1024,
+            height: 1024,
+            sourcePreview: expect.objectContaining({ filename: expect.stringMatching(/^[a-f0-9]{32}\.png$/) }),
+            storedImage: expect.objectContaining({ filename: expect.stringMatching(/^[a-f0-9]{32}\.png$/) }),
+          },
+        })],
+      },
+    });
+    expect(serialized).not.toContain("SECRET_FALLBACK_BYTES");
+    expect(serialized).not.toContain("SECRET_SOURCE_BYTES");
+    expect(serialized).not.toContain("SECRET_FALLBACK_KEY");
+    expect(serialized).not.toContain("C:\\\\private");
+    expect(serialized).not.toContain("class_type");
+    expect(serialized).not.toContain('"bytes"');
+  });
+
   it("round-trips an active workflow record without preserving secrets", () => {
     let workflow = createTimelineWorkflowState({
       workflowId: "timeline-persisted",
@@ -290,6 +424,7 @@ describe("timeline workflow persistence", () => {
       sceneRequest: "A styled greenhouse command deck",
       promptProfile: "illustrious",
       settingsSnapshot: sanitizeRunSceneInputSettingsSnapshot({
+        finalRedrawPreset: "strong",
         promptProfile: "illustrious",
         stylePalette: {
           checkpointId: "checkpoint-a",
@@ -344,6 +479,7 @@ describe("timeline workflow persistence", () => {
     expect(parsed.name).toBe("Named Run controls");
     expect(parsed.workflow.nodes["scene-input"].result).toMatchObject({
       settingsSnapshot: {
+        finalRedrawPreset: "strong",
         stylePalette: {
           checkpointId: "checkpoint-a",
           loras: [
@@ -876,6 +1012,7 @@ describe("timeline workflow persistence", () => {
       sourceImages: Array<Record<string, unknown>>;
       storedImage: Record<string, unknown>;
       storedImages: Array<Record<string, unknown>>;
+      fallbacks: Array<Record<string, unknown>>;
     };
     const candidates = (raw.nodes["preview-execution"].result as {
       candidates: Array<Record<string, unknown>>;
@@ -892,6 +1029,15 @@ describe("timeline workflow persistence", () => {
         promptId: `final-prompt-${rank}`,
         sourceImage: { filename: `final-output-${rank}.png`, nodeId: "9", type: "output" },
         storedImage: managedStoredImage((rank + 8).toString(16)),
+        previewUpscale: {
+          policyVersion: timelineFinalGenerationPolicy.version,
+          resizeMode: timelineFinalGenerationPolicy.resizeMode,
+          width: 1024,
+          height: 1024,
+          sourcePreview: candidate.storedImage,
+          storedImage: managedStoredImage(rank === 1 ? "d" : "f"),
+        },
+        finalPolicy: persistedBalancedFallbackPolicy,
       };
     });
     resultDisplay.finalLinks = execution.finals.map((item) => ({
@@ -905,6 +1051,12 @@ describe("timeline workflow persistence", () => {
     resultDisplay.sourceImage = resultDisplay.sourceImages[0]!;
     resultDisplay.storedImages = execution.finals.map((item) => item.storedImage as Record<string, unknown>);
     resultDisplay.storedImage = resultDisplay.storedImages[0]!;
+    resultDisplay.fallbacks = execution.finals.map((item) => ({
+      candidateId: item.candidateId,
+      rank: item.rank,
+      seed: item.seed,
+      storedImage: (item.previewUpscale as { storedImage: Record<string, unknown> }).storedImage,
+    }));
     resultDisplay.images = execution.finals.map((item) => ({
       ...(item.sourceImage as Record<string, unknown>),
       url: (item.storedImage as { url: string }).url,
@@ -1428,6 +1580,56 @@ describe("timeline workflow persistence", () => {
     });
   });
 
+  it("preserves a fallback-only error record across reload for Final retry reuse", () => {
+    const raw = JSON.parse(JSON.stringify(createPersistedV2GenerationWorkflow(1))) as TimelineWorkflowState;
+    const partial = raw.nodes["comfyui-execution"].result as {
+      completed: boolean;
+      finals: Array<Record<string, unknown>>;
+    };
+    partial.completed = false;
+    partial.finals[0] = {
+      candidateId: partial.finals[0]!.candidateId,
+      seed: partial.finals[0]!.seed,
+      rank: partial.finals[0]!.rank,
+      status: "error",
+      previewUpscale: partial.finals[0]!.previewUpscale,
+      error: {
+        code: "comfyui_execution_failed",
+        message: "Final queue failed after the fallback was stored.",
+        details: { recoverable: true },
+      },
+    };
+    raw.nodes["comfyui-execution"] = {
+      ...raw.nodes["comfyui-execution"],
+      status: "error",
+      result: undefined,
+      error: {
+        code: "comfyui_execution_failed",
+        message: "0 of 1 final images completed.",
+        details: { recoverable: true, partialResult: partial },
+      },
+    };
+    raw.nodes["result-display"] = {
+      ...raw.nodes["result-display"],
+      status: "blocked",
+      result: undefined,
+    };
+
+    const restored = sanitizeTimelineWorkflowState(raw) as TimelineWorkflowState;
+    const restoredPartial = (restored.nodes["comfyui-execution"].error?.details as {
+      partialResult?: { finals: Array<Record<string, unknown>> };
+    }).partialResult;
+
+    expect(restoredPartial?.finals[0]).toMatchObject({
+      candidateId: "preview-1",
+      status: "error",
+      previewUpscale: {
+        resizeMode: "lanczos3-exact",
+        storedImage: expect.objectContaining({ filename: `${"d".repeat(32)}.png` }),
+      },
+    });
+  });
+
   it.each([
     ["missing", undefined],
     ["old", `sha256:${"a".repeat(64)}`],
@@ -1480,6 +1682,37 @@ describe("timeline workflow persistence", () => {
           url: expect.stringMatching(/^\/api\/comfyui\/generated-images\/[a-f0-9]{32}\.png$/),
         },
       },
+    });
+  });
+
+  it("keeps completed policy-v1 results read-only but revokes an incomplete policy-v1 confirmation", () => {
+    const makeV1 = () => {
+      const raw = JSON.parse(JSON.stringify(createPersistedV2GenerationWorkflow(1))) as TimelineWorkflowState;
+      const gate = raw.nodes["generation-gate"].result as Record<string, unknown>;
+      gate.finalPolicyVersion = 1;
+      const execution = raw.nodes["comfyui-execution"].result as {
+        finalPolicy: { version: number; resizeMode: string };
+        finals: Array<{ previewUpscale?: { policyVersion: number }; finalPolicy?: unknown }>;
+      };
+      execution.finalPolicy = { version: 1, resizeMode: "lanczos3-exact" };
+      for (const item of execution.finals) {
+        if (item.previewUpscale) item.previewUpscale.policyVersion = 1;
+        delete item.finalPolicy;
+      }
+      return raw;
+    };
+
+    const completed = sanitizeTimelineWorkflowState(makeV1()) as TimelineWorkflowState;
+    expect(completed.nodes["result-display"].status).toBe("done");
+
+    const incompleteRaw = makeV1();
+    incompleteRaw.nodes["result-display"].status = "blocked";
+    incompleteRaw.nodes["result-display"].result = undefined;
+    const incomplete = sanitizeTimelineWorkflowState(incompleteRaw) as TimelineWorkflowState;
+    expect(incomplete.generationConfirmed).toBe(false);
+    expect(incomplete.nodes["generation-gate"]).toMatchObject({
+      status: "blocked",
+      error: { code: "confirmation_required" },
     });
   });
 

@@ -20,6 +20,7 @@ import {
 } from "@/features/agent-timeline";
 import type { PromptTag } from "@/shared/types";
 import type { CentralSettingsPayload } from "@/features/settings/types";
+import { resolveTimelineFinalGenerationPolicy, timelineFinalGenerationPolicy } from "@/features/agent-timeline/final-generation-policy";
 
 const savePromptLibraryMock = vi.hoisted(() =>
   vi.fn((state: unknown) => {
@@ -238,10 +239,41 @@ function createSimpleGenerationPhaseErrorWorkflow(
     sceneRequest: "A simple mode retry scene",
     imageCount: 2,
   });
+  workflow = setTimelineNodeManualResult(workflow, "scene-prompt", {
+    prompt: "A simple mode retry scene",
+  });
+  workflow = setTimelineNodeManualResult(workflow, "character-tags", { tags: [] });
+  workflow = setTimelineNodeManualResult(workflow, "character-action", { action: "sitting" });
+  workflow = setTimelineNodeManualResult(workflow, "canvas-binding", { primaryCharacterId: "character-1" });
+  workflow = setTimelineNodeManualResult(workflow, "resource-recommendation", {
+    checkpoint: "local.safetensors",
+    loras: [],
+  });
+  workflow = completeTimelineNode(workflow, "parameter-recommendation", {
+    width: 1024,
+    height: 1024,
+    steps: 28,
+    cfg: 7,
+    samplerName: "euler",
+    scheduler: "normal",
+    denoise: 1,
+    seedPolicy: { mode: "fixed", seed: 100 },
+    negativeAdditions: [],
+    negativePrompt: "",
+    reason: "test fixture",
+    warnings: [],
+    requestPreview: {
+      checkpointName: "local.safetensors",
+      positivePrompt: "simple retry scene",
+      width: 1024,
+      height: 1024,
+    },
+  }, "system");
   workflow = confirmTimelineGeneration(workflow, {
     confirmationRequired: false,
     confirmed: true,
     confirmationFingerprint: `hmac-sha256:${"a".repeat(64)}`,
+    finalPolicyVersion: timelineFinalGenerationPolicy.version,
   });
   const candidates = [1, 2, 3, 4].map((number, index) => {
     const filename = `${number.toString(16).repeat(32)}.png`;
@@ -313,6 +345,8 @@ function createSimpleGenerationPhaseErrorWorkflow(
 
   workflow = completeTimelineNode(workflow, "preview-scoring", scoring, "ai");
   const finalFilename = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png";
+  const fallbackFilename = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.png";
+  const finalPolicy = resolveTimelineFinalGenerationPolicy({}, "balanced");
   const partialResult = {
     completed: false,
     finalCount: 2,
@@ -330,15 +364,44 @@ function createSimpleGenerationPhaseErrorWorkflow(
           filename: finalFilename,
           url: `/api/comfyui/generated-images/${finalFilename}`,
         },
+        previewUpscale: {
+          policyVersion: timelineFinalGenerationPolicy.version,
+          resizeMode: "lanczos3-exact" as const,
+          width: 1024,
+          height: 1024,
+          sourcePreview: candidates[0]!.storedImage,
+          storedImage: {
+            byteLength: 20,
+            contentType: "image/png",
+            filename: fallbackFilename,
+            url: `/api/comfyui/generated-images/${fallbackFilename}`,
+          },
+        },
+        finalPolicy,
       },
       {
         candidateId: "preview-2",
         seed: 101,
         rank: 2,
         status: "error" as const,
+        previewUpscale: {
+          policyVersion: timelineFinalGenerationPolicy.version,
+          resizeMode: "lanczos3-exact" as const,
+          width: 1024,
+          height: 1024,
+          sourcePreview: candidates[1]!.storedImage,
+          storedImage: {
+            byteLength: 20,
+            contentType: "image/png",
+            filename: "cccccccccccccccccccccccccccccccc.png",
+            url: "/api/comfyui/generated-images/cccccccccccccccccccccccccccccccc.png",
+          },
+        },
+        finalPolicy,
         error: { code: "comfyui_execution_failed", message: "Final 2 failed." },
       },
     ],
+    finalPolicy,
     request: {
       batchSize: 1,
       checkpointName: "local.safetensors",
@@ -1782,6 +1845,9 @@ describe("TimelineShell", () => {
       const settingsLink = container.querySelector('a[href="/settings"]');
       const faceDetailer = container.querySelector("#run-face-detailer-enabled") as HTMLInputElement | null;
       const handDetailer = container.querySelector("#run-hand-detailer-enabled") as HTMLInputElement | null;
+      const redrawRadios = Array.from(container.querySelectorAll(
+        'input[name="final-redraw-strength"]',
+      )) as HTMLInputElement[];
 
       expect(sceneInput).not.toBeNull();
       expect(promptProfile?.value).toBe("illustrious");
@@ -1800,6 +1866,16 @@ describe("TimelineShell", () => {
       expect(parametersButton.disabled).toBe(true);
       expect(faceDetailer?.checked).toBe(false);
       expect(handDetailer?.checked).toBe(false);
+      expect(redrawRadios.map((radio) => radio.value)).toEqual(["conservative", "balanced", "strong"]);
+      expect(redrawRadios.find((radio) => radio.checked)?.value).toBe("balanced");
+      expect(container.textContent).toContain("Resolved Final denoise: 0.45 (fallback).");
+      const strongLabel = redrawRadios.find((radio) => radio.value === "strong")?.closest("label");
+      expect(strongLabel?.className).toContain("rose");
+      act(() => {
+        redrawRadios.find((radio) => radio.value === "strong")?.click();
+      });
+      expect(redrawRadios.find((radio) => radio.value === "strong")?.checked).toBe(true);
+      expect(container.textContent).toContain("Resolved Final denoise: 0.55 (fallback).");
       const detailerFieldset = faceDetailer?.closest("fieldset");
       const generationSetup = Array.from(container.querySelectorAll("section")).find((section) =>
         section.querySelector("h3")?.textContent?.includes("Style resources / parameters"),
@@ -1909,6 +1985,19 @@ describe("TimelineShell", () => {
       expect(getButtonByText("Parameters").disabled).toBe(true);
       expect((container.querySelector("#run-face-detailer-enabled") as HTMLInputElement | null)?.checked).toBe(false);
       expect((container.querySelector("#run-hand-detailer-enabled") as HTMLInputElement | null)?.checked).toBe(false);
+      const simpleRedrawRadios = Array.from(container.querySelectorAll(
+        'input[name="final-redraw-strength"]',
+      )) as HTMLInputElement[];
+      const simpleRedrawFieldset = simpleRedrawRadios[0]?.closest("fieldset");
+      expect(simpleRedrawFieldset?.querySelector("legend")?.textContent).toContain("Final redraw strength");
+      expect(simpleRedrawRadios.map((radio) => radio.value)).toEqual(["conservative", "balanced", "strong"]);
+      expect(simpleRedrawRadios.find((radio) => radio.checked)?.value).toBe("balanced");
+      expect(simpleRedrawRadios.every((radio) => radio.type === "radio" && Boolean(radio.closest("label"))))
+        .toBe(true);
+      expect(container.textContent).toContain("Resolved Final denoise: 0.45 (fallback).");
+      expect(container.textContent).toContain("More redraw; higher anatomy and object-drift risk.");
+      expect(simpleRedrawRadios.find((radio) => radio.value === "strong")?.closest("label")?.className)
+        .toContain("rose");
       const simpleDetailerFieldset = container.querySelector("#run-face-detailer-enabled")?.closest("fieldset");
       const simpleGenerationSetup = Array.from(container.querySelectorAll("section")).find((section) =>
         section.querySelector("h3")?.textContent?.includes("Style resources / parameters"),
@@ -2091,6 +2180,154 @@ describe("TimelineShell", () => {
     }
   });
 
+  it("shows the resolved Final policy in the Simple confirmation summary", async () => {
+    const originalFetch = globalThis.fetch;
+    const t5FetchMock = mockT5Fetch();
+    globalThis.fetch = vi.fn<typeof fetch>(async (input, init) => {
+      const url = getFetchUrl(input);
+      if (url === "/api/settings") {
+        return createTimelineSettingsResponse({
+          autoReview: false,
+          characterTagNewTermDefaultOption: "temporary",
+          displayMode: "simple",
+        });
+      }
+      return t5FetchMock(input, init);
+    });
+
+    try {
+      act(() => {
+        root.render(<TimelineShell />);
+      });
+      await flushAsyncWork();
+      await submitInitialScene("A simple balanced redraw confirmation scene");
+      await flushAsyncWork();
+
+      expect(container.querySelector(".sf-agent-workbench__nav")).toBeNull();
+      expect(container.textContent).toContain("Review is complete. Confirm before SceneForge queues ComfyUI for rendering.");
+      expect(container.textContent).toContain("Final policy v2: balanced, illustrious, denoise 0.40.");
+      expect(getButtonByText("Confirm and render").disabled).toBe(false);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("reruns Final only after a preset change with an exact-K manual Preview selection", async () => {
+    const originalFetch = globalThis.fetch;
+    let workflow = createSimpleGenerationPhaseErrorWorkflow("comfyui-execution");
+    const scoring = workflow.nodes["preview-scoring"].result as PreviewScoringTimelineResultV2;
+    workflow = setTimelineNodeManualResult(workflow, "preview-scoring", {
+      ...scoring,
+      selectionSource: "manual",
+    });
+    const activeRecord = createTimelineWorkflowRecord({
+      workflow,
+      sceneRequest: "A manual exact-K Final rerender scene",
+      selectedPromptProfile: "illustrious",
+      selectedImageCount: 2,
+      selectedNodeId: "scene-input",
+    });
+    const confirmBodies: Array<Record<string, unknown>> = [];
+    globalThis.fetch = vi.fn<typeof fetch>(async (input, init) => {
+      const url = getFetchUrl(input);
+      if (url === "/api/settings") return createTimelineSettingsResponse({ displayMode: "detailed" });
+      if (url === "/api/agent-timeline/active-workflow") {
+        return init?.method === "PUT"
+          ? createJsonResponse({ ok: true, record: activeRecord })
+          : createJsonResponse(activeRecord);
+      }
+      if (url === "/api/agent-timeline/confirm-generation") {
+        const body = typeof init?.body === "string" ? JSON.parse(init.body) as Record<string, unknown> : {};
+        confirmBodies.push(body);
+        return createJsonResponse({ workflow: body.workflow });
+      }
+      return createJsonResponse({ role: "assistant", content: "{}" });
+    });
+
+    try {
+      act(() => root.render(<TimelineShell />));
+      await flushAsyncWork();
+
+      const strong = container.querySelector<HTMLInputElement>(
+        'input[name="final-redraw-strength"][value="strong"]',
+      );
+      expect(strong).not.toBeNull();
+      act(() => strong?.click());
+      await flushAsyncWork();
+      act(() => getWorkflowStepButton("generation-gate").click());
+
+      const confirmButton = getButtonByText("Confirm and render");
+      expect(confirmButton.disabled).toBe(false);
+      act(() => confirmButton.click());
+      await flushAsyncWork();
+
+      expect(confirmBodies).toHaveLength(1);
+      expect(confirmBodies[0]).toMatchObject({
+        action: "confirm",
+        stage: "comfyui-execution",
+        workflow: {
+          nodes: {
+            "scene-input": { result: { settingsSnapshot: { finalRedrawPreset: "strong" } } },
+            "parameter-recommendation": { status: "done" },
+            "preview-execution": { status: "done", result: { baseSeed: 100 } },
+            "preview-scoring": {
+              status: "manual",
+              result: {
+                selectedCandidateIds: ["preview-1", "preview-2"],
+                selectionSource: "manual",
+              },
+            },
+          },
+        },
+      });
+    } finally {
+      act(() => {
+        root.unmount();
+        rootIsMounted = false;
+      });
+      await flushAsyncWork();
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("keeps a partial Final fallback openable from the Detailed result workspace", async () => {
+    const originalFetch = globalThis.fetch;
+    const workflow = createSimpleGenerationPhaseErrorWorkflow("comfyui-execution");
+    const activeRecord = createTimelineWorkflowRecord({
+      workflow,
+      sceneRequest: "A detailed partial Final scene",
+      selectedPromptProfile: "illustrious",
+      selectedImageCount: 2,
+      selectedNodeId: "result-display",
+      outputDisplayModes: { "result-display": "visual" },
+    });
+    globalThis.fetch = vi.fn<typeof fetch>(async (input, init) => {
+      const url = getFetchUrl(input);
+      if (url === "/api/settings") return createTimelineSettingsResponse({ displayMode: "detailed" });
+      if (url === "/api/agent-timeline/active-workflow") {
+        return init?.method === "PUT"
+          ? createJsonResponse({ ok: true, record: activeRecord })
+          : createJsonResponse(activeRecord);
+      }
+      return createJsonResponse({ role: "assistant", content: "{}" });
+    });
+
+    try {
+      act(() => root.render(<TimelineShell />));
+      await flushAsyncWork();
+
+      const fallbackLink = container.querySelector<HTMLAnchorElement>(
+        "[data-testid='timeline-fallback-gallery'] a",
+      );
+      expect(fallbackLink).not.toBeNull();
+      expect(fallbackLink?.getAttribute("href")).toBe(
+        "/api/comfyui/generated-images/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.png",
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it.each([
     ["preview-execution", "Preview generation", "Preview generation", "Only 1 preview succeeded; 2 are required.", false, "preview-execution"],
     ["preview-scoring", "Preview scoring", "Preview scoring", "Preview scoring failed twice.", false, "preview-scoring"],
@@ -2135,6 +2372,7 @@ describe("TimelineShell", () => {
       if (phase === "comfyui-execution") {
         expect(container.textContent).toContain("1/2 finals are safely stored.");
         expect(container.textContent).toContain("Retry renders only missing or invalid selections.");
+        expect(container.querySelector("[data-testid='timeline-fallback-gallery']")).not.toBeNull();
       }
 
       act(() => getButtonByText(`Retry ${retryTitle.toLowerCase()}`).click());
@@ -2659,9 +2897,15 @@ describe("TimelineShell", () => {
       const handDetailer = container.querySelector("#run-hand-detailer-enabled") as HTMLInputElement | null;
       const detailerFieldset = faceDetailer?.closest("fieldset") as HTMLFieldSetElement | null;
       const resourceFieldset = getButtonByText("Select checkpoint").closest("fieldset") as HTMLFieldSetElement | null;
+      const redrawRadios = Array.from(container.querySelectorAll(
+        'input[name="final-redraw-strength"]',
+      )) as HTMLInputElement[];
+      const redrawFieldset = redrawRadios[0]?.closest("fieldset") as HTMLFieldSetElement | null;
 
       expect(detailerFieldset?.disabled).toBe(true);
       expect(resourceFieldset?.disabled).toBe(true);
+      expect(redrawFieldset?.disabled).toBe(true);
+      expect(redrawRadios.every((radio) => radio.disabled)).toBe(true);
       expect(resourceFieldset?.getAttribute("aria-disabled")).toBe("true");
       expect(faceDetailer?.disabled).toBe(false);
       expect(handDetailer?.disabled).toBe(false);

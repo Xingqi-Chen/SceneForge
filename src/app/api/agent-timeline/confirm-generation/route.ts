@@ -7,6 +7,11 @@ import {
   isTimelineGenerationConfirmationCurrent,
 } from "@/features/agent-timeline/generation-confirmation.server";
 import {
+  resolveTimelineFinalGenerationPolicy,
+  timelineFinalGenerationPolicy,
+} from "@/features/agent-timeline/final-generation-policy";
+import { getRunSceneInputSettings } from "@/features/agent-timeline/run-input-settings";
+import {
   areTimelineNodeDependenciesSatisfied,
   confirmTimelineGeneration,
   retryTimelineGenerationFrom,
@@ -84,8 +89,8 @@ export async function POST(request: Request) {
     return errorResponse("A retry request must target the same stage as retryNodeId.", 400);
   }
 
-  if (action === "confirm" && stage && stage !== "preview-execution") {
-    return errorResponse("A staged confirmation must start with preview execution.", 400);
+  if (action === "confirm" && stage && stage !== "preview-execution" && stage !== "comfyui-execution") {
+    return errorResponse("A staged confirmation must start with preview execution or resume at final execution.", 400);
   }
 
   if (action === "continue" && (!stage || stage === "preview-execution")) {
@@ -115,12 +120,23 @@ export async function POST(request: Request) {
   }
 
   try {
+    const parameterResult = workflow.nodes["parameter-recommendation"].result;
+    const requestPreview = isRecord(parameterResult) && isRecord(parameterResult.requestPreview)
+      ? parameterResult.requestPreview
+      : {};
+    const sceneInput = workflow.nodes["scene-input"].result;
+    const settings = getRunSceneInputSettings(isRecord(sceneInput) ? sceneInput : {});
+    const resolvedFinalPolicy = resolveTimelineFinalGenerationPolicy(requestPreview, settings.finalRedrawPreset);
     const runnableWorkflow = action === "retry"
       ? retryTimelineGenerationFrom(workflow, retryNodeId as TimelineGenerationRetryNodeId)
       : action === "confirm" ? confirmTimelineGeneration(workflow, {
           confirmationRequired: false,
           confirmed: true,
           confirmationFingerprint: createTimelineGenerationConfirmationFingerprint(workflow),
+          finalPolicyVersion: timelineFinalGenerationPolicy.version,
+          finalRedrawPreset: resolvedFinalPolicy.preset,
+          finalGenerationFamily: resolvedFinalPolicy.family,
+          finalDenoise: resolvedFinalPolicy.denoise,
         }) : workflow;
     if (stage && !areTimelineNodeDependenciesSatisfied(runnableWorkflow, stage)) {
       return errorResponse(`Generation stage "${stage}" cannot run until its dependencies are complete.`, 409, {

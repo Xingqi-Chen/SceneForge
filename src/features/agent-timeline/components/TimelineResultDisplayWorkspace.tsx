@@ -24,6 +24,7 @@ export type TimelineResultDisplayWorkspaceProps = {
   draft: GenerationDraft | null;
   emptyState: string;
   errorMessage?: string;
+  fallbacks?: TimelineFallbackDisplayItem[];
   generatedImageAlt?: GeneratedImageText;
   generatedImageCaption?: GeneratedImageText;
   inpaintClientIdPrefix?: string;
@@ -32,6 +33,8 @@ export type TimelineResultDisplayWorkspaceProps = {
   selectedResources: SelectedCivitaiResourcesPreview;
   testId?: string;
 };
+
+export type TimelineFallbackDisplayItem = NonNullable<ResultDisplayTimelineResult["fallbacks"]>[number];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -64,6 +67,64 @@ export function isResultDisplayTimelineResult(value: unknown): value is ResultDi
     typeof value.image.url === "string" &&
     typeof value.promptId === "string" &&
     isRecord(value.storedImage)
+  );
+}
+
+function isFallbackDisplayItem(value: unknown): value is TimelineFallbackDisplayItem {
+  return isRecord(value) && typeof value.candidateId === "string" &&
+    Number.isSafeInteger(value.rank) && Number.isSafeInteger(value.seed) &&
+    isRecord(value.storedImage) && typeof value.storedImage.url === "string" &&
+    typeof value.storedImage.filename === "string";
+}
+
+export function getTimelineExecutionFallbacks(value: unknown) {
+  if (!isRecord(value) || !Array.isArray(value.finals)) return [];
+  return value.finals.flatMap((entry) => {
+    if (!isRecord(entry) || !isRecord(entry.previewUpscale)) return [];
+    const fallback = {
+      candidateId: entry.candidateId,
+      rank: entry.rank,
+      seed: entry.seed,
+      storedImage: entry.previewUpscale.storedImage,
+    };
+    return isFallbackDisplayItem(fallback) ? [fallback] : [];
+  });
+}
+
+function TimelineFallbackGallery({ fallbacks }: { fallbacks: TimelineFallbackDisplayItem[] }) {
+  if (!fallbacks.length) return null;
+  return (
+    <section className="rounded-md border border-amber-200 bg-amber-50 p-3" data-testid="timeline-fallback-gallery">
+      <div className="mb-2">
+        <h3 className="text-xs font-semibold text-amber-900">Formal-size Preview fallbacks</h3>
+        <p className="mt-1 text-[11px] leading-relaxed text-amber-800">
+          These deterministic Preview enlargements are preserved for inspection. Finals remain the default result.
+        </p>
+      </div>
+      <div className={cn("grid gap-3", fallbacks.length > 1 ? "md:grid-cols-2" : "grid-cols-1")}>
+        {fallbacks.map((fallback) => (
+          <a
+            className="overflow-hidden rounded-md border border-amber-200 bg-white transition hover:border-amber-400"
+            href={fallback.storedImage.url}
+            key={`${fallback.candidateId}:${fallback.rank}`}
+            rel="noreferrer"
+            target="_blank"
+          >
+            <Image
+              alt={`Formal-size Preview fallback for ${fallback.candidateId}`}
+              className="max-h-[28rem] w-full object-contain"
+              height={1024}
+              src={fallback.storedImage.url}
+              unoptimized
+              width={1024}
+            />
+            <div className="border-t border-amber-100 px-3 py-2 text-[11px] font-semibold text-amber-800">
+              {fallback.candidateId} · rank {fallback.rank} · seed {fallback.seed} · open image
+            </div>
+          </a>
+        ))}
+      </div>
+    </section>
   );
 }
 
@@ -207,6 +268,7 @@ export function TimelineResultDisplayWorkspace({
   draft,
   emptyState,
   errorMessage,
+  fallbacks = [],
   generatedImageAlt,
   generatedImageCaption,
   inpaintClientIdPrefix = "timeline-inpaint",
@@ -238,10 +300,23 @@ export function TimelineResultDisplayWorkspace({
     })
     .filter((entry): entry is ComfyUiGenerationLoraSetting => entry !== null), [draft, selectedResources.loras]);
 
-  if (!result) {
+  const availableFallbacks = result?.fallbacks?.length ? result.fallbacks : fallbacks;
+
+  if (!result && !availableFallbacks.length) {
     return (
       <div className="rounded-md border border-dashed border-slate-200 bg-slate-50 p-3 text-xs leading-relaxed text-slate-500">
         {errorMessage ?? emptyState}
+      </div>
+    );
+  }
+
+  if (!result) {
+    return (
+      <div className="flex flex-col gap-3" data-testid={testId}>
+        <TimelineFallbackGallery fallbacks={availableFallbacks} />
+        <div className="rounded-md border border-dashed border-slate-200 bg-slate-50 p-3 text-xs leading-relaxed text-slate-500">
+          {errorMessage ?? "Final generation is incomplete. The available fallback remains safe to open."}
+        </div>
       </div>
     );
   }
@@ -359,6 +434,7 @@ export function TimelineResultDisplayWorkspace({
           </figure>
         ))}
       </div>
+      <TimelineFallbackGallery fallbacks={availableFallbacks} />
       {inpaintItems.length > 0 ? (
         <div className={cn(
           "grid gap-3 rounded-md border border-sky-200 bg-sky-50 p-3",

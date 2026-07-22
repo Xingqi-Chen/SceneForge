@@ -39,8 +39,14 @@ import {
   normalizeTimelineSourceDenoise,
   requireTimelineGenerationReconfirmation,
   setTimelineNodeManualResult,
+  updateTimelineFinalRedrawPreset,
   updateTimelineSceneInputSettings,
 } from "@/features/agent-timeline/state";
+import {
+  resolveTimelineFinalGenerationPolicy,
+  timelineFinalGenerationPolicy,
+  type TimelineFinalRedrawPreset,
+} from "@/features/agent-timeline/final-generation-policy";
 import {
   createGenerationDetailerSettingsSnapshot,
   type GenerationDetailerSettingsSnapshot,
@@ -175,6 +181,7 @@ import {
 import { TimelineParameterRecommendationWorkspace } from "./TimelineParameterRecommendationWorkspace";
 import { TimelineResourceRecommendationWorkspace } from "./TimelineResourceRecommendationWorkspace";
 import {
+  getTimelineExecutionFallbacks,
   isResultDisplayTimelineResult,
   TimelineResultDisplayWorkspace,
 } from "./TimelineResultDisplayWorkspace";
@@ -359,6 +366,16 @@ async function completeTimelineChatViaApi(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function getTimelineFinalExecutionState(workflow: TimelineWorkflowState | null) {
+  if (!workflow) return null;
+  const node = workflow.nodes["comfyui-execution"];
+  if (isRecord(node.result) && Array.isArray(node.result.finals)) return node.result;
+  const details = node.error?.details;
+  return isRecord(details) && isRecord(details.partialResult) && Array.isArray(details.partialResult.finals)
+    ? details.partialResult
+    : null;
 }
 
 function isPreviewExecutionResult(value: unknown): value is PreviewExecutionTimelineResult {
@@ -1082,6 +1099,9 @@ export function TimelineShell() {
   const [detailers, setDetailers] = useState<GenerationDetailerSettingsSnapshot>(
     () => createGenerationDetailerSettingsSnapshot(),
   );
+  const [finalRedrawPreset, setFinalRedrawPreset] = useState<TimelineFinalRedrawPreset>(
+    timelineFinalGenerationPolicy.defaultPreset,
+  );
   const [selectedStyleCheckpointId, setSelectedStyleCheckpointId] = useState<string | null>(null);
   const [selectedStyleLoraIds, setSelectedStyleLoraIds] = useState<string[]>([]);
   const [selectedStyleResources, setSelectedStyleResources] =
@@ -1164,6 +1184,7 @@ export function TimelineShell() {
   function getComposerSettingsSnapshot(
     overrides: Partial<{
       detailers: GenerationDetailerSettingsSnapshot;
+      finalRedrawPreset: TimelineFinalRedrawPreset;
       promptProfile: PromptProfileId;
       stylePalette: GenerationStylePaletteSnapshot | undefined;
       styleReference: StyleReferenceSnapshot | undefined;
@@ -1171,6 +1192,7 @@ export function TimelineShell() {
   ): RunSceneInputSettingsSnapshot {
     return createRunSceneInputSettingsSnapshot({
       detailers: overrides.detailers ?? detailers,
+      finalRedrawPreset: overrides.finalRedrawPreset ?? finalRedrawPreset,
       promptProfile: overrides.promptProfile ?? selectedPromptProfile,
       stylePalette: "stylePalette" in overrides ? overrides.stylePalette : stylePalette,
       styleReference: "styleReference" in overrides ? overrides.styleReference : styleReference,
@@ -1251,6 +1273,7 @@ export function TimelineShell() {
     setSelectedSourceDenoise(getSceneInputSourceDenoise(record.workflow));
     setSelectedSourceImage(getSceneInputSourceImage(record.workflow));
     setDetailers(restoredSettings.detailers);
+    setFinalRedrawPreset(restoredSettings.finalRedrawPreset);
     setStylePalette(restoredSettings.stylePalette);
     setStyleReference(restoredSettings.styleReference);
     setSelectedStyleCheckpointId(restoredSettings.stylePalette?.checkpointId ?? null);
@@ -1838,9 +1861,12 @@ export function TimelineShell() {
     activeRunIdRef.current = runId;
     updateIsRunning(true);
     try {
+      const reusablePreviewSelection = hasReusableFinalUpstream(targetWorkflow);
       const outcome = await runGenerationStages(
         targetWorkflow,
-        ["preview-execution", "preview-scoring", "comfyui-execution"],
+        reusablePreviewSelection
+          ? ["comfyui-execution"]
+          : ["preview-execution", "preview-scoring", "comfyui-execution"],
         "confirm",
         runId,
       );
@@ -2234,6 +2260,40 @@ export function TimelineShell() {
     );
   }
 
+  function hasReusableFinalUpstream(candidateWorkflow: TimelineWorkflowState) {
+    const previewNode = candidateWorkflow.nodes["preview-execution"];
+    const scoringNode = candidateWorkflow.nodes["preview-scoring"];
+    if (previewNode.status !== "done" || (scoringNode.status !== "done" && scoringNode.status !== "manual") ||
+        !isRecord(previewNode.result) || !Array.isArray(previewNode.result.candidates) ||
+        !isRecord(scoringNode.result) || scoringNode.result.rubricVersion !== 2 ||
+        !Array.isArray(scoringNode.result.scores) || !Array.isArray(scoringNode.result.selectedCandidateIds)) return false;
+    const finalCount = previewNode.result.finalCount;
+    const candidates = previewNode.result.candidates;
+    const scores = scoringNode.result.scores;
+    const selectedIds = scoringNode.result.selectedCandidateIds;
+    if (!Number.isSafeInteger(finalCount) || (finalCount as number) < 1 ||
+        selectedIds.length !== finalCount || new Set(selectedIds).size !== finalCount) return false;
+    return selectedIds.every((candidateId) => typeof candidateId === "string" &&
+      candidates.filter((candidate) => isRecord(candidate) && candidate.candidateId === candidateId &&
+        candidate.status === "done" && isRecord(candidate.storedImage)).length === 1 &&
+      scores.filter((score) => isRecord(score) && score.candidateId === candidateId).length === 1);
+  }
+
+  function handleFinalRedrawPresetChange(nextPreset: TimelineFinalRedrawPreset) {
+    if (isRunningRef.current || nextPreset === finalRedrawPreset) return;
+    setFinalRedrawPreset(nextPreset);
+    const nextSettings = getComposerSettingsSnapshot({ finalRedrawPreset: nextPreset });
+    if (!workflow) return;
+    const hasReusableUpstream = hasReusableFinalUpstream(workflow);
+    commitWorkflow(updateTimelineFinalRedrawPreset(workflow, nextSettings));
+    setNotices((current) => ({
+      ...current,
+      "scene-input": hasReusableUpstream
+        ? "Final redraw strength changed. Preview selection and seed were preserved; confirm to rerender Final only."
+        : "Final redraw strength changed. Review and confirm after the upstream workflow is ready.",
+    }));
+  }
+
   function getCurrentStyleReferenceIssue() {
     const blockingIssue = getStyleReferenceBlockingIssue(styleReference, "Run");
     if (blockingIssue) {
@@ -2599,6 +2659,7 @@ export function TimelineShell() {
     setSelectedSourceDenoise(DEFAULT_TIMELINE_SOURCE_DENOISE);
     setSelectedSourceImage(null);
     setDetailers(createGenerationDetailerSettingsSnapshot());
+    setFinalRedrawPreset(timelineFinalGenerationPolicy.defaultPreset);
     setSelectedStyleCheckpointId(null);
     setSelectedStyleLoraIds([]);
     setSelectedStyleResources(EMPTY_SELECTED_CIVITAI_RESOURCES);
@@ -2711,10 +2772,54 @@ export function TimelineShell() {
     ) : null;
   }
 
+  function getResolvedComposerFinalPolicy() {
+    const parameterResult = activeWorkflow.nodes["parameter-recommendation"].result;
+    const requestPreview = isRecord(parameterResult) && isRecord(parameterResult.requestPreview)
+      ? parameterResult.requestPreview
+      : {};
+    return resolveTimelineFinalGenerationPolicy({
+      ...(typeof requestPreview.modelBaseModel === "string"
+        ? { modelBaseModel: requestPreview.modelBaseModel }
+        : {}),
+      workflowProfile: typeof requestPreview.workflowProfile === "string"
+        ? requestPreview.workflowProfile
+        : selectedPromptProfile,
+    }, finalRedrawPreset);
+  }
+
+  function renderFinalPolicyConfirmationSummary() {
+    const policy = getResolvedComposerFinalPolicy();
+    const risk = policy.preset === "strong"
+      ? "Strong redraw has higher anatomy, structure, and object-drift risk."
+      : policy.preset === "conservative"
+        ? "Conservative redraw prioritizes Preview structure retention."
+        : "Balanced redraw trades moderate detail refinement against structural drift.";
+    return (
+      <>
+        <p className="pl-6 text-[11px] text-amber-700">
+          Final policy v{policy.version}: {policy.preset}, {policy.family}, denoise {policy.denoise.toFixed(2)}.
+        </p>
+        <p className="pl-6 text-[11px] text-amber-700">
+          {risk} The managed Preview upscale remains available as fallback.
+        </p>
+      </>
+    );
+  }
+
   function renderGenerationControls() {
     const canEditParameters = Boolean(
       selectedStyleCheckpointId && selectedStyleResources.checkpoint?.id === selectedStyleCheckpointId,
     );
+    const resolvedFinalPolicy = getResolvedComposerFinalPolicy();
+    const redrawOptions: Array<{
+      preset: TimelineFinalRedrawPreset;
+      label: string;
+      description: string;
+    }> = [
+      { preset: "conservative", label: "Conservative", description: "Preserves Preview structure most strongly." },
+      { preset: "balanced", label: "Balanced", description: "Default balance of structure and detail." },
+      { preset: "strong", label: "Strong", description: "More redraw; higher anatomy and object-drift risk." },
+    ];
 
     return (
       <div className="border-t border-slate-200 bg-white p-3">
@@ -2772,6 +2877,49 @@ export function TimelineShell() {
               Without saved parameters, Run keeps automatic parameter advice.
             </p>
           )}
+          <fieldset className="mt-3 border-t border-indigo-100 pt-3" disabled={isRunning}>
+            <legend className="text-[11px] font-semibold uppercase tracking-wide text-slate-600">
+              Final redraw strength
+            </legend>
+            <p className="mt-1 text-xs text-slate-500">
+              Resolved Final denoise: {resolvedFinalPolicy.denoise.toFixed(2)} ({resolvedFinalPolicy.family}).
+            </p>
+            <div className="mt-2 grid gap-2 sm:grid-cols-3">
+              {redrawOptions.map((option) => {
+                const selected = option.preset === finalRedrawPreset;
+                const strong = option.preset === "strong";
+                return (
+                  <label
+                    className={cn(
+                      "cursor-pointer rounded-md border px-3 py-2 text-xs transition-colors",
+                      selected
+                        ? strong
+                          ? "border-rose-400 bg-rose-50 text-rose-800"
+                          : "border-indigo-400 bg-white text-indigo-800"
+                        : strong
+                          ? "border-rose-200 bg-rose-50/50 text-rose-700"
+                          : "border-slate-200 bg-white text-slate-600",
+                      isRunning && "cursor-not-allowed opacity-60",
+                    )}
+                    key={option.preset}
+                  >
+                    <span className="flex items-center gap-2 font-semibold">
+                      <input
+                        checked={selected}
+                        disabled={isRunning}
+                        name="final-redraw-strength"
+                        onChange={() => handleFinalRedrawPresetChange(option.preset)}
+                        type="radio"
+                        value={option.preset}
+                      />
+                      {option.label}
+                    </span>
+                    <span className="mt-1 block leading-relaxed">{option.description}</span>
+                  </label>
+                );
+              })}
+            </div>
+          </fieldset>
           <div className="mt-3 border-t border-indigo-100 pt-3">
             <GenerationDetailerSettingsEditor
               detailers={detailers}
@@ -2996,7 +3144,8 @@ export function TimelineShell() {
       (isRunning && (selectedNodeId === "preview-execution" || selectedNodeId === "preview-scoring" || selectedNodeId === "comfyui-execution")
         ? selectedNodeId
         : undefined);
-    const simpleFinalResult = activeWorkflow.nodes["comfyui-execution"].result;
+    const simpleFinalResult = getTimelineFinalExecutionState(activeWorkflow);
+    const simpleFallbacks = getTimelineExecutionFallbacks(simpleFinalResult);
     const simpleFinalDoneCount = isRecord(simpleFinalResult) && Array.isArray(simpleFinalResult.finals)
       ? simpleFinalResult.finals.filter((item) => isRecord(item) && item.status === "done").length
       : 0;
@@ -3118,6 +3267,7 @@ export function TimelineShell() {
                     FaceDetailer {detailers.faceDetailer.enabled ? "enabled" : "disabled"}; HandDetailer{" "}
                     {detailers.handDetailer.enabled ? "enabled" : "disabled"}.
                   </p>
+                  {renderFinalPolicyConfirmationSummary()}
                 </div>
                 <Button
                   className="h-9 shrink-0 px-3 text-xs shadow-none"
@@ -3177,7 +3327,7 @@ export function TimelineShell() {
               </section>
             ) : null}
 
-            {workflow && (resultNode.status === "done" || resultNode.status === "error") ? (
+            {workflow && (resultNode.status === "done" || resultNode.status === "error" || simpleFallbacks.length > 0) ? (
               <section className="rounded-md border border-slate-200 bg-white p-4 shadow-sm">
                 <h2 className="text-sm font-bold text-slate-900">Artifact result</h2>
                 <div className="mt-3">
@@ -3185,6 +3335,7 @@ export function TimelineShell() {
                     draft={timelineResultDraft}
                     emptyState={timelineNodeContent["result-display"].emptyState}
                     errorMessage={resultNode.error?.message}
+                    fallbacks={simpleFallbacks}
                     key={resultNode.updatedAt}
                     result={isResultDisplayTimelineResult(resultNode.result) ? resultNode.result : null}
                     selectedResources={timelineResultSelectedResources}
@@ -3571,6 +3722,7 @@ export function TimelineShell() {
                         FaceDetailer {detailers.faceDetailer.enabled ? "enabled" : "disabled"}; HandDetailer{" "}
                         {detailers.handDetailer.enabled ? "enabled" : "disabled"}.
                       </p>
+                      {renderFinalPolicyConfirmationSummary()}
                     </div>
                     <Button
                       className="h-8 shrink-0 px-3 text-xs shadow-none"
@@ -3725,6 +3877,7 @@ export function TimelineShell() {
                       draft={timelineResultDraft}
                       emptyState={selectedContent.emptyState}
                       errorMessage={selectedNode.error?.message}
+                      fallbacks={getTimelineExecutionFallbacks(getTimelineFinalExecutionState(activeWorkflow))}
                       key={selectedNode.updatedAt}
                       result={isResultDisplayTimelineResult(selectedNode.result) ? selectedNode.result : null}
                       selectedResources={timelineResultSelectedResources}

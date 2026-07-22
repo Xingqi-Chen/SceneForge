@@ -12,9 +12,14 @@ import {
   sanitizeStyleReferenceSnapshot,
   type StyleReferenceSnapshot,
 } from "./style-reference";
+import {
+  sanitizeTimelineFinalRedrawPreset,
+  type TimelineFinalRedrawPreset,
+} from "./final-generation-policy";
 
 export type RunSceneInputSettingsSnapshot = {
   detailers: GenerationDetailerSettingsSnapshot;
+  finalRedrawPreset: TimelineFinalRedrawPreset;
   promptProfile?: PromptProfileId;
   stylePalette?: GenerationStylePaletteSnapshot;
   styleReference?: StyleReferenceSnapshot;
@@ -27,6 +32,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 export function createRunSceneInputSettingsSnapshot(
   value: {
     detailers?: Partial<GenerationDetailerSettingsSnapshot>;
+    finalRedrawPreset?: TimelineFinalRedrawPreset;
     promptProfile?: PromptProfileId;
     stylePalette?: GenerationStylePaletteSnapshot;
     styleReference?: StyleReferenceSnapshot;
@@ -36,6 +42,7 @@ export function createRunSceneInputSettingsSnapshot(
   const styleReference = sanitizeStyleReferenceSnapshot(value.styleReference);
   return {
     detailers: createGenerationDetailerSettingsSnapshot(value.detailers),
+    finalRedrawPreset: sanitizeTimelineFinalRedrawPreset(value.finalRedrawPreset),
     ...(value.promptProfile ? { promptProfile: normalizePromptProfileId(value.promptProfile) } : {}),
     ...(stylePalette ? { stylePalette } : {}),
     ...(styleReference ? { styleReference } : {}),
@@ -48,6 +55,7 @@ export function sanitizeRunSceneInputSettingsSnapshot(value: unknown): RunSceneI
   const styleReference = sanitizeStyleReferenceSnapshot(raw.styleReference);
   return {
     detailers: sanitizeGenerationDetailerSettingsSnapshot(raw.detailers),
+    finalRedrawPreset: sanitizeTimelineFinalRedrawPreset(raw.finalRedrawPreset),
     ...(typeof raw.promptProfile === "string"
       ? { promptProfile: coercePromptProfileId(raw.promptProfile) }
       : {}),
