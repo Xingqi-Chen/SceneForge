@@ -77,6 +77,7 @@ function isOptionalPurpose(value: unknown): value is LlmChatRequest["purpose"] {
     value === "stable-diffusion-prompt-generation" ||
     value === "story-style-reference-analysis" ||
     value === "single-image-preview-scoring" ||
+    value === "single-image-final-review" ||
     value === "comfyui-generation-diagnosis" ||
     value === "comfyui-inpaint-diagnosis"
   );

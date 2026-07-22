@@ -2261,7 +2261,7 @@ describe("TimelineShell", () => {
       act(() => confirmButton.click());
       await flushAsyncWork();
 
-      expect(confirmBodies).toHaveLength(1);
+      expect(confirmBodies).toHaveLength(2);
       expect(confirmBodies[0]).toMatchObject({
         action: "confirm",
         stage: "comfyui-execution",
@@ -2279,6 +2279,10 @@ describe("TimelineShell", () => {
             },
           },
         },
+      });
+      expect(confirmBodies[1]).toMatchObject({
+        action: "continue",
+        stage: "final-review",
       });
     } finally {
       act(() => {
@@ -3284,7 +3288,7 @@ describe("TimelineShell", () => {
       });
       await flushAsyncWork();
 
-      expect(confirmPayloads).toHaveLength(3);
+      expect(confirmPayloads).toHaveLength(4);
       expect(confirmPayloads[0]?.generationConfirmed).toBe(false);
       expect(confirmPayloads[0]?.nodes["scene-input"].result).toMatchObject({
         imageCount: 3,
@@ -3293,7 +3297,7 @@ describe("TimelineShell", () => {
       expect(confirmPayloads[0]?.nodes["generation-gate"].error?.code).toBe("confirmation_required");
 
       const fetchUrls = fetchMock.mock.calls.map(([input]) => getFetchUrl(input));
-      expect(fetchUrls.filter((url) => url === "/api/agent-timeline/confirm-generation")).toHaveLength(3);
+      expect(fetchUrls.filter((url) => url === "/api/agent-timeline/confirm-generation")).toHaveLength(4);
       expect(fetchUrls).not.toContain("/api/comfyui/generate-image");
       expect(fetchUrls).not.toContain("/api/comfyui/generated-images");
 
@@ -3405,7 +3409,7 @@ describe("TimelineShell", () => {
       await submitInitialScene("A neon market alley with a courier at sunrise");
       await flushAsyncWork();
 
-      expect(confirmPayloads).toHaveLength(3);
+      expect(confirmPayloads).toHaveLength(4);
       expect(container.textContent).not.toContain("Review 2 new prompt tags");
       expect(confirmPayloads[0]?.nodes["generation-gate"].error?.code).toBe("confirmation_required");
       expect(getSectionByHeading("Artifact result").textContent).toContain("timeline-confirmed.png");

@@ -1,8 +1,11 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { ResultDisplayTimelineResult } from "@/features/agent-timeline/types";
+import type {
+  FinalReviewTimelineResult,
+  ResultDisplayTimelineResult,
+} from "@/features/agent-timeline/types";
 
 import {
   getTimelineExecutionFallbacks,
@@ -41,7 +44,35 @@ const completedResult: ResultDisplayTimelineResult = {
     filename: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png",
     url: "/api/comfyui/generated-images/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png",
   },
+  finalLinks: [{ candidateId: "preview-1", promptId: "final-prompt", rank: 1, seed: 100 }],
   warnings: [],
+};
+
+const reviewedPair: FinalReviewTimelineResult = {
+  reviewVersion: 1,
+  status: "reviewed",
+  pairs: [{
+    candidateId: "preview-1",
+    rank: 1,
+    seed: 100,
+    variants: {
+      final: completedResult.storedImage,
+      previewUpscale: fallback.storedImage,
+    },
+    scores: {
+      final: { adherence: 80, composition: 80, anatomy: 60, style: 80, technical: 80, total: 76 },
+      previewUpscale: { adherence: 80, composition: 80, anatomy: 90, style: 80, technical: 80, total: 82 },
+    },
+    findings: [
+      { operation: "pose", severity: "major", scope: "final", introducedByFinal: true, description: "Final changed the hand pose." },
+      { operation: "contact", severity: "none", scope: "pair", introducedByFinal: false, description: "Contact is stable." },
+      { operation: "object-count", severity: "none", scope: "pair", introducedByFinal: false, description: "Object count is stable." },
+      { operation: "composition-consistency", severity: "none", scope: "pair", introducedByFinal: false, description: "Composition is stable." },
+    ],
+    rationale: "Preview preserves the intended pose.",
+    recommendedVariant: "preview-upscale",
+    defaultVariant: "preview-upscale",
+  }],
 };
 
 beforeEach(() => {
@@ -104,5 +135,89 @@ describe("TimelineResultDisplayWorkspace fallbacks", () => {
     ]);
     expect(images[0]?.getAttribute("alt")).toBe("Timeline generated ComfyUI result 1");
     expect(container.textContent).toContain("Finals remain the default result.");
+  });
+
+  it("shows a concise Simple selector and keeps both variants selectable when review is unavailable", () => {
+    const onSelectVariant = vi.fn();
+    const failedReview: FinalReviewTimelineResult = {
+      reviewVersion: 1,
+      status: "failed",
+      pairs: [{
+        ...reviewedPair.pairs[0]!,
+        scores: undefined,
+        findings: undefined,
+        rationale: undefined,
+        recommendedVariant: null,
+        defaultVariant: "final",
+      }],
+      error: {
+        code: "llm_upstream",
+        message: "Review unavailable. Both variants remain selectable.",
+        details: { recoverable: true },
+      },
+    };
+
+    act(() => root.render(
+      <TimelineResultDisplayWorkspace
+        draft={null}
+        emptyState="No Final image yet."
+        finalReview={failedReview}
+        onSelectVariant={onSelectVariant}
+        result={completedResult}
+        selectedResources={{ checkpoint: null, loras: [] }}
+      />,
+    ));
+
+    expect(container.textContent).toContain("Review recommendation unavailable");
+    expect(container.textContent).toContain("No recommendation");
+    expect(container.textContent).not.toContain("adherence 80");
+    const buttons = Array.from(container.querySelectorAll<HTMLButtonElement>("[data-testid='timeline-final-review'] button"));
+    expect(buttons).toHaveLength(2);
+    expect(buttons[0]?.getAttribute("aria-pressed")).toBe("true");
+    expect(buttons[1]?.getAttribute("aria-pressed")).toBe("false");
+
+    act(() => buttons[1]?.click());
+    expect(onSelectVariant).toHaveBeenCalledWith("preview-1", "preview-upscale");
+    const images = Array.from(container.querySelectorAll("img"));
+    expect(images.at(-1)?.getAttribute("src")).toBe(completedResult.image.url);
+  });
+
+  it("shows Detailed scores/issues and gives explicit user selection precedence over the local default", () => {
+    act(() => root.render(
+      <TimelineResultDisplayWorkspace
+        detailedReview
+        draft={null}
+        emptyState="No Final image yet."
+        finalReview={reviewedPair}
+        onSelectVariant={() => undefined}
+        result={completedResult}
+        selectedResources={{ checkpoint: null, loras: [] }}
+      />,
+    ));
+
+    expect(container.textContent).toContain("Recommended: Preview fallback");
+    expect(container.textContent).toContain("Final: adherence 80");
+    expect(container.textContent).toContain("pose: major · final · introduced by Final yes");
+    expect(Array.from(container.querySelectorAll("img")).at(-1)?.getAttribute("src")).toBe(fallback.storedImage.url);
+
+    const explicitFinal: FinalReviewTimelineResult = {
+      ...reviewedPair,
+      pairs: reviewedPair.pairs.map((pair) => ({ ...pair, userSelectedVariant: "final" })),
+    };
+    act(() => root.render(
+      <TimelineResultDisplayWorkspace
+        detailedReview
+        draft={null}
+        emptyState="No Final image yet."
+        finalReview={explicitFinal}
+        onSelectVariant={() => undefined}
+        result={completedResult}
+        selectedResources={{ checkpoint: null, loras: [] }}
+      />,
+    ));
+
+    const buttons = Array.from(container.querySelectorAll<HTMLButtonElement>("[data-testid='timeline-final-review'] button"));
+    expect(buttons[0]?.getAttribute("aria-pressed")).toBe("true");
+    expect(Array.from(container.querySelectorAll("img")).at(-1)?.getAttribute("src")).toBe(completedResult.image.url);
   });
 });

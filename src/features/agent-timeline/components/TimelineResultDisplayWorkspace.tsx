@@ -5,7 +5,11 @@ import Image from "next/image";
 import { LoaderCircle, Paintbrush } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import type { ResultDisplayTimelineResult } from "@/features/agent-timeline/types";
+import type {
+  FinalReviewTimelineResult,
+  ResultDisplayTimelineResult,
+  TimelineFinalReviewVariant,
+} from "@/features/agent-timeline/types";
 import type { SelectedCivitaiResourcesPreview } from "@/features/civitai-lora-library/types";
 import type { ComfyUiGeneratedImage, ComfyUiPromptHistoryResponse } from "@/features/comfyui";
 import type { ComfyUiGenerationLoraSetting } from "@/features/editor/ai-prompt/comfyui-generation-params";
@@ -25,10 +29,13 @@ export type TimelineResultDisplayWorkspaceProps = {
   emptyState: string;
   errorMessage?: string;
   fallbacks?: TimelineFallbackDisplayItem[];
+  finalReview?: FinalReviewTimelineResult | null;
   generatedImageAlt?: GeneratedImageText;
   generatedImageCaption?: GeneratedImageText;
   inpaintClientIdPrefix?: string;
   itemIdPrefix?: string;
+  detailedReview?: boolean;
+  onSelectVariant?: (candidateId: string, variant: TimelineFinalReviewVariant) => void;
   result: ResultDisplayTimelineResult | null;
   selectedResources: SelectedCivitaiResourcesPreview;
   testId?: string;
@@ -269,10 +276,13 @@ export function TimelineResultDisplayWorkspace({
   emptyState,
   errorMessage,
   fallbacks = [],
+  finalReview = null,
   generatedImageAlt,
   generatedImageCaption,
   inpaintClientIdPrefix = "timeline-inpaint",
   itemIdPrefix = "timeline",
+  detailedReview = false,
+  onSelectVariant,
   result,
   selectedResources,
   testId = "timeline-result-workspace",
@@ -321,8 +331,35 @@ export function TimelineResultDisplayWorkspace({
     );
   }
 
-  const resultImages = getTimelineResultImages(result);
-  const storedImages = getTimelineResultStoredImages(result);
+  const originalResultImages = getTimelineResultImages(result);
+  const originalStoredImages = getTimelineResultStoredImages(result);
+  const finalIndexByCandidate = new Map((result.finalLinks ?? []).map((link, index) => [link.candidateId, index]));
+  const reviewedSelections = finalReview?.pairs.map((pair) => {
+    const selectedVariant = pair.userSelectedVariant ?? pair.defaultVariant;
+    const finalIndex = finalIndexByCandidate.get(pair.candidateId) ?? pair.rank - 1;
+    if (selectedVariant === "preview-upscale") {
+      return {
+        image: {
+          filename: pair.variants.previewUpscale.filename,
+          nodeId: "preview-upscale",
+          url: pair.variants.previewUpscale.url,
+        },
+        storedImage: pair.variants.previewUpscale,
+        selectedVariant,
+      };
+    }
+    return {
+      image: originalResultImages[finalIndex] ?? result.image,
+      storedImage: originalStoredImages[finalIndex] ?? result.storedImage,
+      selectedVariant,
+    };
+  });
+  const resultImages = reviewedSelections?.length
+    ? reviewedSelections.map((selection) => selection.image)
+    : originalResultImages;
+  const storedImages = reviewedSelections?.length
+    ? reviewedSelections.map((selection) => selection.storedImage)
+    : originalStoredImages;
   const totalBytes = storedImages.reduce((total, image) => total + image.byteLength, 0);
   const parentSeed = draft?.seed ?? 0;
   const parentItems = resultImages.map((image, index) => createTimelineResultImageItem({
@@ -401,6 +438,88 @@ export function TimelineResultDisplayWorkspace({
 
   return (
     <div className="flex flex-col gap-3" data-testid={testId}>
+      {finalReview ? (
+        <section className={cn(
+          "rounded-md border p-3",
+          finalReview.status === "reviewed"
+            ? "border-emerald-200 bg-emerald-50"
+            : "border-amber-200 bg-amber-50",
+        )} data-testid="timeline-final-review">
+          <h3 className="text-xs font-semibold text-slate-900">
+            {finalReview.status === "reviewed" ? "Preview / Final review complete" : "Review recommendation unavailable"}
+          </h3>
+          <p className="mt-1 text-[11px] leading-relaxed text-slate-600">
+            {finalReview.status === "reviewed"
+              ? "SceneForge computed each default locally. Your explicit selection overrides it without regenerating images."
+              : finalReview.error?.message ?? "This restored workflow has no review. Available variants remain selectable."}
+          </p>
+          <div className="mt-3 grid gap-3">
+            {finalReview.pairs.map((pair) => {
+              const selected = pair.userSelectedVariant ?? pair.defaultVariant;
+              return (
+                <article className="rounded-md border border-slate-200 bg-white p-3" key={pair.candidateId}>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="text-xs font-semibold text-slate-800">{pair.candidateId} · rank {pair.rank}</span>
+                    <span className="text-[11px] text-slate-500">
+                      {pair.recommendedVariant ? `Recommended: ${pair.recommendedVariant === "final" ? "Final" : "Preview fallback"}` : "No recommendation"}
+                    </span>
+                  </div>
+                  <div className="mt-2 grid grid-cols-2 gap-2">
+                    {(["final", "preview-upscale"] as const).map((variant) => {
+                      const stored = variant === "final" ? pair.variants.final : pair.variants.previewUpscale;
+                      return (
+                        <button
+                          aria-pressed={selected === variant}
+                          className={cn(
+                            "overflow-hidden rounded-md border bg-white text-left transition",
+                            selected === variant ? "border-blue-500 ring-2 ring-blue-100" : "border-slate-200 hover:border-slate-400",
+                          )}
+                          disabled={!onSelectVariant}
+                          key={variant}
+                          onClick={() => onSelectVariant?.(pair.candidateId, variant)}
+                          type="button"
+                        >
+                          <Image
+                            alt={`${pair.candidateId} ${variant}`}
+                            className="h-36 w-full object-contain"
+                            height={512}
+                            src={stored.url}
+                            unoptimized
+                            width={512}
+                          />
+                          <span className="block border-t border-slate-100 px-2 py-1.5 text-[11px] font-semibold text-slate-700">
+                            {variant === "final" ? "Final" : "Preview fallback"}{selected === variant ? " · selected" : ""}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {detailedReview && pair.scores && pair.findings ? (
+                    <div className="mt-3 grid gap-2 text-[11px] text-slate-600">
+                      <div className="grid grid-cols-2 gap-2">
+                        <p>
+                          Final: adherence {pair.scores.final.adherence}, composition {pair.scores.final.composition}, anatomy {pair.scores.final.anatomy}, style {pair.scores.final.style}, technical {pair.scores.final.technical}, weighted {pair.scores.final.total.toFixed(2)}
+                        </p>
+                        <p>
+                          Preview: adherence {pair.scores.previewUpscale.adherence}, composition {pair.scores.previewUpscale.composition}, anatomy {pair.scores.previewUpscale.anatomy}, style {pair.scores.previewUpscale.style}, technical {pair.scores.previewUpscale.technical}, weighted {pair.scores.previewUpscale.total.toFixed(2)}
+                        </p>
+                      </div>
+                      <ul className="grid gap-1">
+                        {pair.findings.map((finding) => (
+                          <li key={finding.operation}>
+                            {finding.operation}: {finding.severity} · {finding.scope} · introduced by Final {finding.introducedByFinal ? "yes" : "no"} — {finding.description}
+                          </li>
+                        ))}
+                      </ul>
+                      {pair.rationale ? <p>{pair.rationale}</p> : null}
+                    </div>
+                  ) : null}
+                </article>
+              );
+            })}
+          </div>
+        </section>
+      ) : null}
       <div className={cn(
         "grid gap-3 rounded-md border border-slate-200 bg-slate-50 p-3",
         resultImages.length > 1 ? "md:grid-cols-2" : "grid-cols-1",
@@ -423,7 +542,7 @@ export function TimelineResultDisplayWorkspace({
               </figcaption>
               <Button
                 className="h-8 gap-1.5 rounded-md bg-sky-600 px-2.5 text-xs text-white hover:bg-sky-700 disabled:opacity-60"
-                disabled={!draft || inpaintStatus === "loading"}
+                disabled={!draft || inpaintStatus === "loading" || reviewedSelections?.[index]?.selectedVariant === "preview-upscale"}
                 onClick={() => setInpaintImageItem(item)}
                 type="button"
               >
@@ -434,7 +553,7 @@ export function TimelineResultDisplayWorkspace({
           </figure>
         ))}
       </div>
-      <TimelineFallbackGallery fallbacks={availableFallbacks} />
+      {!finalReview ? <TimelineFallbackGallery fallbacks={availableFallbacks} /> : null}
       {inpaintItems.length > 0 ? (
         <div className={cn(
           "grid gap-3 rounded-md border border-sky-200 bg-sky-50 p-3",

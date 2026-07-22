@@ -20,6 +20,11 @@ import {
 import { createTimelineT8ServerNodeAdapters } from "@/features/agent-timeline/t8-server-adapters";
 import { sanitizeTimelineWorkflowState } from "@/features/agent-timeline/timeline-workflow-persistence";
 import {
+  getSingleImageStageExecutionNodeIds,
+  singleImageGenerationStageNodeIds,
+  type SingleImageGenerationStageNodeId,
+} from "@/features/agent-timeline/workflow-definitions";
+import {
   TimelineNodeExecutionError,
   type TimelineExecutableNodeId,
   type TimelineNodeMap,
@@ -65,24 +70,20 @@ export async function POST(request: Request) {
     ? "retry"
     : isRecord(payload) && payload.action === "continue" ? "continue" : "confirm";
   const retryNodeId = isRecord(payload) ? payload.retryNodeId : undefined;
-  const retryNodeIds = new Set<TimelineGenerationRetryNodeId>([
-    "preview-execution",
-    "preview-scoring",
-    "comfyui-execution",
-  ]);
+  const retryNodeIds = new Set<TimelineGenerationRetryNodeId>(singleImageGenerationStageNodeIds);
   const requestedStage = isRecord(payload) ? payload.stage : undefined;
   const stage = typeof requestedStage === "string" && retryNodeIds.has(requestedStage as TimelineGenerationRetryNodeId)
-    ? requestedStage as TimelineGenerationRetryNodeId
+      ? requestedStage as SingleImageGenerationStageNodeId
     : action === "retry" && typeof retryNodeId === "string" && retryNodeIds.has(retryNodeId as TimelineGenerationRetryNodeId)
-      ? retryNodeId as TimelineGenerationRetryNodeId
+      ? retryNodeId as SingleImageGenerationStageNodeId
       : undefined;
 
   if (requestedStage !== undefined && !stage) {
-    return errorResponse("stage must identify preview execution, preview scoring, or final execution.", 400);
+    return errorResponse("stage must identify a declared single-image generation stage.", 400);
   }
 
   if (action === "retry" && (typeof retryNodeId !== "string" || !retryNodeIds.has(retryNodeId as TimelineGenerationRetryNodeId))) {
-    return errorResponse("retryNodeId must identify preview execution, preview scoring, or final execution.", 400);
+    return errorResponse("retryNodeId must identify a declared retryable generation stage.", 400);
   }
 
   if (action === "retry" && stage !== retryNodeId) {
@@ -147,9 +148,9 @@ export async function POST(request: Request) {
         })),
       });
     }
-    const executableNodeIds: readonly TimelineExecutableNodeId[] | undefined = stage === "comfyui-execution"
-      ? ["comfyui-execution", "result-display"]
-      : stage ? [stage] : undefined;
+    const executableNodeIds: readonly TimelineExecutableNodeId[] | undefined = stage
+      ? getSingleImageStageExecutionNodeIds(stage)
+      : undefined;
     const result = await executeTimelineGraph(runnableWorkflow, createTimelineT8ServerNodeAdapters({
       advancePreviewSeedOnRetry: action === "retry" && retryNodeId === "preview-execution",
     }), {

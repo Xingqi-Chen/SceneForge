@@ -2,6 +2,24 @@
 
 This log records dated implementation and documentation work. Keep entries concise and evidence-oriented.
 
+## 2026-07-22
+
+### T38B / Issue #139 Preview-Final Review and Result Selection
+
+Summary:
+
+- Upgraded the Run definition to v3 with `comfyui-execution -> final-review -> result-display` and definition-derived API/client generation stages.
+- Added one bounded high-detail Vision review for all 1-4 managed Preview/Final pairs, reusing path-safe transient JPEG conversion, ordinary/NSFW fail-closed routing, redacted logging, safe upstream/schema classification, and at most one schema repair.
+- Added strict local normalization for five scores per variant plus pose, contact, object-count, and composition-consistency findings. Recommendation/default are computed locally; only a major or blocking issue introduced by Final selects the Preview fallback.
+- Persisted and reconciled both managed variants, review state, recommendation/default, and optional user selection. Review failure keeps complete variants selectable and supports review-only retry; legacy workflows do not start review automatically.
+- Added shared Simple/Detailed Final/Preview selectors. Explicit selection controls displayed images immediately, autosaves, restores, and does not call LLM/ComfyUI or stale upstream nodes.
+
+Validation:
+
+- Focused T38B validation passed 8 files and 255 tests; the final mixed-attempt review suite passed 29 tests.
+- The full Vitest suite passed 1,347 tests across 134 files; `npm run typecheck`, `npm run lint`, `npm run build`, and `git diff --check` passed. Lint reported 23 pre-existing warnings and no errors.
+- Test Gate returned PASS and Review Gate returned APPROVE. Browser runtime had no available session, so desktop/mobile visual QA and live LiteLLM Vision/NSFW plus ComfyUI quality validation remain environment-dependent manual follow-ups.
+
 ## 2026-07-20
 
 ### T38A / Issue #136 Preserve Preview Structure in Final Generation

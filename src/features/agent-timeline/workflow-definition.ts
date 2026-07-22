@@ -1,6 +1,6 @@
 export const commonWorkflowDefinitionVersion = 1;
 
-export type CommonWorkflowDefinitionVersion = 1 | 2;
+export type CommonWorkflowDefinitionVersion = 1 | 2 | 3;
 
 export type CommonWorkflowMode = "single-image" | "story-graph";
 

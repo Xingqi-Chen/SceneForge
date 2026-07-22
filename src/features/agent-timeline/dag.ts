@@ -77,11 +77,15 @@ export function validateTimelineDependencyDag(dag: TimelineDependencyDag = mvpTi
     issues.push({ nodeId: "comfyui-execution", message: "Final execution must remain downstream of preview scoring." });
   }
 
-  if (!dag["result-display"].includes("comfyui-execution")) {
+  if (!dag["final-review"].includes("comfyui-execution")) {
     issues.push({
-      nodeId: "result-display",
-      message: "Result display must remain downstream of ComfyUI execution.",
+      nodeId: "final-review",
+      message: "Final review must remain downstream of ComfyUI execution.",
     });
+  }
+
+  if (!dag["result-display"].includes("final-review")) {
+    issues.push({ nodeId: "result-display", message: "Result display must remain downstream of final review." });
   }
 
   return issues;

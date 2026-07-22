@@ -43,7 +43,8 @@ function summarizeContentForLog(content: LlmChatContent): string | Array<Record<
 
 /** Safe structured summary for logs (no raw image bytes). */
 export function summarizeLlmChatRequestForLog(request: LlmChatRequest): Record<string, unknown> {
-  const redactContent = request.purpose === "single-image-preview-scoring";
+  const redactContent = request.purpose === "single-image-preview-scoring" ||
+    request.purpose === "single-image-final-review";
   return {
     model: request.model ?? "(default)",
     nsfw: request.nsfw,
@@ -429,7 +430,7 @@ export function createLiteLlmClient(options: LiteLlmClientOptions) {
         model: completion.model,
         role: completion.role,
         contentChars: completion.content.length,
-        ...(request.purpose === "single-image-preview-scoring"
+        ...(request.purpose === "single-image-preview-scoring" || request.purpose === "single-image-final-review"
           ? { contentRedacted: true }
           : { contentPreview: truncateForLog(completion.content, 280) }),
         finishReason: completion.finishReason,

@@ -45,6 +45,7 @@ export const timelineNodeIds = [
   "preview-execution",
   "preview-scoring",
   "comfyui-execution",
+  "final-review",
   "result-display",
 ] as const;
 
@@ -62,6 +63,7 @@ export const executableTimelineNodeIds = [
   "preview-execution",
   "preview-scoring",
   "comfyui-execution",
+  "final-review",
   "result-display",
 ] as const satisfies readonly TimelineNodeId[];
 
@@ -429,6 +431,59 @@ export type ComfyUiExecutionTimelineResult = {
   promptId?: string;
   request: ComfyUiTextToImageRequest;
   warnings: string[];
+};
+
+export const timelineFinalReviewVariants = ["final", "preview-upscale"] as const;
+export type TimelineFinalReviewVariant = (typeof timelineFinalReviewVariants)[number];
+
+export const timelineFinalReviewSeverities = ["none", "minor", "major", "blocking"] as const;
+export type TimelineFinalReviewSeverity = (typeof timelineFinalReviewSeverities)[number];
+
+export const timelineFinalReviewScopes = ["preview-upscale", "final", "pair"] as const;
+export type TimelineFinalReviewScope = (typeof timelineFinalReviewScopes)[number];
+
+export const timelineFinalReviewOperations = [
+  "pose",
+  "contact",
+  "object-count",
+  "composition-consistency",
+] as const;
+export type TimelineFinalReviewOperation = (typeof timelineFinalReviewOperations)[number];
+
+export type TimelineFinalReviewScores = TimelinePreviewScore;
+
+export type TimelineFinalReviewFinding = {
+  operation: TimelineFinalReviewOperation;
+  severity: TimelineFinalReviewSeverity;
+  scope: TimelineFinalReviewScope;
+  introducedByFinal: boolean;
+  description: string;
+};
+
+export type TimelineFinalReviewPair = {
+  candidateId: string;
+  rank: number;
+  seed: number;
+  variants: {
+    final: TimelineStoredGeneratedImage;
+    previewUpscale: TimelineStoredGeneratedImage;
+  };
+  scores?: {
+    final: TimelineFinalReviewScores;
+    previewUpscale: TimelineFinalReviewScores;
+  };
+  findings?: TimelineFinalReviewFinding[];
+  rationale?: string;
+  recommendedVariant: TimelineFinalReviewVariant | null;
+  defaultVariant: TimelineFinalReviewVariant;
+  userSelectedVariant?: TimelineFinalReviewVariant;
+};
+
+export type FinalReviewTimelineResult = {
+  reviewVersion: 1;
+  status: "reviewed" | "failed" | "unavailable";
+  pairs: TimelineFinalReviewPair[];
+  error?: TimelineNodeError;
 };
 
 export type TimelineStoredGeneratedImage = {
