@@ -36,6 +36,8 @@ type TimelineWorkspaceKey =
   | "preview-scoring"
   | "comfyui-execution"
   | "final-review"
+  | "final-repair"
+  | "repair-verification"
   | "result-display";
 
 function createTimelineNodeMetadata({
@@ -101,7 +103,9 @@ export const singleImageWorkflowEdges = [
   { from: "preview-execution", to: "preview-scoring" },
   { from: "preview-scoring", to: "comfyui-execution" },
   { from: "comfyui-execution", to: "final-review" },
-  { from: "final-review", to: "result-display" },
+  { from: "final-review", to: "final-repair" },
+  { from: "final-repair", to: "repair-verification" },
+  { from: "repair-verification", to: "result-display" },
 ] as const satisfies readonly CommonWorkflowDagEdge<TimelineNodeId>[];
 
 export const singleImageWorkflowDependencyDag = buildCommonWorkflowDependencyDag(
@@ -111,7 +115,7 @@ export const singleImageWorkflowDependencyDag = buildCommonWorkflowDependencyDag
 
 export const singleImageWorkflowDefinition = {
   mode: singleImageWorkflowMode,
-  version: 3,
+  version: 4,
   nodeIds: timelineNodeIds,
   executableNodeIds: executableTimelineNodeIds,
   reservedNodeIds: reservedTimelineNodeIds,
@@ -214,6 +218,22 @@ export const singleImageWorkflowDefinition = {
       title: "Final review",
       workspaceKey: "final-review",
     }),
+    "final-repair": createTimelineNodeMetadata({
+      aiLabel: "Retry repair",
+      editLabel: "Repair locked",
+      inputKind: "visual",
+      nodeId: "final-repair",
+      title: "Local repair",
+      workspaceKey: "final-repair",
+    }),
+    "repair-verification": createTimelineNodeMetadata({
+      aiLabel: "Retry verification",
+      editLabel: "Verification locked",
+      inputKind: "visual",
+      nodeId: "repair-verification",
+      title: "Repair verification",
+      workspaceKey: "repair-verification",
+    }),
     "result-display": createTimelineNodeMetadata({
       aiLabel: "Review result",
       editLabel: "Result locked",
@@ -231,7 +251,7 @@ const resultDisplayIndex = singleImageWorkflowDefinition.nodeIds.indexOf("result
 export const singleImageGenerationStageNodeIds = singleImageWorkflowDefinition.nodeIds.slice(
   generationGateIndex + 1,
   resultDisplayIndex,
-) as readonly ("preview-execution" | "preview-scoring" | "comfyui-execution" | "final-review")[];
+) as readonly ("preview-execution" | "preview-scoring" | "comfyui-execution" | "final-review" | "final-repair" | "repair-verification")[];
 
 export type SingleImageGenerationStageNodeId = (typeof singleImageGenerationStageNodeIds)[number];
 

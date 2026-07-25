@@ -80,11 +80,13 @@ import {
   type CanvasBindingTimelineResult,
   type CharacterActionTimelineResult,
   type ComfyUiExecutionTimelineResult,
+  type FinalRepairTimelineResult,
   type FinalReviewTimelineResult,
   type ParameterRecommendationTimelineResult,
   type PreviewExecutionTimelineResult,
   type PreviewScoringTimelineResult,
   type ResourceRecommendationTimelineResult,
+  type RepairVerificationTimelineResult,
   type ScenePromptTimelineResult,
   type SceneInputTimelineResult,
   type TimelineNodeId,
@@ -96,7 +98,11 @@ import {
   singleImageWorkflowDefinition,
   type SingleImageGenerationStageNodeId,
 } from "@/features/agent-timeline/workflow-definitions";
-import { selectFinalReviewVariant } from "@/features/agent-timeline/final-review";
+import {
+  getRepairManualRecoveryState,
+  isRepairManualRecoveryRequired,
+  selectRepairVariant,
+} from "@/features/agent-timeline/final-repair";
 import type {
   CivitaiAiRecommendationResponse,
   CivitaiResourceListItem,
@@ -298,6 +304,18 @@ const stepDisplay: Record<TimelineNodeId, StepDisplay> = {
     icon: Bot,
     transform: "Compare structure and choose a safe local default",
   },
+  "final-repair": {
+    agent: "Local repair agent",
+    artifact: "Bounded repair variants and mask metadata",
+    icon: Bot,
+    transform: "Repair supported local contact or object-count defects once",
+  },
+  "repair-verification": {
+    agent: "Vision verifier",
+    artifact: "Preview / Final / Repair verification",
+    icon: Bot,
+    transform: "Verify repaired targets and check for regressions",
+  },
   "result-display": {
     agent: "Artifact agent",
     artifact: "Generated image results",
@@ -334,6 +352,8 @@ const visualOutputNodeIds = new Set<TimelineNodeId>([
   "preview-execution",
   "preview-scoring",
   "final-review",
+  "final-repair",
+  "repair-verification",
   "result-display",
 ]);
 const nonEditableAiNodeIds = new Set<TimelineNodeId>(["character-tags", "character-action"]);
@@ -404,6 +424,14 @@ function isFinalReviewResult(value: unknown): value is FinalReviewTimelineResult
     (value.status === "reviewed" || value.status === "failed" || value.status === "unavailable");
 }
 
+function isFinalRepairResult(value: unknown): value is FinalRepairTimelineResult {
+  return isRecord(value) && value.repairVersion === 1 && Array.isArray(value.pairs);
+}
+
+function isRepairVerificationResult(value: unknown): value is RepairVerificationTimelineResult {
+  return isRecord(value) && value.verificationVersion === 1 && Array.isArray(value.pairs);
+}
+
 function getSelectedTimelineArtifactUrl(workflow: TimelineWorkflowState) {
   const display = workflow.nodes["result-display"].result;
   if (!isResultDisplayTimelineResult(display)) return null;
@@ -412,6 +440,13 @@ function getSelectedTimelineArtifactUrl(workflow: TimelineWorkflowState) {
   const pair = [...review.pairs].sort((left, right) => left.rank - right.rank)[0]!;
   const selected = pair.userSelectedVariant ?? pair.defaultVariant;
   if (selected === "preview-upscale") return pair.variants.previewUpscale.url;
+  if (selected === "repair") {
+    const repair = workflow.nodes["final-repair"].result;
+    if (isFinalRepairResult(repair)) {
+      const stored = repair.pairs.find((item) => item.candidateId === pair.candidateId)?.storedImage;
+      if (stored) return stored.url;
+    }
+  }
   const index = display.finalLinks?.findIndex((link) => link.candidateId === pair.candidateId) ?? -1;
   return index >= 0 ? display.images?.[index]?.url ?? display.image.url : display.image.url;
 }
@@ -1132,6 +1167,7 @@ export function TimelineShell() {
   const [finalRedrawPreset, setFinalRedrawPreset] = useState<TimelineFinalRedrawPreset>(
     timelineFinalGenerationPolicy.defaultPreset,
   );
+  const [automaticLocalRepair, setAutomaticLocalRepair] = useState(false);
   const [selectedStyleCheckpointId, setSelectedStyleCheckpointId] = useState<string | null>(null);
   const [selectedStyleLoraIds, setSelectedStyleLoraIds] = useState<string[]>([]);
   const [selectedStyleResources, setSelectedStyleResources] =
@@ -1194,11 +1230,19 @@ export function TimelineShell() {
     [selectedStyleResources, stylePalette],
   );
   const sceneRequestIsUsable = sceneRequest.trim().length > 0;
+  const repairManualRecoveryPair = isFinalRepairResult(activeWorkflow.nodes["final-repair"].result)
+    ? activeWorkflow.nodes["final-repair"].result.pairs.find(isRepairManualRecoveryRequired)
+    : undefined;
+  const repairManualRecovery = repairManualRecoveryPair
+    ? getRepairManualRecoveryState(repairManualRecoveryPair)
+    : null;
+  const repairManualRecoveryRequired = repairManualRecovery !== null;
   const selectedNodeAiDisabled =
     isRunning ||
     selectedContent.reserved ||
     selectedNode.status === "blocked" ||
-    selectedNode.status === "running";
+    selectedNode.status === "running" ||
+    selectedNodeId === "final-repair" && repairManualRecoveryRequired;
   const generationCanBeConfirmed = canConfirmTimelineWorkflow(workflow);
   const workflowTitle = workflow ? workflowProjectName.trim() || sceneRequest || "Unnamed workflow" : "Untitled workflow";
   const workflowMode = workflow ? "Run shell" : "Draft setup";
@@ -1214,6 +1258,7 @@ export function TimelineShell() {
 
   function getComposerSettingsSnapshot(
     overrides: Partial<{
+      automaticLocalRepair: boolean;
       detailers: GenerationDetailerSettingsSnapshot;
       finalRedrawPreset: TimelineFinalRedrawPreset;
       promptProfile: PromptProfileId;
@@ -1222,6 +1267,7 @@ export function TimelineShell() {
     }> = {},
   ): RunSceneInputSettingsSnapshot {
     return createRunSceneInputSettingsSnapshot({
+      automaticLocalRepair: overrides.automaticLocalRepair ?? automaticLocalRepair,
       detailers: overrides.detailers ?? detailers,
       finalRedrawPreset: overrides.finalRedrawPreset ?? finalRedrawPreset,
       promptProfile: overrides.promptProfile ?? selectedPromptProfile,
@@ -1304,6 +1350,7 @@ export function TimelineShell() {
     setSelectedSourceDenoise(getSceneInputSourceDenoise(record.workflow));
     setSelectedSourceImage(getSceneInputSourceImage(record.workflow));
     setDetailers(restoredSettings.detailers);
+    setAutomaticLocalRepair(restoredSettings.automaticLocalRepair);
     setFinalRedrawPreset(restoredSettings.finalRedrawPreset);
     setStylePalette(restoredSettings.stylePalette);
     setStyleReference(restoredSettings.styleReference);
@@ -1851,11 +1898,11 @@ export function TimelineShell() {
       currentWorkflow = result;
       const failedNodeId = result.nodes[stage].status === "error"
         ? stage
-        : stage === "final-review" && result.nodes["result-display"].status === "error"
+        : stage === "repair-verification" && result.nodes["result-display"].status === "error"
           ? "result-display" as const
           : null;
       const selectedAfterStage = failedNodeId ??
-        (stage === "final-review" && result.nodes["result-display"].status === "done"
+        (stage === "repair-verification" && result.nodes["result-display"].status === "done"
           ? "result-display" as const
           : stage);
       commitWorkflow(result, {
@@ -1865,6 +1912,8 @@ export function TimelineShell() {
           "preview-execution": "visual",
           "preview-scoring": "visual",
           "final-review": "visual",
+          "final-repair": "visual",
+          "repair-verification": "visual",
           "result-display": "visual",
         },
       });
@@ -1903,7 +1952,7 @@ export function TimelineShell() {
         runId,
       );
       if (!outcome || outcome.failedNodeId) return;
-      setNotices((current) => ({ ...current, "result-display": "Preview/Final review and result selection are ready." }));
+      setNotices((current) => ({ ...current, "result-display": "Preview, Final, and any verified Repair variants are ready for explicit selection." }));
     } catch (error) {
       if (!isCurrentRun(runId)) {
         return;
@@ -1926,7 +1975,10 @@ export function TimelineShell() {
     targetWorkflow: TimelineWorkflowState,
     retryNodeId: TimelineGenerationStage,
   ) {
-    if (isRunningRef.current) return;
+    const repairResult = targetWorkflow.nodes["final-repair"].result;
+    if (isRunningRef.current ||
+        retryNodeId === "final-repair" && isFinalRepairResult(repairResult) &&
+          repairResult.pairs.some(isRepairManualRecoveryRequired)) return;
     const runId = activeRunIdRef.current + 1;
     activeRunIdRef.current = runId;
     updateIsRunning(true);
@@ -1984,9 +2036,9 @@ export function TimelineShell() {
     void runGenerationRetry(reselectionWorkflow, "comfyui-execution");
   }
 
-  function handleFinalVariantSelection(candidateId: string, variant: "final" | "preview-upscale") {
+  function handleFinalVariantSelection(candidateId: string, variant: "final" | "preview-upscale" | "repair") {
     if (!workflow || isRunningRef.current) return;
-    const selected = selectFinalReviewVariant(workflow, candidateId, variant);
+    const selected = selectRepairVariant(workflow, candidateId, variant);
     if (selected === workflow) return;
     commitWorkflow(selected, { selectedNodeId });
   }
@@ -2699,6 +2751,7 @@ export function TimelineShell() {
     setSelectedSourceImage(null);
     setDetailers(createGenerationDetailerSettingsSnapshot());
     setFinalRedrawPreset(timelineFinalGenerationPolicy.defaultPreset);
+    setAutomaticLocalRepair(false);
     setSelectedStyleCheckpointId(null);
     setSelectedStyleLoraIds([]);
     setSelectedStyleResources(EMPTY_SELECTED_CIVITAI_RESOURCES);
@@ -2841,6 +2894,9 @@ export function TimelineShell() {
         <p className="pl-6 text-[11px] text-amber-700">
           {risk} The managed Preview upscale remains available as fallback.
         </p>
+        <p className="pl-6 text-[11px] text-amber-700">
+          One-shot local repair: {automaticLocalRepair ? "authorized for supported local findings" : "off"}.
+        </p>
       </>
     );
   }
@@ -2959,6 +3015,21 @@ export function TimelineShell() {
               })}
             </div>
           </fieldset>
+          <label className="mt-3 flex items-start gap-2 rounded-md border border-indigo-100 bg-white px-3 py-2 text-xs text-slate-700">
+            <input
+              checked={automaticLocalRepair}
+              disabled={isRunning || Boolean(workflow)}
+              onChange={(event) => setAutomaticLocalRepair(event.target.checked)}
+              type="checkbox"
+            />
+            <span>
+              <span className="font-semibold">Authorize one-shot local repair</span>
+              <span className="mt-1 block leading-relaxed text-slate-500">
+                Off by default. The signed confirmation may repair only reviewed local contact or object-count defects,
+                once per Final, and never promotes Repair automatically.
+              </span>
+            </span>
+          </label>
           <div className="mt-3 border-t border-indigo-100 pt-3">
             <GenerationDetailerSettingsEditor
               detailers={detailers}
@@ -3195,6 +3266,15 @@ export function TimelineShell() {
     const simpleFinalReview = isFinalReviewResult(activeWorkflow.nodes["final-review"].result)
       ? activeWorkflow.nodes["final-review"].result
       : null;
+    const simpleFinalRepair = isFinalRepairResult(activeWorkflow.nodes["final-repair"].result)
+      ? activeWorkflow.nodes["final-repair"].result : null;
+    const simpleRepairVerification = isRepairVerificationResult(activeWorkflow.nodes["repair-verification"].result)
+      ? activeWorkflow.nodes["repair-verification"].result : null;
+    const simpleRepairManualRecoveryPair = simpleFinalRepair?.pairs.find(isRepairManualRecoveryRequired);
+    const simpleRepairManualRecovery = simpleRepairManualRecoveryPair
+      ? getRepairManualRecoveryState(simpleRepairManualRecoveryPair)
+      : null;
+    const simpleRepairManualRecoveryRequired = simpleRepairManualRecovery !== null;
     const simpleSelectionWarning = isPreviewScoringResult(simpleScoringResult) && simpleScoringResult.rubricVersion === 2
       ? createTimelinePreviewSelectionFallbackMetadata(
           simpleScoringResult.scores,
@@ -3388,6 +3468,54 @@ export function TimelineShell() {
               </section>
             ) : null}
 
+            {workflow && simpleFinalRepair?.pairs.some((pair) => pair.status === "failed") ? (
+              <section className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-amber-200 bg-amber-50 p-4 text-xs text-amber-900 shadow-sm">
+                <div className="min-w-0">
+                  <p className="font-semibold">
+                    {simpleRepairManualRecoveryRequired
+                      ? simpleRepairManualRecovery?.title
+                      : "One or more local repairs need attention."}
+                  </p>
+                  <p className="mt-1 leading-relaxed">
+                    {simpleRepairManualRecoveryRequired
+                      ? simpleRepairManualRecovery?.guidance
+                      : "Completed Preview and Final images remain selectable. Retry resumes only incomplete repair work."}
+                  </p>
+                </div>
+                {!simpleRepairManualRecoveryRequired ? (
+                  <Button
+                    className="h-9 shrink-0 px-3 text-xs shadow-none"
+                    disabled={isRunning}
+                    onClick={() => void runGenerationRetry(workflow, "final-repair")}
+                    type="button"
+                    variant="secondary"
+                  >
+                    <RefreshCw className="size-3.5" />
+                    Retry repair
+                  </Button>
+                ) : null}
+              </section>
+            ) : null}
+
+            {workflow && simpleRepairVerification?.status === "failed" ? (
+              <section className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-amber-200 bg-amber-50 p-4 text-xs text-amber-900 shadow-sm">
+                <div className="min-w-0">
+                  <p className="font-semibold">Repair verification is unavailable.</p>
+                  <p className="mt-1 leading-relaxed">{simpleRepairVerification.error?.message}</p>
+                </div>
+                <Button
+                  className="h-9 shrink-0 px-3 text-xs shadow-none"
+                  disabled={isRunning}
+                  onClick={() => void runGenerationRetry(workflow, "repair-verification")}
+                  type="button"
+                  variant="secondary"
+                >
+                  <RefreshCw className="size-3.5" />
+                  Retry verification
+                </Button>
+              </section>
+            ) : null}
+
             {workflow && (resultNode.status === "done" || resultNode.status === "error" || simpleFallbacks.length > 0) ? (
               <section className="rounded-md border border-slate-200 bg-white p-4 shadow-sm">
                 <h2 className="text-sm font-bold text-slate-900">Artifact result</h2>
@@ -3397,9 +3525,11 @@ export function TimelineShell() {
                     emptyState={timelineNodeContent["result-display"].emptyState}
                     errorMessage={resultNode.error?.message}
                     fallbacks={simpleFallbacks}
+                    finalRepair={simpleFinalRepair}
                     finalReview={simpleFinalReview}
                     key={resultNode.updatedAt}
                     onSelectVariant={handleFinalVariantSelection}
+                    repairVerification={simpleRepairVerification}
                     result={isResultDisplayTimelineResult(resultNode.result) ? resultNode.result : null}
                     selectedResources={timelineResultSelectedResources}
                   />
@@ -3936,17 +4066,22 @@ export function TimelineShell() {
                         ? activeWorkflow.nodes["preview-scoring"].result : null}
                     />
                   ) : selectedOutputDisplayMode === "visual" &&
-                      (selectedWorkspaceKey === "final-review" || selectedWorkspaceKey === "result-display") ? (
+                      (selectedWorkspaceKey === "final-review" || selectedWorkspaceKey === "final-repair" ||
+                        selectedWorkspaceKey === "repair-verification" || selectedWorkspaceKey === "result-display") ? (
                     <TimelineResultDisplayWorkspace
                       draft={timelineResultDraft}
                       emptyState={selectedContent.emptyState}
                       detailedReview
                       errorMessage={activeWorkflow.nodes["final-review"].error?.message ?? selectedNode.error?.message}
                       fallbacks={getTimelineExecutionFallbacks(getTimelineFinalExecutionState(activeWorkflow))}
+                      finalRepair={isFinalRepairResult(activeWorkflow.nodes["final-repair"].result)
+                        ? activeWorkflow.nodes["final-repair"].result : null}
                       finalReview={isFinalReviewResult(activeWorkflow.nodes["final-review"].result)
                         ? activeWorkflow.nodes["final-review"].result : null}
                       key={selectedNode.updatedAt}
                       onSelectVariant={handleFinalVariantSelection}
+                      repairVerification={isRepairVerificationResult(activeWorkflow.nodes["repair-verification"].result)
+                        ? activeWorkflow.nodes["repair-verification"].result : null}
                       result={isResultDisplayTimelineResult(activeWorkflow.nodes["result-display"].result)
                         ? activeWorkflow.nodes["result-display"].result : null}
                       selectedResources={timelineResultSelectedResources}

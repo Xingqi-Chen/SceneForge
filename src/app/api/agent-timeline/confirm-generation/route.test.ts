@@ -55,9 +55,10 @@ import {
 
 import { POST } from "./route";
 
-function createGateReadyWorkflow() {
+function createGateReadyWorkflow(automaticLocalRepair = false) {
   let workflow: TimelineWorkflowState = createTimelineWorkflowState({
     sceneRequest: "A pilot in a greenhouse",
+    settingsSnapshot: { automaticLocalRepair },
     workflowId: "timeline-confirm-api",
     now: () => "2026-06-02T00:00:00.000Z",
   });
@@ -113,6 +114,7 @@ function createSignedConfirmedWorkflow() {
     finalRedrawPreset: finalPolicy.preset,
     finalGenerationFamily: finalPolicy.family,
     finalDenoise: finalPolicy.denoise,
+    automaticLocalRepairAuthorized: false,
   });
 }
 
@@ -163,7 +165,7 @@ afterEach(() => {
 });
 
 describe("POST /api/agent-timeline/confirm-generation", () => {
-  it("returns confirmed workflow object_info mismatch details from the preview phase", async () => {
+  it.each([false, true])("returns signed repair authorization=%s with object_info mismatch details", async (automaticLocalRepair) => {
     const getObjectInfo = vi.fn().mockResolvedValue({ CheckpointLoaderSimple: {} });
     comfyUiMocks.createComfyUiClient.mockReturnValue({ getObjectInfo });
     comfyUiMocks.validateComfyUiTextToImageRequest.mockReturnValue({
@@ -190,7 +192,7 @@ describe("POST /api/agent-timeline/confirm-generation", () => {
     });
 
     const response = await POST(new Request("http://localhost/api/agent-timeline/confirm-generation", {
-      body: JSON.stringify({ workflow: createGateReadyWorkflow() }),
+      body: JSON.stringify({ workflow: createGateReadyWorkflow(automaticLocalRepair) }),
       method: "POST",
     }));
     const payload = await response.json();
@@ -203,6 +205,7 @@ describe("POST /api/agent-timeline/confirm-generation", () => {
         finalRedrawPreset: "balanced",
         finalGenerationFamily: "fallback",
         finalDenoise: 0.45,
+        automaticLocalRepairAuthorized: automaticLocalRepair,
       },
     });
     expect(payload.workflow.nodes["preview-execution"]).toMatchObject({
@@ -421,6 +424,33 @@ describe("POST /api/agent-timeline/confirm-generation", () => {
     });
     expect(comfyUiMocks.createComfyUiClient).not.toHaveBeenCalled();
     expect(comfyUiMocks.validateComfyUiTextToImageRequest).not.toHaveBeenCalled();
+  });
+
+  it("rejects retry when the signed automatic repair authorization is tampered", async () => {
+    const workflow = JSON.parse(JSON.stringify(createSignedConfirmedWorkflow())) as TimelineWorkflowState;
+    const sceneInput = workflow.nodes["scene-input"].result as Record<string, unknown>;
+    sceneInput.settingsSnapshot = {
+      ...((sceneInput.settingsSnapshot as Record<string, unknown> | undefined) ?? {}),
+      automaticLocalRepair: true,
+    };
+
+    const response = await POST(new Request("http://localhost/api/agent-timeline/confirm-generation", {
+      body: JSON.stringify({
+        action: "retry",
+        retryNodeId: "preview-execution",
+        workflow,
+      }),
+      method: "POST",
+    }));
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({
+      error: {
+        message: expect.stringContaining("contract changed"),
+        details: { code: "confirmation_required" },
+      },
+    });
+    expect(comfyUiMocks.createComfyUiClient).not.toHaveBeenCalled();
   });
 
   it("rejects a valid signed confirmation replayed onto a different workflow id", async () => {

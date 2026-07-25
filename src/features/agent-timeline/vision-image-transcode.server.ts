@@ -10,7 +10,7 @@ import { TimelineNodeExecutionError, type TimelineStoredGeneratedImage } from ".
 export async function createStoredImageVisionDataUrl(
   stored: TimelineStoredGeneratedImage,
   itemId: string,
-  stage: "preview-scoring" | "final-review",
+  stage: "preview-scoring" | "final-review" | "repair-verification" | "repair-diagnosis",
 ) {
   const filePath = getGeneratedImagePath(stored.filename);
   if (!filePath) {

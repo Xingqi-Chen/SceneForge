@@ -78,6 +78,8 @@ function isOptionalPurpose(value: unknown): value is LlmChatRequest["purpose"] {
     value === "story-style-reference-analysis" ||
     value === "single-image-preview-scoring" ||
     value === "single-image-final-review" ||
+    value === "single-image-repair-diagnosis" ||
+    value === "single-image-repair-verification" ||
     value === "comfyui-generation-diagnosis" ||
     value === "comfyui-inpaint-diagnosis"
   );

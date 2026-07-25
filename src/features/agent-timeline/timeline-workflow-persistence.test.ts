@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   completeTimelineNode,
+  createTimelineNodeError,
   createTimelineWorkflowState,
   markTimelineNodeRunning,
 } from "./state";
@@ -18,7 +19,18 @@ import { startStoryGraphWorkflow } from "./story-input";
 import { sanitizeRunSceneInputSettingsSnapshot } from "./run-input-settings";
 import { createTimelineFinalRequests } from "./t8-node-adapters";
 import { resolveTimelineFinalGenerationPolicy, timelineFinalGenerationPolicy } from "./final-generation-policy";
-import type { TimelineWorkflowState } from "./types";
+import {
+  deriveRepairAttemptId,
+  deriveRepairBaseRequestDigest,
+  deriveRepairOutputNodeId,
+  deriveRepairRequestDigest,
+} from "./final-repair";
+import type {
+  FinalRepairTimelineResult,
+  TimelineFinalExecutionRecord,
+  TimelineRepairParentBinding,
+  TimelineWorkflowState,
+} from "./types";
 
 const managedPreviewFilename = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png";
 const managedFinalFilename = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.png";
@@ -230,6 +242,839 @@ const readyStyleReference = {
 } as const;
 
 describe("timeline workflow persistence", () => {
+  function createPersistedRepairWorkflow() {
+    let workflow: TimelineWorkflowState = createPersistedV2GenerationWorkflow(1);
+    const sceneInput = workflow.nodes["scene-input"].result as Record<string, unknown>;
+    workflow.nodes["scene-input"].result = {
+      ...sceneInput,
+      settingsSnapshot: {
+        ...((sceneInput.settingsSnapshot as Record<string, unknown> | undefined) ?? {}),
+        automaticLocalRepair: true,
+      },
+    };
+    (workflow.nodes["generation-gate"].result as Record<string, unknown>).automaticLocalRepairAuthorized = true;
+    const final = (workflow.nodes["comfyui-execution"].result as {
+      finals: TimelineFinalExecutionRecord[];
+    }).finals[0]!;
+    if (!final.storedImage || !final.previewUpscale) {
+      throw new Error("Persisted Repair fixture requires a completed Final and Preview Upscale.");
+    }
+    const scores = { adherence: 80, composition: 80, anatomy: 80, style: 80, technical: 80, total: 80 };
+    const findings = [
+      { operation: "pose", severity: "none", scope: "pair", introducedByFinal: false, description: "Stable." },
+      { operation: "contact", severity: "major", scope: "final", introducedByFinal: true, description: "Hand misses cup." },
+      { operation: "object-count", severity: "none", scope: "pair", introducedByFinal: false, description: "Stable." },
+      { operation: "composition-consistency", severity: "none", scope: "pair", introducedByFinal: false, description: "Stable." },
+    ] satisfies TimelineRepairParentBinding["reviewedFindings"];
+    const targets = [{ operation: "contact" as const, severity: "major" as const, description: "Hand misses cup." }];
+    workflow = completeTimelineNode(workflow, "final-review", {
+      reviewVersion: 1,
+      status: "reviewed",
+      pairs: [{
+        candidateId: final.candidateId,
+        rank: final.rank,
+        seed: final.seed,
+        variants: { final: final.storedImage, previewUpscale: final.previewUpscale.storedImage },
+        scores: { final: scores, previewUpscale: scores },
+        findings,
+        recommendedVariant: "preview-upscale",
+        defaultVariant: "preview-upscale",
+        userSelectedVariant: "repair",
+      }],
+    }, "ai");
+    const parent = {
+      finalStoredImage: final.storedImage,
+      reviewUpdatedAt: workflow.nodes["final-review"].updatedAt,
+      reviewedFindings: findings,
+      reviewedTargets: targets,
+    } satisfies TimelineRepairParentBinding;
+    const diagnosis = {
+      shapes: [{ type: "rect" as const, x: 0.4, y: 0.4, width: 0.1, height: 0.1 }],
+      growMaskBy: 16,
+      faceDetailerEnabled: true,
+      handDetailerEnabled: false,
+    };
+    const repairExecution = workflow.nodes["comfyui-execution"].result as Parameters<typeof deriveRepairOutputNodeId>[0];
+    const repairAttemptId = deriveRepairAttemptId(
+      workflow.workflowId,
+      final.candidateId,
+      parent,
+      deriveRepairBaseRequestDigest(repairExecution, final)!,
+    );
+    const repairOutputNodeId = deriveRepairOutputNodeId(
+      repairExecution,
+      final,
+      diagnosis,
+      repairAttemptId,
+    )!;
+    workflow = completeTimelineNode(workflow, "final-repair", {
+      repairVersion: 1,
+      authorized: true,
+      completed: true,
+      pairs: [{
+        candidateId: final.candidateId,
+        rank: final.rank,
+        seed: final.seed,
+        status: "repaired",
+        targets,
+        parent,
+        diagnosis: {
+          ...diagnosis,
+          rawResponse: "PRIVATE_RAW_DIAGNOSIS",
+        },
+        mask: {
+          provenance: "structured-diagnosis",
+          refinement: { status: "skipped", reason: "sam2-unavailable" },
+          coverageBeforeGrowth: 0.01,
+          coverageAfterGrowth: 0.02,
+          growMaskBy: 16,
+          width: final.previewUpscale.width,
+          height: final.previewUpscale.height,
+          storedImage: { ...managedStoredImage("3"), absolutePath: "C:\\PRIVATE\\mask.png", dataUrl: "data:image/png;base64,SECRET" },
+        },
+        requestPolicy: {
+          version: 1,
+          sourceVariant: "final",
+          requestLocalFaceDetailer: true,
+          requestLocalHandDetailer: false,
+        },
+        promptId: "repair-prompt-1",
+        sourceImage: { filename: "repair-output.png", nodeId: repairOutputNodeId, type: "output" },
+        storedImage: { ...managedStoredImage("c"), dataUrl: "data:image/png;base64,SECRET" },
+        attempt: {
+          attemptId: repairAttemptId,
+          status: "stored",
+          promptId: "repair-prompt-1",
+          outputNodeId: repairOutputNodeId,
+          requestDigest: deriveRepairRequestDigest(
+            repairExecution,
+            final,
+            diagnosis,
+            repairAttemptId,
+          )!,
+          sourceImage: { filename: "repair-output.png", nodeId: repairOutputNodeId, type: "output" },
+          storedImage: { ...managedStoredImage("c"), dataUrl: "data:image/png;base64,SECRET" },
+        },
+      }],
+    }, "system");
+    workflow = completeTimelineNode(workflow, "repair-verification", {
+      verificationVersion: 1,
+      status: "verified",
+      pairs: [{
+        candidateId: final.candidateId,
+        repairParent: (workflow.nodes["final-repair"].result as FinalRepairTimelineResult).pairs[0]!.parent!,
+        repairStoredImage: (workflow.nodes["final-repair"].result as FinalRepairTimelineResult).pairs[0]!.storedImage!,
+        scores: {
+          final: scores,
+          repair: { adherence: 82, composition: 82, anatomy: 82, style: 82, technical: 82, total: 82 },
+        },
+        targetedDefectsResolved: true,
+        newMajorOrBlockingIssue: false,
+        findings: findings.map((finding) => finding.operation === "contact"
+          ? { ...finding, severity: "none", scope: "pair", introducedByFinal: false, description: "Resolved." }
+          : finding),
+        recommended: true,
+        rationale: "Repair resolved the target.",
+        rawResponse: "PRIVATE_RAW_VERIFICATION",
+      }],
+    }, "ai");
+    return workflow;
+  }
+
+  it("round-trips safe repair, verification, and explicit promotion without mutating Composer settings", () => {
+    const workflow = createPersistedRepairWorkflow();
+    const settingsBefore = JSON.stringify((workflow.nodes["scene-input"].result as Record<string, unknown>).settingsSnapshot);
+    const serialized = serializeTimelineWorkflowRecord(createTimelineWorkflowRecord({
+      projectId: "t38c-repair-persistence",
+      name: "Repair persistence",
+      workflow,
+      sceneRequest: "A persisted repaired Run",
+      selectedPromptProfile: "illustrious",
+      selectedImageCount: 1,
+      selectedNodeId: "result-display",
+    }));
+    const restored = parseTimelineWorkflowRecordJson(serialized);
+
+    expect(restored && isSingleImageTimelineWorkflowRecord(restored)).toBe(true);
+    if (!restored || !isSingleImageTimelineWorkflowRecord(restored)) throw new Error("Expected repaired Run record.");
+    expect(restored.workflow.nodes["final-repair"]).toMatchObject({
+      status: "done",
+      result: {
+        authorized: true,
+        pairs: [{
+          status: "repaired",
+          requestPolicy: { requestLocalFaceDetailer: true, requestLocalHandDetailer: false },
+          mask: { provenance: "structured-diagnosis", coverageAfterGrowth: 0.02 },
+        }],
+      },
+    });
+    expect(restored.workflow.nodes["repair-verification"]).toMatchObject({
+      status: "done",
+      result: { status: "verified", pairs: [{ recommended: true }] },
+    });
+    expect(restored.workflow.nodes["final-review"].result).toMatchObject({
+      pairs: [{ userSelectedVariant: "repair" }],
+    });
+    expect(JSON.stringify((restored.workflow.nodes["scene-input"].result as Record<string, unknown>).settingsSnapshot))
+      .toBe(settingsBefore);
+    expect(serialized).not.toContain("PRIVATE_");
+    expect(serialized).not.toContain("data:image");
+    expect(serialized).not.toContain("C:\\\\PRIVATE");
+  });
+
+  it("canonicalizes a reordered workflow Repair attempt through the shared sanitizer", () => {
+    const raw = JSON.parse(JSON.stringify(createPersistedRepairWorkflow())) as TimelineWorkflowState;
+    const repair = raw.nodes["final-repair"].result as FinalRepairTimelineResult;
+    const original = structuredClone(repair.pairs[0]!.attempt!);
+    repair.pairs[0]!.attempt = {
+      storedImage: {
+        url: original.storedImage!.url,
+        filename: original.storedImage!.filename,
+        contentType: original.storedImage!.contentType,
+        byteLength: original.storedImage!.byteLength,
+        token: "sk-secret-attempt",
+      },
+      sourceImage: {
+        type: original.sourceImage!.type,
+        nodeId: original.sourceImage!.nodeId,
+        filename: original.sourceImage!.filename,
+        dataUrl: "data:image/png;base64,PRIVATE_ATTEMPT_IMAGE",
+      },
+      outputNodeId: original.outputNodeId,
+      requestDigest: original.requestDigest,
+      promptId: original.promptId,
+      status: original.status,
+      attemptId: original.attemptId,
+      custom: { absolutePath: "C:\\Users\\PRIVATE\\attempt.json", prompt: "PRIVATE_ATTEMPT_PROMPT" },
+    } as never;
+
+    const restored = sanitizeTimelineWorkflowState(raw) as TimelineWorkflowState;
+    const restoredAttempt = (restored.nodes["final-repair"].result as FinalRepairTimelineResult).pairs[0]!.attempt;
+    const serialized = JSON.stringify(restored);
+    const expected = {
+      attemptId: original.attemptId,
+      status: original.status,
+      promptId: original.promptId,
+      outputNodeId: original.outputNodeId,
+      requestDigest: original.requestDigest,
+      sourceImage: original.sourceImage,
+      storedImage: {
+        byteLength: original.storedImage!.byteLength,
+        contentType: original.storedImage!.contentType,
+        filename: original.storedImage!.filename,
+        url: original.storedImage!.url,
+      },
+    };
+
+    expect(restored.nodes["comfyui-execution"].status).toBe("done");
+    expect(restored.nodes["final-review"]).toMatchObject({
+      status: "done",
+      result: { pairs: [{ userSelectedVariant: "repair" }] },
+    });
+    expect(restoredAttempt).toEqual(expected);
+    expect(Object.keys(restoredAttempt!)).toEqual([
+      "attemptId",
+      "status",
+      "promptId",
+      "outputNodeId",
+      "requestDigest",
+      "sourceImage",
+      "storedImage",
+    ]);
+    expect(serialized).not.toMatch(/PRIVATE|data:image|sk-secret|absolutePath|custom/);
+  });
+
+  it.each([
+    ["queued state retaining output and stored references", (attempt: Record<string, unknown>) => {
+      attempt.status = "queued";
+    }],
+    ["missing stored-state source reference", (attempt: Record<string, unknown>) => {
+      delete attempt.sourceImage;
+    }],
+    ["unsafe output-node identifier", (attempt: Record<string, unknown>) => {
+      attempt.outputNodeId = "9/../../private";
+    }],
+    ["noncanonical managed-image reference", (attempt: Record<string, unknown>) => {
+      (attempt.storedImage as Record<string, unknown>).url = "https://private.example/repair.png";
+    }],
+  ] as const)("fails closed on a persisted Repair attempt with %s while preserving Preview and Final", (_name, mutate) => {
+    const raw = JSON.parse(JSON.stringify(createPersistedRepairWorkflow())) as TimelineWorkflowState;
+    const repair = raw.nodes["final-repair"].result as FinalRepairTimelineResult;
+    mutate(repair.pairs[0]!.attempt as unknown as Record<string, unknown>);
+    const expectedPreview = structuredClone(raw.nodes["preview-execution"].result);
+    const expectedFinal = structuredClone(raw.nodes["comfyui-execution"].result);
+
+    const restored = sanitizeTimelineWorkflowState(raw) as TimelineWorkflowState;
+
+    expect(restored.nodes["preview-execution"].result).toEqual(expectedPreview);
+    expect(restored.nodes["comfyui-execution"].status).toBe("done");
+    expect(restored.nodes["comfyui-execution"].result).toEqual(expectedFinal);
+    expect(restored.nodes["final-review"]).toMatchObject({
+      status: "done",
+      result: { pairs: [{ userSelectedVariant: "preview-upscale" }] },
+    });
+    expect(restored.nodes["final-repair"]).toMatchObject({
+      status: "error",
+      error: { code: "node_output_invalid", details: { recoverable: true } },
+    });
+    expect(restored.nodes["repair-verification"]).toMatchObject({
+      status: "done",
+      result: { status: "skipped", pairs: [] },
+    });
+  });
+
+  it.each([
+    ["filename", (sourceImage: Record<string, unknown>) => {
+      sourceImage.filename = "different-repair-output.png";
+    }],
+    ["nodeId", (sourceImage: Record<string, unknown>) => {
+      sourceImage.nodeId = "different-source";
+    }],
+  ] as const)(
+    "demotes a persisted Repair whose top-level sourceImage %s differs from its canonical attempt source",
+    (_name, mutate) => {
+      const raw = JSON.parse(JSON.stringify(createPersistedRepairWorkflow())) as TimelineWorkflowState;
+      const repair = raw.nodes["final-repair"].result as FinalRepairTimelineResult;
+      mutate(repair.pairs[0]!.sourceImage as unknown as Record<string, unknown>);
+      const expectedPreview = structuredClone(raw.nodes["preview-execution"].result);
+      const expectedFinal = structuredClone(raw.nodes["comfyui-execution"].result);
+
+      const restored = sanitizeTimelineWorkflowState(raw) as TimelineWorkflowState;
+
+      expect(restored.nodes["preview-execution"].result).toEqual(expectedPreview);
+      expect(restored.nodes["comfyui-execution"]).toMatchObject({
+        status: "done",
+        result: expectedFinal,
+      });
+      expect(restored.nodes["final-review"]).toMatchObject({
+        status: "done",
+        result: { pairs: [{ userSelectedVariant: "preview-upscale" }] },
+      });
+      expect(restored.nodes["final-repair"]).toMatchObject({
+        status: "error",
+        error: { code: "node_output_invalid", details: { recoverable: true } },
+      });
+      expect(restored.nodes["repair-verification"]).toMatchObject({
+        status: "done",
+        result: { status: "skipped", pairs: [] },
+      });
+    },
+  );
+
+  it.each([
+    ["queued", false, false],
+    ["output-ready", true, false],
+    ["stored", true, true],
+  ] as const)(
+    "fails closed on a persisted %s Repair attempt whose safe output node does not match the rebuilt workflow",
+    (status, includeSource, includeStored) => {
+      const raw = JSON.parse(JSON.stringify(createPersistedRepairWorkflow())) as TimelineWorkflowState;
+      const repair = raw.nodes["final-repair"].result as FinalRepairTimelineResult;
+      const original = repair.pairs[0]!.attempt!;
+      repair.pairs[0]!.status = "failed";
+      repair.pairs[0]!.attempt = {
+        attemptId: original.attemptId,
+        status,
+        promptId: original.promptId,
+        outputNodeId: "different-output",
+        ...(includeSource
+          ? { sourceImage: { filename: "repair-output.png", nodeId: "different-output", type: "output" } }
+          : {}),
+        ...(includeStored ? { storedImage: original.storedImage } : {}),
+      };
+      const expectedPreview = structuredClone(raw.nodes["preview-execution"].result);
+      const expectedFinal = structuredClone(raw.nodes["comfyui-execution"].result);
+
+      const restored = sanitizeTimelineWorkflowState(raw) as TimelineWorkflowState;
+
+      expect(restored.nodes["preview-execution"].result).toEqual(expectedPreview);
+      expect(restored.nodes["comfyui-execution"]).toMatchObject({
+        status: "done",
+        result: expectedFinal,
+      });
+      expect(restored.nodes["final-review"]).toMatchObject({
+        status: "done",
+        result: { pairs: [{ userSelectedVariant: "preview-upscale" }] },
+      });
+      expect(restored.nodes["final-repair"]).toMatchObject({
+        status: "error",
+        error: { code: "node_output_invalid" },
+      });
+      expect(restored.nodes["repair-verification"]).toMatchObject({
+        status: "done",
+        result: { status: "skipped", pairs: [] },
+      });
+    },
+  );
+
+  it.each(["output-ready", "stored"] as const)(
+    "fails closed on a persisted %s Repair attempt whose source node differs from its output node",
+    (status) => {
+      const raw = JSON.parse(JSON.stringify(createPersistedRepairWorkflow())) as TimelineWorkflowState;
+      const repair = raw.nodes["final-repair"].result as FinalRepairTimelineResult;
+      repair.pairs[0]!.status = "failed";
+      repair.pairs[0]!.attempt = {
+        ...repair.pairs[0]!.attempt!,
+        status,
+        sourceImage: {
+          ...repair.pairs[0]!.attempt!.sourceImage!,
+          nodeId: "different-source",
+        },
+        ...(status === "output-ready" ? { storedImage: undefined } : {}),
+      };
+      const expectedPreview = structuredClone(raw.nodes["preview-execution"].result);
+      const expectedFinal = structuredClone(raw.nodes["comfyui-execution"].result);
+
+      const restored = sanitizeTimelineWorkflowState(raw) as TimelineWorkflowState;
+
+      expect(restored.nodes["preview-execution"].result).toEqual(expectedPreview);
+      expect(restored.nodes["comfyui-execution"]).toMatchObject({
+        status: "done",
+        result: expectedFinal,
+      });
+      expect(restored.nodes["final-review"]).toMatchObject({
+        status: "done",
+        result: { pairs: [{ userSelectedVariant: "preview-upscale" }] },
+      });
+      expect(restored.nodes["final-repair"]).toMatchObject({
+        status: "error",
+        error: { code: "node_output_invalid" },
+      });
+      expect(restored.nodes["repair-verification"]).toMatchObject({
+        status: "done",
+        result: { status: "skipped", pairs: [] },
+      });
+    },
+  );
+
+  it("fails closed on tampered repair linkage while preserving independently valid Preview and Final", () => {
+    const raw = JSON.parse(JSON.stringify(createPersistedRepairWorkflow())) as TimelineWorkflowState;
+    const repair = raw.nodes["final-repair"].result as { pairs: Array<{ mask: { width: number } }> };
+    repair.pairs[0]!.mask.width = 2048;
+
+    const restored = sanitizeTimelineWorkflowState(raw) as TimelineWorkflowState;
+
+    expect(restored.nodes["comfyui-execution"].status).toBe("done");
+    expect(restored.nodes["final-review"]).toMatchObject({
+      status: "done",
+      result: { pairs: [{ userSelectedVariant: "preview-upscale" }] },
+    });
+    expect(restored.nodes["final-repair"]).toMatchObject({
+      status: "done",
+      result: { authorized: false, pairs: [{ status: "skipped", skipReason: "repair-disabled" }] },
+    });
+    expect(restored.nodes["repair-verification"]).toMatchObject({
+      status: "done",
+      result: { status: "skipped", pairs: [] },
+    });
+  });
+
+  it("fails closed on a path-unsafe persisted mask and removes stale Repair promotion/verification", () => {
+    const raw = JSON.parse(JSON.stringify(createPersistedRepairWorkflow())) as TimelineWorkflowState;
+    const repair = raw.nodes["final-repair"].result as {
+      pairs: Array<{ mask: { storedImage: { filename: string; url: string } } }>;
+    };
+    repair.pairs[0]!.mask.storedImage.filename = "..\\PRIVATE\\mask.png";
+    repair.pairs[0]!.mask.storedImage.url = "/api/comfyui/generated-images/..%2FPRIVATE%2Fmask.png";
+
+    const restored = sanitizeTimelineWorkflowState(raw) as TimelineWorkflowState;
+
+    expect(restored.nodes["comfyui-execution"].status).toBe("done");
+    expect(restored.nodes["final-review"]).toMatchObject({
+      status: "done",
+      result: { pairs: [{ userSelectedVariant: "preview-upscale" }] },
+    });
+    expect(restored.nodes["final-repair"]).toMatchObject({
+      status: "error",
+      error: { code: "node_output_invalid", details: { recoverable: true } },
+    });
+    expect(restored.nodes["repair-verification"]).toMatchObject({
+      status: "done",
+      result: { status: "skipped", pairs: [] },
+    });
+  });
+
+  it.each([
+    "parent Final",
+    "review timestamp",
+    "review findings",
+    "review targets",
+  ])("fails closed when persisted Repair changes its exact %s binding", (field) => {
+    const raw = JSON.parse(JSON.stringify(createPersistedRepairWorkflow())) as TimelineWorkflowState;
+    const repair = raw.nodes["final-repair"].result as {
+      pairs: Array<{ parent: {
+        finalStoredImage: { filename: string; url: string };
+        reviewUpdatedAt: string;
+        reviewedFindings: Array<{ description: string }>;
+        reviewedTargets: Array<{ description: string }>;
+      } }>;
+    };
+    const parent = repair.pairs[0]!.parent;
+    if (field === "parent Final") {
+      parent.finalStoredImage = managedStoredImage("d");
+    } else if (field === "review timestamp") {
+      parent.reviewUpdatedAt = "2026-07-22T12:34:56.000Z";
+    } else if (field === "review findings") {
+      parent.reviewedFindings[1]!.description = "Tampered finding.";
+    } else {
+      parent.reviewedTargets[0]!.description = "Tampered target.";
+    }
+
+    const restored = sanitizeTimelineWorkflowState(raw) as TimelineWorkflowState;
+
+    expect(restored.nodes["comfyui-execution"].status).toBe("done");
+    expect(restored.nodes["final-review"].result).toMatchObject({
+      pairs: [{ userSelectedVariant: "preview-upscale" }],
+    });
+    if (field === "review targets") {
+      expect(restored.nodes["final-repair"]).toMatchObject({
+        status: "error",
+        error: { code: "node_output_invalid" },
+      });
+    } else {
+      expect(restored.nodes["final-repair"].result).toMatchObject({
+        authorized: false,
+        pairs: [{ status: "skipped", skipReason: "repair-disabled" }],
+      });
+    }
+    expect(restored.nodes["repair-verification"].result).toMatchObject({ status: "skipped", pairs: [] });
+  });
+
+  it("fails closed when a persisted Repair attempt no longer identifies its recorded prompt", () => {
+    const raw = JSON.parse(JSON.stringify(createPersistedRepairWorkflow())) as TimelineWorkflowState;
+    const repair = raw.nodes["final-repair"].result as {
+      pairs: Array<{ attempt: { promptId: string } }>;
+    };
+    repair.pairs[0]!.attempt.promptId = "other-safe-prompt";
+
+    const restored = sanitizeTimelineWorkflowState(raw) as TimelineWorkflowState;
+
+    expect(restored.nodes["comfyui-execution"].status).toBe("done");
+    expect(restored.nodes["final-review"].result).toMatchObject({
+      pairs: [{ userSelectedVariant: "preview-upscale" }],
+    });
+    expect(restored.nodes["final-repair"]).toMatchObject({
+      status: "error",
+      error: { code: "node_output_invalid" },
+    });
+    expect(restored.nodes["repair-verification"].result).toMatchObject({ status: "skipped", pairs: [] });
+  });
+
+  it("downgrades a syntactically valid Repair attempt digest that does not match its exact workflow binding", () => {
+    const raw = JSON.parse(JSON.stringify(createPersistedRepairWorkflow())) as TimelineWorkflowState;
+    const repair = raw.nodes["final-repair"].result as {
+      pairs: Array<{ attempt: { attemptId: string } }>;
+    };
+    repair.pairs[0]!.attempt.attemptId = `sha256:${"b".repeat(64)}`;
+
+    const restored = sanitizeTimelineWorkflowState(raw) as TimelineWorkflowState;
+
+    expect(restored.nodes["comfyui-execution"].status).toBe("done");
+    expect(restored.nodes["final-repair"]).toMatchObject({
+      status: "done",
+      result: {
+        authorized: false,
+        pairs: [{ status: "skipped", skipReason: "repair-disabled" }],
+      },
+    });
+    expect(restored.nodes["repair-verification"].result).toMatchObject({ status: "skipped", pairs: [] });
+    expect(restored.nodes["final-review"].result).toMatchObject({
+      pairs: [{ userSelectedVariant: "preview-upscale" }],
+    });
+  });
+
+  it("serializes Repair errors through a fixed safe allowlist instead of raw filesystem or payload text", () => {
+    const workflow = createPersistedRepairWorkflow();
+    const pair = (workflow.nodes["final-repair"].result as FinalRepairTimelineResult).pairs[0]!;
+    pair.error = createTimelineNodeError(
+      "image_storage_failed",
+      "C:\\Users\\PRIVATE\\repair.png /var/private/repair.png data:image/png;base64,PRIVATE_IMAGE PRIVATE_PROMPT sk-secret-value",
+      {
+        stage: "repair-storage",
+        recoverable: true,
+        absolutePath: "C:\\Users\\PRIVATE\\repair.png",
+        payload: "data:image/png;base64,PRIVATE_IMAGE",
+        prompt: "PRIVATE_PROMPT",
+        apiKey: "sk-secret-value",
+      },
+    );
+
+    const serialized = serializeTimelineWorkflowRecord(createTimelineWorkflowRecord({
+      workflow,
+      sceneRequest: "A persisted repaired Run",
+      selectedPromptProfile: "illustrious",
+      selectedImageCount: 1,
+      selectedNodeId: "result-display",
+      outputDisplayModes: {},
+    }));
+
+    expect(serialized).toContain("A managed Repair image could not be stored safely.");
+    expect(serialized).toContain("\"stage\": \"repair-storage\"");
+    expect(serialized).not.toContain("C:\\\\Users\\\\PRIVATE");
+    expect(serialized).not.toContain("/var/private");
+    expect(serialized).not.toContain("data:image");
+    expect(serialized).not.toContain("PRIVATE_IMAGE");
+    expect(serialized).not.toContain("PRIVATE_PROMPT");
+    expect(serialized).not.toContain("sk-secret-value");
+  });
+
+  it.each([
+    ["diagnosis-outcome", "diagnosis", "llm_upstream"],
+    ["sam2-outcome", "mask", "comfyui_execution_failed"],
+  ] as const)(
+    "preserves closed %s manual-recovery state without a retry stage",
+    (stage, retryStage, code) => {
+      const raw = JSON.parse(JSON.stringify(createPersistedRepairWorkflow())) as TimelineWorkflowState;
+      const pair = (raw.nodes["final-repair"].result as FinalRepairTimelineResult).pairs[0]!;
+      pair.status = "failed";
+      pair.skipReason = "repair-failed";
+      pair.retryStage = retryStage;
+      pair.error = createTimelineNodeError(
+        code,
+        "PRIVATE upstream outcome text",
+        { recoverable: false, stage, token: "sk-secret-value" },
+      );
+      delete pair.attempt;
+      delete pair.mask;
+      delete pair.promptId;
+      delete pair.sourceImage;
+      delete pair.storedImage;
+      delete pair.requestPolicy;
+
+      const restored = sanitizeTimelineWorkflowState(raw) as TimelineWorkflowState;
+      const restoredPair = (restored.nodes["final-repair"].result as FinalRepairTimelineResult).pairs[0]!;
+      const serialized = JSON.stringify(restored);
+
+      expect(restoredPair).toMatchObject({
+        status: "failed",
+        error: {
+          code,
+          details: { recoverable: false, stage },
+        },
+      });
+      expect(restoredPair.retryStage).toBeUndefined();
+      expect(serialized).not.toMatch(/PRIVATE|sk-secret/);
+    },
+  );
+
+  it.each(["final-repair", "repair-verification"] as const)(
+    "normalizes unsafe node-level %s errors through a closed allowlist",
+    (nodeId) => {
+      const raw = JSON.parse(JSON.stringify(createPersistedRepairWorkflow())) as TimelineWorkflowState;
+      raw.nodes[nodeId].status = "error";
+      raw.nodes[nodeId].error = {
+        code: "custom_private_code",
+        message: "C:\\Users\\PRIVATE\\node.png /var/private/node.png data:image/png;base64,PRIVATE_IMAGE PRIVATE_PROMPT sk-secret-value",
+        details: {
+          recoverable: true,
+          name: "PrivateFilesystemError",
+          absolutePath: "C:\\Users\\PRIVATE\\node.png",
+          payload: "data:image/png;base64,PRIVATE_IMAGE",
+          prompt: "PRIVATE_PROMPT",
+          token: "sk-secret-value",
+        },
+      } as never;
+
+      const restored = sanitizeTimelineWorkflowState(raw) as TimelineWorkflowState;
+      const serialized = JSON.stringify(restored);
+
+      expect(restored.nodes[nodeId].error).toMatchObject({
+        code: nodeId === "final-repair" ? "comfyui_execution_failed" : "timeline_node_failed",
+        details: { recoverable: true },
+      });
+      expect(serialized).not.toContain("custom_private_code");
+      expect(serialized).not.toContain("PrivateFilesystemError");
+      expect(serialized).not.toContain("C:\\\\Users\\\\PRIVATE");
+      expect(serialized).not.toContain("/var/private");
+      expect(serialized).not.toContain("data:image");
+      expect(serialized).not.toContain("PRIVATE_PROMPT");
+      expect(serialized).not.toContain("sk-secret-value");
+    },
+  );
+
+  it("normalizes an unsafe failed verification-result error through the verification allowlist", () => {
+    const raw = JSON.parse(JSON.stringify(createPersistedRepairWorkflow())) as TimelineWorkflowState;
+    raw.nodes["repair-verification"].result = {
+      verificationVersion: 1,
+      status: "failed",
+      pairs: [],
+      error: {
+        code: "custom_private_code",
+        message: "C:\\Users\\PRIVATE\\verify.png /var/private/verify.png data:image/png;base64,PRIVATE_IMAGE PRIVATE_PROMPT sk-secret-value",
+        details: {
+          recoverable: true,
+          name: "PrivateVerificationError",
+          payload: "data:image/png;base64,PRIVATE_IMAGE",
+          token: "sk-secret-value",
+        },
+      },
+    } as never;
+
+    const restored = sanitizeTimelineWorkflowState(raw) as TimelineWorkflowState;
+    const serialized = JSON.stringify(restored);
+
+    expect(restored.nodes["repair-verification"].result).toMatchObject({
+      status: "failed",
+      error: {
+        code: "timeline_node_failed",
+        message: "Repair verification could not be completed safely.",
+        details: { recoverable: true },
+      },
+    });
+    expect(serialized).not.toContain("custom_private_code");
+    expect(serialized).not.toContain("PrivateVerificationError");
+    expect(serialized).not.toContain("C:\\\\Users\\\\PRIVATE");
+    expect(serialized).not.toContain("/var/private");
+    expect(serialized).not.toContain("data:image");
+    expect(serialized).not.toContain("PRIVATE_PROMPT");
+    expect(serialized).not.toContain("sk-secret-value");
+  });
+
+  it.each([
+    {
+      location: "final-repair node",
+      prepare(workflow: TimelineWorkflowState) {
+        workflow.nodes["final-repair"].status = "error";
+        workflow.nodes["final-repair"].error = {
+          code: "custom_private_code",
+          message: "C:\\Users\\PRIVATE\\repair.png data:image/png;base64,PRIVATE_IMAGE PRIVATE_PROMPT",
+          details: {
+            recoverable: true,
+            stage: "checkpoint-read",
+            name: "PrivateFilesystemError",
+            token: "sk-secret-value",
+          },
+        } as never;
+      },
+      read(workflow: TimelineWorkflowState) {
+        return workflow.nodes["final-repair"].error;
+      },
+      expected: {
+        code: "comfyui_execution_failed",
+        message: "Repair checkpoint state could not be read safely. This Repair remains closed.",
+        details: { recoverable: false, stage: "checkpoint-read" },
+      },
+    },
+    {
+      location: "repair-verification node",
+      prepare(workflow: TimelineWorkflowState) {
+        workflow.nodes["repair-verification"].status = "error";
+        workflow.nodes["repair-verification"].error = {
+          code: "custom_private_code",
+          message: "/var/private/verify.png data:image/png;base64,PRIVATE_IMAGE PRIVATE_PROMPT",
+          details: {
+            recoverable: true,
+            name: "PrivateVerificationError",
+            absolutePath: "C:\\Users\\PRIVATE\\verify.png",
+            token: "sk-secret-value",
+          },
+        } as never;
+      },
+      read(workflow: TimelineWorkflowState) {
+        return workflow.nodes["repair-verification"].error;
+      },
+      expected: {
+        code: "timeline_node_failed",
+        message: "Repair verification could not be completed safely.",
+        details: { recoverable: true },
+      },
+    },
+    {
+      location: "failed verification result",
+      prepare(workflow: TimelineWorkflowState) {
+        workflow.nodes["repair-verification"].result = {
+          verificationVersion: 1,
+          status: "failed",
+          pairs: [],
+          error: {
+            code: "llm_config",
+            message: "/var/private/config.json data:image/png;base64,PRIVATE_IMAGE PRIVATE_PROMPT",
+            details: {
+              recoverable: true,
+              name: "PrivateConfigError",
+              absolutePath: "C:\\Users\\PRIVATE\\config.json",
+              token: "sk-secret-value",
+            },
+          },
+        } as never;
+      },
+      read(workflow: TimelineWorkflowState) {
+        return (workflow.nodes["repair-verification"].result as {
+          error: unknown;
+        }).error;
+      },
+      expected: {
+        code: "llm_config",
+        message: "Repair verification configuration is unavailable. Preview and Final remain selectable.",
+        details: { recoverable: true },
+      },
+    },
+  ])("sanitizes and serializes the unsafe $location error with bounded metadata", ({ prepare, read, expected }) => {
+    const raw = createPersistedRepairWorkflow();
+    prepare(raw);
+
+    const serialized = serializeTimelineWorkflowRecord(createTimelineWorkflowRecord({
+      workflow: raw,
+      sceneRequest: "A persisted repaired Run",
+      selectedPromptProfile: "illustrious",
+      selectedImageCount: 1,
+      selectedNodeId: "result-display",
+      outputDisplayModes: {},
+    }));
+    const restored = parseTimelineWorkflowRecordJson(serialized);
+
+    expect(restored && isSingleImageTimelineWorkflowRecord(restored)).toBe(true);
+    if (!restored || !isSingleImageTimelineWorkflowRecord(restored)) throw new Error("Expected repaired Run record.");
+    expect(read(restored.workflow)).toEqual(expected);
+    expect(Object.keys((read(restored.workflow) as { details: Record<string, unknown> }).details)).toEqual(
+      Object.keys(expected.details),
+    );
+    expect(serialized).not.toMatch(
+      /custom_private_code|PrivateFilesystemError|PrivateVerificationError|PrivateConfigError|C:\\\\Users\\\\PRIVATE|\/var\/private|data:image|PRIVATE_PROMPT|sk-secret-value|absolutePath|token/,
+    );
+  });
+
+  it.each(["Repair parent", "Repair image"])("rejects verification with a changed exact %s binding", (field) => {
+    const raw = JSON.parse(JSON.stringify(createPersistedRepairWorkflow())) as TimelineWorkflowState;
+    const verification = raw.nodes["repair-verification"].result as {
+      pairs: Array<{
+        repairParent: { finalStoredImage: { filename: string; url: string } };
+        repairStoredImage: { filename: string; url: string };
+      }>;
+    };
+    if (field === "Repair parent") {
+      verification.pairs[0]!.repairParent.finalStoredImage = managedStoredImage("d");
+    } else {
+      verification.pairs[0]!.repairStoredImage = managedStoredImage("d");
+    }
+
+    const restored = sanitizeTimelineWorkflowState(raw) as TimelineWorkflowState;
+
+    expect(restored.nodes["final-repair"].result).toMatchObject({ pairs: [{ status: "repaired" }] });
+    expect(restored.nodes["repair-verification"].result).toMatchObject({ status: "skipped", pairs: [] });
+    expect(restored.nodes["final-review"].result).toMatchObject({
+      pairs: [{ userSelectedVariant: "preview-upscale" }],
+    });
+  });
+
+  it("reconciles a persisted Repair selection when verification failed", () => {
+    const raw = JSON.parse(JSON.stringify(createPersistedRepairWorkflow())) as TimelineWorkflowState;
+    raw.nodes["repair-verification"].result = {
+      verificationVersion: 1,
+      status: "failed",
+      pairs: [],
+      error: createTimelineNodeError("llm_upstream", "Repair verification failed.", { recoverable: true }),
+    };
+
+    const restored = sanitizeTimelineWorkflowState(raw) as TimelineWorkflowState;
+
+    expect(restored.nodes["final-repair"].result).toMatchObject({ pairs: [{ status: "repaired" }] });
+    expect(restored.nodes["repair-verification"].result).toMatchObject({ status: "failed", pairs: [] });
+    expect(restored.nodes["final-review"].result).toMatchObject({
+      pairs: [{ userSelectedVariant: "preview-upscale" }],
+    });
+  });
+
   it("round-trips Final review variants, local defaults, and explicit user selection without unsafe payloads", () => {
     let workflow: TimelineWorkflowState = createPersistedV2GenerationWorkflow(2);
     const finals = (workflow.nodes["comfyui-execution"].result as {
@@ -358,6 +1203,8 @@ describe("timeline workflow persistence", () => {
   it("restores a completed legacy workflow without initiating review and keeps its managed variants visible", () => {
     const raw = JSON.parse(JSON.stringify(createPersistedV2GenerationWorkflow(1))) as TimelineWorkflowState;
     delete (raw.nodes as Partial<TimelineWorkflowState["nodes"]>)["final-review"];
+    delete (raw.nodes as Partial<TimelineWorkflowState["nodes"]>)["final-repair"];
+    delete (raw.nodes as Partial<TimelineWorkflowState["nodes"]>)["repair-verification"];
 
     const restored = sanitizeTimelineWorkflowState(raw) as TimelineWorkflowState;
 
@@ -370,6 +1217,14 @@ describe("timeline workflow persistence", () => {
         status: "unavailable",
         pairs: [{ recommendedVariant: null, defaultVariant: "final" }],
       },
+    });
+    expect(restored.nodes["final-repair"]).toMatchObject({
+      status: "done",
+      result: { authorized: false, pairs: [{ status: "skipped", skipReason: "repair-disabled" }] },
+    });
+    expect(restored.nodes["repair-verification"]).toMatchObject({
+      status: "done",
+      result: { status: "skipped", pairs: [] },
     });
     expect(restored.nodes["result-display"].status).toBe("done");
   });
@@ -937,7 +1792,7 @@ describe("timeline workflow persistence", () => {
     expect(restored && isSingleImageTimelineWorkflowRecord(restored)).toBe(true);
     if (!restored || !isSingleImageTimelineWorkflowRecord(restored)) throw new Error("Expected v2 Run record.");
 
-    expect(restored.definitionVersion).toBe(3);
+    expect(restored.definitionVersion).toBe(4);
     expect(restored.workflow.nodes["preview-execution"].result).toMatchObject({
       candidates: expect.arrayContaining([
         expect.objectContaining({ storedImage: expect.objectContaining({ filename: managedPreviewFilename }) }),

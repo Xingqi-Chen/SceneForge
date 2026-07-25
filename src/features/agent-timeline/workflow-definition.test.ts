@@ -213,7 +213,7 @@ describe("common workflow definitions", () => {
 
   it("exposes single-image node metadata for definition-driven runtime orchestration", () => {
     expect(singleImageWorkflowDefinition.mode).toBe("single-image");
-    expect(singleImageWorkflowDefinition.version).toBe(3);
+    expect(singleImageWorkflowDefinition.version).toBe(4);
     expect(singleImageWorkflowDefinition.nodeIds).toEqual(timelineNodeIds);
     expect(singleImageWorkflowDefinition.dependencyDag["generation-gate"]).toEqual([
       "scene-prompt",
@@ -227,15 +227,21 @@ describe("common workflow definitions", () => {
     expect(singleImageWorkflowDefinition.dependencyDag["preview-scoring"]).toEqual(["preview-execution"]);
     expect(singleImageWorkflowDefinition.dependencyDag["comfyui-execution"]).toEqual(["preview-scoring"]);
     expect(singleImageWorkflowDefinition.dependencyDag["final-review"]).toEqual(["comfyui-execution"]);
-    expect(singleImageWorkflowDefinition.dependencyDag["result-display"]).toEqual(["final-review"]);
+    expect(singleImageWorkflowDefinition.dependencyDag["final-repair"]).toEqual(["final-review"]);
+    expect(singleImageWorkflowDefinition.dependencyDag["repair-verification"]).toEqual(["final-repair"]);
+    expect(singleImageWorkflowDefinition.dependencyDag["result-display"]).toEqual(["repair-verification"]);
     expect(singleImageGenerationStageNodeIds).toEqual([
       "preview-execution",
       "preview-scoring",
       "comfyui-execution",
       "final-review",
+      "final-repair",
+      "repair-verification",
     ]);
     expect(getSingleImageStageExecutionNodeIds("comfyui-execution")).toEqual(["comfyui-execution"]);
-    expect(getSingleImageStageExecutionNodeIds("final-review")).toEqual(["final-review", "result-display"]);
+    expect(getSingleImageStageExecutionNodeIds("final-review")).toEqual(["final-review"]);
+    expect(getSingleImageStageExecutionNodeIds("final-repair")).toEqual(["final-repair"]);
+    expect(getSingleImageStageExecutionNodeIds("repair-verification")).toEqual(["repair-verification", "result-display"]);
     expect(singleImageWorkflowDefinition.adapterFactory({
       "scene-prompt": () => ({ prompt: "adapter" }),
     })["scene-prompt"]).toBeDefined();

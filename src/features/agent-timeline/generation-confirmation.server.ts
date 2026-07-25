@@ -60,10 +60,13 @@ export function isTimelineGenerationConfirmationCurrent(workflow: TimelineWorkfl
   const gate = result as Record<string, unknown>;
   const fingerprint = gate.confirmationFingerprint;
   const resolvedFinalPolicy = resolveWorkflowFinalPolicy(workflow);
+  const sceneInput = workflow.nodes["scene-input"].result;
+  const settings = getRunSceneInputSettings(isRecord(sceneInput) ? sceneInput : {});
   if (gate.finalPolicyVersion !== resolvedFinalPolicy.version ||
       gate.finalRedrawPreset !== resolvedFinalPolicy.preset ||
       gate.finalGenerationFamily !== resolvedFinalPolicy.family ||
-      gate.finalDenoise !== resolvedFinalPolicy.denoise) return false;
+      gate.finalDenoise !== resolvedFinalPolicy.denoise ||
+      gate.automaticLocalRepairAuthorized !== settings.automaticLocalRepair) return false;
   if (typeof fingerprint !== "string" || !/^hmac-sha256:[a-f0-9]{64}$/.test(fingerprint)) return false;
   const expected = createTimelineGenerationConfirmationFingerprint(workflow);
   return crypto.timingSafeEqual(Buffer.from(fingerprint), Buffer.from(expected));

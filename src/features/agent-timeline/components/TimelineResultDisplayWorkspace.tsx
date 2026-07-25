@@ -5,8 +5,15 @@ import Image from "next/image";
 import { LoaderCircle, Paintbrush } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import {
+  getRepairManualRecoveryState,
+  isRepairManualRecoveryRequired,
+  repairVerificationMatchesRepairPair,
+} from "@/features/agent-timeline/final-repair";
 import type {
+  FinalRepairTimelineResult,
   FinalReviewTimelineResult,
+  RepairVerificationTimelineResult,
   ResultDisplayTimelineResult,
   TimelineFinalReviewVariant,
 } from "@/features/agent-timeline/types";
@@ -30,12 +37,14 @@ export type TimelineResultDisplayWorkspaceProps = {
   errorMessage?: string;
   fallbacks?: TimelineFallbackDisplayItem[];
   finalReview?: FinalReviewTimelineResult | null;
+  finalRepair?: FinalRepairTimelineResult | null;
   generatedImageAlt?: GeneratedImageText;
   generatedImageCaption?: GeneratedImageText;
   inpaintClientIdPrefix?: string;
   itemIdPrefix?: string;
   detailedReview?: boolean;
   onSelectVariant?: (candidateId: string, variant: TimelineFinalReviewVariant) => void;
+  repairVerification?: RepairVerificationTimelineResult | null;
   result: ResultDisplayTimelineResult | null;
   selectedResources: SelectedCivitaiResourcesPreview;
   testId?: string;
@@ -276,6 +285,7 @@ export function TimelineResultDisplayWorkspace({
   emptyState,
   errorMessage,
   fallbacks = [],
+  finalRepair = null,
   finalReview = null,
   generatedImageAlt,
   generatedImageCaption,
@@ -283,6 +293,7 @@ export function TimelineResultDisplayWorkspace({
   itemIdPrefix = "timeline",
   detailedReview = false,
   onSelectVariant,
+  repairVerification = null,
   result,
   selectedResources,
   testId = "timeline-result-workspace",
@@ -311,11 +322,40 @@ export function TimelineResultDisplayWorkspace({
     .filter((entry): entry is ComfyUiGenerationLoraSetting => entry !== null), [draft, selectedResources.loras]);
 
   const availableFallbacks = result?.fallbacks?.length ? result.fallbacks : fallbacks;
+  const manualRecoveryPairs = finalRepair?.pairs.flatMap((pair) => {
+    const recovery = getRepairManualRecoveryState(pair);
+    return recovery ? [{ pair, recovery }] : [];
+  }) ?? [];
+  const manualRecoveryNotice = manualRecoveryPairs.length ? (
+    <section
+      className="rounded-md border border-amber-200 bg-amber-50 p-3 text-xs leading-relaxed text-amber-900"
+      data-testid="timeline-repair-manual-recovery"
+    >
+      {manualRecoveryPairs.some(({ recovery }) => recovery.reason === "queue-outcome") ? (
+        <span className="hidden" data-testid="timeline-repair-queue-outcome-unknown" />
+      ) : null}
+      <h3 className="font-semibold">
+        {manualRecoveryPairs.length === 1
+          ? manualRecoveryPairs[0]!.recovery.title
+          : "One or more Repair attempts require manual recovery and remain closed."}
+      </h3>
+      {manualRecoveryPairs.map(({ pair, recovery }) => (
+        <div className="mt-1" key={pair.candidateId}>
+          <p className="font-semibold">Repair: {recovery.label} · closed</p>
+          <p>Reason: {recovery.reason === "queue-outcome" ? pair.skipReason ?? "queue-outcome-unknown" : recovery.reason}</p>
+          <p className="mt-1">{recovery.guidance}</p>
+        </div>
+      ))}
+    </section>
+  ) : null;
 
   if (!result && !availableFallbacks.length) {
     return (
-      <div className="rounded-md border border-dashed border-slate-200 bg-slate-50 p-3 text-xs leading-relaxed text-slate-500">
-        {errorMessage ?? emptyState}
+      <div className="flex flex-col gap-3" data-testid={testId}>
+        {manualRecoveryNotice}
+        <div className="rounded-md border border-dashed border-slate-200 bg-slate-50 p-3 text-xs leading-relaxed text-slate-500">
+          {errorMessage ?? emptyState}
+        </div>
       </div>
     );
   }
@@ -323,6 +363,7 @@ export function TimelineResultDisplayWorkspace({
   if (!result) {
     return (
       <div className="flex flex-col gap-3" data-testid={testId}>
+        {manualRecoveryNotice}
         <TimelineFallbackGallery fallbacks={availableFallbacks} />
         <div className="rounded-md border border-dashed border-slate-200 bg-slate-50 p-3 text-xs leading-relaxed text-slate-500">
           {errorMessage ?? "Final generation is incomplete. The available fallback remains safe to open."}
@@ -335,8 +376,24 @@ export function TimelineResultDisplayWorkspace({
   const originalStoredImages = getTimelineResultStoredImages(result);
   const finalIndexByCandidate = new Map((result.finalLinks ?? []).map((link, index) => [link.candidateId, index]));
   const reviewedSelections = finalReview?.pairs.map((pair) => {
-    const selectedVariant = pair.userSelectedVariant ?? pair.defaultVariant;
     const finalIndex = finalIndexByCandidate.get(pair.candidateId) ?? pair.rank - 1;
+    const repairPair = finalRepair?.pairs.find((item) => item.candidateId === pair.candidateId);
+    const verificationPair = repairVerification?.pairs.find((item) => item.candidateId === pair.candidateId);
+    const verifiedRepair = Boolean(repairPair && verificationPair &&
+      repairVerificationMatchesRepairPair(verificationPair, repairPair));
+    const requestedVariant = pair.userSelectedVariant ?? pair.defaultVariant;
+    const selectedVariant = requestedVariant === "repair" && !verifiedRepair ? pair.defaultVariant : requestedVariant;
+    if (selectedVariant === "repair" && repairPair?.status === "repaired" && repairPair.storedImage) {
+      return {
+        image: {
+          filename: repairPair.storedImage.filename,
+          nodeId: "final-repair",
+          url: repairPair.storedImage.url,
+        },
+        storedImage: repairPair.storedImage,
+        selectedVariant,
+      };
+    }
     if (selectedVariant === "preview-upscale") {
       return {
         image: {
@@ -455,7 +512,20 @@ export function TimelineResultDisplayWorkspace({
           </p>
           <div className="mt-3 grid gap-3">
             {finalReview.pairs.map((pair) => {
-              const selected = pair.userSelectedVariant ?? pair.defaultVariant;
+              const repairPair = finalRepair?.pairs.find((item) => item.candidateId === pair.candidateId);
+              const verificationPair = repairVerification?.pairs.find((item) => item.candidateId === pair.candidateId);
+              const repairManualRecovery = repairPair
+                ? getRepairManualRecoveryState(repairPair)
+                : null;
+              const verifiedRepair = Boolean(repairPair && verificationPair &&
+                repairVerificationMatchesRepairPair(verificationPair, repairPair));
+              const requestedVariant = pair.userSelectedVariant ?? pair.defaultVariant;
+              const selected = requestedVariant === "repair" && !verifiedRepair ? pair.defaultVariant : requestedVariant;
+              const availableVariants: TimelineFinalReviewVariant[] = [
+                "final",
+                "preview-upscale",
+                ...(repairPair?.status === "repaired" && repairPair.storedImage && verifiedRepair ? ["repair" as const] : []),
+              ];
               return (
                 <article className="rounded-md border border-slate-200 bg-white p-3" key={pair.candidateId}>
                   <div className="flex flex-wrap items-center justify-between gap-2">
@@ -464,9 +534,13 @@ export function TimelineResultDisplayWorkspace({
                       {pair.recommendedVariant ? `Recommended: ${pair.recommendedVariant === "final" ? "Final" : "Preview fallback"}` : "No recommendation"}
                     </span>
                   </div>
-                  <div className="mt-2 grid grid-cols-2 gap-2">
-                    {(["final", "preview-upscale"] as const).map((variant) => {
-                      const stored = variant === "final" ? pair.variants.final : pair.variants.previewUpscale;
+                  <div className={cn("mt-2 grid gap-2", availableVariants.length === 3 ? "sm:grid-cols-3" : "grid-cols-2")}>
+                    {availableVariants.map((variant) => {
+                      const stored = variant === "final"
+                        ? pair.variants.final
+                        : variant === "preview-upscale"
+                          ? pair.variants.previewUpscale
+                          : repairPair!.storedImage!;
                       return (
                         <button
                           aria-pressed={selected === variant}
@@ -488,7 +562,8 @@ export function TimelineResultDisplayWorkspace({
                             width={512}
                           />
                           <span className="block border-t border-slate-100 px-2 py-1.5 text-[11px] font-semibold text-slate-700">
-                            {variant === "final" ? "Final" : "Preview fallback"}{selected === variant ? " · selected" : ""}
+                            {variant === "final" ? "Final" : variant === "repair" ? "Repair" : "Preview fallback"}
+                            {selected === variant ? " · selected" : ""}
                           </span>
                         </button>
                       );
@@ -512,6 +587,52 @@ export function TimelineResultDisplayWorkspace({
                         ))}
                       </ul>
                       {pair.rationale ? <p>{pair.rationale}</p> : null}
+                    </div>
+                  ) : null}
+                  {repairPair ? (
+                    <div className="mt-3 rounded-md border border-sky-100 bg-sky-50 p-2 text-[11px] leading-relaxed text-sky-800">
+                      <p className="font-semibold">
+                        Repair: {repairManualRecovery ? `${repairManualRecovery.label} · closed` : repairPair.status}
+                        {!repairManualRecovery && verificationPair?.recommended ? " · recommended" : !repairManualRecovery && verificationPair ? " · not recommended" : ""}
+                      </p>
+                      {repairPair.skipReason ? <p>Reason: {repairPair.skipReason}</p> : null}
+                      {repairManualRecovery ? (
+                        <>
+                          {repairManualRecovery.reason !== "queue-outcome"
+                            ? <p>Closed reason: {repairManualRecovery.reason}</p>
+                            : null}
+                          <p>{repairManualRecovery.guidance}</p>
+                        </>
+                      ) : null}
+                      {detailedReview && repairPair.retryStage && !isRepairManualRecoveryRequired(repairPair)
+                        ? <p>Retry stage: {repairPair.retryStage}</p>
+                        : null}
+                      {detailedReview && repairPair.targets.length ? (
+                        <p>Targets: {repairPair.targets.map((target) => `${target.operation} (${target.severity})`).join(", ")}</p>
+                      ) : null}
+                      {detailedReview && repairPair.mask ? (
+                        <p>
+                          Mask: {repairPair.mask.provenance}, {(repairPair.mask.coverageBeforeGrowth * 100).toFixed(2)}% before /{" "}
+                          {(repairPair.mask.coverageAfterGrowth * 100).toFixed(2)}% after, grow {repairPair.mask.growMaskBy}px. SAM2: {repairPair.mask.refinement.status}
+                          {repairPair.mask.refinement.reason ? ` (${repairPair.mask.refinement.reason})` : ""}.
+                        </p>
+                      ) : null}
+                      {detailedReview && verificationPair ? (
+                        <div className="grid gap-1">
+                          <p>
+                            Targets resolved: {verificationPair.targetedDefectsResolved ? "yes" : "no"}; new major/blocking regression:{" "}
+                            {verificationPair.newMajorOrBlockingIssue ? "yes" : "no"}; Repair weighted {verificationPair.scores.repair.total.toFixed(2)} vs Final {verificationPair.scores.final.total.toFixed(2)}.
+                          </p>
+                          <p className="font-semibold">Verification findings</p>
+                          <ul className="grid gap-1">
+                            {verificationPair.findings.map((finding) => (
+                              <li key={finding.operation}>
+                                {finding.operation}: {finding.severity} · {finding.scope} — {finding.description}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      ) : null}
                     </div>
                   ) : null}
                 </article>

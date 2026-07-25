@@ -35,6 +35,8 @@ export type LlmChatRequest = {
     | "story-style-reference-analysis"
     | "single-image-preview-scoring"
     | "single-image-final-review"
+    | "single-image-repair-diagnosis"
+    | "single-image-repair-verification"
     | "comfyui-generation-diagnosis"
     | "comfyui-inpaint-diagnosis";
   messages: LlmChatMessage[];

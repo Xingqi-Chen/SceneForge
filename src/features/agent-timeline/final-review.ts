@@ -208,6 +208,7 @@ export function selectFinalReviewVariant(
   variant: "final" | "preview-upscale",
   updatedAt = new Date().toISOString(),
 ) {
+  if (variant !== "final" && variant !== "preview-upscale") return workflow;
   const review = getFinalReviewResult(workflow);
   if (!review || !review.pairs.some((pair) => pair.candidateId === candidateId)) return workflow;
   return {
@@ -217,7 +218,6 @@ export function selectFinalReviewVariant(
       ...workflow.nodes,
       "final-review": {
         ...workflow.nodes["final-review"],
-        updatedAt,
         result: {
           ...review,
           pairs: review.pairs.map((pair) => pair.candidateId === candidateId
