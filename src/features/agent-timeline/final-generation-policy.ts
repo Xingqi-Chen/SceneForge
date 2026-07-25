@@ -11,16 +11,19 @@ export const timelineFinalGenerationPolicy = {
       illustrious: 0.3,
       anima: 0.35,
       fallback: 0.35,
+      krea2: 0.35,
     },
     balanced: {
       illustrious: 0.4,
       anima: 0.45,
       fallback: 0.45,
+      krea2: 0.45,
     },
     strong: {
       illustrious: 0.5,
       anima: 0.55,
       fallback: 0.55,
+      krea2: 0.55,
     },
   },
 } as const;
@@ -46,6 +49,7 @@ export function getTimelineFinalGenerationFamily(
   request: TimelineFinalModelContext,
 ): TimelineFinalGenerationFamily {
   const baseModel = request.modelBaseModel?.trim().toLocaleLowerCase() ?? "";
+  if (request.workflowProfile === "krea2") return "krea2";
   if (request.workflowProfile === "anima" || baseModel.includes("anima")) return "anima";
   if (baseModel.includes("illustrious")) return "illustrious";
   return "fallback";

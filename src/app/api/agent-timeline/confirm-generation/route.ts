@@ -26,6 +26,7 @@ import {
 } from "@/features/agent-timeline/workflow-definitions";
 import {
   TimelineNodeExecutionError,
+  isTimelineLegacyDirectReadOnly,
   type TimelineExecutableNodeId,
   type TimelineNodeMap,
 } from "@/features/agent-timeline/types";
@@ -64,6 +65,12 @@ export async function POST(request: Request) {
 
   if (workflow.workflowMode !== "single-image") {
     return errorResponse("Single-image generation requires a single-image timeline workflow.", 400);
+  }
+
+  if (isTimelineLegacyDirectReadOnly(workflow)) {
+    return errorResponse("Completed legacy Krea 2 Turbo direct txt2img Runs are read-only and cannot be changed or rerun.", 409, {
+      code: "legacy_direct_read_only",
+    });
   }
 
   const action = isRecord(payload) && payload.action === "retry"

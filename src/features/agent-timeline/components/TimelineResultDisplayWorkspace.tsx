@@ -40,6 +40,8 @@ export type TimelineResultDisplayWorkspaceProps = {
   finalRepair?: FinalRepairTimelineResult | null;
   generatedImageAlt?: GeneratedImageText;
   generatedImageCaption?: GeneratedImageText;
+  /** Explicitly disables manual external inpaint for workflow profiles that do not support it. */
+  inpaintAllowed?: boolean;
   inpaintClientIdPrefix?: string;
   itemIdPrefix?: string;
   detailedReview?: boolean;
@@ -289,6 +291,7 @@ export function TimelineResultDisplayWorkspace({
   finalReview = null,
   generatedImageAlt,
   generatedImageCaption,
+  inpaintAllowed = true,
   inpaintClientIdPrefix = "timeline-inpaint",
   itemIdPrefix = "timeline",
   detailedReview = false,
@@ -429,7 +432,7 @@ export function TimelineResultDisplayWorkspace({
   }));
 
   async function submitTimelineInpaint(input: InpaintSubmitInput) {
-    if (!draft || !inpaintImageItem) {
+    if (!inpaintAllowed || !draft || !inpaintImageItem) {
       throw new Error("Inpaint settings are not ready.");
     }
 
@@ -661,15 +664,17 @@ export function TimelineResultDisplayWorkspace({
                   resultImages.length > 1 ? `Image ${index + 1} of ${resultImages.length}` : "Generated image"
                 )}
               </figcaption>
-              <Button
-                className="h-8 gap-1.5 rounded-md bg-sky-600 px-2.5 text-xs text-white hover:bg-sky-700 disabled:opacity-60"
-                disabled={!draft || inpaintStatus === "loading" || reviewedSelections?.[index]?.selectedVariant === "preview-upscale"}
-                onClick={() => setInpaintImageItem(item)}
-                type="button"
-              >
-                <Paintbrush className="size-3.5" />
-                Inpaint
-              </Button>
+              {inpaintAllowed ? (
+                <Button
+                  className="h-8 gap-1.5 rounded-md bg-sky-600 px-2.5 text-xs text-white hover:bg-sky-700 disabled:opacity-60"
+                  disabled={!draft || inpaintStatus === "loading" || reviewedSelections?.[index]?.selectedVariant === "preview-upscale"}
+                  onClick={() => setInpaintImageItem(item)}
+                  type="button"
+                >
+                  <Paintbrush className="size-3.5" />
+                  Inpaint
+                </Button>
+              ) : null}
             </div>
           </figure>
         ))}
@@ -708,7 +713,7 @@ export function TimelineResultDisplayWorkspace({
           {inpaintMessage}
         </div>
       ) : null}
-      {draft && inpaintImageItem ? (
+      {inpaintAllowed && draft && inpaintImageItem ? (
         <InpaintMaskDialog
           busy={inpaintStatus === "loading"}
           draft={draft}

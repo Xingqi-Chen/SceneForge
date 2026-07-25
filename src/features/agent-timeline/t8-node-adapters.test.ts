@@ -139,8 +139,16 @@ describe("timeline T8 ComfyUI request conversion", () => {
     });
   });
 
-  it("uses one Krea direct-final request while preview and scoring remain not applicable", async () => {
-    let workflow = createConfirmedWorkflow(1, undefined, { promptProfile: "krea2" });
+  it("runs Krea Preview, exact-K scoring, and Final stages through the normal adapters", async () => {
+    const sourceImage = {
+      dataUrl: "data:image/png;base64,aGVsbG8=",
+      filename: "krea-source.png",
+      height: 1024,
+      mimeType: "image/png" as const,
+      uploadedAt: "2026-07-25T00:00:00.000Z",
+      width: 1024,
+    };
+    let workflow = createConfirmedWorkflow(2, sourceImage, { promptProfile: "krea2" });
     workflow = setTimelineNodeManualResult(workflow, "resource-recommendation", {
       checkpoint: {
         resource: {
@@ -156,7 +164,7 @@ describe("timeline T8 ComfyUI request conversion", () => {
     workflow = setTimelineNodeManualResult(workflow, "parameter-recommendation", {
       ...(workflow.nodes["parameter-recommendation"].result as object),
       requestPreview: {
-        batchSize: 1,
+        batchSize: 4,
         checkpointName: "krea-2-turbo-unet.safetensors",
         cfg: 1,
         denoise: 1,
@@ -164,33 +172,40 @@ describe("timeline T8 ComfyUI request conversion", () => {
         modelStorageKind: "diffusion",
         negativePrompt: "",
         positivePrompt: "a quiet station",
-        preview: false,
+        preview: true,
         samplerName: "euler",
         scheduler: "simple",
         steps: 8,
         workflowProfile: "krea2",
-        width: 1025,
-        height: 1023,
+        width: 1024,
+        height: 1024,
       },
     });
     workflow = confirmTimelineGeneration(workflow);
 
-    const executePreviews = vi.fn();
-    const scorePreviews = vi.fn();
-    const executeFinals = vi.fn();
-    const executeDirectFinal = vi.fn(async (request) => ({
-      completed: true,
-      finalCount: 1,
-      finals: [],
-      request,
+    const executePreviews = vi.fn(async (requests) => ({
+      baseSeed: requests[0]?.seed,
+      candidateCount: requests.length,
+      finalCount: 2,
+      previewHeight: 768,
+      previewWidth: 768,
+      previewSteps: 8,
+      candidates: [],
+      successfulCount: 0,
       warnings: [],
     }));
-    const loadResultDisplay = vi.fn();
+    const scorePreviews = vi.fn();
+    const executeFinals = vi.fn(async (requests) => ({
+      completed: true,
+      finalCount: requests.length,
+      finals: [],
+      request: requests[0]?.request,
+      warnings: [],
+    }));
     const adapters = createTimelineT8NodeAdapters({
-      executeDirectFinal,
       executeFinals,
       executePreviews,
-      loadResultDisplay,
+      loadResultDisplay: vi.fn(),
       scorePreviews,
     });
     const context = (nodeId: "preview-execution" | "preview-scoring" | "comfyui-execution") => ({
@@ -201,30 +216,123 @@ describe("timeline T8 ComfyUI request conversion", () => {
 
     await expect(adapters["preview-execution"]?.(context("preview-execution"))).resolves.toMatchObject({
       source: "system",
-      value: { status: "not-applicable", reason: "krea2-direct-txt2img" },
+      value: { candidateCount: 4, finalCount: 2 },
     });
+    expect(executePreviews).toHaveBeenCalledWith(expect.arrayContaining([
+      expect.objectContaining({
+        request: expect.objectContaining({
+          batchSize: 1,
+          preview: true,
+          sourceImageDataUrl: "data:image/png;base64,aGVsbG8=",
+          workflowProfile: "krea2",
+          width: 768,
+          height: 768,
+        }),
+      }),
+    ]), expect.any(Object));
+    expect(executePreviews.mock.calls[0]?.[0]).toHaveLength(4);
+
+    workflow = setTimelineNodeManualResult(workflow, "preview-execution", {
+      baseSeed: 100,
+      candidateCount: 4,
+      finalCount: 2,
+      previewHeight: 768,
+      previewWidth: 768,
+      previewSteps: 8,
+      candidates: [1, 2, 3, 4].map((number, index) => ({
+        candidateId: `preview-${number}`,
+        index,
+        seed: 99 + number,
+        status: "done" as const,
+        storedImage: {
+          byteLength: number,
+          contentType: "image/png",
+          filename: `preview-${number}.png`,
+          url: `/api/comfyui/generated-images/preview-${number}.png`,
+        },
+      })),
+      successfulCount: 4,
+      warnings: [],
+    });
+    const scoringResult = {
+      rubricVersion: 2,
+      scores: [1, 2, 3, 4].map((number) => ({
+        candidateId: `preview-${number}`,
+        adherence: 100 - number,
+        composition: 100 - number,
+        anatomy: 100 - number,
+        style: 100 - number,
+        technical: 100 - number,
+        total: 100 - number,
+        criticalDefects: [],
+        eligible: true,
+        rank: number,
+      })),
+      selectedCandidateIds: ["preview-1", "preview-2"],
+      selectionSource: "ai",
+    };
+    scorePreviews.mockResolvedValue(scoringResult);
     await expect(adapters["preview-scoring"]?.(context("preview-scoring"))).resolves.toMatchObject({
-      source: "system",
-      value: { status: "not-applicable", reason: "krea2-direct-txt2img" },
+      source: "ai",
+      value: { selectedCandidateIds: ["preview-1", "preview-2"] },
     });
+    workflow = setTimelineNodeManualResult(workflow, "preview-scoring", scoringResult);
     await expect(adapters["comfyui-execution"]?.(context("comfyui-execution"))).resolves.toMatchObject({
       source: "system",
-      value: { completed: true, finalCount: 1 },
+      value: { completed: true, finalCount: 2 },
     });
 
-    expect(executeDirectFinal).toHaveBeenCalledTimes(1);
-    expect(executeDirectFinal).toHaveBeenCalledWith(expect.objectContaining({
-      batchSize: 1,
-      modelStorageKind: "diffusion",
-      preview: false,
-      workflowProfile: "krea2",
-      width: 1040,
-      height: 1024,
-    }), expect.any(Object), undefined);
-    expect(executePreviews).not.toHaveBeenCalled();
-    expect(scorePreviews).not.toHaveBeenCalled();
-    expect(executeFinals).not.toHaveBeenCalled();
-    expect(loadResultDisplay).not.toHaveBeenCalled();
+    expect(executeFinals).toHaveBeenCalledWith(expect.arrayContaining([
+      expect.objectContaining({
+        candidateId: "preview-1",
+        request: expect.objectContaining({
+          denoise: 0.45,
+          sourceImageDataUrl: undefined,
+          workflowProfile: "krea2",
+          width: 1024,
+          height: 1024,
+        }),
+        storedPreview: expect.objectContaining({ filename: "preview-1.png" }),
+      }),
+    ]), expect.any(Object), undefined);
+    expect(executeFinals.mock.calls[0]?.[0]).toHaveLength(2);
+  });
+
+  it.each([
+    [1, 4],
+    [2, 4],
+    [3, 6],
+    [4, 8],
+  ])("maps Krea K=%i to %i individually queued aligned previews", (imageCount, candidateCount) => {
+    let workflow = createConfirmedWorkflow(imageCount, undefined, { promptProfile: "krea2" });
+    workflow = setTimelineNodeManualResult(workflow, "parameter-recommendation", {
+      ...(workflow.nodes["parameter-recommendation"].result as object),
+      requestPreview: {
+        batchSize: 1,
+        checkpointName: "krea-2-turbo-unet.safetensors",
+        cfg: 1,
+        denoise: 1,
+        modelBaseModel: "Krea 2",
+        modelStorageKind: "diffusion",
+        negativePrompt: "",
+        positivePrompt: "a quiet station",
+        samplerName: "euler",
+        scheduler: "simple",
+        steps: 8,
+        workflowProfile: "krea2",
+        width: 1024,
+        height: 1024,
+      },
+    });
+
+    const previews = createTimelinePreviewRequests(confirmTimelineGeneration(workflow));
+
+    expect(previews).toHaveLength(candidateCount);
+    expect(previews.map(({ request }) => request.batchSize)).toEqual(Array(candidateCount).fill(1));
+    expect(previews.every(({ request }) =>
+      request.preview === true && request.width === 768 && request.height === 768 &&
+      request.width % 16 === 0 && request.height % 16 === 0,
+    )).toBe(true);
   });
 
   it("rejects a Krea automatic-repair setting before any direct queue provider can run", async () => {

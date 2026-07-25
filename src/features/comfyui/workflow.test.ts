@@ -213,15 +213,15 @@ describe("ComfyUI workflow builder", () => {
     });
   });
 
-  it("builds the Krea 2 direct txt2img graph with fixed model-only LoRAs and Turbo defaults", () => {
+  it("builds the Krea 2 txt2img graph with fixed model-only LoRAs and Turbo defaults", () => {
     const result = buildBasicTextToImageWorkflow({
       checkpointName: "krea-2-turbo-unet.safetensors",
       modelBaseModel: "Krea 2",
       modelStorageKind: "diffusion",
       positivePrompt: "a quiet station",
       negativePrompt: "blur",
-      width: 1025,
-      height: 1023,
+      width: 1040,
+      height: 1024,
       seed: 123,
       loras: [{
         loraName: "krea-style.safetensors",
@@ -291,6 +291,52 @@ describe("ComfyUI workflow builder", () => {
       "IPAdapterAdvanced",
       "FaceDetailer",
     ].includes(node.class_type))).toBe(false);
+  });
+
+  it("builds Krea source img2img through LoadImage, ImageScale, and VAEEncode", () => {
+    const result = buildBasicTextToImageWorkflow({
+      checkpointName: "krea-2-turbo-unet.safetensors",
+      modelBaseModel: "Krea 2",
+      modelStorageKind: "diffusion",
+      positivePrompt: "a quiet station",
+      imageName: "SceneForge/krea-source.png",
+      width: 1040,
+      height: 1024,
+      denoise: 0.45,
+      seed: 123,
+    });
+
+    expect(result.nodeIds).toMatchObject({
+      sourceImage: "6",
+      sourceImageScale: "7",
+      vaeEncode: "8",
+      latentImage: "8",
+      sampler: "9",
+      vaeDecode: "10",
+    });
+    expect(result.workflow["6"]).toMatchObject({
+      class_type: "LoadImage",
+      inputs: { image: "SceneForge/krea-source.png" },
+    });
+    expect(result.workflow["7"]).toMatchObject({
+      class_type: "ImageScale",
+      inputs: {
+        image: ["6", 0],
+        upscale_method: "lanczos",
+        width: 1040,
+        height: 1024,
+        crop: "disabled",
+      },
+    });
+    expect(result.workflow["8"]).toMatchObject({
+      class_type: "VAEEncode",
+      inputs: { pixels: ["7", 0], vae: ["3", 0] },
+    });
+    expect(result.workflow["9"].inputs).toMatchObject({
+      latent_image: ["8", 0],
+      denoise: 0.45,
+    });
+    expect(Object.values(result.workflow).some((node) => node.class_type === "EmptyLatentImage")).toBe(false);
   });
 
   it("builds the Anima img2img workflow from the Anima VAE", () => {

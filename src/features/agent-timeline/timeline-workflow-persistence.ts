@@ -63,6 +63,7 @@ import {
   type TimelineNodeMap,
   type TimelineNodeResult,
   type TimelineNodeStatus,
+  type TimelineNotApplicableResult,
   type ComfyUiExecutionTimelineResult,
   type TimelineFinalExecutionRecord,
   type TimelineRepairDiagnosis,
@@ -290,14 +291,19 @@ function sanitizeTimelineNode(
       };
     }
   }
-  const isKrea2NotApplicableResult = isRecord(raw.result) &&
-    raw.result.status === "not-applicable" &&
-    raw.result.reason === "krea2-direct-txt2img" &&
-    typeof raw.result.message === "string" && raw.result.message.trim();
+  const krea2NotApplicableReason: TimelineNotApplicableResult["reason"] | undefined =
+    isRecord(raw.result) && raw.result.status === "not-applicable" &&
+    (raw.result.reason === "krea2-direct-txt2img" ||
+      (raw.result.reason === "krea2-t42-unavailable" &&
+        (nodeId === "final-review" || nodeId === "final-repair" || nodeId === "repair-verification")))
+    ? raw.result.reason as TimelineNotApplicableResult["reason"]
+    : undefined;
+  const isKrea2NotApplicableResult = krea2NotApplicableReason !== undefined &&
+    isRecord(raw.result) && typeof raw.result.message === "string" && raw.result.message.trim();
   const sanitizedResult = isKrea2NotApplicableResult
     ? {
         status: "not-applicable" as const,
-        reason: "krea2-direct-txt2img" as const,
+        reason: krea2NotApplicableReason,
         message: ((raw.result as Record<string, unknown>).message as string).trim().slice(0, 500),
       }
     : nodeId === "preview-execution"
@@ -661,6 +667,21 @@ function getStoryId(raw: Record<string, unknown>, fallbackWorkflowId: string) {
   return fallbackWorkflowId;
 }
 
+function isKrea2LegacyDirectRun(nodes: TimelineNodeMap) {
+  const hasDirectNotApplicableResult = ["preview-execution", "preview-scoring", "final-review", "final-repair", "repair-verification"]
+    .some((nodeId) => {
+      const result = nodes[nodeId as TimelineNodeId]?.result;
+      return isRecord(result) && result.status === "not-applicable" && result.reason === "krea2-direct-txt2img";
+    });
+  if (hasDirectNotApplicableResult) return true;
+
+  const execution = nodes["comfyui-execution"].result;
+  return isRecord(execution) && isRecord(execution.request) &&
+    execution.request.workflowProfile === "krea2" && Array.isArray(execution.finals) &&
+    execution.finals.some((entry) => isRecord(entry) && entry.status === "done") &&
+    execution.finals.every((entry) => !isRecord(entry) || entry.previewUpscale === undefined);
+}
+
 function sanitizeSingleImageWorkflowState(raw: Record<string, unknown>): TimelineWorkflowState | null {
   if (typeof raw.workflowId !== "string" || !raw.workflowId.trim()) {
     return null;
@@ -685,40 +706,46 @@ function sanitizeSingleImageWorkflowState(raw: Record<string, unknown>): Timelin
       sanitizeTimelineNode(nodeId, rawNodes[nodeId], updatedAt, { requireCurrentFinalPolicy }),
     ]),
   ) as TimelineNodeMap;
-  if (isKrea2Workflow) {
+  const isKrea2LegacyDirect = isKrea2Workflow && isKrea2LegacyDirectRun(nodes);
+  const hasInvalidKrea2Dimensions = isKrea2Workflow && !isKrea2LegacyDirect && (() => {
     const parameterNode = nodes["parameter-recommendation"];
     const parameterResult = isRecord(parameterNode.result) ? parameterNode.result : null;
     const requestPreview = parameterResult && isRecord(parameterResult.requestPreview)
       ? parameterResult.requestPreview
       : null;
-    if (requestPreview?.workflowProfile === "krea2") {
-      const normalizeDimension = (value: unknown) => {
-        const dimension = typeof value === "number" && Number.isFinite(value) && value > 0
-          ? Math.round(value)
-          : 1024;
-        return Math.ceil(dimension / 16) * 16;
-      };
-      const width = normalizeDimension(requestPreview.width);
-      const height = normalizeDimension(requestPreview.height);
-      nodes["parameter-recommendation"] = {
-        ...parameterNode,
-        result: {
-          ...parameterResult,
-          width,
-          height,
-          requestPreview: {
-            ...requestPreview,
-            width,
-            height,
-          },
-        },
+    if (requestPreview?.workflowProfile !== "krea2") return false;
+    const isAlignedDimension = (value: unknown) =>
+      typeof value === "number" && Number.isSafeInteger(value) && value >= 16 && value <= 16_384 && value % 16 === 0;
+    return !isAlignedDimension(parameterResult?.width) || !isAlignedDimension(parameterResult?.height) ||
+      !isAlignedDimension(requestPreview.width) || !isAlignedDimension(requestPreview.height);
+  })();
+  if (hasInvalidKrea2Dimensions) {
+    nodes["parameter-recommendation"] = {
+      ...nodes["parameter-recommendation"],
+      status: "error",
+      source: "system",
+      error: createTimelineNodeError(
+        "timeline_request_invalid",
+        "Persisted Krea 2 Turbo dimensions must be exact multiples of 16. Regenerate parameters before continuing.",
+        { recoverable: true },
+      ),
+    };
+    for (const nodeId of ["generation-gate", "preview-execution", "preview-scoring", "comfyui-execution", "final-review", "final-repair", "repair-verification", "result-display"] as const) {
+      nodes[nodeId] = {
+        ...nodes[nodeId],
+        status: "stale",
+        result: undefined,
+        error: undefined,
+        source: "system",
       };
     }
   }
-  if (!isLegacyWorkflow && !isKrea2Workflow) {
+  if (!isLegacyWorkflow && !isKrea2LegacyDirect) {
     const scoringIsTrusted = reconcilePersistedPreviewScoring(nodes, updatedAt);
-    reconcilePersistedGenerationLinkage(nodes, updatedAt);
-    reconcilePersistedRepairLinkage(nodes, updatedAt, raw.workflowId.trim());
+    reconcilePersistedGenerationLinkage(nodes, updatedAt, { requireCurrentFinalPolicy: isKrea2Workflow });
+    if (!isKrea2Workflow) {
+      reconcilePersistedRepairLinkage(nodes, updatedAt, raw.workflowId.trim());
+    }
     if (!scoringIsTrusted) {
       invalidatePersistedScoringDownstream(nodes, updatedAt);
     }
@@ -772,7 +799,7 @@ function sanitizeSingleImageWorkflowState(raw: Record<string, unknown>): Timelin
       result: { verificationVersion: 1, status: "skipped", pairs: [] },
     };
   }
-  if (!isLegacyWorkflow && !isKrea2Workflow && nodes["comfyui-execution"].status !== "done" && nodes["result-display"].status === "done") {
+  if (!isLegacyWorkflow && !isKrea2LegacyDirect && nodes["comfyui-execution"].status !== "done" && nodes["result-display"].status === "done") {
     nodes["result-display"] = {
       nodeId: "result-display",
       status: "error",
@@ -787,12 +814,15 @@ function sanitizeSingleImageWorkflowState(raw: Record<string, unknown>): Timelin
   }
 
   const legacyCompleted = nodes["result-display"].status === "done";
+  const legacyDirectProvenance = isKrea2LegacyDirect && legacyCompleted
+    ? { kind: "krea2-direct-txt2img" as const, readOnly: true as const }
+    : undefined;
   const gateResult = nodes["generation-gate"].result;
   const hasConfirmationFingerprint = isRecord(gateResult) &&
     typeof gateResult.confirmationFingerprint === "string" &&
     /^hmac-sha256:[a-f0-9]{64}$/.test(gateResult.confirmationFingerprint);
   const requiresReconfirmation = !legacyCompleted &&
-    (isLegacyWorkflow || raw.generationConfirmed === true && (
+    (isKrea2LegacyDirect || isLegacyWorkflow || raw.generationConfirmed === true && (
       !hasConfirmationFingerprint || (isRecord(gateResult) && gateResult.finalPolicyVersion === 1)
     ));
   const generationConfirmed = requiresReconfirmation
@@ -808,15 +838,11 @@ function sanitizeSingleImageWorkflowState(raw: Record<string, unknown>): Timelin
         "This Run uses a legacy or unverifiable confirmation and requires review before continuing.",
       ),
     };
-    nodes["comfyui-execution"] = {
-      ...nodes["comfyui-execution"],
-      status: "blocked",
-      error: undefined,
-    };
-    for (const nodeId of ["preview-execution", "preview-scoring", "final-review", "final-repair", "repair-verification", "result-display"] as const) {
+    for (const nodeId of ["preview-execution", "preview-scoring", "comfyui-execution", "final-review", "final-repair", "repair-verification", "result-display"] as const) {
       nodes[nodeId] = {
         ...nodes[nodeId],
-        status: "blocked",
+        status: isKrea2LegacyDirect ? "stale" : "blocked",
+        ...(isKrea2LegacyDirect ? { result: undefined } : {}),
         error: undefined,
       };
     }
@@ -829,6 +855,7 @@ function sanitizeSingleImageWorkflowState(raw: Record<string, unknown>): Timelin
     updatedAt,
     generationConfirmed,
     nodes,
+    ...(legacyDirectProvenance ? { legacyDirectProvenance } : {}),
   });
 }
 
@@ -1156,7 +1183,7 @@ function sanitizeFinalExecutionResult(
     if (!isRecord(raw) || raw.version !== timelineFinalGenerationPolicy.version ||
         raw.resizeMode !== timelineFinalGenerationPolicy.resizeMode ||
         !isTimelineFinalRedrawPreset(raw.preset) ||
-        (raw.family !== "illustrious" && raw.family !== "anima" && raw.family !== "fallback")) return undefined;
+        (raw.family !== "illustrious" && raw.family !== "anima" && raw.family !== "fallback" && raw.family !== "krea2")) return undefined;
     const preset = raw.preset;
     const family = raw.family;
     const denoise = timelineFinalGenerationPolicy.denoiseByPreset[preset][family];
@@ -2020,6 +2047,7 @@ function createUntrustedPersistedFinal(link: PersistedFinalLink) {
 function reconcilePersistedFinalResult(
   value: unknown,
   expected: ReturnType<typeof getPersistedExpectedFinalLinks>,
+  options: { requireCurrentFinalPolicy?: boolean } = {},
 ) {
   if (!expected || !isRecord(value) || !Array.isArray(value.finals) ||
       value.finalCount !== expected.finalCount) return null;
@@ -2041,7 +2069,8 @@ function reconcilePersistedFinalResult(
       item.candidateId === link.candidateId && item.seed === link.seed && item.rank === link.rank,
     );
     const trusted = matches.filter((item) =>
-      item.status === "done" ? (!currentPolicy || matchesCurrentFallback(item, link))
+      item.status === "done"
+        ? (!options.requireCurrentFinalPolicy || currentPolicy) && (!currentPolicy || matchesCurrentFallback(item, link))
         : item.status === "error" && currentPolicy && matchesCurrentFallback(item, link),
     );
     return matches.length === 1 && trusted.length === 1 ? trusted[0] : createUntrustedPersistedFinal(link);
@@ -2119,13 +2148,17 @@ function resultDisplayMatchesFinals(display: unknown, finalResult: unknown) {
     samePersistedStoredImage(display.storedImage, isRecord(finals[0]) ? finals[0].storedImage : undefined);
 }
 
-function reconcilePersistedGenerationLinkage(nodes: TimelineNodeMap, updatedAt: string) {
+function reconcilePersistedGenerationLinkage(
+  nodes: TimelineNodeMap,
+  updatedAt: string,
+  options: { requireCurrentFinalPolicy?: boolean } = {},
+) {
   const expected = getPersistedExpectedFinalLinks(nodes);
   const finalNode = nodes["comfyui-execution"];
   const errorPartial = isRecord(finalNode.error?.details)
     ? finalNode.error.details.partialResult
     : undefined;
-  const reconciled = reconcilePersistedFinalResult(finalNode.result ?? errorPartial, expected);
+  const reconciled = reconcilePersistedFinalResult(finalNode.result ?? errorPartial, expected, options);
 
   if (finalNode.status === "done" && (!reconciled || !reconciled.completed)) {
     const partialResult = reconciled && reconciled.trustedDoneCount > 0 ? reconciled.result : undefined;

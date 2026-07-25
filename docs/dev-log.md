@@ -1879,3 +1879,11 @@ Notes:
 
 - `git status` requires the one-shot `safe.directory` override in this sandbox because repository ownership differs from the sandbox user.
 - Source files contain some existing mojibake in comments and UI strings. That issue is documented as a separate risk in `docs/plan.md`.
+### T41 / Issue #150 Krea 2 staged Run
+
+Summary:
+
+- Replaced newly confirmed Krea direct-final execution with the standard K=1–4 Preview, comparative scoring, exact-K selection, candidate-linked `preview-upscale`, and Final img2img path; Krea previews use 16-pixel exact-aspect alignment and the existing 4/4/6/8 candidate pools.
+- Added Composer source img2img with source-denoise precedence, fixed Krea UNET/CLIP/VAE/model-only-LoRA context in both stages, and fail-closed source-node/input, sampler, local-model-file, and exact-dimension validation.
+- Bound Krea Final redraw presets to Conservative/Balanced/Strong 0.35/0.45/0.55. Final review, repair, and verification now persist an explicit T42-unavailable result without invoking their providers.
+- Preserved completed legacy direct outputs as read-only direct provenance; incomplete direct records become stale and require new confirmation without fabricated Preview linkage.

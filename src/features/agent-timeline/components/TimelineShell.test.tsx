@@ -149,6 +149,103 @@ function createConfirmedGenerationWorkflow(workflow: TimelineWorkflowState) {
   return confirmedWorkflow;
 }
 
+function createCompletedLegacyDirectKreaWorkflow() {
+  let workflow = createTimelineWorkflowState({
+    imageCount: 1,
+    promptProfile: "krea2",
+    sceneRequest: "A preserved legacy Krea direct render",
+    workflowId: "timeline-legacy-direct-ui",
+  });
+  workflow = setTimelineNodeManualResult(workflow, "parameter-recommendation", {
+    cfg: 1,
+    denoise: 1,
+    height: 1024,
+    requestPreview: {
+      checkpointName: "krea-2-turbo-unet.safetensors",
+      height: 1024,
+      modelBaseModel: "Krea 2",
+      modelStorageKind: "diffusion",
+      positivePrompt: "a preserved legacy Krea direct render",
+      workflowProfile: "krea2",
+      width: 1024,
+    },
+    seedPolicy: { mode: "fixed", seed: 123 },
+    steps: 8,
+    width: 1024,
+  });
+  const storedImage = {
+    byteLength: 128,
+    contentType: "image/png",
+    filename: `${"a".repeat(32)}.png`,
+    url: `/api/comfyui/generated-images/${"a".repeat(32)}.png`,
+  };
+  const sourceImage = { filename: "legacy-direct.png", nodeId: "9", type: "output" as const };
+  workflow = completeTimelineNode(workflow, "preview-execution", {
+    status: "not-applicable",
+    reason: "krea2-direct-txt2img",
+    message: "Legacy Krea direct output has no staged previews.",
+  }, "system");
+  workflow = completeTimelineNode(workflow, "preview-scoring", {
+    status: "not-applicable",
+    reason: "krea2-direct-txt2img",
+    message: "Legacy Krea direct output has no preview scoring.",
+  }, "system");
+  workflow = completeTimelineNode(workflow, "comfyui-execution", {
+    completed: true,
+    finalCount: 1,
+    finals: [{
+      candidateId: "preview-1",
+      promptId: "legacy-direct-prompt",
+      rank: 1,
+      seed: 123,
+      sourceImage,
+      status: "done" as const,
+      storedImage,
+    }],
+    request: {
+      checkpointName: "krea-2-turbo-unet.safetensors",
+      modelBaseModel: "Krea 2",
+      modelStorageKind: "diffusion",
+      positivePrompt: "a preserved legacy Krea direct render",
+      workflowProfile: "krea2",
+    },
+    warnings: [],
+  }, "system");
+  workflow = completeTimelineNode(workflow, "result-display", {
+    completed: true,
+    finalLinks: [{ candidateId: "preview-1", promptId: "legacy-direct-prompt", rank: 1, seed: 123 }],
+    image: { ...sourceImage, url: storedImage.url },
+    images: [{ ...sourceImage, url: storedImage.url }],
+    promptId: "legacy-direct-prompt",
+    sourceImage,
+    sourceImages: [sourceImage],
+    storedImage,
+    storedImages: [storedImage],
+    warnings: [],
+  }, "system");
+  for (const nodeId of [
+    "preview-execution",
+    "preview-scoring",
+    "final-review",
+    "final-repair",
+    "repair-verification",
+  ] as const) {
+    workflow.nodes[nodeId] = {
+      nodeId,
+      status: "done",
+      source: "system",
+      updatedAt: workflow.updatedAt,
+      result: {
+        status: "not-applicable",
+        reason: "krea2-direct-txt2img",
+        message: `Legacy Krea skipped ${nodeId}`,
+      },
+    } as never;
+  }
+
+  return workflow;
+}
+
 function createQueueOutcomeUnknownRepairWorkflow() {
   let workflow = createSimpleGenerationPhaseErrorWorkflow("comfyui-execution", false, true);
   const details = workflow.nodes["comfyui-execution"].error?.details as {
@@ -1352,6 +1449,80 @@ describe("TimelineShell", () => {
     }
   });
 
+  it("keeps a completed legacy Krea direct record display-only without autosave or mutation controls", async () => {
+    vi.useFakeTimers();
+    const originalFetch = globalThis.fetch;
+    const legacyWorkflow = createCompletedLegacyDirectKreaWorkflow();
+    const legacyRecord = createTimelineWorkflowRecord({
+      name: "Legacy direct archive",
+      projectId: "legacy-direct-archive",
+      sceneRequest: "A preserved legacy Krea direct render",
+      selectedImageCount: 1,
+      selectedNodeId: "result-display",
+      selectedPromptProfile: "krea2",
+      workflow: legacyWorkflow,
+    });
+    const mutations: Array<{ method: string; url: string }> = [];
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = getFetchUrl(input);
+      if (url === "/api/settings") return createTimelineSettingsResponse({ displayMode: "detailed" });
+      if (url === "/api/agent-timeline/active-workflow") {
+        if (init?.method && init.method !== "GET") mutations.push({ method: init.method, url });
+        return init?.method === "PUT"
+          ? createJsonResponse({ ok: true })
+          : createJsonResponse(legacyRecord);
+      }
+      if (url.startsWith("/api/agent-timeline/workflows")) {
+        mutations.push({ method: init?.method ?? "GET", url });
+        return createJsonResponse({ workflows: [] });
+      }
+      if (url === "/api/agent-timeline/confirm-generation") {
+        mutations.push({ method: init?.method ?? "POST", url });
+        return createJsonResponse({ error: { message: "must not execute" } }, 500);
+      }
+      return createJsonResponse({ role: "assistant", content: "{}" });
+    });
+    globalThis.fetch = fetchMock;
+
+    try {
+      act(() => root.render(<TimelineShell />));
+      await flushAsyncWork();
+
+      expect(container.textContent).toContain("This completed legacy Krea 2 Turbo direct txt2img Run is preserved as a read-only record.");
+      expect(container.textContent).toContain(`${"a".repeat(32)}.png`);
+      expect(Array.from(container.querySelectorAll("button")).filter((button) => button.textContent?.includes("Inpaint"))).toHaveLength(0);
+      expect(fetchMock.mock.calls.map(([input]) => getFetchUrl(input))).not.toContain("/api/comfyui/inpaint-image");
+      expect(getButtonByText("Legacy direct archive").disabled).toBe(true);
+      expect(getButtonByText("New scene").disabled).toBe(true);
+
+      act(() => getWorkflowStepButton("scene-input").click());
+
+      const promptProfile = container.querySelector("#prompt-profile") as HTMLSelectElement;
+      const imageCount = container.querySelector("#timeline-image-count") as HTMLSelectElement;
+      const sceneRequest = container.querySelector("#scene-request") as HTMLTextAreaElement;
+      expect(promptProfile.disabled).toBe(true);
+      expect(imageCount.disabled).toBe(true);
+      expect(sceneRequest.readOnly).toBe(true);
+      expect(getButtonByText("Upload source").disabled).toBe(true);
+      expect(getButtonByText("Suggest").disabled).toBe(true);
+      expect(getButtonByText("Rewrite").disabled).toBe(true);
+      expect(getButtonByText("Start workflow").disabled).toBe(true);
+      expect(Array.from(container.querySelectorAll("button")).some((button) =>
+        button.textContent?.includes("Confirm and render"),
+      )).toBe(false);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(500);
+      });
+      await flushAsyncWork();
+
+      expect(mutations).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("fails closed when restoring malformed preview scoring without crashing visual score formatting", async () => {
     const originalFetch = globalThis.fetch;
     const workflow = createSimpleGenerationPhaseErrorWorkflow("comfyui-execution");
@@ -2128,7 +2299,7 @@ describe("TimelineShell", () => {
   });
 
   it.each(["simple", "detailed"] as const)(
-    "switches %s Run composer to Krea direct txt2img controls",
+    "switches %s Run composer to Krea staged preview and img2img controls",
     async (displayMode) => {
       const originalFetch = globalThis.fetch;
       const t5Fetch = mockT5Fetch();
@@ -2151,13 +2322,14 @@ describe("TimelineShell", () => {
         });
 
         const imageCount = container.querySelector("#timeline-image-count") as HTMLSelectElement | null;
-        const sourceButton = getButtonByText("Txt2img only");
+        const sourceButton = getButtonByText("Upload source");
         expect(profile.value).toBe("krea2");
         expect(imageCount?.value).toBe("1");
-        expect(imageCount?.disabled).toBe(true);
-        expect(sourceButton.disabled).toBe(true);
-        expect(container.textContent).toContain("Krea 2 Turbo uses the selected Krea 2 local UNet");
-        expect(container.textContent).toContain("Preview/Final redraw, review, and repair are unavailable.");
+        expect(imageCount?.disabled).toBe(false);
+        expect(sourceButton.disabled).toBe(false);
+        expect(container.textContent).toContain("Krea 2 Turbo uses its fixed local UNet");
+        expect(container.textContent).toContain("4/4/6/8 scored previews, exact-K selection, and Preview-to-Final img2img redraw.");
+        expect(container.textContent).toContain("Source img2img is supported; style references, Detailers, review, and repair remain unavailable.");
       } finally {
         globalThis.fetch = originalFetch;
       }
@@ -3713,6 +3885,67 @@ describe("TimelineShell", () => {
       expect(resultSection.textContent).toContain("4 images");
       expect(resultSection.textContent).toContain("100");
       expect(Array.from(resultSection.querySelectorAll("button")).filter((button) => button.textContent?.includes("Inpaint"))).toHaveLength(4);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("omits Inpaint and never posts an inpaint request for staged Krea results", async () => {
+    const originalFetch = globalThis.fetch;
+    const t5FetchMock = mockT5Fetch();
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = getFetchUrl(input);
+
+      if (url === "/api/settings") {
+        return createTimelineSettingsResponse({
+          characterTagNewTermDefaultOption: "temporary",
+          autoReview: false,
+        });
+      }
+
+      if (url === "/api/agent-timeline/confirm-generation") {
+        const payload = typeof init?.body === "string" ? JSON.parse(init.body) : {};
+        const stagedKreaWorkflow = structuredClone(payload.workflow as TimelineWorkflowState);
+        const sceneInput = stagedKreaWorkflow.nodes["scene-input"].result as { promptProfile?: string };
+        sceneInput.promptProfile = "krea2";
+
+        return createJsonResponse({
+          workflow: createConfirmedGenerationWorkflow(stagedKreaWorkflow),
+        });
+      }
+
+      if (url === "/api/agent-timeline/active-workflow") return createJsonResponse(null);
+
+      if (url === "/api/comfyui/inpaint-image") {
+        throw new Error("Krea must not submit an inpaint request.");
+      }
+
+      return t5FetchMock(input, init);
+    });
+
+    globalThis.fetch = fetchMock;
+
+    try {
+      act(() => {
+        root.render(<TimelineShell />);
+      });
+      await flushAsyncWork();
+
+      await submitInitialScene("A staged render of a neon market alley with a courier");
+      await flushAsyncWork();
+
+      act(() => {
+        getWorkflowStepButton("generation-gate").click();
+      });
+      act(() => {
+        getButtonByText("Confirm and render").click();
+      });
+      await flushAsyncWork();
+
+      const resultSection = getSectionByHeading("Artifact result");
+      expect(resultSection.textContent).toContain("timeline-confirmed.png");
+      expect(Array.from(resultSection.querySelectorAll("button")).filter((button) => button.textContent?.includes("Inpaint"))).toHaveLength(0);
+      expect(fetchMock.mock.calls.map(([input]) => getFetchUrl(input))).not.toContain("/api/comfyui/inpaint-image");
     } finally {
       globalThis.fetch = originalFetch;
     }

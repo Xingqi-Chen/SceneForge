@@ -893,44 +893,10 @@ async function executeFinals(
   return partialResult;
 }
 
-function isKrea2DirectRun(context: TimelineNodeExecutionContext) {
+function isKrea2Run(context: TimelineNodeExecutionContext) {
   const parameters = context.workflow.nodes["parameter-recommendation"].result;
   return isRecord(parameters) && isRecord(parameters.requestPreview) &&
     parameters.requestPreview.workflowProfile === "krea2";
-}
-
-async function executeKrea2DirectFinal(
-  request: ComfyUiTextToImageRequest,
-  context: TimelineNodeExecutionContext,
-  previous?: ComfyUiExecutionTimelineResult,
-): Promise<ComfyUiExecutionTimelineResult> {
-  if (previous?.completed && previous.finalCount === 1 && previous.finals[0]?.status === "done") {
-    return previous;
-  }
-
-  const client = makeClient();
-  let objectInfo: unknown;
-  try {
-    objectInfo = await client.getObjectInfo();
-  } catch (error) {
-    throw toComfyError(error);
-  }
-  const result = await queueAndStore(client, objectInfo, request, context, "krea2-direct-final");
-  return {
-    completed: true,
-    finalCount: 1,
-    finals: [{
-      candidateId: "preview-1",
-      rank: 1,
-      seed: request.seed ?? 0,
-      status: "done",
-      promptId: result.promptId,
-      sourceImage: result.sourceImage,
-      storedImage: result.storedImage,
-    }],
-    request,
-    warnings: result.warnings,
-  };
 }
 
 function loadResultDisplay(execution: ComfyUiExecutionTimelineResult): ResultDisplayTimelineResult {
@@ -973,18 +939,17 @@ export function createTimelineT8ServerNodeAdapters(
     executePreviews,
     scorePreviews,
     executeFinals,
-    executeDirectFinal: executeKrea2DirectFinal,
     loadResultDisplay,
   });
   return {
     ...adapters,
     "final-review": async (context) => {
-      if (isKrea2DirectRun(context)) {
+      if (isKrea2Run(context)) {
         return {
           value: {
             status: "not-applicable",
-            reason: "krea2-direct-txt2img",
-            message: "Krea 2 Turbo direct txt2img has no Preview-to-Final review step.",
+            reason: "krea2-t42-unavailable",
+            message: "Krea 2 staged Run preserves Preview and Final variants, but paired Final review is reserved for T42.",
           },
           source: "system",
         };
@@ -1005,12 +970,12 @@ export function createTimelineT8ServerNodeAdapters(
       };
     },
     "final-repair": async (context) => {
-      if (isKrea2DirectRun(context)) {
+      if (isKrea2Run(context)) {
         return {
           value: {
             status: "not-applicable",
-            reason: "krea2-direct-txt2img",
-            message: "Krea 2 Turbo direct txt2img does not support local repair.",
+            reason: "krea2-t42-unavailable",
+            message: "Krea 2 staged Run local repair is reserved for T42 and was not requested.",
           },
           source: "system",
         };
@@ -1033,12 +998,12 @@ export function createTimelineT8ServerNodeAdapters(
       };
     },
     "repair-verification": async (context) => {
-      if (isKrea2DirectRun(context)) {
+      if (isKrea2Run(context)) {
         return {
           value: {
             status: "not-applicable",
-            reason: "krea2-direct-txt2img",
-            message: "Krea 2 Turbo direct txt2img has no repair verification step.",
+            reason: "krea2-t42-unavailable",
+            message: "Krea 2 staged Run repair verification is reserved for T42 and was not requested.",
           },
           source: "system",
         };

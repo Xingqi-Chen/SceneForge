@@ -75,6 +75,32 @@ const objectInfoWithAnima = {
 
 const objectInfoWithKrea2 = {
   ...objectInfoWithAnima,
+  LoadImage: {
+    input: {
+      required: {
+        image: [["SceneForge/krea-source.png"], {}],
+      },
+    },
+  },
+  ImageScale: {
+    input: {
+      required: {
+        image: ["IMAGE", {}],
+        upscale_method: [["lanczos"], {}],
+        width: ["INT", {}],
+        height: ["INT", {}],
+        crop: [["disabled"], {}],
+      },
+    },
+  },
+  VAEEncode: {
+    input: {
+      required: {
+        pixels: ["IMAGE", {}],
+        vae: ["VAE", {}],
+      },
+    },
+  },
   UNETLoader: {
     input: {
       required: {
@@ -955,6 +981,13 @@ describe("ComfyUI object info helpers", () => {
       },
     });
 
+    expect(validateComfyUiRequestAgainstObjectInfo({
+      ...validRequest,
+      imageName: "SceneForge/krea-source.png",
+      width: 1040,
+      height: 1024,
+    }, objectInfoWithKrea2)).toMatchObject({ errors: [] });
+
     expect(
       validateComfyUiRequestAgainstObjectInfo(validRequest, {
         ...objectInfoWithKrea2,
@@ -992,7 +1025,6 @@ describe("ComfyUI object info helpers", () => {
         objectInfoWithKrea2,
       ).errors,
     ).toEqual(expect.arrayContaining([
-      "Krea 2 Turbo supports direct txt2img only; source images are not supported.",
       "Krea 2 Turbo does not support Detailer nodes.",
       "Krea 2 Turbo does not support style or IPAdapter references.",
     ]));

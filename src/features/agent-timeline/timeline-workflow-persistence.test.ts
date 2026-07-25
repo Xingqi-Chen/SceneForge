@@ -274,7 +274,7 @@ describe("timeline workflow persistence", () => {
     }).settingsSnapshot?.promptProfile).toBe("illustrious");
   });
 
-  it("round-trips Krea direct-run not-applicable stages without restoring preview or repair work", () => {
+  it("marks incomplete legacy Krea direct runs stale and requires reconfirmation", () => {
     const raw = JSON.parse(JSON.stringify(createTimelineWorkflowState({
       promptProfile: "krea2",
       sceneRequest: "A direct Krea render",
@@ -306,19 +306,92 @@ describe("timeline workflow persistence", () => {
     }
 
     expect((restored.nodes["scene-input"].result as { promptProfile?: string }).promptProfile).toBe("krea2");
+    expect(restored.generationConfirmed).toBe(false);
+    expect(restored.nodes["generation-gate"]).toMatchObject({
+      status: "blocked",
+      error: { code: "confirmation_required" },
+    });
     for (const nodeId of skippedNodes) {
       expect(restored.nodes[nodeId]).toMatchObject({
-        status: "done",
-        result: {
-          status: "not-applicable",
-          reason: "krea2-direct-txt2img",
-          message: `Krea skipped ${nodeId}`,
-        },
+        status: "stale",
+        result: undefined,
       });
     }
   });
 
-  it("normalizes restored Krea request dimensions upward to the same 16-pixel boundaries used at queue time", () => {
+  it("keeps completed legacy Krea direct output readable without reopening generation", () => {
+    const raw = JSON.parse(JSON.stringify(createPersistedV2GenerationWorkflow(1))) as {
+      nodes: Record<string, { result?: Record<string, unknown> }>;
+    };
+    const sceneInput = raw.nodes["scene-input"]?.result;
+    const parameters = raw.nodes["parameter-recommendation"]?.result;
+    const execution = raw.nodes["comfyui-execution"]?.result;
+    if (!sceneInput || !parameters || !execution) {
+      throw new Error("Expected a complete legacy workflow fixture.");
+    }
+    sceneInput.promptProfile = "krea2";
+    sceneInput.settingsSnapshot = {
+      ...(sceneInput.settingsSnapshot as Record<string, unknown>),
+      promptProfile: "krea2",
+    };
+    parameters.requestPreview = {
+      ...(parameters.requestPreview as Record<string, unknown>),
+      checkpointName: "krea-2-turbo-unet.safetensors",
+      modelBaseModel: "Krea 2",
+      modelStorageKind: "diffusion",
+      workflowProfile: "krea2",
+    };
+    execution.request = {
+      checkpointName: "krea-2-turbo-unet.safetensors",
+      modelBaseModel: "Krea 2",
+      modelStorageKind: "diffusion",
+      positivePrompt: "persisted scene",
+      workflowProfile: "krea2",
+    };
+    delete execution.finalPolicy;
+    execution.finals = (execution.finals as Array<Record<string, unknown>>).map((entry) => {
+      const final = { ...entry };
+      delete final.previewUpscale;
+      delete final.finalPolicy;
+      return final;
+    });
+    for (const nodeId of [
+      "preview-execution",
+      "preview-scoring",
+      "final-review",
+      "final-repair",
+      "repair-verification",
+    ]) {
+      raw.nodes[nodeId] = {
+        ...raw.nodes[nodeId],
+        status: "done",
+        source: "system",
+        result: {
+          status: "not-applicable",
+          reason: "krea2-direct-txt2img",
+          message: `Legacy Krea skipped ${nodeId}`,
+        },
+      } as { result?: Record<string, unknown> };
+    }
+
+    const restored = sanitizeTimelineWorkflowState(raw);
+    if (!restored || !("scene-input" in restored.nodes)) {
+      throw new Error("Expected a completed single-image Krea workflow.");
+    }
+
+    expect(restored.generationConfirmed).toBe(true);
+    expect(restored.nodes["comfyui-execution"]).toMatchObject({ status: "done" });
+    expect(restored.nodes["result-display"]).toMatchObject({
+      status: "done",
+      result: { completed: true },
+    });
+    expect(restored.nodes["generation-gate"].status).not.toBe("blocked");
+  });
+
+  it.each([
+    ["parameter dimensions", { height: 1024, requestHeight: 1024, requestWidth: 1024, width: 1025 }],
+    ["request preview dimensions", { height: 1024, requestHeight: 1023, requestWidth: 1024, width: 1024 }],
+  ])("fails closed for persisted staged Krea %s that are not exact multiples of 16", (_label, dimensions) => {
     const raw = JSON.parse(JSON.stringify(createTimelineWorkflowState({
       promptProfile: "krea2",
       sceneRequest: "A direct Krea render",
@@ -329,16 +402,16 @@ describe("timeline workflow persistence", () => {
       status: "done",
       source: "system",
       result: {
-        width: 1025,
-        height: 1023,
+        width: dimensions.width,
+        height: dimensions.height,
         requestPreview: {
           checkpointName: "krea-2-turbo-unet.safetensors",
           workflowProfile: "krea2",
           modelBaseModel: "Krea 2",
           modelStorageKind: "diffusion",
           positivePrompt: "a quiet station",
-          width: 1025,
-          height: 1023,
+          width: dimensions.requestWidth,
+          height: dimensions.requestHeight,
         },
       },
     };
@@ -353,11 +426,31 @@ describe("timeline workflow persistence", () => {
       requestPreview?: { width?: number; height?: number };
     };
 
-    expect(parameters).toMatchObject({
-      width: 1040,
-      height: 1024,
-      requestPreview: { width: 1040, height: 1024 },
+    expect(restored.generationConfirmed).toBe(false);
+    expect(restored.nodes["parameter-recommendation"]).toMatchObject({
+      status: "error",
+      error: {
+        code: "timeline_request_invalid",
+        message: "Persisted Krea 2 Turbo dimensions must be exact multiples of 16. Regenerate parameters before continuing.",
+      },
     });
+    expect(parameters).toMatchObject({
+      width: dimensions.width,
+      height: dimensions.height,
+      requestPreview: { width: dimensions.requestWidth, height: dimensions.requestHeight },
+    });
+    for (const nodeId of [
+      "generation-gate",
+      "preview-execution",
+      "preview-scoring",
+      "comfyui-execution",
+      "final-review",
+      "final-repair",
+      "repair-verification",
+      "result-display",
+    ] as const) {
+      expect(restored.nodes[nodeId]).toMatchObject({ status: "stale", result: undefined });
+    }
   });
 
   function createPersistedRepairWorkflow() {

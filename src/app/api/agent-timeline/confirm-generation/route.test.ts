@@ -45,6 +45,7 @@ import {
   completeTimelineNode,
   confirmTimelineGeneration,
   createTimelineWorkflowState,
+  sanitizeTimelineWorkflowState,
   type TimelineWorkflowState,
 } from "@/features/agent-timeline";
 import { createTimelineGenerationConfirmationFingerprint } from "@/features/agent-timeline/generation-confirmation.server";
@@ -118,11 +119,107 @@ function createKreaWorkflowWithAutomaticRepair() {
   parameters.requestPreview = {
     ...parameters.requestPreview,
     checkpointName: "krea-2-turbo-unet.safetensors",
+    height: 1024,
     modelBaseModel: "Krea 2",
     modelStorageKind: "diffusion",
     scheduler: "simple",
     workflowProfile: "krea2",
+    width: 1024,
   };
+  return workflow;
+}
+
+function createCompletedLegacyDirectKreaWorkflow() {
+  let workflow = createGateReadyWorkflow();
+  const sceneInput = workflow.nodes["scene-input"].result as Record<string, unknown>;
+  const parameters = workflow.nodes["parameter-recommendation"].result as {
+    requestPreview: Record<string, unknown>;
+  } & Record<string, unknown>;
+  sceneInput.promptProfile = "krea2";
+  sceneInput.settingsSnapshot = {
+    ...((sceneInput.settingsSnapshot as Record<string, unknown> | undefined) ?? {}),
+    promptProfile: "krea2",
+  };
+  parameters.requestPreview = {
+    ...parameters.requestPreview,
+    checkpointName: "krea-2-turbo-unet.safetensors",
+    height: 1024,
+    modelBaseModel: "Krea 2",
+    modelStorageKind: "diffusion",
+    positivePrompt: "a preserved direct render",
+    workflowProfile: "krea2",
+    width: 1024,
+  };
+  const storedImage = {
+    byteLength: 128,
+    contentType: "image/png",
+    filename: `${"a".repeat(32)}.png`,
+    url: `/api/comfyui/generated-images/${"a".repeat(32)}.png`,
+  };
+  const sourceImage = { filename: "legacy-direct.png", nodeId: "9", type: "output" as const };
+  workflow = completeTimelineNode(workflow, "preview-execution", {
+    status: "not-applicable",
+    reason: "krea2-direct-txt2img",
+    message: "Legacy Krea direct output has no staged previews.",
+  }, "system");
+  workflow = completeTimelineNode(workflow, "preview-scoring", {
+    status: "not-applicable",
+    reason: "krea2-direct-txt2img",
+    message: "Legacy Krea direct output has no preview scoring.",
+  }, "system");
+  workflow = completeTimelineNode(workflow, "comfyui-execution", {
+    completed: true,
+    finalCount: 1,
+    finals: [{
+      candidateId: "preview-1",
+      promptId: "legacy-direct-prompt",
+      rank: 1,
+      seed: 123,
+      sourceImage,
+      status: "done" as const,
+      storedImage,
+    }],
+    request: {
+      checkpointName: "krea-2-turbo-unet.safetensors",
+      modelBaseModel: "Krea 2",
+      modelStorageKind: "diffusion",
+      positivePrompt: "a preserved direct render",
+      workflowProfile: "krea2",
+    },
+    warnings: [],
+  }, "system");
+  workflow = completeTimelineNode(workflow, "result-display", {
+    completed: true,
+    finalLinks: [{ candidateId: "preview-1", promptId: "legacy-direct-prompt", rank: 1, seed: 123 }],
+    image: { ...sourceImage, url: storedImage.url },
+    images: [{ ...sourceImage, url: storedImage.url }],
+    promptId: "legacy-direct-prompt",
+    sourceImage,
+    sourceImages: [sourceImage],
+    storedImage,
+    storedImages: [storedImage],
+    warnings: [],
+  }, "system");
+  for (const nodeId of [
+    "preview-execution",
+    "preview-scoring",
+    "final-review",
+    "final-repair",
+    "repair-verification",
+  ] as const) {
+    workflow.nodes[nodeId] = {
+      nodeId,
+      status: "done",
+      source: "system",
+      updatedAt: workflow.updatedAt,
+      result: {
+        status: "not-applicable",
+        reason: "krea2-direct-txt2img",
+        message: `Legacy Krea skipped ${nodeId}`,
+      },
+    } as never;
+  }
+
   return workflow;
 }
 
@@ -188,6 +285,33 @@ afterEach(() => {
 });
 
 describe("POST /api/agent-timeline/confirm-generation", () => {
+  it.each([
+    ["confirm", {}],
+    ["direct Final execution", { action: "confirm", stage: "comfyui-execution" }],
+    ["retry", { action: "retry", retryNodeId: "comfyui-execution" }],
+  ])("rejects completed legacy Krea direct %s requests before any execution", async (_label, payload) => {
+    const workflow = createCompletedLegacyDirectKreaWorkflow();
+    expect(sanitizeTimelineWorkflowState(workflow)).toMatchObject({
+      legacyDirectProvenance: { kind: "krea2-direct-txt2img", readOnly: true },
+    });
+    const response = await POST(new Request("http://localhost/api/agent-timeline/confirm-generation", {
+      body: JSON.stringify({ ...payload, workflow }),
+      method: "POST",
+    }));
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({
+      error: {
+        message: "Completed legacy Krea 2 Turbo direct txt2img Runs are read-only and cannot be changed or rerun.",
+        details: { code: "legacy_direct_read_only" },
+      },
+    });
+    expect(comfyUiMocks.createComfyUiClient).not.toHaveBeenCalled();
+    expect(comfyUiMocks.validateComfyUiTextToImageRequest).not.toHaveBeenCalled();
+    expect(comfyUiMocks.validateComfyUiRequestAgainstObjectInfo).not.toHaveBeenCalled();
+    expect(storeGeneratedImageMock).not.toHaveBeenCalled();
+  });
+
   it("rejects Krea automatic repair before ComfyUI validation or queueing", async () => {
     const response = await POST(new Request("http://localhost/api/agent-timeline/confirm-generation", {
       body: JSON.stringify({ workflow: createKreaWorkflowWithAutomaticRepair() }),

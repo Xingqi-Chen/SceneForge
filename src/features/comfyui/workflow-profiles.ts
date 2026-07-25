@@ -51,7 +51,7 @@ export const COMFYUI_TEXT_TO_IMAGE_WORKFLOW_PROFILES = {
   },
   krea2: {
     id: "krea2",
-    label: "Krea 2 Turbo direct txt2img",
+    label: "Krea 2 Turbo staged Run",
     requiredNodeClasses: [
       "UNETLoader",
       "CLIPLoader",

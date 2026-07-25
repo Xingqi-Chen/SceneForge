@@ -521,6 +521,17 @@ function normalizeRenderDimension(value: unknown, fallback: number) {
   return Math.max(8, Math.round(parsed / 8) * 8);
 }
 
+function normalizeKrea2RenderDimension(value: unknown, fallback: number, label: "width" | "height") {
+  const parsed = typeof value === "number" ? value : Number(value);
+  const dimension = Number.isFinite(parsed) ? parsed : fallback;
+  if (!Number.isInteger(dimension) || dimension < 16 || dimension > 16_384 || dimension % 16 !== 0) {
+    invalidTimelineInput(
+      `Krea 2 Turbo ${label} must be an exact 16-pixel-aligned integer between 16 and 16384; SceneForge will not round dimensions or change the source aspect ratio.`,
+    );
+  }
+  return dimension;
+}
+
 function makeSeedPolicy(requestSeed: number | undefined): TimelineSeedPolicy {
   return typeof requestSeed === "number" && Number.isSafeInteger(requestSeed) && requestSeed >= 0
     ? { mode: "fixed", seed: requestSeed }
@@ -600,9 +611,6 @@ export function createTimelineParameterRecommendation({
   styleReference?: StyleReferenceSnapshot;
 }): ParameterRecommendationTimelineResult {
   const isKrea2Profile = normalizePromptProfileId(promptProfile ?? scenePrompt.promptProfile) === "krea2";
-  if (isKrea2Profile && sourceImage) {
-    invalidTimelineInput("Krea 2 Turbo supports direct txt2img only; remove the source image before generating.");
-  }
   if (isKrea2Profile && styleReference) {
     invalidTimelineInput("Krea 2 Turbo does not support style or IPAdapter references.");
   }
@@ -661,13 +669,13 @@ export function createTimelineParameterRecommendation({
         ...rawRequestPreview,
         workflowProfile: "krea2" as const,
         modelStorageKind: "diffusion" as const,
-        width: Math.ceil((rawRequestPreview.width ?? 1024) / 16) * 16,
-        height: Math.ceil((rawRequestPreview.height ?? 1024) / 16) * 16,
+        width: rawRequestPreview.width ?? 1024,
+        height: rawRequestPreview.height ?? 1024,
         steps: rawRequestPreview.steps ?? 8,
         cfg: rawRequestPreview.cfg ?? 1,
         samplerName: pickSupportedValue("euler", samplerOptions.samplers, "euler"),
         scheduler: pickSupportedValue("simple", samplerOptions.schedulers, "simple"),
-        denoise: 1,
+        denoise,
         batchSize: 1,
         latentImageNode: "EmptyLatentImage" as const,
         faceDetailer: { ...rawRequestPreview.faceDetailer, enabled: false },
@@ -676,8 +684,12 @@ export function createTimelineParameterRecommendation({
         characterReferences: [],
       }
     : rawRequestPreview;
-  const width = normalizeRenderDimension(kreaRequestPreview.width, 1024);
-  const height = normalizeRenderDimension(kreaRequestPreview.height, 1024);
+  const width = isKrea2Profile
+    ? normalizeKrea2RenderDimension(kreaRequestPreview.width, 1024, "width")
+    : normalizeRenderDimension(kreaRequestPreview.width, 1024);
+  const height = isKrea2Profile
+    ? normalizeKrea2RenderDimension(kreaRequestPreview.height, 1024, "height")
+    : normalizeRenderDimension(kreaRequestPreview.height, 1024);
   const requestPreview = {
     ...kreaRequestPreview,
     width,
@@ -777,9 +789,6 @@ export function createTimelineT7NodeAdapters({
       const sourceImage = getSceneInputSourceImage(context.workflow);
       const inputSettings = getSceneInputSettings(context.workflow);
       const styleReferenceIssue = getStyleReferenceBlockingIssue(inputSettings.styleReference, "Run");
-      if (promptProfile === "krea2" && sourceImage) {
-        invalidTimelineInput("Krea 2 Turbo supports direct txt2img only; remove the source image before generating.");
-      }
       if (promptProfile === "krea2" && inputSettings.styleReference) {
         invalidTimelineInput("Krea 2 Turbo does not support style or IPAdapter references.");
       }
