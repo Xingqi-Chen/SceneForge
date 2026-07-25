@@ -41,6 +41,15 @@ const IMPORT_METADATA_MESSAGE =
   "已从 Civitai 图片公开元数据中识别资源；部分资源可能因隐藏元数据、权限限制或 API 返回不完整而无法解析。";
 const OFFICIAL_RESOURCE_CACHE_CONCURRENCY = 3;
 
+export class CivitaiImageImportInputError extends Error {
+  readonly statusCode = 400;
+
+  constructor(message: string) {
+    super(message);
+    this.name = "CivitaiImageImportInputError";
+  }
+}
+
 async function mapWithConcurrency<T, R>(
   items: T[],
   concurrency: number,
@@ -469,7 +478,9 @@ export async function parseCivitaiImageUrl(options: {
 }): Promise<CivitaiParsePreview> {
   const imageId = parseCivitaiImageIdFromUrl(options.imageUrl);
   if (!imageId) {
-    throw new Error("请输入有效的 Civitai image URL，例如 https://civitai.com/images/29900440。");
+    throw new CivitaiImageImportInputError(
+      "请输入有效的 civitai.com / civitai.red image URL 或纯数字 image ID，例如 https://civitai.red/images/135795968。",
+    );
   }
 
   const client = options.client ?? createCivitaiClient({ apiKey: process.env.CIVITAI_API_KEY });
@@ -530,7 +541,9 @@ export async function importCivitaiImageUrlToSqlite(options: {
 }): Promise<CivitaiImportResult> {
   const imageId = parseCivitaiImageIdFromUrl(options.imageUrl);
   if (!imageId) {
-    throw new Error("请输入有效的 Civitai image URL，例如 https://civitai.com/images/29900440。");
+    throw new CivitaiImageImportInputError(
+      "请输入有效的 civitai.com / civitai.red image URL 或纯数字 image ID，例如 https://civitai.red/images/135795968。",
+    );
   }
 
   const client = options.client ?? createCivitaiClient({ apiKey: process.env.CIVITAI_API_KEY });
@@ -558,7 +571,7 @@ export async function importCivitaiImageUrlToSqlite(options: {
   const selectedNewResourcePreviews = selectedResourcePreviews.filter((preview) => !preview.existingResource);
 
   if (selectedResourcePreviews.length === 0 && implicitExistingResourcePreviews.length === 0) {
-    throw new Error("请至少选择一个 LoRA 或 checkpoint/model 再导入。");
+    throw new CivitaiImageImportInputError("请至少选择一个 LoRA 或 checkpoint/model 再导入。");
   }
 
   const importedResources: CivitaiImportResult["resources"] = [];

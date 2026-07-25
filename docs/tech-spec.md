@@ -90,6 +90,7 @@ Route expectations:
 - Validate input at the edge.
 - Avoid leaking secrets or absolute local paths in responses unless explicitly needed for local file access.
 - Normalize external service errors into user-actionable responses.
+- Civitai image parse/import accepts only numeric IDs or exact `/images/<id>` pages on the trusted `.com`/`.red` host allowlist. URLs are never used as fetch targets. Each parse and confirmed import independently queries the fixed Civitai API with exactly `nsfw=X`; this explicit metadata lookup does not read or depend on `SCENEFORGE_SHOW_NSFW_BUTTON`, persisted `supportsNsfw`, or downstream generation context.
 - Use configured storage roots and reject path traversal.
 - Preserve the `/api/llm/chat` logging, validation, and model-selection semantics when wrapping existing LLM calls for LangGraph nodes. Story Graph planning adapters should write local request, response, and error records with workflow id, story id, and node id context.
 
