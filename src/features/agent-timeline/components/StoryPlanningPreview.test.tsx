@@ -2254,6 +2254,11 @@ describe("StoryPlanningPreview", () => {
 
     expect(textarea).not.toBeNull();
     expect(baseModelSelect).not.toBeNull();
+    expect(Array.from(baseModelSelect?.options ?? []).map((option) => option.value)).toEqual([
+      "illustrious",
+      "anima",
+    ]);
+    expect(Array.from(baseModelSelect?.options ?? []).map((option) => option.value)).not.toContain("krea2");
 
     act(() => {
       setNativeInputValue(textarea as HTMLTextAreaElement, "A detective follows a signal through a storm-lit city.");

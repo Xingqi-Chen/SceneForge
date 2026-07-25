@@ -15,6 +15,11 @@ import {
   type IllustriousPromptSections,
 } from "@/features/editor/ai-prompt/illustrious-prompt";
 import {
+  buildKrea2AiResponseInstructions,
+  parseKrea2PromptSectionsFromResponse,
+  type Krea2PromptSections,
+} from "@/features/editor/ai-prompt/krea2-prompt";
+import {
   buildCharacterTextPromptTagMessages,
   isCharacterBodyPromptTagCategory,
   parseCharacterImagePromptTagsContent,
@@ -230,6 +235,10 @@ export function normalizeScenePromptTimelineResult(
     parsed.animaSections ?? parsed.anima_sections ?? parsed.sections,
     parseAnimaPromptSectionsFromResponse,
   );
+  const krea2Sections = normalizeProfileSections<Krea2PromptSections>(
+    parsed.krea2Sections ?? parsed.krea2_sections ?? parsed.sections,
+    parseKrea2PromptSectionsFromResponse,
+  );
 
   return {
     promptProfile,
@@ -255,6 +264,7 @@ export function normalizeScenePromptTimelineResult(
     lighting: normalizePromptFragments(parsed.lighting),
     ...(illustriousSections ? { illustriousSections } : {}),
     ...(animaSections ? { animaSections } : {}),
+    ...(krea2Sections ? { krea2Sections } : {}),
   };
 }
 
@@ -503,7 +513,7 @@ function buildScenePromptRequest(context: TimelineNodeExecutionContext): LlmChat
           "Do not choose checkpoints, LoRAs, render parameters, file paths, or external resources.",
           `Selected prompt profile: ${formatPromptProfileLabel(sceneInput.promptProfile)} (${sceneInput.promptProfile}).`,
           profileInstructions,
-          'Required shape: {"promptProfile":"illustrious|anima","primaryCharacter":{"name":"...","identity":"...","publicFacts":["..."]},"sceneIntent":"...","styleTone":"...","setting":"...","sharedFacts":["..."],"positivePrompt":"...","negativeSuggestions":["..."],"style":[{"label":"...","prompt":"..."}],"camera":[{"label":"...","prompt":"..."}],"lighting":[{"label":"...","prompt":"..."}],"illustriousSections"?:{},"animaSections"?:{}}',
+          'Required shape: {"promptProfile":"illustrious|anima|krea2","primaryCharacter":{"name":"...","identity":"...","publicFacts":["..."]},"sceneIntent":"...","styleTone":"...","setting":"...","sharedFacts":["..."],"positivePrompt":"...","negativeSuggestions":["..."],"style":[{"label":"...","prompt":"..."}],"camera":[{"label":"...","prompt":"..."}],"lighting":[{"label":"...","prompt":"..."}],"illustriousSections"?:{},"animaSections"?:{},"krea2Sections"?:{}}',
         ].join("\n"),
       },
       {
@@ -543,6 +553,14 @@ function buildPromptProfileSceneInstructions(promptProfile: PromptProfileId) {
       "For this scene context response, set promptProfile to anima and include animaSections.",
       "Make positivePrompt detailed comma-separated anime image clauses, not Illustrious booru-only tags.",
       "Describe visible character identity, action, expression, environment, camera, and lighting as concise anime clauses.",
+    ].join("\n");
+  }
+
+  if (promptProfile === "krea2") {
+    return [
+      buildKrea2AiResponseInstructions(),
+      "For this scene context response, set promptProfile to krea2 and include krea2Sections.",
+      "Make positivePrompt a single faithful natural-language paragraph, not tag soup.",
     ].join("\n");
   }
 

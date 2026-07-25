@@ -28,6 +28,10 @@ import {
   DEFAULT_COMFYUI_ANIMA_CLIP_TYPE,
   DEFAULT_COMFYUI_ANIMA_UNET_WEIGHT_DTYPE,
   DEFAULT_COMFYUI_ANIMA_VAE_NAME,
+  DEFAULT_COMFYUI_KREA2_CLIP_NAME,
+  DEFAULT_COMFYUI_KREA2_CLIP_TYPE,
+  DEFAULT_COMFYUI_KREA2_UNET_WEIGHT_DTYPE,
+  DEFAULT_COMFYUI_KREA2_VAE_NAME,
   resolveComfyUiTextToImageWorkflowProfile,
 } from "./workflow-profiles";
 
@@ -616,6 +620,64 @@ function resolveAnimaProfileObjectInfoOptions({
   };
 }
 
+function resolveKrea2ProfileObjectInfoOptions({
+  errors,
+  objectInfo,
+  request,
+}: {
+  errors: string[];
+  objectInfo: unknown;
+  request: Pick<ComfyUiTextToImageRequest, "checkpointName"> &
+    Partial<Pick<ComfyUiTextToImageRequest, "checkpointNameAliases">>;
+}) {
+  const unetName = resolveRequiredOption({
+    aliases: request.checkpointNameAliases,
+    classType: "UNETLoader",
+    errors,
+    inputName: "unet_name",
+    label: "Krea 2 UNET model",
+    objectInfo,
+    requested: request.checkpointName,
+  });
+  const unetWeightDtype = resolveRequiredOption({
+    classType: "UNETLoader",
+    errors,
+    fallback: DEFAULT_COMFYUI_KREA2_UNET_WEIGHT_DTYPE,
+    inputName: "weight_dtype",
+    label: "Krea 2 UNET weight dtype",
+    objectInfo,
+    requested: DEFAULT_COMFYUI_KREA2_UNET_WEIGHT_DTYPE,
+  });
+  const clipName = resolveRequiredOption({
+    classType: "CLIPLoader",
+    errors,
+    fallback: DEFAULT_COMFYUI_KREA2_CLIP_NAME,
+    inputName: "clip_name",
+    label: "Krea 2 CLIP model",
+    objectInfo,
+    requested: DEFAULT_COMFYUI_KREA2_CLIP_NAME,
+  });
+  resolveRequiredOption({
+    classType: "CLIPLoader",
+    errors,
+    inputName: "type",
+    label: "Krea 2 CLIP type",
+    objectInfo,
+    requested: DEFAULT_COMFYUI_KREA2_CLIP_TYPE,
+  });
+  const vaeName = resolveRequiredOption({
+    classType: "VAELoader",
+    errors,
+    fallback: DEFAULT_COMFYUI_KREA2_VAE_NAME,
+    inputName: "vae_name",
+    label: "Krea 2 VAE model",
+    objectInfo,
+    requested: DEFAULT_COMFYUI_KREA2_VAE_NAME,
+  });
+
+  return { clipName, unetName, unetWeightDtype, vaeName };
+}
+
 export function validateComfyUiRequestAgainstObjectInfo(
   request: ComfyUiTextToImageRequest,
   objectInfo: unknown,
@@ -624,6 +686,7 @@ export function validateComfyUiRequestAgainstObjectInfo(
   const warnings: string[] = [];
   const profile = resolveComfyUiTextToImageWorkflowProfile(request);
   const isAnimaProfile = profile.id === "anima";
+  const isKrea2Profile = profile.id === "krea2";
   const usesImg2ImgSource = Boolean(request.imageName || request.sourceImageDataUrl);
   const requiredNodeClasses = usesImg2ImgSource
     ? profile.requiredNodeClasses.filter((classType) => classType !== "EmptyLatentImage")
@@ -631,7 +694,7 @@ export function validateComfyUiRequestAgainstObjectInfo(
   validateRequiredNodeClasses(objectInfo, requiredNodeClasses, errors);
   validateRequiredInputs(objectInfo, "KSampler", ["sampler_name", "scheduler"], errors);
 
-  if (isAnimaProfile) {
+  if (isAnimaProfile || isKrea2Profile) {
     validateRequiredInputs(objectInfo, "UNETLoader", ["unet_name", "weight_dtype"], errors);
     validateRequiredInputs(objectInfo, "CLIPLoader", ["clip_name", "type"], errors);
     validateRequiredInputs(objectInfo, "VAELoader", ["vae_name"], errors);
@@ -640,7 +703,11 @@ export function validateComfyUiRequestAgainstObjectInfo(
   }
 
   const checkpointOptions = readInputOptions(objectInfo, "CheckpointLoaderSimple", "ckpt_name");
-  const loraOptions = readInputOptions(objectInfo, "LoraLoader", "lora_name");
+  const loraOptions = readInputOptions(
+    objectInfo,
+    isKrea2Profile ? "LoraLoaderModelOnly" : "LoraLoader",
+    "lora_name",
+  );
   const samplerOptions = readInputOptions(objectInfo, "KSampler", "sampler_name");
   const schedulerOptions = readInputOptions(objectInfo, "KSampler", "scheduler");
   const ultralyticsDetectorOptions = readInputOptions(objectInfo, "UltralyticsDetectorProvider", "model_name");
@@ -649,12 +716,17 @@ export function validateComfyUiRequestAgainstObjectInfo(
   const animaOptions = isAnimaProfile
     ? resolveAnimaProfileObjectInfoOptions({ errors, objectInfo, request })
     : undefined;
+  const krea2Options = isKrea2Profile
+    ? resolveKrea2ProfileObjectInfoOptions({ errors, objectInfo, request })
+    : undefined;
   const sampler = findSampler(request.samplerName, samplerOptions, schedulerOptions);
   const samplerName = sampler.samplerName;
   const requestedScheduler = request.scheduler ? findOption(request.scheduler, schedulerOptions) : null;
   const scheduler = sampler.scheduler ?? requestedScheduler;
   const requestedLatentImageNode = normalizeComfyUiLatentImageNode(request.latentImageNode);
-  const latentImageNode = isAnimaProfile ? "EmptyLatentImage" : requestedLatentImageNode ?? "EmptyLatentImage";
+  const latentImageNode = isAnimaProfile || isKrea2Profile
+    ? "EmptyLatentImage"
+    : requestedLatentImageNode ?? "EmptyLatentImage";
   let faceDetailer = request.faceDetailer;
   let handDetailer = request.handDetailer;
   const loras = (request.loras ?? []).map((lora, index) => {
@@ -669,11 +741,23 @@ export function validateComfyUiRequestAgainstObjectInfo(
     };
   });
 
-  if ((request.loras ?? []).length > 0 && !hasNodeInfo(objectInfo, "LoraLoader")) {
-    errors.push("LoraLoader node is not available in ComfyUI. It is required when LoRAs are enabled.");
+  if ((request.loras ?? []).length > 0 && !hasNodeInfo(objectInfo, isKrea2Profile ? "LoraLoaderModelOnly" : "LoraLoader")) {
+    errors.push(
+      isKrea2Profile
+        ? "LoraLoaderModelOnly node is not available in ComfyUI. It is required when Krea LoRAs are enabled."
+        : "LoraLoader node is not available in ComfyUI. It is required when LoRAs are enabled.",
+    );
+  }
+  if (isKrea2Profile && (request.loras ?? []).length > 0) {
+    validateRequiredInputs(
+      objectInfo,
+      "LoraLoaderModelOnly",
+      ["model", "lora_name", "strength_model"],
+      errors,
+    );
   }
 
-  if (!isAnimaProfile && !checkpointName) {
+  if (!isAnimaProfile && !isKrea2Profile && !checkpointName) {
     errors.push(`Checkpoint is not available in ComfyUI: ${request.checkpointName}`);
   }
 
@@ -737,6 +821,20 @@ export function validateComfyUiRequestAgainstObjectInfo(
 
   let controlNets = getRequestControlNetUnits(request);
   let characterReferences = request.characterReferences ?? [];
+  if (isKrea2Profile) {
+    if (usesImg2ImgSource) {
+      errors.push("Krea 2 Turbo supports direct txt2img only; source images are not supported.");
+    }
+    if (request.faceDetailer?.enabled || request.handDetailer?.enabled) {
+      errors.push("Krea 2 Turbo does not support Detailer nodes.");
+    }
+    if (controlNets.some((unit) => unit.enabled)) {
+      errors.push("Krea 2 Turbo does not support ControlNet.");
+    }
+    if (characterReferences.some((reference) => reference.enabled !== false)) {
+      errors.push("Krea 2 Turbo does not support style or IPAdapter references.");
+    }
+  }
   if (controlNets.some((unit) => unit.enabled)) {
     if (!hasNodeInfo(objectInfo, "LoadImage")) {
       errors.push("LoadImage node is not available in ComfyUI. It is required for ControlNet images.");
@@ -777,7 +875,7 @@ export function validateComfyUiRequestAgainstObjectInfo(
 
   if (isAnimaProfile) {
     validateAnimaCharacterReferenceNodes(characterReferences, objectInfo, errors);
-  } else {
+  } else if (!isKrea2Profile) {
     characterReferences = characterReferences.map((reference) => {
       if (reference.enabled === false) {
         return reference;
@@ -822,11 +920,21 @@ export function validateComfyUiRequestAgainstObjectInfo(
     request: {
       ...request,
       workflowProfile: profile.id,
-      checkpointName: isAnimaProfile ? animaOptions?.unetName ?? request.checkpointName : checkpointName ?? request.checkpointName,
-      clipName: isAnimaProfile ? animaOptions?.clipName : request.clipName,
+      checkpointName: isAnimaProfile
+        ? animaOptions?.unetName ?? request.checkpointName
+        : isKrea2Profile
+          ? krea2Options?.unetName ?? request.checkpointName
+          : checkpointName ?? request.checkpointName,
+      clipName: isAnimaProfile
+        ? animaOptions?.clipName
+        : isKrea2Profile ? krea2Options?.clipName : request.clipName,
       clipDevice: isAnimaProfile ? animaOptions?.clipDevice : request.clipDevice,
-      vaeName: isAnimaProfile ? animaOptions?.vaeName : request.vaeName,
-      unetWeightDtype: isAnimaProfile ? animaOptions?.unetWeightDtype : request.unetWeightDtype,
+      vaeName: isAnimaProfile
+        ? animaOptions?.vaeName
+        : isKrea2Profile ? krea2Options?.vaeName : request.vaeName,
+      unetWeightDtype: isAnimaProfile
+        ? animaOptions?.unetWeightDtype
+        : isKrea2Profile ? krea2Options?.unetWeightDtype : request.unetWeightDtype,
       samplerName: samplerName ?? request.samplerName,
       scheduler: scheduler ?? request.scheduler,
       latentImageNode: latentImageNode ?? request.latentImageNode,

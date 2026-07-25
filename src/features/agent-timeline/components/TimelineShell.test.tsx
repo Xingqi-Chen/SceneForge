@@ -2049,6 +2049,7 @@ describe("TimelineShell", () => {
       expect(Array.from(promptProfile?.options ?? []).map((option) => option.value)).toEqual([
         "illustrious",
         "anima",
+        "krea2",
       ]);
       expect(startButton.disabled).toBe(true);
       expect(parametersButton.disabled).toBe(true);
@@ -2125,6 +2126,43 @@ describe("TimelineShell", () => {
       globalThis.fetch = originalFetch;
     }
   });
+
+  it.each(["simple", "detailed"] as const)(
+    "switches %s Run composer to Krea direct txt2img controls",
+    async (displayMode) => {
+      const originalFetch = globalThis.fetch;
+      const t5Fetch = mockT5Fetch();
+      globalThis.fetch = vi.fn<typeof fetch>(async (input, init) => {
+        if (getFetchUrl(input) === "/api/settings") {
+          return createTimelineSettingsResponse({ displayMode });
+        }
+        return t5Fetch(input, init);
+      });
+
+      try {
+        act(() => {
+          root.render(<TimelineShell />);
+        });
+        await flushAsyncWork();
+
+        const profile = container.querySelector("#prompt-profile") as HTMLSelectElement;
+        act(() => {
+          setNativeSelectValue(profile, "krea2");
+        });
+
+        const imageCount = container.querySelector("#timeline-image-count") as HTMLSelectElement | null;
+        const sourceButton = getButtonByText("Txt2img only");
+        expect(profile.value).toBe("krea2");
+        expect(imageCount?.value).toBe("1");
+        expect(imageCount?.disabled).toBe(true);
+        expect(sourceButton.disabled).toBe(true);
+        expect(container.textContent).toContain("Krea 2 Turbo uses the selected Krea 2 local UNet");
+        expect(container.textContent).toContain("Preview/Final redraw, review, and repair are unavailable.");
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    },
+  );
 
   it("defaults legacy settings to simple mode and auto-renders when auto review is enabled", async () => {
     const originalFetch = globalThis.fetch;

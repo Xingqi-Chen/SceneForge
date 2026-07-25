@@ -14,6 +14,10 @@ export function isAnimaCivitaiBaseModel(value: string | null | undefined) {
   return normalizeCivitaiBaseModel(value) === "anima";
 }
 
+export function isKrea2CivitaiBaseModel(value: string | null | undefined) {
+  return /^krea\s*[-_ ]?2(?:\s|$)/i.test((value ?? "").trim());
+}
+
 export function isCivitaiBaseModelCompatibleWithPromptProfile(
   baseModel: string | null | undefined,
   promptProfile: PromptProfileId,
@@ -26,6 +30,10 @@ export function isCivitaiBaseModelCompatibleWithPromptProfile(
 
   if (promptProfile === "anima") {
     return normalized === "anima";
+  }
+
+  if (promptProfile === "krea2") {
+    return isKrea2CivitaiBaseModel(baseModel);
   }
 
   return false;

@@ -158,7 +158,7 @@ describe("T5 timeline node adapters", () => {
     expect(requests).toHaveLength(1);
     expect(String(requests[0]?.messages[0]?.content)).toContain("Selected prompt profile: Illustrious (illustrious)");
     expect(String(requests[0]?.messages[0]?.content)).toContain("include illustriousSections");
-    expect(String(requests[0]?.messages[0]?.content)).toContain('"promptProfile":"illustrious|anima"');
+    expect(String(requests[0]?.messages[0]?.content)).toContain('"promptProfile":"illustrious|anima|krea2"');
     expect(String(requests[0]?.messages[0]?.content)).not.toContain("generic");
     expect(JSON.parse(String(requests[0]?.messages[1]?.content))).toMatchObject({
       promptProfile: "illustrious",

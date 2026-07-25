@@ -28,6 +28,7 @@ import type {
   ResolvedComfyUiSam2MaskRequest,
   ResolvedComfyUiTextToImageRequest,
 } from "./types";
+import { isKrea2CivitaiBaseModel } from "@/features/civitai-lora-library/base-model";
 import {
   DEFAULT_COMFYUI_LATENT_IMAGE_NODE,
   normalizeComfyUiLatentImageNode,
@@ -50,6 +51,9 @@ import {
   DEFAULT_COMFYUI_ANIMA_CLIP_NAME,
   DEFAULT_COMFYUI_ANIMA_UNET_WEIGHT_DTYPE,
   DEFAULT_COMFYUI_ANIMA_VAE_NAME,
+  DEFAULT_COMFYUI_KREA2_CLIP_NAME,
+  DEFAULT_COMFYUI_KREA2_UNET_WEIGHT_DTYPE,
+  DEFAULT_COMFYUI_KREA2_VAE_NAME,
   resolveComfyUiTextToImageWorkflowProfile,
 } from "./workflow-profiles";
 
@@ -197,7 +201,7 @@ const CONTROLNET_TYPES = ["openpose", "depth", "normal"] as const satisfies read
 const IPADAPTER_REFERENCE_MODES = ["ipadapter", "face", "faceid"] as const satisfies readonly ComfyUiIpAdapterReferenceMode[];
 const IPADAPTER_COMBINE_EMBEDS = ["concat", "add", "subtract", "average", "norm average"] as const satisfies readonly ComfyUiIpAdapterCombineEmbeds[];
 const COMFYUI_MODEL_STORAGE_KINDS = ["checkpoint", "diffusion"] as const;
-const COMFYUI_TEXT_TO_IMAGE_WORKFLOW_PROFILE_IDS = ["default", "anima"] as const satisfies readonly ComfyUiTextToImageWorkflowProfileId[];
+const COMFYUI_TEXT_TO_IMAGE_WORKFLOW_PROFILE_IDS = ["default", "anima", "krea2"] as const satisfies readonly ComfyUiTextToImageWorkflowProfileId[];
 const INPAINT_UPSCALE_MODES = ["lanczos", "real-esrgan-x2", "aniscale2-x2"] as const satisfies readonly ComfyUiInpaintUpscaleMode[];
 const INPAINT_UPSCALE_STRATEGIES = ["full-image", "local-region"] as const satisfies readonly ComfyUiInpaintUpscaleStrategy[];
 const INPAINT_LOCAL_REGION_SOURCES = ["mask-bounds", "box"] as const satisfies readonly ComfyUiInpaintLocalRegionSource[];
@@ -378,6 +382,12 @@ function isComfyUiModelStorageKind(value: unknown): value is ComfyUiModelStorage
 
 function isComfyUiTextToImageWorkflowProfileId(value: unknown): value is ComfyUiTextToImageWorkflowProfileId {
   return typeof value === "string" && COMFYUI_TEXT_TO_IMAGE_WORKFLOW_PROFILE_IDS.some((profile) => profile === value);
+}
+
+function hasKrea2WorkflowProfileMetadata(modelBaseModel: unknown, modelStorageKind: unknown) {
+  return modelStorageKind === "diffusion" &&
+    typeof modelBaseModel === "string" &&
+    isKrea2CivitaiBaseModel(modelBaseModel);
 }
 
 function isIpAdapterReferenceMode(value: unknown): value is ComfyUiIpAdapterReferenceMode {
@@ -1016,7 +1026,15 @@ export function validateComfyUiTextToImageRequest(value: unknown): ComfyUiTextTo
   if (value.workflowProfile !== undefined && !isComfyUiTextToImageWorkflowProfileId(value.workflowProfile)) {
     return {
       ok: false,
-      message: "workflowProfile must be default or anima when provided.",
+      message: "workflowProfile must be default, anima, or krea2 when provided.",
+    };
+  }
+
+  if (value.workflowProfile === "krea2" &&
+      !hasKrea2WorkflowProfileMetadata(value.modelBaseModel, value.modelStorageKind)) {
+    return {
+      ok: false,
+      message: "Krea 2 Turbo requires a normalized Krea 2 base model and diffusion model storage.",
     };
   }
 
@@ -1236,6 +1254,31 @@ export function validateComfyUiTextToImageRequest(value: unknown): ComfyUiTextTo
     };
   }
 
+  const workflowProfile = resolveComfyUiTextToImageWorkflowProfile({
+    checkpointName: value.checkpointName.trim(),
+    workflowProfile: isComfyUiTextToImageWorkflowProfileId(value.workflowProfile) ? value.workflowProfile : undefined,
+    modelBaseModel: getOptionalTrimmedStringValue(value.modelBaseModel),
+    modelStorageKind: isComfyUiModelStorageKind(value.modelStorageKind) ? value.modelStorageKind : undefined,
+  }).id;
+
+  if (workflowProfile === "krea2") {
+    if (value.imageName || value.sourceImageDataUrl) {
+      return { ok: false, message: "Krea 2 Turbo supports direct txt2img only; source images are not supported." };
+    }
+    if (faceDetailer?.enabled || handDetailer?.enabled) {
+      return { ok: false, message: "Krea 2 Turbo does not support FaceDetailer or HandDetailer." };
+    }
+    if (controlNetUnitsForValidation.some((unit) => unit.enabled)) {
+      return { ok: false, message: "Krea 2 Turbo does not support ControlNet." };
+    }
+    if (characterReferences?.some((reference) => reference.enabled !== false)) {
+      return { ok: false, message: "Krea 2 Turbo does not support style or IPAdapter references." };
+    }
+    if (value.preview === true) {
+      return { ok: false, message: "Krea 2 Turbo does not support preview generation." };
+    }
+  }
+
   return {
     ok: true,
     request: {
@@ -1318,7 +1361,27 @@ export function validateComfyUiInpaintRequest(value: unknown): ComfyUiInpaintVal
   if (value.workflowProfile !== undefined && !isComfyUiTextToImageWorkflowProfileId(value.workflowProfile)) {
     return {
       ok: false,
-      message: "workflowProfile must be default or anima when provided.",
+      message: "workflowProfile must be default, anima, or krea2 when provided.",
+    };
+  }
+
+  if (value.workflowProfile === "krea2" &&
+      !hasKrea2WorkflowProfileMetadata(value.modelBaseModel, value.modelStorageKind)) {
+    return {
+      ok: false,
+      message: "Krea 2 Turbo requires a normalized Krea 2 base model and diffusion model storage.",
+    };
+  }
+
+  if (resolveComfyUiTextToImageWorkflowProfile({
+    checkpointName: value.checkpointName.trim(),
+    workflowProfile: isComfyUiTextToImageWorkflowProfileId(value.workflowProfile) ? value.workflowProfile : undefined,
+    modelBaseModel: getOptionalTrimmedStringValue(value.modelBaseModel),
+    modelStorageKind: isComfyUiModelStorageKind(value.modelStorageKind) ? value.modelStorageKind : undefined,
+  }).id === "krea2") {
+    return {
+      ok: false,
+      message: "Krea 2 Turbo supports direct txt2img only; inpaint and repair are not supported.",
     };
   }
 
@@ -1847,6 +1910,7 @@ export function resolveComfyUiTextToImageRequest(
     modelStorageKind,
   }).id;
   const isAnimaProfile = workflowProfile === "anima";
+  const isKrea2Profile = workflowProfile === "krea2";
 
   return {
     checkpointName,
@@ -1854,12 +1918,16 @@ export function resolveComfyUiTextToImageRequest(
     workflowProfile,
     modelBaseModel,
     modelStorageKind,
-    clipName: isAnimaProfile ? DEFAULT_COMFYUI_ANIMA_CLIP_NAME : getOptionalTrimmedStringValue(request.clipName),
+    clipName: isAnimaProfile
+      ? DEFAULT_COMFYUI_ANIMA_CLIP_NAME
+      : isKrea2Profile ? DEFAULT_COMFYUI_KREA2_CLIP_NAME : getOptionalTrimmedStringValue(request.clipName),
     clipDevice: getOptionalTrimmedStringValue(request.clipDevice),
-    vaeName: isAnimaProfile ? DEFAULT_COMFYUI_ANIMA_VAE_NAME : getOptionalTrimmedStringValue(request.vaeName),
+    vaeName: isAnimaProfile
+      ? DEFAULT_COMFYUI_ANIMA_VAE_NAME
+      : isKrea2Profile ? DEFAULT_COMFYUI_KREA2_VAE_NAME : getOptionalTrimmedStringValue(request.vaeName),
     unetWeightDtype: isAnimaProfile
       ? DEFAULT_COMFYUI_ANIMA_UNET_WEIGHT_DTYPE
-      : getOptionalTrimmedStringValue(request.unetWeightDtype),
+      : isKrea2Profile ? DEFAULT_COMFYUI_KREA2_UNET_WEIGHT_DTYPE : getOptionalTrimmedStringValue(request.unetWeightDtype),
     positivePrompt: request.positivePrompt.trim(),
     negativePrompt: getString(request.negativePrompt, DEFAULT_TEXT_TO_IMAGE_REQUEST.negativePrompt),
     loras: (request.loras ?? []).map((lora) => ({
@@ -1867,18 +1935,22 @@ export function resolveComfyUiTextToImageRequest(
       strengthModel: lora.strengthModel,
       strengthClip: lora.strengthClip ?? lora.strengthModel,
     })),
-    width: request.width ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.width,
-    height: request.height ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.height,
+    width: isKrea2Profile
+      ? Math.ceil((request.width ?? 1024) / 16) * 16
+      : request.width ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.width,
+    height: isKrea2Profile
+      ? Math.ceil((request.height ?? 1024) / 16) * 16
+      : request.height ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.height,
     seed: request.seed ?? createRandomSeed(),
-    steps: request.steps ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.steps,
-    cfg: request.cfg ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.cfg,
+    steps: request.steps ?? (isKrea2Profile ? 8 : DEFAULT_TEXT_TO_IMAGE_REQUEST.steps),
+    cfg: request.cfg ?? (isKrea2Profile ? 1 : DEFAULT_TEXT_TO_IMAGE_REQUEST.cfg),
     samplerName: getString(request.samplerName, DEFAULT_TEXT_TO_IMAGE_REQUEST.samplerName),
-    scheduler: getString(request.scheduler, DEFAULT_TEXT_TO_IMAGE_REQUEST.scheduler),
+    scheduler: getString(request.scheduler, isKrea2Profile ? "simple" : DEFAULT_TEXT_TO_IMAGE_REQUEST.scheduler),
     denoise: request.denoise ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.denoise,
-    batchSize: request.imageName || request.sourceImageDataUrl ? 1 : request.batchSize ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.batchSize,
-    latentImageNode: isAnimaProfile ? "EmptyLatentImage" : request.latentImageNode ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.latentImageNode,
-    sourceImageDataUrl: request.sourceImageDataUrl ?? "",
-    imageName: getString(request.imageName, ""),
+    batchSize: isKrea2Profile ? 1 : request.imageName || request.sourceImageDataUrl ? 1 : request.batchSize ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.batchSize,
+    latentImageNode: isAnimaProfile || isKrea2Profile ? "EmptyLatentImage" : request.latentImageNode ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.latentImageNode,
+    sourceImageDataUrl: isKrea2Profile ? "" : request.sourceImageDataUrl ?? "",
+    imageName: isKrea2Profile ? "" : getString(request.imageName, ""),
     ...(request.imageWidth ? { imageWidth: request.imageWidth } : {}),
     ...(request.imageHeight ? { imageHeight: request.imageHeight } : {}),
     promptWrapper: {
@@ -1886,10 +1958,14 @@ export function resolveComfyUiTextToImageRequest(
       negativePrefix: request.promptWrapper?.negativePrefix ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.promptWrapper.negativePrefix,
     },
     outputPrefix: getString(request.outputPrefix, DEFAULT_TEXT_TO_IMAGE_REQUEST.outputPrefix),
-    faceDetailer: resolveDetailerConfig(request.faceDetailer, request, DEFAULT_TEXT_TO_IMAGE_REQUEST.faceDetailer),
-    handDetailer: resolveDetailerConfig(request.handDetailer, request, DEFAULT_TEXT_TO_IMAGE_REQUEST.handDetailer),
-    controlNets: resolveControlNetUnits(request),
-    characterReferences: resolveCharacterReferences(request),
+    faceDetailer: isKrea2Profile
+      ? { ...DEFAULT_TEXT_TO_IMAGE_REQUEST.faceDetailer, enabled: false }
+      : resolveDetailerConfig(request.faceDetailer, request, DEFAULT_TEXT_TO_IMAGE_REQUEST.faceDetailer),
+    handDetailer: isKrea2Profile
+      ? { ...DEFAULT_TEXT_TO_IMAGE_REQUEST.handDetailer, enabled: false }
+      : resolveDetailerConfig(request.handDetailer, request, DEFAULT_TEXT_TO_IMAGE_REQUEST.handDetailer),
+    controlNets: isKrea2Profile ? [] : resolveControlNetUnits(request),
+    characterReferences: isKrea2Profile ? [] : resolveCharacterReferences(request),
   };
 }
 

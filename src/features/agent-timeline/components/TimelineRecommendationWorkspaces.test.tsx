@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   ParameterRecommendationTimelineResult,
   ResourceRecommendationTimelineResult,
+  ScenePromptTimelineResult,
   TimelineNodeResult,
 } from "@/features/agent-timeline";
 import type {
@@ -14,6 +15,7 @@ import type {
 
 import { TimelineParameterRecommendationWorkspace } from "./TimelineParameterRecommendationWorkspace";
 import { TimelineResourceRecommendationWorkspace } from "./TimelineResourceRecommendationWorkspace";
+import { TimelineScenePromptWorkspace } from "./TimelineScenePromptWorkspace";
 
 let container: HTMLDivElement;
 let root: Root;
@@ -59,6 +61,16 @@ function makeCandidate(resource: SelectedCivitaiResourcePreview): CivitaiRecomme
 function makeNode(result: unknown): TimelineNodeResult {
   return {
     nodeId: "resource-recommendation",
+    result,
+    source: "ai",
+    status: "done",
+    updatedAt: "2026-06-01T00:00:00.000Z",
+  };
+}
+
+function makeSceneNode(result: ScenePromptTimelineResult): TimelineNodeResult {
+  return {
+    nodeId: "scene-prompt",
     result,
     source: "ai",
     status: "done",
@@ -118,6 +130,67 @@ afterEach(() => {
 });
 
 describe("timeline recommendation workspaces", () => {
+  it("saves Krea sections unchanged and maps a flat edit only to subject/mood", () => {
+    const result: ScenePromptTimelineResult = {
+      promptProfile: "krea2",
+      primaryCharacter: { name: "Courier", identity: "A calm courier", publicFacts: [] },
+      sceneIntent: "A calm courier waits in a station.",
+      styleTone: "quiet",
+      setting: "station",
+      sharedFacts: [],
+      positivePrompt: "A calm courier",
+      negativeSuggestions: [],
+      style: [],
+      camera: [],
+      lighting: [],
+      krea2Sections: {
+        subjectMood: "A calm courier",
+        subjectAttributesAndActions: "wearing a yellow jacket",
+        visualStyleAndMedium: "watercolor illustration",
+        lightingColorAndTexture: "soft amber light",
+        spatialCompositionAndFraming: "standing at the center of a quiet station",
+      },
+    };
+    const onSave = vi.fn();
+
+    act(() => {
+      root.render(
+        <TimelineScenePromptWorkspace
+          editable
+          emptyState="No prompt."
+          node={makeSceneNode(result)}
+          onSave={onSave}
+          promptProfile="krea2"
+        />,
+      );
+    });
+
+    expect(container.textContent).toContain("maps it to Krea's subject/mood section");
+    clickButton("Save context");
+    expect(onSave).toHaveBeenLastCalledWith(expect.objectContaining({
+      krea2Sections: result.krea2Sections,
+      positivePrompt: "A calm courier",
+    }));
+
+    const positivePrompt = container.querySelector('[aria-label="Positive prompt"]') as HTMLTextAreaElement;
+    act(() => {
+      setNativeTextareaValue(positivePrompt, "A focused courier");
+    });
+    clickButton("Save context");
+
+    expect(onSave).toHaveBeenLastCalledWith(expect.objectContaining({
+      promptProfile: "krea2",
+      positivePrompt: "A focused courier",
+      krea2Sections: {
+        subjectMood: "A focused courier",
+        subjectAttributesAndActions: "wearing a yellow jacket",
+        visualStyleAndMedium: "watercolor illustration",
+        lightingColorAndTexture: "soft amber light",
+        spatialCompositionAndFraming: "standing at the center of a quiet station",
+      },
+    }));
+  });
+
   it("saves bounded manual resource weights from local candidates only", () => {
     const checkpoint = makeResource("model", "checkpoint-local", "Local Checkpoint");
     const lora = makeResource("lora", "lora-local", "Local LoRA");
@@ -255,6 +328,126 @@ describe("timeline recommendation workspaces", () => {
         width: 16,
       }),
     );
+  });
+
+  it("rounds Krea manual dimensions upward to 16-pixel boundaries before saving", () => {
+    const result: ParameterRecommendationTimelineResult = {
+      availableSamplers: ["euler"],
+      availableSchedulers: ["simple"],
+      width: 1024,
+      height: 1024,
+      steps: 8,
+      cfg: 1,
+      samplerName: "euler",
+      scheduler: "simple",
+      denoise: 1,
+      seedPolicy: { mode: "fixed", seed: 7 },
+      negativeAdditions: [],
+      negativePrompt: "",
+      requestPreview: {
+        checkpointName: "krea-2-turbo-unet.safetensors",
+        workflowProfile: "krea2",
+        modelBaseModel: "Krea 2",
+        modelStorageKind: "diffusion",
+        positivePrompt: "a quiet station",
+        width: 1024,
+        height: 1024,
+        steps: 8,
+        cfg: 1,
+        samplerName: "euler",
+        scheduler: "simple",
+        denoise: 1,
+        loras: [],
+      },
+      reason: "Krea defaults.",
+      warnings: [],
+    };
+    const onSave = vi.fn();
+
+    act(() => {
+      root.render(
+        <TimelineParameterRecommendationWorkspace
+          editable
+          emptyState="No parameters."
+          node={makeNode(result)}
+          onSave={onSave}
+        />,
+      );
+    });
+
+    const inputs = Array.from(container.querySelectorAll('input[type="number"]')) as HTMLInputElement[];
+    expect(inputs[0]?.step).toBe("16");
+    expect(inputs[1]?.step).toBe("16");
+    act(() => {
+      setNativeInputValue(inputs[0]!, "1025");
+      setNativeInputValue(inputs[1]!, "1023");
+    });
+    clickButton("Save parameters");
+
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
+      width: 1040,
+      height: 1024,
+      requestPreview: expect.objectContaining({ width: 1040, height: 1024, workflowProfile: "krea2" }),
+    }));
+  });
+
+  it("keeps non-Krea manual dimensions on nearest 8-pixel boundaries", () => {
+    const result: ParameterRecommendationTimelineResult = {
+      availableSamplers: ["euler"],
+      availableSchedulers: ["normal"],
+      width: 1024,
+      height: 1024,
+      steps: 30,
+      cfg: 7,
+      samplerName: "euler",
+      scheduler: "normal",
+      denoise: 1,
+      seedPolicy: { mode: "fixed", seed: 7 },
+      negativeAdditions: [],
+      negativePrompt: "",
+      requestPreview: {
+        checkpointName: "Local Checkpoint.safetensors",
+        workflowProfile: "default",
+        positivePrompt: "a quiet station",
+        width: 1024,
+        height: 1024,
+        steps: 30,
+        cfg: 7,
+        samplerName: "euler",
+        scheduler: "normal",
+        denoise: 1,
+        loras: [],
+      },
+      reason: "Default parameters.",
+      warnings: [],
+    };
+    const onSave = vi.fn();
+
+    act(() => {
+      root.render(
+        <TimelineParameterRecommendationWorkspace
+          editable
+          emptyState="No parameters."
+          node={makeNode(result)}
+          onSave={onSave}
+        />,
+      );
+    });
+
+    const inputs = Array.from(container.querySelectorAll('input[type="number"]')) as HTMLInputElement[];
+    expect(inputs[0]?.step).toBe("8");
+    expect(inputs[1]?.step).toBe("8");
+    act(() => {
+      setNativeInputValue(inputs[0]!, "1025");
+      setNativeInputValue(inputs[1]!, "1023");
+    });
+    clickButton("Save parameters");
+
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
+      width: 1024,
+      height: 1024,
+      requestPreview: expect.objectContaining({ width: 1024, height: 1024, workflowProfile: "default" }),
+    }));
   });
 
   it("preserves complete Anima negative prompt defaults when saving manual parameters", () => {
