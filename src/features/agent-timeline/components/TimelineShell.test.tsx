@@ -9,9 +9,15 @@ import {
   confirmTimelineGeneration,
   createTimelineWorkflowRecord,
   createTimelineWorkflowState,
+  deriveRepairAttemptId,
+  deriveRepairBaseRequestDigest,
+  deriveRepairOutputNodeId,
+  deriveRepairRequestDigest,
   failTimelineNode,
   setTimelineNodeManualResult,
   startStoryGraphWorkflow,
+  type ComfyUiExecutionTimelineResult,
+  type FinalRepairTimelineResult,
   type PreviewScoringTimelineResultV2,
   type ScenePromptTimelineResult,
   type TimelineNodeId,
@@ -143,6 +149,172 @@ function createConfirmedGenerationWorkflow(workflow: TimelineWorkflowState) {
   return confirmedWorkflow;
 }
 
+function createQueueOutcomeUnknownRepairWorkflow() {
+  let workflow = createSimpleGenerationPhaseErrorWorkflow("comfyui-execution", false, true);
+  const details = workflow.nodes["comfyui-execution"].error?.details as {
+    partialResult: ComfyUiExecutionTimelineResult;
+  };
+  const partialResult = details.partialResult;
+  const firstFinal = partialResult.finals[0]!;
+  const secondPartial = partialResult.finals[1]!;
+  const secondFinalStoredImage = {
+    byteLength: 11,
+    contentType: "image/png",
+    filename: "dddddddddddddddddddddddddddddddd.png",
+    url: "/api/comfyui/generated-images/dddddddddddddddddddddddddddddddd.png",
+  };
+  const secondFinal = {
+    ...secondPartial,
+    status: "done" as const,
+    promptId: "final-prompt-2",
+    sourceImage: { filename: "final-output-2.png", nodeId: "9", type: "output" as const },
+    storedImage: secondFinalStoredImage,
+    error: undefined,
+  };
+  workflow = completeTimelineNode(workflow, "comfyui-execution", {
+    ...partialResult,
+    completed: true,
+    finals: [firstFinal, secondFinal],
+  }, "system");
+  const localFindings = [
+    { operation: "pose" as const, severity: "none" as const, scope: "pair" as const, introducedByFinal: false, description: "Stable." },
+    { operation: "contact" as const, severity: "major" as const, scope: "final" as const, introducedByFinal: true, description: "Hand misses cup." },
+    { operation: "object-count" as const, severity: "none" as const, scope: "pair" as const, introducedByFinal: false, description: "Stable." },
+    { operation: "composition-consistency" as const, severity: "none" as const, scope: "pair" as const, introducedByFinal: false, description: "Stable." },
+  ];
+  const clearFindings = localFindings.map((finding) => ({
+    ...finding,
+    severity: "none" as const,
+    scope: "pair" as const,
+    introducedByFinal: false,
+    description: "Stable.",
+  }));
+  const scores = {
+    final: { adherence: 80, composition: 80, anatomy: 80, style: 80, technical: 80, total: 80 },
+    previewUpscale: { adherence: 80, composition: 80, anatomy: 80, style: 80, technical: 80, total: 80 },
+  };
+  const targets = [{ operation: "contact" as const, severity: "major" as const, description: "Hand misses cup." }];
+  workflow = completeTimelineNode(workflow, "final-review", {
+    reviewVersion: 1,
+    status: "reviewed",
+    pairs: [{
+      candidateId: firstFinal.candidateId,
+      rank: firstFinal.rank,
+      seed: firstFinal.seed,
+      variants: { final: firstFinal.storedImage!, previewUpscale: firstFinal.previewUpscale!.storedImage },
+      scores,
+      findings: localFindings,
+      recommendedVariant: "preview-upscale",
+      defaultVariant: "preview-upscale",
+    }, {
+      candidateId: secondFinal.candidateId,
+      rank: secondFinal.rank,
+      seed: secondFinal.seed,
+      variants: { final: secondFinalStoredImage, previewUpscale: secondFinal.previewUpscale!.storedImage },
+      scores,
+      findings: clearFindings,
+      recommendedVariant: "final",
+      defaultVariant: "final",
+    }],
+  }, "ai");
+  const reviewUpdatedAt = workflow.nodes["final-review"].updatedAt;
+  const repairParent = {
+    finalStoredImage: firstFinal.storedImage!,
+    reviewUpdatedAt,
+    reviewedFindings: localFindings,
+    reviewedTargets: targets,
+  };
+  const repairDiagnosis = {
+    shapes: [{ type: "rect" as const, x: 0.4, y: 0.4, width: 0.1, height: 0.1 }],
+    growMaskBy: 2,
+  };
+  const repairAttemptId = deriveRepairAttemptId(
+    "timeline-queue-outcome-unknown",
+    firstFinal.candidateId,
+    repairParent,
+    deriveRepairBaseRequestDigest(
+      workflow.nodes["comfyui-execution"].result as ComfyUiExecutionTimelineResult,
+      firstFinal,
+    )!,
+  );
+  const repairOutputNodeId = deriveRepairOutputNodeId(
+    workflow.nodes["comfyui-execution"].result as ComfyUiExecutionTimelineResult,
+    firstFinal,
+    repairDiagnosis,
+    repairAttemptId,
+  )!;
+  workflow = completeTimelineNode(workflow, "final-repair", {
+    repairVersion: 1,
+    authorized: true,
+    completed: true,
+    pairs: [{
+      candidateId: firstFinal.candidateId,
+      rank: firstFinal.rank,
+      seed: firstFinal.seed,
+      status: "failed",
+      targets,
+      parent: repairParent,
+      diagnosis: repairDiagnosis,
+      attempt: {
+        attemptId: repairAttemptId,
+        status: "queue-started",
+        outputNodeId: repairOutputNodeId,
+        requestDigest: deriveRepairRequestDigest(
+          workflow.nodes["comfyui-execution"].result as ComfyUiExecutionTimelineResult,
+          firstFinal,
+          repairDiagnosis,
+          repairAttemptId,
+        )!,
+      },
+      skipReason: "queue-outcome-unknown",
+      error: {
+        code: "comfyui_execution_failed",
+        message: "Repair queue acceptance is uncertain. Manual recovery is required before another Repair can be queued.",
+      },
+    }, {
+      candidateId: secondFinal.candidateId,
+      rank: secondFinal.rank,
+      seed: secondFinal.seed,
+      status: "skipped",
+      targets: [],
+      skipReason: "no-supported-finding",
+    }],
+  }, "system");
+  return {
+    ...workflow,
+    workflowId: "timeline-queue-outcome-unknown",
+    sceneRequest: "A preserved Final with an uncertain Repair queue outcome",
+  };
+}
+
+function createPreparationOutcomeUnknownRepairWorkflow(
+  stage: "diagnosis-outcome" | "sam2-outcome",
+) {
+  const workflow = createQueueOutcomeUnknownRepairWorkflow();
+  const repair = workflow.nodes["final-repair"].result as FinalRepairTimelineResult;
+  const failed = repair.pairs[0]!;
+  repair.pairs[0] = {
+    candidateId: failed.candidateId,
+    rank: failed.rank,
+    seed: failed.seed,
+    status: "failed",
+    targets: failed.targets,
+    parent: failed.parent,
+    diagnosis: stage === "sam2-outcome"
+      ? { shapes: [{ type: "rect", x: 0.4, y: 0.4, width: 0.1, height: 0.1 }], growMaskBy: 2 }
+      : undefined,
+    skipReason: "repair-failed",
+    error: {
+      code: stage === "diagnosis-outcome" ? "llm_upstream" : "comfyui_execution_failed",
+      message: stage === "diagnosis-outcome"
+        ? "Repair diagnosis outcome is uncertain. This one-shot Repair remains closed."
+        : "SAM2 queue acceptance is uncertain. This one-shot Repair remains closed.",
+      details: { recoverable: false, stage },
+    },
+  };
+  return workflow;
+}
+
 function createScenePromptResultWithProfile(promptProfile: string): ScenePromptTimelineResult {
   return {
     promptProfile: promptProfile as ScenePromptTimelineResult["promptProfile"],
@@ -233,12 +405,24 @@ function createMultiImageConfirmedGenerationWorkflow(workflow: TimelineWorkflowS
 function createSimpleGenerationPhaseErrorWorkflow(
   phase: Extract<TimelineNodeId, "preview-execution" | "preview-scoring" | "comfyui-execution">,
   retryFromPreviewExecution = false,
+  automaticLocalRepair = false,
 ) {
   let workflow = createTimelineWorkflowState({
     workflowId: `simple-${phase}-error`,
     sceneRequest: "A simple mode retry scene",
     imageCount: 2,
   });
+  if (automaticLocalRepair) {
+    const sceneInput = workflow.nodes["scene-input"].result as Record<string, unknown>;
+    const settingsSnapshot = sceneInput.settingsSnapshot as Record<string, unknown> | undefined;
+    workflow.nodes["scene-input"] = {
+      ...workflow.nodes["scene-input"],
+      result: {
+        ...sceneInput,
+        settingsSnapshot: { ...settingsSnapshot, automaticLocalRepair: true },
+      },
+    };
+  }
   workflow = setTimelineNodeManualResult(workflow, "scene-prompt", {
     prompt: "A simple mode retry scene",
   });
@@ -274,6 +458,7 @@ function createSimpleGenerationPhaseErrorWorkflow(
     confirmed: true,
     confirmationFingerprint: `hmac-sha256:${"a".repeat(64)}`,
     finalPolicyVersion: timelineFinalGenerationPolicy.version,
+    automaticLocalRepairAuthorized: automaticLocalRepair,
   });
   const candidates = [1, 2, 3, 4].map((number, index) => {
     const filename = `${number.toString(16).repeat(32)}.png`;
@@ -1848,6 +2033,9 @@ describe("TimelineShell", () => {
       const redrawRadios = Array.from(container.querySelectorAll(
         'input[name="final-redraw-strength"]',
       )) as HTMLInputElement[];
+      const repairAuthorization = Array.from(container.querySelectorAll("label"))
+        .find((label) => label.textContent?.includes("Authorize one-shot local repair"))
+        ?.querySelector("input") as HTMLInputElement | null;
 
       expect(sceneInput).not.toBeNull();
       expect(promptProfile?.value).toBe("illustrious");
@@ -1868,6 +2056,9 @@ describe("TimelineShell", () => {
       expect(handDetailer?.checked).toBe(false);
       expect(redrawRadios.map((radio) => radio.value)).toEqual(["conservative", "balanced", "strong"]);
       expect(redrawRadios.find((radio) => radio.checked)?.value).toBe("balanced");
+      expect(repairAuthorization?.type).toBe("checkbox");
+      expect(repairAuthorization?.checked).toBe(false);
+      expect(container.textContent).toContain("Off by default.");
       expect(container.textContent).toContain("Resolved Final denoise: 0.45 (fallback).");
       const strongLabel = redrawRadios.find((radio) => radio.value === "strong")?.closest("label");
       expect(strongLabel?.className).toContain("rose");
@@ -1996,6 +2187,12 @@ describe("TimelineShell", () => {
         .toBe(true);
       expect(container.textContent).toContain("Resolved Final denoise: 0.45 (fallback).");
       expect(container.textContent).toContain("More redraw; higher anatomy and object-drift risk.");
+      const simpleRepairAuthorization = Array.from(container.querySelectorAll("label"))
+        .find((label) => label.textContent?.includes("Authorize one-shot local repair"))
+        ?.querySelector("input") as HTMLInputElement | null;
+      expect(simpleRepairAuthorization?.checked).toBe(false);
+      act(() => simpleRepairAuthorization?.click());
+      expect(simpleRepairAuthorization?.checked).toBe(true);
       expect(simpleRedrawRadios.find((radio) => radio.value === "strong")?.closest("label")?.className)
         .toContain("rose");
       const simpleDetailerFieldset = container.querySelector("#run-face-detailer-enabled")?.closest("fieldset");
@@ -2024,6 +2221,13 @@ describe("TimelineShell", () => {
       expect(confirmRequests[0]!.body).toMatchObject({
         action: "confirm",
         stage: "preview-execution",
+        workflow: {
+          nodes: {
+            "scene-input": {
+              result: { settingsSnapshot: { automaticLocalRepair: true } },
+            },
+          },
+        },
       });
       expect(container.textContent).toContain("Preview generation is running.");
 
@@ -2119,6 +2323,102 @@ describe("TimelineShell", () => {
       globalThis.fetch = originalFetch;
     }
   });
+
+  it.each(["simple", "detailed"] as const)(
+    "shows safe closed Repair queue guidance without a retry action in %s mode",
+    async (displayMode) => {
+      const originalFetch = globalThis.fetch;
+      const workflow = createQueueOutcomeUnknownRepairWorkflow();
+      const activeRecord = createTimelineWorkflowRecord({
+        workflow,
+        sceneRequest: "A preserved Final with an uncertain Repair queue outcome",
+        selectedPromptProfile: "illustrious",
+        selectedImageCount: 1,
+        selectedNodeId: "final-repair",
+        outputDisplayModes: { "final-repair": "visual" },
+      });
+      const generationRequests: unknown[] = [];
+      globalThis.fetch = vi.fn<typeof fetch>(async (input, init) => {
+        const url = getFetchUrl(input);
+        if (url === "/api/settings") return createTimelineSettingsResponse({ displayMode });
+        if (url === "/api/agent-timeline/active-workflow") {
+          return init?.method === "PUT"
+            ? createJsonResponse({ ok: true, record: activeRecord })
+            : createJsonResponse(activeRecord);
+        }
+        if (url === "/api/agent-timeline/confirm-generation") {
+          generationRequests.push(typeof init?.body === "string" ? JSON.parse(init.body) : null);
+        }
+        return createJsonResponse({ role: "assistant", content: "{}" });
+      });
+
+      try {
+        act(() => root.render(<TimelineShell />));
+        await flushAsyncWork();
+
+        expect(container.textContent).toContain("Repair queue outcome is unknown and this attempt is closed.");
+        expect(container.textContent).toContain("Do not retry it.");
+        expect(container.textContent).toContain("keep using the preserved Preview or Final");
+        expect(Array.from(container.querySelectorAll("button")).some((button) => button.textContent?.includes("Retry repair")))
+          .toBe(false);
+        if (displayMode === "detailed") {
+          expect(container.textContent).toContain("Repair: queue outcome unknown · closed");
+          expect(container.textContent).toContain("Reason: queue-outcome-unknown");
+          expect(getButtonByText("Regenerate").disabled).toBe(true);
+          expect(getButtonByText("Run node").disabled).toBe(true);
+        }
+        expect(generationRequests).toHaveLength(0);
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    },
+  );
+
+  it.each([
+    ["diagnosis-outcome", "Repair diagnosis outcome is uncertain"],
+    ["sam2-outcome", "SAM2 queue acceptance is uncertain"],
+  ] as const)(
+    "keeps %s manual recovery closed with no Detailed Run or Regenerate action",
+    async (stage, guidance) => {
+      const originalFetch = globalThis.fetch;
+      const workflow = createPreparationOutcomeUnknownRepairWorkflow(stage);
+      const activeRecord = createTimelineWorkflowRecord({
+        workflow,
+        sceneRequest: "A preserved Final with an uncertain Repair preparation outcome",
+        selectedPromptProfile: "illustrious",
+        selectedImageCount: 1,
+        selectedNodeId: "final-repair",
+        outputDisplayModes: { "final-repair": "visual" },
+      });
+      const generationRequests: unknown[] = [];
+      globalThis.fetch = vi.fn<typeof fetch>(async (input, init) => {
+        const url = getFetchUrl(input);
+        if (url === "/api/settings") return createTimelineSettingsResponse({ displayMode: "detailed" });
+        if (url === "/api/agent-timeline/active-workflow") {
+          return init?.method === "PUT"
+            ? createJsonResponse({ ok: true, record: activeRecord })
+            : createJsonResponse(activeRecord);
+        }
+        if (url === "/api/agent-timeline/confirm-generation") {
+          generationRequests.push(typeof init?.body === "string" ? JSON.parse(init.body) : null);
+        }
+        return createJsonResponse({ role: "assistant", content: "{}" });
+      });
+
+      try {
+        act(() => root.render(<TimelineShell />));
+        await flushAsyncWork();
+
+        expect(container.textContent).toContain(guidance);
+        expect(container.textContent).toContain("remains closed");
+        expect(getButtonByText("Regenerate").disabled).toBe(true);
+        expect(getButtonByText("Run node").disabled).toBe(true);
+        expect(generationRequests).toHaveLength(0);
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    },
+  );
 
   it("shows the exact-K fallback selection warning in Simple mode", async () => {
     const originalFetch = globalThis.fetch;
@@ -2261,7 +2561,7 @@ describe("TimelineShell", () => {
       act(() => confirmButton.click());
       await flushAsyncWork();
 
-      expect(confirmBodies).toHaveLength(2);
+      expect(confirmBodies).toHaveLength(4);
       expect(confirmBodies[0]).toMatchObject({
         action: "confirm",
         stage: "comfyui-execution",
@@ -2283,6 +2583,14 @@ describe("TimelineShell", () => {
       expect(confirmBodies[1]).toMatchObject({
         action: "continue",
         stage: "final-review",
+      });
+      expect(confirmBodies[2]).toMatchObject({
+        action: "continue",
+        stage: "final-repair",
+      });
+      expect(confirmBodies[3]).toMatchObject({
+        action: "continue",
+        stage: "repair-verification",
       });
     } finally {
       act(() => {
@@ -3288,7 +3596,7 @@ describe("TimelineShell", () => {
       });
       await flushAsyncWork();
 
-      expect(confirmPayloads).toHaveLength(4);
+      expect(confirmPayloads).toHaveLength(6);
       expect(confirmPayloads[0]?.generationConfirmed).toBe(false);
       expect(confirmPayloads[0]?.nodes["scene-input"].result).toMatchObject({
         imageCount: 3,
@@ -3297,7 +3605,7 @@ describe("TimelineShell", () => {
       expect(confirmPayloads[0]?.nodes["generation-gate"].error?.code).toBe("confirmation_required");
 
       const fetchUrls = fetchMock.mock.calls.map(([input]) => getFetchUrl(input));
-      expect(fetchUrls.filter((url) => url === "/api/agent-timeline/confirm-generation")).toHaveLength(4);
+      expect(fetchUrls.filter((url) => url === "/api/agent-timeline/confirm-generation")).toHaveLength(6);
       expect(fetchUrls).not.toContain("/api/comfyui/generate-image");
       expect(fetchUrls).not.toContain("/api/comfyui/generated-images");
 
@@ -3409,7 +3717,7 @@ describe("TimelineShell", () => {
       await submitInitialScene("A neon market alley with a courier at sunrise");
       await flushAsyncWork();
 
-      expect(confirmPayloads).toHaveLength(4);
+      expect(confirmPayloads).toHaveLength(6);
       expect(container.textContent).not.toContain("Review 2 new prompt tags");
       expect(confirmPayloads[0]?.nodes["generation-gate"].error?.code).toBe("confirmation_required");
       expect(getSectionByHeading("Artifact result").textContent).toContain("timeline-confirmed.png");

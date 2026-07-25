@@ -95,7 +95,7 @@ export async function POST(request: Request) {
   }
 
   if (action === "continue" && (!stage || stage === "preview-execution")) {
-    return errorResponse("A continuation must target preview scoring or final execution.", 400);
+    return errorResponse("A continuation must target a declared stage after preview execution.", 400);
   }
 
   const gateResult = workflow.nodes["generation-gate"].result;
@@ -138,6 +138,7 @@ export async function POST(request: Request) {
           finalRedrawPreset: resolvedFinalPolicy.preset,
           finalGenerationFamily: resolvedFinalPolicy.family,
           finalDenoise: resolvedFinalPolicy.denoise,
+          automaticLocalRepairAuthorized: settings.automaticLocalRepair,
         }) : workflow;
     if (stage && !areTimelineNodeDependenciesSatisfied(runnableWorkflow, stage)) {
       return errorResponse(`Generation stage "${stage}" cannot run until its dependencies are complete.`, 409, {

@@ -3,7 +3,9 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type {
+  FinalRepairTimelineResult,
   FinalReviewTimelineResult,
+  RepairVerificationTimelineResult,
   ResultDisplayTimelineResult,
 } from "@/features/agent-timeline/types";
 
@@ -72,6 +74,89 @@ const reviewedPair: FinalReviewTimelineResult = {
     rationale: "Preview preserves the intended pose.",
     recommendedVariant: "preview-upscale",
     defaultVariant: "preview-upscale",
+  }],
+};
+
+const repairTargets = [{ operation: "contact" as const, severity: "major" as const, description: "Hand misses cup." }];
+const repairParent = {
+  finalStoredImage: completedResult.storedImage,
+  reviewUpdatedAt: "2026-07-22T00:00:00.000Z",
+  reviewedFindings: reviewedPair.pairs[0]!.findings!,
+  reviewedTargets: repairTargets,
+};
+const repairSourceImage = {
+  filename: "repair-output.png",
+  nodeId: "9",
+  type: "output" as const,
+};
+const repairStoredImage = {
+  byteLength: 64,
+  contentType: "image/png",
+  filename: "dddddddddddddddddddddddddddddddd.png",
+  url: "/api/comfyui/generated-images/dddddddddddddddddddddddddddddddd.png",
+};
+
+const repairedResult: FinalRepairTimelineResult = {
+  repairVersion: 1,
+  authorized: true,
+  completed: true,
+  pairs: [{
+    candidateId: "preview-1",
+    rank: 1,
+    seed: 100,
+    status: "repaired",
+    targets: repairTargets,
+    parent: repairParent,
+    mask: {
+      provenance: "structured-diagnosis",
+      refinement: { status: "skipped", reason: "sam2-unavailable" },
+      coverageBeforeGrowth: 0.01,
+      coverageAfterGrowth: 0.02,
+      growMaskBy: 16,
+      width: 1024,
+      height: 1024,
+      storedImage: {
+        byteLength: 32,
+        contentType: "image/png",
+        filename: "cccccccccccccccccccccccccccccccc.png",
+        url: "/api/comfyui/generated-images/cccccccccccccccccccccccccccccccc.png",
+      },
+    },
+    promptId: "repair-prompt",
+    sourceImage: repairSourceImage,
+    storedImage: repairStoredImage,
+    attempt: {
+      attemptId: `sha256:${"a".repeat(64)}`,
+      status: "stored",
+      promptId: "repair-prompt",
+      outputNodeId: "9",
+      requestDigest: `sha256:${"b".repeat(64)}`,
+      sourceImage: repairSourceImage,
+      storedImage: repairStoredImage,
+    },
+  }],
+};
+
+const verifiedRepair: RepairVerificationTimelineResult = {
+  verificationVersion: 1,
+  status: "verified",
+  pairs: [{
+    candidateId: "preview-1",
+    repairParent,
+    repairStoredImage: repairedResult.pairs[0]!.storedImage!,
+    scores: {
+      final: { adherence: 80, composition: 80, anatomy: 80, style: 80, technical: 80, total: 80 },
+      repair: { adherence: 82, composition: 82, anatomy: 82, style: 82, technical: 82, total: 82 },
+    },
+    targetedDefectsResolved: true,
+    newMajorOrBlockingIssue: false,
+    findings: [
+      { operation: "pose", severity: "none", scope: "pair", introducedByFinal: false, description: "Stable after repair." },
+      { operation: "contact", severity: "none", scope: "pair", introducedByFinal: false, description: "Contact resolved after repair." },
+      { operation: "object-count", severity: "none", scope: "pair", introducedByFinal: false, description: "Object count stable after repair." },
+      { operation: "composition-consistency", severity: "none", scope: "pair", introducedByFinal: false, description: "Composition stable after repair." },
+    ],
+    recommended: true,
   }],
 };
 
@@ -219,5 +304,170 @@ describe("TimelineResultDisplayWorkspace fallbacks", () => {
     const buttons = Array.from(container.querySelectorAll<HTMLButtonElement>("[data-testid='timeline-final-review'] button"));
     expect(buttons[0]?.getAttribute("aria-pressed")).toBe("true");
     expect(Array.from(container.querySelectorAll("img")).at(-1)?.getAttribute("src")).toBe(completedResult.image.url);
+  });
+
+  it("shows a verified Repair in Simple mode and promotes it only through explicit selection", () => {
+    const onSelectVariant = vi.fn();
+    act(() => root.render(
+      <TimelineResultDisplayWorkspace
+        draft={null}
+        emptyState="No Final image yet."
+        finalRepair={repairedResult}
+        finalReview={reviewedPair}
+        onSelectVariant={onSelectVariant}
+        repairVerification={verifiedRepair}
+        result={completedResult}
+        selectedResources={{ checkpoint: null, loras: [] }}
+      />,
+    ));
+
+    expect(container.textContent).toContain("Repair: repaired");
+    expect(container.textContent).toContain("recommended");
+    expect(container.textContent).not.toContain("Mask: structured-diagnosis");
+    const buttons = Array.from(container.querySelectorAll<HTMLButtonElement>("[data-testid='timeline-final-review'] button"));
+    expect(buttons).toHaveLength(3);
+    expect(buttons[2]?.textContent).toContain("Repair");
+    expect(buttons[2]?.getAttribute("aria-pressed")).toBe("false");
+
+    act(() => buttons[2]?.click());
+    expect(onSelectVariant).toHaveBeenCalledWith("preview-1", "repair");
+  });
+
+  it("shows normalized Repair targets, mask metadata, and verification findings in Detailed mode", () => {
+    act(() => root.render(
+      <TimelineResultDisplayWorkspace
+        detailedReview
+        draft={null}
+        emptyState="No Final image yet."
+        finalRepair={repairedResult}
+        finalReview={reviewedPair}
+        onSelectVariant={() => undefined}
+        repairVerification={verifiedRepair}
+        result={completedResult}
+        selectedResources={{ checkpoint: null, loras: [] }}
+      />,
+    ));
+
+    expect(container.textContent).toContain("Targets: contact (major)");
+    expect(container.textContent).toContain("Mask: structured-diagnosis, 1.00% before / 2.00% after, grow 16px");
+    expect(container.textContent).toContain("Verification findings");
+    expect(container.textContent).toContain("contact: none");
+    expect(container.textContent).toContain("Contact resolved after repair.");
+  });
+
+  it("shows the recoverable retry stage for a failed Repair in Detailed mode", () => {
+    const failedRepair: FinalRepairTimelineResult = {
+      ...repairedResult,
+      pairs: [{
+        ...repairedResult.pairs[0]!,
+        status: "failed",
+        storedImage: undefined,
+        retryStage: "comfyui",
+        skipReason: "repair-failed",
+        error: { code: "comfyui_execution_failed", message: "Repair failed.", details: { recoverable: true } },
+      }],
+    };
+    act(() => root.render(
+      <TimelineResultDisplayWorkspace
+        detailedReview
+        draft={null}
+        emptyState="No Final image yet."
+        finalRepair={failedRepair}
+        finalReview={reviewedPair}
+        onSelectVariant={() => undefined}
+        result={completedResult}
+        selectedResources={{ checkpoint: null, loras: [] }}
+      />,
+    ));
+
+    expect(container.textContent).toContain("Repair: failed");
+    expect(container.textContent).toContain("Reason: repair-failed");
+    expect(container.textContent).toContain("Retry stage: comfyui");
+    expect(container.querySelectorAll("[data-testid='timeline-final-review'] button")).toHaveLength(2);
+  });
+
+  it.each([false, true])("shows closed queue-outcome guidance in %s detailed mode", (detailedReview) => {
+    const failedRepair: FinalRepairTimelineResult = {
+      ...repairedResult,
+      pairs: [{
+        ...repairedResult.pairs[0]!,
+        status: "failed",
+        promptId: undefined,
+        sourceImage: undefined,
+        storedImage: undefined,
+        requestPolicy: undefined,
+        retryStage: undefined,
+        skipReason: "queue-outcome-unknown",
+        attempt: {
+          attemptId: `sha256:${"a".repeat(64)}`,
+          status: "queue-started",
+          outputNodeId: "9",
+        },
+        error: {
+          code: "comfyui_execution_failed",
+          message: "Repair queue acceptance is uncertain. Manual recovery is required before another Repair can be queued.",
+        },
+      }],
+    };
+    act(() => root.render(
+      <TimelineResultDisplayWorkspace
+        detailedReview={detailedReview}
+        draft={null}
+        emptyState="No Final image yet."
+        finalRepair={failedRepair}
+        finalReview={reviewedPair}
+        onSelectVariant={() => undefined}
+        result={completedResult}
+        selectedResources={{ checkpoint: null, loras: [] }}
+      />,
+    ));
+
+    expect(container.textContent).toContain("Repair: queue outcome unknown · closed");
+    expect(container.textContent).toContain("Reason: queue-outcome-unknown");
+    expect(container.textContent).toContain("Do not retry it.");
+    expect(container.textContent).toContain("keep using the preserved Preview or Final");
+    expect(container.textContent).not.toContain("Retry stage:");
+  });
+
+  it("keeps closed queue-outcome guidance visible before result display completes", () => {
+    const failedRepair: FinalRepairTimelineResult = {
+      ...repairedResult,
+      pairs: [{
+        ...repairedResult.pairs[0]!,
+        status: "failed",
+        promptId: undefined,
+        sourceImage: undefined,
+        storedImage: undefined,
+        requestPolicy: undefined,
+        retryStage: undefined,
+        skipReason: "queue-outcome-unknown",
+        attempt: {
+          attemptId: `sha256:${"a".repeat(64)}`,
+          status: "queue-started",
+          outputNodeId: "9",
+        },
+        error: {
+          code: "comfyui_execution_failed",
+          message: "Repair queue acceptance is uncertain. Manual recovery is required before another Repair can be queued.",
+        },
+      }],
+    };
+    act(() => root.render(
+      <TimelineResultDisplayWorkspace
+        detailedReview
+        draft={null}
+        emptyState="No Final image yet."
+        finalRepair={failedRepair}
+        finalReview={reviewedPair}
+        onSelectVariant={() => undefined}
+        result={null}
+        selectedResources={{ checkpoint: null, loras: [] }}
+      />,
+    ));
+
+    expect(container.textContent).toContain("Repair: queue outcome unknown · closed");
+    expect(container.textContent).toContain("Reason: queue-outcome-unknown");
+    expect(container.textContent).toContain("Do not retry it.");
+    expect(container.textContent).toContain("keep using the preserved Preview or Final");
   });
 });

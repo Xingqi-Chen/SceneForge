@@ -149,6 +149,7 @@ describe("Run scene input generation settings", () => {
 
     expect(settings.stylePalette).toBeUndefined();
     expect(settings.styleReference).toBeUndefined();
+    expect(settings.automaticLocalRepair).toBe(false);
     expect(settings.finalRedrawPreset).toBe("balanced");
     expect(settings.detailers).toMatchObject({
       faceDetailer: {
@@ -160,6 +161,13 @@ describe("Run scene input generation settings", () => {
         detectorModelName: "bbox/hand_yolov8s.pt",
       },
     });
+  });
+
+  it("accepts only an explicit boolean true for automatic local repair", () => {
+    expect(sanitizeRunSceneInputSettingsSnapshot({ automaticLocalRepair: true }).automaticLocalRepair).toBe(true);
+    for (const automaticLocalRepair of [undefined, false, "true", 1, {}, []]) {
+      expect(sanitizeRunSceneInputSettingsSnapshot({ automaticLocalRepair }).automaticLocalRepair).toBe(false);
+    }
   });
 
   it("persists only supported Final redraw presets and rejects numeric denoise injection", () => {

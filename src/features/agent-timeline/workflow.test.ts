@@ -106,7 +106,9 @@ describe("agent timeline workflow foundation", () => {
     expect(getTimelineNodeDependencies("preview-scoring")).toEqual(["preview-execution"]);
     expect(getTimelineNodeDependencies("comfyui-execution")).toEqual(["preview-scoring"]);
     expect(getTimelineNodeDependencies("final-review")).toEqual(["comfyui-execution"]);
-    expect(getTimelineNodeDependencies("result-display")).toEqual(["final-review"]);
+    expect(getTimelineNodeDependencies("final-repair")).toEqual(["final-review"]);
+    expect(getTimelineNodeDependencies("repair-verification")).toEqual(["final-repair"]);
+    expect(getTimelineNodeDependencies("result-display")).toEqual(["repair-verification"]);
     expect(getTimelineDownstreamClosure("canvas-binding")).toEqual([
       "parameter-recommendation",
       "generation-gate",
@@ -114,6 +116,8 @@ describe("agent timeline workflow foundation", () => {
       "preview-scoring",
       "comfyui-execution",
       "final-review",
+      "final-repair",
+      "repair-verification",
       "result-display",
     ]);
   });
@@ -615,8 +619,22 @@ describe("agent timeline workflow foundation", () => {
           source: "ai",
         };
       },
-      "result-display": (context) => {
+      "final-repair": (context) => {
         expect(context.workflow.nodes["final-review"].status).toBe("done");
+        return {
+          value: { repairVersion: 1, authorized: false, completed: true, pairs: [] },
+          source: "system",
+        };
+      },
+      "repair-verification": (context) => {
+        expect(context.workflow.nodes["final-repair"].status).toBe("done");
+        return {
+          value: { verificationVersion: 1, status: "skipped", pairs: [] },
+          source: "system",
+        };
+      },
+      "result-display": (context) => {
+        expect(context.workflow.nodes["repair-verification"].status).toBe("done");
         expect(context.workflow.nodes["comfyui-execution"].result).toMatchObject({
           promptId: "prompt-1",
         });
@@ -660,6 +678,14 @@ describe("agent timeline workflow foundation", () => {
       status: "done",
       result: { reviewVersion: 1, status: "unavailable" },
     });
+    expect(result.nodes["final-repair"]).toMatchObject({
+      status: "done",
+      result: { authorized: false, completed: true },
+    });
+    expect(result.nodes["repair-verification"]).toMatchObject({
+      status: "done",
+      result: { status: "skipped" },
+    });
     expect(result.nodes["result-display"]).toMatchObject({
       status: "done",
       result: {
@@ -671,19 +697,21 @@ describe("agent timeline workflow foundation", () => {
   });
 
   it.each([
-    ["preview-execution", ["preview-execution", "preview-scoring", "comfyui-execution", "final-review", "result-display"]],
-    ["preview-scoring", ["preview-scoring", "comfyui-execution", "final-review", "result-display"]],
-    ["comfyui-execution", ["comfyui-execution", "final-review", "result-display"]],
-    ["final-review", ["final-review", "result-display"]],
+    ["preview-execution", ["preview-execution", "preview-scoring", "comfyui-execution", "final-review", "final-repair", "repair-verification", "result-display"]],
+    ["preview-scoring", ["preview-scoring", "comfyui-execution", "final-review", "final-repair", "repair-verification", "result-display"]],
+    ["comfyui-execution", ["comfyui-execution", "final-review", "final-repair", "repair-verification", "result-display"]],
+    ["final-review", ["final-review", "final-repair", "repair-verification", "result-display"]],
+    ["final-repair", ["final-repair", "repair-verification", "result-display"]],
+    ["repair-verification", ["repair-verification", "result-display"]],
   ] as const)("stales only the %s retry phase and its descendants", (nodeId, expectedStale) => {
     const clock = createClock();
     let workflow = confirmTimelineGeneration(createReadyForGateWorkflow(clock), undefined, { now: clock });
-    for (const phase of ["preview-execution", "preview-scoring", "comfyui-execution", "final-review", "result-display"] as const) {
+    for (const phase of ["preview-execution", "preview-scoring", "comfyui-execution", "final-review", "final-repair", "repair-verification", "result-display"] as const) {
       workflow = completeTimelineNode(workflow, phase, { phase }, "system", { now: clock });
     }
 
     const retried = retryTimelineGenerationFrom(workflow, nodeId, { now: clock });
-    for (const phase of ["preview-execution", "preview-scoring", "comfyui-execution", "final-review", "result-display"] as const) {
+    for (const phase of ["preview-execution", "preview-scoring", "comfyui-execution", "final-review", "final-repair", "repair-verification", "result-display"] as const) {
       expect(retried.nodes[phase].status, phase).toBe((expectedStale as readonly string[]).includes(phase) ? "stale" : "done");
     }
     expect(retried.generationConfirmed).toBe(true);
@@ -725,6 +753,14 @@ describe("agent timeline workflow foundation", () => {
       },
       source: "ai" as const,
     }));
+    const repair = vi.fn(() => ({
+      value: { repairVersion: 1, authorized: false, completed: true, pairs: [] },
+      source: "system" as const,
+    }));
+    const verification = vi.fn(() => ({
+      value: { verificationVersion: 1, status: "skipped", pairs: [] },
+      source: "system" as const,
+    }));
     const display = vi.fn(() => ({ value: { completed: true, reviewUnavailable: true }, source: "system" as const }));
 
     const result = await executeTimelineGraph(workflow, {
@@ -732,9 +768,11 @@ describe("agent timeline workflow foundation", () => {
       "preview-scoring": scoring,
       "comfyui-execution": final,
       "final-review": review,
+      "final-repair": repair,
+      "repair-verification": verification,
       "result-display": display,
     }, {
-      executableNodeIds: ["final-review", "result-display"],
+      executableNodeIds: ["final-review", "final-repair", "repair-verification", "result-display"],
       now: clock,
     });
 
@@ -742,6 +780,8 @@ describe("agent timeline workflow foundation", () => {
     expect(scoring).not.toHaveBeenCalled();
     expect(final).not.toHaveBeenCalled();
     expect(review).toHaveBeenCalledTimes(1);
+    expect(repair).toHaveBeenCalledTimes(1);
+    expect(verification).toHaveBeenCalledTimes(1);
     expect(display).toHaveBeenCalledTimes(1);
     expect(result.nodes["final-review"]).toMatchObject({ status: "done", result: { status: "failed" } });
     expect(result.nodes["result-display"]).toMatchObject({
@@ -810,6 +850,8 @@ describe("agent timeline workflow foundation", () => {
     }, "ai", { now: clock });
     workflow = completeTimelineNode(workflow, "comfyui-execution", { completed: true }, "system", { now: clock });
     workflow = completeTimelineNode(workflow, "final-review", { reviewVersion: 1, status: "unavailable", pairs: [] }, "ai", { now: clock });
+    workflow = completeTimelineNode(workflow, "final-repair", { repairVersion: 1, authorized: false, completed: true, pairs: [] }, "system", { now: clock });
+    workflow = completeTimelineNode(workflow, "repair-verification", { verificationVersion: 1, status: "skipped", pairs: [] }, "system", { now: clock });
     workflow = completeTimelineNode(workflow, "result-display", { completed: true }, "system", { now: clock });
 
     const edited = setTimelineNodeManualResult(workflow, "preview-scoring", {
@@ -822,6 +864,8 @@ describe("agent timeline workflow foundation", () => {
     expect(edited.nodes["preview-scoring"]).toMatchObject({ status: "manual", source: "manual" });
     expect(edited.nodes["comfyui-execution"].status).toBe("stale");
     expect(edited.nodes["final-review"].status).toBe("stale");
+    expect(edited.nodes["final-repair"].status).toBe("stale");
+    expect(edited.nodes["repair-verification"].status).toBe("stale");
     expect(edited.nodes["result-display"].status).toBe("stale");
     expect(edited.generationConfirmed).toBe(true);
   });
@@ -847,6 +891,9 @@ describe("agent timeline workflow foundation", () => {
       { now: clock },
     );
     workflow = completeTimelineNode(workflow, "comfyui-execution", { completed: true }, "system", { now: clock });
+    workflow = completeTimelineNode(workflow, "final-review", { reviewVersion: 1, status: "unavailable", pairs: [] }, "ai", { now: clock });
+    workflow = completeTimelineNode(workflow, "final-repair", { repairVersion: 1, authorized: false, completed: true, pairs: [] }, "system", { now: clock });
+    workflow = completeTimelineNode(workflow, "repair-verification", { verificationVersion: 1, status: "skipped", pairs: [] }, "system", { now: clock });
     workflow = completeTimelineNode(workflow, "result-display", { completed: true }, "system", { now: clock });
 
     const edited = updateTimelineFinalRedrawPreset(workflow, sanitizeRunSceneInputSettingsSnapshot({
@@ -868,6 +915,8 @@ describe("agent timeline workflow foundation", () => {
     });
     expect(edited.nodes["comfyui-execution"].status).toBe("stale");
     expect(edited.nodes["final-review"].status).toBe("stale");
+    expect(edited.nodes["final-repair"].status).toBe("stale");
+    expect(edited.nodes["repair-verification"].status).toBe("stale");
     expect(edited.nodes["result-display"].status).toBe("stale");
   });
 

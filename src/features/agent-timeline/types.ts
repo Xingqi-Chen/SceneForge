@@ -46,6 +46,8 @@ export const timelineNodeIds = [
   "preview-scoring",
   "comfyui-execution",
   "final-review",
+  "final-repair",
+  "repair-verification",
   "result-display",
 ] as const;
 
@@ -64,6 +66,8 @@ export const executableTimelineNodeIds = [
   "preview-scoring",
   "comfyui-execution",
   "final-review",
+  "final-repair",
+  "repair-verification",
   "result-display",
 ] as const satisfies readonly TimelineNodeId[];
 
@@ -77,6 +81,7 @@ export type TimelineNodeSource = "ai" | "manual" | "system";
 
 export type TimelineErrorCode =
   | "timeline_request_invalid"
+  | "node_output_invalid"
   | "timeline_node_blocked"
   | "timeline_node_stale"
   | "timeline_node_failed"
@@ -259,6 +264,7 @@ export type GenerationGateTimelineResult = {
   finalRedrawPreset?: TimelineFinalRedrawPreset;
   finalGenerationFamily?: TimelineFinalGenerationFamily;
   finalDenoise?: number;
+  automaticLocalRepairAuthorized?: boolean;
 };
 
 export const previewScoringRubric = {
@@ -433,7 +439,7 @@ export type ComfyUiExecutionTimelineResult = {
   warnings: string[];
 };
 
-export const timelineFinalReviewVariants = ["final", "preview-upscale"] as const;
+export const timelineFinalReviewVariants = ["final", "preview-upscale", "repair"] as const;
 export type TimelineFinalReviewVariant = (typeof timelineFinalReviewVariants)[number];
 
 export const timelineFinalReviewSeverities = ["none", "minor", "major", "blocking"] as const;
@@ -474,8 +480,8 @@ export type TimelineFinalReviewPair = {
   };
   findings?: TimelineFinalReviewFinding[];
   rationale?: string;
-  recommendedVariant: TimelineFinalReviewVariant | null;
-  defaultVariant: TimelineFinalReviewVariant;
+  recommendedVariant: Exclude<TimelineFinalReviewVariant, "repair"> | null;
+  defaultVariant: Exclude<TimelineFinalReviewVariant, "repair">;
   userSelectedVariant?: TimelineFinalReviewVariant;
 };
 
@@ -483,6 +489,130 @@ export type FinalReviewTimelineResult = {
   reviewVersion: 1;
   status: "reviewed" | "failed" | "unavailable";
   pairs: TimelineFinalReviewPair[];
+  error?: TimelineNodeError;
+};
+
+export const timelineRepairSkipReasons = [
+  "repair-disabled",
+  "no-supported-finding",
+  "unsupported-operation",
+  "unsupported-scope",
+  "missing-target",
+  "ambiguous-target",
+  "parent-mismatch",
+  "diagnosis-invalid",
+  "mask-empty",
+  "mask-oversized",
+  "mask-growth-oversized",
+  "comfyui-unavailable",
+  "queue-outcome-unknown",
+  "repair-failed",
+  "already-repaired",
+] as const;
+export type TimelineRepairSkipReason = (typeof timelineRepairSkipReasons)[number];
+
+export type TimelineRepairTarget = {
+  operation: "contact" | "object-count";
+  severity: "major" | "blocking";
+  description: string;
+};
+
+export type TimelineRepairParentBinding = {
+  finalStoredImage: TimelineStoredGeneratedImage;
+  reviewUpdatedAt: string;
+  reviewedFindings: TimelineFinalReviewFinding[];
+  reviewedTargets: TimelineRepairTarget[];
+};
+
+export type TimelineRepairAttempt = {
+  attemptId: string;
+  status: "queue-started" | "queued" | "output-ready" | "stored";
+  promptId?: string;
+  outputNodeId: string;
+  requestDigest?: string;
+  sourceImage?: TimelineFinalExecutionRecord["sourceImage"];
+  storedImage?: TimelineStoredGeneratedImage;
+};
+
+export type TimelineRepairMaskMetadata = {
+  provenance: "structured-diagnosis" | "sam2-refinement";
+  refinement: {
+    status: "not-applicable" | "applied" | "skipped";
+    reason?: "no-clear-target" | "sam2-unavailable" | "sam2-invalid";
+  };
+  coverageBeforeGrowth: number;
+  coverageAfterGrowth: number;
+  growMaskBy: number;
+  width: number;
+  height: number;
+  storedImage: TimelineStoredGeneratedImage;
+};
+
+export type TimelineRepairRequestPolicy = {
+  version: 1;
+  sourceVariant: "final";
+  requestLocalFaceDetailer: boolean;
+  requestLocalHandDetailer: boolean;
+};
+
+export type TimelineRepairDiagnosis = {
+  shapes: Array<
+    | { type: "ellipse"; x: number; y: number; radiusX: number; radiusY: number; rotation?: number }
+    | { type: "rect"; x: number; y: number; width: number; height: number; rotation?: number }
+    | { type: "polygon"; points: Array<{ x: number; y: number }> }
+    | { type: "stroke"; points: Array<{ x: number; y: number }>; brushSize?: number }
+  >;
+  denoise?: number;
+  growMaskBy: number;
+  faceDetailerEnabled?: boolean;
+  handDetailerEnabled?: boolean;
+};
+
+export type TimelineRepairPair = {
+  candidateId: string;
+  rank: number;
+  seed: number;
+  status: "skipped" | "failed" | "repaired";
+  targets: TimelineRepairTarget[];
+  parent?: TimelineRepairParentBinding;
+  attempt?: TimelineRepairAttempt;
+  skipReason?: TimelineRepairSkipReason;
+  retryStage?: "diagnosis" | "mask" | "comfyui";
+  diagnosis?: TimelineRepairDiagnosis;
+  mask?: TimelineRepairMaskMetadata;
+  requestPolicy?: TimelineRepairRequestPolicy;
+  promptId?: string;
+  sourceImage?: TimelineFinalExecutionRecord["sourceImage"];
+  storedImage?: TimelineStoredGeneratedImage;
+  error?: TimelineNodeError;
+};
+
+export type FinalRepairTimelineResult = {
+  repairVersion: 1;
+  authorized: boolean;
+  completed: boolean;
+  pairs: TimelineRepairPair[];
+};
+
+export type TimelineRepairVerificationPair = {
+  candidateId: string;
+  repairParent: TimelineRepairParentBinding;
+  repairStoredImage: TimelineStoredGeneratedImage;
+  scores: {
+    final: TimelineFinalReviewScores;
+    repair: TimelineFinalReviewScores;
+  };
+  targetedDefectsResolved: boolean;
+  newMajorOrBlockingIssue: boolean;
+  findings: TimelineFinalReviewFinding[];
+  recommended: boolean;
+  rationale?: string;
+};
+
+export type RepairVerificationTimelineResult = {
+  verificationVersion: 1;
+  status: "verified" | "skipped" | "failed";
+  pairs: TimelineRepairVerificationPair[];
   error?: TimelineNodeError;
 };
 

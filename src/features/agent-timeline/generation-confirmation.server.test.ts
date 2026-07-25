@@ -24,4 +24,20 @@ describe("Run generation confirmation contract", () => {
     expect(createTimelineGenerationConfirmationFingerprint(createWorkflow("balanced")))
       .not.toBe(createTimelineGenerationConfirmationFingerprint(createWorkflow("strong")));
   });
+
+  it("binds the default-off automatic local repair authorization", () => {
+    const disabled = createTimelineWorkflowState({
+      workflowId: "confirmation-repair-policy",
+      sceneRequest: "A glass greenhouse",
+      settingsSnapshot: { automaticLocalRepair: false },
+    });
+    const enabled = createTimelineWorkflowState({
+      workflowId: "confirmation-repair-policy",
+      sceneRequest: "A glass greenhouse",
+      settingsSnapshot: { automaticLocalRepair: true },
+    });
+
+    expect(createTimelineGenerationConfirmationFingerprint(disabled))
+      .not.toBe(createTimelineGenerationConfirmationFingerprint(enabled));
+  });
 });

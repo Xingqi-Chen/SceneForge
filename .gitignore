@@ -49,6 +49,9 @@ next-env.d.ts
 /data/timeline-workflows/*
 !/data/timeline-workflows/.gitkeep
 
+# Durable one-shot Repair attempt checkpoints (server-side runtime data)
+/data/agent-timeline-repair-attempts/
+
 # Shared prompt library (server-side persistence)
 /data/prompt-library.json
 

@@ -84,8 +84,16 @@ export function validateTimelineDependencyDag(dag: TimelineDependencyDag = mvpTi
     });
   }
 
-  if (!dag["result-display"].includes("final-review")) {
-    issues.push({ nodeId: "result-display", message: "Result display must remain downstream of final review." });
+  if (!dag["final-repair"].includes("final-review")) {
+    issues.push({ nodeId: "final-repair", message: "Final repair must remain downstream of final review." });
+  }
+
+  if (!dag["repair-verification"].includes("final-repair")) {
+    issues.push({ nodeId: "repair-verification", message: "Repair verification must remain downstream of final repair." });
+  }
+
+  if (!dag["result-display"].includes("repair-verification")) {
+    issues.push({ nodeId: "result-display", message: "Result display must remain downstream of repair verification." });
   }
 
   return issues;

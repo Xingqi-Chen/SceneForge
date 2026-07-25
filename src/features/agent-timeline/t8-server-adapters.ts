@@ -33,6 +33,9 @@ import {
 import { createTimelineT8NodeAdapters } from "./t8-node-adapters";
 import { reviewFinalExecution } from "./final-review.server";
 import { getFinalReviewResult } from "./final-review";
+import { getFinalRepairResult } from "./final-repair";
+import { repairFinalExecution } from "./final-repair.server";
+import { verifyFinalRepairs } from "./repair-verification.server";
 import { createStoredImageVisionDataUrl } from "./vision-image-transcode.server";
 import {
   createTimelinePreviewSelectionFallbackMetadata,
@@ -946,6 +949,38 @@ export function createTimelineT8ServerNodeAdapters(
             return userSelectedVariant ? { ...pair, userSelectedVariant } : pair;
           }),
         },
+        source: "ai",
+      };
+    },
+    "final-repair": async (context) => {
+      const review = getFinalReviewResult(context.workflow);
+      if (!review) {
+        throw new TimelineNodeExecutionError(createTimelineNodeError(
+          "timeline_node_blocked",
+          "Final review is required before local repair.",
+        ));
+      }
+      return {
+        value: await repairFinalExecution(
+          getCompletedFinalExecution(context),
+          review,
+          context,
+          getFinalRepairResult(context.workflow),
+        ),
+        source: "system",
+      };
+    },
+    "repair-verification": async (context) => {
+      const review = getFinalReviewResult(context.workflow);
+      const repair = getFinalRepairResult(context.workflow);
+      if (!review || !repair) {
+        throw new TimelineNodeExecutionError(createTimelineNodeError(
+          "timeline_node_blocked",
+          "Completed repair state is required before repair verification.",
+        ));
+      }
+      return {
+        value: await verifyFinalRepairs(repair, review, context),
         source: "ai",
       };
     },

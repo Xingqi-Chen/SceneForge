@@ -2,7 +2,46 @@
 
 This log records dated implementation and documentation work. Keep entries concise and evidence-oriented.
 
+## 2026-07-24
+
+### T38C / Issue #142 Repair Identity and Error-Boundary Hardening
+
+Summary:
+
+- Made the Repair attempt SHA-256 identity a shared deterministic contract and reject any previous or persisted attempt whose digest does not match the exact workflow, candidate, and parent binding before diagnosis, managed-image work, or ComfyUI queueing.
+- Canonicalized workflow and disk-checkpoint attempts through one pure state-aware sanitizer; checkpoint envelopes and nested attempt/image references reject unknown unsafe fields before history, storage, or client propagation.
+- Added checkpoint-v3 base request digests to bind Repair attempt identity to validated confirmed generation semantics before diagnosis or mask lookup, without persisting raw prompts or requests.
+- Added diagnosis-adjusted Repair request digests and require exact matches before queue submission, history recovery, and managed output storage.
+- Required repaired-pair source provenance to match exactly between the top-level result and stored Repair attempt, including the derived output node, across restore, verification, and promotion.
+- Legacy or incomplete Repair checkpoints now fail closed, while persistence demotes invalid Repair state without discarding the valid Preview or Final result.
+- Added fail-closed checkpoint and managed-image read/store boundaries whose returned and persisted errors use fixed stage-specific codes, messages, and bounded metadata without upstream paths, payloads, prompts, or secrets.
+- Applied closed error allowlists to Final-repair and Repair-verification node errors plus failed verification results, and clarified that verification configuration failures leave only Preview and Final selectable.
+- Restricted the generic Final-review selector to Preview/Final so Repair promotion remains available only through the verification- and parent-guarded Repair selector.
+
+Validation:
+
+- Focused Repair execution, checkpoint, persistence, verification, privacy, and selection tests passed 170 tests across 4 files.
+- `npm run typecheck` passed.
+- `npm run lint` passed with 23 pre-existing warnings and no errors.
+- `git diff --check` passed with line-ending warnings only.
+
 ## 2026-07-22
+
+### T38C / Issue #142 One-Shot Local Final Repair
+
+Summary:
+
+- Upgraded the Run definition to v4 with `final-review -> final-repair -> repair-verification -> result-display` and a default-off Composer authorization covered by generation confirmation.
+- Added locally derived contact/object-count repair eligibility, strict single-region mask validation with a 35% before/after-growth ceiling and 64-pixel growth cap, existing high-resolution ComfyUI inpaint execution, managed Repair storage, request-local Detailers, and resumable failure handling that never repeats a successful repair.
+- Added one optional SAM2 refinement for a single clear rectangle/ellipse target through existing request, `object_info`, queue/history, and storage boundaries. Unavailable or invalid SAM2 safely retains the independently validated structured mask and records refinement provenance.
+- Added per-pair queued/output-ready/stored repair checkpoints, exact Final/review/target parent binding, closed diagnosis cardinality/locality validation, and a repair-specific redacted LiteLLM purpose so interruption, storage failure, changed parents, ambiguous targets, and request/response logging fail safely.
+- Added one bounded Preview/Final/Repair verification pass with local recommendation and explicit-only Repair selection in Simple and Detailed result views.
+- Added fail-closed persistence sanitization and linkage reconciliation for authorization, candidates, seeds, dimensions, managed images, masks, findings, and recommendations. Legacy workflows restore without automatic repair calls.
+- Reconciled exact matching disk/workflow Repair checkpoints monotonically so returned queued/output-ready/stored state outranks an older checkpoint without accepting mismatched attempt linkage. Uncertain `queue-started` outcomes now use a closed `queue-outcome-unknown` reason, show safe manual guidance, and suppress Repair retry in Simple and Detailed modes. The default Repair checkpoint directory is ignored by Git.
+
+Validation:
+
+- `npm run typecheck`, `npm run lint` (23 pre-existing warnings, no errors), the focused T38C unit suite (7 tests), and the combined T38C/existing SAM2 validation (13 tests across 3 files) passed during implementation. Full test, build, and independent Test/Review Gate evidence are recorded during closeout.
 
 ### T38B / Issue #139 Preview-Final Review and Result Selection
 

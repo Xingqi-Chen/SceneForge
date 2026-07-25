@@ -37,7 +37,7 @@ import {
 import {
   sanitizeStoryStyleReferenceSnapshot,
 } from "./story-style-palette";
-import { sanitizeRunSceneInputSettingsSnapshot } from "./run-input-settings";
+import { getRunSceneInputSettings, sanitizeRunSceneInputSettingsSnapshot } from "./run-input-settings";
 import {
   isTimelineFinalRedrawPreset,
   resolveTimelineFinalDimensions,
@@ -56,12 +56,17 @@ import {
   timelineFinalReviewScopes,
   timelineFinalReviewSeverities,
   timelineFinalReviewVariants,
+  timelineRepairSkipReasons,
   timelineNodeIds,
   timelineNodeStatuses,
   type TimelineNodeId,
   type TimelineNodeMap,
   type TimelineNodeResult,
   type TimelineNodeStatus,
+  type ComfyUiExecutionTimelineResult,
+  type TimelineFinalExecutionRecord,
+  type TimelineRepairDiagnosis,
+  type TimelineRepairParentBinding,
   type TimelineWorkflowState,
 } from "./types";
 import { coercePromptProfileId, isPromptProfileId, type PromptProfileId } from "@/shared/prompt-profile";
@@ -69,6 +74,13 @@ import {
   normalizeComfyUiViewImageReference,
   normalizeStoredGeneratedImageReference,
 } from "@/features/comfyui/generated-image-reference";
+import {
+  deriveRepairAttemptId,
+  deriveRepairBaseRequestDigest,
+  deriveRepairOutputNodeId,
+  deriveRepairRequestDigest,
+  sanitizeTimelineRepairAttempt,
+} from "./final-repair";
 
 export const TIMELINE_WORKFLOW_RECORD_KIND = "sceneforge-timeline-workflow" as const;
 export const TIMELINE_WORKFLOW_RECORD_VERSION = 1 as const;
@@ -254,6 +266,11 @@ function sanitizeTimelineNode(
   const updatedAt = sanitizeDateString(raw.updatedAt, fallbackUpdatedAt);
   const source = sanitizeNodeSource(raw.source);
   let error = sanitizeNodeError(raw.error, { redactDataUrls: nodeId !== "scene-input" });
+  if (nodeId === "final-repair") {
+    error = sanitizeRepairPairError(raw.error);
+  } else if (nodeId === "repair-verification") {
+    error = sanitizeRepairVerificationError(raw.error);
+  }
   if ((nodeId === "preview-execution" || nodeId === "comfyui-execution") &&
       isRecord(raw.error) && isRecord(raw.error.details)) {
     const partialResult = nodeId === "preview-execution"
@@ -280,6 +297,10 @@ function sanitizeTimelineNode(
       ? sanitizeFinalExecutionResult(raw.result, options)
       : nodeId === "final-review"
         ? sanitizeFinalReviewResult(raw.result)
+      : nodeId === "final-repair"
+        ? sanitizeFinalRepairResult(raw.result)
+      : nodeId === "repair-verification"
+        ? sanitizeRepairVerificationResult(raw.result)
       : nodeId === "result-display"
         ? sanitizeResultDisplayResult(raw.result)
         : raw.result !== undefined
@@ -313,6 +334,8 @@ function sanitizeTimelineNode(
     nodeId === "comfyui-execution" && status === "done" &&
       (!isRecord(result) || result.completed !== true) ||
     nodeId === "final-review" && status === "done" && !isRecord(result) ||
+    nodeId === "final-repair" && status === "done" && !isRecord(result) ||
+    nodeId === "repair-verification" && status === "done" && !isRecord(result) ||
     nodeId === "result-display" && status === "done" && result === undefined;
   if (invalidCompletedResult) {
     return {
@@ -322,7 +345,11 @@ function sanitizeTimelineNode(
       updatedAt,
       ...(result !== undefined ? { result } : {}),
       error: createTimelineNodeError(
-        nodeId === "preview-scoring" || nodeId === "final-review" ? "timeline_request_invalid" : "image_storage_invalid",
+        nodeId === "final-repair" || nodeId === "repair-verification"
+          ? "node_output_invalid"
+          : nodeId === "preview-scoring" || nodeId === "final-review"
+            ? "timeline_request_invalid"
+            : "image_storage_invalid",
         nodeId === "preview-scoring"
           ? "Persisted preview scoring was invalid. Retry preview scoring."
           : nodeId === "final-review"
@@ -633,6 +660,7 @@ function sanitizeSingleImageWorkflowState(raw: Record<string, unknown>): Timelin
   const rawNodes = isRecord(raw.nodes) ? raw.nodes : {};
   const isLegacyWorkflow = !("preview-execution" in rawNodes) || !("preview-scoring" in rawNodes);
   const isLegacyFinalReview = !("final-review" in rawNodes);
+  const isLegacyRepair = !("final-repair" in rawNodes) || !("repair-verification" in rawNodes);
   const rawGateNode = isRecord(rawNodes["generation-gate"]) ? rawNodes["generation-gate"] : {};
   const rawGateResult = isRecord(rawGateNode.result) ? rawGateNode.result : {};
   const requireCurrentFinalPolicy = rawGateResult.finalPolicyVersion === timelineFinalGenerationPolicy.version;
@@ -646,6 +674,7 @@ function sanitizeSingleImageWorkflowState(raw: Record<string, unknown>): Timelin
   if (!isLegacyWorkflow) {
     const scoringIsTrusted = reconcilePersistedPreviewScoring(nodes, updatedAt);
     reconcilePersistedGenerationLinkage(nodes, updatedAt);
+    reconcilePersistedRepairLinkage(nodes, updatedAt, raw.workflowId.trim());
     if (!scoringIsTrusted) {
       invalidatePersistedScoringDownstream(nodes, updatedAt);
     }
@@ -674,6 +703,30 @@ function sanitizeSingleImageWorkflowState(raw: Record<string, unknown>): Timelin
         result: { reviewVersion: 1, status: "unavailable", pairs },
       };
     }
+  }
+  if (isLegacyRepair && nodes["result-display"].status === "done" && nodes["final-review"].status === "done") {
+    const review = nodes["final-review"].result;
+    const pairs = isRecord(review) && Array.isArray(review.pairs)
+      ? review.pairs.flatMap((entry) => isRecord(entry) && safePreviewCandidateId(entry.candidateId) &&
+        safeNonNegativeInteger(entry.rank) !== null && safeNonNegativeInteger(entry.seed) !== null
+        ? [{ candidateId: entry.candidateId, rank: entry.rank, seed: entry.seed, status: "skipped" as const,
+            targets: [], skipReason: "repair-disabled" as const }]
+        : [])
+      : [];
+    nodes["final-repair"] = {
+      nodeId: "final-repair",
+      status: "done",
+      source: "system",
+      updatedAt,
+      result: { repairVersion: 1, authorized: false, completed: true, pairs },
+    };
+    nodes["repair-verification"] = {
+      nodeId: "repair-verification",
+      status: "done",
+      source: "system",
+      updatedAt,
+      result: { verificationVersion: 1, status: "skipped", pairs: [] },
+    };
   }
   if (!isLegacyWorkflow && nodes["comfyui-execution"].status !== "done" && nodes["result-display"].status === "done") {
     nodes["result-display"] = {
@@ -716,7 +769,7 @@ function sanitizeSingleImageWorkflowState(raw: Record<string, unknown>): Timelin
       status: "blocked",
       error: undefined,
     };
-    for (const nodeId of ["preview-execution", "preview-scoring", "final-review", "result-display"] as const) {
+    for (const nodeId of ["preview-execution", "preview-scoring", "final-review", "final-repair", "repair-verification", "result-display"] as const) {
       nodes[nodeId] = {
         ...nodes[nodeId],
         status: "blocked",
@@ -1157,8 +1210,9 @@ function sanitizeFinalReviewResult(value: unknown) {
     seen.add(entry.candidateId as string);
     const final = sanitizeTimelineStoredImage(entry.variants.final);
     const previewUpscale = sanitizeTimelineStoredImage(entry.variants.previewUpscale);
-    if (!final || !previewUpscale || !variantSet.has(entry.defaultVariant as string) ||
-        !(entry.recommendedVariant === null || variantSet.has(entry.recommendedVariant as string)) ||
+    if (!final || !previewUpscale ||
+        (entry.defaultVariant !== "final" && entry.defaultVariant !== "preview-upscale") ||
+        !(entry.recommendedVariant === null || entry.recommendedVariant === "final" || entry.recommendedVariant === "preview-upscale") ||
         !(entry.userSelectedVariant === undefined || variantSet.has(entry.userSelectedVariant as string))) return null;
     const normalizeScores = (raw: unknown) => {
       if (!isRecord(raw)) return null;
@@ -1208,7 +1262,7 @@ function sanitizeFinalReviewResult(value: unknown) {
         : {}),
       recommendedVariant: entry.recommendedVariant as "final" | "preview-upscale" | null,
       defaultVariant: entry.defaultVariant as "final" | "preview-upscale",
-      ...(entry.userSelectedVariant ? { userSelectedVariant: entry.userSelectedVariant as "final" | "preview-upscale" } : {}),
+      ...(entry.userSelectedVariant ? { userSelectedVariant: entry.userSelectedVariant as "final" | "preview-upscale" | "repair" } : {}),
     };
   });
   if (pairs.some((pair) => !pair)) return undefined;
@@ -1220,6 +1274,390 @@ function sanitizeFinalReviewResult(value: unknown) {
     pairs,
     ...(error ? { error } : {}),
   };
+}
+
+const repairErrorStages = new Set([
+  "attempt-identity",
+  "queue-outcome",
+  "diagnosis-outcome",
+  "sam2-outcome",
+  "checkpoint-read",
+  "checkpoint-write",
+  "managed-image-read",
+  "mask-storage",
+  "repair-storage",
+  "diagnosis",
+  "mask",
+  "comfyui",
+]);
+
+function sanitizeRepairPairError(raw: unknown): SanitizedNodeError | undefined {
+  if (!isRecord(raw) || typeof raw.code !== "string") return undefined;
+  const rawDetails = isRecord(raw.details) ? raw.details : {};
+  const stage = typeof rawDetails.stage === "string" && repairErrorStages.has(rawDetails.stage)
+    ? rawDetails.stage
+    : undefined;
+  const recoverable = rawDetails.recoverable === true;
+  if (stage === "attempt-identity") {
+    return {
+      code: "timeline_request_invalid",
+      message: "Repair attempt identity did not match its workflow binding. This Repair remains closed.",
+      details: { recoverable: false, stage },
+    };
+  }
+  if (stage === "queue-outcome") {
+    return {
+      code: "comfyui_execution_failed",
+      message: "Repair queue acceptance is uncertain. Manual recovery is required before another Repair can be queued.",
+      details: { recoverable: false, stage },
+    };
+  }
+  if (stage === "diagnosis-outcome" || stage === "sam2-outcome") {
+    return {
+      code: stage === "diagnosis-outcome" ? "llm_upstream" : "comfyui_execution_failed",
+      message: stage === "diagnosis-outcome"
+        ? "Repair diagnosis outcome is uncertain. This one-shot Repair remains closed."
+        : "SAM2 queue acceptance is uncertain. This one-shot Repair remains closed.",
+      details: { recoverable: false, stage },
+    };
+  }
+  if (stage === "checkpoint-read" || stage === "checkpoint-write") {
+    return {
+      code: "comfyui_execution_failed",
+      message: stage === "checkpoint-read"
+        ? "Repair checkpoint state could not be read safely. This Repair remains closed."
+        : "Repair checkpoint state could not be persisted safely.",
+      details: { recoverable: stage === "checkpoint-write" && recoverable, stage },
+    };
+  }
+  if (stage === "managed-image-read" || stage === "mask-storage" || stage === "repair-storage") {
+    const invalid = raw.code === "image_storage_invalid";
+    return {
+      code: invalid ? "image_storage_invalid" : "image_storage_failed",
+      message: invalid
+        ? "A managed Repair image reference was invalid. This Repair remains closed."
+        : stage === "managed-image-read"
+          ? "A managed Repair image could not be read safely."
+          : "A managed Repair image could not be stored safely.",
+      details: { recoverable: !invalid && recoverable, stage },
+    };
+  }
+  if (stage === "diagnosis") {
+    return {
+      code: "llm_upstream",
+      message: "Repair diagnosis could not be completed safely.",
+      details: { recoverable, stage },
+    };
+  }
+  if (stage === "mask") {
+    return {
+      code: "image_storage_failed",
+      message: "Repair mask preparation could not be completed safely.",
+      details: { recoverable, stage },
+    };
+  }
+  if (stage === "comfyui") {
+    return {
+      code: "comfyui_execution_failed",
+      message: "Repair execution could not be completed safely.",
+      details: { recoverable, stage },
+    };
+  }
+  if (raw.code === "image_storage_invalid") {
+    return {
+      code: raw.code,
+      message: "A managed Repair image reference was invalid. This Repair remains closed.",
+      details: { recoverable: false },
+    };
+  }
+  if (raw.code === "image_storage_failed") {
+    return {
+      code: raw.code,
+      message: "A managed Repair image operation could not be completed safely.",
+      details: { recoverable },
+    };
+  }
+  if (raw.code === "llm_config" || raw.code === "llm_upstream" || raw.code === "llm_malformed_response") {
+    return {
+      code: raw.code,
+      message: "Repair diagnosis could not be completed safely.",
+      details: { recoverable },
+    };
+  }
+  return {
+    code: "comfyui_execution_failed",
+    message: "Repair execution could not be completed safely.",
+    details: { recoverable },
+  };
+}
+
+function sanitizeRepairVerificationError(raw: unknown): SanitizedNodeError | undefined {
+  if (!isRecord(raw) || typeof raw.code !== "string") return undefined;
+  const recoverable = isRecord(raw.details) && raw.details.recoverable === true;
+  if (raw.code === "llm_config") {
+    return {
+      code: "llm_config",
+      message: "Repair verification configuration is unavailable. Preview and Final remain selectable.",
+      details: { recoverable },
+    };
+  }
+  if (raw.code === "image_storage_invalid" || raw.code === "image_storage_failed") {
+    return {
+      code: raw.code,
+      message: raw.code === "image_storage_invalid"
+        ? "A managed image reference for Repair verification was invalid."
+        : "Managed images could not be prepared safely for Repair verification.",
+      details: { recoverable },
+    };
+  }
+  if (raw.code === "llm_upstream") {
+    return {
+      code: "llm_upstream",
+      message: "Repair verification failed upstream after bounded attempts.",
+      details: { recoverable },
+    };
+  }
+  if (raw.code === "llm_malformed_response") {
+    return {
+      code: "llm_malformed_response",
+      message: "Repair verification remained malformed after one schema-repair attempt.",
+      details: { recoverable },
+    };
+  }
+  return {
+    code: "timeline_node_failed",
+    message: "Repair verification could not be completed safely.",
+    details: { recoverable },
+  };
+}
+
+function sanitizeRepairDiagnosis(value: unknown) {
+  if (!isRecord(value) || !Array.isArray(value.shapes) || value.shapes.length !== 1) return null;
+  const finiteUnit = (entry: unknown) => typeof entry === "number" && Number.isFinite(entry) && entry >= 0 && entry <= 1;
+  const shapes = value.shapes.map((entry) => {
+    if (!isRecord(entry) || !["ellipse", "rect", "polygon", "stroke"].includes(String(entry.type))) return null;
+    if (entry.type === "ellipse") {
+      if (![entry.x, entry.y, entry.radiusX, entry.radiusY].every(finiteUnit) || entry.radiusX === 0 || entry.radiusY === 0) return null;
+      return { type: "ellipse", x: entry.x, y: entry.y, radiusX: entry.radiusX, radiusY: entry.radiusY,
+        ...(typeof entry.rotation === "number" && Number.isFinite(entry.rotation) ? { rotation: entry.rotation } : {}) };
+    }
+    if (entry.type === "rect") {
+      if (![entry.x, entry.y, entry.width, entry.height].every(finiteUnit) || entry.width === 0 || entry.height === 0) return null;
+      return { type: "rect", x: entry.x, y: entry.y, width: entry.width, height: entry.height,
+        ...(typeof entry.rotation === "number" && Number.isFinite(entry.rotation) ? { rotation: entry.rotation } : {}) };
+    }
+    if (!Array.isArray(entry.points) || entry.points.length < (entry.type === "polygon" ? 3 : 1) ||
+        entry.points.some((point) => !isRecord(point) || !finiteUnit(point.x) || !finiteUnit(point.y))) return null;
+    return {
+      type: entry.type,
+      points: entry.points.map((point) => ({ x: (point as Record<string, unknown>).x, y: (point as Record<string, unknown>).y })),
+      ...(entry.type === "stroke" && typeof entry.brushSize === "number" && Number.isFinite(entry.brushSize) &&
+        entry.brushSize >= 1 && entry.brushSize <= 64 ? { brushSize: entry.brushSize } : {}),
+    };
+  });
+  const growMaskBy = safeNonNegativeInteger(value.growMaskBy);
+  if (shapes.some((shape) => !shape) || growMaskBy === null || growMaskBy > 64) return null;
+  return {
+    shapes,
+    growMaskBy,
+    ...(typeof value.denoise === "number" && Number.isFinite(value.denoise) && value.denoise >= 0 && value.denoise <= 1
+      ? { denoise: value.denoise } : {}),
+    ...(typeof value.faceDetailerEnabled === "boolean" ? { faceDetailerEnabled: value.faceDetailerEnabled } : {}),
+    ...(typeof value.handDetailerEnabled === "boolean" ? { handDetailerEnabled: value.handDetailerEnabled } : {}),
+  };
+}
+
+function sanitizeRepairParentBinding(value: unknown) {
+  if (!isRecord(value)) return null;
+  const finalStoredImage = sanitizeTimelineStoredImage(value.finalStoredImage);
+  const reviewedFindings = Array.isArray(value.reviewedFindings)
+    ? value.reviewedFindings.map((finding) => isRecord(finding) &&
+      timelineFinalReviewOperations.includes(finding.operation as never) &&
+      timelineFinalReviewSeverities.includes(finding.severity as never) &&
+      timelineFinalReviewScopes.includes(finding.scope as never) && typeof finding.introducedByFinal === "boolean" &&
+      typeof finding.description === "string" && finding.description.trim()
+      ? { operation: finding.operation, severity: finding.severity, scope: finding.scope,
+          introducedByFinal: finding.introducedByFinal, description: finding.description.trim().slice(0, 500) }
+      : null)
+    : [];
+  const reviewedTargets = Array.isArray(value.reviewedTargets)
+    ? value.reviewedTargets.map((target) => isRecord(target) &&
+      (target.operation === "contact" || target.operation === "object-count") &&
+      (target.severity === "major" || target.severity === "blocking") &&
+      typeof target.description === "string" && target.description.trim()
+      ? { operation: target.operation, severity: target.severity, description: target.description.trim().slice(0, 500) }
+      : null)
+    : [];
+  if (!finalStoredImage || typeof value.reviewUpdatedAt !== "string" || !Number.isFinite(Date.parse(value.reviewUpdatedAt)) ||
+      reviewedFindings.length !== timelineFinalReviewOperations.length || reviewedFindings.some((finding) => !finding) ||
+      new Set(reviewedFindings.map((finding) => finding?.operation)).size !== timelineFinalReviewOperations.length ||
+      reviewedTargets.length > 2 || reviewedTargets.some((target) => !target)) return null;
+  return {
+    finalStoredImage,
+    reviewUpdatedAt: value.reviewUpdatedAt,
+    reviewedFindings,
+    reviewedTargets,
+  };
+}
+
+function sanitizeFinalRepairResult(value: unknown) {
+  if (!isRecord(value) || value.repairVersion !== 1 || typeof value.authorized !== "boolean" ||
+      value.completed !== true || !Array.isArray(value.pairs) || value.pairs.length < 1 || value.pairs.length > 4) return undefined;
+  const skipReasons = new Set<string>(timelineRepairSkipReasons);
+  const seen = new Set<string>();
+  const pairs = value.pairs.map((entry) => {
+    if (!isRecord(entry) || !safePreviewCandidateId(entry.candidateId) || seen.has(entry.candidateId as string) ||
+        !["skipped", "failed", "repaired"].includes(String(entry.status)) ||
+        safeNonNegativeInteger(entry.rank) === null || safeNonNegativeInteger(entry.seed) === null ||
+        !Array.isArray(entry.targets) || entry.targets.length > 2) return null;
+    seen.add(entry.candidateId as string);
+    const targets = entry.targets.map((target) => isRecord(target) &&
+      (target.operation === "contact" || target.operation === "object-count") &&
+      (target.severity === "major" || target.severity === "blocking") && typeof target.description === "string" && target.description.trim()
+      ? { operation: target.operation, severity: target.severity, description: target.description.trim().slice(0, 500) }
+      : null);
+    if (targets.some((target) => !target)) return null;
+    const diagnosis = entry.diagnosis === undefined ? undefined : sanitizeRepairDiagnosis(entry.diagnosis);
+    if (entry.diagnosis !== undefined && !diagnosis) return null;
+    const storedImage = sanitizeTimelineStoredImage(entry.storedImage);
+    const sourceImage = sanitizeTimelineSourceImageReference(entry.sourceImage);
+    const parentRecord = isRecord(entry.parent) ? entry.parent : null;
+    const parentFinalStoredImage = parentRecord ? sanitizeTimelineStoredImage(parentRecord.finalStoredImage) : null;
+    const parentFindings = parentRecord && Array.isArray(parentRecord.reviewedFindings)
+      ? parentRecord.reviewedFindings.map((finding) => isRecord(finding) &&
+        timelineFinalReviewOperations.includes(finding.operation as never) &&
+        timelineFinalReviewSeverities.includes(finding.severity as never) &&
+        timelineFinalReviewScopes.includes(finding.scope as never) && typeof finding.introducedByFinal === "boolean" &&
+        typeof finding.description === "string" && finding.description.trim()
+        ? { operation: finding.operation, severity: finding.severity, scope: finding.scope,
+            introducedByFinal: finding.introducedByFinal, description: finding.description.trim().slice(0, 500) }
+        : null)
+      : [];
+    const parentTargets = parentRecord && Array.isArray(parentRecord.reviewedTargets)
+      ? parentRecord.reviewedTargets.map((target) => isRecord(target) &&
+        (target.operation === "contact" || target.operation === "object-count") &&
+        (target.severity === "major" || target.severity === "blocking") && typeof target.description === "string" && target.description.trim()
+        ? { operation: target.operation, severity: target.severity, description: target.description.trim().slice(0, 500) }
+        : null)
+      : [];
+    const parent = parentRecord && parentFinalStoredImage && typeof parentRecord.reviewUpdatedAt === "string" &&
+      Number.isFinite(Date.parse(parentRecord.reviewUpdatedAt)) && parentFindings.length === timelineFinalReviewOperations.length &&
+      parentFindings.every(Boolean) && new Set(parentFindings.map((finding) => finding?.operation)).size === timelineFinalReviewOperations.length &&
+      parentTargets.every(Boolean) && JSON.stringify(parentTargets) === JSON.stringify(targets)
+      ? { finalStoredImage: parentFinalStoredImage, reviewUpdatedAt: parentRecord.reviewUpdatedAt,
+          reviewedFindings: parentFindings, reviewedTargets: parentTargets }
+      : null;
+    const attempt = sanitizeTimelineRepairAttempt(entry.attempt);
+    const maskRecord = isRecord(entry.mask) ? entry.mask : null;
+    const refinement = !maskRecord ? null : isRecord(maskRecord.refinement) &&
+      (maskRecord.refinement.status === "not-applicable" || maskRecord.refinement.status === "applied" || maskRecord.refinement.status === "skipped") &&
+      (maskRecord.refinement.reason === undefined || maskRecord.refinement.reason === "no-clear-target" ||
+        maskRecord.refinement.reason === "sam2-unavailable" || maskRecord.refinement.reason === "sam2-invalid")
+      ? { status: maskRecord.refinement.status,
+          ...(maskRecord.refinement.reason ? { reason: maskRecord.refinement.reason } : {}) }
+      : maskRecord.refinement === undefined && maskRecord.provenance === "sam2-refinement"
+        ? { status: "applied" as const }
+        : maskRecord.refinement === undefined && maskRecord.provenance === "structured-diagnosis"
+          ? { status: "not-applicable" as const, reason: "no-clear-target" as const }
+          : null;
+    const refinementMatchesProvenance = refinement && (
+      (maskRecord?.provenance === "sam2-refinement" && refinement.status === "applied" && refinement.reason === undefined) ||
+      (maskRecord?.provenance === "structured-diagnosis" && refinement.status === "not-applicable" && refinement.reason === "no-clear-target") ||
+      (maskRecord?.provenance === "structured-diagnosis" && refinement.status === "skipped" &&
+        (refinement.reason === "sam2-unavailable" || refinement.reason === "sam2-invalid"))
+    );
+    const maskStoredImage = maskRecord ? sanitizeTimelineStoredImage(maskRecord.storedImage) : null;
+    const mask = maskRecord && (maskRecord.provenance === "structured-diagnosis" || maskRecord.provenance === "sam2-refinement") &&
+      refinementMatchesProvenance &&
+      typeof maskRecord.coverageBeforeGrowth === "number" && maskRecord.coverageBeforeGrowth > 0 && maskRecord.coverageBeforeGrowth <= 0.35 &&
+      typeof maskRecord.coverageAfterGrowth === "number" && maskRecord.coverageAfterGrowth > 0 && maskRecord.coverageAfterGrowth <= 0.35 &&
+      maskRecord.coverageAfterGrowth >= maskRecord.coverageBeforeGrowth && safeNonNegativeInteger(maskRecord.growMaskBy) !== null &&
+      (maskRecord.growMaskBy as number) <= 64 && safeNonNegativeInteger(maskRecord.width) !== null && (maskRecord.width as number) > 0 &&
+      safeNonNegativeInteger(maskRecord.height) !== null && (maskRecord.height as number) > 0 && maskStoredImage
+      ? { provenance: maskRecord.provenance, refinement, coverageBeforeGrowth: maskRecord.coverageBeforeGrowth,
+          coverageAfterGrowth: maskRecord.coverageAfterGrowth, growMaskBy: maskRecord.growMaskBy,
+          width: maskRecord.width, height: maskRecord.height, storedImage: maskStoredImage }
+      : null;
+    const validRepaired = entry.status === "repaired" && parent && attempt?.status === "stored" &&
+      attempt.requestDigest && storedImage && sourceImage &&
+      safeIdentifier(entry.promptId) && entry.promptId === attempt.promptId &&
+      samePersistedSourceImage(sourceImage, attempt.sourceImage) &&
+      sourceImage.nodeId === attempt.outputNodeId &&
+      samePersistedStoredImage(storedImage, attempt.storedImage) && mask &&
+      isRecord(entry.requestPolicy) && entry.requestPolicy.version === 1 && entry.requestPolicy.sourceVariant === "final" &&
+      typeof entry.requestPolicy.requestLocalFaceDetailer === "boolean" && typeof entry.requestPolicy.requestLocalHandDetailer === "boolean";
+    if (entry.status === "repaired" && !validRepaired) return null;
+    if (entry.status === "failed" && (!parent || entry.attempt !== undefined && !attempt)) return null;
+    if (entry.status !== "repaired" && entry.storedImage !== undefined) return null;
+    if (entry.skipReason !== undefined && !skipReasons.has(entry.skipReason as string)) return null;
+    const error = sanitizeRepairPairError(entry.error);
+    const errorDetails = isRecord(error?.details) ? error.details : null;
+    const manualRecoveryClosed = errorDetails?.stage === "diagnosis-outcome" ||
+      errorDetails?.stage === "sam2-outcome" ||
+      errorDetails?.stage === "queue-outcome" ||
+      attempt?.status === "queue-started" ||
+      entry.skipReason === "queue-outcome-unknown";
+    return {
+      candidateId: entry.candidateId,
+      rank: entry.rank,
+      seed: entry.seed,
+      status: entry.status,
+      targets,
+      ...(parent ? { parent } : {}),
+      ...(attempt && (entry.status === "failed" || validRepaired) ? { attempt } : {}),
+      ...(entry.skipReason ? { skipReason: entry.skipReason } : {}),
+      ...(!manualRecoveryClosed &&
+        (entry.retryStage === "diagnosis" || entry.retryStage === "mask" || entry.retryStage === "comfyui")
+        ? { retryStage: entry.retryStage }
+        : {}),
+      ...(diagnosis ? { diagnosis } : {}),
+      ...(validRepaired ? { promptId: entry.promptId, sourceImage, storedImage, mask, requestPolicy: entry.requestPolicy } : {}),
+      ...(entry.status === "failed" && mask ? { mask } : {}),
+      ...(error ? { error } : {}),
+    };
+  });
+  return pairs.every(Boolean) ? { repairVersion: 1 as const, authorized: value.authorized, completed: true, pairs } : undefined;
+}
+
+function sanitizeRepairVerificationResult(value: unknown) {
+  if (!isRecord(value) || value.verificationVersion !== 1 ||
+      !["verified", "skipped", "failed"].includes(String(value.status)) || !Array.isArray(value.pairs)) return undefined;
+  const operationSet = new Set<string>(timelineFinalReviewOperations);
+  const severitySet = new Set<string>(timelineFinalReviewSeverities);
+  const scopeSet = new Set<string>(timelineFinalReviewScopes);
+  const pairs = value.pairs.map((entry) => {
+    if (!isRecord(entry) || !safePreviewCandidateId(entry.candidateId) || !isRecord(entry.scores)) return null;
+    const repairParent = sanitizeRepairParentBinding(entry.repairParent);
+    const repairStoredImage = sanitizeTimelineStoredImage(entry.repairStoredImage);
+    if (!repairParent || !repairStoredImage) return null;
+    const normalizeScores = (raw: unknown) => {
+      if (!isRecord(raw)) return null;
+      const keys = ["adherence", "composition", "anatomy", "style", "technical"] as const;
+      if (keys.some((key) => typeof raw[key] !== "number" || !Number.isFinite(raw[key]) || (raw[key] as number) < 0 || (raw[key] as number) > 100)) return null;
+      const total = Number(calculatePreviewScoreRawTotal(raw as { adherence: number; anatomy: number; composition: number; style: number; technical: number }).toFixed(2));
+      return raw.total === total ? { ...Object.fromEntries(keys.map((key) => [key, raw[key]])), total } : null;
+    };
+    const final = normalizeScores(entry.scores.final);
+    const repair = normalizeScores(entry.scores.repair);
+    const findings = Array.isArray(entry.findings) ? entry.findings.map((finding) => isRecord(finding) &&
+      operationSet.has(finding.operation as string) && severitySet.has(finding.severity as string) && scopeSet.has(finding.scope as string) &&
+      typeof finding.description === "string" && finding.description.trim()
+      ? { operation: finding.operation, severity: finding.severity, scope: finding.scope, introducedByFinal: false,
+          description: finding.description.trim().slice(0, 500) } : null) : [];
+    if (!final || !repair || findings.length !== 4 || findings.some((finding) => !finding) ||
+        new Set(findings.map((finding) => finding?.operation)).size !== 4 ||
+        typeof entry.targetedDefectsResolved !== "boolean" || typeof entry.newMajorOrBlockingIssue !== "boolean" ||
+        typeof entry.recommended !== "boolean") return null;
+    return { candidateId: entry.candidateId, repairParent, repairStoredImage, scores: { final, repair }, findings,
+      targetedDefectsResolved: entry.targetedDefectsResolved, newMajorOrBlockingIssue: entry.newMajorOrBlockingIssue,
+      recommended: entry.recommended,
+      ...(typeof entry.rationale === "string" && entry.rationale.trim() ? { rationale: entry.rationale.trim().slice(0, 1_000) } : {}) };
+  });
+  if (pairs.some((pair) => !pair) || (value.status === "verified" && pairs.length < 1) ||
+      (value.status !== "verified" && pairs.length > 0)) return undefined;
+  const error = sanitizeRepairVerificationError(value.error);
+  if (value.status === "failed" && !error) return undefined;
+  return { verificationVersion: 1 as const, status: value.status, pairs, ...(error ? { error } : {}) };
 }
 
 function sanitizeResultDisplayResult(value: unknown) {
@@ -1424,7 +1862,7 @@ function reconcilePersistedPreviewScoring(nodes: TimelineNodeMap, updatedAt: str
 }
 
 function invalidatePersistedScoringDownstream(nodes: TimelineNodeMap, updatedAt: string) {
-  for (const nodeId of ["comfyui-execution", "final-review", "result-display"] as const) {
+  for (const nodeId of ["comfyui-execution", "final-review", "final-repair", "repair-verification", "result-display"] as const) {
     nodes[nodeId] = {
       nodeId,
       status: "error",
@@ -1726,6 +2164,174 @@ function reconcilePersistedGenerationLinkage(nodes: TimelineNodeMap, updatedAt: 
         { recoverable: true },
       ),
     };
+  }
+}
+
+function reconcilePersistedRepairLinkage(
+  nodes: TimelineNodeMap,
+  updatedAt: string,
+  workflowId: string,
+) {
+  const repairNode = nodes["final-repair"];
+  const verificationNode = nodes["repair-verification"];
+  const reviewNode = nodes["final-review"];
+  const finalNode = nodes["comfyui-execution"];
+  if (reviewNode.status !== "done" || !isRecord(reviewNode.result) || !Array.isArray(reviewNode.result.pairs) ||
+      !isRecord(finalNode.result) || !Array.isArray(finalNode.result.finals)) return;
+  const reviewResult = reviewNode.result as Record<string, unknown> & { pairs: unknown[] };
+  const resetRepairSelections = () => {
+    nodes["final-review"] = {
+      ...reviewNode,
+      result: {
+        ...reviewResult,
+        pairs: reviewResult.pairs.map((entry) => isRecord(entry) && entry.userSelectedVariant === "repair"
+          ? { ...entry, userSelectedVariant: entry.defaultVariant }
+          : entry),
+      },
+    };
+  };
+  const skipInvalidVerification = () => {
+    nodes["repair-verification"] = {
+      nodeId: "repair-verification",
+      status: "done",
+      source: "system",
+      updatedAt,
+      result: { verificationVersion: 1, status: "skipped", pairs: [] },
+    };
+  };
+  if (repairNode.status !== "done" || !isRecord(repairNode.result) || !Array.isArray(repairNode.result.pairs)) {
+    resetRepairSelections();
+    skipInvalidVerification();
+    return;
+  }
+  const repairResult = repairNode.result as Record<string, unknown> & { pairs: unknown[] };
+  const sceneInput = nodes["scene-input"].result;
+  const settings = getRunSceneInputSettings(isRecord(sceneInput) ? sceneInput : {});
+  const gate = nodes["generation-gate"].result;
+  const authorizationMatches = isRecord(gate) &&
+    gate.automaticLocalRepairAuthorized === settings.automaticLocalRepair &&
+    repairResult.authorized === settings.automaticLocalRepair;
+  const finalByCandidate = new Map(finalNode.result.finals.flatMap((entry) =>
+    isRecord(entry) && typeof entry.candidateId === "string" ? [[entry.candidateId, entry] as const] : []));
+  const reviewByCandidate = new Map(reviewResult.pairs.flatMap((entry) =>
+    isRecord(entry) && typeof entry.candidateId === "string" ? [[entry.candidateId, entry] as const] : []));
+  const linkageMatches = authorizationMatches && repairResult.pairs.length === reviewByCandidate.size &&
+    repairResult.pairs.every((entry) => {
+      if (!isRecord(entry) || typeof entry.candidateId !== "string") return false;
+      const final = finalByCandidate.get(entry.candidateId);
+      const review = reviewByCandidate.get(entry.candidateId);
+      if (!final || !review || entry.rank !== final.rank || entry.seed !== final.seed) return false;
+      if (entry.status === "repaired" || entry.status === "failed") {
+        const expectedTargets = Array.isArray(review.findings) ? review.findings.flatMap((finding) => isRecord(finding) &&
+          (finding.operation === "contact" || finding.operation === "object-count") &&
+          (finding.severity === "major" || finding.severity === "blocking") && finding.scope === "final" &&
+          finding.introducedByFinal === true && typeof finding.description === "string"
+          ? [{ operation: finding.operation, severity: finding.severity, description: finding.description }]
+          : []) : [];
+        if (!isRecord(entry.parent) || !samePersistedStoredImage(entry.parent.finalStoredImage, final.storedImage) ||
+            entry.parent.reviewUpdatedAt !== reviewNode.updatedAt ||
+            JSON.stringify(entry.parent.reviewedFindings) !== JSON.stringify(review.findings) ||
+            JSON.stringify(entry.parent.reviewedTargets) !== JSON.stringify(expectedTargets) ||
+            JSON.stringify(entry.targets) !== JSON.stringify(expectedTargets)) return false;
+        if (isRecord(entry.attempt)) {
+          const baseRequestDigest = deriveRepairBaseRequestDigest(
+            finalNode.result as ComfyUiExecutionTimelineResult,
+            final as TimelineFinalExecutionRecord,
+          );
+          if (!baseRequestDigest) return false;
+          const expectedAttemptId = deriveRepairAttemptId(
+            workflowId,
+            entry.candidateId,
+            entry.parent as TimelineRepairParentBinding,
+            baseRequestDigest,
+          );
+          if (entry.attempt.attemptId !== expectedAttemptId || !isRecord(entry.diagnosis)) return false;
+          try {
+            if (entry.attempt.outputNodeId !== deriveRepairOutputNodeId(
+              finalNode.result as ComfyUiExecutionTimelineResult,
+              final as TimelineFinalExecutionRecord,
+              entry.diagnosis as TimelineRepairDiagnosis,
+              expectedAttemptId,
+            )) return false;
+            if (entry.attempt.requestDigest !== deriveRepairRequestDigest(
+              finalNode.result as ComfyUiExecutionTimelineResult,
+              final as TimelineFinalExecutionRecord,
+              entry.diagnosis as TimelineRepairDiagnosis,
+              expectedAttemptId,
+            )) return false;
+          } catch {
+            return false;
+          }
+        }
+      }
+      if (isRecord(entry.mask) && (!isRecord(final.previewUpscale) ||
+          entry.mask.width !== final.previewUpscale.width || entry.mask.height !== final.previewUpscale.height)) return false;
+      if (entry.status !== "repaired") return true;
+      return isRecord(entry.mask) && isRecord(final.previewUpscale) &&
+        entry.mask.width === final.previewUpscale.width && entry.mask.height === final.previewUpscale.height &&
+        isRecord(entry.storedImage) && isRecord(entry.attempt) && entry.attempt.status === "stored" &&
+        isRecord(entry.sourceImage) && samePersistedSourceImage(entry.sourceImage, entry.attempt.sourceImage) &&
+        entry.sourceImage.nodeId === entry.attempt.outputNodeId &&
+        samePersistedStoredImage(entry.attempt.storedImage, entry.storedImage) &&
+        isRecord(entry.requestPolicy) && entry.requestPolicy.sourceVariant === "final";
+    });
+  if (!linkageMatches) {
+    resetRepairSelections();
+    nodes["final-repair"] = {
+      nodeId: "final-repair",
+      status: "done",
+      source: "system",
+      updatedAt,
+      result: {
+        repairVersion: 1,
+        authorized: false,
+        completed: true,
+        pairs: [...reviewByCandidate.values()].map((entry) => ({
+          candidateId: entry.candidateId,
+          rank: entry.rank,
+          seed: entry.seed,
+          status: "skipped",
+          targets: [],
+          skipReason: "repair-disabled",
+        })),
+      },
+    };
+    skipInvalidVerification();
+    return;
+  }
+  if (verificationNode.status !== "done" || !isRecord(verificationNode.result) ||
+      verificationNode.result.status !== "verified" || !Array.isArray(verificationNode.result.pairs)) {
+    resetRepairSelections();
+    return;
+  }
+  const verificationResult = verificationNode.result as Record<string, unknown> & { pairs: unknown[] };
+  const repairByCandidate = new Map(repairResult.pairs.flatMap((entry) =>
+    isRecord(entry) && typeof entry.candidateId === "string" && entry.status === "repaired"
+      ? [[entry.candidateId, entry] as const] : []));
+  const verificationMatches = verificationResult.pairs.length === repairByCandidate.size &&
+    verificationResult.pairs.every((entry) => {
+      if (!isRecord(entry) || typeof entry.candidateId !== "string" || !isRecord(entry.scores) ||
+          !isRecord(entry.scores.final) || !isRecord(entry.scores.repair) || !Array.isArray(entry.findings) ||
+          !isRecord(entry.repairParent) || !isRecord(entry.repairStoredImage)) return false;
+      const repair = repairByCandidate.get(entry.candidateId);
+      if (!repair || !Array.isArray(repair.targets) || !isRecord(repair.parent) || !isRecord(repair.storedImage) ||
+          JSON.stringify(entry.repairParent) !== JSON.stringify(repair.parent) ||
+          !samePersistedStoredImage(entry.repairStoredImage, repair.storedImage)) return false;
+      const findings = entry.findings as unknown[];
+      const targets = repair.targets as unknown[];
+      const targetsResolved = targets.every((target) => isRecord(target) && findings.some((finding) =>
+        isRecord(finding) && finding.operation === target.operation && (finding.severity === "none" || finding.severity === "minor")));
+      const newRegression = findings.some((finding) => isRecord(finding) &&
+        (finding.severity === "major" || finding.severity === "blocking") &&
+        !targets.some((target) => isRecord(target) && target.operation === finding.operation));
+      const recommended = targetsResolved && !newRegression &&
+        Number(entry.scores.repair.total) >= Number(entry.scores.final.total);
+      return entry.targetedDefectsResolved === targetsResolved && entry.newMajorOrBlockingIssue === newRegression &&
+        entry.recommended === recommended;
+    });
+  if (!verificationMatches) {
+    resetRepairSelections();
+    skipInvalidVerification();
   }
 }
 

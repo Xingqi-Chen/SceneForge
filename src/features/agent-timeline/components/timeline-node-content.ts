@@ -95,6 +95,20 @@ export const timelineNodeContent: Record<TimelineNodeId, TimelineNodeContent> = 
     editLabel: singleImageWorkflowDefinition.metadata["final-review"].manualEdit.label,
     aiLabel: singleImageWorkflowDefinition.metadata["final-review"].aiRetry.label,
   },
+  "final-repair": {
+    title: singleImageWorkflowDefinition.metadata["final-repair"].title,
+    shellState: "One-shot localized repair",
+    emptyState: "Waiting for Final review and signed repair authorization.",
+    editLabel: singleImageWorkflowDefinition.metadata["final-repair"].manualEdit.label,
+    aiLabel: singleImageWorkflowDefinition.metadata["final-repair"].aiRetry.label,
+  },
+  "repair-verification": {
+    title: singleImageWorkflowDefinition.metadata["repair-verification"].title,
+    shellState: "Preview / Final / Repair verification",
+    emptyState: "Waiting for completed or safely skipped repair work.",
+    editLabel: singleImageWorkflowDefinition.metadata["repair-verification"].manualEdit.label,
+    aiLabel: singleImageWorkflowDefinition.metadata["repair-verification"].aiRetry.label,
+  },
   "result-display": {
     title: singleImageWorkflowDefinition.metadata["result-display"].title,
     shellState: "Standalone timeline images",
