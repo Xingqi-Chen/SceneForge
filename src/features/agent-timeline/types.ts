@@ -12,6 +12,7 @@ import type { StickFigurePoseV1 } from "@/shared/types/stick-figure-pose";
 import type { PromptProfileId } from "@/shared/prompt-profile";
 import type { AnimaPromptSections } from "@/features/editor/ai-prompt/anima-prompt";
 import type { IllustriousPromptSections } from "@/features/editor/ai-prompt/illustrious-prompt";
+import type { Krea2PromptSections } from "@/features/editor/ai-prompt/krea2-prompt";
 import type { TimelineWorkflowMode } from "./workflow-definitions";
 import type { RunSceneInputSettingsSnapshot } from "./run-input-settings";
 import type { TimelineFinalGenerationFamily, TimelineFinalRedrawPreset } from "./final-generation-policy";
@@ -167,6 +168,7 @@ export type ScenePromptTimelineResult = {
   lighting: TimelinePromptFragment[];
   illustriousSections?: IllustriousPromptSections;
   animaSections?: AnimaPromptSections;
+  krea2Sections?: Krea2PromptSections;
   animaPromptOptions?: AnimaPromptProfileOptions;
 };
 
@@ -338,6 +340,12 @@ export type PreviewExecutionTimelineResult = {
   candidates: TimelinePreviewCandidate[];
   successfulCount: number;
   warnings: string[];
+};
+
+export type TimelineNotApplicableResult = {
+  status: "not-applicable";
+  reason: "krea2-direct-txt2img";
+  message: string;
 };
 
 type PreviewScoringTimelineResultBase = {

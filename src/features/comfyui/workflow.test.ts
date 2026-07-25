@@ -213,6 +213,86 @@ describe("ComfyUI workflow builder", () => {
     });
   });
 
+  it("builds the Krea 2 direct txt2img graph with fixed model-only LoRAs and Turbo defaults", () => {
+    const result = buildBasicTextToImageWorkflow({
+      checkpointName: "krea-2-turbo-unet.safetensors",
+      modelBaseModel: "Krea 2",
+      modelStorageKind: "diffusion",
+      positivePrompt: "a quiet station",
+      negativePrompt: "blur",
+      width: 1025,
+      height: 1023,
+      seed: 123,
+      loras: [{
+        loraName: "krea-style.safetensors",
+        strengthModel: 0.65,
+        strengthClip: 0.1,
+      }],
+    });
+
+    expect(result.request).toMatchObject({
+      workflowProfile: "krea2",
+      modelStorageKind: "diffusion",
+      clipName: "qwen3vl_4b_fp8_scaled.safetensors",
+      vaeName: "qwen_image_vae.safetensors",
+      width: 1040,
+      height: 1024,
+      steps: 8,
+      cfg: 1,
+      samplerName: "euler",
+      scheduler: "simple",
+      batchSize: 1,
+    });
+    expect(Object.values(result.workflow).map((node) => node.class_type)).toEqual([
+      "UNETLoader",
+      "CLIPLoader",
+      "VAELoader",
+      "LoraLoaderModelOnly",
+      "CLIPTextEncode",
+      "CLIPTextEncode",
+      "EmptyLatentImage",
+      "KSampler",
+      "VAEDecode",
+      "SaveImage",
+    ]);
+    expect(result.workflow["1"].inputs).toMatchObject({
+      unet_name: "krea-2-turbo-unet.safetensors",
+      weight_dtype: "default",
+    });
+    expect(result.workflow["2"].inputs).toEqual({
+      clip_name: "qwen3vl_4b_fp8_scaled.safetensors",
+      type: "krea2",
+    });
+    expect(result.workflow["3"].inputs).toEqual({ vae_name: "qwen_image_vae.safetensors" });
+    expect(result.workflow["4"].inputs).toEqual({
+      model: ["1", 0],
+      lora_name: "krea-style.safetensors",
+      strength_model: 0.65,
+    });
+    expect(result.workflow["4"].inputs).not.toHaveProperty("clip");
+    expect(result.workflow["4"].inputs).not.toHaveProperty("strength_clip");
+    expect(result.workflow["7"].inputs).toEqual({ width: 1040, height: 1024, batch_size: 1 });
+    expect(result.workflow["8"].inputs).toMatchObject({
+      model: ["4", 0],
+      positive: ["5", 0],
+      negative: ["6", 0],
+      latent_image: ["7", 0],
+      steps: 8,
+      cfg: 1,
+      sampler_name: "euler",
+      scheduler: "simple",
+    });
+    expect(result.outputNodeId).toBe("10");
+    expect(result.workflow["10"].inputs).toEqual({ images: ["9", 0], filename_prefix: "SceneForge" });
+    expect(Object.values(result.workflow).some((node) => [
+      "CheckpointLoaderSimple",
+      "PreviewImage",
+      "VAEEncode",
+      "IPAdapterAdvanced",
+      "FaceDetailer",
+    ].includes(node.class_type))).toBe(false);
+  });
+
   it("builds the Anima img2img workflow from the Anima VAE", () => {
     const result = buildBasicTextToImageWorkflow({
       checkpointName: "pencil-xl-diffusion.safetensors",

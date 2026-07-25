@@ -73,6 +73,44 @@ const objectInfoWithAnima = {
   },
 };
 
+const objectInfoWithKrea2 = {
+  ...objectInfoWithAnima,
+  UNETLoader: {
+    input: {
+      required: {
+        unet_name: [["krea-2-turbo-unet.safetensors"], {}],
+        weight_dtype: [["default"], {}],
+      },
+    },
+  },
+  CLIPLoader: {
+    input: {
+      required: {
+        clip_name: [["qwen3vl_4b_fp8_scaled.safetensors"], {}],
+        type: [["krea2"], {}],
+      },
+    },
+  },
+  KSampler: {
+    input: {
+      required: {
+        sampler_name: [["euler"], {}],
+        scheduler: [["simple"], {}],
+      },
+    },
+  },
+  LoraLoaderModelOnly: {
+    input: {
+      required: {
+        model: ["MODEL", {}],
+        lora_name: [["krea-style.safetensors"], {}],
+        strength_model: ["FLOAT", {}],
+      },
+    },
+  },
+  SaveImage: {},
+};
+
 const objectInfoWithControlNet = {
   ...objectInfo,
   LoadImage: {},
@@ -893,6 +931,71 @@ describe("ComfyUI object info helpers", () => {
       "Anima CLIP device is not available in ComfyUI: default",
       "Anima VAE model is not available in ComfyUI: qwen_image_vae.safetensors",
     ]);
+  });
+
+  it("validates Krea 2's fixed local files and fails closed for missing nodes or unsupported inputs", () => {
+    const validRequest = {
+      checkpointName: "krea-2-turbo-unet.safetensors",
+      workflowProfile: "krea2" as const,
+      modelBaseModel: "Krea 2",
+      modelStorageKind: "diffusion" as const,
+      positivePrompt: "a quiet station",
+      samplerName: "euler",
+      scheduler: "simple",
+      loras: [{ loraName: "krea-style.safetensors", strengthModel: 0.7 }],
+    };
+
+    expect(validateComfyUiRequestAgainstObjectInfo(validRequest, objectInfoWithKrea2)).toMatchObject({
+      errors: [],
+      request: {
+        checkpointName: "krea-2-turbo-unet.safetensors",
+        clipName: "qwen3vl_4b_fp8_scaled.safetensors",
+        vaeName: "qwen_image_vae.safetensors",
+        loras: [{ loraName: "krea-style.safetensors", strengthModel: 0.7 }],
+      },
+    });
+
+    expect(
+      validateComfyUiRequestAgainstObjectInfo(validRequest, {
+        ...objectInfoWithKrea2,
+        CLIPLoader: {
+          input: {
+            required: {
+              clip_name: [["qwen3vl_4b_fp8_scaled.safetensors"], {}],
+              type: [["qwen_image"], {}],
+            },
+          },
+        },
+        VAELoader: { input: { required: { vae_name: [["other-vae.safetensors"], {}] } } },
+        LoraLoaderModelOnly: undefined,
+      }),
+    ).toMatchObject({
+      errors: expect.arrayContaining([
+        "Krea 2 CLIP type is not available in ComfyUI: krea2",
+        "Krea 2 VAE model is not available in ComfyUI: qwen_image_vae.safetensors",
+        "LoraLoaderModelOnly node is not available in ComfyUI. It is required when Krea LoRAs are enabled.",
+      ]),
+    });
+
+    expect(
+      validateComfyUiRequestAgainstObjectInfo(
+        {
+          ...validRequest,
+          sourceImageDataUrl: "data:image/png;base64,aGVsbG8=",
+          faceDetailer: { enabled: true },
+          characterReferences: [{
+            enabled: true,
+            name: "reference",
+            images: [{ imageName: "reference.png" }],
+          }],
+        },
+        objectInfoWithKrea2,
+      ).errors,
+    ).toEqual(expect.arrayContaining([
+      "Krea 2 Turbo supports direct txt2img only; source images are not supported.",
+      "Krea 2 Turbo does not support Detailer nodes.",
+      "Krea 2 Turbo does not support style or IPAdapter references.",
+    ]));
   });
 
   it("keeps unknown diffusion models on the fallback checkpoint profile", () => {

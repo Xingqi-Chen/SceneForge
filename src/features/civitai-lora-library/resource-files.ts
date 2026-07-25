@@ -17,7 +17,7 @@ const DEFAULT_MODEL_EXTENSION = ".safetensors";
 const KNOWN_MODEL_EXTENSIONS = new Set([".safetensors", ".ckpt", ".pt", ".bin"]);
 const WINDOWS_RESERVED_FILE_CHARS = /[<>:"/\\|?*\x00-\x1F]/g;
 const DIFFUSION_MODEL_PATTERN =
-  /\b(?:anima|flux(?:\s*1)?|sd\s*3(?:\.\d+)?|stable\s+diffusion\s+3(?:\.\d+)?|qwen(?:\s+image)?|z\s+image|lumina)\b/i;
+  /\b(?:anima|krea\s*2|flux(?:\s*1)?|sd\s*3(?:\.\d+)?|stable\s+diffusion\s+3(?:\.\d+)?|qwen(?:\s+image)?|z\s+image|lumina)\b/i;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;

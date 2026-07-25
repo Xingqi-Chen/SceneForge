@@ -136,6 +136,20 @@ describe("story input workflow start", () => {
     });
   });
 
+  it("falls a Run-only Krea profile back to Illustrious before Story planning", () => {
+    const input = createStoryInputFromStartRequest({
+      rawIntent: "A Krea legacy Story record must remain a supported Story plan.",
+      storyId: "story-krea-fallback",
+      now,
+      settingsSnapshot: { promptProfile: "krea2" as never },
+    });
+    const artifacts = createStoryPlanningArtifacts(input, now());
+
+    expect(input.settingsSnapshot).toMatchObject({ promptProfile: "illustrious" });
+    expect(artifacts.renderPlan.shots.every((shot) => shot.promptProfile === "illustrious")).toBe(true);
+    expect(artifacts.generationGate.promptProfile).toBe("illustrious");
+  });
+
   it("leaves target shot count unset when the user lets the workflow decide", () => {
     const input = createStoryInputFromStartRequest({
       rawIntent: "A moody station encounter.",

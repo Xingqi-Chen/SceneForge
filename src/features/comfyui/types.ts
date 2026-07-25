@@ -6,7 +6,7 @@ import type { ComfyUiInpaintMode } from "./inpaint";
 import type { ComfyUiLatentImageNode } from "./latent-image-node";
 
 export type ComfyUiModelStorageKind = "checkpoint" | "diffusion";
-export type ComfyUiTextToImageWorkflowProfileId = "default" | "anima";
+export type ComfyUiTextToImageWorkflowProfileId = "default" | "anima" | "krea2";
 
 export type ComfyUiNodeConnection = [nodeId: string, outputIndex: number];
 

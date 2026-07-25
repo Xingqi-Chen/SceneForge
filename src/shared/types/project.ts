@@ -3,7 +3,7 @@ import type { PromptTag, PromptTagCategory, PromptTagSubcategory, Scene } from "
 export type PromptModelFormat = "generic" | "stable-diffusion";
 export type ArtistStringPromptRenderMode = "novelai" | "artist-weight" | "by-weight" | "anima";
 export type SavedComfyUiGenerationSeedMode = "random" | "fixed";
-export type SavedComfyUiWorkflowProfile = "default" | "anima";
+export type SavedComfyUiWorkflowProfile = "default" | "anima" | "krea2";
 export type SavedComfyUiModelStorageKind = "checkpoint" | "diffusion";
 
 export type SavedComfyUiGenerationLoraParams = {

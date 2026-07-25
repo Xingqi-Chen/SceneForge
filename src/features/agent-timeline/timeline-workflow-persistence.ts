@@ -70,6 +70,7 @@ import {
   type TimelineWorkflowState,
 } from "./types";
 import { coercePromptProfileId, isPromptProfileId, type PromptProfileId } from "@/shared/prompt-profile";
+import { coerceStoryPromptProfileId } from "./story-prompt-profile";
 import {
   normalizeComfyUiViewImageReference,
   normalizeStoredGeneratedImageReference,
@@ -289,7 +290,17 @@ function sanitizeTimelineNode(
       };
     }
   }
-  const sanitizedResult = nodeId === "preview-execution"
+  const isKrea2NotApplicableResult = isRecord(raw.result) &&
+    raw.result.status === "not-applicable" &&
+    raw.result.reason === "krea2-direct-txt2img" &&
+    typeof raw.result.message === "string" && raw.result.message.trim();
+  const sanitizedResult = isKrea2NotApplicableResult
+    ? {
+        status: "not-applicable" as const,
+        reason: "krea2-direct-txt2img" as const,
+        message: ((raw.result as Record<string, unknown>).message as string).trim().slice(0, 500),
+      }
+    : nodeId === "preview-execution"
     ? sanitizePreviewExecutionResult(raw.result)
     : nodeId === "preview-scoring"
       ? sanitizePreviewScoringResult(raw.result)
@@ -329,13 +340,13 @@ function sanitizeTimelineNode(
 
   const invalidCompletedResult =
     nodeId === "preview-execution" && status === "done" &&
-      (!isRecord(result) || Number(result.successfulCount) < Number(result.finalCount)) ||
+      (!isKrea2NotApplicableResult && (!isRecord(result) || Number(result.successfulCount) < Number(result.finalCount))) ||
     nodeId === "preview-scoring" && (status === "done" || status === "manual") && !isRecord(result) ||
     nodeId === "comfyui-execution" && status === "done" &&
       (!isRecord(result) || result.completed !== true) ||
-    nodeId === "final-review" && status === "done" && !isRecord(result) ||
-    nodeId === "final-repair" && status === "done" && !isRecord(result) ||
-    nodeId === "repair-verification" && status === "done" && !isRecord(result) ||
+    nodeId === "final-review" && status === "done" && !isKrea2NotApplicableResult && !isRecord(result) ||
+    nodeId === "final-repair" && status === "done" && !isKrea2NotApplicableResult && !isRecord(result) ||
+    nodeId === "repair-verification" && status === "done" && !isKrea2NotApplicableResult && !isRecord(result) ||
     nodeId === "result-display" && status === "done" && result === undefined;
   if (invalidCompletedResult) {
     return {
@@ -571,6 +582,7 @@ function sanitizeStoryNodeResult(
     ...sanitized,
     settingsSnapshot: {
       ...settingsSnapshot,
+      promptProfile: coerceStoryPromptProfileId(settingsSnapshot.promptProfile),
       detailers: sanitizeStoryDetailerSettingsSnapshot(settingsSnapshot.detailers),
       ...(styleReference ? { styleReference } : {}),
     },
@@ -658,6 +670,8 @@ function sanitizeSingleImageWorkflowState(raw: Record<string, unknown>): Timelin
   const createdAt = sanitizeDateString(raw.createdAt, fallback.createdAt);
   const updatedAt = sanitizeDateString(raw.updatedAt, fallback.updatedAt);
   const rawNodes = isRecord(raw.nodes) ? raw.nodes : {};
+  const rawSceneInput = isRecord(rawNodes["scene-input"]) ? rawNodes["scene-input"].result : undefined;
+  const isKrea2Workflow = isRecord(rawSceneInput) && coercePromptProfileId(rawSceneInput.promptProfile) === "krea2";
   const isLegacyWorkflow = !("preview-execution" in rawNodes) || !("preview-scoring" in rawNodes);
   const isLegacyFinalReview = !("final-review" in rawNodes);
   const isLegacyRepair = !("final-repair" in rawNodes) || !("repair-verification" in rawNodes);
@@ -671,7 +685,37 @@ function sanitizeSingleImageWorkflowState(raw: Record<string, unknown>): Timelin
       sanitizeTimelineNode(nodeId, rawNodes[nodeId], updatedAt, { requireCurrentFinalPolicy }),
     ]),
   ) as TimelineNodeMap;
-  if (!isLegacyWorkflow) {
+  if (isKrea2Workflow) {
+    const parameterNode = nodes["parameter-recommendation"];
+    const parameterResult = isRecord(parameterNode.result) ? parameterNode.result : null;
+    const requestPreview = parameterResult && isRecord(parameterResult.requestPreview)
+      ? parameterResult.requestPreview
+      : null;
+    if (requestPreview?.workflowProfile === "krea2") {
+      const normalizeDimension = (value: unknown) => {
+        const dimension = typeof value === "number" && Number.isFinite(value) && value > 0
+          ? Math.round(value)
+          : 1024;
+        return Math.ceil(dimension / 16) * 16;
+      };
+      const width = normalizeDimension(requestPreview.width);
+      const height = normalizeDimension(requestPreview.height);
+      nodes["parameter-recommendation"] = {
+        ...parameterNode,
+        result: {
+          ...parameterResult,
+          width,
+          height,
+          requestPreview: {
+            ...requestPreview,
+            width,
+            height,
+          },
+        },
+      };
+    }
+  }
+  if (!isLegacyWorkflow && !isKrea2Workflow) {
     const scoringIsTrusted = reconcilePersistedPreviewScoring(nodes, updatedAt);
     reconcilePersistedGenerationLinkage(nodes, updatedAt);
     reconcilePersistedRepairLinkage(nodes, updatedAt, raw.workflowId.trim());
@@ -679,7 +723,7 @@ function sanitizeSingleImageWorkflowState(raw: Record<string, unknown>): Timelin
       invalidatePersistedScoringDownstream(nodes, updatedAt);
     }
   }
-  if (isLegacyFinalReview && nodes["comfyui-execution"].status === "done") {
+  if (!isKrea2Workflow && isLegacyFinalReview && nodes["comfyui-execution"].status === "done") {
     const execution = nodes["comfyui-execution"].result;
     const finals = isRecord(execution) && Array.isArray(execution.finals) ? execution.finals : [];
     const pairs = finals.flatMap((entry) => {
@@ -704,7 +748,7 @@ function sanitizeSingleImageWorkflowState(raw: Record<string, unknown>): Timelin
       };
     }
   }
-  if (isLegacyRepair && nodes["result-display"].status === "done" && nodes["final-review"].status === "done") {
+  if (!isKrea2Workflow && isLegacyRepair && nodes["result-display"].status === "done" && nodes["final-review"].status === "done") {
     const review = nodes["final-review"].result;
     const pairs = isRecord(review) && Array.isArray(review.pairs)
       ? review.pairs.flatMap((entry) => isRecord(entry) && safePreviewCandidateId(entry.candidateId) &&
@@ -728,7 +772,7 @@ function sanitizeSingleImageWorkflowState(raw: Record<string, unknown>): Timelin
       result: { verificationVersion: 1, status: "skipped", pairs: [] },
     };
   }
-  if (!isLegacyWorkflow && nodes["comfyui-execution"].status !== "done" && nodes["result-display"].status === "done") {
+  if (!isLegacyWorkflow && !isKrea2Workflow && nodes["comfyui-execution"].status !== "done" && nodes["result-display"].status === "done") {
     nodes["result-display"] = {
       nodeId: "result-display",
       status: "error",
@@ -882,10 +926,16 @@ function getWorkflowSettingsPromptProfile(workflow: TimelineWorkflowRecordState)
   const settingsSnapshot = isRecord(inputResult) ? inputResult.settingsSnapshot : undefined;
   const promptProfile = isRecord(settingsSnapshot) ? settingsSnapshot.promptProfile : undefined;
 
-  return coercePromptProfileId(promptProfile);
+  return workflow.workflowMode === storyGraphWorkflowMode
+    ? coerceStoryPromptProfileId(promptProfile)
+    : coercePromptProfileId(promptProfile);
 }
 
 function getWorkflowSelectedPromptProfile(rawValue: unknown, workflow: TimelineWorkflowRecordState) {
+  if (workflow.workflowMode === storyGraphWorkflowMode) {
+    return coerceStoryPromptProfileId(rawValue, getWorkflowSettingsPromptProfile(workflow) === "anima" ? "anima" : "illustrious");
+  }
+
   if (isPromptProfileId(rawValue)) {
     return rawValue;
   }
@@ -1101,6 +1151,7 @@ function sanitizeFinalExecutionResult(
   if (!isRecord(value) || !Array.isArray(value.finals)) return undefined;
   const finalCount = safeNonNegativeInteger(value.finalCount);
   if (!finalCount || finalCount > 4) return undefined;
+  const isKrea2DirectFinal = isRecord(value.request) && value.request.workflowProfile === "krea2";
   const sanitizeFinalPolicy = (raw: unknown) => {
     if (!isRecord(raw) || raw.version !== timelineFinalGenerationPolicy.version ||
         raw.resizeMode !== timelineFinalGenerationPolicy.resizeMode ||
@@ -1147,7 +1198,7 @@ function sanitizeFinalExecutionResult(
     const previewUpscale = sanitizePreviewUpscale(raw.previewUpscale);
     const recordFinalPolicy = sanitizeFinalPolicy(raw.finalPolicy);
     const validDone = raw.status === "done" && candidateId && seed !== null && rank !== null && rank >= 1 && rank <= 8 &&
-      sourceImage && storedImage && promptId && (!options.requireCurrentFinalPolicy || finalPolicy) && (!finalPolicy || (
+      sourceImage && storedImage && promptId && (isKrea2DirectFinal || !options.requireCurrentFinalPolicy || finalPolicy) && (!finalPolicy || (
         previewUpscale && recordFinalPolicy && JSON.stringify(recordFinalPolicy) === JSON.stringify(finalPolicy)
       ));
     if (validDone) {
