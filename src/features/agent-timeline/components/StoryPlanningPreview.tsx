@@ -90,13 +90,14 @@ import {
   COMFYUI_SCHEDULER_OPTIONS,
 } from "@/features/editor/ai-prompt/comfyui-generation-options";
 import {
-  coercePromptProfileId,
-  defaultPromptProfileId,
   formatPromptProfileLabel,
-  normalizePromptProfileId,
-  promptProfileIds,
   type PromptProfileId,
 } from "@/shared/prompt-profile";
+import {
+  coerceStoryPromptProfileId,
+  storyPromptProfileIds,
+  type StoryPromptProfileId,
+} from "@/features/agent-timeline/story-prompt-profile";
 import { cn } from "@/shared/utils/cn";
 
 import { StoryNodeOutputSummaryView } from "./StoryNodeOutputSummaryView";
@@ -1484,11 +1485,11 @@ function getStoryWorkflowRequest(workflow: StoryWorkflowState) {
   return isRecord(input) && typeof input.rawIntent === "string" ? input.rawIntent : "";
 }
 
-function getStoryWorkflowPromptProfile(workflow: StoryWorkflowState): PromptProfileId {
+function getStoryWorkflowPromptProfile(workflow: StoryWorkflowState): StoryPromptProfileId {
   const input = workflow.nodes["story-input"].result;
   const settingsSnapshot = isRecord(input) ? input.settingsSnapshot : undefined;
 
-  return coercePromptProfileId(
+  return coerceStoryPromptProfileId(
     isRecord(settingsSnapshot) && typeof settingsSnapshot.promptProfile === "string"
       ? settingsSnapshot.promptProfile
       : undefined,
@@ -1841,7 +1842,7 @@ function StartPanel({
   const [rawIntent, setRawIntent] = useState("");
   const [targetShotCount, setTargetShotCount] = useState("");
   const [img2imgDenoise, setImg2ImgDenoise] = useState(String(DEFAULT_STORY_IMG2IMG_DENOISE));
-  const [promptProfile, setPromptProfile] = useState<PromptProfileId>(defaultPromptProfileId);
+  const [promptProfile, setPromptProfile] = useState<StoryPromptProfileId>("illustrious");
   const [detailers, setDetailers] = useState<StoryDetailerSettingsSnapshot>(() => createStoryDetailerSettingsSnapshot());
   const [selectedCheckpointId, setSelectedCheckpointId] = useState<string | null>(null);
   const [selectedLoraIds, setSelectedLoraIds] = useState<string[]>([]);
@@ -2022,10 +2023,10 @@ function StartPanel({
                     Base model
                     <select
                       className="h-9 rounded-md border border-slate-200 bg-white px-3 text-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
-                      onChange={(event) => setPromptProfile(normalizePromptProfileId(event.target.value))}
+                      onChange={(event) => setPromptProfile(coerceStoryPromptProfileId(event.target.value))}
                       value={promptProfile}
                     >
-                      {promptProfileIds.map((profile) => (
+                      {storyPromptProfileIds.map((profile) => (
                         <option key={profile} value={profile}>
                           {formatPromptProfileLabel(profile)}
                         </option>
@@ -2644,7 +2645,7 @@ export function StoryPlanningPreview() {
     try {
       const initialStart = createStoryGraphInputWorkflow(request);
       setWorkflow(initialStart.workflow);
-      const promptProfile = normalizePromptProfileId(request.settingsSnapshot?.promptProfile);
+      const promptProfile = coerceStoryPromptProfileId(request.settingsSnapshot?.promptProfile);
       const settingsSnapshot = {
         ...(isRecord(request.settingsSnapshot) ? request.settingsSnapshot : {}),
         promptProfile,

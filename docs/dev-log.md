@@ -2,6 +2,27 @@
 
 This log records dated implementation and documentation work. Keep entries concise and evidence-oriented.
 
+## 2026-07-25
+
+### T39 / Issue #145 Krea 2 Turbo Direct Run Profile
+
+Summary:
+
+- Added the `krea2` prompt/workflow profile, Krea 2 Civitai compatibility filtering, and diffusion-model storage classification while retaining the existing Illustrious and Anima profiles.
+- Added a deterministic Krea prompt renderer that emits one faithful natural-language paragraph in the author-recommended subject-to-LoRA order, preserves quoted user text and requested media, avoids fabrication, and deduplicates selected LoRA triggers.
+- Added the fail-closed Krea ComfyUI workflow: local UNET, Krea CLIP, Qwen Image VAE, optional `LoraLoaderModelOnly`, empty latent, KSampler, decode, and save. Validation rejects missing required `object_info` nodes/inputs/files and all source, reference/IPAdapter, ControlNet, Detailer, preview, or inpaint inputs.
+- Added the confirmation-gated direct Run branch: one 16-aligned txt2img output with 1024×1024 / 8-step / CFG-1 / Euler-simple defaults. Preview, scoring, redraw, review, repair, and verification persist a visible structured `not-applicable` result without an LLM or external generation call.
+- Added safe Krea persistence/restore behavior. Legacy source, reference, Detailer, and repair controls are cleared before downstream state can be reused, and restored work requires explicit reconfirmation.
+- Documented the Krea user workflow, local ComfyUI prerequisites, and technical direct-branch contract in the README, product specification, and technical specification.
+- Review hardening keeps Krea Run-only: Story exposes and persists only Illustrious/Anima profiles, while malformed legacy Story Krea input coerces to Illustrious. Krea profile resolution now requires normalized Krea 2-family metadata plus diffusion storage and never infers from filenames. Confirmation rejects automatic repair, manual parameters normalize to 16-pixel alignment before signing/queueing, scene-context edits preserve or safely map Krea ordered sections, and trigger matching no longer treats substrings as duplicates.
+
+Validation:
+
+- `npm run typecheck` passed.
+- `npm run lint` passed with 23 existing warnings and no errors.
+- `npm run build` passed.
+- `npm test` passed: 143 files, 1,573 tests.
+
 ## 2026-07-24
 
 ### T38C / Issue #142 Repair Identity and Error-Boundary Hardening

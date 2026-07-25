@@ -242,6 +242,124 @@ const readyStyleReference = {
 } as const;
 
 describe("timeline workflow persistence", () => {
+  it("restores legacy Story Krea profile fields as Illustrious without enabling Run-only behavior", () => {
+    const started = startStoryGraphWorkflow({
+      rawIntent: "A persisted legacy Story record.",
+      settingsSnapshot: { promptProfile: "illustrious" },
+      storyId: "story-krea-persistence",
+      workflowId: "story-krea-persistence",
+    });
+    const raw = JSON.parse(JSON.stringify(createTimelineWorkflowRecord({
+      workflow: started,
+      sceneRequest: "A persisted legacy Story record.",
+      selectedPromptProfile: "illustrious",
+      selectedImageCount: 1,
+      selectedNodeId: "story-input",
+    }))) as {
+      selectedPromptProfile: unknown;
+      workflow: { nodes: { "story-input": { result: { settingsSnapshot: Record<string, unknown> } } } };
+    };
+    raw.selectedPromptProfile = "krea2";
+    raw.workflow.nodes["story-input"].result.settingsSnapshot.promptProfile = "krea2";
+
+    const restored = sanitizeTimelineWorkflowRecord(raw);
+
+    expect(restored && isStoryGraphTimelineWorkflowRecord(restored)).toBe(true);
+    if (!restored || !isStoryGraphTimelineWorkflowRecord(restored)) {
+      throw new Error("Expected a restored Story workflow.");
+    }
+    expect(restored.selectedPromptProfile).toBe("illustrious");
+    expect((restored.workflow.nodes["story-input"].result as {
+      settingsSnapshot?: { promptProfile?: string };
+    }).settingsSnapshot?.promptProfile).toBe("illustrious");
+  });
+
+  it("round-trips Krea direct-run not-applicable stages without restoring preview or repair work", () => {
+    const raw = JSON.parse(JSON.stringify(createTimelineWorkflowState({
+      promptProfile: "krea2",
+      sceneRequest: "A direct Krea render",
+      workflowId: "persisted-krea-direct",
+    }))) as { nodes: Record<string, Record<string, unknown>> };
+    const skippedNodes = [
+      "preview-execution",
+      "preview-scoring",
+      "final-review",
+      "final-repair",
+      "repair-verification",
+    ] as const;
+    for (const nodeId of skippedNodes) {
+      raw.nodes[nodeId] = {
+        ...raw.nodes[nodeId],
+        status: "done",
+        source: "system",
+        result: {
+          status: "not-applicable",
+          reason: "krea2-direct-txt2img",
+          message: `Krea skipped ${nodeId}`,
+        },
+      };
+    }
+
+    const restored = sanitizeTimelineWorkflowState(raw);
+    if (!restored || !("scene-input" in restored.nodes)) {
+      throw new Error("Expected a single-image Krea workflow.");
+    }
+
+    expect((restored.nodes["scene-input"].result as { promptProfile?: string }).promptProfile).toBe("krea2");
+    for (const nodeId of skippedNodes) {
+      expect(restored.nodes[nodeId]).toMatchObject({
+        status: "done",
+        result: {
+          status: "not-applicable",
+          reason: "krea2-direct-txt2img",
+          message: `Krea skipped ${nodeId}`,
+        },
+      });
+    }
+  });
+
+  it("normalizes restored Krea request dimensions upward to the same 16-pixel boundaries used at queue time", () => {
+    const raw = JSON.parse(JSON.stringify(createTimelineWorkflowState({
+      promptProfile: "krea2",
+      sceneRequest: "A direct Krea render",
+      workflowId: "persisted-krea-dimensions",
+    }))) as { nodes: Record<string, Record<string, unknown>> };
+    raw.nodes["parameter-recommendation"] = {
+      ...raw.nodes["parameter-recommendation"],
+      status: "done",
+      source: "system",
+      result: {
+        width: 1025,
+        height: 1023,
+        requestPreview: {
+          checkpointName: "krea-2-turbo-unet.safetensors",
+          workflowProfile: "krea2",
+          modelBaseModel: "Krea 2",
+          modelStorageKind: "diffusion",
+          positivePrompt: "a quiet station",
+          width: 1025,
+          height: 1023,
+        },
+      },
+    };
+
+    const restored = sanitizeTimelineWorkflowState(raw);
+    if (!restored || !("scene-input" in restored.nodes)) {
+      throw new Error("Expected a single-image Krea workflow.");
+    }
+    const parameters = restored.nodes["parameter-recommendation"].result as {
+      width?: number;
+      height?: number;
+      requestPreview?: { width?: number; height?: number };
+    };
+
+    expect(parameters).toMatchObject({
+      width: 1040,
+      height: 1024,
+      requestPreview: { width: 1040, height: 1024 },
+    });
+  });
+
   function createPersistedRepairWorkflow() {
     let workflow: TimelineWorkflowState = createPersistedV2GenerationWorkflow(1);
     const sceneInput = workflow.nodes["scene-input"].result as Record<string, unknown>;

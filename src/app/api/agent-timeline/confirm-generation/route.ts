@@ -127,6 +127,11 @@ export async function POST(request: Request) {
       : {};
     const sceneInput = workflow.nodes["scene-input"].result;
     const settings = getRunSceneInputSettings(isRecord(sceneInput) ? sceneInput : {});
+    if (requestPreview.workflowProfile === "krea2" && settings.automaticLocalRepair) {
+      return errorResponse("Krea 2 Turbo does not support automatic local repair; disable it before confirmation.", 400, {
+        code: "comfyui_request_invalid",
+      });
+    }
     const resolvedFinalPolicy = resolveTimelineFinalGenerationPolicy(requestPreview, settings.finalRedrawPreset);
     const runnableWorkflow = action === "retry"
       ? retryTimelineGenerationFrom(workflow, retryNodeId as TimelineGenerationRetryNodeId)

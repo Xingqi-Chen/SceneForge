@@ -96,6 +96,12 @@ Output precedence is explicit:
 
 Active autosave and named workflows persist the normalized explicit resource ids, supported saved parameters, Detailer settings, and sanitized style-reference metadata/analysis/context/status/settings needed to restore the Composer. Style-reference records never persist bytes, base64/data URLs, secrets, unsafe paths, or full resource collections. Restored legacy Run workflows that lack these settings keep the automatic resource and parameter recommendation paths, default both Detailers to disabled, and restore no reference. Restoring a stale or previously confirmed workflow must not automatically submit a generation request.
 
+### Krea 2 Turbo direct Run exception
+
+The Krea 2 prompt profile is selected only for Krea 2-compatible ready local Civitai resources and treats the selected model as a diffusion model. Its final prompt is one natural-language paragraph in this fixed author-recommended order: subject/mood, subject attributes/actions, visual style/medium, lighting/color/texture, spatial composition/framing, and selected LoRA trigger words. The prompt renderer preserves quoted user text and requested media, adds no unsupported details, and appends each selected LoRA trigger once.
+
+Krea 2 Turbo is a confirmation-gated direct txt2img path: it always queues one output with 1024×1024, 16-pixel-aligned defaults, 8 steps, CFG 1, Euler/simple sampling, and batch size 1. It has no source image, style/IPAdapter reference, ControlNet, FaceDetailer, HandDetailer, preview, preview scoring, Final redraw, review, or repair path. The corresponding timeline stages remain visibly completed with a structured `not-applicable` result and make no external generation or LLM call. A restored Krea record with any of those legacy controls clears them, stales downstream work, and requires new confirmation; it must not silently reuse or queue a legacy result.
+
 ## Timeline Nodes
 
 | Node | Inputs | Outputs | Dependencies | User Intervention | AI Re-entry |
@@ -115,6 +121,8 @@ Active autosave and named workflows persist the normalized explicit resource ids
 | Final repair | Signed opt-in plus eligible Final-review findings | At most one managed local Repair, mask provenance, or a closed skip/failure reason per pair | Final review | Retry failed/skipped-eligible pairs only | Structured local diagnosis; mask coverage must remain at most 35% before and after bounded growth |
 | Repair verification | Completed repair stage | One bounded Preview/Final/Repair comparison and local recommendation | Final repair | Retry verification only | At most one safe schema-repair attempt; no per-pair calls |
 | Result display | Completed managed variants and selection | One to four selected images, metadata, and candidate linkage | Repair verification, including safe unavailable results | Select Final, Preview, or a verified Repair | Selection autosaves without AI or generation |
+
+For Krea 2 Turbo, the Preview execution, Preview scoring, Final review, Final repair, and Repair verification rows are not applicable. `ComfyUI execution` instead produces the one direct confirmed txt2img output, and Result display exposes that output without a Preview fallback or variant selector.
 
 ## Dependency and Regeneration Rules
 

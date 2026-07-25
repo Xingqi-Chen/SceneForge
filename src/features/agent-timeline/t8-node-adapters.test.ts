@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   confirmTimelineGeneration,
   createConfirmedTimelineComfyUiRequest,
+  createTimelineT8NodeAdapters,
   createTimelineFinalRequests,
   createTimelinePreviewRequests,
   createTimelineWorkflowState,
@@ -136,6 +137,137 @@ describe("timeline T8 ComfyUI request conversion", () => {
       checkpointName: "local.safetensors",
       preview: false,
     });
+  });
+
+  it("uses one Krea direct-final request while preview and scoring remain not applicable", async () => {
+    let workflow = createConfirmedWorkflow(1, undefined, { promptProfile: "krea2" });
+    workflow = setTimelineNodeManualResult(workflow, "resource-recommendation", {
+      checkpoint: {
+        resource: {
+          baseModel: "Krea 2",
+          id: "checkpoint-krea",
+          modelFileName: "krea-2-turbo-unet.safetensors",
+          modelStorageKind: "diffusion",
+          name: "Krea 2 Turbo",
+        },
+      },
+      loras: [],
+    });
+    workflow = setTimelineNodeManualResult(workflow, "parameter-recommendation", {
+      ...(workflow.nodes["parameter-recommendation"].result as object),
+      requestPreview: {
+        batchSize: 1,
+        checkpointName: "krea-2-turbo-unet.safetensors",
+        cfg: 1,
+        denoise: 1,
+        modelBaseModel: "Krea 2",
+        modelStorageKind: "diffusion",
+        negativePrompt: "",
+        positivePrompt: "a quiet station",
+        preview: false,
+        samplerName: "euler",
+        scheduler: "simple",
+        steps: 8,
+        workflowProfile: "krea2",
+        width: 1025,
+        height: 1023,
+      },
+    });
+    workflow = confirmTimelineGeneration(workflow);
+
+    const executePreviews = vi.fn();
+    const scorePreviews = vi.fn();
+    const executeFinals = vi.fn();
+    const executeDirectFinal = vi.fn(async (request) => ({
+      completed: true,
+      finalCount: 1,
+      finals: [],
+      request,
+      warnings: [],
+    }));
+    const loadResultDisplay = vi.fn();
+    const adapters = createTimelineT8NodeAdapters({
+      executeDirectFinal,
+      executeFinals,
+      executePreviews,
+      loadResultDisplay,
+      scorePreviews,
+    });
+    const context = (nodeId: "preview-execution" | "preview-scoring" | "comfyui-execution") => ({
+      dependencies: [],
+      nodeId,
+      workflow,
+    });
+
+    await expect(adapters["preview-execution"]?.(context("preview-execution"))).resolves.toMatchObject({
+      source: "system",
+      value: { status: "not-applicable", reason: "krea2-direct-txt2img" },
+    });
+    await expect(adapters["preview-scoring"]?.(context("preview-scoring"))).resolves.toMatchObject({
+      source: "system",
+      value: { status: "not-applicable", reason: "krea2-direct-txt2img" },
+    });
+    await expect(adapters["comfyui-execution"]?.(context("comfyui-execution"))).resolves.toMatchObject({
+      source: "system",
+      value: { completed: true, finalCount: 1 },
+    });
+
+    expect(executeDirectFinal).toHaveBeenCalledTimes(1);
+    expect(executeDirectFinal).toHaveBeenCalledWith(expect.objectContaining({
+      batchSize: 1,
+      modelStorageKind: "diffusion",
+      preview: false,
+      workflowProfile: "krea2",
+      width: 1040,
+      height: 1024,
+    }), expect.any(Object), undefined);
+    expect(executePreviews).not.toHaveBeenCalled();
+    expect(scorePreviews).not.toHaveBeenCalled();
+    expect(executeFinals).not.toHaveBeenCalled();
+    expect(loadResultDisplay).not.toHaveBeenCalled();
+  });
+
+  it("rejects a Krea automatic-repair setting before any direct queue provider can run", async () => {
+    let workflow = createConfirmedWorkflow(1, undefined, {
+      automaticLocalRepair: true,
+      promptProfile: "krea2",
+    });
+    workflow = setTimelineNodeManualResult(workflow, "parameter-recommendation", {
+      ...(workflow.nodes["parameter-recommendation"].result as object),
+      requestPreview: {
+        batchSize: 1,
+        checkpointName: "krea-2-turbo-unet.safetensors",
+        modelBaseModel: "Krea 2",
+        modelStorageKind: "diffusion",
+        positivePrompt: "a quiet station",
+        samplerName: "euler",
+        scheduler: "simple",
+        workflowProfile: "krea2",
+        width: 1024,
+        height: 1024,
+      },
+    });
+    workflow = confirmTimelineGeneration(workflow);
+    const executeDirectFinal = vi.fn();
+    const executeFinals = vi.fn();
+    const adapters = createTimelineT8NodeAdapters({
+      executeDirectFinal,
+      executeFinals,
+      executePreviews: vi.fn(),
+      loadResultDisplay: vi.fn(),
+      scorePreviews: vi.fn(),
+    });
+
+    expect(() => createConfirmedTimelineComfyUiRequest(workflow)).toThrow(
+      "Krea 2 Turbo does not support automatic local repair",
+    );
+    await expect(adapters["comfyui-execution"]?.({
+      dependencies: [],
+      nodeId: "comfyui-execution",
+      workflow,
+    })).rejects.toThrow("Krea 2 Turbo does not support automatic local repair");
+    expect(executeDirectFinal).not.toHaveBeenCalled();
+    expect(executeFinals).not.toHaveBeenCalled();
   });
 
   it("carries independent Run detailers into the confirmed ComfyUI request", () => {

@@ -28,6 +28,10 @@ import {
   DEFAULT_COMFYUI_ANIMA_CLIP_TYPE,
   DEFAULT_COMFYUI_ANIMA_UNET_WEIGHT_DTYPE,
   DEFAULT_COMFYUI_ANIMA_VAE_NAME,
+  DEFAULT_COMFYUI_KREA2_CLIP_NAME,
+  DEFAULT_COMFYUI_KREA2_CLIP_TYPE,
+  DEFAULT_COMFYUI_KREA2_UNET_WEIGHT_DTYPE,
+  DEFAULT_COMFYUI_KREA2_VAE_NAME,
   resolveComfyUiTextToImageWorkflowProfile,
 } from "./workflow-profiles";
 
@@ -132,6 +136,32 @@ function addLoraLoaderNodes({
   };
 }
 
+function addLoraLoaderModelOnlyNodes({
+  builder,
+  loras,
+  modelConnection,
+}: {
+  builder: ComfyUiWorkflowBuilder;
+  loras: ResolvedComfyUiLoraInput[];
+  modelConnection: ComfyUiNodeConnection;
+}) {
+  const loraLoaders = loras.map((lora, index) => {
+    const loraLoader = builder.addNode(
+      "LoraLoaderModelOnly",
+      {
+        model: modelConnection,
+        lora_name: lora.loraName,
+        strength_model: lora.strengthModel,
+      },
+      `Load Krea LoRA ${index + 1}`,
+    );
+    modelConnection = builder.connect(loraLoader, 0);
+    return loraLoader;
+  });
+
+  return { loraLoaders, modelConnection };
+}
+
 function addModelContextNodes({
   builder,
   request,
@@ -139,6 +169,48 @@ function addModelContextNodes({
   builder: ComfyUiWorkflowBuilder;
   request: ResolvedComfyUiTextToImageRequest | ResolvedComfyUiInpaintRequest;
 }) {
+  if (request.workflowProfile === "krea2") {
+    const unetLoader = builder.addNode(
+      "UNETLoader",
+      {
+        unet_name: request.checkpointName,
+        weight_dtype: request.unetWeightDtype ?? DEFAULT_COMFYUI_KREA2_UNET_WEIGHT_DTYPE,
+      },
+      "Load Krea 2 UNET",
+    );
+    const clipLoader = builder.addNode(
+      "CLIPLoader",
+      {
+        clip_name: request.clipName ?? DEFAULT_COMFYUI_KREA2_CLIP_NAME,
+        type: DEFAULT_COMFYUI_KREA2_CLIP_TYPE,
+        ...(request.clipDevice ? { device: request.clipDevice } : {}),
+      },
+      "Load Krea 2 CLIP",
+    );
+    const vaeLoader = builder.addNode(
+      "VAELoader",
+      { vae_name: request.vaeName ?? DEFAULT_COMFYUI_KREA2_VAE_NAME },
+      "Load Krea 2 VAE",
+    );
+    const loraContext = addLoraLoaderModelOnlyNodes({
+      builder,
+      loras: request.loras,
+      modelConnection: builder.connect(unetLoader, 0),
+    });
+
+    return {
+      clipConnection: builder.connect(clipLoader, 0),
+      modelConnection: loraContext.modelConnection,
+      nodeIds: {
+        unetLoader,
+        clipLoader,
+        vaeLoader,
+        loraLoaders: loraContext.loraLoaders,
+      },
+      vaeConnection: builder.connect(vaeLoader, 0),
+    };
+  }
+
   if (request.workflowProfile === "anima") {
     const unetLoader = builder.addNode(
       "UNETLoader",
@@ -392,6 +464,10 @@ export function buildBasicTextToImageWorkflow(request: ComfyUiTextToImageRequest
     return buildAnimaTextToImageWorkflow(resolvedRequest);
   }
 
+  if (profile.id === "krea2") {
+    return buildKrea2TextToImageWorkflow(resolvedRequest);
+  }
+
   return buildDefaultTextToImageWorkflow(resolvedRequest);
 }
 
@@ -632,6 +708,85 @@ function buildAnimaTextToImageWorkflow(
     ...resolvedRequest,
     latentImageNode: "EmptyLatentImage",
   });
+}
+
+function buildKrea2TextToImageWorkflow(
+  resolvedRequest: ResolvedComfyUiTextToImageRequest,
+): BasicTextToImageWorkflow {
+  const builder = new ComfyUiWorkflowBuilder();
+  const modelContext = addModelContextNodes({ builder, request: resolvedRequest });
+  const positivePrompt = builder.addNode(
+    "CLIPTextEncode",
+    {
+      text: applyPromptPrefix(resolvedRequest.promptWrapper.positivePrefix, resolvedRequest.positivePrompt),
+      clip: modelContext.clipConnection,
+    },
+    "Positive Krea Prompt",
+  );
+  const negativePrompt = builder.addNode(
+    "CLIPTextEncode",
+    {
+      text: applyPromptPrefix(resolvedRequest.promptWrapper.negativePrefix, resolvedRequest.negativePrompt),
+      clip: modelContext.clipConnection,
+    },
+    "Negative Krea Prompt",
+  );
+  const latentImage = builder.addNode(
+    "EmptyLatentImage",
+    {
+      width: resolvedRequest.width,
+      height: resolvedRequest.height,
+      batch_size: 1,
+    },
+    "Empty Krea Latent",
+  );
+  const sampler = builder.addNode(
+    "KSampler",
+    {
+      seed: resolvedRequest.seed,
+      steps: resolvedRequest.steps,
+      cfg: resolvedRequest.cfg,
+      sampler_name: resolvedRequest.samplerName,
+      scheduler: resolvedRequest.scheduler,
+      denoise: resolvedRequest.denoise,
+      model: modelContext.modelConnection,
+      positive: builder.connect(positivePrompt, 0),
+      negative: builder.connect(negativePrompt, 0),
+      latent_image: builder.connect(latentImage, 0),
+    },
+    "KSampler",
+  );
+  const vaeDecode = builder.addNode(
+    "VAEDecode",
+    {
+      samples: builder.connect(sampler, 0),
+      vae: modelContext.vaeConnection,
+    },
+    "Decode Krea Image",
+  );
+  const saveImage = builder.addNode(
+    "SaveImage",
+    {
+      filename_prefix: resolvedRequest.outputPrefix,
+      images: builder.connect(vaeDecode, 0),
+    },
+    "Save Krea 2 Image",
+  );
+
+  return {
+    workflow: builder.toWorkflow(),
+    nodeIds: {
+      ...modelContext.nodeIds,
+      positivePrompt,
+      negativePrompt,
+      latentImage,
+      sampler,
+      vaeDecode,
+      previewImage: saveImage,
+    },
+    outputNodeId: saveImage,
+    request: resolvedRequest,
+  };
 }
 
 export function buildBasicInpaintWorkflow(request: ComfyUiInpaintRequest): BasicInpaintWorkflow {

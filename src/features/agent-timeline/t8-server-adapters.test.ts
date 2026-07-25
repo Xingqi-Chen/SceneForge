@@ -403,6 +403,40 @@ describe("timeline T8 server adapters", () => {
     expect(storeGeneratedImageMock).not.toHaveBeenCalled();
   });
 
+  it("marks Krea final review and repair stages not applicable without external calls", async () => {
+    const base = createGateReadyWorkflow();
+    const workflow = {
+      ...base,
+      nodes: {
+        ...base.nodes,
+        "parameter-recommendation": {
+          ...base.nodes["parameter-recommendation"],
+          result: {
+            ...(base.nodes["parameter-recommendation"].result as object),
+            requestPreview: {
+              ...((base.nodes["parameter-recommendation"].result as { requestPreview: object }).requestPreview),
+              workflowProfile: "krea2",
+            },
+          },
+        },
+      },
+    };
+    const adapters = createTimelineT8ServerNodeAdapters();
+    const skippedNodes = ["final-review", "final-repair", "repair-verification"] as const;
+
+    for (const nodeId of skippedNodes) {
+      await expect(adapters[nodeId]?.({ dependencies: [], nodeId, workflow })).resolves.toMatchObject({
+        source: "system",
+        value: { status: "not-applicable", reason: "krea2-direct-txt2img" },
+      });
+    }
+
+    expect(comfyUiMocks.createComfyUiClient).not.toHaveBeenCalled();
+    expect(comfyUiMocks.validateComfyUiTextToImageRequest).not.toHaveBeenCalled();
+    expect(comfyUiMocks.validateComfyUiRequestAgainstObjectInfo).not.toHaveBeenCalled();
+    expect(storeGeneratedImageMock).not.toHaveBeenCalled();
+  });
+
   it("validates, queues, polls history, reads the image, and stores the result after confirmation", async () => {
     const getObjectInfo = vi.fn().mockResolvedValue({ CheckpointLoaderSimple: {} });
     const generateImage = vi.fn().mockResolvedValue({

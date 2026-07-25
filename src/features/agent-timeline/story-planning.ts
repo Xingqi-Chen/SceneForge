@@ -18,10 +18,8 @@ import {
   type IllustriousResourceTriggerSelection,
   type IllustriousPromptSections,
 } from "@/features/editor/ai-prompt/illustrious-prompt";
-import {
-  normalizePromptProfileId,
-  type PromptProfileId,
-} from "@/shared/prompt-profile";
+import type { PromptProfileId } from "@/shared/prompt-profile";
+import { coerceStoryPromptProfileId } from "./story-prompt-profile";
 import type { CivitaiAiPromptResult } from "@/features/editor/ai-prompt/civitai-ai-context";
 import {
   validateLocalResourcePlan,
@@ -873,7 +871,7 @@ function getStoryRenderPromptDraft(shotId: StoryShotId, renderPromptPlan?: Story
     return undefined;
   }
 
-  const promptProfile = normalizePromptProfileId(renderPromptPlan?.promptProfile);
+  const promptProfile = coerceStoryPromptProfileId(renderPromptPlan?.promptProfile);
 
   return {
     ...draft,
@@ -1980,7 +1978,7 @@ export function assembleStoryRenderPlan({
   styleReference?: StoryStyleReferenceSnapshot;
 }): StoryRenderPlan {
   const nsfwContext = getNsfwContext(safetyPlan);
-  const promptProfile = normalizePromptProfileId(renderPromptPlan?.promptProfile ?? rawPromptProfile);
+  const promptProfile = coerceStoryPromptProfileId(renderPromptPlan?.promptProfile ?? rawPromptProfile);
   const defaultParameters = normalizeParameters(parameterPlan.defaults, samplerOptions);
   const normalizedImg2ImgDenoise = normalizeStoryImg2ImgDenoise(img2imgDenoise);
   const sanitizedDetailers = sanitizeStoryDetailerSettingsSnapshot(detailers);

@@ -1,4 +1,4 @@
-export const promptProfileIds = ["illustrious", "anima"] as const;
+export const promptProfileIds = ["illustrious", "anima", "krea2"] as const;
 
 export type PromptProfileId = (typeof promptProfileIds)[number];
 
@@ -34,5 +34,9 @@ export function formatPromptProfileLabel(profile: PromptProfileId) {
     return "Illustrious";
   }
 
-  return "Anima";
+  if (profile === "anima") {
+    return "Anima";
+  }
+
+  return "Krea 2 Turbo";
 }

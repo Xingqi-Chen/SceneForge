@@ -407,19 +407,25 @@ describe("T7 timeline adapters", () => {
   it("filters local resource candidates by selected prompt profile", () => {
     const illustriousCheckpoint = makeResource("model", "checkpoint-illustrious", "Illustrious", "Illustrious");
     const animaCheckpoint = makeResource("model", "checkpoint-anima", "Anima", "Anima");
+    const kreaCheckpoint = makeResource("model", "checkpoint-krea", "Krea 2 Turbo", "Krea 2", {
+      modelStorageKind: "diffusion",
+    });
     const unknownCheckpoint = makeResource("model", "checkpoint-unknown", "Unknown", null);
     const illustriousLora = makeResource("lora", "lora-illustrious", "Illustrious LoRA", "Illustrious");
     const animaLora = makeResource("lora", "lora-anima", "Anima LoRA", "Anima");
+    const kreaLora = makeResource("lora", "lora-krea", "Krea 2 LoRA", "Krea-2 Turbo");
 
     const candidates = {
       checkpoints: [
         makeCandidate(illustriousCheckpoint),
         makeCandidate(animaCheckpoint),
+        makeCandidate(kreaCheckpoint),
         makeCandidate(unknownCheckpoint),
       ],
       loras: [
         makeCandidate(illustriousLora),
         makeCandidate(animaLora),
+        makeCandidate(kreaLora),
       ],
     };
 
@@ -435,6 +441,14 @@ describe("T7 timeline adapters", () => {
       filterTimelineResourceCandidatesForPromptProfile(candidates, "illustrious")
         .loras.map((candidate) => candidate.resource.id),
     ).toEqual(["lora-illustrious"]);
+    expect(
+      filterTimelineResourceCandidatesForPromptProfile(candidates, "krea2")
+        .checkpoints.map((candidate) => candidate.resource.id),
+    ).toEqual(["checkpoint-krea"]);
+    expect(
+      filterTimelineResourceCandidatesForPromptProfile(candidates, "krea2")
+        .loras.map((candidate) => candidate.resource.id),
+    ).toEqual(["lora-krea"]);
   });
 
   it("rejects an invented LoRA that is not in the local candidate set", () => {
@@ -1165,6 +1179,56 @@ describe("T7 timeline adapters", () => {
     expect(illustrious).toContain("solo courier");
     expect(illustrious).not.toContain("A courier runs");
     expect(anima).not.toBe(illustrious);
+  });
+
+  it("uses Krea 2's direct defaults and natural-language renderer without changing other profiles", () => {
+    const checkpoint = makeResource("model", "checkpoint-krea", "Krea 2 Turbo", "Krea 2", {
+      modelFileName: "krea-2-turbo-unet.safetensors",
+      modelStorageKind: "diffusion",
+    });
+    const lora = makeResource("lora", "lora-krea", "Krea Style", "Krea 2", {
+      trainedWords: ["krea_style"],
+    });
+    const resourceResult: ResourceRecommendationTimelineResult = {
+      checkpoint: { resource: checkpoint, reason: "Local Krea model." },
+      loras: [{ resource: lora, suggestedWeight: 0.7, reason: "Local Krea LoRA." }],
+      candidates: { checkpoints: [makeCandidate(checkpoint)], loras: [makeCandidate(lora)] },
+      recommendationReason: "Krea local resources.",
+      overallEffect: "Faithful direct render.",
+      warnings: [],
+    };
+    const scenePrompt = {
+      ...makeScenePrompt("krea2"),
+      positivePrompt: "flat fallback",
+      krea2Sections: {
+        subjectMood: "A courier waits",
+        visualStyleAndMedium: "watercolor illustration",
+        spatialCompositionAndFraming: "at the center of a station",
+      },
+    };
+
+    const result = createTimelineParameterRecommendation({
+      resourceResult,
+      scenePrompt,
+      canvasBinding: null,
+      samplerOptions: { samplers: ["euler"], schedulers: ["simple"] },
+    });
+
+    expect(result.requestPreview).toMatchObject({
+      workflowProfile: "krea2",
+      modelStorageKind: "diffusion",
+      width: 1024,
+      height: 1024,
+      steps: 8,
+      cfg: 1,
+      samplerName: "euler",
+      scheduler: "simple",
+      denoise: 1,
+      batchSize: 1,
+    });
+    expect(result.requestPreview.positivePrompt).toBe(
+      "A courier waits, watercolor illustration, at the center of a station, krea_style",
+    );
   });
 
   it("does not format an assembled Anima prompt a second time in the request preview", () => {

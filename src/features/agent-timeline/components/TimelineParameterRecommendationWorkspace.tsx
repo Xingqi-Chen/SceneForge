@@ -69,8 +69,14 @@ function clampInteger(value: string, fallback: number, min: number, max: number)
   return Math.min(max, Math.max(min, Math.round(parsed)));
 }
 
-function clampDimension(value: string, fallback: number) {
-  return Math.round(clampInteger(value, fallback, 16, 16384) / 8) * 8;
+function clampDimension(
+  value: string,
+  fallback: number,
+  alignment = 8,
+  rounding: "nearest" | "up" = "nearest",
+) {
+  const dimension = clampInteger(value, fallback, 16, 16384);
+  return (rounding === "up" ? Math.ceil : Math.round)(dimension / alignment) * alignment;
 }
 
 function clampNumber(value: string, fallback: number, min: number, max: number) {
@@ -152,6 +158,8 @@ export function TimelineParameterRecommendationWorkspace({
     Array.isArray(result.availableSchedulers) ? result.availableSchedulers : [],
     result.scheduler,
   );
+  const isKrea2 = result.requestPreview.workflowProfile === "krea2";
+  const dimensionAlignment = isKrea2 ? 16 : 8;
 
   function updateDraft(patch: Partial<Draft>) {
     setDraft((current) => (current ? { ...current, ...patch } : current));
@@ -162,8 +170,9 @@ export function TimelineParameterRecommendationWorkspace({
       return;
     }
 
-    const width = clampDimension(draft.width, result.width);
-    const height = clampDimension(draft.height, result.height);
+    const dimensionRounding = isKrea2 ? "up" : "nearest";
+    const width = clampDimension(draft.width, result.width, dimensionAlignment, dimensionRounding);
+    const height = clampDimension(draft.height, result.height, dimensionAlignment, dimensionRounding);
     const steps = clampInteger(draft.steps, result.steps, 1, 150);
     const cfg = clampNumber(draft.cfg, result.cfg, 0, 30);
     const denoise = clampNumber(draft.denoise, result.denoise, 0, 1);
@@ -229,7 +238,7 @@ export function TimelineParameterRecommendationWorkspace({
             max={16384}
             min={16}
             onChange={(event) => updateDraft({ width: event.target.value })}
-            step={8}
+            step={dimensionAlignment}
             type="number"
             value={draft.width}
           />
@@ -242,7 +251,7 @@ export function TimelineParameterRecommendationWorkspace({
             max={16384}
             min={16}
             onChange={(event) => updateDraft({ height: event.target.value })}
-            step={8}
+            step={dimensionAlignment}
             type="number"
             value={draft.height}
           />

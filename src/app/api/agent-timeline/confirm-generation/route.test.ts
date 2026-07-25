@@ -103,6 +103,29 @@ function createGateReadyWorkflow(automaticLocalRepair = false) {
   return workflow;
 }
 
+function createKreaWorkflowWithAutomaticRepair() {
+  const workflow = createGateReadyWorkflow(true);
+  const sceneInput = workflow.nodes["scene-input"].result as Record<string, unknown>;
+  sceneInput.promptProfile = "krea2";
+  sceneInput.settingsSnapshot = {
+    ...((sceneInput.settingsSnapshot as Record<string, unknown> | undefined) ?? {}),
+    automaticLocalRepair: true,
+    promptProfile: "krea2",
+  };
+  const parameters = workflow.nodes["parameter-recommendation"].result as {
+    requestPreview: Record<string, unknown>;
+  };
+  parameters.requestPreview = {
+    ...parameters.requestPreview,
+    checkpointName: "krea-2-turbo-unet.safetensors",
+    modelBaseModel: "Krea 2",
+    modelStorageKind: "diffusion",
+    scheduler: "simple",
+    workflowProfile: "krea2",
+  };
+  return workflow;
+}
+
 function createSignedConfirmedWorkflow() {
   const workflow = createGateReadyWorkflow();
   const finalPolicy = resolveTimelineFinalGenerationPolicy({}, "balanced");
@@ -165,6 +188,25 @@ afterEach(() => {
 });
 
 describe("POST /api/agent-timeline/confirm-generation", () => {
+  it("rejects Krea automatic repair before ComfyUI validation or queueing", async () => {
+    const response = await POST(new Request("http://localhost/api/agent-timeline/confirm-generation", {
+      body: JSON.stringify({ workflow: createKreaWorkflowWithAutomaticRepair() }),
+      method: "POST",
+    }));
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      error: {
+        message: "Krea 2 Turbo does not support automatic local repair; disable it before confirmation.",
+        details: { code: "comfyui_request_invalid" },
+      },
+    });
+    expect(comfyUiMocks.createComfyUiClient).not.toHaveBeenCalled();
+    expect(comfyUiMocks.validateComfyUiTextToImageRequest).not.toHaveBeenCalled();
+    expect(comfyUiMocks.validateComfyUiRequestAgainstObjectInfo).not.toHaveBeenCalled();
+    expect(storeGeneratedImageMock).not.toHaveBeenCalled();
+  });
+
   it.each([false, true])("returns signed repair authorization=%s with object_info mismatch details", async (automaticLocalRepair) => {
     const getObjectInfo = vi.fn().mockResolvedValue({ CheckpointLoaderSimple: {} });
     comfyUiMocks.createComfyUiClient.mockReturnValue({ getObjectInfo });

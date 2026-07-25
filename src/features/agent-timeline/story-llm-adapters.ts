@@ -70,11 +70,10 @@ import type {
   CommonWorkflowNodeExecutionContext,
 } from "./workflow-definition";
 import {
-  coercePromptProfileId,
   formatPromptProfileLabel,
-  normalizePromptProfileId,
   type PromptProfileId,
 } from "@/shared/prompt-profile";
+import { coerceStoryPromptProfileId } from "./story-prompt-profile";
 
 export type StoryCompleteChat = (request: LlmChatRequest) => Promise<LlmChatResponse>;
 
@@ -778,7 +777,7 @@ function getSettingsResourceCandidates(
 function getStoryPromptProfile(input: StoryInput): PromptProfileId {
   const snapshot = isRecord(input.settingsSnapshot) ? input.settingsSnapshot : {};
 
-  return coercePromptProfileId(snapshot.promptProfile);
+  return coerceStoryPromptProfileId(snapshot.promptProfile);
 }
 
 function buildStoryResourceDesiredEffect({
@@ -1248,7 +1247,7 @@ export function normalizeStoryRenderPromptPlan(
     throw malformedResponse("Render prompt plan response must be a JSON object.", { raw });
   }
 
-  const resolvedProfile = normalizePromptProfileId(promptProfile);
+  const resolvedProfile = coerceStoryPromptProfileId(promptProfile);
   const shotIds = new Set(shots.map((shot) => shot.id));
   const rawShots = Array.isArray(parsed.shots) ? parsed.shots : [];
 

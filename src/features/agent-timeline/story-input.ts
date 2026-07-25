@@ -38,7 +38,11 @@ import type {
   StoryWorkflowNodeId,
 } from "./story-types";
 import { createStoryWorkflowState } from "./story-state";
-import { coercePromptProfileId, type PromptProfileId } from "@/shared/prompt-profile";
+import type { PromptProfileId } from "@/shared/prompt-profile";
+import {
+  coerceStoryPromptProfileId,
+  type StoryPromptProfileId,
+} from "./story-prompt-profile";
 import {
   getStoryStyleReferenceFromSettingsSnapshot,
   getStoryStyleReferenceBlockingIssue,
@@ -64,7 +68,7 @@ export type StoryGraphStartSettingsSnapshot = {
   audienceRating: StoryAudienceRating;
   img2imgDenoise: number;
   planningMode: "deterministic-local";
-  promptProfile?: PromptProfileId;
+  promptProfile?: StoryPromptProfileId;
   resourceCandidateCounts?: {
     checkpoints: number;
     loras: number;
@@ -200,6 +204,7 @@ function createSettingsSnapshot({
     audienceRating,
     img2imgDenoise: normalizeStoryImg2ImgDenoise(settingsSnapshot.img2imgDenoise),
     nsfwEnabled,
+    promptProfile: coerceStoryPromptProfileId(settingsSnapshot.promptProfile),
     resourceCandidateCounts: resourceCandidates
       ? {
           checkpoints: resourceCandidates.checkpoints.length,
@@ -663,7 +668,7 @@ export function createStoryPlanningArtifacts(
   const characterContinuityGraph = createCharacterContinuityGraph(input, bible, shots);
   const resourcePlan = createResourcePlan(input, resourceCandidates);
   const parameterPlan = createParameterPlan(input, resourcePlan, shots);
-  const promptProfile = coercePromptProfileId(
+  const promptProfile = coerceStoryPromptProfileId(
     input.settingsSnapshot && typeof input.settingsSnapshot === "object" && "promptProfile" in input.settingsSnapshot
       ? (input.settingsSnapshot as { promptProfile?: unknown }).promptProfile
       : undefined,

@@ -15,6 +15,7 @@ import type { CivitaiAiPromptResult } from "@/features/editor/ai-prompt/civitai-
 import {
   renderAnimaPrompt,
 } from "@/features/editor/ai-prompt/anima-prompt";
+import { renderKrea2Prompt } from "@/features/editor/ai-prompt/krea2-prompt";
 import {
   classifyFlatPromptToIllustriousSections,
   renderIllustriousPrompt,
@@ -453,6 +454,14 @@ export function buildTimelineFinalPositivePrompt({
     }), styleReference);
   }
 
+  if (resolvedProfile === "krea2") {
+    return renderKrea2Prompt({
+      resources,
+      sections: scenePrompt.krea2Sections,
+      sourcePrompt,
+    });
+  }
+
   return appendStyleReferencePromptExactlyOnce(sourcePrompt, styleReference);
 }
 
@@ -526,6 +535,7 @@ function createAiAdvice(
   finalPositivePrompt: string,
   sourceImage?: SceneInputTimelineResult["sourceImage"],
 ): CivitaiAiPromptResult {
+  const isKrea2Profile = scenePrompt.promptProfile === "krea2";
   const checkpoint = resourceResult.checkpoint.resource;
   const referenceSampler = getReferenceSampler(checkpoint)
     ?? resourceResult.loras.map((lora) => getReferenceSampler(lora.resource)).find(Boolean);
@@ -547,17 +557,17 @@ function createAiAdvice(
     overallEffect: resourceResult.overallEffect,
     parseWarning: null,
     parameterSuggestions: {
-      cfg: inferCfg(checkpoint),
-      denoise: sourceImage ? DEFAULT_TIMELINE_SOURCE_DENOISE : 1,
+      cfg: isKrea2Profile ? 1 : inferCfg(checkpoint),
+      denoise: isKrea2Profile ? 1 : sourceImage ? DEFAULT_TIMELINE_SOURCE_DENOISE : 1,
       loraWeights: resourceResult.loras.map((lora) => ({
         name: lora.resource.name,
         suggestedWeight: lora.suggestedWeight,
       })),
       negativePromptAdditions: scenePrompt.negativeSuggestions.join(", "),
-      resolution: referenceResolution,
+      resolution: isKrea2Profile ? "1024x1024" : referenceResolution,
       sampler: samplerName,
-      scheduler,
-      steps: inferSteps(checkpoint),
+      scheduler: isKrea2Profile ? "simple" : scheduler,
+      steps: isKrea2Profile ? 8 : inferSteps(checkpoint),
     },
   };
 }
@@ -589,13 +599,23 @@ export function createTimelineParameterRecommendation({
   savedParameters?: SavedComfyUiGenerationParams | null;
   styleReference?: StyleReferenceSnapshot;
 }): ParameterRecommendationTimelineResult {
+  const isKrea2Profile = normalizePromptProfileId(promptProfile ?? scenePrompt.promptProfile) === "krea2";
+  if (isKrea2Profile && sourceImage) {
+    invalidTimelineInput("Krea 2 Turbo supports direct txt2img only; remove the source image before generating.");
+  }
+  if (isKrea2Profile && styleReference) {
+    invalidTimelineInput("Krea 2 Turbo does not support style or IPAdapter references.");
+  }
+  if (isKrea2Profile && (detailers?.faceDetailer.enabled || detailers?.handDetailer.enabled)) {
+    invalidTimelineInput("Krea 2 Turbo does not support FaceDetailer or HandDetailer.");
+  }
   const samplerOptions = normalizeTimelineSamplerOptions(rawSamplerOptions);
   const selectedResources = getSelectedResources(resourceResult);
   const finalPositivePrompt = buildTimelineFinalPositivePrompt({
     promptProfile,
     resourceResult,
     scenePrompt,
-    styleReference,
+    styleReference: isKrea2Profile ? undefined : styleReference,
     supportsNsfw,
   });
   const baseNegativePrompt = scenePrompt.negativeSuggestions.join(", ");
@@ -636,10 +656,30 @@ export function createTimelineParameterRecommendation({
     samplerName,
     scheduler,
   };
-  const width = normalizeRenderDimension(rawRequestPreview.width, 1024);
-  const height = normalizeRenderDimension(rawRequestPreview.height, 1024);
+  const kreaRequestPreview = isKrea2Profile
+    ? {
+        ...rawRequestPreview,
+        workflowProfile: "krea2" as const,
+        modelStorageKind: "diffusion" as const,
+        width: Math.ceil((rawRequestPreview.width ?? 1024) / 16) * 16,
+        height: Math.ceil((rawRequestPreview.height ?? 1024) / 16) * 16,
+        steps: rawRequestPreview.steps ?? 8,
+        cfg: rawRequestPreview.cfg ?? 1,
+        samplerName: pickSupportedValue("euler", samplerOptions.samplers, "euler"),
+        scheduler: pickSupportedValue("simple", samplerOptions.schedulers, "simple"),
+        denoise: 1,
+        batchSize: 1,
+        latentImageNode: "EmptyLatentImage" as const,
+        faceDetailer: { ...rawRequestPreview.faceDetailer, enabled: false },
+        handDetailer: { ...rawRequestPreview.handDetailer, enabled: false },
+        controlNets: [],
+        characterReferences: [],
+      }
+    : rawRequestPreview;
+  const width = normalizeRenderDimension(kreaRequestPreview.width, 1024);
+  const height = normalizeRenderDimension(kreaRequestPreview.height, 1024);
   const requestPreview = {
-    ...rawRequestPreview,
+    ...kreaRequestPreview,
     width,
     height,
   };
@@ -659,7 +699,7 @@ export function createTimelineParameterRecommendation({
     negativeAdditions: scenePrompt.negativeSuggestions,
     negativePrompt: requestPreview.negativePrompt ?? "",
     requestPreview,
-    ...(styleReference ? { styleReference } : {}),
+    ...(!isKrea2Profile && styleReference ? { styleReference } : {}),
     reason: savedParameters
       ? "Used generation parameters saved in the Run Scene Composer."
       : aiAdvice
@@ -737,10 +777,16 @@ export function createTimelineT7NodeAdapters({
       const sourceImage = getSceneInputSourceImage(context.workflow);
       const inputSettings = getSceneInputSettings(context.workflow);
       const styleReferenceIssue = getStyleReferenceBlockingIssue(inputSettings.styleReference, "Run");
+      if (promptProfile === "krea2" && sourceImage) {
+        invalidTimelineInput("Krea 2 Turbo supports direct txt2img only; remove the source image before generating.");
+      }
+      if (promptProfile === "krea2" && inputSettings.styleReference) {
+        invalidTimelineInput("Krea 2 Turbo does not support style or IPAdapter references.");
+      }
       if (styleReferenceIssue) {
         invalidTimelineInput(styleReferenceIssue);
       }
-      const styleReferenceMismatch = getStyleReferenceContextMismatch(inputSettings.styleReference, {
+      const styleReferenceMismatch = promptProfile === "krea2" ? null : getStyleReferenceContextMismatch(inputSettings.styleReference, {
         checkpointBaseModel: resourceResult.checkpoint.resource.baseModel ?? promptProfile,
         checkpointId: resourceResult.checkpoint.resource.id,
         promptProfile,
@@ -752,7 +798,7 @@ export function createTimelineT7NodeAdapters({
         inputSettings.stylePalette,
         selectedResources,
       );
-      const aiAdvice = !savedParameters && adviseStyle
+      const aiAdvice = promptProfile !== "krea2" && !savedParameters && adviseStyle
         ? await adviseStyle(
             {
               baseNegativePrompt,
@@ -785,7 +831,7 @@ export function createTimelineT7NodeAdapters({
           ),
           scenePrompt,
           savedParameters,
-          styleReference: inputSettings.styleReference,
+          styleReference: promptProfile === "krea2" ? undefined : inputSettings.styleReference,
           sourceDenoise: sourceImage ? getSceneInputSourceDenoise(context.workflow) : undefined,
           sourceImage,
           supportsNsfw: supportsNsfw(),

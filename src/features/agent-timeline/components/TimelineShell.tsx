@@ -91,6 +91,7 @@ import {
   type SceneInputTimelineResult,
   type TimelineNodeId,
   type TimelineNodeStatus,
+  type TimelineNotApplicableResult,
   type TimelineWorkflowState,
 } from "@/features/agent-timeline/types";
 import {
@@ -216,6 +217,7 @@ const EMPTY_SELECTED_CIVITAI_RESOURCES: SelectedCivitaiResourcesPreview = {
   checkpoint: null,
   loras: [],
 };
+const KREA2_TIMELINE_IMAGE_COUNT = 1;
 
 type PendingTimelinePromptTagReview = {
   input: TimelineCanvasBindingInput;
@@ -399,6 +401,13 @@ async function completeTimelineChatViaApi(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isTimelineNotApplicableResult(value: unknown): value is TimelineNotApplicableResult {
+  return isRecord(value) &&
+    value.status === "not-applicable" &&
+    value.reason === "krea2-direct-txt2img" &&
+    typeof value.message === "string";
 }
 
 function getTimelineFinalExecutionState(workflow: TimelineWorkflowState | null) {
@@ -1212,6 +1221,9 @@ export function TimelineShell() {
   const selectedWorkspaceKey = singleImageWorkflowDefinition.metadata[selectedNodeId].workspace.key;
   const selectedDisplay = stepDisplay[selectedNodeId];
   const SelectedIcon = selectedDisplay.icon;
+  const selectedNotApplicableResult = isTimelineNotApplicableResult(selectedNode.result)
+    ? selectedNode.result
+    : null;
   const selectedOutput = getTimelineNodeOutputText(selectedNode);
   const selectedRawJsonOutput = getTimelineNodeRawJsonText(selectedNode);
   const selectedHasVisualOutput = hasVisualOutputMode(selectedNodeId);
@@ -1230,6 +1242,7 @@ export function TimelineShell() {
     [selectedStyleResources, stylePalette],
   );
   const sceneRequestIsUsable = sceneRequest.trim().length > 0;
+  const isKrea2Profile = selectedPromptProfile === "krea2";
   const repairManualRecoveryPair = isFinalRepairResult(activeWorkflow.nodes["final-repair"].result)
     ? activeWorkflow.nodes["final-repair"].result.pairs.find(isRepairManualRecoveryRequired)
     : undefined;
@@ -1266,13 +1279,15 @@ export function TimelineShell() {
       styleReference: StyleReferenceSnapshot | undefined;
     }> = {},
   ): RunSceneInputSettingsSnapshot {
+    const promptProfile = overrides.promptProfile ?? selectedPromptProfile;
+    const isKrea2 = promptProfile === "krea2";
     return createRunSceneInputSettingsSnapshot({
-      automaticLocalRepair: overrides.automaticLocalRepair ?? automaticLocalRepair,
-      detailers: overrides.detailers ?? detailers,
+      automaticLocalRepair: isKrea2 ? false : overrides.automaticLocalRepair ?? automaticLocalRepair,
+      detailers: isKrea2 ? createGenerationDetailerSettingsSnapshot() : overrides.detailers ?? detailers,
       finalRedrawPreset: overrides.finalRedrawPreset ?? finalRedrawPreset,
-      promptProfile: overrides.promptProfile ?? selectedPromptProfile,
+      promptProfile,
       stylePalette: "stylePalette" in overrides ? overrides.stylePalette : stylePalette,
-      styleReference: "styleReference" in overrides ? overrides.styleReference : styleReference,
+      styleReference: isKrea2 ? undefined : "styleReference" in overrides ? overrides.styleReference : styleReference,
     });
   }
 
@@ -1321,17 +1336,42 @@ export function TimelineShell() {
       return;
     }
 
-    const restoredImageCount = normalizeTimelineImageCount(record.selectedImageCount);
+    const restoredKrea2 = record.selectedPromptProfile === "krea2";
+    const restoredImageCount = restoredKrea2
+      ? KREA2_TIMELINE_IMAGE_COUNT
+      : normalizeTimelineImageCount(record.selectedImageCount);
     const restoredSceneInput = record.workflow.nodes["scene-input"].result;
     const restoredSettings = getRunSceneInputSettings(
       isRecord(restoredSceneInput) ? restoredSceneInput : {},
     );
+    const restoredKrea2HasUnsupportedControls = restoredKrea2 && (
+      getSceneInputSourceImage(record.workflow) !== null ||
+      restoredSettings.automaticLocalRepair ||
+      restoredSettings.detailers.faceDetailer.enabled ||
+      restoredSettings.detailers.handDetailer.enabled ||
+      restoredSettings.styleReference !== undefined
+    );
+    const restoredWorkflow = restoredKrea2HasUnsupportedControls
+      ? setTimelineNodeManualResult(record.workflow, "scene-input", {
+          rawIntent: record.sceneRequest.trim() || getSceneInputRawIntent(record.workflow).trim(),
+          imageCount: restoredImageCount,
+          ...(useEditorStore.getState().project.settings.supportsNsfw === true ? { nsfw: true } : {}),
+          promptProfile: "krea2",
+          settingsSnapshot: createRunSceneInputSettingsSnapshot({
+            automaticLocalRepair: false,
+            detailers: createGenerationDetailerSettingsSnapshot(),
+            finalRedrawPreset: restoredSettings.finalRedrawPreset,
+            promptProfile: "krea2",
+            stylePalette: restoredSettings.stylePalette,
+          }),
+        } satisfies SceneInputTimelineResult)
+      : record.workflow;
     const projectId = record.projectId ?? null;
     const projectName = record.name ?? "";
     const autosaveInput: TimelineWorkflowRecordInput = {
       ...(projectId ? { projectId } : {}),
       ...(projectName ? { name: projectName } : {}),
-      workflow: record.workflow,
+      workflow: restoredWorkflow,
       sceneRequest: record.sceneRequest,
       selectedPromptProfile: record.selectedPromptProfile,
       selectedImageCount: restoredImageCount,
@@ -1341,19 +1381,19 @@ export function TimelineShell() {
 
     latestAutosaveInputRef.current = autosaveInput;
     shouldClearActiveWorkflowRef.current = false;
-    setWorkflow(record.workflow);
+    setWorkflow(restoredWorkflow);
     setWorkflowProjectId(projectId);
     setWorkflowProjectName(projectName);
     setSceneRequest(record.sceneRequest);
     setSelectedPromptProfile(record.selectedPromptProfile);
     setSelectedImageCount(restoredImageCount);
-    setSelectedSourceDenoise(getSceneInputSourceDenoise(record.workflow));
-    setSelectedSourceImage(getSceneInputSourceImage(record.workflow));
-    setDetailers(restoredSettings.detailers);
-    setAutomaticLocalRepair(restoredSettings.automaticLocalRepair);
+    setSelectedSourceDenoise(restoredKrea2 ? DEFAULT_TIMELINE_SOURCE_DENOISE : getSceneInputSourceDenoise(restoredWorkflow));
+    setSelectedSourceImage(restoredKrea2 ? null : getSceneInputSourceImage(restoredWorkflow));
+    setDetailers(restoredKrea2 ? createGenerationDetailerSettingsSnapshot() : restoredSettings.detailers);
+    setAutomaticLocalRepair(restoredKrea2 ? false : restoredSettings.automaticLocalRepair);
     setFinalRedrawPreset(restoredSettings.finalRedrawPreset);
     setStylePalette(restoredSettings.stylePalette);
-    setStyleReference(restoredSettings.styleReference);
+    setStyleReference(restoredKrea2 ? undefined : restoredSettings.styleReference);
     setSelectedStyleCheckpointId(restoredSettings.stylePalette?.checkpointId ?? null);
     setSelectedStyleLoraIds(restoredSettings.stylePalette?.loras.map((lora) => lora.id) ?? []);
     setSelectedStyleResources(EMPTY_SELECTED_CIVITAI_RESOURCES);
@@ -1365,10 +1405,12 @@ export function TimelineShell() {
     setOutputDisplayModes(record.outputDisplayModes);
     setNotices((current) => ({
       ...current,
-      [record.selectedNodeId]: message,
+      [record.selectedNodeId]: restoredKrea2HasUnsupportedControls
+        ? "Restored Krea 2 Turbo workflow after removing unsupported source, reference, Detailer, and repair settings. Confirm again to render."
+        : message,
     }));
     setAutosaveStatus("saved");
-    setAutosaveMessage(projectName ? `Restored ${projectName}.` : `Restored ${record.workflow.workflowId}.`);
+    setAutosaveMessage(projectName ? `Restored ${projectName}.` : `Restored ${restoredWorkflow.workflowId}.`);
 
     if (options.saveActive) {
       void saveActiveTimelineWorkflowRecord(autosaveInput).catch((error) => {
@@ -1952,7 +1994,12 @@ export function TimelineShell() {
         runId,
       );
       if (!outcome || outcome.failedNodeId) return;
-      setNotices((current) => ({ ...current, "result-display": "Preview, Final, and any verified Repair variants are ready for explicit selection." }));
+      setNotices((current) => ({
+        ...current,
+        "result-display": isKrea2Profile
+          ? "Direct Krea 2 Turbo output is ready. Preview, scoring, redraw, review, and repair were not applicable."
+          : "Preview, Final, and any verified Repair variants are ready for explicit selection.",
+      }));
     } catch (error) {
       if (!isCurrentRun(runId)) {
         return;
@@ -2060,19 +2107,19 @@ export function TimelineShell() {
     setWorkflowProjectId(null);
     setWorkflowProjectName("");
     const nextWorkflow = createTimelineWorkflowState({
-      imageCount: selectedImageCount,
+      imageCount: isKrea2Profile ? KREA2_TIMELINE_IMAGE_COUNT : selectedImageCount,
       nsfw: useEditorStore.getState().project.settings.supportsNsfw === true,
       promptProfile: selectedPromptProfile,
       sceneRequest: trimmedSceneRequest,
       settingsSnapshot: getComposerSettingsSnapshot(),
       sourceDenoise: selectedSourceDenoise,
-      sourceImage: selectedSourceImage ?? undefined,
+      sourceImage: selectedPromptProfile === "krea2" ? undefined : selectedSourceImage ?? undefined,
     });
     const initialAutosaveInput: TimelineWorkflowRecordInput = {
       workflow: nextWorkflow,
       sceneRequest: trimmedSceneRequest,
       selectedPromptProfile,
-      selectedImageCount,
+      selectedImageCount: isKrea2Profile ? KREA2_TIMELINE_IMAGE_COUNT : selectedImageCount,
       selectedNodeId: "scene-input",
       outputDisplayModes: {},
     };
@@ -2109,14 +2156,24 @@ export function TimelineShell() {
 
   function handlePromptProfileChange(value: string) {
     const promptProfile = normalizePromptProfileId(value);
+    const isKrea2 = promptProfile === "krea2";
+    const nextImageCount = isKrea2 ? KREA2_TIMELINE_IMAGE_COUNT : selectedImageCount;
 
     setSelectedPromptProfile(promptProfile);
+    setSelectedImageCount(nextImageCount);
     setSelectedStyleCheckpointId(null);
     setSelectedStyleLoraIds([]);
     setSelectedStyleResources(EMPTY_SELECTED_CIVITAI_RESOURCES);
     setStylePalette(undefined);
     setStyleAdvice(EMPTY_STYLE_PALETTE_ADVICE);
     setParametersOpen(false);
+    if (isKrea2) {
+      setSelectedSourceImage(null);
+      setSelectedSourceDenoise(DEFAULT_TIMELINE_SOURCE_DENOISE);
+      setDetailers(createGenerationDetailerSettingsSnapshot());
+      setAutomaticLocalRepair(false);
+      setStyleReference(undefined);
+    }
 
     if (!workflow || isRunning) {
       return;
@@ -2135,20 +2192,24 @@ export function TimelineShell() {
     invalidateTimelineRun();
     commitWorkflow(setTimelineNodeManualResult(workflow, "scene-input", {
       rawIntent,
-      imageCount: selectedImageCount,
+      imageCount: nextImageCount,
       ...(useEditorStore.getState().project.settings.supportsNsfw === true ? { nsfw: true } : {}),
       promptProfile,
-      ...(selectedSourceImage ? { sourceDenoise: selectedSourceDenoise } : {}),
-      ...(selectedSourceImage ? { sourceImage: selectedSourceImage } : {}),
+      ...(!isKrea2 && selectedSourceImage ? { sourceDenoise: selectedSourceDenoise } : {}),
+      ...(!isKrea2 && selectedSourceImage ? { sourceImage: selectedSourceImage } : {}),
       settingsSnapshot: getComposerSettingsSnapshot({ promptProfile, stylePalette: undefined }),
     } satisfies SceneInputTimelineResult), {
       sceneRequest: rawIntent,
       selectedPromptProfile: promptProfile,
-      selectedImageCount,
+      selectedImageCount: nextImageCount,
     });
   }
 
   function handleImageCountChange(value: string) {
+    if (isKrea2Profile) {
+      setSelectedImageCount(KREA2_TIMELINE_IMAGE_COUNT);
+      return;
+    }
     const imageCount = normalizeTimelineImageCount(value);
     setSelectedImageCount(imageCount);
 
@@ -2180,6 +2241,13 @@ export function TimelineShell() {
   }
 
   function commitSceneInputSourceImage(sourceImage: TimelineSourceImage | null) {
+    if (isKrea2Profile && sourceImage) {
+      setNotices((current) => ({
+        ...current,
+        "scene-input": "Krea 2 Turbo supports direct txt2img only; source images are unavailable.",
+      }));
+      return;
+    }
     const sourceDenoise = normalizeTimelineSourceDenoise(selectedSourceDenoise);
     setSelectedSourceImage(sourceImage);
     if (sourceImage) {
@@ -2343,6 +2411,15 @@ export function TimelineShell() {
       return;
     }
 
+    if (isKrea2Profile) {
+      setDetailers(createGenerationDetailerSettingsSnapshot());
+      setNotices((current) => ({
+        ...current,
+        "scene-input": "Krea 2 Turbo does not support FaceDetailer or HandDetailer.",
+      }));
+      return;
+    }
+
     setDetailers(nextDetailers);
     commitComposerSettingChange(
       getComposerSettingsSnapshot({ detailers: nextDetailers }),
@@ -2372,6 +2449,13 @@ export function TimelineShell() {
 
   function handleFinalRedrawPresetChange(nextPreset: TimelineFinalRedrawPreset) {
     if (isRunningRef.current || nextPreset === finalRedrawPreset) return;
+    if (isKrea2Profile) {
+      setNotices((current) => ({
+        ...current,
+        "scene-input": "Krea 2 Turbo submits one direct render; Final redraw is not applicable.",
+      }));
+      return;
+    }
     setFinalRedrawPreset(nextPreset);
     const nextSettings = getComposerSettingsSnapshot({ finalRedrawPreset: nextPreset });
     if (!workflow) return;
@@ -2403,6 +2487,14 @@ export function TimelineShell() {
 
   function handleStyleReferenceChange(nextStyleReference: StyleReferenceSnapshot | undefined) {
     if (isRunningRef.current) {
+      return;
+    }
+    if (isKrea2Profile && nextStyleReference) {
+      setStyleReference(undefined);
+      setNotices((current) => ({
+        ...current,
+        "scene-input": "Krea 2 Turbo does not support style references or IPAdapter inputs.",
+      }));
       return;
     }
     const normalizedStyleReference = sanitizeStyleReferenceSnapshot(nextStyleReference);
@@ -2880,6 +2972,13 @@ export function TimelineShell() {
   }
 
   function renderFinalPolicyConfirmationSummary() {
+    if (isKrea2Profile) {
+      return (
+        <p className="pl-6 text-[11px] text-amber-700">
+          Krea 2 Turbo submits one confirmed direct 1024² txt2img render. Preview, scoring, redraw, review, and repair are not applicable.
+        </p>
+      );
+    }
     const policy = getResolvedComposerFinalPolicy();
     const risk = policy.preset === "strong"
       ? "Strong redraw has higher anatomy, structure, and object-drift risk."
@@ -2972,6 +3071,12 @@ export function TimelineShell() {
               Without saved parameters, Run keeps automatic parameter advice.
             </p>
           )}
+          {isKrea2Profile ? (
+            <p className="mt-3 rounded-md border border-indigo-100 bg-white px-3 py-2 text-xs leading-relaxed text-indigo-800">
+              Krea 2 Turbo uses the selected Krea 2 local UNet and optional compatible LoRAs for one direct txt2img output. Source images, references, Detailers, Preview/Final redraw, review, and repair are unavailable.
+            </p>
+          ) : (
+            <>
           <fieldset className="mt-3 border-t border-indigo-100 pt-3" disabled={isRunning}>
             <legend className="text-[11px] font-semibold uppercase tracking-wide text-slate-600">
               Final redraw strength
@@ -3001,7 +3106,7 @@ export function TimelineShell() {
                     <span className="flex items-center gap-2 font-semibold">
                       <input
                         checked={selected}
-                        disabled={isRunning}
+                        disabled={isRunning || isKrea2Profile}
                         name="final-redraw-strength"
                         onChange={() => handleFinalRedrawPresetChange(option.preset)}
                         type="radio"
@@ -3049,6 +3154,8 @@ export function TimelineShell() {
             snapshot={styleReference}
             workflowLabel="Run"
           />
+            </>
+          )}
           <ComfyUiGenerationDialog
             activePrompt={sceneRequest || "Run generation parameter preview"}
             advice={styleAdvice.result}
@@ -3125,7 +3232,7 @@ export function TimelineShell() {
           </label>
           <select
             className="h-8 rounded-md border border-slate-200 bg-white px-2 text-xs text-slate-800 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
-            disabled={isRunning}
+            disabled={isRunning || isKrea2Profile}
             id="timeline-image-count"
             onChange={(event) => handleImageCountChange(event.target.value)}
             value={selectedImageCount}
@@ -3145,13 +3252,15 @@ export function TimelineShell() {
           />
           <Button
             className="ml-2 h-8 px-2 text-xs shadow-none"
-            disabled={isRunning}
-            onClick={() => sourceImageInputRef.current?.click()}
+            disabled={isRunning || isKrea2Profile}
+            onClick={() => {
+              if (!isKrea2Profile) sourceImageInputRef.current?.click();
+            }}
             type="button"
             variant="secondary"
           >
             <ImageIcon className="size-3.5" />
-            Upload source
+            {isKrea2Profile ? "Txt2img only" : "Upload source"}
           </Button>
         </div>
         <textarea
@@ -3763,7 +3872,7 @@ export function TimelineShell() {
                       </label>
                       <select
                         className="h-8 rounded-md border border-slate-200 bg-white px-2 text-xs text-slate-800 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
-                        disabled={isRunning}
+                        disabled={isRunning || isKrea2Profile}
                         id="timeline-image-count"
                         onChange={(event) => handleImageCountChange(event.target.value)}
                         value={selectedImageCount}
@@ -3783,13 +3892,15 @@ export function TimelineShell() {
                       />
                       <Button
                         className="ml-2 h-8 px-2 text-xs shadow-none"
-                        disabled={isRunning}
-                        onClick={() => sourceImageInputRef.current?.click()}
+                        disabled={isRunning || isKrea2Profile}
+                        onClick={() => {
+                          if (!isKrea2Profile) sourceImageInputRef.current?.click();
+                        }}
                         type="button"
                         variant="secondary"
                       >
                         <ImageIcon className="size-3.5" />
-                        Upload source
+                        {isKrea2Profile ? "Txt2img only" : "Upload source"}
                       </Button>
                     </div>
                     <textarea
@@ -4003,7 +4114,12 @@ export function TimelineShell() {
                   </div>
 
                   <div className="min-h-0 flex-1">
-                  {editingNodeId === selectedNodeId ? (
+                  {selectedNotApplicableResult ? (
+                    <div className="rounded-md border border-indigo-200 bg-indigo-50 p-4 text-sm leading-relaxed text-indigo-900">
+                      <p className="font-semibold">Not applicable for Krea 2 Turbo direct txt2img</p>
+                      <p className="mt-1 text-xs text-indigo-800">{selectedNotApplicableResult.message}</p>
+                    </div>
+                  ) : editingNodeId === selectedNodeId ? (
                     <div className="flex flex-col gap-2">
                       <textarea
                         className="min-h-28 w-full resize-y rounded-md border border-slate-200 bg-white p-3 font-mono text-xs leading-relaxed text-slate-800 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100"

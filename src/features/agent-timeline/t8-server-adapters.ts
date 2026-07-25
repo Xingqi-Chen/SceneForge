@@ -893,12 +893,58 @@ async function executeFinals(
   return partialResult;
 }
 
+function isKrea2DirectRun(context: TimelineNodeExecutionContext) {
+  const parameters = context.workflow.nodes["parameter-recommendation"].result;
+  return isRecord(parameters) && isRecord(parameters.requestPreview) &&
+    parameters.requestPreview.workflowProfile === "krea2";
+}
+
+async function executeKrea2DirectFinal(
+  request: ComfyUiTextToImageRequest,
+  context: TimelineNodeExecutionContext,
+  previous?: ComfyUiExecutionTimelineResult,
+): Promise<ComfyUiExecutionTimelineResult> {
+  if (previous?.completed && previous.finalCount === 1 && previous.finals[0]?.status === "done") {
+    return previous;
+  }
+
+  const client = makeClient();
+  let objectInfo: unknown;
+  try {
+    objectInfo = await client.getObjectInfo();
+  } catch (error) {
+    throw toComfyError(error);
+  }
+  const result = await queueAndStore(client, objectInfo, request, context, "krea2-direct-final");
+  return {
+    completed: true,
+    finalCount: 1,
+    finals: [{
+      candidateId: "preview-1",
+      rank: 1,
+      seed: request.seed ?? 0,
+      status: "done",
+      promptId: result.promptId,
+      sourceImage: result.sourceImage,
+      storedImage: result.storedImage,
+    }],
+    request,
+    warnings: result.warnings,
+  };
+}
+
 function loadResultDisplay(execution: ComfyUiExecutionTimelineResult): ResultDisplayTimelineResult {
   const completed = execution.finals.filter((item) => item.status === "done" && item.sourceImage && item.storedImage && item.promptId);
   if (!execution.completed || completed.length !== execution.finalCount) {
     throw new TimelineNodeExecutionError(createTimelineNodeError("comfyui_execution_failed", "All selected finals must complete before result display."));
   }
   const first = completed[0]!;
+  const fallbacks = completed.flatMap((item) => item.previewUpscale ? [{
+    candidateId: item.candidateId,
+    rank: item.rank,
+    seed: item.seed,
+    storedImage: item.previewUpscale.storedImage,
+  }] : []);
   return {
     completed: true,
     image: { ...first.sourceImage!, url: first.storedImage!.url },
@@ -908,12 +954,7 @@ function loadResultDisplay(execution: ComfyUiExecutionTimelineResult): ResultDis
     sourceImages: completed.map((item) => item.sourceImage!),
     storedImage: first.storedImage!,
     storedImages: completed.map((item) => item.storedImage!),
-    fallbacks: completed.flatMap((item) => item.previewUpscale ? [{
-      candidateId: item.candidateId,
-      rank: item.rank,
-      seed: item.seed,
-      storedImage: item.previewUpscale.storedImage,
-    }] : []),
+    ...(fallbacks.length > 0 ? { fallbacks } : {}),
     warnings: execution.warnings,
     finalLinks: completed.map((item) => ({
       candidateId: item.candidateId,
@@ -932,11 +973,22 @@ export function createTimelineT8ServerNodeAdapters(
     executePreviews,
     scorePreviews,
     executeFinals,
+    executeDirectFinal: executeKrea2DirectFinal,
     loadResultDisplay,
   });
   return {
     ...adapters,
     "final-review": async (context) => {
+      if (isKrea2DirectRun(context)) {
+        return {
+          value: {
+            status: "not-applicable",
+            reason: "krea2-direct-txt2img",
+            message: "Krea 2 Turbo direct txt2img has no Preview-to-Final review step.",
+          },
+          source: "system",
+        };
+      }
       const previous = getFinalReviewResult(context.workflow);
       const reviewed = await reviewFinalExecution(getCompletedFinalExecution(context), context);
       const selectionByCandidate = new Map(previous?.pairs.flatMap((pair) =>
@@ -953,6 +1005,16 @@ export function createTimelineT8ServerNodeAdapters(
       };
     },
     "final-repair": async (context) => {
+      if (isKrea2DirectRun(context)) {
+        return {
+          value: {
+            status: "not-applicable",
+            reason: "krea2-direct-txt2img",
+            message: "Krea 2 Turbo direct txt2img does not support local repair.",
+          },
+          source: "system",
+        };
+      }
       const review = getFinalReviewResult(context.workflow);
       if (!review) {
         throw new TimelineNodeExecutionError(createTimelineNodeError(
@@ -971,6 +1033,16 @@ export function createTimelineT8ServerNodeAdapters(
       };
     },
     "repair-verification": async (context) => {
+      if (isKrea2DirectRun(context)) {
+        return {
+          value: {
+            status: "not-applicable",
+            reason: "krea2-direct-txt2img",
+            message: "Krea 2 Turbo direct txt2img has no repair verification step.",
+          },
+          source: "system",
+        };
+      }
       const review = getFinalReviewResult(context.workflow);
       const repair = getFinalRepairResult(context.workflow);
       if (!review || !repair) {

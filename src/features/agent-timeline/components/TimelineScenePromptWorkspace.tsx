@@ -142,9 +142,16 @@ function createResultFromDraft(
   const positivePrompt = draft.positivePrompt.trim() || draft.sceneIntent.trim();
   const sceneIntent = draft.sceneIntent.trim() || positivePrompt;
   const primaryCharacterIdentity = draft.primaryCharacterIdentity.trim() || positivePrompt;
+  const promptProfile = getSafeScenePromptProfile(previousResult?.promptProfile, fallbackPromptProfile);
+  const preservedKrea2Sections = previousResult?.krea2Sections;
+  const krea2Sections = promptProfile === "krea2"
+    ? previousResult?.positivePrompt.trim() === positivePrompt && preservedKrea2Sections
+      ? preservedKrea2Sections
+      : { ...preservedKrea2Sections, subjectMood: positivePrompt }
+    : undefined;
 
   return {
-    promptProfile: getSafeScenePromptProfile(previousResult?.promptProfile, fallbackPromptProfile),
+    promptProfile,
     primaryCharacter: {
       name: draft.primaryCharacterName.trim() || "Primary character",
       identity: primaryCharacterIdentity,
@@ -161,6 +168,7 @@ function createResultFromDraft(
     lighting: linesToFragments(draft.lighting),
     ...(previousResult?.illustriousSections ? { illustriousSections: previousResult.illustriousSections } : {}),
     ...(previousResult?.animaSections ? { animaSections: previousResult.animaSections } : {}),
+    ...(krea2Sections ? { krea2Sections } : {}),
   };
 }
 
@@ -366,6 +374,11 @@ export function TimelineScenePromptWorkspace({
                   rows={5}
                   value={draft.positivePrompt}
                 />
+                {safePromptProfile === "krea2" ? (
+                  <p className="mt-1 text-[11px] leading-relaxed text-slate-500">
+                    Editing this free-form paragraph maps it to Krea&apos;s subject/mood section; the preserved ordered Krea sections remain after it.
+                  </p>
+                ) : null}
               </td>
             </tr>
             <tr>
