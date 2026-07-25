@@ -135,9 +135,12 @@ function getModelVersionIds(item: Record<string, unknown>, meta: Record<string, 
   return raw.map(asNumber).filter((id): id is number => id !== null);
 }
 
+export const CIVITAI_IMAGE_UNAVAILABLE_MESSAGE =
+  "This Civitai image is unavailable. It may not exist, may be private or deleted, or may be filtered by the current content settings. Check the image ID and content settings, then try again.";
+
 export function normalizeCivitaiImageResponse(payload: unknown, imageId: number): NormalizedCivitaiImage {
   if (!isRecord(payload) || !Array.isArray(payload.items) || payload.items.length === 0) {
-    throw new Error("Civitai did not return an image for this imageId.");
+    throw new Error(CIVITAI_IMAGE_UNAVAILABLE_MESSAGE);
   }
 
   const item = payload.items.find((entry) => isRecord(entry) && asNumber(entry.id) === imageId) ?? payload.items[0];

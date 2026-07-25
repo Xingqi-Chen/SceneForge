@@ -706,7 +706,7 @@ export function CivitaiLoraLibraryPanel() {
     const trimmed = imageUrl.trim();
     if (!trimmed) {
       setParseStatus("error");
-      setParseError("请粘贴 Civitai image URL。");
+      setParseError("请粘贴 civitai.com / civitai.red image URL，或输入纯数字 image ID。");
       return;
     }
 
@@ -1366,7 +1366,7 @@ export function CivitaiLoraLibraryPanel() {
                           setRepairError("");
                           setRepairResult(null);
                         }}
-                        placeholder="https://civitai.com/images/29900440"
+                        placeholder="https://civitai.red/images/135795968 或纯数字 ID"
                         value={imageUrl}
                       />
                       <Button
@@ -1988,7 +1988,8 @@ export function CivitaiLoraLibraryPanel() {
                         ) : null}
                         {resourceStatus !== "loading" && (isImageTab ? images.length === 0 : resources.length === 0) ? (
                           <p className="rounded-md bg-slate-50 p-3 text-xs leading-relaxed text-slate-500">
-                            暂无已导入 {activeResourceLabel}。先粘贴一个 Civitai image URL 解析并确认导入。
+                            暂无已导入 {activeResourceLabel}。先粘贴 civitai.com / civitai.red image URL
+                            或输入纯数字 ID，解析并确认导入。
                           </p>
                         ) : null}
                         <div className="space-y-2">

@@ -1,6 +1,10 @@
 import { NextResponse } from "next/server";
 
-import { parseCivitaiImageUrl } from "@/features/civitai-lora-library";
+import {
+  CivitaiApiError,
+  CivitaiImageImportInputError,
+  parseCivitaiImageUrl,
+} from "@/features/civitai-lora-library";
 import { openSceneForgeSqliteDatabase } from "@/features/persistence/sqlite-storage";
 
 export const runtime = "nodejs";
@@ -18,6 +22,10 @@ function errorResponse(message: string, status: number, details?: unknown) {
 }
 
 function getErrorStatus(error: unknown) {
+  if (error instanceof CivitaiImageImportInputError) {
+    return error.statusCode;
+  }
+
   if (error && typeof error === "object" && "statusCode" in error) {
     const statusCode = (error as { statusCode?: unknown }).statusCode;
     if (typeof statusCode === "number") {
@@ -59,9 +67,16 @@ export async function POST(request: Request) {
     const result = await parseCivitaiImageUrl({ db, imageUrl });
     return NextResponse.json(result);
   } catch (error) {
-    console.error("[SceneForge] [civitai-lora-library] parse failed", { error });
-    const message = error instanceof Error ? error.message : "解析 Civitai 图片元数据失败。";
-    return errorResponse(message, getErrorStatus(error), error);
+    const status = getErrorStatus(error);
+    console.error("[SceneForge] [civitai-lora-library] parse failed", {
+      errorName: error instanceof Error ? error.name : "unknown",
+      status,
+    });
+    const message =
+      error instanceof CivitaiApiError || error instanceof CivitaiImageImportInputError
+        ? error.message
+        : "解析 Civitai 图片元数据失败。";
+    return errorResponse(message, status);
   } finally {
     db.close();
   }
