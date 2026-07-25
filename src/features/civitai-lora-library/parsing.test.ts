@@ -3,16 +3,41 @@ import { describe, expect, it } from "vitest";
 import { parseCivitaiImageIdFromUrl, parseLoraWeightsFromPrompt } from "./parsing";
 
 describe("Civitai parsing helpers", () => {
-  it("parses Civitai image ids from supported inputs", () => {
-    expect(parseCivitaiImageIdFromUrl("https://civitai.com/images/29900440")).toBe(29900440);
-    expect(parseCivitaiImageIdFromUrl("https://www.civitai.com/images/29900440?foo=bar")).toBe(29900440);
-    expect(parseCivitaiImageIdFromUrl("29900440")).toBe(29900440);
+  it.each([
+    ["https://civitai.com/images/29900440", 29900440],
+    ["https://www.civitai.com/images/29900440?foo=bar#preview", 29900440],
+    ["https://civitai.red/images/135795968", 135795968],
+    ["http://www.civitai.red/images/42?foo=bar#preview", 42],
+    ["29900440", 29900440],
+    ["  7  ", 7],
+    [String(Number.MAX_SAFE_INTEGER), Number.MAX_SAFE_INTEGER],
+  ])("parses supported Civitai image input %s", (input, expectedImageId) => {
+    expect(parseCivitaiImageIdFromUrl(input)).toBe(expectedImageId);
   });
 
-  it("rejects non-Civitai image urls", () => {
-    expect(parseCivitaiImageIdFromUrl("https://example.com/images/29900440")).toBeNull();
-    expect(parseCivitaiImageIdFromUrl("https://civitai.com/models/29900440")).toBeNull();
-    expect(parseCivitaiImageIdFromUrl("not a url")).toBeNull();
+  it.each([
+    "https://example.com/images/29900440",
+    "https://civitai.red.example.com/images/29900440",
+    "https://images.civitai.red/images/29900440",
+    "https://civitai.com.evil.test/images/29900440",
+    "https://civitai.red@evil.test/images/29900440",
+    "https://civitai.com/models/29900440",
+    "https://civitai.red/posts/29900440",
+    "https://civitai.red/foo/images/29900440",
+    "https://civitai.red/images/29900440/extra",
+    "https://civitai.red/images",
+    "ftp://civitai.red/images/29900440",
+    "file://civitai.red/images/29900440",
+    "not a url",
+    "0",
+    "-1",
+    "1.5",
+    String(Number.MAX_SAFE_INTEGER + 1),
+    "https://civitai.red/images/0",
+    "https://civitai.red/images/-1",
+    `https://civitai.red/images/${Number.MAX_SAFE_INTEGER + 1}`,
+  ])("rejects unsupported or unsafe Civitai image input %s", (input) => {
+    expect(parseCivitaiImageIdFromUrl(input)).toBeNull();
   });
 
   it("extracts LoRA prompt weights", () => {

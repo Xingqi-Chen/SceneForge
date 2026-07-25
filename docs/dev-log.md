@@ -4,6 +4,23 @@ This log records dated implementation and documentation work. Keep entries conci
 
 ## 2026-07-25
 
+### T40 / Issue #147 Civitai Red Import Without Content Filtering
+
+Summary:
+
+- Added an exact Civitai image-page host and path allowlist for `.com`, `.red`, their `www` variants, and pure numeric image IDs; input URLs are reduced to an ID and never become fetch targets.
+- Made the explicit Civitai image-ID lookup always send `nsfw=X`, independently of `SCENEFORGE_SHOW_NSFW_BUTTON`, SQLite `supportsNsfw`, and downstream generation context.
+- Parse preview and confirmed import each perform their own fixed API lookup; Settings changes do not alter metadata import results.
+- Replaced empty-result wording with a neutral unavailable/private/deleted/content-filtered explanation and redacted raw upstream errors from image-import route responses.
+
+Validation:
+
+- Focused validation passed 79 tests across 7 files.
+- The full Vitest suite passed 1,595 tests across 140 files.
+- `npm run typecheck`, `npm run lint`, `npm run build`, and `git diff --check` passed; lint reported 23 existing warnings and no errors.
+- Review Gate approved the URL/SSRF boundary, settings-independent fixed `nsfw=X` lookup, metadata fidelity, route error redaction, and scope.
+- Live Civitai API verification returned image ID `135795968` with referenced model version `3100032`; the follow-up model-version request resolved a downloadable Krea 2 checkpoint with three files. Complete live caching and SQLite persistence remain environment-dependent.
+
 ### T39 / Issue #145 Krea 2 Turbo Direct Run Profile
 
 Summary:

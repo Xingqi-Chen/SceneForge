@@ -1,4 +1,5 @@
 import {
+  CIVITAI_IMAGE_UNAVAILABLE_MESSAGE,
   normalizeCivitaiImageResponse,
   normalizeCivitaiModelVersionResponse,
 } from "./normalize";
@@ -75,7 +76,24 @@ export function createCivitaiClient(options: {
 
   return {
     async getImageById(imageId: number): Promise<NormalizedCivitaiImage> {
-      const payload = await getJson(`/images?imageId=${encodeURIComponent(String(imageId))}`);
+      const query = new URLSearchParams({
+        imageId: String(imageId),
+        nsfw: "X",
+      });
+
+      const payload = await getJson(`/images?${query.toString()}`);
+      if (
+        typeof payload === "object" &&
+        payload !== null &&
+        "items" in payload &&
+        Array.isArray((payload as { items?: unknown }).items) &&
+        (payload as { items: unknown[] }).items.length === 0
+      ) {
+        throw new CivitaiApiError(CIVITAI_IMAGE_UNAVAILABLE_MESSAGE, {
+          statusCode: 404,
+        });
+      }
+
       return normalizeCivitaiImageResponse(payload, imageId);
     },
 

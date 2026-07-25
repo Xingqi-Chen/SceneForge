@@ -1,13 +1,30 @@
 import type { ParsedLoraWeight } from "./types";
 
+const CIVITAI_IMAGE_PAGE_HOSTS = new Set([
+  "civitai.com",
+  "www.civitai.com",
+  "civitai.red",
+  "www.civitai.red",
+]);
+
+function parseCivitaiImageId(value: string): number | null {
+  if (!/^\d+$/.test(value)) {
+    return null;
+  }
+
+  const imageId = Number(value);
+  return Number.isSafeInteger(imageId) && imageId > 0 ? imageId : null;
+}
+
 export function parseCivitaiImageIdFromUrl(value: string): number | null {
   const trimmed = value.trim();
   if (!trimmed) {
     return null;
   }
 
-  if (/^\d+$/.test(trimmed)) {
-    return Number.parseInt(trimmed, 10);
+  const numericImageId = parseCivitaiImageId(trimmed);
+  if (numericImageId !== null) {
+    return numericImageId;
   }
 
   let url: URL;
@@ -17,18 +34,19 @@ export function parseCivitaiImageIdFromUrl(value: string): number | null {
     return null;
   }
 
-  if (!/(^|\.)civitai\.com$/i.test(url.hostname)) {
+  if (
+    (url.protocol !== "https:" && url.protocol !== "http:") ||
+    !CIVITAI_IMAGE_PAGE_HOSTS.has(url.hostname.toLowerCase())
+  ) {
     return null;
   }
 
   const parts = url.pathname.split("/").filter(Boolean);
-  const imagesIndex = parts.findIndex((part) => part.toLowerCase() === "images");
-  const candidate = imagesIndex >= 0 ? parts[imagesIndex + 1] : null;
-  if (!candidate || !/^\d+$/.test(candidate)) {
+  if (parts.length !== 2 || parts[0]?.toLowerCase() !== "images") {
     return null;
   }
 
-  return Number.parseInt(candidate, 10);
+  return parseCivitaiImageId(parts[1] ?? "");
 }
 
 export function parseLoraWeightsFromPrompt(prompt: string | null | undefined): ParsedLoraWeight[] {
