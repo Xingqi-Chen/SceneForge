@@ -2877,9 +2877,6 @@ export function TimelineShell() {
   }
 
   function handleNewScene() {
-    if (rejectLegacyDirectMutation()) {
-      return;
-    }
     invalidateTimelineRun();
     restoreVersionRef.current += 1;
     autosaveVersionRef.current += 1;
@@ -3495,7 +3492,7 @@ export function TimelineShell() {
           </div>
 
           <div className={timelineHeaderActionsClassName}>
-            <Button className="h-9 shrink-0 gap-2 px-2.5 text-xs shadow-none sm:px-3" disabled={isLegacyDirectReadOnly} onClick={handleNewScene} type="button" variant="secondary">
+            <Button className="h-9 shrink-0 gap-2 px-2.5 text-xs shadow-none sm:px-3" onClick={handleNewScene} type="button" variant="secondary">
               <RefreshCw className="size-3.5" />
               New scene
             </Button>
@@ -3766,7 +3763,7 @@ export function TimelineShell() {
         </div>
 
         <div className={timelineHeaderActionsClassName}>
-          <Button className="h-9 shrink-0 gap-2 px-2.5 text-xs shadow-none sm:px-3" disabled={isLegacyDirectReadOnly} onClick={handleNewScene} type="button" variant="secondary">
+          <Button className="h-9 shrink-0 gap-2 px-2.5 text-xs shadow-none sm:px-3" onClick={handleNewScene} type="button" variant="secondary">
             <RefreshCw className="size-3.5" />
             New scene
           </Button>

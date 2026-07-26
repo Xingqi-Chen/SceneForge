@@ -1449,7 +1449,7 @@ describe("TimelineShell", () => {
     }
   });
 
-  it("keeps a completed legacy Krea direct record display-only without autosave or mutation controls", async () => {
+  it("starts a fresh scene from a completed legacy Krea direct record without mutating the archive", async () => {
     vi.useFakeTimers();
     const originalFetch = globalThis.fetch;
     const legacyWorkflow = createCompletedLegacyDirectKreaWorkflow();
@@ -1465,19 +1465,21 @@ describe("TimelineShell", () => {
     const mutations: Array<{ method: string; url: string }> = [];
     const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
       const url = getFetchUrl(input);
+      if (init?.method && init.method !== "GET") mutations.push({ method: init.method, url });
       if (url === "/api/settings") return createTimelineSettingsResponse({ displayMode: "detailed" });
       if (url === "/api/agent-timeline/active-workflow") {
-        if (init?.method && init.method !== "GET") mutations.push({ method: init.method, url });
-        return init?.method === "PUT"
-          ? createJsonResponse({ ok: true })
-          : createJsonResponse(legacyRecord);
+        return init?.method === "GET" || !init?.method
+          ? createJsonResponse(legacyRecord)
+          : createJsonResponse({ ok: true });
       }
       if (url.startsWith("/api/agent-timeline/workflows")) {
-        mutations.push({ method: init?.method ?? "GET", url });
         return createJsonResponse({ workflows: [] });
       }
-      if (url === "/api/agent-timeline/confirm-generation") {
-        mutations.push({ method: init?.method ?? "POST", url });
+      if (
+        url === "/api/agent-timeline/confirm-generation"
+        || url === "/api/comfyui/inpaint-image"
+        || url.startsWith("/api/comfyui/generated-images/")
+      ) {
         return createJsonResponse({ error: { message: "must not execute" } }, 500);
       }
       return createJsonResponse({ role: "assistant", content: "{}" });
@@ -1489,11 +1491,12 @@ describe("TimelineShell", () => {
       await flushAsyncWork();
 
       expect(container.textContent).toContain("This completed legacy Krea 2 Turbo direct txt2img Run is preserved as a read-only record.");
+      expect(container.textContent).toContain("legacy-direct-prompt");
       expect(container.textContent).toContain(`${"a".repeat(32)}.png`);
       expect(Array.from(container.querySelectorAll("button")).filter((button) => button.textContent?.includes("Inpaint"))).toHaveLength(0);
       expect(fetchMock.mock.calls.map(([input]) => getFetchUrl(input))).not.toContain("/api/comfyui/inpaint-image");
       expect(getButtonByText("Legacy direct archive").disabled).toBe(true);
-      expect(getButtonByText("New scene").disabled).toBe(true);
+      expect(getButtonByText("New scene").disabled).toBe(false);
 
       act(() => getWorkflowStepButton("scene-input").click());
 
@@ -1511,12 +1514,23 @@ describe("TimelineShell", () => {
         button.textContent?.includes("Confirm and render"),
       )).toBe(false);
 
+      act(() => getButtonByText("New scene").click());
+      await flushAsyncWork();
+
+      expect((container.querySelector("#scene-request") as HTMLTextAreaElement | null)?.value).toBe("");
+      expect(container.textContent).toContain("Waiting for scene command.");
+      expect(container.textContent).not.toContain("This completed legacy Krea 2 Turbo direct txt2img Run is preserved as a read-only record.");
+      expect(container.textContent).not.toContain(`${"a".repeat(32)}.png`);
+
       await act(async () => {
         await vi.advanceTimersByTimeAsync(500);
       });
       await flushAsyncWork();
 
-      expect(mutations).toEqual([]);
+      expect(mutations).toEqual([{
+        method: "DELETE",
+        url: "/api/agent-timeline/active-workflow",
+      }]);
     } finally {
       vi.useRealTimers();
       globalThis.fetch = originalFetch;
