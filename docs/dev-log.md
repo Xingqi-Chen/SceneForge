@@ -4,6 +4,29 @@ This log records dated implementation and documentation work. Keep entries conci
 
 ## 2026-07-26
 
+### T50 / Issue #169 Adult NSFW empty Run suggestions
+
+Summary:
+
+- Required every empty-input candidate in both initial and repair prompts to depict exactly one person as the sole visual subject, excluding additional, coupled, grouped, crowd, and background people. SFW candidates require one female protagonist and diverse safe settings, with campus optional rather than required or default; SFW does not inherit the 21+ rule.
+- Conditioned `nsfw: true` prompts to request six clearly adult NSFW concepts with varied mature intensity, require the sole person to be explicitly 21+ without requiring that protagonist to be female, and prohibit minors, ambiguous-age or youth-coded subjects/settings, coercion, exploitation, non-consensual sexual content, and unlawful sexual content.
+- Reused the existing `ageGroup` fingerprint as an explicit numeric 21+ declaration. Invalid NSFW age declarations are rejected before ranking through the existing parse/repair/failure path without parsing, reconstructing, or rewriting `sceneRequest`.
+- Hardened that declaration to a full-string bounded age-label grammar. Youth/non-adult tokens and unrelated-number phrases such as a shoe size are rejected; supported plus, age/aged, years-old, year-old, adult-prefixed, range, and list forms remain accepted only when every declared age is at least 21.
+- Kept person count, background exclusion, and SFW gender as provider contract instructions because existing fingerprints cannot validate them reliably without semantic prompt parsing or schema/history changes. Preserved the NSFW-model/default fallback, six-candidate schema, request budget, deduplication, ranking/selection, shared bounded history/privacy, UI/routes, and all nonempty or downstream workflows.
+
+Implementation Gate validation:
+
+- `npm run typecheck`
+- `npx eslint src/features/agent-timeline/run-scene-suggestion.server.ts src/features/agent-timeline/run-scene-suggestion.ts`
+- `npx vitest run src/features/agent-timeline/run-scene-suggestion.test.ts src/features/agent-timeline/run-scene-suggestion.server.test.ts` (67 tests)
+- `git diff --check`
+
+Closeout:
+
+- Test Gate passed 140 focused tests and 1,850 full-suite tests with typecheck, lint, production build, and diff-check.
+- Review Gate returned `APPROVE` after a red-to-green regression pass hardened `ageGroup` against youth-coded labels and unrelated numeric values.
+- The lint run reported zero errors and retained 23 unrelated pre-existing warnings.
+
 ### T49 / Issue #167 Preview Scoring default-model routing
 
 Summary:

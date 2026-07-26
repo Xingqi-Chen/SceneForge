@@ -46,12 +46,18 @@ export type RunSceneSuggestionResult = {
   warning?: string;
 };
 
-function buildCandidateContract(promptProfile: PromptProfileId) {
+function buildCandidateContract(promptProfile: PromptProfileId, nsfw: boolean) {
   return {
-    sceneRequest: "one complete generation-ready English single-image scene request",
+    sceneRequest: nsfw
+      ? "one complete generation-ready English scene request depicting exactly one protagonist as the sole person and visual subject"
+      : "one complete generation-ready English scene request depicting exactly one female protagonist as the sole person and visual subject",
     compatiblePromptProfiles: [promptProfile],
-    protagonistType: "bounded category",
-    ageGroup: "bounded category",
+    protagonistType: nsfw
+      ? "bounded category for exactly one sole protagonist"
+      : "bounded category for exactly one sole female protagonist",
+    ageGroup: nsfw
+      ? "unambiguous numeric age declaration of 21 years or older"
+      : "bounded category",
     occupationFamily: "bounded category",
     settingCategory: "bounded category",
     era: "bounded category",
@@ -83,6 +89,17 @@ export function buildEmptyRunSceneSuggestionRequest({
           "You are SceneForge's empty-input Run scene suggestion agent.",
           `Return exactly ${REQUESTED_CANDIDATE_COUNT} diverse candidates as valid JSON only. No markdown, comments, reasoning, or prose outside JSON.`,
           "Every candidate must be a complete, generation-ready single-image concept with one clear protagonist, visible action, supporting setting, visual mood, and palette.",
+          "Every candidate must depict exactly one person as the sole visual subject. Never include a multi-person scene, another person, a couple, group, crowd, or any person in the background.",
+          ...(nsfw
+            ? [
+                "All six candidates must lean clearly adult and NSFW, with varied mature intensity across sensual, nude, and erotic concepts.",
+                "Every depicted person must be explicitly 21 years old or older. Each ageGroup must be an unambiguous numeric 21+ declaration; vague labels such as adult or young adult are invalid.",
+                "Never include minors, ambiguous-age or youth-coded subjects or settings, coercion, exploitation, non-consensual sexual content, or unlawful sexual content.",
+              ]
+            : [
+                "The sole protagonist in every candidate must be female.",
+                "Use diverse safe settings across the six candidates. A campus is one optional possibility, not a requirement or default.",
+              ]),
           "Write every sceneRequest yourself as the complete authoritative semantic request. Do not return fragments and do not derive it mechanically from category labels.",
           `Every candidate must be compatible with ${profileLabel} (${promptProfile}) and must include compatiblePromptProfiles containing "${promptProfile}".`,
           "Categorical fingerprint values must be concise English labels of at most 64 characters.",
@@ -94,7 +111,7 @@ export function buildEmptyRunSceneSuggestionRequest({
                 `Safe validation issue: ${repairReason}`,
               ]
             : []),
-          `Required shape: ${JSON.stringify({ candidates: [buildCandidateContract(promptProfile)] })}`,
+          `Required shape: ${JSON.stringify({ candidates: [buildCandidateContract(promptProfile, nsfw)] })}`,
         ].join("\n"),
       },
       {
@@ -197,7 +214,7 @@ export async function createEmptyRunSceneSuggestion({
     promptProfile,
     recentConceptsToAvoid,
   }), "initial");
-  let parsed = parseRunSceneSuggestionCandidates(initial.content, promptProfile);
+  let parsed = parseRunSceneSuggestionCandidates(initial.content, promptProfile, nsfw);
   if (parsed.malformed || parsed.candidates.length < 3) {
     const repair = await requestCandidates(buildEmptyRunSceneSuggestionRequest({
       nsfw,
@@ -205,7 +222,7 @@ export async function createEmptyRunSceneSuggestion({
       recentConceptsToAvoid,
       repairReason: repairReason(parsed.malformed, parsed.candidates.length, parsed.rejectedCount),
     }), "repair");
-    parsed = parseRunSceneSuggestionCandidates(repair.content, promptProfile);
+    parsed = parseRunSceneSuggestionCandidates(repair.content, promptProfile, nsfw);
   }
   if (parsed.candidates.length === 0) {
     throw new RunSceneSuggestionError(
