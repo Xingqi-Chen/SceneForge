@@ -26,6 +26,7 @@ Closeout:
 - Test Gate passed 140 focused tests and 1,850 full-suite tests with typecheck, lint, production build, and diff-check.
 - Review Gate returned `APPROVE` after a red-to-green regression pass hardened `ageGroup` against youth-coded labels and unrelated numeric values.
 - The lint run reported zero errors and retained 23 unrelated pre-existing warnings.
+- Opened stacked PR #170 against the PR #168 branch so the T50 review diff remains isolated; PR #168 should merge first.
 
 ### T49 / Issue #167 Preview Scoring default-model routing
 
