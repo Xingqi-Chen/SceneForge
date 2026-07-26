@@ -339,6 +339,7 @@ export type GenerationDraft = Required<Omit<
   | "controlNets"
   | "characterReferences"
   | "krea2StyleReference"
+  | "krea2StyleReferenceDescriptor"
   | "preview"
   | "workflowProfile"
   | "modelBaseModel"

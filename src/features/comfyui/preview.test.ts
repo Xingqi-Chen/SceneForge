@@ -59,6 +59,24 @@ describe("ComfyUI preview request transform", () => {
     expect(getComfyUiPreviewSteps(30)).toBe(COMFYUI_PREVIEW_STEPS);
   });
 
+  it("always disables Krea Final Detailers on staged previews", () => {
+    const request = createComfyUiTextToImagePreviewRequest({
+      checkpointName: "krea-2-turbo-unet.safetensors",
+      modelBaseModel: "Krea 2",
+      modelStorageKind: "diffusion",
+      workflowProfile: "krea2",
+      positivePrompt: "a quiet station",
+      faceDetailer: { enabled: true, detectorModelName: "bbox/face_yolov8s.pt" },
+      handDetailer: { enabled: true, detectorModelName: "bbox/hand_yolov8s.pt" },
+    });
+
+    expect(request).toMatchObject({
+      preview: true,
+      faceDetailer: { enabled: false, detectorModelName: "bbox/face_yolov8s.pt" },
+      handDetailer: { enabled: false, detectorModelName: "bbox/hand_yolov8s.pt" },
+    });
+  });
+
   it("uses default preview steps when the original request does not include steps", () => {
     const request = createComfyUiTextToImagePreviewRequest({
       checkpointName: "model.safetensors",

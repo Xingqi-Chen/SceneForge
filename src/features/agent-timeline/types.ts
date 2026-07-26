@@ -419,6 +419,7 @@ export type TimelineFinalExecutionRecord = {
   storedImage?: TimelineStoredGeneratedImage;
   previewUpscale?: TimelinePreviewUpscaleArtifact;
   finalPolicy?: TimelineResolvedFinalPolicy;
+  finalRequestDigest?: string;
   error?: TimelineNodeError;
 };
 

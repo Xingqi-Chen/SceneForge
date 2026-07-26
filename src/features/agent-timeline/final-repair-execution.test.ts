@@ -2037,6 +2037,16 @@ describe("T38C durable repair attempts", () => {
         modelBaseModel: "Krea 2",
         modelStorageKind: "diffusion",
         positivePrompt: "private Krea repair",
+        krea2StyleReferenceDescriptor: {
+          version: 1,
+          referenceDigest: `sha256:${"a".repeat(64)}`,
+          loraName: "krea2_style_reference.safetensors",
+          weight: 0.45,
+          startPercent: 0,
+          endPercent: 1,
+        },
+        faceDetailer: { enabled: true, detectorModelName: "bbox/face_yolov8s.pt" },
+        handDetailer: { enabled: false, detectorModelName: "bbox/hand_yolov8s.pt" },
         samplerName: "euler",
         scheduler: "simple",
         steps: 8,
@@ -2135,6 +2145,16 @@ describe("T38C durable repair attempts", () => {
         modelBaseModel: "Krea 2",
         modelStorageKind: "diffusion",
         positivePrompt: "private Krea repair",
+        krea2StyleReferenceDescriptor: {
+          version: 1,
+          referenceDigest: `sha256:${"a".repeat(64)}`,
+          loraName: "krea2_style_reference.safetensors",
+          weight: 0.45,
+          startPercent: 0,
+          endPercent: 1,
+        },
+        faceDetailer: { enabled: true, detectorModelName: "bbox/face_yolov8s.pt" },
+        handDetailer: { enabled: false, detectorModelName: "bbox/hand_yolov8s.pt" },
         samplerName: "euler",
         scheduler: "simple",
         steps: 8,
@@ -2148,23 +2168,52 @@ describe("T38C durable repair attempts", () => {
       status: "reviewed",
       pairs: [{ ...item.review, userSelectedVariant: "preview-upscale" }],
     };
+    const adapterBoundDigest = deriveRepairBaseRequestDigest(execution, item.final);
+    const changedAdapterDigest = deriveRepairBaseRequestDigest({
+      ...execution,
+      request: {
+        ...execution.request,
+        krea2StyleReferenceDescriptor: {
+          ...execution.request.krea2StyleReferenceDescriptor!,
+          weight: 0.55,
+        },
+      },
+    }, item.final);
     const executionContext = context("krea-repair-once");
+    mocks.completeChat.mockResolvedValueOnce({
+      content: JSON.stringify({
+        repairTarget: { cardinality: "single", locality: "localized", regionCount: 1 },
+        mask: { coordinateUnit: "normalized", shapes: [{ type: "polygon", points: [
+          { x: 0.4, y: 0.4 }, { x: 0.55, y: 0.4 }, { x: 0.55, y: 0.55 }, { x: 0.4, y: 0.55 },
+        ] }] },
+        adjustments: { growMaskBy: 2, faceDetailerEnabled: false, handDetailerEnabled: true },
+      }),
+    });
 
     const completed = await repairFinalExecution(execution, review, executionContext);
     const recovered = await repairFinalExecution(execution, review, executionContext, completed);
 
     expect(completed.pairs[0]).toMatchObject({
       attempt: { status: "stored" },
+      requestPolicy: {
+        requestLocalFaceDetailer: true,
+        requestLocalHandDetailer: false,
+      },
       status: "repaired",
     });
     expect(recovered.pairs[0]).toBe(completed.pairs[0]);
     expect(recovered.pairs[0]).not.toHaveProperty("userSelectedVariant");
+    expect(adapterBoundDigest).toMatch(/^sha256:[a-f0-9]{64}$/);
+    expect(changedAdapterDigest).not.toBe(adapterBoundDigest);
     expect(mocks.queuePrompt).toHaveBeenCalledTimes(1);
     expect(mocks.buildBasicInpaintWorkflow).toHaveBeenCalledWith(expect.objectContaining({
-      faceDetailer: expect.objectContaining({ enabled: false }),
+      faceDetailer: expect.objectContaining({ enabled: true }),
       handDetailer: expect.objectContaining({ enabled: false }),
+      krea2StyleReferenceDescriptor: execution.request.krea2StyleReferenceDescriptor,
       workflowProfile: "krea2",
     }));
+    expect(mocks.buildBasicInpaintWorkflow.mock.calls[0]?.[0]).not.toHaveProperty("krea2StyleReference");
+    expect(execution.request).not.toHaveProperty("imageName");
   });
 
   it("rejects separated target declarations before object_info, uploads, or queue", async () => {

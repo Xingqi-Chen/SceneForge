@@ -293,6 +293,64 @@ describe("ComfyUI workflow builder", () => {
     ].includes(node.class_type))).toBe(false);
   });
 
+  it("keeps the verified Krea adapter model context through independent Final HandDetailer then FaceDetailer nodes", () => {
+    const result = buildBasicTextToImageWorkflow({
+      checkpointName: "krea-2-turbo-unet.safetensors",
+      modelBaseModel: "Krea 2",
+      modelStorageKind: "diffusion",
+      positivePrompt: "a detailed portrait with hands",
+      seed: 123,
+      krea2StyleReference: {
+        imageName: "sceneforge-krea-style.png",
+      },
+      faceDetailer: { enabled: true, detectorModelName: "bbox/face_yolov8s.pt", steps: 18 },
+      handDetailer: { enabled: true, detectorModelName: "bbox/hand_yolov8s.pt", steps: 21 },
+    });
+
+    expect(result.nodeIds).toMatchObject({
+      unetLoader: "1",
+      clipLoader: "2",
+      vaeLoader: "3",
+      styleReferenceImage: "4",
+      styleReferenceLora: "5",
+      styleReferencePatch: "6",
+      handUltralyticsDetectorProvider: "12",
+      handDetailer: "13",
+      ultralyticsDetectorProvider: "14",
+      faceDetailer: "15",
+      previewImage: "16",
+    });
+    expect(result.workflow["13"]).toMatchObject({
+      class_type: "FaceDetailer",
+      _meta: { title: "Krea HandDetailer" },
+      inputs: {
+        image: ["11", 0],
+        model: ["6", 0],
+        clip: ["2", 0],
+        vae: ["3", 0],
+        positive: ["7", 0],
+        negative: ["8", 0],
+        bbox_detector: ["12", 0],
+        steps: 21,
+      },
+    });
+    expect(result.workflow["15"]).toMatchObject({
+      class_type: "FaceDetailer",
+      _meta: { title: "Krea FaceDetailer" },
+      inputs: {
+        image: ["13", 0],
+        model: ["6", 0],
+        clip: ["2", 0],
+        vae: ["3", 0],
+        positive: ["7", 0],
+        negative: ["8", 0],
+        bbox_detector: ["14", 0],
+        steps: 18,
+      },
+    });
+    expect(result.workflow["16"].inputs).toEqual({ images: ["15", 0], filename_prefix: "SceneForge" });
+  });
+
   it("builds Krea source img2img through LoadImage, ImageScale, and VAEEncode", () => {
     const result = buildBasicTextToImageWorkflow({
       checkpointName: "krea-2-turbo-unet.safetensors",
@@ -1550,6 +1608,89 @@ describe("ComfyUI workflow builder", () => {
     expect(result.workflow["14"].inputs).toEqual({
       images: ["13", 0],
     });
+  });
+
+  it("keeps a persisted Krea adapter patched through Repair sampling and Hand-before-Face Detailers", () => {
+    const result = buildBasicInpaintWorkflow({
+      checkpointName: "krea-2-turbo-unet.safetensors",
+      modelBaseModel: "Krea 2",
+      modelStorageKind: "diffusion",
+      workflowProfile: "krea2",
+      positivePrompt: "repair the hand holding the cup",
+      imageName: "SceneForge/source.png",
+      imageWidth: 1024,
+      imageHeight: 1024,
+      maskName: "SceneForge/mask.png",
+      seed: 123,
+      krea2StyleReferenceDescriptor: {
+        version: 1,
+        referenceDigest: `sha256:${"a".repeat(64)}`,
+        loraName: "krea2_style_reference.safetensors",
+        weight: 0.45,
+        startPercent: 0,
+        endPercent: 1,
+      },
+      faceDetailer: { enabled: true, detectorModelName: "bbox/face_yolov8s.pt" },
+      handDetailer: { enabled: true, detectorModelName: "bbox/hand_yolov8s.pt" },
+      upscaleBeforeInpaint: {
+        enabled: true,
+        mode: "lanczos",
+        scaleBy: 2,
+        strategy: "local-region",
+        localRegion: {
+          source: "mask-bounds",
+          x: 400,
+          y: 400,
+          width: 128,
+          height: 128,
+          padding: 32,
+          feather: 16,
+        },
+      },
+    });
+
+    const handDetailer = result.workflow[result.nodeIds.handDetailer!];
+    const faceDetailer = result.workflow[result.nodeIds.faceDetailer!];
+    expect(result.workflow[result.nodeIds.styleReferenceLora!]).toMatchObject({
+      class_type: "LoraLoaderModelOnly",
+      inputs: {
+        model: [result.nodeIds.unetLoader, 0],
+        lora_name: "krea2_style_reference.safetensors",
+        strength_model: 0.45,
+      },
+    });
+    expect(result.workflow[result.nodeIds.styleReferencePatch!]).toMatchObject({
+      class_type: "Krea2OstrisEditModelPatch",
+      inputs: { model: [result.nodeIds.styleReferenceLora, 0], kv_cache: false },
+    });
+    expect(result.workflow[result.nodeIds.sampler].inputs.model).toEqual([
+      result.nodeIds.styleReferencePatch,
+      0,
+    ]);
+    expect(handDetailer).toMatchObject({
+      class_type: "FaceDetailer",
+      inputs: {
+        image: [result.nodeIds.vaeDecode, 0],
+        model: [result.nodeIds.styleReferencePatch, 0],
+        clip: [result.nodeIds.clipLoader, 0],
+        vae: [result.nodeIds.vaeLoader, 0],
+      },
+    });
+    expect(faceDetailer).toMatchObject({
+      class_type: "FaceDetailer",
+      inputs: {
+        image: [result.nodeIds.handDetailer, 0],
+        model: [result.nodeIds.styleReferencePatch, 0],
+        clip: [result.nodeIds.clipLoader, 0],
+        vae: [result.nodeIds.vaeLoader, 0],
+      },
+    });
+    expect(result.workflow[result.nodeIds.localPatchScale!].inputs.image).toEqual([
+      result.nodeIds.faceDetailer,
+      0,
+    ]);
+    expect(result.request.krea2StyleReferenceDescriptor).not.toHaveProperty("imageName");
+    expect(result.nodeIds).not.toHaveProperty("styleReferenceImage");
   });
 
   it("builds a VAE inpaint workflow with LoRA and grow mask", () => {

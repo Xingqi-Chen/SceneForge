@@ -61,6 +61,7 @@ import {
   getComfyUiKrea2StyleReferenceContextIssue,
   isComfyUiKrea2StyleReferenceTimingSupported,
   KREA2_STYLE_REFERENCE_LORA_NAME,
+  normalizeComfyUiKrea2StyleReferenceDescriptor,
 } from "./krea2-style-reference";
 
 export const COMFYUI_INPAINT_UPSCALE_MODEL_PRESETS = {
@@ -1161,6 +1162,14 @@ export function validateComfyUiTextToImageRequest(value: unknown): ComfyUiTextTo
       message: "krea2StyleReference must contain a safe input image name and 0-to-1 adapter values when provided.",
     };
   }
+  const krea2StyleReferenceDescriptor =
+    normalizeComfyUiKrea2StyleReferenceDescriptor(value.krea2StyleReferenceDescriptor);
+  if (krea2StyleReferenceDescriptor === null) {
+    return {
+      ok: false,
+      message: "krea2StyleReferenceDescriptor must be a transport-free, verified Krea adapter identity.",
+    };
+  }
 
   const invalidCharacterReferenceTiming = characterReferences?.find((reference) =>
     reference.enabled !== false &&
@@ -1301,7 +1310,7 @@ export function validateComfyUiTextToImageRequest(value: unknown): ComfyUiTextTo
     modelStorageKind: isComfyUiModelStorageKind(value.modelStorageKind) ? value.modelStorageKind : undefined,
   }).id;
 
-  if (krea2StyleReference && workflowProfile !== "krea2") {
+  if ((krea2StyleReference || krea2StyleReferenceDescriptor) && workflowProfile !== "krea2") {
     return {
       ok: false,
       message: "Krea style reference is available only for a compatible Krea 2 Turbo diffusion workflow.",
@@ -1309,16 +1318,13 @@ export function validateComfyUiTextToImageRequest(value: unknown): ComfyUiTextTo
   }
 
   if (workflowProfile === "krea2") {
-    if (faceDetailer?.enabled || handDetailer?.enabled) {
-      return { ok: false, message: "Krea 2 Turbo does not support FaceDetailer or HandDetailer." };
-    }
     if (controlNetUnitsForValidation.some((unit) => unit.enabled)) {
       return { ok: false, message: "Krea 2 Turbo does not support ControlNet." };
     }
     if (characterReferences?.some((reference) => reference.enabled !== false)) {
       return { ok: false, message: "Krea 2 Turbo does not support entity or character references." };
     }
-    if (krea2StyleReference) {
+    if (krea2StyleReference || krea2StyleReferenceDescriptor) {
       const contextIssue = getComfyUiKrea2StyleReferenceContextIssue({
         checkpointName: value.checkpointName.trim(),
         workflowProfile: isComfyUiTextToImageWorkflowProfileId(value.workflowProfile)
@@ -1330,12 +1336,22 @@ export function validateComfyUiTextToImageRequest(value: unknown): ComfyUiTextTo
           : undefined,
       });
       if (contextIssue) return { ok: false, message: contextIssue };
+    }
+    if (krea2StyleReference) {
       if ((krea2StyleReference.loraName ?? KREA2_STYLE_REFERENCE_LORA_NAME) !== KREA2_STYLE_REFERENCE_LORA_NAME) {
         return { ok: false, message: "Krea style reference must use the verified krea2_style_reference.safetensors adapter file." };
       }
       if (!isComfyUiKrea2StyleReferenceTimingSupported(krea2StyleReference)) {
         return { ok: false, message: "Krea style reference supports only start_at=0 and end_at=1." };
       }
+    }
+    if (krea2StyleReference && krea2StyleReferenceDescriptor &&
+        ((krea2StyleReference.loraName ?? KREA2_STYLE_REFERENCE_LORA_NAME) !==
+          krea2StyleReferenceDescriptor.loraName ||
+        (krea2StyleReference.weight ?? 0.45) !== krea2StyleReferenceDescriptor.weight ||
+        (krea2StyleReference.startPercent ?? 0) !== krea2StyleReferenceDescriptor.startPercent ||
+        (krea2StyleReference.endPercent ?? 1) !== krea2StyleReferenceDescriptor.endPercent)) {
+      return { ok: false, message: "Krea style-reference transport settings do not match the signed adapter identity." };
     }
     if ((typeof value.width === "number" && value.width % 16 !== 0) ||
         (typeof value.height === "number" && value.height % 16 !== 0)) {
@@ -1380,6 +1396,7 @@ export function validateComfyUiTextToImageRequest(value: unknown): ComfyUiTextTo
       controlNets,
       characterReferences,
       krea2StyleReference,
+      krea2StyleReferenceDescriptor,
       preview: typeof value.preview === "boolean" ? value.preview : undefined,
     },
   };
@@ -1444,6 +1461,20 @@ export function validateComfyUiInpaintRequest(value: unknown): ComfyUiInpaintVal
     modelBaseModel: getOptionalTrimmedStringValue(value.modelBaseModel),
     modelStorageKind: isComfyUiModelStorageKind(value.modelStorageKind) ? value.modelStorageKind : undefined,
   }).id;
+  const krea2StyleReferenceDescriptor =
+    normalizeComfyUiKrea2StyleReferenceDescriptor(value.krea2StyleReferenceDescriptor);
+  if (krea2StyleReferenceDescriptor === null) {
+    return {
+      ok: false,
+      message: "krea2StyleReferenceDescriptor must be a transport-free, verified Krea adapter identity.",
+    };
+  }
+  if (krea2StyleReferenceDescriptor && resolvedWorkflowProfile !== "krea2") {
+    return {
+      ok: false,
+      message: "Krea style-reference adapter identity is available only for a compatible Krea 2 Turbo workflow.",
+    };
+  }
 
   if (value.negativePrompt !== undefined && typeof value.negativePrompt !== "string") {
     return {
@@ -1567,8 +1598,18 @@ export function validateComfyUiInpaintRequest(value: unknown): ComfyUiInpaintVal
   }
 
   if (resolvedWorkflowProfile === "krea2") {
-    if (faceDetailer?.enabled || handDetailer?.enabled) {
-      return { ok: false, message: "Krea 2 Turbo repair does not support Detailer nodes." };
+    if (krea2StyleReferenceDescriptor) {
+      const contextIssue = getComfyUiKrea2StyleReferenceContextIssue({
+        checkpointName: value.checkpointName.trim(),
+        workflowProfile: isComfyUiTextToImageWorkflowProfileId(value.workflowProfile)
+          ? value.workflowProfile
+          : undefined,
+        modelBaseModel: getOptionalTrimmedStringValue(value.modelBaseModel),
+        modelStorageKind: isComfyUiModelStorageKind(value.modelStorageKind)
+          ? value.modelStorageKind
+          : undefined,
+      });
+      if (contextIssue) return { ok: false, message: contextIssue };
     }
     const imageWidth = value.imageWidth;
     const imageHeight = value.imageHeight;
@@ -1720,6 +1761,7 @@ export function validateComfyUiInpaintRequest(value: unknown): ComfyUiInpaintVal
       growMaskBy: getOptionalNumber(value.growMaskBy),
       faceDetailer,
       handDetailer,
+      krea2StyleReferenceDescriptor,
       upscaleBeforeInpaint,
       preview: typeof value.preview === "boolean" ? value.preview : undefined,
     },
@@ -2042,12 +2084,8 @@ export function resolveComfyUiTextToImageRequest(
       negativePrefix: request.promptWrapper?.negativePrefix ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.promptWrapper.negativePrefix,
     },
     outputPrefix: getString(request.outputPrefix, DEFAULT_TEXT_TO_IMAGE_REQUEST.outputPrefix),
-    faceDetailer: isKrea2Profile
-      ? { ...DEFAULT_TEXT_TO_IMAGE_REQUEST.faceDetailer, enabled: false }
-      : resolveDetailerConfig(request.faceDetailer, request, DEFAULT_TEXT_TO_IMAGE_REQUEST.faceDetailer),
-    handDetailer: isKrea2Profile
-      ? { ...DEFAULT_TEXT_TO_IMAGE_REQUEST.handDetailer, enabled: false }
-      : resolveDetailerConfig(request.handDetailer, request, DEFAULT_TEXT_TO_IMAGE_REQUEST.handDetailer),
+    faceDetailer: resolveDetailerConfig(request.faceDetailer, request, DEFAULT_TEXT_TO_IMAGE_REQUEST.faceDetailer),
+    handDetailer: resolveDetailerConfig(request.handDetailer, request, DEFAULT_TEXT_TO_IMAGE_REQUEST.handDetailer),
     controlNets: isKrea2Profile ? [] : resolveControlNetUnits(request),
     characterReferences: isKrea2Profile ? [] : resolveCharacterReferences(request),
     ...(isKrea2Profile && request.krea2StyleReference
@@ -2060,6 +2098,9 @@ export function resolveComfyUiTextToImageRequest(
             endPercent: request.krea2StyleReference.endPercent ?? 1,
           },
         }
+      : {}),
+    ...(isKrea2Profile && request.krea2StyleReferenceDescriptor
+      ? { krea2StyleReferenceDescriptor: request.krea2StyleReferenceDescriptor }
       : {}),
   };
 }
@@ -2123,6 +2164,9 @@ export function resolveComfyUiInpaintRequest(request: ComfyUiInpaintRequest): Re
     growMaskBy: request.growMaskBy ?? DEFAULT_INPAINT_REQUEST.growMaskBy,
     faceDetailer: resolveDetailerConfig(request.faceDetailer, request, DEFAULT_INPAINT_REQUEST.faceDetailer),
     handDetailer: resolveDetailerConfig(request.handDetailer, request, DEFAULT_INPAINT_REQUEST.handDetailer),
+    ...(isKrea2Profile && request.krea2StyleReferenceDescriptor
+      ? { krea2StyleReferenceDescriptor: request.krea2StyleReferenceDescriptor }
+      : {}),
     upscaleBeforeInpaint: resolveInpaintUpscaleConfig(request.upscaleBeforeInpaint),
   };
 }
