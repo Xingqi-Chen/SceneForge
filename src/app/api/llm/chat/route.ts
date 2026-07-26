@@ -10,6 +10,9 @@ import { appendLlmLocalLog, serializeErrorForLlmLog } from "../../../../features
 
 export const runtime = "nodejs";
 
+const PREVIEW_SCORING_MODEL_CONFIG_MESSAGE =
+  "LITELLM_DEFAULT_MODEL must be configured with a model that supports multimodal image input and permits the content being scored.";
+
 function createRequestId() {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
     return crypto.randomUUID();
@@ -18,10 +21,11 @@ function createRequestId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
-function errorResponse(message: string, status: number, details?: unknown) {
+function errorResponse(message: string, status: number, details?: unknown, code?: string) {
   return NextResponse.json(
     {
       error: {
+        ...(code ? { code } : {}),
         message,
         details,
       },
@@ -60,9 +64,7 @@ function resolvePurposeDefaultModel(payload: LlmChatRequest) {
   }
 
   if (payload.purpose === "single-image-preview-scoring") {
-    return payload.nsfw === true
-      ? process.env.LITELLM_NSFW_MODEL
-      : process.env.LITELLM_VISION_MODEL || process.env.LITELLM_DEFAULT_MODEL;
+    return process.env.LITELLM_DEFAULT_MODEL;
   }
 
   if (payload.purpose === "comic-sequence-storyboard") {
@@ -100,7 +102,7 @@ export function resolveDefaultModel(payload: LlmChatRequest) {
 export function resolveRequestModel(payload: LlmChatRequest) {
   const defaultModel = resolveDefaultModel(payload);
 
-  if (payload.purpose === "single-image-preview-scoring" && payload.nsfw === true) {
+  if (payload.purpose === "single-image-preview-scoring") {
     return defaultModel;
   }
 
@@ -131,6 +133,14 @@ export async function POST(request: Request) {
 
   const chatRequest: LlmChatRequest = payload;
   const defaultModel = resolveDefaultModel(chatRequest);
+  if (chatRequest.purpose === "single-image-preview-scoring" && !defaultModel) {
+    return errorResponse(
+      PREVIEW_SCORING_MODEL_CONFIG_MESSAGE,
+      503,
+      { recoverable: true },
+      "llm_config",
+    );
+  }
   const resolvedRequest: LlmChatRequest = {
     ...chatRequest,
     model: resolveRequestModel(chatRequest),
