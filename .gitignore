@@ -52,6 +52,9 @@ next-env.d.ts
 # Durable one-shot Repair attempt checkpoints (server-side runtime data)
 /data/agent-timeline-repair-attempts/
 
+# Installation-local empty Run Suggest fingerprint history
+/data/agent-timeline-run-suggestion-history/
+
 # Shared prompt library (server-side persistence)
 /data/prompt-library.json
 

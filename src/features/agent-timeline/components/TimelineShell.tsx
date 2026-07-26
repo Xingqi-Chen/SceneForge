@@ -399,6 +399,33 @@ async function completeTimelineChatViaApi(
   return payload;
 }
 
+async function requestEmptyRunSceneSuggestionViaApi(promptProfile: PromptProfileId) {
+  const response = await fetch("/api/agent-timeline/run-scene-suggestion", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      promptProfile,
+      nsfw: useEditorStore.getState().project.settings.supportsNsfw === true,
+    }),
+  });
+  const payload: unknown = await response.json();
+  if (!response.ok) {
+    throw new Error(getApiErrorMessage(payload, "Unable to suggest a scene request."));
+  }
+  if (!isRecord(payload) ||
+      typeof payload.sceneRequest !== "string" ||
+      !payload.sceneRequest.trim() ||
+      (payload.warning !== undefined && typeof payload.warning !== "string")) {
+    throw new Error("Empty Run suggestion response was invalid.");
+  }
+  return {
+    sceneRequest: payload.sceneRequest.trim(),
+    ...(typeof payload.warning === "string" && payload.warning.trim()
+      ? { warning: payload.warning.trim() }
+      : {}),
+  };
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -2687,7 +2714,9 @@ export function TimelineShell() {
       return;
     }
 
-    const currentSceneRequest = sceneRequest.trim() || getSceneInputRawIntent(workflow).trim();
+    const visibleSceneRequest = sceneRequest.trim();
+    const currentSceneRequest = visibleSceneRequest || getSceneInputRawIntent(workflow).trim();
+    const isEmptySuggestion = action === "suggest" && !visibleSceneRequest;
 
     if (action === "rewrite" && !currentSceneRequest) {
       setNotices((current) => ({
@@ -2710,19 +2739,26 @@ export function TimelineShell() {
     }));
 
     try {
-      const response = await completeTimelineChatViaApi(
-        buildSceneInputAiRequest({
-          action,
-          promptProfile: selectedPromptProfile,
-          sceneRequest: currentSceneRequest,
-        }),
-      );
+      const emptySuggestion = isEmptySuggestion
+        ? await requestEmptyRunSceneSuggestionViaApi(selectedPromptProfile)
+        : null;
+      const response = emptySuggestion
+        ? null
+        : await completeTimelineChatViaApi(
+            buildSceneInputAiRequest({
+              action,
+              promptProfile: selectedPromptProfile,
+              sceneRequest: currentSceneRequest,
+            }),
+          );
 
       if (!isCurrentRun(runId)) {
         return;
       }
 
-      const nextSceneRequest = parseSceneInputAiResponse(response);
+      const nextSceneRequest = emptySuggestion
+        ? emptySuggestion.sceneRequest.trim()
+        : parseSceneInputAiResponse(response!);
 
       if (!nextSceneRequest) {
         throw new Error("Scene input AI response did not include a usable scene request.");
@@ -2758,8 +2794,8 @@ export function TimelineShell() {
             ? "Scene request rewritten. Downstream nodes are pending regeneration."
             : "Scene request rewritten. Run the timeline when ready."
           : workflow
-            ? "Scene request suggested. Downstream nodes are pending regeneration."
-            : "Scene request suggested. Run the timeline when ready.",
+            ? `Scene request suggested. Downstream nodes are pending regeneration.${emptySuggestion?.warning ? ` ${emptySuggestion.warning}` : ""}`
+            : `Scene request suggested. Run the timeline when ready.${emptySuggestion?.warning ? ` ${emptySuggestion.warning}` : ""}`,
       }));
     } catch (error) {
       if (!isCurrentRun(runId)) {
