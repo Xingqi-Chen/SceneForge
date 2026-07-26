@@ -24,6 +24,8 @@ const mocks = vi.hoisted(() => ({
   queuePrompt: vi.fn(),
   storeGeneratedImage: vi.fn(),
   uploadImage: vi.fn(),
+  validateComfyUiInpaintRequest: vi.fn(),
+  validateComfyUiInpaintRequestAgainstObjectInfo: vi.fn(),
   validateSam2MaskRequest: vi.fn(),
   validateSam2MaskRequestAgainstObjectInfo: vi.fn(),
 }));
@@ -47,8 +49,8 @@ vi.mock("@/features/comfyui", async (importOriginal) => ({
     filename: `${promptId}.png`, nodeId: "9", type: "output",
   }]),
   isComfyUiPromptHistoryComplete: vi.fn(() => true),
-  validateComfyUiInpaintRequest: vi.fn((request: unknown) => ({ ok: true, request })),
-  validateComfyUiInpaintRequestAgainstObjectInfo: vi.fn((request: unknown) => ({ errors: [], request, warnings: [] })),
+  validateComfyUiInpaintRequest: mocks.validateComfyUiInpaintRequest,
+  validateComfyUiInpaintRequestAgainstObjectInfo: mocks.validateComfyUiInpaintRequestAgainstObjectInfo,
   validateComfyUiSam2MaskRequest: mocks.validateSam2MaskRequest,
   validateComfyUiSam2MaskRequestAgainstObjectInfo: mocks.validateSam2MaskRequestAgainstObjectInfo,
 }));
@@ -298,6 +300,8 @@ beforeEach(async () => {
   mocks.getObjectInfo.mockReset().mockResolvedValue({});
   mocks.queuePrompt.mockReset().mockImplementation(async () => ({ promptId: `repair-prompt-${mocks.queuePrompt.mock.calls.length}` }));
   mocks.uploadImage.mockReset().mockImplementation(async ({ filename }: { filename: string }) => ({ imageName: filename }));
+  mocks.validateComfyUiInpaintRequest.mockReset().mockImplementation((request: unknown) => ({ ok: true, request }));
+  mocks.validateComfyUiInpaintRequestAgainstObjectInfo.mockReset().mockImplementation((request: unknown) => ({ errors: [], request, warnings: [] }));
   mocks.validateSam2MaskRequest.mockReset();
   mocks.validateSam2MaskRequestAgainstObjectInfo.mockReset();
   mocks.storeGeneratedImage.mockReset().mockImplementation(async (bytes: Buffer | Uint8Array) => {
@@ -2018,6 +2022,149 @@ describe("T38C durable repair attempts", () => {
     );
     expect(result.pairs[0]).toMatchObject({ status: "skipped", skipReason: "parent-mismatch" });
     expect(mocks.queuePrompt).toHaveBeenCalledTimes(1);
+  });
+
+  it("safely skips Krea one-shot repair when local graph preflight is incompatible without hiding Final variants", async () => {
+    const item = await candidate("preview-1", 1);
+    const execution: ComfyUiExecutionTimelineResult = {
+      completed: true,
+      finalCount: 1,
+      finals: [item.final],
+      request: {
+        cfg: 1,
+        checkpointName: "krea-2-turbo-unet.safetensors",
+        height: 64,
+        modelBaseModel: "Krea 2",
+        modelStorageKind: "diffusion",
+        positivePrompt: "private Krea repair",
+        samplerName: "euler",
+        scheduler: "simple",
+        steps: 8,
+        width: 64,
+        workflowProfile: "krea2",
+      },
+      warnings: [],
+    };
+    mocks.validateComfyUiInpaintRequest.mockReturnValueOnce({
+      message: "Krea graph is unavailable.",
+      ok: false,
+    });
+
+    const result = await repairFinalExecution(
+      execution,
+      { reviewVersion: 1, status: "reviewed", pairs: [item.review] },
+      context("krea-preflight-unavailable"),
+    );
+
+    expect(result).toMatchObject({
+      authorized: true,
+      pairs: [{
+        candidateId: "preview-1",
+        skipReason: "comfyui-unavailable",
+        status: "skipped",
+      }],
+    });
+    expect(mocks.completeChat).not.toHaveBeenCalled();
+    expect(mocks.queuePrompt).not.toHaveBeenCalled();
+    expect(mocks.uploadImage).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      "the nearest-exact mask resize option",
+      "ImageScaleBy nearest-exact upscale method is not available in ComfyUI. It is required for high-res inpaint masks.",
+    ],
+    ["the KSampler seed input", "KSampler.seed input is not available in ComfyUI object_info."],
+    ["the KSampler steps input", "KSampler.steps input is not available in ComfyUI object_info."],
+    ["the KSampler cfg input", "KSampler.cfg input is not available in ComfyUI object_info."],
+    ["the KSampler denoise input", "KSampler.denoise input is not available in ComfyUI object_info."],
+  ])("fails closed before diagnosis, uploads, or queueing when preflight lacks %s", async (_label, error) => {
+    const item = await candidate("preview-1", 1);
+    const execution: ComfyUiExecutionTimelineResult = {
+      completed: true,
+      finalCount: 1,
+      finals: [item.final],
+      request: {
+        cfg: 1,
+        checkpointName: "krea-2-turbo-unet.safetensors",
+        height: 64,
+        modelBaseModel: "Krea 2",
+        modelStorageKind: "diffusion",
+        positivePrompt: "private Krea repair",
+        samplerName: "euler",
+        scheduler: "simple",
+        steps: 8,
+        width: 64,
+        workflowProfile: "krea2",
+      },
+      warnings: [],
+    };
+    mocks.validateComfyUiInpaintRequestAgainstObjectInfo.mockImplementationOnce((request: unknown) => ({
+      errors: [error],
+      request,
+      warnings: [],
+    }));
+
+    const result = await repairFinalExecution(
+      execution,
+      { reviewVersion: 1, status: "reviewed", pairs: [item.review] },
+      context(`krea-preflight-${_label}`),
+    );
+
+    expect(result.pairs).toEqual([expect.objectContaining({
+      candidateId: "preview-1",
+      skipReason: "comfyui-unavailable",
+      status: "skipped",
+    })]);
+    expect(mocks.completeChat).not.toHaveBeenCalled();
+    expect(mocks.uploadImage).not.toHaveBeenCalled();
+    expect(mocks.queuePrompt).not.toHaveBeenCalled();
+    expect(mocks.buildBasicInpaintWorkflow).not.toHaveBeenCalled();
+  });
+
+  it("queues a compatible signed Krea repair once and preserves explicit variant selection on recovery", async () => {
+    const item = await candidate("preview-1", 1);
+    const execution: ComfyUiExecutionTimelineResult = {
+      completed: true,
+      finalCount: 1,
+      finals: [item.final],
+      request: {
+        cfg: 1,
+        checkpointName: "krea-2-turbo-unet.safetensors",
+        height: 64,
+        modelBaseModel: "Krea 2",
+        modelStorageKind: "diffusion",
+        positivePrompt: "private Krea repair",
+        samplerName: "euler",
+        scheduler: "simple",
+        steps: 8,
+        width: 64,
+        workflowProfile: "krea2",
+      },
+      warnings: [],
+    };
+    const review: FinalReviewTimelineResult = {
+      reviewVersion: 1,
+      status: "reviewed",
+      pairs: [{ ...item.review, userSelectedVariant: "preview-upscale" }],
+    };
+    const executionContext = context("krea-repair-once");
+
+    const completed = await repairFinalExecution(execution, review, executionContext);
+    const recovered = await repairFinalExecution(execution, review, executionContext, completed);
+
+    expect(completed.pairs[0]).toMatchObject({
+      attempt: { status: "stored" },
+      status: "repaired",
+    });
+    expect(recovered.pairs[0]).toBe(completed.pairs[0]);
+    expect(recovered.pairs[0]).not.toHaveProperty("userSelectedVariant");
+    expect(mocks.queuePrompt).toHaveBeenCalledTimes(1);
+    expect(mocks.buildBasicInpaintWorkflow).toHaveBeenCalledWith(expect.objectContaining({
+      faceDetailer: expect.objectContaining({ enabled: false }),
+      handDetailer: expect.objectContaining({ enabled: false }),
+      workflowProfile: "krea2",
+    }));
   });
 
   it("rejects separated target declarations before object_info, uploads, or queue", async () => {

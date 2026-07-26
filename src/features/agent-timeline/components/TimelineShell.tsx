@@ -1298,7 +1298,7 @@ export function TimelineShell() {
     const promptProfile = overrides.promptProfile ?? selectedPromptProfile;
     const isKrea2 = promptProfile === "krea2";
     return createRunSceneInputSettingsSnapshot({
-      automaticLocalRepair: isKrea2 ? false : overrides.automaticLocalRepair ?? automaticLocalRepair,
+      automaticLocalRepair: overrides.automaticLocalRepair ?? automaticLocalRepair,
       detailers: isKrea2 ? createGenerationDetailerSettingsSnapshot() : overrides.detailers ?? detailers,
       finalRedrawPreset: overrides.finalRedrawPreset ?? finalRedrawPreset,
       promptProfile,
@@ -1360,7 +1360,6 @@ export function TimelineShell() {
     );
     const restoredSourceImage = getSceneInputSourceImage(record.workflow);
     const restoredKrea2HasUnsupportedControls = restoredKrea2 && (
-      restoredSettings.automaticLocalRepair ||
       restoredSettings.detailers.faceDetailer.enabled ||
       restoredSettings.detailers.handDetailer.enabled ||
       restoredSettings.styleReference !== undefined
@@ -1410,7 +1409,7 @@ export function TimelineShell() {
     setSelectedSourceDenoise(getSceneInputSourceDenoise(restoredWorkflow));
     setSelectedSourceImage(getSceneInputSourceImage(restoredWorkflow));
     setDetailers(restoredKrea2 ? createGenerationDetailerSettingsSnapshot() : restoredSettings.detailers);
-    setAutomaticLocalRepair(restoredKrea2 ? false : restoredSettings.automaticLocalRepair);
+    setAutomaticLocalRepair(restoredSettings.automaticLocalRepair);
     setFinalRedrawPreset(restoredSettings.finalRedrawPreset);
     setStylePalette(restoredSettings.stylePalette);
     setStyleReference(restoredKrea2 ? undefined : restoredSettings.styleReference);
@@ -2040,9 +2039,7 @@ export function TimelineShell() {
       if (!outcome || outcome.failedNodeId) return;
       setNotices((current) => ({
         ...current,
-        "result-display": isKrea2Profile
-          ? "Krea 2 Preview candidates and Final redraws are ready. Final review and repair remain unavailable until T42."
-          : "Preview, Final, and any verified Repair variants are ready for explicit selection.",
+        "result-display": "Preview, Final, and any verified Repair variants are ready for explicit selection.",
       }));
     } catch (error) {
       if (!isCurrentRun(runId)) {
@@ -3176,9 +3173,24 @@ export function TimelineShell() {
           {isKrea2Profile ? (
             <>
               <p className="mt-3 rounded-md border border-indigo-100 bg-white px-3 py-2 text-xs leading-relaxed text-indigo-800">
-                Krea 2 Turbo uses its fixed local UNet, CLIP, VAE, and optional model-only LoRAs for 4/4/6/8 scored previews, exact-K selection, and Preview-to-Final img2img redraw. Source img2img is supported; style references, Detailers, review, and repair remain unavailable.
+                Krea 2 Turbo uses its fixed local UNet, CLIP, VAE, and optional model-only LoRAs for 4/4/6/8 scored previews, exact-K selection, and Preview-to-Final img2img redraw. Paired review and explicit variant selection are available. One-shot Repair remains off by default and runs only when this local ComfyUI installation validates the Krea img2img/inpaint graph.
               </p>
               {renderFinalRedrawStrengthControls()}
+              <label className="mt-3 flex items-start gap-2 rounded-md border border-indigo-100 bg-white px-3 py-2 text-xs text-slate-700">
+                <input
+                  checked={automaticLocalRepair}
+                  disabled={isRunning || isLegacyDirectReadOnly || Boolean(workflow)}
+                  onChange={(event) => setAutomaticLocalRepair(event.target.checked)}
+                  type="checkbox"
+                />
+                <span>
+                  <span className="font-semibold">Authorize one-shot local repair</span>
+                  <span className="mt-1 block leading-relaxed text-slate-500">
+                    Off by default. The signed confirmation may repair only reviewed local contact or object-count defects,
+                    once per Final, only after Krea graph validation, and never promotes Repair automatically.
+                  </span>
+                </span>
+              </label>
             </>
           ) : (
             <>

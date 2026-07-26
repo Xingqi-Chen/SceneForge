@@ -2329,7 +2329,12 @@ describe("TimelineShell", () => {
         expect(sourceButton.disabled).toBe(false);
         expect(container.textContent).toContain("Krea 2 Turbo uses its fixed local UNet");
         expect(container.textContent).toContain("4/4/6/8 scored previews, exact-K selection, and Preview-to-Final img2img redraw.");
-        expect(container.textContent).toContain("Source img2img is supported; style references, Detailers, review, and repair remain unavailable.");
+        expect(container.textContent).toContain("Paired review and explicit variant selection are available.");
+        expect(container.textContent).toContain("One-shot Repair remains off by default");
+        const authorizeRepair = Array.from(container.querySelectorAll('input[type="checkbox"]')).find((input) =>
+          input.parentElement?.textContent?.includes("Authorize one-shot local repair"),
+        ) as HTMLInputElement | undefined;
+        expect(authorizeRepair?.checked).toBe(false);
       } finally {
         globalThis.fetch = originalFetch;
       }
