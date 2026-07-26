@@ -2994,7 +2994,8 @@ export function TimelineShell() {
     return (
       <>
         <p className="pl-6 text-[11px] text-amber-700">
-          Final policy v{policy.version}: {policy.preset}, {policy.family}, denoise {policy.denoise.toFixed(2)}.
+          Final policy v{policy.version}: {policy.preset}, {policy.family}
+          {policy.steps ? `, ${policy.steps} steps` : ""}, denoise {policy.denoise.toFixed(2)}.
         </p>
         <p className="pl-6 text-[11px] text-amber-700">
           {risk} The managed Preview upscale remains available as fallback.
@@ -3026,7 +3027,8 @@ export function TimelineShell() {
           Final redraw strength
         </legend>
         <p className="mt-1 text-xs text-slate-500">
-          Resolved Final denoise: {resolvedFinalPolicy.denoise.toFixed(2)} ({resolvedFinalPolicy.family}).
+          Resolved Final: {resolvedFinalPolicy.steps ? `${resolvedFinalPolicy.steps} steps, ` : ""}
+          denoise {resolvedFinalPolicy.denoise.toFixed(2)} ({resolvedFinalPolicy.family}).
         </p>
         <div className="mt-2 grid gap-2 sm:grid-cols-3">
           {redrawOptions.map((option) => {

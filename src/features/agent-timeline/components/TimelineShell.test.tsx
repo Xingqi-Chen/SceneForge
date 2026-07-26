@@ -2245,14 +2245,14 @@ describe("TimelineShell", () => {
       expect(repairAuthorization?.type).toBe("checkbox");
       expect(repairAuthorization?.checked).toBe(false);
       expect(container.textContent).toContain("Off by default.");
-      expect(container.textContent).toContain("Resolved Final denoise: 0.45 (fallback).");
+      expect(container.textContent).toContain("Resolved Final: denoise 0.45 (fallback).");
       const strongLabel = redrawRadios.find((radio) => radio.value === "strong")?.closest("label");
       expect(strongLabel?.className).toContain("rose");
       act(() => {
         redrawRadios.find((radio) => radio.value === "strong")?.click();
       });
       expect(redrawRadios.find((radio) => radio.value === "strong")?.checked).toBe(true);
-      expect(container.textContent).toContain("Resolved Final denoise: 0.55 (fallback).");
+      expect(container.textContent).toContain("Resolved Final: denoise 0.55 (fallback).");
       const detailerFieldset = faceDetailer?.closest("fieldset");
       const generationSetup = Array.from(container.querySelectorAll("section")).find((section) =>
         section.querySelector("h3")?.textContent?.includes("Style resources / parameters"),
@@ -2356,6 +2356,15 @@ describe("TimelineShell", () => {
         expect(container.textContent).toContain("optional reference adapter appears only after local Krea preflight");
         expect(container.textContent).toContain("FaceDetailer and HandDetailer apply independently to Final and compatible Repair requests; Previews always remain Detailer-free.");
         expect(container.textContent).toContain("SceneForge checks their required nodes, inputs, samplers, detector models, and Krea model context before queueing.");
+        expect(container.textContent).toContain("Resolved Final: 4 steps, denoise 0.18 (krea2).");
+        const strongRedraw = container.querySelector(
+          'input[name="final-redraw-strength"][value="strong"]',
+        ) as HTMLInputElement | null;
+        act(() => {
+          strongRedraw?.click();
+        });
+        expect(strongRedraw?.checked).toBe(true);
+        expect(container.textContent).toContain("Resolved Final: 6 steps, denoise 0.28 (krea2).");
         const authorizeRepair = Array.from(container.querySelectorAll('input[type="checkbox"]')).find((input) =>
           input.parentElement?.textContent?.includes("Authorize one-shot local repair"),
         ) as HTMLInputElement | undefined;
@@ -2425,7 +2434,7 @@ describe("TimelineShell", () => {
       expect(simpleRedrawRadios.find((radio) => radio.checked)?.value).toBe("balanced");
       expect(simpleRedrawRadios.every((radio) => radio.type === "radio" && Boolean(radio.closest("label"))))
         .toBe(true);
-      expect(container.textContent).toContain("Resolved Final denoise: 0.45 (fallback).");
+      expect(container.textContent).toContain("Resolved Final: denoise 0.45 (fallback).");
       expect(container.textContent).toContain("More redraw; higher anatomy and object-drift risk.");
       const simpleRepairAuthorization = Array.from(container.querySelectorAll("label"))
         .find((label) => label.textContent?.includes("Authorize one-shot local repair"))

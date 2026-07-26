@@ -41,6 +41,7 @@ const MAX_SEED = Number.MAX_SAFE_INTEGER;
 export type TimelineBalancedGenerationPolicy = {
   family: "illustrious" | "anima" | "fallback" | "krea2";
   finalDenoise: number;
+  finalSteps?: number;
   previewLongestEdge: number;
   previewStepCap: number;
 };
@@ -53,6 +54,7 @@ export function getTimelineBalancedGenerationPolicy(
   return {
     family: finalPolicy.family,
     finalDenoise: finalPolicy.denoise,
+    finalSteps: finalPolicy.steps,
     previewLongestEdge: 768,
     previewStepCap: 20,
   };
@@ -493,6 +495,7 @@ export function createTimelineFinalRequests(workflow: TimelineWorkflowState) {
         imageWidth: dimensions.width,
         imageHeight: dimensions.height,
         seed: candidate.seed,
+        steps: policy.finalSteps ?? formal.steps,
         denoise: policy.finalDenoise,
         batchSize: 1,
         preview: false,

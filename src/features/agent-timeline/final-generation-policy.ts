@@ -3,7 +3,10 @@ import type { ComfyUiTextToImageRequest } from "@/features/comfyui";
 type TimelineFinalModelContext = Pick<ComfyUiTextToImageRequest, "modelBaseModel"> & { workflowProfile?: string };
 
 export const timelineFinalGenerationPolicy = {
+  // Version 2 remains the current ordinary-profile contract. Krea uses its own
+  // revision so the second-pass tuning does not invalidate unchanged profiles.
   version: 2,
+  krea2Version: 3,
   resizeMode: "lanczos3-exact",
   defaultPreset: "balanced",
   denoiseByPreset: {
@@ -11,20 +14,34 @@ export const timelineFinalGenerationPolicy = {
       illustrious: 0.3,
       anima: 0.35,
       fallback: 0.35,
-      krea2: 0.35,
+      krea2: 0.12,
     },
     balanced: {
       illustrious: 0.4,
       anima: 0.45,
       fallback: 0.45,
-      krea2: 0.45,
+      krea2: 0.18,
     },
     strong: {
       illustrious: 0.5,
       anima: 0.55,
       fallback: 0.55,
-      krea2: 0.55,
+      krea2: 0.28,
     },
+  },
+  krea2StepsByPreset: {
+    conservative: 4,
+    balanced: 4,
+    strong: 6,
+  },
+} as const;
+
+export const timelineLegacyKrea2FinalGenerationPolicy = {
+  version: 2,
+  denoiseByPreset: {
+    conservative: 0.35,
+    balanced: 0.45,
+    strong: 0.55,
   },
 } as const;
 
@@ -62,6 +79,12 @@ export function getTimelineFinalDenoise(
   return timelineFinalGenerationPolicy.denoiseByPreset[preset][getTimelineFinalGenerationFamily(request)];
 }
 
+export function getTimelineFinalGenerationPolicyVersion(family: TimelineFinalGenerationFamily) {
+  return family === "krea2"
+    ? timelineFinalGenerationPolicy.krea2Version
+    : timelineFinalGenerationPolicy.version;
+}
+
 export function resolveTimelineFinalGenerationPolicy(
   request: TimelineFinalModelContext,
   presetValue: unknown,
@@ -69,11 +92,14 @@ export function resolveTimelineFinalGenerationPolicy(
   const preset = sanitizeTimelineFinalRedrawPreset(presetValue);
   const family = getTimelineFinalGenerationFamily(request);
   return {
-    version: timelineFinalGenerationPolicy.version,
+    version: getTimelineFinalGenerationPolicyVersion(family),
     resizeMode: timelineFinalGenerationPolicy.resizeMode,
     preset,
     family,
     denoise: timelineFinalGenerationPolicy.denoiseByPreset[preset][family],
+    ...(family === "krea2"
+      ? { steps: timelineFinalGenerationPolicy.krea2StepsByPreset[preset] }
+      : {}),
   } as const;
 }
 

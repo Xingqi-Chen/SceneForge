@@ -4,6 +4,20 @@ This log records dated implementation and documentation work. Keep entries conci
 
 ## 2026-07-26
 
+### T47 / Issue #163 Krea 2 Final second-pass tuning
+
+Summary:
+
+- Kept Krea formal planning and Preview at 8 steps, CFG 1, Euler, and simple while resolving Final Conservative/Balanced/Strong to 4/0.12, 4/0.18, and 6/0.28.
+- Reused each selected Preview seed and managed upscale, preserved Detailers and semantic request bindings, and carried resolved Krea steps through the confirmation gate, Final request, execution metadata, and candidate records.
+- Introduced a Krea-only policy v3 while leaving ordinary Final policy v2 unchanged. Managed-upscale and exact retry identity now reject older, incomplete, missing-step, or cross-policy Krea work; completed v2 Krea results remain historical display state.
+- Documented the Krea-only override without changing source Preview denoise, prompt/resource/style-reference behavior, review, Repair, or Illustrious/Anima/fallback policy.
+
+Implementation Gate validation:
+
+- `npm run typecheck` passed.
+- Focused pre-test update run reached 224 passing tests; five expected assertions still described the superseded Krea 8-step/0.45 or v2 fixture contract and are owned by the Test Gate.
+
 ### T46 / Issue #161 Krea 2 Environment-Aware Prompt Composition
 
 Summary:

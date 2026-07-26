@@ -19,42 +19,47 @@ describe("timeline Final generation policy", () => {
   });
 
   it.each([
-    ["conservative", "illustrious", 0.3],
-    ["balanced", "illustrious", 0.4],
-    ["strong", "illustrious", 0.5],
-    ["conservative", "anima", 0.35],
-    ["balanced", "anima", 0.45],
-    ["strong", "anima", 0.55],
-    ["conservative", "krea2", 0.35],
-    ["balanced", "krea2", 0.45],
-    ["strong", "krea2", 0.55],
-    ["conservative", "fallback", 0.35],
-    ["balanced", "fallback", 0.45],
-    ["strong", "fallback", 0.55],
-  ] as const)("resolves %s/%s to %s", (preset, family, denoise) => {
+    ["conservative", "illustrious", 2, 0.3, undefined],
+    ["balanced", "illustrious", 2, 0.4, undefined],
+    ["strong", "illustrious", 2, 0.5, undefined],
+    ["conservative", "anima", 2, 0.35, undefined],
+    ["balanced", "anima", 2, 0.45, undefined],
+    ["strong", "anima", 2, 0.55, undefined],
+    ["conservative", "krea2", 3, 0.12, 4],
+    ["balanced", "krea2", 3, 0.18, 4],
+    ["strong", "krea2", 3, 0.28, 6],
+    ["conservative", "fallback", 2, 0.35, undefined],
+    ["balanced", "fallback", 2, 0.45, undefined],
+    ["strong", "fallback", 2, 0.55, undefined],
+  ] as const)("resolves %s/%s to its versioned Final contract", (preset, family, version, denoise, steps) => {
     const context = family === "krea2"
       ? { modelBaseModel: "Krea 2", workflowProfile: "krea2" }
       : family === "fallback"
       ? { modelBaseModel: "future-xl" }
       : { modelBaseModel: family };
-    expect(resolveTimelineFinalGenerationPolicy(context, preset)).toEqual({
-      version: 2,
+    const resolved = resolveTimelineFinalGenerationPolicy(context, preset);
+    expect(resolved).toEqual({
+      version,
       resizeMode: "lanczos3-exact",
       preset,
       family,
       denoise,
+      ...(steps === undefined ? {} : { steps }),
     });
+    if (family !== "krea2") expect(resolved).not.toHaveProperty("steps");
   });
 
-  it("publishes the complete immutable v2 mapping with balanced as default", () => {
+  it("publishes ordinary v2 and Krea v3 mappings with balanced as default", () => {
     expect(timelineFinalGenerationPolicy).toMatchObject({
       version: 2,
+      krea2Version: 3,
       defaultPreset: "balanced",
       denoiseByPreset: {
-        conservative: { illustrious: 0.3, anima: 0.35, fallback: 0.35, krea2: 0.35 },
-        balanced: { illustrious: 0.4, anima: 0.45, fallback: 0.45, krea2: 0.45 },
-        strong: { illustrious: 0.5, anima: 0.55, fallback: 0.55, krea2: 0.55 },
+        conservative: { illustrious: 0.3, anima: 0.35, fallback: 0.35, krea2: 0.12 },
+        balanced: { illustrious: 0.4, anima: 0.45, fallback: 0.45, krea2: 0.18 },
+        strong: { illustrious: 0.5, anima: 0.55, fallback: 0.55, krea2: 0.28 },
       },
+      krea2StepsByPreset: { conservative: 4, balanced: 4, strong: 6 },
     });
   });
 });

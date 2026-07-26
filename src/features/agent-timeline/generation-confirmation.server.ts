@@ -65,6 +65,7 @@ export function isTimelineGenerationConfirmationCurrent(workflow: TimelineWorkfl
   if (gate.finalPolicyVersion !== resolvedFinalPolicy.version ||
       gate.finalRedrawPreset !== resolvedFinalPolicy.preset ||
       gate.finalGenerationFamily !== resolvedFinalPolicy.family ||
+      gate.finalSteps !== resolvedFinalPolicy.steps ||
       gate.finalDenoise !== resolvedFinalPolicy.denoise ||
       gate.automaticLocalRepairAuthorized !== settings.automaticLocalRepair) return false;
   if (typeof fingerprint !== "string" || !/^hmac-sha256:[a-f0-9]{64}$/.test(fingerprint)) return false;

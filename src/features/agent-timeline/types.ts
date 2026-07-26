@@ -277,6 +277,7 @@ export type GenerationGateTimelineResult = {
   finalPolicyVersion?: number;
   finalRedrawPreset?: TimelineFinalRedrawPreset;
   finalGenerationFamily?: TimelineFinalGenerationFamily;
+  finalSteps?: number;
   finalDenoise?: number;
   automaticLocalRepairAuthorized?: boolean;
 };
@@ -428,6 +429,7 @@ export type TimelineResolvedFinalPolicy = {
   resizeMode: "lanczos3-exact";
   preset: TimelineFinalRedrawPreset;
   family: TimelineFinalGenerationFamily;
+  steps?: number;
   denoise: number;
 };
 
@@ -449,6 +451,7 @@ export type ComfyUiExecutionTimelineResult = {
     resizeMode: "lanczos3-exact";
     preset: TimelineFinalRedrawPreset;
     family: TimelineFinalGenerationFamily;
+    steps?: number;
     denoise: number;
   };
   nodeErrors?: unknown;
