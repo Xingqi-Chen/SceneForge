@@ -312,22 +312,28 @@ describe("POST /api/agent-timeline/confirm-generation", () => {
     expect(storeGeneratedImageMock).not.toHaveBeenCalled();
   });
 
-  it("rejects Krea automatic repair before ComfyUI validation or queueing", async () => {
+  it("signs opted-in Krea one-shot repair without queueing it before paired review", async () => {
     const response = await POST(new Request("http://localhost/api/agent-timeline/confirm-generation", {
       body: JSON.stringify({ workflow: createKreaWorkflowWithAutomaticRepair() }),
       method: "POST",
     }));
 
-    expect(response.status).toBe(400);
+    expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({
-      error: {
-        message: "Krea 2 Turbo does not support automatic local repair; disable it before confirmation.",
-        details: { code: "comfyui_request_invalid" },
+      workflow: {
+        generationConfirmed: true,
+        nodes: {
+          "generation-gate": {
+            result: {
+              automaticLocalRepairAuthorized: true,
+              confirmed: true,
+            },
+          },
+          "final-repair": { status: "blocked" },
+        },
       },
     });
-    expect(comfyUiMocks.createComfyUiClient).not.toHaveBeenCalled();
-    expect(comfyUiMocks.validateComfyUiTextToImageRequest).not.toHaveBeenCalled();
-    expect(comfyUiMocks.validateComfyUiRequestAgainstObjectInfo).not.toHaveBeenCalled();
+    expect(comfyUiMocks.createComfyUiClient).toHaveBeenCalledTimes(1);
     expect(storeGeneratedImageMock).not.toHaveBeenCalled();
   });
 

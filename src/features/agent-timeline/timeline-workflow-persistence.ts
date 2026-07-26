@@ -707,6 +707,11 @@ function sanitizeSingleImageWorkflowState(raw: Record<string, unknown>): Timelin
     ]),
   ) as TimelineNodeMap;
   const isKrea2LegacyDirect = isKrea2Workflow && isKrea2LegacyDirectRun(nodes);
+  const hasKrea2T42UnavailableResult = isKrea2Workflow &&
+    (["final-review", "final-repair", "repair-verification"] as const).some((nodeId) => {
+      const result = nodes[nodeId].result;
+      return isRecord(result) && result.status === "not-applicable" && result.reason === "krea2-t42-unavailable";
+    });
   const hasInvalidKrea2Dimensions = isKrea2Workflow && !isKrea2LegacyDirect && (() => {
     const parameterNode = nodes["parameter-recommendation"];
     const parameterResult = isRecord(parameterNode.result) ? parameterNode.result : null;
@@ -743,9 +748,67 @@ function sanitizeSingleImageWorkflowState(raw: Record<string, unknown>): Timelin
   if (!isLegacyWorkflow && !isKrea2LegacyDirect) {
     const scoringIsTrusted = reconcilePersistedPreviewScoring(nodes, updatedAt);
     reconcilePersistedGenerationLinkage(nodes, updatedAt, { requireCurrentFinalPolicy: isKrea2Workflow });
-    if (!isKrea2Workflow) {
-      reconcilePersistedRepairLinkage(nodes, updatedAt, raw.workflowId.trim());
+    if (hasKrea2T42UnavailableResult && nodes["comfyui-execution"].status === "done") {
+      const execution = nodes["comfyui-execution"].result;
+      const finals = isRecord(execution) && Array.isArray(execution.finals) ? execution.finals : [];
+      const pairs = finals.flatMap((entry) => {
+        if (!isRecord(entry) || entry.status !== "done" || !isRecord(entry.previewUpscale) ||
+            !isRecord(entry.storedImage) || !isRecord(entry.previewUpscale.storedImage)) return [];
+        return [{
+          candidateId: entry.candidateId,
+          rank: entry.rank,
+          seed: entry.seed,
+          variants: { final: entry.storedImage, previewUpscale: entry.previewUpscale.storedImage },
+          recommendedVariant: null,
+          defaultVariant: "final" as const,
+        }];
+      });
+      if (pairs.length > 0 && pairs.length === finals.length) {
+        nodes["final-review"] = {
+          nodeId: "final-review",
+          status: "done",
+          source: "system",
+          updatedAt,
+          result: {
+            reviewVersion: 1,
+            status: "failed",
+            pairs,
+            error: createTimelineNodeError(
+              "timeline_node_stale",
+              "This Krea 2 Run completed before paired Final review was available. Preview and Final remain selectable; retry review in place.",
+              { recoverable: true },
+            ),
+          },
+        };
+        nodes["final-repair"] = {
+          nodeId: "final-repair",
+          status: "done",
+          source: "system",
+          updatedAt,
+          result: {
+            repairVersion: 1,
+            authorized: false,
+            completed: true,
+            pairs: pairs.map((pair) => ({
+              candidateId: pair.candidateId,
+              rank: pair.rank,
+              seed: pair.seed,
+              status: "skipped" as const,
+              targets: [],
+              skipReason: "repair-disabled" as const,
+            })),
+          },
+        };
+        nodes["repair-verification"] = {
+          nodeId: "repair-verification",
+          status: "done",
+          source: "system",
+          updatedAt,
+          result: { verificationVersion: 1, status: "skipped", pairs: [] },
+        };
+      }
     }
+    reconcilePersistedRepairLinkage(nodes, updatedAt, raw.workflowId.trim());
     if (!scoringIsTrusted) {
       invalidatePersistedScoringDownstream(nodes, updatedAt);
     }

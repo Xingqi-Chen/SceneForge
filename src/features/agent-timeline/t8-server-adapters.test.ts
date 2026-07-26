@@ -412,7 +412,7 @@ describe("timeline T8 server adapters", () => {
     expect(storeGeneratedImageMock).not.toHaveBeenCalled();
   });
 
-  it("marks Krea final review and repair as T42-unavailable without external calls", async () => {
+  it("routes Krea review and repair through the paired-review stages instead of T42 placeholders", async () => {
     const base = createGateReadyWorkflow();
     const workflow = {
       ...base,
@@ -431,18 +431,24 @@ describe("timeline T8 server adapters", () => {
       },
     };
     const adapters = createTimelineT8ServerNodeAdapters();
-    const skippedNodes = ["final-review", "final-repair", "repair-verification"] as const;
 
-    for (const nodeId of skippedNodes) {
-      await expect(adapters[nodeId]?.({ dependencies: [], nodeId, workflow })).resolves.toMatchObject({
-        source: "system",
-        value: {
-          status: "not-applicable",
-          reason: "krea2-t42-unavailable",
-          message: expect.stringContaining("T42"),
-        },
-      });
-    }
+    await expect(adapters["final-review"]?.({
+      dependencies: [],
+      nodeId: "final-review",
+      workflow,
+    })).rejects.toThrow("Complete Final execution is required before Final review.");
+
+    await expect(adapters["final-repair"]?.({
+      dependencies: [],
+      nodeId: "final-repair",
+      workflow,
+    })).rejects.toThrow("Final review is required before local repair.");
+
+    await expect(adapters["repair-verification"]?.({
+      dependencies: [],
+      nodeId: "repair-verification",
+      workflow,
+    })).rejects.toThrow("Completed repair state is required before repair verification.");
 
     expect(comfyUiMocks.createComfyUiClient).not.toHaveBeenCalled();
     expect(comfyUiMocks.validateComfyUiTextToImageRequest).not.toHaveBeenCalled();

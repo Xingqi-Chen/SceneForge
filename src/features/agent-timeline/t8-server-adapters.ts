@@ -926,12 +926,6 @@ async function executeFinals(
   return partialResult;
 }
 
-function isKrea2Run(context: TimelineNodeExecutionContext) {
-  const parameters = context.workflow.nodes["parameter-recommendation"].result;
-  return isRecord(parameters) && isRecord(parameters.requestPreview) &&
-    parameters.requestPreview.workflowProfile === "krea2";
-}
-
 function loadResultDisplay(execution: ComfyUiExecutionTimelineResult): ResultDisplayTimelineResult {
   const completed = execution.finals.filter((item) => item.status === "done" && item.sourceImage && item.storedImage && item.promptId);
   if (!execution.completed || completed.length !== execution.finalCount) {
@@ -977,16 +971,6 @@ export function createTimelineT8ServerNodeAdapters(
   return {
     ...adapters,
     "final-review": async (context) => {
-      if (isKrea2Run(context)) {
-        return {
-          value: {
-            status: "not-applicable",
-            reason: "krea2-t42-unavailable",
-            message: "Krea 2 staged Run preserves Preview and Final variants, but paired Final review is reserved for T42.",
-          },
-          source: "system",
-        };
-      }
       const previous = getFinalReviewResult(context.workflow);
       const reviewed = await reviewFinalExecution(getCompletedFinalExecution(context), context);
       const selectionByCandidate = new Map(previous?.pairs.flatMap((pair) =>
@@ -1003,16 +987,6 @@ export function createTimelineT8ServerNodeAdapters(
       };
     },
     "final-repair": async (context) => {
-      if (isKrea2Run(context)) {
-        return {
-          value: {
-            status: "not-applicable",
-            reason: "krea2-t42-unavailable",
-            message: "Krea 2 staged Run local repair is reserved for T42 and was not requested.",
-          },
-          source: "system",
-        };
-      }
       const review = getFinalReviewResult(context.workflow);
       if (!review) {
         throw new TimelineNodeExecutionError(createTimelineNodeError(
@@ -1031,16 +1005,6 @@ export function createTimelineT8ServerNodeAdapters(
       };
     },
     "repair-verification": async (context) => {
-      if (isKrea2Run(context)) {
-        return {
-          value: {
-            status: "not-applicable",
-            reason: "krea2-t42-unavailable",
-            message: "Krea 2 staged Run repair verification is reserved for T42 and was not requested.",
-          },
-          source: "system",
-        };
-      }
       const review = getFinalReviewResult(context.workflow);
       const repair = getFinalRepairResult(context.workflow);
       if (!review || !repair) {

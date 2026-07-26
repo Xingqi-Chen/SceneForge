@@ -41,13 +41,13 @@ describe("Krea 2 ComfyUI request validation", () => {
 
   it.each([
     ["Detailer", { faceDetailer: { enabled: true } }, "does not support FaceDetailer"],
-    ["style reference", {
+    ["entity or character reference", {
       characterReferences: [{
         enabled: true,
         name: "reference",
         images: [{ imageName: "reference.png" }],
       }],
-    }, "does not support style or IPAdapter"],
+    }, "does not support entity or character references"],
     ["ControlNet", { controlNets: [{ type: "openpose", enabled: true, svg: "<svg />" }] }, "does not support ControlNet"],
   ])("rejects Krea %s requests", (_label, override, message) => {
     expect(validateComfyUiTextToImageRequest({ ...kreaRequest, ...override })).toMatchObject({
@@ -85,10 +85,43 @@ describe("Krea 2 ComfyUI request validation", () => {
     });
   });
 
-  it("rejects Krea inpaint and repair requests before source or mask handling", () => {
-    expect(validateComfyUiInpaintRequest(kreaRequest)).toEqual({
+  it("accepts only the bounded Krea repair graph and still rejects unsupported repair nodes", () => {
+    const compatibleRepair = {
+      ...kreaRequest,
+      imageHeight: 1024,
+      imageWidth: 1024,
+      inpaintMode: "latent-noise-mask" as const,
+      maskDataUrl: "data:image/png;base64,aGVsbG8=",
+      sourceImageDataUrl: "data:image/png;base64,aGVsbG8=",
+      upscaleBeforeInpaint: {
+        enabled: true,
+        localRegion: { feather: 16, padding: 32, source: "mask-bounds" as const },
+        mode: "lanczos" as const,
+        scaleBy: 2 as const,
+        strategy: "local-region" as const,
+      },
+    };
+
+    expect(validateComfyUiInpaintRequest(compatibleRepair)).toMatchObject({
+      ok: true,
+      request: {
+        workflowProfile: "krea2",
+        inpaintMode: "latent-noise-mask",
+      },
+    });
+    expect(validateComfyUiInpaintRequest({
+      ...compatibleRepair,
+      faceDetailer: { enabled: true },
+    })).toEqual({
       ok: false,
-      message: "Krea 2 Turbo supports direct txt2img only; inpaint and repair are not supported.",
+      message: "Krea 2 Turbo repair does not support Detailer nodes.",
+    });
+    expect(validateComfyUiInpaintRequest({
+      ...compatibleRepair,
+      imageWidth: 1025,
+    })).toEqual({
+      ok: false,
+      message: "Krea 2 Turbo repair source dimensions must be exact 16-pixel-aligned integers.",
     });
   });
 

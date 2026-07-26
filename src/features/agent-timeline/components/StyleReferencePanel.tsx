@@ -1,7 +1,7 @@
 "use client";
 
 import { ImageIcon, LoaderCircle, RefreshCw, X } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import type { SelectedCivitaiResourcesPreview } from "@/features/civitai-lora-library";
 import {
@@ -34,6 +34,13 @@ type KreaAdapterPreflight = {
   key: string;
   reason: string;
 };
+
+type KreaAdapterAvailability = {
+  reason: string;
+  status: "available" | "pending" | "unavailable";
+};
+
+const KREA_ADAPTER_PREFLIGHT_ERROR_PREFIX = "Krea adapter preflight blocks generation:";
 
 type Props = {
   checkpointId?: string | null;
@@ -82,7 +89,9 @@ function buildAnalysisRequest({
 }): LlmChatRequest {
   const modelInstruction = promptProfile === "anima"
     ? "Generate an Anima-compatible stylePrompt as concise natural-language visual clauses, not tag soup."
-    : "Generate an Illustrious-compatible stylePrompt as compact comma-separated SD/Danbooru-friendly style tags and short visual phrases.";
+    : promptProfile === "krea2"
+      ? "Generate a Krea 2-compatible stylePrompt as one faithful natural-language visual style clause covering medium/rendering, lighting/color/texture, and atmosphere/framing. Do not use Danbooru tags, tag soup, or terse keyword lists."
+      : "Generate an Illustrious-compatible stylePrompt as compact comma-separated SD/Danbooru-friendly style tags and short visual phrases.";
 
   return {
     purpose: "story-style-reference-analysis",
@@ -195,6 +204,18 @@ function NumberInput({ label, onChange, value }: { label: string; onChange: (val
   );
 }
 
+function getKreaAdapterBlockingError(availability: KreaAdapterAvailability) {
+  return availability.status === "pending"
+    ? `${KREA_ADAPTER_PREFLIGHT_ERROR_PREFIX} local verification is pending. The explicit adapter selection is preserved, but generation remains blocked until verification succeeds or you disable IPAdapter.`
+    : `${KREA_ADAPTER_PREFLIGHT_ERROR_PREFIX} ${availability.reason} The explicit adapter selection is preserved. Disable IPAdapter explicitly to continue with the analyzed style prompt only.`;
+}
+
+function isKreaAdapterPreflightBlockingSnapshot(snapshot: StyleReferenceSnapshot | undefined) {
+  return snapshot?.mode === "ipadapter" &&
+    snapshot.status !== "ready" &&
+    snapshot.error?.startsWith(KREA_ADAPTER_PREFLIGHT_ERROR_PREFIX) === true;
+}
+
 export function StyleReferencePanel({
   checkpointId,
   disabled = false,
@@ -222,14 +243,32 @@ export function StyleReferencePanel({
   const currentKreaAdapterPreflight = kreaAdapterPreflight?.key === kreaAdapterPreflightKey
     ? kreaAdapterPreflight
     : undefined;
-  const capability = isKrea2 && currentKreaAdapterPreflight?.available
+  const kreaAdapterAvailability = useMemo<KreaAdapterAvailability | undefined>(() => !isKrea2
+    ? undefined
+    : !selectedCheckpoint?.modelFileName || !selectedCheckpoint.baseModel
+      ? {
+          status: "unavailable",
+          reason: "Select a compatible local Krea 2 Turbo diffusion checkpoint before enabling its reference adapter.",
+        }
+      : currentKreaAdapterPreflight
+        ? {
+            status: currentKreaAdapterPreflight.available ? "available" : "unavailable",
+            reason: currentKreaAdapterPreflight.reason,
+          }
+        : {
+            status: "pending",
+            reason: "Checking the selected Krea 2 Turbo checkpoint and local reference-adapter graph.",
+          }, [
+    currentKreaAdapterPreflight,
+    isKrea2,
+    selectedCheckpoint,
+  ]);
+  const capability = kreaAdapterAvailability
     ? {
-        mode: "ipadapter" as const,
-        reason: currentKreaAdapterPreflight.reason,
+        mode: kreaAdapterAvailability.status === "available" ? "ipadapter" as const : "prompt-only" as const,
+        reason: kreaAdapterAvailability.reason,
       }
-    : isKrea2 && currentKreaAdapterPreflight
-      ? { mode: "prompt-only" as const, reason: currentKreaAdapterPreflight.reason }
-      : baseCapability;
+    : baseCapability;
   const currentCheckpointBaseModel = selectedCheckpoint
     ? selectedCheckpoint.baseModel ?? null
     : (checkpointId && checkpointId === snapshot?.settingsSnapshot?.checkpointId
@@ -242,6 +281,14 @@ export function StyleReferencePanel({
   });
   const busy = isProcessing;
   const ipAdapter = sanitizeStyleReferenceIpAdapterSettings(snapshot?.ipAdapter);
+  const kreaAdapterBlocked = isKreaAdapterPreflightBlockingSnapshot(snapshot);
+  const hasAnalyzedReference = Boolean(
+    snapshot?.analysis &&
+    snapshot.metadata &&
+    (snapshot.status === "ready" || kreaAdapterBlocked),
+  );
+  const showIpAdapterControls = hasAnalyzedReference &&
+    (capability.mode === "ipadapter" || isKrea2 && snapshot?.mode === "ipadapter");
 
   useEffect(() => {
     if (!isKrea2) {
@@ -289,10 +336,44 @@ export function StyleReferencePanel({
 
   useEffect(() => {
     if (mismatch && snapshot?.status === "ready") {
-      onChange({ ...snapshot, error: mismatch, mode: "prompt-only", status: "mismatch", ipAdapter: undefined });
+      onChange(isKrea2 && snapshot.mode === "ipadapter"
+        ? { ...snapshot, error: mismatch, status: "mismatch" }
+        : { ...snapshot, error: mismatch, mode: "prompt-only", status: "mismatch", ipAdapter: undefined });
       return;
     }
-    if (snapshot?.status === "ready" && snapshot.mode === "ipadapter" && capability.mode !== "ipadapter") {
+
+    if (isKrea2 && snapshot?.mode === "ipadapter" && snapshot.analysis && snapshot.metadata &&
+        !mismatch && kreaAdapterAvailability) {
+      const modeReason = kreaAdapterAvailability.reason;
+      const settingsSnapshot = snapshot.settingsSnapshot
+        ? { ...snapshot.settingsSnapshot, modeReason }
+        : snapshot.settingsSnapshot;
+      const currentPreflightBlock = isKreaAdapterPreflightBlockingSnapshot(snapshot);
+
+      if (kreaAdapterAvailability.status === "available") {
+        if (currentPreflightBlock) {
+          onChange({ ...snapshot, error: undefined, settingsSnapshot, status: "ready" });
+        } else if (snapshot.status === "ready" && snapshot.settingsSnapshot?.modeReason !== modeReason) {
+          onChange({ ...snapshot, settingsSnapshot });
+        }
+        return;
+      }
+
+      const error = getKreaAdapterBlockingError(kreaAdapterAvailability);
+      const status = kreaAdapterAvailability.status === "pending" ? "pending" as const : "mismatch" as const;
+      if (
+        snapshot.status === "ready" ||
+        currentPreflightBlock &&
+          (snapshot.status !== status || snapshot.error !== error ||
+            snapshot.settingsSnapshot?.modeReason !== modeReason)
+      ) {
+        onChange({ ...snapshot, error, settingsSnapshot, status });
+      }
+      return;
+    }
+
+    if (!isKrea2 && snapshot?.status === "ready" &&
+        snapshot.mode === "ipadapter" && capability.mode !== "ipadapter") {
       onChange({
         ...snapshot,
         ipAdapter: undefined,
@@ -302,10 +383,27 @@ export function StyleReferencePanel({
           : snapshot.settingsSnapshot,
       });
     }
-  }, [capability.mode, capability.reason, mismatch, onChange, snapshot]);
+  }, [
+    capability.mode,
+    capability.reason,
+    isKrea2,
+    kreaAdapterAvailability,
+    mismatch,
+    onChange,
+    snapshot,
+  ]);
 
   async function finishAnalysis(metadata: StyleReferenceMetadata, nextDataUrl: string, nextFileInfo: StyleReferenceFileInfo) {
-    onChange({ metadata, mode: "prompt-only", status: "pending" });
+    const preserveKreaAdapter = isKrea2 && snapshot?.mode === "ipadapter";
+    const pendingIpAdapter = preserveKreaAdapter
+      ? sanitizeStyleReferenceIpAdapterSettings(snapshot.ipAdapter)
+      : undefined;
+    onChange({
+      metadata,
+      mode: preserveKreaAdapter ? "ipadapter" : "prompt-only",
+      ...(pendingIpAdapter ? { ipAdapter: pendingIpAdapter } : {}),
+      status: "pending",
+    });
     const analysis = await analyzeReference({
       dataUrl: nextDataUrl,
       fileInfo: nextFileInfo,
@@ -318,9 +416,9 @@ export function StyleReferencePanel({
       capturedAt: new Date().toISOString(),
       checkpointBaseModel: currentCheckpointBaseModel,
       checkpointId,
-      ipAdapter: STYLE_REFERENCE_IP_ADAPTER_DEFAULTS,
+      ipAdapter: pendingIpAdapter ?? STYLE_REFERENCE_IP_ADAPTER_DEFAULTS,
       metadata,
-      mode: capability.mode === "ipadapter" ? "ipadapter" : "prompt-only",
+      mode: preserveKreaAdapter || capability.mode === "ipadapter" ? "ipadapter" : "prompt-only",
       modeReason: capability.reason,
       promptProfile,
     }));
@@ -335,7 +433,12 @@ export function StyleReferencePanel({
     const nextFileInfo = { byteLength: file.size, contentType: file.type, name: file.name };
     setFileInfo(nextFileInfo);
     setIsProcessing(true);
-    onChange({ mode: "prompt-only", status: "pending" });
+    const preserveKreaAdapter = isKrea2 && snapshot?.mode === "ipadapter";
+    onChange({
+      mode: preserveKreaAdapter ? "ipadapter" : "prompt-only",
+      ...(preserveKreaAdapter ? { ipAdapter } : {}),
+      status: "pending",
+    });
     let uploadedMetadata: StyleReferenceMetadata | undefined;
     try {
       const nextDataUrl = await readFileAsDataUrl(file);
@@ -343,10 +446,12 @@ export function StyleReferencePanel({
       uploadedMetadata = await uploadReference(nextDataUrl, nextFileInfo);
       await finishAnalysis(uploadedMetadata, nextDataUrl, nextFileInfo);
     } catch (error) {
+      const preserveKreaAdapter = isKrea2 && snapshot?.mode === "ipadapter";
       onChange({
         ...(uploadedMetadata ? { metadata: uploadedMetadata } : {}),
         error: error instanceof Error ? error.message : `${workflowLabel} style reference failed.`,
-        mode: "prompt-only",
+        mode: preserveKreaAdapter ? "ipadapter" : "prompt-only",
+        ...(preserveKreaAdapter ? { ipAdapter } : {}),
         status: "failed",
       });
     } finally {
@@ -380,10 +485,12 @@ export function StyleReferencePanel({
       if (!nextFileInfo) throw new Error("Style reference file metadata is missing. Replace the reference.");
       await finishAnalysis(snapshot.metadata, nextDataUrl, nextFileInfo);
     } catch (error) {
+      const preserveKreaAdapter = isKrea2 && snapshot.mode === "ipadapter";
       onChange({
         ...snapshot,
         error: error instanceof Error ? error.message : "Style reference analysis failed.",
-        mode: "prompt-only",
+        mode: preserveKreaAdapter ? "ipadapter" : "prompt-only",
+        ipAdapter: preserveKreaAdapter ? ipAdapter : undefined,
         status: "failed",
       });
     } finally {
@@ -391,9 +498,16 @@ export function StyleReferencePanel({
     }
   }
 
-  function updateReady(patch: Partial<StyleReferenceSnapshot>) {
+  function updateAnalyzed(
+    patch: Partial<StyleReferenceSnapshot>,
+    options: { clearKreaAdapterBlock?: boolean } = {},
+  ) {
     if (!snapshot?.analysis || !snapshot.metadata) return;
-    onChange({ ...snapshot, ...patch, status: "ready" });
+    onChange({
+      ...snapshot,
+      ...patch,
+      status: kreaAdapterBlocked && !options.clearKreaAdapterBlock ? snapshot.status : "ready",
+    });
   }
 
   return (
@@ -426,13 +540,18 @@ export function StyleReferencePanel({
       <p className="mt-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">{capability.reason}</p>
       {!snapshot ? <p className="mt-3 rounded-md border border-dashed border-slate-200 p-3 text-center text-xs text-slate-500">No {workflowLabel} style reference selected.</p> : null}
       {busy ? <p className="mt-3 flex items-center gap-2 rounded-md border border-indigo-100 bg-indigo-50 p-3 text-xs text-indigo-700"><LoaderCircle className="size-3.5 animate-spin" /> Uploading or analyzing style reference...</p> : null}
-      {snapshot && snapshot.status !== "ready" && !busy ? (
+      {snapshot && snapshot.status !== "ready" && !busy && !kreaAdapterBlocked ? (
         <div className="mt-3 rounded-md border border-rose-200 bg-rose-50 p-3 text-xs text-rose-700">
           <p>{snapshot.error ?? "Style reference is not ready."}</p>
           <button className="mt-2 inline-flex h-8 items-center gap-2 rounded-md border border-rose-200 bg-white px-3" disabled={disabled} onClick={() => void handleRetry()} type="button"><RefreshCw className="size-3.5" /> Retry analysis</button>
         </div>
       ) : null}
-      {snapshot?.status === "ready" && snapshot.analysis ? (
+      {kreaAdapterBlocked ? (
+        <p className="mt-3 rounded-md border border-rose-200 bg-rose-50 p-3 text-xs leading-relaxed text-rose-700">
+          {snapshot?.error}
+        </p>
+      ) : null}
+      {hasAnalyzedReference && snapshot?.analysis ? (
         <div className="mt-3 grid gap-2 rounded-md border border-emerald-100 bg-emerald-50/60 p-3 text-xs">
           <div className="flex justify-between gap-2"><strong className="text-emerald-800">{snapshot.metadata?.filename ?? "Style reference"} analyzed</strong><span className="uppercase text-emerald-700">{snapshot.mode === "ipadapter" ? "IPAdapter" : "Prompt-only"}</span></div>
           <p className="text-slate-700">{snapshot.analysis.summary}</p>
@@ -440,24 +559,36 @@ export function StyleReferencePanel({
             aria-label="Style prompt"
             className="min-h-16 rounded-md border border-emerald-100 bg-white p-2 text-slate-700 outline-none"
             disabled={disabled}
-            onChange={(event) => updateReady({ analysis: { ...snapshot.analysis!, stylePrompt: event.target.value } })}
+            onChange={(event) => updateAnalyzed({ analysis: { ...snapshot.analysis!, stylePrompt: event.target.value } })}
             value={snapshot.analysis.stylePrompt}
           />
         </div>
       ) : null}
-      {snapshot?.status === "ready" && capability.mode === "ipadapter" ? (
+      {showIpAdapterControls && snapshot ? (
         <div className="mt-3 grid gap-3 rounded-md border border-indigo-100 bg-indigo-50/40 p-3">
           <label className="flex items-center gap-2 text-xs font-medium text-indigo-800">
-            <input checked={snapshot.mode === "ipadapter"} disabled={disabled} onChange={(event) => updateReady({ mode: event.target.checked ? "ipadapter" : "prompt-only", ipAdapter: event.target.checked ? ipAdapter : undefined })} type="checkbox" />
+            <input
+              checked={snapshot.mode === "ipadapter"}
+              disabled={disabled}
+              onChange={(event) => updateAnalyzed({
+                error: undefined,
+                mode: event.target.checked ? "ipadapter" : "prompt-only",
+                ipAdapter: event.target.checked ? ipAdapter : undefined,
+                settingsSnapshot: snapshot.settingsSnapshot
+                  ? { ...snapshot.settingsSnapshot, modeReason: capability.reason }
+                  : snapshot.settingsSnapshot,
+              }, { clearKreaAdapterBlock: true })}
+              type="checkbox"
+            />
             Use IPAdapter in addition to the style prompt
           </label>
           {snapshot.mode === "ipadapter" ? (
             <>
               <div className="grid gap-3 sm:grid-cols-3">
-                <NumberInput label="weight" onChange={(weight) => updateReady({ ipAdapter: sanitizeStyleReferenceIpAdapterSettings({ ...ipAdapter, weight }) })} value={ipAdapter.weight} />
+                <NumberInput label="weight" onChange={(weight) => updateAnalyzed({ ipAdapter: sanitizeStyleReferenceIpAdapterSettings({ ...ipAdapter, weight }) })} value={ipAdapter.weight} />
                 {!isKrea2 ? <>
-                  <NumberInput label="start_at" onChange={(startPercent) => updateReady({ ipAdapter: sanitizeStyleReferenceIpAdapterSettings({ ...ipAdapter, startPercent }) })} value={ipAdapter.startPercent} />
-                  <NumberInput label="end_at" onChange={(endPercent) => updateReady({ ipAdapter: sanitizeStyleReferenceIpAdapterSettings({ ...ipAdapter, endPercent }) })} value={ipAdapter.endPercent} />
+                  <NumberInput label="start_at" onChange={(startPercent) => updateAnalyzed({ ipAdapter: sanitizeStyleReferenceIpAdapterSettings({ ...ipAdapter, startPercent }) })} value={ipAdapter.startPercent} />
+                  <NumberInput label="end_at" onChange={(endPercent) => updateAnalyzed({ ipAdapter: sanitizeStyleReferenceIpAdapterSettings({ ...ipAdapter, endPercent }) })} value={ipAdapter.endPercent} />
                 </> : null}
               </div>
               {isKrea2 ? <p className="text-xs leading-relaxed text-slate-600">Krea reference timing is fixed to start_at 0 and end_at 1 by its verified adapter graph.</p> : null}

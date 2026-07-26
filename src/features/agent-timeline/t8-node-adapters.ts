@@ -283,13 +283,9 @@ export function createConfirmedTimelineComfyUiRequest(workflow: TimelineWorkflow
   const sourceImage = getTimelineSourceImage(workflow);
   const sceneInput = workflow.nodes["scene-input"].result;
   const detailers = getGenerationInputDetailers(isRecord(sceneInput) ? sceneInput : {});
-  const settings = getRunSceneInputSettings(isRecord(sceneInput) ? sceneInput : {});
   const isKrea2 = parameterResult.requestPreview.workflowProfile === "krea2";
   assertStyleReferenceUsable(workflow, parameterResult);
   if (isKrea2) {
-    if (settings.automaticLocalRepair) {
-      invalidComfyUiRequest("Krea 2 Turbo does not support automatic local repair; disable it before confirmation.");
-    }
     if (detailers.faceDetailer.enabled || detailers.handDetailer.enabled) {
       invalidComfyUiRequest("Krea 2 Turbo does not support FaceDetailer or HandDetailer.");
     }
