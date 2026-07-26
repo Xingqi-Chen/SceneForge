@@ -1,4 +1,7 @@
-import type { ComfyUiTextToImageRequest } from "@/features/comfyui";
+import {
+  resolveComfyUiTextToImageWorkflowProfile,
+  type ComfyUiTextToImageRequest,
+} from "@/features/comfyui";
 
 import {
   resolveTimelineFinalGenerationPolicy,
@@ -283,7 +286,11 @@ export function createConfirmedTimelineComfyUiRequest(workflow: TimelineWorkflow
   const sourceImage = getTimelineSourceImage(workflow);
   const sceneInput = workflow.nodes["scene-input"].result;
   const detailers = getGenerationInputDetailers(isRecord(sceneInput) ? sceneInput : {});
-  const isKrea2 = parameterResult.requestPreview.workflowProfile === "krea2";
+  const inputSettings = getRunSceneInputSettings(isRecord(sceneInput) ? sceneInput : {});
+  const isKrea2 = inputSettings.promptProfile === "krea2" ||
+    (isRecord(sceneInput) && sceneInput.promptProfile === "krea2") ||
+    parameterResult.requestPreview.workflowProfile === "krea2" ||
+    resolveComfyUiTextToImageWorkflowProfile(parameterResult.requestPreview).id === "krea2";
   assertStyleReferenceUsable(workflow, parameterResult);
   if (isKrea2) {
     const width = normalizeKrea2Dimension(parameterResult.requestPreview.width, "width");
@@ -307,6 +314,10 @@ export function createConfirmedTimelineComfyUiRequest(workflow: TimelineWorkflow
       } : {}),
       width,
       height,
+      steps: 8,
+      cfg: 1,
+      samplerName: "euler",
+      scheduler: "simple",
       batchSize: 1,
       preview: false,
       faceDetailer: detailers.faceDetailer,

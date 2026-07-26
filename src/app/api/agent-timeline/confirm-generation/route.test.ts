@@ -35,7 +35,10 @@ const comfyUiMocks = vi.hoisted(() => ({
 
 const storeGeneratedImageMock = vi.hoisted(() => vi.fn());
 
-vi.mock("@/features/comfyui", () => comfyUiMocks);
+vi.mock("@/features/comfyui", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/features/comfyui")>()),
+  ...comfyUiMocks,
+}));
 
 vi.mock("@/features/comfyui/generated-image-storage", () => ({
   storeGeneratedImage: storeGeneratedImageMock,

@@ -114,6 +114,19 @@ function clickButton(label: string) {
   });
 }
 
+function getLabeledControl(label: string) {
+  const field = Array.from(container.querySelectorAll("label")).find(
+    (candidate) => candidate.childNodes[0]?.textContent?.trim() === label,
+  );
+  const control = field?.querySelector("input, select, textarea");
+
+  if (!control) {
+    throw new Error(`Unable to find control labeled "${label}".`);
+  }
+
+  return control as HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement;
+}
+
 beforeEach(() => {
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   container = document.createElement("div");
@@ -330,16 +343,16 @@ describe("timeline recommendation workspaces", () => {
     );
   });
 
-  it("rounds Krea manual dimensions upward to 16-pixel boundaries before saving", () => {
+  it("locks Krea sampling controls while preserving edits to compatible parameters", () => {
     const result: ParameterRecommendationTimelineResult = {
-      availableSamplers: ["euler"],
-      availableSchedulers: ["simple"],
+      availableSamplers: ["euler", "dpmpp_2m"],
+      availableSchedulers: ["simple", "karras"],
       width: 1024,
       height: 1024,
-      steps: 8,
-      cfg: 1,
-      samplerName: "euler",
-      scheduler: "simple",
+      steps: 91,
+      cfg: 12,
+      samplerName: "dpmpp_2m",
+      scheduler: "karras",
       denoise: 1,
       seedPolicy: { mode: "fixed", seed: 7 },
       negativeAdditions: [],
@@ -352,10 +365,10 @@ describe("timeline recommendation workspaces", () => {
         positivePrompt: "a quiet station",
         width: 1024,
         height: 1024,
-        steps: 8,
-        cfg: 1,
-        samplerName: "euler",
-        scheduler: "simple",
+        steps: 91,
+        cfg: 12,
+        samplerName: "dpmpp_2m",
+        scheduler: "karras",
         denoise: 1,
         loras: [],
       },
@@ -375,19 +388,62 @@ describe("timeline recommendation workspaces", () => {
       );
     });
 
-    const inputs = Array.from(container.querySelectorAll('input[type="number"]')) as HTMLInputElement[];
-    expect(inputs[0]?.step).toBe("16");
-    expect(inputs[1]?.step).toBe("16");
+    const widthInput = getLabeledControl("Width") as HTMLInputElement;
+    const heightInput = getLabeledControl("Height") as HTMLInputElement;
+    const stepsInput = getLabeledControl("Steps") as HTMLInputElement;
+    const cfgInput = getLabeledControl("CFG") as HTMLInputElement;
+    const denoiseInput = getLabeledControl("Denoise") as HTMLInputElement;
+    const samplerSelect = getLabeledControl("Sampler") as HTMLSelectElement;
+    const schedulerSelect = getLabeledControl("Scheduler") as HTMLSelectElement;
+    const positivePrompt = getLabeledControl("Positive prompt") as HTMLTextAreaElement;
+    const negativeAdditions = getLabeledControl("Negative additions") as HTMLTextAreaElement;
+
+    expect(container.textContent).toContain(
+      "Krea 2 Turbo fixes the primary sampler at 8 steps, CFG 1, Euler, and simple scheduling.",
+    );
+    expect(widthInput.step).toBe("16");
+    expect(heightInput.step).toBe("16");
+    expect(stepsInput).toMatchObject({ disabled: true, value: "8" });
+    expect(cfgInput).toMatchObject({ disabled: true, value: "1" });
+    expect(samplerSelect).toMatchObject({ disabled: true, value: "euler" });
+    expect(schedulerSelect).toMatchObject({ disabled: true, value: "simple" });
+    expect(widthInput.disabled).toBe(false);
+    expect(heightInput.disabled).toBe(false);
+    expect(denoiseInput.disabled).toBe(false);
+    expect(positivePrompt.disabled).toBe(false);
+    expect(negativeAdditions.disabled).toBe(false);
+
     act(() => {
-      setNativeInputValue(inputs[0]!, "1025");
-      setNativeInputValue(inputs[1]!, "1023");
+      setNativeInputValue(widthInput, "1025");
+      setNativeInputValue(heightInput, "1023");
+      setNativeInputValue(denoiseInput, "0.65");
+      setNativeTextareaValue(positivePrompt, "edited local Krea prompt");
+      setNativeTextareaValue(negativeAdditions, "jpeg artifacts");
     });
     clickButton("Save parameters");
 
     expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
       width: 1040,
       height: 1024,
-      requestPreview: expect.objectContaining({ width: 1040, height: 1024, workflowProfile: "krea2" }),
+      steps: 8,
+      cfg: 1,
+      samplerName: "euler",
+      scheduler: "simple",
+      denoise: 0.65,
+      finalPositivePrompt: "edited local Krea prompt",
+      negativeAdditions: ["jpeg artifacts"],
+      requestPreview: expect.objectContaining({
+        width: 1040,
+        height: 1024,
+        steps: 8,
+        cfg: 1,
+        samplerName: "euler",
+        scheduler: "simple",
+        denoise: 0.65,
+        positivePrompt: "edited local Krea prompt",
+        negativePrompt: "jpeg artifacts",
+        workflowProfile: "krea2",
+      }),
     }));
   });
 

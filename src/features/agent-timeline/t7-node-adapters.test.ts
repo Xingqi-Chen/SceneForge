@@ -23,6 +23,7 @@ import type {
   ScenePromptTimelineResult,
 } from "./types";
 import type { PromptProfileId } from "@/shared/prompt-profile";
+import type { SavedComfyUiGenerationParams } from "@/shared/types";
 
 function makeResource(
   resourceType: "model" | "lora",
@@ -93,6 +94,59 @@ function makeScenePrompt(promptProfile: PromptProfileId = "illustrious"): SceneP
     style: [],
     camera: [{ label: "Portrait", prompt: "vertical portrait framing" }],
     lighting: [],
+  };
+}
+
+function makeKreaResourceResult(): ResourceRecommendationTimelineResult {
+  const checkpoint = makeResource("model", "checkpoint-krea", "Krea 2 Turbo", "Krea 2", {
+    modelFileName: "krea-2-turbo-unet.safetensors",
+    modelStorageKind: "diffusion",
+  });
+  const lora = makeResource("lora", "lora-krea", "Krea Style", "Krea 2", {
+    modelFileName: "krea-style.safetensors",
+    trainedWords: ["krea_style"],
+  });
+
+  return {
+    checkpoint: { resource: checkpoint, reason: "Local Krea model." },
+    loras: [{ resource: lora, suggestedWeight: 0.7, reason: "Local Krea LoRA." }],
+    candidates: { checkpoints: [makeCandidate(checkpoint)], loras: [makeCandidate(lora)] },
+    recommendationReason: "Krea local resources.",
+    overallEffect: "Faithful direct render.",
+    warnings: [],
+  };
+}
+
+function makeKreaScenePrompt(): ScenePromptTimelineResult {
+  return {
+    ...makeScenePrompt("krea2"),
+    positivePrompt: "flat fallback should not become authoritative",
+    krea2Sections: {
+      subjectMood: "A courier waits",
+      visualStyleAndMedium: "watercolor illustration",
+      spatialCompositionAndFraming: "at the center of a station",
+    },
+  };
+}
+
+function makeSavedKreaParameters(
+  overrides: Partial<SavedComfyUiGenerationParams> = {},
+): SavedComfyUiGenerationParams {
+  return {
+    width: 1280,
+    height: 768,
+    seed: 17,
+    seedMode: "fixed",
+    steps: 91,
+    cfg: 12,
+    samplerName: "dpmpp_2m",
+    scheduler: "karras",
+    denoise: 0.82,
+    imageCount: 4,
+    outputPrefix: "SceneForge",
+    loras: [],
+    savedAt: "2026-07-26T00:00:00.000Z",
+    ...overrides,
   };
 }
 
@@ -1229,6 +1283,328 @@ describe("T7 timeline adapters", () => {
     expect(result.requestPreview.positivePrompt).toBe(
       "A courier waits, watercolor illustration, at the center of a station, krea_style",
     );
+  });
+
+  it("calls Krea Style Advice once when unsaved while keeping the local prompt and fixed sampler contract", async () => {
+    const resourceResult = makeKreaResourceResult();
+    const scenePrompt = makeKreaScenePrompt();
+    const adviseStyle = vi.fn(() => ({
+      prompt: "LLM replacement prompt must be ignored",
+      parameterSuggestionReason: "AI tuned compatible Krea fields.",
+      overallEffect: "Soft watercolor with controlled contrast.",
+      parseWarning: null,
+      parameterSuggestions: {
+        cfgScale: 9,
+        loraWeights: [
+          { name: "Krea Style", suggestedWeight: 0.54 },
+          { name: "Unselected LoRA", suggestedWeight: 1.8 },
+        ],
+        negativePromptAdditions: "jpeg artifacts",
+        resolution: "1152x768",
+        sampler: "dpmpp_2m",
+        scheduler: "karras",
+        steps: 44,
+      },
+    }));
+    let workflow = createTimelineWorkflowState({
+      promptProfile: "krea2",
+      sceneRequest: "A Krea watercolor courier",
+    });
+    workflow = completeTimelineNode(workflow, "scene-prompt", scenePrompt, "ai");
+    workflow = completeTimelineNode(workflow, "resource-recommendation", resourceResult, "ai");
+    const adapter = createTimelineT7NodeAdapters({
+      adviseStyle,
+      loadResourceCandidates: () => resourceResult.candidates,
+      loadSamplerOptions: () => ({
+        samplers: ["euler", "dpmpp_2m"],
+        schedulers: ["simple", "karras"],
+      }),
+      recommendResources: vi.fn(),
+    })["parameter-recommendation"];
+
+    const adapterResult = await adapter?.({
+      dependencies: [workflow.nodes["scene-prompt"], workflow.nodes["resource-recommendation"]],
+      nodeId: "parameter-recommendation",
+      workflow,
+    });
+    const result = (
+      adapterResult && typeof adapterResult === "object" && "value" in adapterResult
+        ? adapterResult.value
+        : adapterResult
+    ) as ParameterRecommendationTimelineResult;
+
+    expect(adviseStyle).toHaveBeenCalledTimes(1);
+    expect(adviseStyle).toHaveBeenCalledWith(
+      expect.objectContaining({
+        finalPositivePrompt: "A courier waits, watercolor illustration, at the center of a station, krea_style",
+        selectedResources: expect.objectContaining({
+          checkpoint: expect.objectContaining({ id: "checkpoint-krea" }),
+          loras: [expect.objectContaining({ id: "lora-krea" })],
+        }),
+      }),
+      expect.any(Object),
+    );
+    expect(result).toMatchObject({
+      width: 1152,
+      height: 768,
+      steps: 8,
+      cfg: 1,
+      samplerName: "euler",
+      scheduler: "simple",
+      reason: "AI tuned compatible Krea fields.",
+      requestPreview: {
+        width: 1152,
+        height: 768,
+        steps: 8,
+        cfg: 1,
+        samplerName: "euler",
+        scheduler: "simple",
+        workflowProfile: "krea2",
+      },
+    });
+    expect(result.finalPositivePrompt).toBe(
+      "A courier waits, watercolor illustration, at the center of a station, krea_style",
+    );
+    expect(result.requestPreview.positivePrompt).toBe(result.finalPositivePrompt);
+    expect(result.requestPreview.positivePrompt).not.toContain("LLM replacement");
+    expect(result.requestPreview.negativePrompt).toContain("jpeg artifacts");
+    expect(result.requestPreview.loras).toEqual([
+      {
+        loraName: "krea-style.safetensors",
+        strengthModel: 0.54,
+        strengthClip: 0.54,
+      },
+    ]);
+  });
+
+  it.each([
+    ["null advice", null],
+    [
+      "unusable advice",
+      {
+        prompt: "ignored unusable prompt",
+        parameterSuggestionReason: "",
+        overallEffect: "",
+        parseWarning: "Style Advice returned no usable parameter object.",
+        parameterSuggestions: null,
+      },
+    ],
+  ] as const)("calls Krea Style Advice once and uses local fallbacks for %s", async (_label, advice) => {
+    const resourceResult = makeKreaResourceResult();
+    let workflow = createTimelineWorkflowState({
+      promptProfile: "krea2",
+      sceneRequest: "A fallback Krea courier",
+    });
+    workflow = completeTimelineNode(workflow, "scene-prompt", makeKreaScenePrompt(), "ai");
+    workflow = completeTimelineNode(workflow, "resource-recommendation", resourceResult, "ai");
+    const adviseStyle = vi.fn(() => advice);
+    const adapter = createTimelineT7NodeAdapters({
+      adviseStyle,
+      loadResourceCandidates: () => resourceResult.candidates,
+      loadSamplerOptions: () => ({ samplers: ["euler"], schedulers: ["simple"] }),
+      recommendResources: vi.fn(),
+    })["parameter-recommendation"];
+
+    const adapterResult = await adapter?.({
+      dependencies: [workflow.nodes["scene-prompt"], workflow.nodes["resource-recommendation"]],
+      nodeId: "parameter-recommendation",
+      workflow,
+    });
+    const result = (
+      adapterResult && typeof adapterResult === "object" && "value" in adapterResult
+        ? adapterResult.value
+        : adapterResult
+    ) as ParameterRecommendationTimelineResult;
+
+    expect(adviseStyle).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({
+      width: 1024,
+      height: 1024,
+      steps: 8,
+      cfg: 1,
+      samplerName: "euler",
+      scheduler: "simple",
+      requestPreview: {
+        width: 1024,
+        height: 1024,
+        steps: 8,
+        cfg: 1,
+        samplerName: "euler",
+        scheduler: "simple",
+      },
+    });
+    expect(result.requestPreview.positivePrompt).toBe(result.finalPositivePrompt);
+    expect(result.requestPreview.loras?.[0]).toMatchObject({
+      loraName: "krea-style.safetensors",
+      strengthModel: 0.7,
+      strengthClip: 0.7,
+    });
+  });
+
+  it("skips Krea Style Advice for saved parameters and keeps saved dimensions while locking sampling", async () => {
+    const resourceResult = makeKreaResourceResult();
+    const adviseStyle = vi.fn();
+    let workflow = createTimelineWorkflowState({
+      promptProfile: "krea2",
+      sceneRequest: "A saved Krea courier",
+      settingsSnapshot: {
+        stylePalette: {
+          checkpointId: "checkpoint-krea",
+          loras: [],
+          parameters: makeSavedKreaParameters(),
+        },
+      },
+    });
+    workflow = completeTimelineNode(workflow, "scene-prompt", makeKreaScenePrompt(), "ai");
+    workflow = completeTimelineNode(workflow, "resource-recommendation", resourceResult, "manual");
+    const adapter = createTimelineT7NodeAdapters({
+      adviseStyle,
+      loadResourceCandidates: () => resourceResult.candidates,
+      loadSamplerOptions: () => ({
+        samplers: ["euler", "dpmpp_2m"],
+        schedulers: ["simple", "karras"],
+      }),
+      recommendResources: vi.fn(),
+    })["parameter-recommendation"];
+
+    const adapterResult = await adapter?.({
+      dependencies: [workflow.nodes["scene-prompt"], workflow.nodes["resource-recommendation"]],
+      nodeId: "parameter-recommendation",
+      workflow,
+    });
+    const result = (
+      adapterResult && typeof adapterResult === "object" && "value" in adapterResult
+        ? adapterResult.value
+        : adapterResult
+    ) as ParameterRecommendationTimelineResult;
+
+    expect(adviseStyle).not.toHaveBeenCalled();
+    expect(adapterResult).toMatchObject({ source: "manual" });
+    expect(result).toMatchObject({
+      width: 1280,
+      height: 768,
+      denoise: 0.82,
+      steps: 8,
+      cfg: 1,
+      samplerName: "euler",
+      scheduler: "simple",
+      requestPreview: {
+        width: 1280,
+        height: 768,
+        denoise: 0.82,
+        steps: 8,
+        cfg: 1,
+        samplerName: "euler",
+        scheduler: "simple",
+      },
+    });
+  });
+
+  it("keeps aligned Krea source dimensions and Composer denoise authoritative over saved values", async () => {
+    const resourceResult = makeKreaResourceResult();
+    const adviseStyle = vi.fn();
+    let workflow = createTimelineWorkflowState({
+      promptProfile: "krea2",
+      sceneRequest: "A source-guided Krea courier",
+      sourceDenoise: 0.37,
+      sourceImage: {
+        dataUrl: "data:image/png;base64,c291cmNl",
+        filename: "source.png",
+        height: 720,
+        mimeType: "image/png",
+        uploadedAt: "2026-07-26T00:00:00.000Z",
+        width: 1280,
+      },
+      settingsSnapshot: {
+        stylePalette: {
+          checkpointId: "checkpoint-krea",
+          loras: [],
+          parameters: makeSavedKreaParameters({ width: 1024, height: 1024, denoise: 0.91 }),
+        },
+      },
+    });
+    workflow = completeTimelineNode(workflow, "scene-prompt", makeKreaScenePrompt(), "ai");
+    workflow = completeTimelineNode(workflow, "resource-recommendation", resourceResult, "manual");
+    const adapter = createTimelineT7NodeAdapters({
+      adviseStyle,
+      loadResourceCandidates: () => resourceResult.candidates,
+      loadSamplerOptions: () => ({ samplers: ["euler"], schedulers: ["simple"] }),
+      recommendResources: vi.fn(),
+    })["parameter-recommendation"];
+
+    const adapterResult = await adapter?.({
+      dependencies: [workflow.nodes["scene-prompt"], workflow.nodes["resource-recommendation"]],
+      nodeId: "parameter-recommendation",
+      workflow,
+    });
+    const result = (
+      adapterResult && typeof adapterResult === "object" && "value" in adapterResult
+        ? adapterResult.value
+        : adapterResult
+    ) as ParameterRecommendationTimelineResult;
+
+    expect(adviseStyle).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      width: 1280,
+      height: 720,
+      denoise: 0.37,
+      steps: 8,
+      cfg: 1,
+      samplerName: "euler",
+      scheduler: "simple",
+      requestPreview: {
+        width: 1280,
+        height: 720,
+        imageWidth: 1280,
+        imageHeight: 720,
+        denoise: 0.37,
+      },
+    });
+  });
+
+  it("rejects non-16-aligned Krea source, saved, and AI-advised dimensions without rounding", () => {
+    const resourceResult = makeKreaResourceResult();
+    const common = {
+      resourceResult,
+      scenePrompt: makeKreaScenePrompt(),
+      canvasBinding: null,
+      samplerOptions: { samplers: ["euler"], schedulers: ["simple"] },
+    };
+    const invalidAdvice = {
+      prompt: "ignored",
+      parameterSuggestionReason: "Invalid dimensions.",
+      overallEffect: "Invalid.",
+      parseWarning: null,
+      parameterSuggestions: {
+        cfgScale: 1,
+        loraWeights: [],
+        negativePromptAdditions: "",
+        resolution: "1000x1024",
+        sampler: "euler",
+        scheduler: "simple",
+        steps: 8,
+      },
+    };
+
+    expect(() => createTimelineParameterRecommendation({
+      ...common,
+      sourceImage: {
+        dataUrl: "data:image/png;base64,c291cmNl",
+        filename: "invalid-source.png",
+        height: 1024,
+        mimeType: "image/png",
+        uploadedAt: "2026-07-26T00:00:00.000Z",
+        width: 1000,
+      },
+    })).toThrow(/Krea 2 Turbo width must be an exact 16-pixel-aligned integer/);
+    expect(() => createTimelineParameterRecommendation({
+      ...common,
+      savedParameters: makeSavedKreaParameters({ width: 1000, height: 1024 }),
+    })).toThrow(/Krea 2 Turbo width must be an exact 16-pixel-aligned integer/);
+    expect(() => createTimelineParameterRecommendation({
+      ...common,
+      aiAdvice: invalidAdvice,
+    })).toThrow(/Krea 2 Turbo width must be an exact 16-pixel-aligned integer/);
   });
 
   it("does not format an assembled Anima prompt a second time in the request preview", () => {
