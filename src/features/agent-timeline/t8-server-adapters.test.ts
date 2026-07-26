@@ -1089,28 +1089,35 @@ describe("timeline T8 server adapters", () => {
     expect(storeGeneratedImageMock).toHaveBeenCalledTimes(1);
   });
 
-  it("preserves object_info validation errors in the timeline node message", async () => {
+  it("preserves Krea Detailer object_info preflight errors and never queues a silently omitted graph", async () => {
     const getObjectInfo = vi.fn().mockResolvedValue({ CheckpointLoaderSimple: {} });
+    const generateImage = vi.fn();
     comfyUiMocks.createComfyUiClient.mockReturnValue({
       getObjectInfo,
+      generateImage,
     });
     comfyUiMocks.validateComfyUiTextToImageRequest.mockReturnValue({
       ok: true,
       request: {
         batchSize: 1,
-        checkpointName: "missing.safetensors",
+        checkpointName: "krea-2-turbo-unet.safetensors",
+        modelBaseModel: "Krea 2",
+        modelStorageKind: "diffusion",
         positivePrompt: "glass greenhouse pilot",
         preview: false,
+        workflowProfile: "krea2",
+        faceDetailer: { enabled: true, detectorModelName: "bbox/face_yolov8s.pt" },
       },
     });
     comfyUiMocks.validateComfyUiRequestAgainstObjectInfo.mockReturnValue({
       errors: [
-        "Checkpoint is not available in ComfyUI: missing.safetensors",
-        "LoRA 1 is not available in ComfyUI: missing-lora.safetensors",
+        "Krea 2 UNET model is not available in ComfyUI: krea-2-turbo-unet.safetensors",
+        "FaceDetailer.cycle input is not available in ComfyUI object_info.",
+        "FaceDetailer detector model is not available in ComfyUI: bbox/face_yolov8s.pt",
       ],
       request: {
         batchSize: 1,
-        checkpointName: "missing.safetensors",
+        checkpointName: "krea-2-turbo-unet.safetensors",
         positivePrompt: "glass greenhouse pilot",
         preview: false,
       },
@@ -1130,11 +1137,12 @@ describe("timeline T8 server adapters", () => {
               status: "error",
               error: {
                 code: "comfyui_object_info_mismatch",
-                message: "ComfyUI request does not match current model/node options. Checkpoint is not available in ComfyUI: missing.safetensors LoRA 1 is not available in ComfyUI: missing-lora.safetensors",
+                message: "ComfyUI request does not match current model/node options. Krea 2 UNET model is not available in ComfyUI: krea-2-turbo-unet.safetensors FaceDetailer.cycle input is not available in ComfyUI object_info. FaceDetailer detector model is not available in ComfyUI: bbox/face_yolov8s.pt",
                 details: {
                   errors: [
-                    "Checkpoint is not available in ComfyUI: missing.safetensors",
-                    "LoRA 1 is not available in ComfyUI: missing-lora.safetensors",
+                    "Krea 2 UNET model is not available in ComfyUI: krea-2-turbo-unet.safetensors",
+                    "FaceDetailer.cycle input is not available in ComfyUI object_info.",
+                    "FaceDetailer detector model is not available in ComfyUI: bbox/face_yolov8s.pt",
                   ],
                   warnings: ["using default sampler"],
                 },
@@ -1144,6 +1152,7 @@ describe("timeline T8 server adapters", () => {
         },
       },
     });
+    expect(generateImage).not.toHaveBeenCalled();
   });
 
   it("injects one Illustrious Run style reference before object_info validation and queueing", async () => {

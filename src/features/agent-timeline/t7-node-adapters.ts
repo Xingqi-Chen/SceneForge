@@ -614,9 +614,6 @@ export function createTimelineParameterRecommendation({
   if (isKrea2Profile && styleReference) {
     invalidTimelineInput("Krea 2 Turbo does not support style or IPAdapter references.");
   }
-  if (isKrea2Profile && (detailers?.faceDetailer.enabled || detailers?.handDetailer.enabled)) {
-    invalidTimelineInput("Krea 2 Turbo does not support FaceDetailer or HandDetailer.");
-  }
   const samplerOptions = normalizeTimelineSamplerOptions(rawSamplerOptions);
   const selectedResources = getSelectedResources(resourceResult);
   const finalPositivePrompt = buildTimelineFinalPositivePrompt({
@@ -678,8 +675,6 @@ export function createTimelineParameterRecommendation({
         denoise,
         batchSize: 1,
         latentImageNode: "EmptyLatentImage" as const,
-        faceDetailer: { ...rawRequestPreview.faceDetailer, enabled: false },
-        handDetailer: { ...rawRequestPreview.handDetailer, enabled: false },
         controlNets: [],
         characterReferences: [],
       }

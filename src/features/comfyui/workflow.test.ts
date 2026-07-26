@@ -293,6 +293,54 @@ describe("ComfyUI workflow builder", () => {
     ].includes(node.class_type))).toBe(false);
   });
 
+  it("adds independent Final HandDetailer then FaceDetailer nodes to Krea's local UNET, CLIP, and VAE graph", () => {
+    const result = buildBasicTextToImageWorkflow({
+      checkpointName: "krea-2-turbo-unet.safetensors",
+      modelBaseModel: "Krea 2",
+      modelStorageKind: "diffusion",
+      positivePrompt: "a detailed portrait with hands",
+      seed: 123,
+      faceDetailer: { enabled: true, detectorModelName: "bbox/face_yolov8s.pt", steps: 18 },
+      handDetailer: { enabled: true, detectorModelName: "bbox/hand_yolov8s.pt", steps: 21 },
+    });
+
+    expect(result.nodeIds).toMatchObject({
+      unetLoader: "1",
+      clipLoader: "2",
+      vaeLoader: "3",
+      handUltralyticsDetectorProvider: "9",
+      handDetailer: "10",
+      ultralyticsDetectorProvider: "11",
+      faceDetailer: "12",
+      previewImage: "13",
+    });
+    expect(result.workflow["10"]).toMatchObject({
+      class_type: "FaceDetailer",
+      _meta: { title: "Krea HandDetailer" },
+      inputs: {
+        image: ["8", 0],
+        model: ["1", 0],
+        clip: ["2", 0],
+        vae: ["3", 0],
+        bbox_detector: ["9", 0],
+        steps: 21,
+      },
+    });
+    expect(result.workflow["12"]).toMatchObject({
+      class_type: "FaceDetailer",
+      _meta: { title: "Krea FaceDetailer" },
+      inputs: {
+        image: ["10", 0],
+        model: ["1", 0],
+        clip: ["2", 0],
+        vae: ["3", 0],
+        bbox_detector: ["11", 0],
+        steps: 18,
+      },
+    });
+    expect(result.workflow["13"].inputs).toEqual({ images: ["12", 0], filename_prefix: "SceneForge" });
+  });
+
   it("builds Krea source img2img through LoadImage, ImageScale, and VAEEncode", () => {
     const result = buildBasicTextToImageWorkflow({
       checkpointName: "krea-2-turbo-unet.safetensors",

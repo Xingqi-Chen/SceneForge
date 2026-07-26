@@ -2,6 +2,25 @@
 
 This log records dated implementation and documentation work. Keep entries concise and evidence-oriented.
 
+## 2026-07-26
+
+### T44 / Issue #155 Krea 2 FaceDetailer and HandDetailer
+
+Summary:
+
+- Enabled the existing independent FaceDetailer and HandDetailer controls for Krea 2 Final requests while retaining the explicit Preview-only disablement.
+- Added Krea Final graph wiring from the Krea UNET/CLIP/VAE model context through the selected Detailer nodes before `SaveImage`.
+- Added fail-closed Krea Detailer preflight checks for the complete generated graph, required node inputs, KSampler/detailer sampler settings, detector model, and exact Krea local UNET/CLIP/VAE files before any queue request.
+- Restored Krea workflows with their persisted Detailer choices, while legacy/missing settings still sanitize to both controls off. T42 Repair remains outside this branch's scope.
+
+Validation:
+
+- Focused affected validation passed: 8 files, 272 tests.
+- `npm test` passed: 146 files, 1,643 tests.
+- `npm run typecheck` passed.
+- `npm run lint` passed with 23 existing warnings and no errors.
+- `npm run build` and `git diff --check` passed.
+
 ## 2026-07-25
 
 ### T40 / Issue #147 Civitai Red Import Without Content Filtering

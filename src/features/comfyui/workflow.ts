@@ -799,11 +799,54 @@ function buildKrea2TextToImageWorkflow(
     },
     "Decode Krea Image",
   );
+  let outputImageConnection = builder.connect(vaeDecode, 0);
+  let handUltralyticsDetectorProvider: string | undefined;
+  let handDetailer: string | undefined;
+  let ultralyticsDetectorProvider: string | undefined;
+  let faceDetailer: string | undefined;
+
+  if (resolvedRequest.handDetailer.enabled) {
+    const handDetailerNodes = addDetailerNode({
+      builder,
+      clipConnection: modelContext.clipConnection,
+      config: resolvedRequest.handDetailer,
+      detectorTitle: "Krea Hand Detector",
+      image: outputImageConnection,
+      modelConnection: modelContext.modelConnection,
+      negativePrompt,
+      positivePrompt,
+      seed: resolvedRequest.seed,
+      title: "Krea HandDetailer",
+      vaeConnection: modelContext.vaeConnection,
+    });
+    handUltralyticsDetectorProvider = handDetailerNodes.detector;
+    handDetailer = handDetailerNodes.detailer;
+    outputImageConnection = handDetailerNodes.output;
+  }
+
+  if (resolvedRequest.faceDetailer.enabled) {
+    const faceDetailerNodes = addDetailerNode({
+      builder,
+      clipConnection: modelContext.clipConnection,
+      config: resolvedRequest.faceDetailer,
+      detectorTitle: "Krea Face Detector",
+      image: outputImageConnection,
+      modelConnection: modelContext.modelConnection,
+      negativePrompt,
+      positivePrompt,
+      seed: resolvedRequest.seed,
+      title: "Krea FaceDetailer",
+      vaeConnection: modelContext.vaeConnection,
+    });
+    ultralyticsDetectorProvider = faceDetailerNodes.detector;
+    faceDetailer = faceDetailerNodes.detailer;
+    outputImageConnection = faceDetailerNodes.output;
+  }
   const saveImage = builder.addNode(
     "SaveImage",
     {
       filename_prefix: resolvedRequest.outputPrefix,
-      images: builder.connect(vaeDecode, 0),
+      images: outputImageConnection,
     },
     "Save Krea 2 Image",
   );
@@ -820,6 +863,10 @@ function buildKrea2TextToImageWorkflow(
       latentImage,
       sampler,
       vaeDecode,
+      ...(handUltralyticsDetectorProvider ? { handUltralyticsDetectorProvider } : {}),
+      ...(handDetailer ? { handDetailer } : {}),
+      ...(ultralyticsDetectorProvider ? { ultralyticsDetectorProvider } : {}),
+      ...(faceDetailer ? { faceDetailer } : {}),
       previewImage: saveImage,
     },
     outputNodeId: saveImage,

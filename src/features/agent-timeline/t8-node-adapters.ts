@@ -290,9 +290,6 @@ export function createConfirmedTimelineComfyUiRequest(workflow: TimelineWorkflow
     if (settings.automaticLocalRepair) {
       invalidComfyUiRequest("Krea 2 Turbo does not support automatic local repair; disable it before confirmation.");
     }
-    if (detailers.faceDetailer.enabled || detailers.handDetailer.enabled) {
-      invalidComfyUiRequest("Krea 2 Turbo does not support FaceDetailer or HandDetailer.");
-    }
     const width = normalizeKrea2Dimension(parameterResult.requestPreview.width, "width");
     const height = normalizeKrea2Dimension(parameterResult.requestPreview.height, "height");
     if (sourceImage && (sourceImage.width !== width || sourceImage.height !== height)) {
@@ -316,8 +313,8 @@ export function createConfirmedTimelineComfyUiRequest(workflow: TimelineWorkflow
       height,
       batchSize: 1,
       preview: false,
-      faceDetailer: { ...parameterResult.requestPreview.faceDetailer, enabled: false },
-      handDetailer: { ...parameterResult.requestPreview.handDetailer, enabled: false },
+      faceDetailer: detailers.faceDetailer,
+      handDetailer: detailers.handDetailer,
       controlNets: [],
       characterReferences: [],
     };

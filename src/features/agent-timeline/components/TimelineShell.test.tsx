@@ -2329,7 +2329,9 @@ describe("TimelineShell", () => {
         expect(sourceButton.disabled).toBe(false);
         expect(container.textContent).toContain("Krea 2 Turbo uses its fixed local UNet");
         expect(container.textContent).toContain("4/4/6/8 scored previews, exact-K selection, and Preview-to-Final img2img redraw.");
-        expect(container.textContent).toContain("Source img2img is supported; style references, Detailers, review, and repair remain unavailable.");
+        expect(container.textContent).toContain("FaceDetailer and HandDetailer apply independently to Final only; Previews always remain Detailer-free.");
+        expect(container.textContent).toContain("SceneForge checks the required Detailer nodes, inputs, and local models before queueing.");
+        expect(container.textContent).toContain("Style references, review, and repair remain unavailable.");
       } finally {
         globalThis.fetch = originalFetch;
       }

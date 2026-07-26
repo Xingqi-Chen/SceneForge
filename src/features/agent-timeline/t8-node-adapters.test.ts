@@ -148,7 +148,22 @@ describe("timeline T8 ComfyUI request conversion", () => {
       uploadedAt: "2026-07-25T00:00:00.000Z",
       width: 1024,
     };
-    let workflow = createConfirmedWorkflow(2, sourceImage, { promptProfile: "krea2" });
+    let workflow = createConfirmedWorkflow(2, sourceImage, {
+      promptProfile: "krea2",
+      detailers: {
+        faceDetailer: {
+          enabled: true,
+          detectorModelName: "bbox/custom-face.pt",
+          denoise: 0.42,
+          steps: 18,
+        } as never,
+        handDetailer: {
+          enabled: false,
+          detectorModelName: "bbox/custom-hand.pt",
+          steps: 21,
+        } as never,
+      },
+    });
     workflow = setTimelineNodeManualResult(workflow, "resource-recommendation", {
       checkpoint: {
         resource: {
@@ -223,6 +238,8 @@ describe("timeline T8 ComfyUI request conversion", () => {
         request: expect.objectContaining({
           batchSize: 1,
           preview: true,
+          faceDetailer: expect.objectContaining({ enabled: false, detectorModelName: "bbox/custom-face.pt" }),
+          handDetailer: expect.objectContaining({ enabled: false, detectorModelName: "bbox/custom-hand.pt" }),
           sourceImageDataUrl: "data:image/png;base64,aGVsbG8=",
           workflowProfile: "krea2",
           width: 768,
@@ -287,6 +304,17 @@ describe("timeline T8 ComfyUI request conversion", () => {
         candidateId: "preview-1",
         request: expect.objectContaining({
           denoise: 0.45,
+          faceDetailer: expect.objectContaining({
+            enabled: true,
+            detectorModelName: "bbox/custom-face.pt",
+            denoise: 0.42,
+            steps: 18,
+          }),
+          handDetailer: expect.objectContaining({
+            enabled: false,
+            detectorModelName: "bbox/custom-hand.pt",
+            steps: 21,
+          }),
           sourceImageDataUrl: undefined,
           workflowProfile: "krea2",
           width: 1024,

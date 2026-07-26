@@ -1262,9 +1262,6 @@ export function validateComfyUiTextToImageRequest(value: unknown): ComfyUiTextTo
   }).id;
 
   if (workflowProfile === "krea2") {
-    if (faceDetailer?.enabled || handDetailer?.enabled) {
-      return { ok: false, message: "Krea 2 Turbo does not support FaceDetailer or HandDetailer." };
-    }
     if (controlNetUnitsForValidation.some((unit) => unit.enabled)) {
       return { ok: false, message: "Krea 2 Turbo does not support ControlNet." };
     }
@@ -1952,12 +1949,8 @@ export function resolveComfyUiTextToImageRequest(
       negativePrefix: request.promptWrapper?.negativePrefix ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.promptWrapper.negativePrefix,
     },
     outputPrefix: getString(request.outputPrefix, DEFAULT_TEXT_TO_IMAGE_REQUEST.outputPrefix),
-    faceDetailer: isKrea2Profile
-      ? { ...DEFAULT_TEXT_TO_IMAGE_REQUEST.faceDetailer, enabled: false }
-      : resolveDetailerConfig(request.faceDetailer, request, DEFAULT_TEXT_TO_IMAGE_REQUEST.faceDetailer),
-    handDetailer: isKrea2Profile
-      ? { ...DEFAULT_TEXT_TO_IMAGE_REQUEST.handDetailer, enabled: false }
-      : resolveDetailerConfig(request.handDetailer, request, DEFAULT_TEXT_TO_IMAGE_REQUEST.handDetailer),
+    faceDetailer: resolveDetailerConfig(request.faceDetailer, request, DEFAULT_TEXT_TO_IMAGE_REQUEST.faceDetailer),
+    handDetailer: resolveDetailerConfig(request.handDetailer, request, DEFAULT_TEXT_TO_IMAGE_REQUEST.handDetailer),
     controlNets: isKrea2Profile ? [] : resolveControlNetUnits(request),
     characterReferences: isKrea2Profile ? [] : resolveCharacterReferences(request),
   };

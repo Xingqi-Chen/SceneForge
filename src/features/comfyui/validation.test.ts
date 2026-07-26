@@ -40,7 +40,6 @@ describe("Krea 2 ComfyUI request validation", () => {
   });
 
   it.each([
-    ["Detailer", { faceDetailer: { enabled: true } }, "does not support FaceDetailer"],
     ["style reference", {
       characterReferences: [{
         enabled: true,
@@ -53,6 +52,46 @@ describe("Krea 2 ComfyUI request validation", () => {
     expect(validateComfyUiTextToImageRequest({ ...kreaRequest, ...override })).toMatchObject({
       ok: false,
       message: expect.stringContaining(message),
+    });
+  });
+
+  it("preserves independent Krea Final Detailers while legacy defaults remain off", () => {
+    const request = resolveComfyUiTextToImageRequest({
+      ...kreaRequest,
+      faceDetailer: {
+        enabled: true,
+        detectorModelName: "bbox/custom-face.pt",
+        denoise: 0.42,
+        steps: 18,
+      },
+      handDetailer: {
+        enabled: false,
+        detectorModelName: "bbox/custom-hand.pt",
+        steps: 21,
+      },
+    });
+
+    expect(validateComfyUiTextToImageRequest({
+      ...kreaRequest,
+      faceDetailer: request.faceDetailer,
+      handDetailer: request.handDetailer,
+    })).toMatchObject({ ok: true });
+    expect(request).toMatchObject({
+      faceDetailer: {
+        enabled: true,
+        detectorModelName: "bbox/custom-face.pt",
+        denoise: 0.42,
+        steps: 18,
+      },
+      handDetailer: {
+        enabled: false,
+        detectorModelName: "bbox/custom-hand.pt",
+        steps: 21,
+      },
+    });
+    expect(resolveComfyUiTextToImageRequest(kreaRequest)).toMatchObject({
+      faceDetailer: { enabled: false },
+      handDetailer: { enabled: false },
     });
   });
 

@@ -1010,23 +1010,65 @@ describe("ComfyUI object info helpers", () => {
       ]),
     });
 
-    expect(
-      validateComfyUiRequestAgainstObjectInfo(
-        {
-          ...validRequest,
-          sourceImageDataUrl: "data:image/png;base64,aGVsbG8=",
-          faceDetailer: { enabled: true },
-          characterReferences: [{
-            enabled: true,
-            name: "reference",
-            images: [{ imageName: "reference.png" }],
-          }],
+    const requiredNode = (inputNames: readonly string[]) => ({
+      input: {
+        required: Object.fromEntries(inputNames.map((inputName) => [inputName, ["ANY", {}]])),
+      },
+    });
+    const detailerGraphInputs = [
+      "image", "model", "clip", "vae", "guide_size", "guide_size_for", "max_size", "seed", "steps", "cfg",
+      "sampler_name", "scheduler", "positive", "negative", "denoise", "feather", "noise_mask", "force_inpaint",
+      "bbox_threshold", "bbox_dilation", "bbox_crop_factor", "sam_detection_hint", "sam_dilation", "sam_threshold",
+      "sam_bbox_expansion", "sam_mask_hint_threshold", "sam_mask_hint_use_negative", "drop_size", "bbox_detector",
+      "wildcard", "cycle",
+    ];
+    const objectInfoWithKrea2DetailerGraph = {
+      ...objectInfoWithKrea2,
+      CLIPTextEncode: requiredNode(["text", "clip"]),
+      EmptyLatentImage: requiredNode(["width", "height", "batch_size"]),
+      KSampler: {
+        input: {
+          required: {
+            ...objectInfoWithKrea2.KSampler.input.required,
+            model: ["MODEL", {}],
+            positive: ["CONDITIONING", {}],
+            negative: ["CONDITIONING", {}],
+            latent_image: ["LATENT", {}],
+          },
         },
-        objectInfoWithKrea2,
-      ).errors,
-    ).toEqual(expect.arrayContaining([
-      "Krea 2 Turbo does not support Detailer nodes.",
-      "Krea 2 Turbo does not support style or IPAdapter references.",
+      },
+      VAEDecode: requiredNode(["samples", "vae"]),
+      FaceDetailer: requiredNode(detailerGraphInputs),
+      SaveImage: requiredNode(["filename_prefix", "images"]),
+    };
+    const kreaDetailerRequest = {
+      ...validRequest,
+      faceDetailer: { enabled: true, detectorModelName: "bbox/face_yolov8s.pt" },
+      handDetailer: { enabled: false, detectorModelName: "bbox/hand_yolov8s.pt" },
+    };
+
+    expect(validateComfyUiRequestAgainstObjectInfo(
+      kreaDetailerRequest,
+      objectInfoWithKrea2DetailerGraph,
+    ).errors).toEqual([]);
+
+    expect(validateComfyUiRequestAgainstObjectInfo(kreaDetailerRequest, {
+      ...objectInfoWithKrea2DetailerGraph,
+      UNETLoader: {
+        input: { required: { unet_name: [["other-unet.safetensors"], {}], weight_dtype: [["default"], {}] } },
+      },
+      CLIPLoader: {
+        input: { required: { clip_name: [["other-clip.safetensors"], {}], type: [["krea2"], {}] } },
+      },
+      VAELoader: { input: { required: { vae_name: [["other-vae.safetensors"], {}] } } },
+      UltralyticsDetectorProvider: { input: { required: { model_name: [["bbox/other.pt"], {}] } } },
+      FaceDetailer: requiredNode(detailerGraphInputs.filter((inputName) => inputName !== "cycle")),
+    }).errors).toEqual(expect.arrayContaining([
+      "Krea 2 UNET model is not available in ComfyUI: krea-2-turbo-unet.safetensors",
+      "Krea 2 CLIP model is not available in ComfyUI: qwen3vl_4b_fp8_scaled.safetensors",
+      "Krea 2 VAE model is not available in ComfyUI: qwen_image_vae.safetensors",
+      "FaceDetailer detector model is not available in ComfyUI: bbox/face_yolov8s.pt",
+      "FaceDetailer.cycle input is not available in ComfyUI object_info.",
     ]));
   });
 
