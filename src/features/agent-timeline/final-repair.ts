@@ -112,6 +112,7 @@ function stableCanonicalValue(value: unknown): unknown {
 const recursiveRepairTransportFields = new Set([
   "clientId",
   "client_id",
+  "krea2StyleReference",
   "maskDataUrl",
   "outputPrefix",
   "promptId",
@@ -140,7 +141,7 @@ function projectRepairSemanticValue(value: unknown, depth = 0): unknown {
   );
 }
 
-function digestCanonicalSemanticValue(value: unknown) {
+export function digestTimelineSemanticValue(value: unknown) {
   return `sha256:${sha256Hex(JSON.stringify(stableCanonicalValue(value)))}`;
 }
 
@@ -214,7 +215,7 @@ export function deriveRepairBaseRequestDigest(
   const validation = validateComfyUiTextToImageRequest(execution.request);
   if (!validation.ok) return null;
   const semanticRequest = projectRepairSemanticValue(validation.request);
-  return digestCanonicalSemanticValue({
+  return digestTimelineSemanticValue({
     version: 1,
     request: {
       ...(isRecord(semanticRequest) ? semanticRequest : {}),
@@ -234,13 +235,15 @@ export function createCanonicalRepairInpaintRequest(
   if (!final.previewUpscale) return null;
   const suffix = attemptId.slice(7, 31);
   const formal = execution.request;
-  const allowsDetailers = formal.workflowProfile !== "krea2";
+  const formalSemantic = { ...formal };
+  delete formalSemantic.krea2StyleReference;
+  const isKrea2 = formal.workflowProfile === "krea2";
   const krea2LocalRegion = formal.workflowProfile === "krea2"
     ? getKrea2RepairLocalRegion(diagnosis, final.previewUpscale.width, final.previewUpscale.height)
     : null;
   if (formal.workflowProfile === "krea2" && !krea2LocalRegion) return null;
   return {
-    ...formal,
+    ...formalSemantic,
     outputPrefix: `sceneforge/timeline-repair-${suffix}`,
     imageName: `sceneforge-repair-source-${suffix}.png`,
     maskName: `sceneforge-repair-mask-${suffix}.png`,
@@ -252,11 +255,15 @@ export function createCanonicalRepairInpaintRequest(
     inpaintMode: "latent-noise-mask",
     faceDetailer: {
       ...formal.faceDetailer,
-      enabled: allowsDetailers && (diagnosis.faceDetailerEnabled ?? formal.faceDetailer?.enabled ?? false),
+      enabled: isKrea2
+        ? formal.faceDetailer?.enabled ?? false
+        : diagnosis.faceDetailerEnabled ?? formal.faceDetailer?.enabled ?? false,
     },
     handDetailer: {
       ...formal.handDetailer,
-      enabled: allowsDetailers && (diagnosis.handDetailerEnabled ?? formal.handDetailer?.enabled ?? false),
+      enabled: isKrea2
+        ? formal.handDetailer?.enabled ?? false
+        : diagnosis.handDetailerEnabled ?? formal.handDetailer?.enabled ?? false,
     },
     upscaleBeforeInpaint: {
       enabled: true,
@@ -383,7 +390,7 @@ export function deriveRepairRequestDigest(
   const validation = validateComfyUiInpaintRequest(request);
   if (!validation.ok) return null;
   const semanticRequest = projectRepairSemanticValue(validation.request);
-  return digestCanonicalSemanticValue({
+  return digestTimelineSemanticValue({
     version: 1,
     request: semanticRequest,
   });

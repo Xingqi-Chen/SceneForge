@@ -66,6 +66,7 @@ export type ComfyUiTextToImageRequest = {
   controlNets?: ComfyUiControlNetUnitConfig[];
   characterReferences?: ComfyUiCharacterReferenceConfig[];
   krea2StyleReference?: ComfyUiKrea2StyleReferenceConfig;
+  krea2StyleReferenceDescriptor?: ComfyUiKrea2StyleReferenceDescriptor;
   preview?: boolean;
 };
 
@@ -101,6 +102,7 @@ export type ComfyUiInpaintRequest = {
   growMaskBy?: number;
   faceDetailer?: ComfyUiFaceDetailerConfig;
   handDetailer?: ComfyUiHandDetailerConfig;
+  krea2StyleReferenceDescriptor?: ComfyUiKrea2StyleReferenceDescriptor;
   upscaleBeforeInpaint?: ComfyUiInpaintUpscaleConfig;
   preview?: boolean;
 };
@@ -276,6 +278,16 @@ export type ComfyUiKrea2StyleReferenceConfig = {
   endPercent?: number;
 };
 
+/** Persistable Krea adapter identity. It intentionally contains no file or transport identifiers. */
+export type ComfyUiKrea2StyleReferenceDescriptor = {
+  version: 1;
+  referenceDigest: string;
+  loraName: string;
+  weight: number;
+  startPercent: number;
+  endPercent: number;
+};
+
 export type ComfyUiLoraInput = {
   loraName: string;
   strengthModel: number;
@@ -322,6 +334,7 @@ export type ResolvedComfyUiTextToImageRequest = {
   controlNets: ResolvedComfyUiControlNetUnitConfig[];
   characterReferences: ResolvedComfyUiCharacterReferenceConfig[];
   krea2StyleReference?: Required<ComfyUiKrea2StyleReferenceConfig>;
+  krea2StyleReferenceDescriptor?: ComfyUiKrea2StyleReferenceDescriptor;
 };
 
 export type ResolvedComfyUiInpaintRequest = {
@@ -356,6 +369,7 @@ export type ResolvedComfyUiInpaintRequest = {
   growMaskBy: number;
   faceDetailer: ResolvedComfyUiFaceDetailerConfig;
   handDetailer: ResolvedComfyUiHandDetailerConfig;
+  krea2StyleReferenceDescriptor?: ComfyUiKrea2StyleReferenceDescriptor;
   upscaleBeforeInpaint: ResolvedComfyUiInpaintUpscaleConfig;
 };
 
@@ -518,6 +532,8 @@ export type BasicInpaintNodeIds = {
   clipLoader?: string;
   vaeLoader?: string;
   loraLoaders: string[];
+  styleReferenceLora?: string;
+  styleReferencePatch?: string;
   positivePrompt: string;
   negativePrompt: string;
   sourceImage: string;

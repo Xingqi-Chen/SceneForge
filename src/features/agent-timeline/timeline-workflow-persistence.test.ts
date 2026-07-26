@@ -1631,6 +1631,64 @@ describe("timeline workflow persistence", () => {
     expect(serialized).not.toContain('"bytes"');
   });
 
+  it("persists only the signed Krea adapter descriptor and Final digest, never its transport image", () => {
+    const raw = JSON.parse(JSON.stringify(createPersistedV2GenerationWorkflow(1))) as TimelineWorkflowState;
+    const execution = raw.nodes["comfyui-execution"].result as {
+      finals: Array<Record<string, unknown>>;
+      request: Record<string, unknown>;
+    };
+    execution.finals[0]!.finalRequestDigest = `sha256:${"b".repeat(64)}`;
+    execution.request = {
+      checkpointName: "krea-2-turbo-unet.safetensors",
+      modelBaseModel: "Krea 2",
+      modelStorageKind: "diffusion",
+      workflowProfile: "krea2",
+      positivePrompt: "persisted Krea scene",
+      sourceImageDataUrl: "data:image/png;base64,PRIVATE_FINAL_SOURCE",
+      imageName: "sceneforge-final-source.png",
+      outputPrefix: "C:\\private\\sceneforge-final",
+      krea2StyleReference: {
+        imageName: "sceneforge-krea-style-transport.png",
+        loraName: "krea2_style_reference.safetensors",
+        weight: 0.45,
+        startPercent: 0,
+        endPercent: 1,
+      },
+      krea2StyleReferenceDescriptor: {
+        version: 1,
+        referenceDigest: `sha256:${"a".repeat(64)}`,
+        loraName: "krea2_style_reference.safetensors",
+        weight: 0.45,
+        startPercent: 0,
+        endPercent: 1,
+      },
+    };
+
+    const restored = sanitizeTimelineWorkflowState(raw) as TimelineWorkflowState;
+    const result = restored.nodes["comfyui-execution"].result as {
+      finals: Array<{ finalRequestDigest?: string }>;
+      request: Record<string, unknown>;
+    };
+    const serialized = JSON.stringify(result);
+
+    expect(result.finals[0]?.finalRequestDigest).toBe(`sha256:${"b".repeat(64)}`);
+    expect(result.request.krea2StyleReferenceDescriptor).toEqual({
+      version: 1,
+      referenceDigest: `sha256:${"a".repeat(64)}`,
+      loraName: "krea2_style_reference.safetensors",
+      weight: 0.45,
+      startPercent: 0,
+      endPercent: 1,
+    });
+    expect(result.request).not.toHaveProperty("krea2StyleReference");
+    expect(result.request).not.toHaveProperty("sourceImageDataUrl");
+    expect(result.request).not.toHaveProperty("imageName");
+    expect(result.request).not.toHaveProperty("outputPrefix");
+    expect(serialized).not.toContain("sceneforge-krea-style-transport.png");
+    expect(serialized).not.toContain("PRIVATE_FINAL_SOURCE");
+    expect(serialized).not.toContain("C:\\\\private");
+  });
+
   it("round-trips an active workflow record without preserving secrets", () => {
     let workflow = createTimelineWorkflowState({
       workflowId: "timeline-persisted",

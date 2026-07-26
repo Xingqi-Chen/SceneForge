@@ -227,6 +227,52 @@ const SAMPLER_ALIASES: Record<string, string> = {
   resmultistepcfgpp: "res_multistep_cfg_pp",
 };
 
+const KREA2_DETAILER_REQUIRED_INPUTS = [
+  ["UltralyticsDetectorProvider", ["model_name"]],
+  ["FaceDetailer", [
+    "image",
+    "model",
+    "clip",
+    "vae",
+    "guide_size",
+    "guide_size_for",
+    "max_size",
+    "seed",
+    "steps",
+    "cfg",
+    "sampler_name",
+    "scheduler",
+    "positive",
+    "negative",
+    "denoise",
+    "feather",
+    "noise_mask",
+    "force_inpaint",
+    "bbox_threshold",
+    "bbox_dilation",
+    "bbox_crop_factor",
+    "sam_detection_hint",
+    "sam_dilation",
+    "sam_threshold",
+    "sam_bbox_expansion",
+    "sam_mask_hint_threshold",
+    "sam_mask_hint_use_negative",
+    "drop_size",
+    "bbox_detector",
+    "wildcard",
+    "cycle",
+  ]],
+] as const;
+
+const KREA2_DETAILER_GRAPH_REQUIRED_INPUTS = [
+  ["CLIPTextEncode", ["text", "clip"]],
+  ["EmptyLatentImage", ["width", "height", "batch_size"]],
+  ["KSampler", ["model", "positive", "negative", "latent_image"]],
+  ["VAEDecode", ["samples", "vae"]],
+  ...KREA2_DETAILER_REQUIRED_INPUTS,
+  ["SaveImage", ["filename_prefix", "images"]],
+] as const;
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -771,6 +817,57 @@ function validateDetailerAgainstObjectInfo({
   return resolvedDetailer;
 }
 
+function validateKrea2DetailerGraphAgainstObjectInfo({
+  errors,
+  objectInfo,
+  usesImg2ImgSource,
+}: {
+  errors: string[];
+  objectInfo: unknown;
+  usesImg2ImgSource: boolean;
+}) {
+  for (const [classType, inputNames] of KREA2_DETAILER_GRAPH_REQUIRED_INPUTS) {
+    if (usesImg2ImgSource && classType === "EmptyLatentImage") {
+      continue;
+    }
+    validateRequiredInputs(objectInfo, classType, inputNames, errors);
+  }
+}
+
+function validateKrea2StyleReferenceModelPatch(
+  request: ComfyUiInpaintRequest,
+  objectInfo: unknown,
+  errors: string[],
+) {
+  const descriptor = request.krea2StyleReferenceDescriptor;
+  if (!descriptor) return;
+  const contextIssue = getComfyUiKrea2StyleReferenceContextIssue(request);
+  if (contextIssue) {
+    errors.push(contextIssue);
+    return;
+  }
+  validateRequiredNodeClasses(objectInfo, [
+    "LoraLoaderModelOnly",
+    KREA2_STYLE_REFERENCE_MODEL_PATCH_NODE,
+  ], errors);
+  validateRequiredInputs(objectInfo, "LoraLoaderModelOnly", ["model", "lora_name", "strength_model"], errors);
+  validateRequiredInputs(objectInfo, KREA2_STYLE_REFERENCE_MODEL_PATCH_NODE, ["model", "kv_cache"], errors);
+  if (descriptor.loraName !== KREA2_STYLE_REFERENCE_LORA_NAME) {
+    errors.push("Krea Repair must use the verified krea2_style_reference.safetensors adapter file.");
+  } else if (!findOption(
+    descriptor.loraName,
+    readInputOptions(objectInfo, "LoraLoaderModelOnly", "lora_name"),
+  )) {
+    errors.push(`Krea style-reference adapter is not available in ComfyUI: ${descriptor.loraName}`);
+  }
+}
+
+function validateKrea2DetailerInputsAgainstObjectInfo(objectInfo: unknown, errors: string[]) {
+  for (const [classType, inputNames] of KREA2_DETAILER_REQUIRED_INPUTS) {
+    validateRequiredInputs(objectInfo, classType, inputNames, errors);
+  }
+}
+
 function resolveAnimaProfileObjectInfoOptions({
   errors,
   objectInfo,
@@ -1049,12 +1146,13 @@ export function validateComfyUiRequestAgainstObjectInfo(
     ultralyticsDetectorOptions,
   });
 
+  if (isKrea2Profile && (request.faceDetailer?.enabled || request.handDetailer?.enabled)) {
+    validateKrea2DetailerGraphAgainstObjectInfo({ errors, objectInfo, usesImg2ImgSource });
+  }
+
   let controlNets = getRequestControlNetUnits(request);
   let characterReferences = request.characterReferences ?? [];
   if (isKrea2Profile) {
-    if (request.faceDetailer?.enabled || request.handDetailer?.enabled) {
-      errors.push("Krea 2 Turbo does not support Detailer nodes.");
-    }
     if (controlNets.some((unit) => unit.enabled)) {
       errors.push("Krea 2 Turbo does not support ControlNet.");
     }
@@ -1192,6 +1290,7 @@ export function validateComfyUiInpaintRequestAgainstObjectInfo(
   const isKrea2Profile = profile.id === "krea2";
   if (isKrea2Profile) {
     validateKrea2RepairObjectInfoContract(objectInfo, errors);
+    validateKrea2StyleReferenceModelPatch(request, objectInfo, errors);
   } else {
     validateRequiredNodeClasses(
       objectInfo,
@@ -1448,7 +1547,7 @@ export function validateComfyUiInpaintRequestAgainstObjectInfo(
 
   if (isKrea2Profile) {
     if (request.faceDetailer?.enabled || request.handDetailer?.enabled) {
-      errors.push("Krea 2 Turbo repair does not support Detailer nodes.");
+      validateKrea2DetailerInputsAgainstObjectInfo(objectInfo, errors);
     }
     const imageWidth = request.imageWidth;
     const imageHeight = request.imageHeight;

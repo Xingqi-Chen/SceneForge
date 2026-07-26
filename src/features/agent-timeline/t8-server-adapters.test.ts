@@ -1104,28 +1104,35 @@ describe("timeline T8 server adapters", () => {
     expect(storeGeneratedImageMock).toHaveBeenCalledTimes(1);
   });
 
-  it("preserves object_info validation errors in the timeline node message", async () => {
+  it("preserves Krea Detailer object_info preflight errors and never queues a silently omitted graph", async () => {
     const getObjectInfo = vi.fn().mockResolvedValue({ CheckpointLoaderSimple: {} });
+    const generateImage = vi.fn();
     comfyUiMocks.createComfyUiClient.mockReturnValue({
       getObjectInfo,
+      generateImage,
     });
     comfyUiMocks.validateComfyUiTextToImageRequest.mockReturnValue({
       ok: true,
       request: {
         batchSize: 1,
-        checkpointName: "missing.safetensors",
+        checkpointName: "krea-2-turbo-unet.safetensors",
+        modelBaseModel: "Krea 2",
+        modelStorageKind: "diffusion",
         positivePrompt: "glass greenhouse pilot",
         preview: false,
+        workflowProfile: "krea2",
+        faceDetailer: { enabled: true, detectorModelName: "bbox/face_yolov8s.pt" },
       },
     });
     comfyUiMocks.validateComfyUiRequestAgainstObjectInfo.mockReturnValue({
       errors: [
-        "Checkpoint is not available in ComfyUI: missing.safetensors",
-        "LoRA 1 is not available in ComfyUI: missing-lora.safetensors",
+        "Krea 2 UNET model is not available in ComfyUI: krea-2-turbo-unet.safetensors",
+        "FaceDetailer.cycle input is not available in ComfyUI object_info.",
+        "FaceDetailer detector model is not available in ComfyUI: bbox/face_yolov8s.pt",
       ],
       request: {
         batchSize: 1,
-        checkpointName: "missing.safetensors",
+        checkpointName: "krea-2-turbo-unet.safetensors",
         positivePrompt: "glass greenhouse pilot",
         preview: false,
       },
@@ -1145,11 +1152,12 @@ describe("timeline T8 server adapters", () => {
               status: "error",
               error: {
                 code: "comfyui_object_info_mismatch",
-                message: "ComfyUI request does not match current model/node options. Checkpoint is not available in ComfyUI: missing.safetensors LoRA 1 is not available in ComfyUI: missing-lora.safetensors",
+                message: "ComfyUI request does not match current model/node options. Krea 2 UNET model is not available in ComfyUI: krea-2-turbo-unet.safetensors FaceDetailer.cycle input is not available in ComfyUI object_info. FaceDetailer detector model is not available in ComfyUI: bbox/face_yolov8s.pt",
                 details: {
                   errors: [
-                    "Checkpoint is not available in ComfyUI: missing.safetensors",
-                    "LoRA 1 is not available in ComfyUI: missing-lora.safetensors",
+                    "Krea 2 UNET model is not available in ComfyUI: krea-2-turbo-unet.safetensors",
+                    "FaceDetailer.cycle input is not available in ComfyUI object_info.",
+                    "FaceDetailer detector model is not available in ComfyUI: bbox/face_yolov8s.pt",
                   ],
                   warnings: ["using default sampler"],
                 },
@@ -1159,6 +1167,7 @@ describe("timeline T8 server adapters", () => {
         },
       },
     });
+    expect(generateImage).not.toHaveBeenCalled();
   });
 
   it("injects one Illustrious Run style reference before object_info validation and queueing", async () => {
@@ -1332,12 +1341,18 @@ describe("timeline T8 server adapters", () => {
     expect(comfyUiMocks.validateComfyUiRequestAgainstObjectInfo).toHaveBeenCalledWith(
       expect.objectContaining({
         characterReferences: [],
-        krea2StyleReference: {
+        krea2StyleReference: expect.objectContaining({
           imageName: "sceneforge-krea-style.png",
+          loraName: "krea2_style_reference.safetensors",
           weight: 0.45,
           startPercent: 0,
           endPercent: 1,
-        },
+        }),
+        krea2StyleReferenceDescriptor: expect.objectContaining({
+          version: 1,
+          referenceDigest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+          loraName: "krea2_style_reference.safetensors",
+        }),
       }),
       expect.anything(),
     );
@@ -1512,14 +1527,16 @@ describe("timeline T8 server adapters", () => {
   });
 
   it.each([
-    ["valid stored Final", 3, 1, false, 0.45],
-    ["truncated stored Final", 99, 2, false, 0.45],
-    ["valid stored Final from another redraw preset", 3, 2, true, 0.55],
+    ["valid stored Final", 3, 1, false, false, 0.45],
+    ["truncated stored Final", 99, 2, false, false, 0.45],
+    ["valid stored Final from another redraw preset", 3, 2, true, false, 0.55],
+    ["valid stored Final after a Detailer-only change", 3, 2, false, true, 0.45],
   ] as const)("retries only missing or invalid work with a %s", async (
     _case,
     persistedFinalSize,
     expectedQueueCount,
     changePreset,
+    changeDetailer,
     expectedDenoise,
   ) => {
     const getObjectInfo = vi.fn().mockResolvedValue({ CheckpointLoaderSimple: {} });
@@ -1614,6 +1631,18 @@ describe("timeline T8 server adapters", () => {
             : managedImageMocks.pngBytes,
       );
       const restored = JSON.parse(JSON.stringify(first)) as TimelineWorkflowState;
+      if (changeDetailer) {
+        const sceneInput = restored.nodes["scene-input"].result as {
+          settingsSnapshot?: Record<string, unknown>;
+        };
+        sceneInput.settingsSnapshot = {
+          ...sceneInput.settingsSnapshot,
+          detailers: {
+            faceDetailer: { enabled: true, detectorModelName: "bbox/face_yolov8s.pt" },
+            handDetailer: { enabled: false },
+          },
+        };
+      }
       const retried = changePreset
         ? confirmTimelineGeneration(updateTimelineFinalRedrawPreset(restored, {
             ...getRunSceneInputSettings(restored.nodes["scene-input"].result as { settingsSnapshot?: unknown }),
@@ -1624,7 +1653,12 @@ describe("timeline T8 server adapters", () => {
 
       expect(generateImage).toHaveBeenCalledTimes(expectedQueueCount);
       expect(generateImage).toHaveBeenLastCalledWith(
-        expect.objectContaining({ seed: 101, batchSize: 1, denoise: expectedDenoise }),
+        expect.objectContaining({
+          seed: 101,
+          batchSize: 1,
+          denoise: expectedDenoise,
+          ...(changeDetailer ? { faceDetailer: expect.objectContaining({ enabled: true }) } : {}),
+        }),
         { clientId: "timeline-timeline-t8-server-final-preview-2" },
       );
       expect(storeGeneratedImageMock).toHaveBeenCalledTimes(expectedQueueCount);

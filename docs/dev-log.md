@@ -4,6 +4,22 @@ This log records dated implementation and documentation work. Keep entries conci
 
 ## 2026-07-26
 
+### T44 / Issue #155 Krea 2 FaceDetailer and HandDetailer
+
+Summary:
+
+- Merged PR #157 into `master` as `bae3db0`; Issue #155 closed.
+- Enabled the existing independent FaceDetailer and HandDetailer controls for Krea 2 Final requests while retaining the explicit Preview-only disablement.
+- Added Krea Final graph wiring from the Krea UNET/CLIP/VAE model context through the selected Detailer nodes before `SaveImage`.
+- Added fail-closed Krea Detailer preflight checks for the complete generated graph, required node inputs, KSampler/detailer sampler settings, detector model, and exact Krea local UNET/CLIP/VAE files before any queue request.
+- Restored Krea workflows with their persisted Detailer choices, while legacy/missing settings still sanitize to both controls off.
+- Synchronized the T44 implementation with merged T42/T43 behavior. Krea Repair now preserves the user's signed Detailer choices without diagnosis-controlled enablement changes; adapter + Detailer Final graphs preserve the selected model context, and Final/Repair keep Hand-before-Face ordering.
+- Bound reusable Finals to a canonical semantic request digest so Detailer-only changes cannot reuse an incompatible image while unchanged partial retries still reuse completed siblings. Krea adapter-enabled Finals now persist only a signed, transport-free adapter descriptor; Repair identity includes it and the Repair sampler/Detailers inherit the verified patched model context.
+
+Validation:
+
+- Pre-sync T44 validation passed 272 focused and 1,643 full-suite tests. Final synchronized validation passed 552 focused tests across 12 affected files and 1,673 full-suite tests across 147 files, plus typecheck, lint with no errors, production build, and diff-check. Review Gate approved the T42/T43/T44 integration after Final reuse and adapter-enabled Repair identity hardening.
+
 ### T43 / Issue #154 Krea 2 Global Style Prompt and Verified Reference Adapter
 
 Summary:
@@ -12,7 +28,7 @@ Summary:
 - Preserved metadata-only workflow persistence; reference bytes, data URLs, and temporary ComfyUI input names remain outside persisted timeline state.
 - Added a visible no-queue Krea adapter preflight plus repeated queue-time fail-closed validation for compatible Krea 2 Turbo diffusion context, `TextEncodeKrea2OstrisEdit`, `Krea2OstrisEditModelPatch`, required ports, `LoraLoaderModelOnly`, and exact `krea2_style_reference.safetensors` availability.
 - Built the Krea-specific reference graph instead of reusing generic IPAdapter nodes. Prompt-only generation remains usable when no adapter is selected; a restored or explicitly enabled adapter stays selected and blocks while preflight is pending or unavailable until verification succeeds or the user explicitly opts out. Enabled adapters never queue when preflight or queue-time validation fails.
-- Kept ControlNet, entity references, Story, hidden adapter injection, Detailers, and image-byte persistence outside the Krea scope. Reference edits continue to stale downstream parameter/generation work and cancel prior confirmation.
+- Kept ControlNet, entity references, Story, hidden adapter injection, and image-byte persistence outside the Krea scope. Reference edits continue to stale downstream parameter/generation work and cancel prior confirmation. T44 subsequently adds independently selected Detailers without weakening adapter preflight.
 
 ## 2026-07-25
 

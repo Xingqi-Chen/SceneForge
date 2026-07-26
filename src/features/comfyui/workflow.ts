@@ -720,6 +720,9 @@ function buildKrea2TextToImageWorkflow(
   const builder = new ComfyUiWorkflowBuilder();
   const modelContext = addModelContextNodes({ builder, request: resolvedRequest });
   const styleReference = resolvedRequest.krea2StyleReference;
+  if (resolvedRequest.krea2StyleReferenceDescriptor && !styleReference) {
+    throw new Error("Krea style-reference transport image is required for Final generation.");
+  }
   let modelConnection = modelContext.modelConnection;
   let styleReferenceImage: string | undefined;
   let styleReferenceLora: string | undefined;
@@ -850,11 +853,54 @@ function buildKrea2TextToImageWorkflow(
     },
     "Decode Krea Image",
   );
+  let outputImageConnection = builder.connect(vaeDecode, 0);
+  let handUltralyticsDetectorProvider: string | undefined;
+  let handDetailer: string | undefined;
+  let ultralyticsDetectorProvider: string | undefined;
+  let faceDetailer: string | undefined;
+
+  if (resolvedRequest.handDetailer.enabled) {
+    const handDetailerNodes = addDetailerNode({
+      builder,
+      clipConnection: modelContext.clipConnection,
+      config: resolvedRequest.handDetailer,
+      detectorTitle: "Krea Hand Detector",
+      image: outputImageConnection,
+      modelConnection,
+      negativePrompt,
+      positivePrompt,
+      seed: resolvedRequest.seed,
+      title: "Krea HandDetailer",
+      vaeConnection: modelContext.vaeConnection,
+    });
+    handUltralyticsDetectorProvider = handDetailerNodes.detector;
+    handDetailer = handDetailerNodes.detailer;
+    outputImageConnection = handDetailerNodes.output;
+  }
+
+  if (resolvedRequest.faceDetailer.enabled) {
+    const faceDetailerNodes = addDetailerNode({
+      builder,
+      clipConnection: modelContext.clipConnection,
+      config: resolvedRequest.faceDetailer,
+      detectorTitle: "Krea Face Detector",
+      image: outputImageConnection,
+      modelConnection,
+      negativePrompt,
+      positivePrompt,
+      seed: resolvedRequest.seed,
+      title: "Krea FaceDetailer",
+      vaeConnection: modelContext.vaeConnection,
+    });
+    ultralyticsDetectorProvider = faceDetailerNodes.detector;
+    faceDetailer = faceDetailerNodes.detailer;
+    outputImageConnection = faceDetailerNodes.output;
+  }
   const saveImage = builder.addNode(
     "SaveImage",
     {
       filename_prefix: resolvedRequest.outputPrefix,
-      images: builder.connect(vaeDecode, 0),
+      images: outputImageConnection,
     },
     "Save Krea 2 Image",
   );
@@ -874,6 +920,10 @@ function buildKrea2TextToImageWorkflow(
       latentImage,
       sampler,
       vaeDecode,
+      ...(handUltralyticsDetectorProvider ? { handUltralyticsDetectorProvider } : {}),
+      ...(handDetailer ? { handDetailer } : {}),
+      ...(ultralyticsDetectorProvider ? { ultralyticsDetectorProvider } : {}),
+      ...(faceDetailer ? { faceDetailer } : {}),
       previewImage: saveImage,
     },
     outputNodeId: saveImage,
@@ -886,7 +936,26 @@ export function buildBasicInpaintWorkflow(request: ComfyUiInpaintRequest): Basic
   const builder = new ComfyUiWorkflowBuilder();
 
   const modelContext = addModelContextNodes({ builder, request: resolvedRequest });
-  const modelConnection = modelContext.modelConnection;
+  let modelConnection = modelContext.modelConnection;
+  let styleReferenceLora: string | undefined;
+  let styleReferencePatch: string | undefined;
+  if (resolvedRequest.krea2StyleReferenceDescriptor) {
+    styleReferenceLora = builder.addNode(
+      "LoraLoaderModelOnly",
+      {
+        model: modelConnection,
+        lora_name: resolvedRequest.krea2StyleReferenceDescriptor.loraName,
+        strength_model: resolvedRequest.krea2StyleReferenceDescriptor.weight,
+      },
+      "Load Krea Style Reference Adapter",
+    );
+    styleReferencePatch = builder.addNode(
+      KREA2_STYLE_REFERENCE_MODEL_PATCH_NODE,
+      { model: builder.connect(styleReferenceLora, 0), kv_cache: false },
+      "Patch Krea Style Reference Model",
+    );
+    modelConnection = builder.connect(styleReferencePatch, 0);
+  }
   const clipConnection = modelContext.clipConnection;
   const vaeConnection = modelContext.vaeConnection;
   const positivePrompt = builder.addNode(
@@ -1250,6 +1319,8 @@ export function buildBasicInpaintWorkflow(request: ComfyUiInpaintRequest): Basic
     workflow: builder.toWorkflow(),
     nodeIds: {
       ...modelContext.nodeIds,
+      ...(styleReferenceLora ? { styleReferenceLora } : {}),
+      ...(styleReferencePatch ? { styleReferencePatch } : {}),
       positivePrompt,
       negativePrompt,
       sourceImage,

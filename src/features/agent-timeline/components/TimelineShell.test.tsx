@@ -2354,6 +2354,8 @@ describe("TimelineShell", () => {
         expect(container.textContent).toContain("One-shot Repair remains off by default");
         expect(container.textContent).toContain("The analyzed global style prompt is supported exactly once");
         expect(container.textContent).toContain("optional reference adapter appears only after local Krea preflight");
+        expect(container.textContent).toContain("FaceDetailer and HandDetailer apply independently to Final and compatible Repair requests; Previews always remain Detailer-free.");
+        expect(container.textContent).toContain("SceneForge checks their required nodes, inputs, samplers, detector models, and Krea model context before queueing.");
         const authorizeRepair = Array.from(container.querySelectorAll('input[type="checkbox"]')).find((input) =>
           input.parentElement?.textContent?.includes("Authorize one-shot local repair"),
         ) as HTMLInputElement | undefined;

@@ -1149,10 +1149,12 @@ export async function repairFinalExecution(
         requestPolicy: {
           version: 1,
           sourceVariant: "final",
-          requestLocalFaceDetailer: !isKrea2RepairExecution(execution) &&
-            (diagnosis.faceDetailerEnabled ?? execution.request.faceDetailer?.enabled ?? false),
-          requestLocalHandDetailer: !isKrea2RepairExecution(execution) &&
-            (diagnosis.handDetailerEnabled ?? execution.request.handDetailer?.enabled ?? false),
+          requestLocalFaceDetailer: isKrea2RepairExecution(execution)
+            ? execution.request.faceDetailer?.enabled ?? false
+            : diagnosis.faceDetailerEnabled ?? execution.request.faceDetailer?.enabled ?? false,
+          requestLocalHandDetailer: isKrea2RepairExecution(execution)
+            ? execution.request.handDetailer?.enabled ?? false
+            : diagnosis.handDetailerEnabled ?? execution.request.handDetailer?.enabled ?? false,
         },
       });
     } catch (error) {

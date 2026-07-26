@@ -81,8 +81,10 @@ import {
   deriveRepairBaseRequestDigest,
   deriveRepairOutputNodeId,
   deriveRepairRequestDigest,
+  sanitizeRepairSemanticDigest,
   sanitizeTimelineRepairAttempt,
 } from "./final-repair";
+import { normalizeComfyUiKrea2StyleReferenceDescriptor } from "@/features/comfyui/krea2-style-reference";
 
 export const TIMELINE_WORKFLOW_RECORD_KIND = "sceneforge-timeline-workflow" as const;
 export const TIMELINE_WORKFLOW_RECORD_VERSION = 1 as const;
@@ -1287,6 +1289,7 @@ function sanitizeFinalExecutionResult(
     const promptId = safeIdentifier(raw.promptId) ?? undefined;
     const previewUpscale = sanitizePreviewUpscale(raw.previewUpscale);
     const recordFinalPolicy = sanitizeFinalPolicy(raw.finalPolicy);
+    const finalRequestDigest = sanitizeRepairSemanticDigest(raw.finalRequestDigest);
     const validDone = raw.status === "done" && candidateId && seed !== null && rank !== null && rank >= 1 && rank <= 8 &&
       sourceImage && storedImage && promptId && (isKrea2DirectFinal || !options.requireCurrentFinalPolicy || finalPolicy) && (!finalPolicy || (
         previewUpscale && recordFinalPolicy && JSON.stringify(recordFinalPolicy) === JSON.stringify(finalPolicy)
@@ -1302,6 +1305,7 @@ function sanitizeFinalExecutionResult(
         storedImage,
         ...(previewUpscale ? { previewUpscale } : {}),
         ...(recordFinalPolicy ? { finalPolicy: recordFinalPolicy } : {}),
+        ...(finalRequestDigest ? { finalRequestDigest } : {}),
       };
     }
     return {
@@ -1311,6 +1315,7 @@ function sanitizeFinalExecutionResult(
       status: "error" as const,
       ...(previewUpscale ? { previewUpscale } : {}),
       ...(recordFinalPolicy ? { finalPolicy: recordFinalPolicy } : {}),
+      ...(finalRequestDigest ? { finalRequestDigest } : {}),
       error: createTimelineNodeError(
         "image_storage_invalid",
         "A persisted final reference was invalid and must be rendered again.",
@@ -1322,9 +1327,23 @@ function sanitizeFinalExecutionResult(
   const validCompleteSet = finals.length === finalCount && done.length === finalCount &&
     new Set(done.map((item) => item.candidateId)).size === finalCount &&
     new Set(done.map((item) => item.rank)).size === finalCount;
-  const request = isRecord(value.request)
-    ? sanitizeJsonValue(value.request, 0, { redactDataUrls: true })
-    : {};
+  const request = (() => {
+    if (!isRecord(value.request)) return {};
+    const rawRequest = { ...value.request };
+    const descriptor = normalizeComfyUiKrea2StyleReferenceDescriptor(
+      rawRequest.krea2StyleReferenceDescriptor,
+    );
+    delete rawRequest.krea2StyleReference;
+    delete rawRequest.krea2StyleReferenceDescriptor;
+    delete rawRequest.sourceImageDataUrl;
+    delete rawRequest.imageName;
+    delete rawRequest.outputPrefix;
+    const sanitized = sanitizeJsonValue(rawRequest, 0, { redactDataUrls: true });
+    return {
+      ...(isRecord(sanitized) ? sanitized : {}),
+      ...(descriptor ? { krea2StyleReferenceDescriptor: descriptor } : {}),
+    };
+  })();
   return {
     completed: value.completed === true && validCompleteSet,
     finalCount,
