@@ -790,6 +790,10 @@ export function validateComfyUiRequestAgainstObjectInfo(
       errors.push("VAEEncode node is not available in ComfyUI. It is required to encode img2img source images.");
     }
 
+    validateRequiredInputs(objectInfo, "LoadImage", ["image"], errors);
+    validateRequiredInputs(objectInfo, "ImageScale", ["image", "upscale_method", "width", "height", "crop"], errors);
+    validateRequiredInputs(objectInfo, "VAEEncode", ["pixels", "vae"], errors);
+
     const imageScaleMethodOptions = readInputOptions(objectInfo, "ImageScale", "upscale_method");
     if (imageScaleMethodOptions.length > 0 && !findOption("lanczos", imageScaleMethodOptions)) {
       errors.push("ImageScale lanczos upscale method is not available in ComfyUI. It is required for img2img source images.");
@@ -822,9 +826,6 @@ export function validateComfyUiRequestAgainstObjectInfo(
   let controlNets = getRequestControlNetUnits(request);
   let characterReferences = request.characterReferences ?? [];
   if (isKrea2Profile) {
-    if (usesImg2ImgSource) {
-      errors.push("Krea 2 Turbo supports direct txt2img only; source images are not supported.");
-    }
     if (request.faceDetailer?.enabled || request.handDetailer?.enabled) {
       errors.push("Krea 2 Turbo does not support Detailer nodes.");
     }
@@ -899,6 +900,12 @@ export function validateComfyUiRequestAgainstObjectInfo(
 
   validateDimension(request.width, "width", latentImageNode ?? "EmptyLatentImage", errors);
   validateDimension(request.height, "height", latentImageNode ?? "EmptyLatentImage", errors);
+  if (isKrea2Profile && request.width !== undefined && request.width % 16 !== 0) {
+    errors.push("width must be divisible by 16 for Krea 2 Turbo without aspect-ratio rounding.");
+  }
+  if (isKrea2Profile && request.height !== undefined && request.height % 16 !== 0) {
+    errors.push("height must be divisible by 16 for Krea 2 Turbo without aspect-ratio rounding.");
+  }
 
   if (request.samplerName && samplerName && samplerName !== request.samplerName) {
     warnings.push(`Normalized sampler ${request.samplerName} to ${samplerName}.`);

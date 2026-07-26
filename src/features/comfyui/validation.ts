@@ -1262,9 +1262,6 @@ export function validateComfyUiTextToImageRequest(value: unknown): ComfyUiTextTo
   }).id;
 
   if (workflowProfile === "krea2") {
-    if (value.imageName || value.sourceImageDataUrl) {
-      return { ok: false, message: "Krea 2 Turbo supports direct txt2img only; source images are not supported." };
-    }
     if (faceDetailer?.enabled || handDetailer?.enabled) {
       return { ok: false, message: "Krea 2 Turbo does not support FaceDetailer or HandDetailer." };
     }
@@ -1274,8 +1271,9 @@ export function validateComfyUiTextToImageRequest(value: unknown): ComfyUiTextTo
     if (characterReferences?.some((reference) => reference.enabled !== false)) {
       return { ok: false, message: "Krea 2 Turbo does not support style or IPAdapter references." };
     }
-    if (value.preview === true) {
-      return { ok: false, message: "Krea 2 Turbo does not support preview generation." };
+    if ((typeof value.width === "number" && value.width % 16 !== 0) ||
+        (typeof value.height === "number" && value.height % 16 !== 0)) {
+      return { ok: false, message: "Krea 2 Turbo width and height must be divisible by 16 without aspect-ratio rounding." };
     }
   }
 
@@ -1935,12 +1933,8 @@ export function resolveComfyUiTextToImageRequest(
       strengthModel: lora.strengthModel,
       strengthClip: lora.strengthClip ?? lora.strengthModel,
     })),
-    width: isKrea2Profile
-      ? Math.ceil((request.width ?? 1024) / 16) * 16
-      : request.width ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.width,
-    height: isKrea2Profile
-      ? Math.ceil((request.height ?? 1024) / 16) * 16
-      : request.height ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.height,
+    width: request.width ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.width,
+    height: request.height ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.height,
     seed: request.seed ?? createRandomSeed(),
     steps: request.steps ?? (isKrea2Profile ? 8 : DEFAULT_TEXT_TO_IMAGE_REQUEST.steps),
     cfg: request.cfg ?? (isKrea2Profile ? 1 : DEFAULT_TEXT_TO_IMAGE_REQUEST.cfg),
@@ -1949,8 +1943,8 @@ export function resolveComfyUiTextToImageRequest(
     denoise: request.denoise ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.denoise,
     batchSize: isKrea2Profile ? 1 : request.imageName || request.sourceImageDataUrl ? 1 : request.batchSize ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.batchSize,
     latentImageNode: isAnimaProfile || isKrea2Profile ? "EmptyLatentImage" : request.latentImageNode ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.latentImageNode,
-    sourceImageDataUrl: isKrea2Profile ? "" : request.sourceImageDataUrl ?? "",
-    imageName: isKrea2Profile ? "" : getString(request.imageName, ""),
+    sourceImageDataUrl: request.sourceImageDataUrl ?? "",
+    imageName: getString(request.imageName, ""),
     ...(request.imageWidth ? { imageWidth: request.imageWidth } : {}),
     ...(request.imageHeight ? { imageHeight: request.imageHeight } : {}),
     promptWrapper: {

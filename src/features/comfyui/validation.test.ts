@@ -16,12 +16,12 @@ const kreaRequest = {
 };
 
 describe("Krea 2 ComfyUI request validation", () => {
-  it("resolves the direct txt2img defaults and 16-pixel-aligned dimensions", () => {
+  it("resolves staged preview defaults while preserving already 16-pixel-aligned dimensions", () => {
     expect(validateComfyUiTextToImageRequest(kreaRequest)).toMatchObject({ ok: true });
     expect(resolveComfyUiTextToImageRequest({
       ...kreaRequest,
-      width: 1025,
-      height: 1023,
+      width: 1040,
+      height: 1024,
     })).toMatchObject({
       workflowProfile: "krea2",
       clipName: "qwen3vl_4b_fp8_scaled.safetensors",
@@ -40,7 +40,6 @@ describe("Krea 2 ComfyUI request validation", () => {
   });
 
   it.each([
-    ["source image", { sourceImageDataUrl: "data:image/png;base64,aGVsbG8=" }, "direct txt2img only"],
     ["Detailer", { faceDetailer: { enabled: true } }, "does not support FaceDetailer"],
     ["style reference", {
       characterReferences: [{
@@ -50,11 +49,39 @@ describe("Krea 2 ComfyUI request validation", () => {
       }],
     }, "does not support style or IPAdapter"],
     ["ControlNet", { controlNets: [{ type: "openpose", enabled: true, svg: "<svg />" }] }, "does not support ControlNet"],
-    ["preview", { preview: true }, "does not support preview generation"],
   ])("rejects Krea %s requests", (_label, override, message) => {
     expect(validateComfyUiTextToImageRequest({ ...kreaRequest, ...override })).toMatchObject({
       ok: false,
       message: expect.stringContaining(message),
+    });
+  });
+
+  it("accepts Krea source img2img and preview requests, but rejects unaligned formal dimensions", () => {
+    expect(validateComfyUiTextToImageRequest({
+      ...kreaRequest,
+      sourceImageDataUrl: "data:image/png;base64,aGVsbG8=",
+      imageHeight: 1024,
+      imageWidth: 1040,
+      preview: true,
+      width: 1040,
+      height: 1024,
+    })).toMatchObject({
+      ok: true,
+      request: {
+        preview: true,
+        sourceImageDataUrl: "data:image/png;base64,aGVsbG8=",
+        imageWidth: 1040,
+        imageHeight: 1024,
+      },
+    });
+
+    expect(validateComfyUiTextToImageRequest({
+      ...kreaRequest,
+      width: 1025,
+      height: 1024,
+    })).toMatchObject({
+      ok: false,
+      message: "Krea 2 Turbo width and height must be divisible by 16 without aspect-ratio rounding.",
     });
   });
 

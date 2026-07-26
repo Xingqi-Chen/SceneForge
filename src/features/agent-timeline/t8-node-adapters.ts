@@ -6,7 +6,11 @@ import {
 } from "./final-generation-policy";
 import { getGenerationInputDetailers } from "./generation-detailers";
 import { getRunSceneInputSettings } from "./run-input-settings";
-import { createTimelineNodeError, normalizeTimelineImageCount } from "./state";
+import {
+  createTimelineNodeError,
+  normalizeTimelineImageCount,
+  normalizeTimelineSourceDenoise,
+} from "./state";
 import {
   getStyleReferenceBlockingIssue,
   getStyleReferenceContextMismatch,
@@ -24,7 +28,6 @@ import {
   type SceneInputTimelineResult,
   type TimelineNodeAdapters,
   type TimelineNodeExecutionContext,
-  type TimelineNotApplicableResult,
   type TimelineWorkflowState,
 } from "./types";
 
@@ -32,7 +35,7 @@ const PREVIEW_DIMENSION_ALIGNMENT = 8;
 const MAX_SEED = Number.MAX_SAFE_INTEGER;
 
 export type TimelineBalancedGenerationPolicy = {
-  family: "illustrious" | "anima" | "fallback";
+  family: "illustrious" | "anima" | "fallback" | "krea2";
   finalDenoise: number;
   previewLongestEdge: number;
   previewStepCap: number;
@@ -92,6 +95,7 @@ export type TimelineT8NodeAdapterOptions = {
   executePreviews: TimelinePreviewExecutionProvider;
   scorePreviews: TimelinePreviewScoringProvider;
   executeFinals: TimelineFinalExecutionProvider;
+  /** @deprecated T39 compatibility shape; staged adapters never invoke direct execution. */
   executeDirectFinal?: TimelineDirectFinalExecutionProvider;
   loadResultDisplay: TimelineResultDisplayProvider;
 };
@@ -138,9 +142,9 @@ function leastCommonMultiple(left: number, right: number) {
   return (left / greatestCommonDivisor(left, right)) * right;
 }
 
-export function getTimelinePreviewDimensions(width: number, height: number, longestEdge = 768) {
-  if (![width, height, longestEdge].every((value) => Number.isSafeInteger(value) && value > 0)) {
-    invalidComfyUiRequest("Preview width, height, and longest-edge limit must be positive integers.");
+export function getTimelinePreviewDimensions(width: number, height: number, longestEdge = 768, alignment = PREVIEW_DIMENSION_ALIGNMENT) {
+  if (![width, height, longestEdge, alignment].every((value) => Number.isSafeInteger(value) && value > 0)) {
+    invalidComfyUiRequest("Preview width, height, longest-edge limit, and alignment must be positive integers.");
   }
   if (Math.max(width, height) <= longestEdge) {
     return { width, height };
@@ -149,10 +153,8 @@ export function getTimelinePreviewDimensions(width: number, height: number, long
   const ratioDivisor = greatestCommonDivisor(width, height);
   const ratioWidth = width / ratioDivisor;
   const ratioHeight = height / ratioDivisor;
-  const widthAlignmentMultiplier = PREVIEW_DIMENSION_ALIGNMENT /
-    greatestCommonDivisor(ratioWidth, PREVIEW_DIMENSION_ALIGNMENT);
-  const heightAlignmentMultiplier = PREVIEW_DIMENSION_ALIGNMENT /
-    greatestCommonDivisor(ratioHeight, PREVIEW_DIMENSION_ALIGNMENT);
+  const widthAlignmentMultiplier = alignment / greatestCommonDivisor(ratioWidth, alignment);
+  const heightAlignmentMultiplier = alignment / greatestCommonDivisor(ratioHeight, alignment);
   const alignmentMultiplier = leastCommonMultiple(widthAlignmentMultiplier, heightAlignmentMultiplier);
   const maximumMultiplier = Math.floor(longestEdge / Math.max(ratioWidth, ratioHeight));
   const multiplier = Math.floor(maximumMultiplier / alignmentMultiplier) * alignmentMultiplier;
@@ -160,7 +162,7 @@ export function getTimelinePreviewDimensions(width: number, height: number, long
   if (multiplier < alignmentMultiplier) {
     invalidComfyUiRequest(
       `Preview dimensions ${width}x${height} cannot be downscaled to an exact-aspect, ` +
-      `${PREVIEW_DIMENSION_ALIGNMENT}-pixel-aligned size within longest edge ${longestEdge}. ` +
+      `${alignment}-pixel-aligned size within longest edge ${longestEdge}. ` +
       "Choose a less extreme aspect ratio or dimensions already within the preview limit.",
       { height, longestEdge, width },
     );
@@ -174,21 +176,16 @@ function getTimelineSourceImage(workflow: TimelineWorkflowState) {
   return isRecord(result) ? (result as Partial<SceneInputTimelineResult>).sourceImage : undefined;
 }
 
-function isKrea2DirectRun(workflow: TimelineWorkflowState) {
-  const parameters = workflow.nodes["parameter-recommendation"].result;
-  return isRecord(parameters) && isRecord(parameters.requestPreview) &&
-    parameters.requestPreview.workflowProfile === "krea2";
-}
-
-function krea2NotApplicable(message: string): TimelineNotApplicableResult {
-  return { status: "not-applicable", reason: "krea2-direct-txt2img", message };
-}
-
-function normalizeKrea2Dimension(value: unknown) {
+function normalizeKrea2Dimension(value: unknown, label: "width" | "height") {
   const dimension = typeof value === "number" && Number.isFinite(value) && value > 0
-    ? Math.round(value)
+    ? value
     : 1024;
-  return Math.ceil(dimension / 16) * 16;
+  if (!Number.isSafeInteger(dimension) || dimension < 16 || dimension > 16_384 || dimension % 16 !== 0) {
+    invalidComfyUiRequest(
+      `Krea 2 Turbo ${label} must be an exact 16-pixel-aligned integer between 16 and 16384; dimensions cannot be rounded before queueing.`,
+    );
+  }
+  return dimension;
 }
 
 function assertGenerationConfirmed(workflow: TimelineWorkflowState) {
@@ -289,7 +286,6 @@ export function createConfirmedTimelineComfyUiRequest(workflow: TimelineWorkflow
   const settings = getRunSceneInputSettings(isRecord(sceneInput) ? sceneInput : {});
   const isKrea2 = parameterResult.requestPreview.workflowProfile === "krea2";
   if (isKrea2) {
-    if (sourceImage) invalidComfyUiRequest("Krea 2 Turbo supports direct txt2img only; remove the source image before confirmation.");
     if (settings.styleReference) invalidComfyUiRequest("Krea 2 Turbo does not support style or IPAdapter references.");
     if (settings.automaticLocalRepair) {
       invalidComfyUiRequest("Krea 2 Turbo does not support automatic local repair; disable it before confirmation.");
@@ -297,14 +293,27 @@ export function createConfirmedTimelineComfyUiRequest(workflow: TimelineWorkflow
     if (detailers.faceDetailer.enabled || detailers.handDetailer.enabled) {
       invalidComfyUiRequest("Krea 2 Turbo does not support FaceDetailer or HandDetailer.");
     }
+    const width = normalizeKrea2Dimension(parameterResult.requestPreview.width, "width");
+    const height = normalizeKrea2Dimension(parameterResult.requestPreview.height, "height");
+    if (sourceImage && (sourceImage.width !== width || sourceImage.height !== height)) {
+      invalidComfyUiRequest(
+        "Krea 2 Turbo source img2img dimensions must exactly match the 16-pixel-aligned formal dimensions; regenerate parameters instead of rounding or stretching the source aspect ratio.",
+      );
+    }
     return {
       ...parameterResult.requestPreview,
       workflowProfile: "krea2",
       modelStorageKind: "diffusion",
-      sourceImageDataUrl: undefined,
-      imageName: undefined,
-      width: normalizeKrea2Dimension(parameterResult.requestPreview.width),
-      height: normalizeKrea2Dimension(parameterResult.requestPreview.height),
+      ...(sourceImage ? {
+        sourceImageDataUrl: sourceImage.dataUrl,
+        imageWidth: sourceImage.width,
+        imageHeight: sourceImage.height,
+        denoise: normalizeTimelineSourceDenoise(
+          isRecord(sceneInput) ? sceneInput.sourceDenoise : undefined,
+        ),
+      } : {}),
+      width,
+      height,
       batchSize: 1,
       preview: false,
       faceDetailer: { ...parameterResult.requestPreview.faceDetailer, enabled: false },
@@ -328,21 +337,6 @@ export function createConfirmedTimelineComfyUiRequest(workflow: TimelineWorkflow
   };
 }
 
-export function createTimelineKrea2DirectFinalRequest(workflow: TimelineWorkflowState) {
-  const request = createConfirmedTimelineComfyUiRequest(workflow);
-  if (request.workflowProfile !== "krea2") {
-    invalidComfyUiRequest("Krea 2 direct-final execution requires a Krea 2 Turbo request profile.");
-  }
-  return {
-    ...request,
-    seed: Number.isSafeInteger(request.seed) && (request.seed ?? -1) >= 0
-      ? request.seed
-      : Math.floor(Math.random() * MAX_SEED),
-    batchSize: 1,
-    preview: false,
-  };
-}
-
 export function createTimelinePreviewRequests(
   workflow: TimelineWorkflowState,
   options: { advancePreviewSeedOnRetry?: boolean } = {},
@@ -352,7 +346,12 @@ export function createTimelinePreviewRequests(
   const parameterResult = getParameterRecommendationResult(workflow);
   const finalCount = getTimelineFinalImageCount(workflow);
   const candidateCount = getTimelinePreviewCandidateCount(finalCount);
-  const dimensions = getTimelinePreviewDimensions(parameterResult.width, parameterResult.height, policy.previewLongestEdge);
+  const dimensions = getTimelinePreviewDimensions(
+    parameterResult.width,
+    parameterResult.height,
+    policy.previewLongestEdge,
+    formal.workflowProfile === "krea2" ? 16 : PREVIEW_DIMENSION_ALIGNMENT,
+  );
   const baseSeed = materializeBaseSeed(
     workflow,
     parameterResult,
@@ -504,37 +503,23 @@ function getPreviousFinalResult(workflow: TimelineWorkflowState) {
 }
 
 export function createTimelineT8NodeAdapters(options: TimelineT8NodeAdapterOptions): TimelineNodeAdapters {
-  const directFinal = async (context: TimelineNodeExecutionContext) => {
-    if (!options.executeDirectFinal) {
-      invalidComfyUiRequest("Krea 2 Turbo direct-final execution is not configured on this server.");
-    }
-    return options.executeDirectFinal(
-      createTimelineKrea2DirectFinalRequest(context.workflow),
-      context,
-      getPreviousFinalResult(context.workflow),
-    );
-  };
-
   return {
-    "preview-execution": async (context) => isKrea2DirectRun(context.workflow)
-      ? { value: krea2NotApplicable("Krea 2 Turbo executes one confirmed direct txt2img render; preview generation is not applicable."), source: "system" }
-      : {
-          value: await options.executePreviews(createTimelinePreviewRequests(context.workflow, {
-            advancePreviewSeedOnRetry: options.advancePreviewSeedOnRetry,
-          }), context),
-          source: "system",
-        },
-    "preview-scoring": async (context) => isKrea2DirectRun(context.workflow)
-      ? { value: krea2NotApplicable("Krea 2 Turbo has no preview candidates to score."), source: "system" }
-      : { value: await options.scorePreviews(requirePreviewResult(context.workflow), context), source: "ai" },
+    "preview-execution": async (context) => ({
+      value: await options.executePreviews(createTimelinePreviewRequests(context.workflow, {
+        advancePreviewSeedOnRetry: options.advancePreviewSeedOnRetry,
+      }), context),
+      source: "system",
+    }),
+    "preview-scoring": async (context) => ({
+      value: await options.scorePreviews(requirePreviewResult(context.workflow), context),
+      source: "ai",
+    }),
     "comfyui-execution": async (context) => ({
-      value: isKrea2DirectRun(context.workflow)
-        ? await directFinal(context)
-        : await options.executeFinals(
-            createTimelineFinalRequests(context.workflow),
-            context,
-            getPreviousFinalResult(context.workflow),
-          ),
+      value: await options.executeFinals(
+        createTimelineFinalRequests(context.workflow),
+        context,
+        getPreviousFinalResult(context.workflow),
+      ),
       source: "system",
     }),
     "result-display": async (context) => ({

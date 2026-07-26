@@ -126,7 +126,19 @@ export type TimelineWorkflowState = {
   createdAt: string;
   updatedAt: string;
   generationConfirmed: boolean;
+  /** A completed pre-T41 Krea direct txt2img run. It is display-only so its provenance remains truthful. */
+  legacyDirectProvenance?: {
+    kind: "krea2-direct-txt2img";
+    readOnly: true;
+  };
 };
+
+export function isTimelineLegacyDirectReadOnly(
+  workflow: Pick<TimelineWorkflowState, "legacyDirectProvenance"> | null | undefined,
+) {
+  return workflow?.legacyDirectProvenance?.kind === "krea2-direct-txt2img" &&
+    workflow.legacyDirectProvenance.readOnly === true;
+}
 
 export type SceneInputTimelineResult = {
   rawIntent: string;
@@ -344,7 +356,7 @@ export type PreviewExecutionTimelineResult = {
 
 export type TimelineNotApplicableResult = {
   status: "not-applicable";
-  reason: "krea2-direct-txt2img";
+  reason: "krea2-direct-txt2img" | "krea2-t42-unavailable";
   message: string;
 };
 

@@ -25,11 +25,16 @@ describe("timeline Final generation policy", () => {
     ["conservative", "anima", 0.35],
     ["balanced", "anima", 0.45],
     ["strong", "anima", 0.55],
+    ["conservative", "krea2", 0.35],
+    ["balanced", "krea2", 0.45],
+    ["strong", "krea2", 0.55],
     ["conservative", "fallback", 0.35],
     ["balanced", "fallback", 0.45],
     ["strong", "fallback", 0.55],
   ] as const)("resolves %s/%s to %s", (preset, family, denoise) => {
-    const context = family === "fallback"
+    const context = family === "krea2"
+      ? { modelBaseModel: "Krea 2", workflowProfile: "krea2" }
+      : family === "fallback"
       ? { modelBaseModel: "future-xl" }
       : { modelBaseModel: family };
     expect(resolveTimelineFinalGenerationPolicy(context, preset)).toEqual({
@@ -46,9 +51,9 @@ describe("timeline Final generation policy", () => {
       version: 2,
       defaultPreset: "balanced",
       denoiseByPreset: {
-        conservative: { illustrious: 0.3, anima: 0.35, fallback: 0.35 },
-        balanced: { illustrious: 0.4, anima: 0.45, fallback: 0.45 },
-        strong: { illustrious: 0.5, anima: 0.55, fallback: 0.55 },
+        conservative: { illustrious: 0.3, anima: 0.35, fallback: 0.35, krea2: 0.35 },
+        balanced: { illustrious: 0.4, anima: 0.45, fallback: 0.45, krea2: 0.45 },
+        strong: { illustrious: 0.5, anima: 0.55, fallback: 0.55, krea2: 0.55 },
       },
     });
   });

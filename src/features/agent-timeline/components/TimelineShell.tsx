@@ -93,6 +93,7 @@ import {
   type TimelineNodeStatus,
   type TimelineNotApplicableResult,
   type TimelineWorkflowState,
+  isTimelineLegacyDirectReadOnly,
 } from "@/features/agent-timeline/types";
 import {
   singleImageGenerationStageNodeIds,
@@ -217,7 +218,6 @@ const EMPTY_SELECTED_CIVITAI_RESOURCES: SelectedCivitaiResourcesPreview = {
   checkpoint: null,
   loras: [],
 };
-const KREA2_TIMELINE_IMAGE_COUNT = 1;
 
 type PendingTimelinePromptTagReview = {
   input: TimelineCanvasBindingInput;
@@ -406,7 +406,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function isTimelineNotApplicableResult(value: unknown): value is TimelineNotApplicableResult {
   return isRecord(value) &&
     value.status === "not-applicable" &&
-    value.reason === "krea2-direct-txt2img" &&
+    (value.reason === "krea2-direct-txt2img" || value.reason === "krea2-t42-unavailable") &&
     typeof value.message === "string";
 }
 
@@ -1215,6 +1215,8 @@ export function TimelineShell() {
 
   const previewWorkflow = useMemo(() => createTimelineWorkflowState({ workflowId: "draft-workflow" }), []);
   const activeWorkflow = workflow ?? previewWorkflow;
+  const activeWorkflowAllowsInpaint = !isTimelineLegacyDirectReadOnly(activeWorkflow) &&
+    getTimelineWorkflowPromptProfile(activeWorkflow) !== "krea2";
   const selectedArtifactUrl = getSelectedTimelineArtifactUrl(activeWorkflow);
   const selectedNode = activeWorkflow.nodes[selectedNodeId];
   const selectedContent = timelineNodeContent[selectedNodeId];
@@ -1233,7 +1235,8 @@ export function TimelineShell() {
       ? "visual"
       : outputDisplayModes[selectedNodeId] ?? "visual"
     : "json";
-  const selectedRawEditable = canRawEditNode(selectedNodeId, workflow);
+  const isLegacyDirectReadOnly = isTimelineLegacyDirectReadOnly(workflow);
+  const selectedRawEditable = !isLegacyDirectReadOnly && canRawEditNode(selectedNodeId, workflow);
   const selectedIsNonEditableAiNode = nonEditableAiNodeIds.has(selectedNodeId);
   const timelineResultDraft = useMemo(() => getTimelineExecutionDraft(activeWorkflow), [activeWorkflow]);
   const timelineResultSelectedResources = useMemo(() => getTimelineSelectedResources(activeWorkflow), [activeWorkflow]);
@@ -1252,11 +1255,12 @@ export function TimelineShell() {
   const repairManualRecoveryRequired = repairManualRecovery !== null;
   const selectedNodeAiDisabled =
     isRunning ||
+    isLegacyDirectReadOnly ||
     selectedContent.reserved ||
     selectedNode.status === "blocked" ||
     selectedNode.status === "running" ||
     selectedNodeId === "final-repair" && repairManualRecoveryRequired;
-  const generationCanBeConfirmed = canConfirmTimelineWorkflow(workflow);
+  const generationCanBeConfirmed = !isLegacyDirectReadOnly && canConfirmTimelineWorkflow(workflow);
   const workflowTitle = workflow ? workflowProjectName.trim() || sceneRequest || "Unnamed workflow" : "Untitled workflow";
   const workflowMode = workflow ? "Run shell" : "Draft setup";
   const sceneInputAiSource = sceneRequest.trim() || getSceneInputRawIntent(workflow).trim();
@@ -1267,6 +1271,18 @@ export function TimelineShell() {
     if (nextIsRunning) {
       setParametersOpen(false);
     }
+  }
+
+  function rejectLegacyDirectMutation() {
+    if (!isLegacyDirectReadOnly) {
+      return false;
+    }
+
+    setNotices((current) => ({
+      ...current,
+      [selectedNodeId]: "This completed legacy Krea 2 Turbo direct txt2img Run is read-only.",
+    }));
+    return true;
   }
 
   function getComposerSettingsSnapshot(
@@ -1310,7 +1326,7 @@ export function TimelineShell() {
   function getCurrentTimelineWorkflowRecordInput(
     overrides: Partial<Omit<TimelineWorkflowRecordInput, "workflow">> = {},
   ): TimelineWorkflowRecordInput | null {
-    if (!workflow) {
+    if (!workflow || isTimelineLegacyDirectReadOnly(workflow)) {
       return null;
     }
 
@@ -1337,26 +1353,30 @@ export function TimelineShell() {
     }
 
     const restoredKrea2 = record.selectedPromptProfile === "krea2";
-    const restoredImageCount = restoredKrea2
-      ? KREA2_TIMELINE_IMAGE_COUNT
-      : normalizeTimelineImageCount(record.selectedImageCount);
+    const restoredImageCount = normalizeTimelineImageCount(record.selectedImageCount);
     const restoredSceneInput = record.workflow.nodes["scene-input"].result;
     const restoredSettings = getRunSceneInputSettings(
       isRecord(restoredSceneInput) ? restoredSceneInput : {},
     );
+    const restoredSourceImage = getSceneInputSourceImage(record.workflow);
     const restoredKrea2HasUnsupportedControls = restoredKrea2 && (
-      getSceneInputSourceImage(record.workflow) !== null ||
       restoredSettings.automaticLocalRepair ||
       restoredSettings.detailers.faceDetailer.enabled ||
       restoredSettings.detailers.handDetailer.enabled ||
       restoredSettings.styleReference !== undefined
     );
-    const restoredWorkflow = restoredKrea2HasUnsupportedControls
+    const restoredWorkflow = isTimelineLegacyDirectReadOnly(record.workflow)
+      ? record.workflow
+      : restoredKrea2HasUnsupportedControls
       ? setTimelineNodeManualResult(record.workflow, "scene-input", {
           rawIntent: record.sceneRequest.trim() || getSceneInputRawIntent(record.workflow).trim(),
           imageCount: restoredImageCount,
           ...(useEditorStore.getState().project.settings.supportsNsfw === true ? { nsfw: true } : {}),
           promptProfile: "krea2",
+          ...(restoredSourceImage ? {
+            sourceDenoise: getSceneInputSourceDenoise(record.workflow),
+            sourceImage: restoredSourceImage,
+          } : {}),
           settingsSnapshot: createRunSceneInputSettingsSnapshot({
             automaticLocalRepair: false,
             detailers: createGenerationDetailerSettingsSnapshot(),
@@ -1379,7 +1399,7 @@ export function TimelineShell() {
       outputDisplayModes: record.outputDisplayModes,
     };
 
-    latestAutosaveInputRef.current = autosaveInput;
+    latestAutosaveInputRef.current = isTimelineLegacyDirectReadOnly(restoredWorkflow) ? null : autosaveInput;
     shouldClearActiveWorkflowRef.current = false;
     setWorkflow(restoredWorkflow);
     setWorkflowProjectId(projectId);
@@ -1387,8 +1407,8 @@ export function TimelineShell() {
     setSceneRequest(record.sceneRequest);
     setSelectedPromptProfile(record.selectedPromptProfile);
     setSelectedImageCount(restoredImageCount);
-    setSelectedSourceDenoise(restoredKrea2 ? DEFAULT_TIMELINE_SOURCE_DENOISE : getSceneInputSourceDenoise(restoredWorkflow));
-    setSelectedSourceImage(restoredKrea2 ? null : getSceneInputSourceImage(restoredWorkflow));
+    setSelectedSourceDenoise(getSceneInputSourceDenoise(restoredWorkflow));
+    setSelectedSourceImage(getSceneInputSourceImage(restoredWorkflow));
     setDetailers(restoredKrea2 ? createGenerationDetailerSettingsSnapshot() : restoredSettings.detailers);
     setAutomaticLocalRepair(restoredKrea2 ? false : restoredSettings.automaticLocalRepair);
     setFinalRedrawPreset(restoredSettings.finalRedrawPreset);
@@ -1405,14 +1425,18 @@ export function TimelineShell() {
     setOutputDisplayModes(record.outputDisplayModes);
     setNotices((current) => ({
       ...current,
-      [record.selectedNodeId]: restoredKrea2HasUnsupportedControls
+      [record.selectedNodeId]: isTimelineLegacyDirectReadOnly(restoredWorkflow)
+        ? "This completed legacy Krea 2 Turbo direct txt2img Run is preserved as a read-only record."
+        : restoredKrea2HasUnsupportedControls
         ? "Restored Krea 2 Turbo workflow after removing unsupported source, reference, Detailer, and repair settings. Confirm again to render."
         : message,
     }));
     setAutosaveStatus("saved");
-    setAutosaveMessage(projectName ? `Restored ${projectName}.` : `Restored ${restoredWorkflow.workflowId}.`);
+    setAutosaveMessage(isTimelineLegacyDirectReadOnly(restoredWorkflow)
+      ? "Restored a read-only legacy direct Run."
+      : projectName ? `Restored ${projectName}.` : `Restored ${restoredWorkflow.workflowId}.`);
 
-    if (options.saveActive) {
+    if (options.saveActive && !isTimelineLegacyDirectReadOnly(restoredWorkflow)) {
       void saveActiveTimelineWorkflowRecord(autosaveInput).catch((error) => {
         console.error("[SceneForge] [timeline] failed to update active workflow after opening named workflow", { error });
         setAutosaveStatus("error");
@@ -1489,6 +1513,12 @@ export function TimelineShell() {
 
   useEffect(() => {
     if (!workflow) {
+      return;
+    }
+
+    if (isTimelineLegacyDirectReadOnly(workflow)) {
+      latestAutosaveInputRef.current = null;
+      shouldClearActiveWorkflowRef.current = false;
       return;
     }
 
@@ -1630,8 +1660,16 @@ export function TimelineShell() {
     nextWorkflow: TimelineWorkflowState,
     overrides: Partial<Omit<TimelineWorkflowRecordInput, "workflow">> = {},
   ) {
+    if (isTimelineLegacyDirectReadOnly(workflow) || isTimelineLegacyDirectReadOnly(nextWorkflow)) {
+      setNotices((current) => ({
+        ...current,
+        [selectedNodeId]: "This completed legacy Krea 2 Turbo direct txt2img Run is read-only.",
+      }));
+      return false;
+    }
     rememberLatestTimelineAutosaveInput(nextWorkflow, overrides);
     setWorkflow(nextWorkflow);
+    return true;
   }
 
   function getCurrentPromptLibraryTags() {
@@ -1760,6 +1798,9 @@ export function TimelineShell() {
   }
 
   async function runTimelineGraph(nextWorkflow: TimelineWorkflowState) {
+    if (isTimelineLegacyDirectReadOnly(nextWorkflow)) {
+      return;
+    }
     const runId = activeRunIdRef.current + 1;
     activeRunIdRef.current = runId;
 
@@ -1907,6 +1948,9 @@ export function TimelineShell() {
     firstAction: "confirm" | "retry",
     runId: number,
   ) {
+    if (isTimelineLegacyDirectReadOnly(targetWorkflow)) {
+      return null;
+    }
     let currentWorkflow = targetWorkflow;
     for (let index = 0; index < stages.length; index += 1) {
       const stage = stages[index]!;
@@ -1976,7 +2020,7 @@ export function TimelineShell() {
     targetWorkflow: TimelineWorkflowState | null,
     options: { allowWhileRunning?: boolean } = {},
   ) {
-    if (!targetWorkflow || !canConfirmTimelineWorkflow(targetWorkflow) || (!options.allowWhileRunning && isRunning)) {
+    if (!targetWorkflow || isTimelineLegacyDirectReadOnly(targetWorkflow) || !canConfirmTimelineWorkflow(targetWorkflow) || (!options.allowWhileRunning && isRunning)) {
       return;
     }
 
@@ -1997,7 +2041,7 @@ export function TimelineShell() {
       setNotices((current) => ({
         ...current,
         "result-display": isKrea2Profile
-          ? "Direct Krea 2 Turbo output is ready. Preview, scoring, redraw, review, and repair were not applicable."
+          ? "Krea 2 Preview candidates and Final redraws are ready. Final review and repair remain unavailable until T42."
           : "Preview, Final, and any verified Repair variants are ready for explicit selection.",
       }));
     } catch (error) {
@@ -2023,7 +2067,7 @@ export function TimelineShell() {
     retryNodeId: TimelineGenerationStage,
   ) {
     const repairResult = targetWorkflow.nodes["final-repair"].result;
-    if (isRunningRef.current ||
+    if (isTimelineLegacyDirectReadOnly(targetWorkflow) || isRunningRef.current ||
         retryNodeId === "final-repair" && isFinalRepairResult(repairResult) &&
           repairResult.pairs.some(isRepairManualRecoveryRequired)) return;
     const runId = activeRunIdRef.current + 1;
@@ -2091,6 +2135,9 @@ export function TimelineShell() {
   }
 
   function startWorkflow() {
+    if (rejectLegacyDirectMutation()) {
+      return;
+    }
     const trimmedSceneRequest = sceneRequest.trim();
 
     if (!trimmedSceneRequest || isRunning) {
@@ -2107,19 +2154,19 @@ export function TimelineShell() {
     setWorkflowProjectId(null);
     setWorkflowProjectName("");
     const nextWorkflow = createTimelineWorkflowState({
-      imageCount: isKrea2Profile ? KREA2_TIMELINE_IMAGE_COUNT : selectedImageCount,
+      imageCount: selectedImageCount,
       nsfw: useEditorStore.getState().project.settings.supportsNsfw === true,
       promptProfile: selectedPromptProfile,
       sceneRequest: trimmedSceneRequest,
       settingsSnapshot: getComposerSettingsSnapshot(),
       sourceDenoise: selectedSourceDenoise,
-      sourceImage: selectedPromptProfile === "krea2" ? undefined : selectedSourceImage ?? undefined,
+      sourceImage: selectedSourceImage ?? undefined,
     });
     const initialAutosaveInput: TimelineWorkflowRecordInput = {
       workflow: nextWorkflow,
       sceneRequest: trimmedSceneRequest,
       selectedPromptProfile,
-      selectedImageCount: isKrea2Profile ? KREA2_TIMELINE_IMAGE_COUNT : selectedImageCount,
+      selectedImageCount,
       selectedNodeId: "scene-input",
       outputDisplayModes: {},
     };
@@ -2155,9 +2202,12 @@ export function TimelineShell() {
   }
 
   function handlePromptProfileChange(value: string) {
+    if (rejectLegacyDirectMutation()) {
+      return;
+    }
     const promptProfile = normalizePromptProfileId(value);
     const isKrea2 = promptProfile === "krea2";
-    const nextImageCount = isKrea2 ? KREA2_TIMELINE_IMAGE_COUNT : selectedImageCount;
+    const nextImageCount = selectedImageCount;
 
     setSelectedPromptProfile(promptProfile);
     setSelectedImageCount(nextImageCount);
@@ -2168,8 +2218,6 @@ export function TimelineShell() {
     setStyleAdvice(EMPTY_STYLE_PALETTE_ADVICE);
     setParametersOpen(false);
     if (isKrea2) {
-      setSelectedSourceImage(null);
-      setSelectedSourceDenoise(DEFAULT_TIMELINE_SOURCE_DENOISE);
       setDetailers(createGenerationDetailerSettingsSnapshot());
       setAutomaticLocalRepair(false);
       setStyleReference(undefined);
@@ -2195,8 +2243,8 @@ export function TimelineShell() {
       imageCount: nextImageCount,
       ...(useEditorStore.getState().project.settings.supportsNsfw === true ? { nsfw: true } : {}),
       promptProfile,
-      ...(!isKrea2 && selectedSourceImage ? { sourceDenoise: selectedSourceDenoise } : {}),
-      ...(!isKrea2 && selectedSourceImage ? { sourceImage: selectedSourceImage } : {}),
+      ...(selectedSourceImage ? { sourceDenoise: selectedSourceDenoise } : {}),
+      ...(selectedSourceImage ? { sourceImage: selectedSourceImage } : {}),
       settingsSnapshot: getComposerSettingsSnapshot({ promptProfile, stylePalette: undefined }),
     } satisfies SceneInputTimelineResult), {
       sceneRequest: rawIntent,
@@ -2206,8 +2254,7 @@ export function TimelineShell() {
   }
 
   function handleImageCountChange(value: string) {
-    if (isKrea2Profile) {
-      setSelectedImageCount(KREA2_TIMELINE_IMAGE_COUNT);
+    if (rejectLegacyDirectMutation()) {
       return;
     }
     const imageCount = normalizeTimelineImageCount(value);
@@ -2241,11 +2288,7 @@ export function TimelineShell() {
   }
 
   function commitSceneInputSourceImage(sourceImage: TimelineSourceImage | null) {
-    if (isKrea2Profile && sourceImage) {
-      setNotices((current) => ({
-        ...current,
-        "scene-input": "Krea 2 Turbo supports direct txt2img only; source images are unavailable.",
-      }));
+    if (rejectLegacyDirectMutation()) {
       return;
     }
     const sourceDenoise = normalizeTimelineSourceDenoise(selectedSourceDenoise);
@@ -2286,6 +2329,9 @@ export function TimelineShell() {
   }
 
   function commitSourceDenoise(value: unknown = selectedSourceDenoise) {
+    if (rejectLegacyDirectMutation()) {
+      return;
+    }
     const denoise = normalizeTimelineSourceDenoise(value);
     setSelectedSourceDenoise(denoise);
 
@@ -2318,10 +2364,17 @@ export function TimelineShell() {
   }
 
   function handleSourceDenoiseChange(value: string) {
+    if (rejectLegacyDirectMutation()) {
+      return;
+    }
     setSelectedSourceDenoise(normalizeTimelineSourceDenoise(value));
   }
 
   function handleSourceImageChange(event: ChangeEvent<HTMLInputElement>) {
+    if (rejectLegacyDirectMutation()) {
+      event.target.value = "";
+      return;
+    }
     const file = event.target.files?.[0];
     event.target.value = "";
 
@@ -2372,7 +2425,7 @@ export function TimelineShell() {
     staleFromNodeId: "resource-recommendation" | "parameter-recommendation",
     message: string,
   ) {
-    if (!workflow || isRunningRef.current) {
+    if (rejectLegacyDirectMutation() || !workflow || isRunningRef.current) {
       return;
     }
 
@@ -2384,7 +2437,7 @@ export function TimelineShell() {
   }
 
   function handleStyleResourceSelection(selection: { checkpointId: string | null; loraIds: string[] }) {
-    if (isRunningRef.current) {
+    if (rejectLegacyDirectMutation() || isRunningRef.current) {
       return;
     }
 
@@ -2407,7 +2460,7 @@ export function TimelineShell() {
   }
 
   function handleDetailersChange(nextDetailers: GenerationDetailerSettingsSnapshot) {
-    if (isRunningRef.current) {
+    if (rejectLegacyDirectMutation() || isRunningRef.current) {
       return;
     }
 
@@ -2448,14 +2501,7 @@ export function TimelineShell() {
   }
 
   function handleFinalRedrawPresetChange(nextPreset: TimelineFinalRedrawPreset) {
-    if (isRunningRef.current || nextPreset === finalRedrawPreset) return;
-    if (isKrea2Profile) {
-      setNotices((current) => ({
-        ...current,
-        "scene-input": "Krea 2 Turbo submits one direct render; Final redraw is not applicable.",
-      }));
-      return;
-    }
+    if (rejectLegacyDirectMutation() || isRunningRef.current || nextPreset === finalRedrawPreset) return;
     setFinalRedrawPreset(nextPreset);
     const nextSettings = getComposerSettingsSnapshot({ finalRedrawPreset: nextPreset });
     if (!workflow) return;
@@ -2486,7 +2532,7 @@ export function TimelineShell() {
   }
 
   function handleStyleReferenceChange(nextStyleReference: StyleReferenceSnapshot | undefined) {
-    if (isRunningRef.current) {
+    if (rejectLegacyDirectMutation() || isRunningRef.current) {
       return;
     }
     if (isKrea2Profile && nextStyleReference) {
@@ -2509,7 +2555,7 @@ export function TimelineShell() {
   }
 
   function handleSaveStyleParameters(parameters: SavedComfyUiGenerationParams) {
-    if (isRunningRef.current) {
+    if (rejectLegacyDirectMutation() || isRunningRef.current) {
       return;
     }
 
@@ -2542,7 +2588,7 @@ export function TimelineShell() {
   }
 
   function handleStartEdit(nodeId: TimelineNodeId) {
-    if (!workflow || !canRawEditNode(nodeId, workflow)) {
+    if (rejectLegacyDirectMutation() || !workflow || !canRawEditNode(nodeId, workflow)) {
       return;
     }
 
@@ -2577,7 +2623,7 @@ export function TimelineShell() {
   }
 
   function handleSaveEdit(nodeId: TimelineNodeId) {
-    if (!workflow || !canRawEditNode(nodeId, workflow)) {
+    if (rejectLegacyDirectMutation() || !workflow || !canRawEditNode(nodeId, workflow)) {
       return;
     }
 
@@ -2616,7 +2662,7 @@ export function TimelineShell() {
   }
 
   function handleSaveScenePromptVisual(result: ScenePromptTimelineResult) {
-    if (!workflow) {
+    if (rejectLegacyDirectMutation() || !workflow) {
       return;
     }
 
@@ -2638,7 +2684,7 @@ export function TimelineShell() {
   }
 
   function handleSaveResourceRecommendationVisual(result: ResourceRecommendationTimelineResult) {
-    if (!workflow) {
+    if (rejectLegacyDirectMutation() || !workflow) {
       return;
     }
 
@@ -2659,7 +2705,7 @@ export function TimelineShell() {
   }
 
   function handleSaveParameterRecommendationVisual(result: ParameterRecommendationTimelineResult) {
-    if (!workflow) {
+    if (rejectLegacyDirectMutation() || !workflow) {
       return;
     }
 
@@ -2680,6 +2726,9 @@ export function TimelineShell() {
   }
 
   async function handleSceneInputAi(action: SceneInputAiAction) {
+    if (rejectLegacyDirectMutation()) {
+      return;
+    }
     setSelectedNodeId("scene-input");
 
     if (isRunning) {
@@ -2781,6 +2830,9 @@ export function TimelineShell() {
   }
 
   function handleConfirmGeneration() {
+    if (rejectLegacyDirectMutation()) {
+      return;
+    }
     const styleIssue = getCurrentStyleReferenceIssue();
     if (styleIssue) {
       setNotices((current) => ({ ...current, "generation-gate": styleIssue }));
@@ -2790,6 +2842,9 @@ export function TimelineShell() {
   }
 
   function handleRequestAi(nodeId: TimelineNodeId) {
+    if (rejectLegacyDirectMutation()) {
+      return;
+    }
     setSelectedNodeId(nodeId);
 
     if (!workflow) {
@@ -2878,6 +2933,9 @@ export function TimelineShell() {
   }
 
   function handleNamedWorkflowSaved(record: TimelineWorkflowRecord) {
+    if (rejectLegacyDirectMutation()) {
+      return;
+    }
     const projectId = record.projectId ?? null;
     const projectName = record.name ?? "";
     const autosaveInput = getCurrentTimelineWorkflowRecordInput({
@@ -2907,6 +2965,9 @@ export function TimelineShell() {
   }
 
   function handleCurrentNamedWorkflowDeleted() {
+    if (rejectLegacyDirectMutation()) {
+      return;
+    }
     const autosaveInput = getCurrentTimelineWorkflowRecordInput({
       projectId: null,
       name: null,
@@ -2972,13 +3033,6 @@ export function TimelineShell() {
   }
 
   function renderFinalPolicyConfirmationSummary() {
-    if (isKrea2Profile) {
-      return (
-        <p className="pl-6 text-[11px] text-amber-700">
-          Krea 2 Turbo submits one confirmed direct 1024² txt2img render. Preview, scoring, redraw, review, and repair are not applicable.
-        </p>
-      );
-    }
     const policy = getResolvedComposerFinalPolicy();
     const risk = policy.preset === "strong"
       ? "Strong redraw has higher anatomy, structure, and object-drift risk."
@@ -3014,6 +3068,51 @@ export function TimelineShell() {
       { preset: "balanced", label: "Balanced", description: "Default balance of structure and detail." },
       { preset: "strong", label: "Strong", description: "More redraw; higher anatomy and object-drift risk." },
     ];
+    const renderFinalRedrawStrengthControls = () => (
+      <fieldset className="mt-3 border-t border-indigo-100 pt-3" disabled={isRunning || isLegacyDirectReadOnly}>
+        <legend className="text-[11px] font-semibold uppercase tracking-wide text-slate-600">
+          Final redraw strength
+        </legend>
+        <p className="mt-1 text-xs text-slate-500">
+          Resolved Final denoise: {resolvedFinalPolicy.denoise.toFixed(2)} ({resolvedFinalPolicy.family}).
+        </p>
+        <div className="mt-2 grid gap-2 sm:grid-cols-3">
+          {redrawOptions.map((option) => {
+            const selected = option.preset === finalRedrawPreset;
+            const strong = option.preset === "strong";
+            return (
+              <label
+                className={cn(
+                  "cursor-pointer rounded-md border px-3 py-2 text-xs transition-colors",
+                  selected
+                    ? strong
+                      ? "border-rose-400 bg-rose-50 text-rose-800"
+                      : "border-indigo-400 bg-white text-indigo-800"
+                    : strong
+                      ? "border-rose-200 bg-rose-50/50 text-rose-700"
+                      : "border-slate-200 bg-white text-slate-600",
+                  (isRunning || isLegacyDirectReadOnly) && "cursor-not-allowed opacity-60",
+                )}
+                key={option.preset}
+              >
+                <span className="flex items-center gap-2 font-semibold">
+                  <input
+                    checked={selected}
+                    disabled={isRunning || isLegacyDirectReadOnly}
+                    name="final-redraw-strength"
+                    onChange={() => handleFinalRedrawPresetChange(option.preset)}
+                    type="radio"
+                    value={option.preset}
+                  />
+                  {option.label}
+                </span>
+                <span className="mt-1 block leading-relaxed">{option.description}</span>
+              </label>
+            );
+          })}
+        </div>
+      </fieldset>
+    );
 
     return (
       <div className="border-t border-slate-200 bg-white p-3">
@@ -3029,7 +3128,7 @@ export function TimelineShell() {
             </div>
             <Button
               className="h-8 px-3 text-xs shadow-none"
-              disabled={isRunning || !canEditParameters}
+              disabled={isRunning || isLegacyDirectReadOnly || !canEditParameters}
               onClick={() => setParametersOpen(true)}
               title={canEditParameters
                 ? "Edit Run generation parameters"
@@ -3042,9 +3141,9 @@ export function TimelineShell() {
             </Button>
           </div>
           <StylePaletteCivitaiResourceSelector
-            disabled={isRunning}
+            disabled={isRunning || isLegacyDirectReadOnly}
             onSelectedResourcesChange={(resources) => {
-              if (!isRunningRef.current) {
+              if (!isRunningRef.current && !isLegacyDirectReadOnly) {
                 setSelectedStyleResources(resources);
               }
             }}
@@ -3072,58 +3171,19 @@ export function TimelineShell() {
             </p>
           )}
           {isKrea2Profile ? (
-            <p className="mt-3 rounded-md border border-indigo-100 bg-white px-3 py-2 text-xs leading-relaxed text-indigo-800">
-              Krea 2 Turbo uses the selected Krea 2 local UNet and optional compatible LoRAs for one direct txt2img output. Source images, references, Detailers, Preview/Final redraw, review, and repair are unavailable.
-            </p>
+            <>
+              <p className="mt-3 rounded-md border border-indigo-100 bg-white px-3 py-2 text-xs leading-relaxed text-indigo-800">
+                Krea 2 Turbo uses its fixed local UNet, CLIP, VAE, and optional model-only LoRAs for 4/4/6/8 scored previews, exact-K selection, and Preview-to-Final img2img redraw. Source img2img is supported; style references, Detailers, review, and repair remain unavailable.
+              </p>
+              {renderFinalRedrawStrengthControls()}
+            </>
           ) : (
             <>
-          <fieldset className="mt-3 border-t border-indigo-100 pt-3" disabled={isRunning}>
-            <legend className="text-[11px] font-semibold uppercase tracking-wide text-slate-600">
-              Final redraw strength
-            </legend>
-            <p className="mt-1 text-xs text-slate-500">
-              Resolved Final denoise: {resolvedFinalPolicy.denoise.toFixed(2)} ({resolvedFinalPolicy.family}).
-            </p>
-            <div className="mt-2 grid gap-2 sm:grid-cols-3">
-              {redrawOptions.map((option) => {
-                const selected = option.preset === finalRedrawPreset;
-                const strong = option.preset === "strong";
-                return (
-                  <label
-                    className={cn(
-                      "cursor-pointer rounded-md border px-3 py-2 text-xs transition-colors",
-                      selected
-                        ? strong
-                          ? "border-rose-400 bg-rose-50 text-rose-800"
-                          : "border-indigo-400 bg-white text-indigo-800"
-                        : strong
-                          ? "border-rose-200 bg-rose-50/50 text-rose-700"
-                          : "border-slate-200 bg-white text-slate-600",
-                      isRunning && "cursor-not-allowed opacity-60",
-                    )}
-                    key={option.preset}
-                  >
-                    <span className="flex items-center gap-2 font-semibold">
-                      <input
-                        checked={selected}
-                        disabled={isRunning || isKrea2Profile}
-                        name="final-redraw-strength"
-                        onChange={() => handleFinalRedrawPresetChange(option.preset)}
-                        type="radio"
-                        value={option.preset}
-                      />
-                      {option.label}
-                    </span>
-                    <span className="mt-1 block leading-relaxed">{option.description}</span>
-                  </label>
-                );
-              })}
-            </div>
-          </fieldset>
+          {renderFinalRedrawStrengthControls()}
           <label className="mt-3 flex items-start gap-2 rounded-md border border-indigo-100 bg-white px-3 py-2 text-xs text-slate-700">
             <input
               checked={automaticLocalRepair}
-              disabled={isRunning || Boolean(workflow)}
+              disabled={isRunning || isLegacyDirectReadOnly || Boolean(workflow)}
               onChange={(event) => setAutomaticLocalRepair(event.target.checked)}
               type="checkbox"
             />
@@ -3138,7 +3198,7 @@ export function TimelineShell() {
           <div className="mt-3 border-t border-indigo-100 pt-3">
             <GenerationDetailerSettingsEditor
               detailers={detailers}
-              disabled={isRunning}
+              disabled={isRunning || isLegacyDirectReadOnly}
               idPrefix="run"
               layout="compact-strip"
               onChange={handleDetailersChange}
@@ -3146,7 +3206,7 @@ export function TimelineShell() {
           </div>
           <StyleReferencePanel
             checkpointId={selectedStyleCheckpointId}
-            disabled={isRunning}
+            disabled={isRunning || isLegacyDirectReadOnly}
             nsfwEnabled={useEditorStore.getState().project.settings.supportsNsfw === true}
             onChange={handleStyleReferenceChange}
             promptProfile={selectedPromptProfile}
@@ -3167,10 +3227,10 @@ export function TimelineShell() {
             introContent={
               <StylePaletteAiAdvicePanel
                 advice={styleAdvice}
-                disabled={isRunning}
+                disabled={isRunning || isLegacyDirectReadOnly}
                 emptyMessage="Advice uses only the selected ready local resources for this Run."
                 onAdviceChange={(nextAdvice) => {
-                  if (!isRunningRef.current) {
+                  if (!isRunningRef.current && !isLegacyDirectReadOnly) {
                     setStyleAdvice(nextAdvice);
                   }
                 }}
@@ -3213,7 +3273,7 @@ export function TimelineShell() {
           </label>
           <select
             className="h-8 rounded-md border border-slate-200 bg-white px-2 text-xs text-slate-800 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
-            disabled={isRunning}
+            disabled={isRunning || isLegacyDirectReadOnly}
             id="prompt-profile"
             onChange={(event) => handlePromptProfileChange(event.target.value)}
             value={selectedPromptProfile}
@@ -3232,7 +3292,7 @@ export function TimelineShell() {
           </label>
           <select
             className="h-8 rounded-md border border-slate-200 bg-white px-2 text-xs text-slate-800 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
-            disabled={isRunning || isKrea2Profile}
+            disabled={isRunning || isLegacyDirectReadOnly}
             id="timeline-image-count"
             onChange={(event) => handleImageCountChange(event.target.value)}
             value={selectedImageCount}
@@ -3252,20 +3312,19 @@ export function TimelineShell() {
           />
           <Button
             className="ml-2 h-8 px-2 text-xs shadow-none"
-            disabled={isRunning || isKrea2Profile}
-            onClick={() => {
-              if (!isKrea2Profile) sourceImageInputRef.current?.click();
-            }}
+            disabled={isRunning || isLegacyDirectReadOnly}
+            onClick={() => sourceImageInputRef.current?.click()}
             type="button"
             variant="secondary"
           >
             <ImageIcon className="size-3.5" />
-            {isKrea2Profile ? "Txt2img only" : "Upload source"}
+            Upload source
           </Button>
         </div>
         <textarea
           className="min-h-28 w-full resize-none border-0 bg-white px-3 py-3 text-sm leading-relaxed text-slate-900 outline-none placeholder:text-slate-400"
           id="scene-request"
+          readOnly={isLegacyDirectReadOnly}
           onChange={(event) => setSceneRequest(event.target.value)}
           placeholder="Describe the scene, characters, mood, camera, and constraints..."
           value={sceneRequest}
@@ -3290,7 +3349,7 @@ export function TimelineShell() {
                 Denoise
                 <input
                   className="h-8 rounded-md border border-slate-200 bg-white px-2 text-xs font-normal normal-case tracking-normal text-slate-800 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
-                  disabled={isRunning}
+                  disabled={isRunning || isLegacyDirectReadOnly}
                   max={1}
                   min={0}
                   onChange={(event) => handleSourceDenoiseChange(event.target.value)}
@@ -3308,7 +3367,7 @@ export function TimelineShell() {
             </div>
             <Button
               className="h-8 px-2 text-xs shadow-none"
-              disabled={isRunning}
+              disabled={isRunning || isLegacyDirectReadOnly}
               onClick={() => commitSceneInputSourceImage(null)}
               type="button"
               variant="secondary"
@@ -3322,7 +3381,7 @@ export function TimelineShell() {
           <div className="flex flex-wrap items-center gap-1.5">
             <Button
               className="h-7 px-2 text-[11px] shadow-none"
-              disabled={isRunning || !sceneInputAiSource}
+              disabled={isRunning || isLegacyDirectReadOnly || !sceneInputAiSource}
               onClick={() => void handleSceneInputAi("rewrite")}
               type="button"
               variant="secondary"
@@ -3331,7 +3390,7 @@ export function TimelineShell() {
             </Button>
             <Button
               className="h-7 px-2 text-[11px] shadow-none"
-              disabled={isRunning}
+              disabled={isRunning || isLegacyDirectReadOnly}
               onClick={() => void handleSceneInputAi("suggest")}
               type="button"
               variant="secondary"
@@ -3343,7 +3402,7 @@ export function TimelineShell() {
               Lock
             </Button>
           </div>
-          <Button className="h-8 px-3 text-xs shadow-none" disabled={!sceneRequestIsUsable || isRunning} type="submit">
+          <Button className="h-8 px-3 text-xs shadow-none" disabled={!sceneRequestIsUsable || isRunning || isLegacyDirectReadOnly} type="submit">
             <Play className="size-3.5" />
             Start workflow
           </Button>
@@ -3411,7 +3470,7 @@ export function TimelineShell() {
             <TimelineWorkflowProjectMenu
               currentProjectId={workflowProjectId}
               currentProjectName={workflowProjectName}
-              disabled={isRunning}
+              disabled={isRunning || isLegacyDirectReadOnly}
               getCurrentRecordInput={getCurrentTimelineWorkflowRecordInput}
               onDeleteCurrentProject={handleCurrentNamedWorkflowDeleted}
               onRecordOpened={handleNamedWorkflowOpened}
@@ -3594,7 +3653,7 @@ export function TimelineShell() {
                 {!simpleRepairManualRecoveryRequired ? (
                   <Button
                     className="h-9 shrink-0 px-3 text-xs shadow-none"
-                    disabled={isRunning}
+                    disabled={isRunning || isLegacyDirectReadOnly}
                     onClick={() => void runGenerationRetry(workflow, "final-repair")}
                     type="button"
                     variant="secondary"
@@ -3614,7 +3673,7 @@ export function TimelineShell() {
                 </div>
                 <Button
                   className="h-9 shrink-0 px-3 text-xs shadow-none"
-                  disabled={isRunning}
+                  disabled={isRunning || isLegacyDirectReadOnly}
                   onClick={() => void runGenerationRetry(workflow, "repair-verification")}
                   type="button"
                   variant="secondary"
@@ -3637,6 +3696,7 @@ export function TimelineShell() {
                     finalRepair={simpleFinalRepair}
                     finalReview={simpleFinalReview}
                     key={resultNode.updatedAt}
+                    inpaintAllowed={activeWorkflowAllowsInpaint}
                     onSelectVariant={handleFinalVariantSelection}
                     repairVerification={simpleRepairVerification}
                     result={isResultDisplayTimelineResult(resultNode.result) ? resultNode.result : null}
@@ -3681,7 +3741,7 @@ export function TimelineShell() {
           <TimelineWorkflowProjectMenu
             currentProjectId={workflowProjectId}
             currentProjectName={workflowProjectName}
-            disabled={isRunning}
+            disabled={isRunning || isLegacyDirectReadOnly}
             getCurrentRecordInput={getCurrentTimelineWorkflowRecordInput}
             onDeleteCurrentProject={handleCurrentNamedWorkflowDeleted}
             onRecordOpened={handleNamedWorkflowOpened}
@@ -3853,7 +3913,7 @@ export function TimelineShell() {
                       </label>
                       <select
                         className="h-8 rounded-md border border-slate-200 bg-white px-2 text-xs text-slate-800 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
-                        disabled={isRunning}
+                        disabled={isRunning || isLegacyDirectReadOnly}
                         id="prompt-profile"
                         onChange={(event) => handlePromptProfileChange(event.target.value)}
                         value={selectedPromptProfile}
@@ -3872,7 +3932,7 @@ export function TimelineShell() {
                       </label>
                       <select
                         className="h-8 rounded-md border border-slate-200 bg-white px-2 text-xs text-slate-800 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
-                        disabled={isRunning || isKrea2Profile}
+                        disabled={isRunning || isLegacyDirectReadOnly}
                         id="timeline-image-count"
                         onChange={(event) => handleImageCountChange(event.target.value)}
                         value={selectedImageCount}
@@ -3892,20 +3952,19 @@ export function TimelineShell() {
                       />
                       <Button
                         className="ml-2 h-8 px-2 text-xs shadow-none"
-                        disabled={isRunning || isKrea2Profile}
-                        onClick={() => {
-                          if (!isKrea2Profile) sourceImageInputRef.current?.click();
-                        }}
+                        disabled={isRunning || isLegacyDirectReadOnly}
+                        onClick={() => sourceImageInputRef.current?.click()}
                         type="button"
                         variant="secondary"
                       >
                         <ImageIcon className="size-3.5" />
-                        {isKrea2Profile ? "Txt2img only" : "Upload source"}
+                        Upload source
                       </Button>
                     </div>
                     <textarea
                       className="min-h-28 w-full resize-none border-0 bg-white px-3 py-3 text-sm leading-relaxed text-slate-900 outline-none placeholder:text-slate-400"
                       id="scene-request"
+                      readOnly={isLegacyDirectReadOnly}
                       onChange={(event) => setSceneRequest(event.target.value)}
                       placeholder="Describe the scene, characters, mood, camera, and constraints..."
                       value={sceneRequest}
@@ -3930,7 +3989,7 @@ export function TimelineShell() {
                             Denoise
                             <input
                               className="h-8 rounded-md border border-slate-200 bg-white px-2 text-xs font-normal normal-case tracking-normal text-slate-800 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
-                              disabled={isRunning}
+                              disabled={isRunning || isLegacyDirectReadOnly}
                               max={1}
                               min={0}
                               onChange={(event) => handleSourceDenoiseChange(event.target.value)}
@@ -3948,7 +4007,7 @@ export function TimelineShell() {
                         </div>
                         <Button
                           className="h-8 px-2 text-xs shadow-none"
-                          disabled={isRunning}
+                          disabled={isRunning || isLegacyDirectReadOnly}
                           onClick={() => commitSceneInputSourceImage(null)}
                           type="button"
                           variant="secondary"
@@ -3962,7 +4021,7 @@ export function TimelineShell() {
                       <div className="flex flex-wrap items-center gap-1.5">
                         <Button
                           className="h-7 px-2 text-[11px] shadow-none"
-                          disabled={isRunning || !sceneInputAiSource}
+                          disabled={isRunning || isLegacyDirectReadOnly || !sceneInputAiSource}
                           onClick={() => void handleSceneInputAi("rewrite")}
                           type="button"
                           variant="secondary"
@@ -3971,7 +4030,7 @@ export function TimelineShell() {
                         </Button>
                         <Button
                           className="h-7 px-2 text-[11px] shadow-none"
-                          disabled={isRunning}
+                          disabled={isRunning || isLegacyDirectReadOnly}
                           onClick={() => void handleSceneInputAi("suggest")}
                           type="button"
                           variant="secondary"
@@ -3983,7 +4042,7 @@ export function TimelineShell() {
                           Lock
                         </Button>
                       </div>
-                      <Button className="h-8 px-3 text-xs shadow-none" disabled={!sceneRequestIsUsable || isRunning} type="submit">
+                      <Button className="h-8 px-3 text-xs shadow-none" disabled={!sceneRequestIsUsable || isRunning || isLegacyDirectReadOnly} type="submit">
                         <Play className="size-3.5" />
                         Start workflow
                       </Button>
@@ -4116,7 +4175,11 @@ export function TimelineShell() {
                   <div className="min-h-0 flex-1">
                   {selectedNotApplicableResult ? (
                     <div className="rounded-md border border-indigo-200 bg-indigo-50 p-4 text-sm leading-relaxed text-indigo-900">
-                      <p className="font-semibold">Not applicable for Krea 2 Turbo direct txt2img</p>
+                      <p className="font-semibold">
+                        {selectedNotApplicableResult.reason === "krea2-direct-txt2img"
+                          ? "Read-only legacy Krea 2 Turbo direct txt2img"
+                          : "Not applicable for Krea 2 Turbo until T42"}
+                      </p>
                       <p className="mt-1 text-xs text-indigo-800">{selectedNotApplicableResult.message}</p>
                     </div>
                   ) : editingNodeId === selectedNodeId ? (
@@ -4147,7 +4210,7 @@ export function TimelineShell() {
                     </div>
                   ) : selectedOutputDisplayMode === "visual" && selectedWorkspaceKey === "scene-prompt" ? (
                     <TimelineScenePromptWorkspace
-                      editable={Boolean(workflow)}
+                      editable={Boolean(workflow) && !isLegacyDirectReadOnly}
                       emptyState={selectedContent.emptyState}
                       key={selectedNode.updatedAt}
                       node={selectedNode}
@@ -4156,7 +4219,7 @@ export function TimelineShell() {
                     />
                   ) : selectedOutputDisplayMode === "visual" && selectedWorkspaceKey === "resource-recommendation" ? (
                     <TimelineResourceRecommendationWorkspace
-                      editable={Boolean(workflow)}
+                      editable={Boolean(workflow) && !isLegacyDirectReadOnly}
                       emptyState={selectedContent.emptyState}
                       key={selectedNode.updatedAt}
                       node={selectedNode}
@@ -4164,7 +4227,7 @@ export function TimelineShell() {
                     />
                   ) : selectedOutputDisplayMode === "visual" && selectedWorkspaceKey === "parameter-recommendation" ? (
                     <TimelineParameterRecommendationWorkspace
-                      editable={Boolean(workflow)}
+                      editable={Boolean(workflow) && !isLegacyDirectReadOnly}
                       emptyState={selectedContent.emptyState}
                       key={selectedNode.updatedAt}
                       node={selectedNode}
@@ -4173,7 +4236,7 @@ export function TimelineShell() {
                   ) : selectedOutputDisplayMode === "visual" &&
                       (selectedWorkspaceKey === "preview-execution" || selectedWorkspaceKey === "preview-scoring") ? (
                     <TimelinePreviewWorkspace
-                      disabled={isRunning}
+                      disabled={isRunning || isLegacyDirectReadOnly}
                       key={`${activeWorkflow.nodes["preview-execution"].updatedAt}-${activeWorkflow.nodes["preview-scoring"].updatedAt}`}
                       onRegenerate={handlePreviewSelection}
                       previews={isPreviewExecutionResult(activeWorkflow.nodes["preview-execution"].result)
@@ -4195,6 +4258,7 @@ export function TimelineShell() {
                       finalReview={isFinalReviewResult(activeWorkflow.nodes["final-review"].result)
                         ? activeWorkflow.nodes["final-review"].result : null}
                       key={selectedNode.updatedAt}
+                      inpaintAllowed={activeWorkflowAllowsInpaint}
                       onSelectVariant={handleFinalVariantSelection}
                       repairVerification={isRepairVerificationResult(activeWorkflow.nodes["repair-verification"].result)
                         ? activeWorkflow.nodes["repair-verification"].result : null}

@@ -103,15 +103,32 @@ const objectInfoWithControlNet = {
 
 const objectInfoWithImg2Img = {
   ...objectInfo,
-  LoadImage: {},
-  ImageScale: {
+  LoadImage: {
     input: {
       required: {
-        upscale_method: [["lanczos"], {}],
+        image: [["SceneForge/uploaded-source.png"], {}],
       },
     },
   },
-  VAEEncode: {},
+  ImageScale: {
+    input: {
+      required: {
+        image: ["IMAGE", {}],
+        upscale_method: [["lanczos"], {}],
+        width: ["INT", {}],
+        height: ["INT", {}],
+        crop: [["disabled"], {}],
+      },
+    },
+  },
+  VAEEncode: {
+    input: {
+      required: {
+        pixels: ["IMAGE", {}],
+        vae: ["VAE", {}],
+      },
+    },
+  },
 };
 
 const objectInfoWithAnimaAddons = {

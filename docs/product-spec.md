@@ -90,17 +90,17 @@ After a workflow has started, these Composer settings remain editable. Resource 
 Output precedence is explicit:
 
 - Text-to-image Run keeps the Composer output count of one to four, and its selected resources, parameters, and Detailers apply to every output in that Run.
-- Attaching an image-to-image source forces the output count to one and uses the source image dimensions.
+- Attaching an image-to-image source preserves the selected output count of one to four and uses the source image dimensions.
 - The Composer source-image denoise value overrides saved parameter denoise for image-to-image generation. Other compatible saved parameters remain effective.
 - A saved parameter payload must not override the Composer output count.
 
 Active autosave and named workflows persist the normalized explicit resource ids, supported saved parameters, Detailer settings, and sanitized style-reference metadata/analysis/context/status/settings needed to restore the Composer. Style-reference records never persist bytes, base64/data URLs, secrets, unsafe paths, or full resource collections. Restored legacy Run workflows that lack these settings keep the automatic resource and parameter recommendation paths, default both Detailers to disabled, and restore no reference. Restoring a stale or previously confirmed workflow must not automatically submit a generation request.
 
-### Krea 2 Turbo direct Run exception
+### Krea 2 Turbo staged Run profile
 
 The Krea 2 prompt profile is selected only for Krea 2-compatible ready local Civitai resources and treats the selected model as a diffusion model. Its final prompt is one natural-language paragraph in this fixed author-recommended order: subject/mood, subject attributes/actions, visual style/medium, lighting/color/texture, spatial composition/framing, and selected LoRA trigger words. The prompt renderer preserves quoted user text and requested media, adds no unsupported details, and appends each selected LoRA trigger once.
 
-Krea 2 Turbo is a confirmation-gated direct txt2img path: it always queues one output with 1024×1024, 16-pixel-aligned defaults, 8 steps, CFG 1, Euler/simple sampling, and batch size 1. It has no source image, style/IPAdapter reference, ControlNet, FaceDetailer, HandDetailer, preview, preview scoring, Final redraw, review, or repair path. The corresponding timeline stages remain visibly completed with a structured `not-applicable` result and make no external generation or LLM call. A restored Krea record with any of those legacy controls clears them, stales downstream work, and requires new confirmation; it must not silently reuse or queue a legacy result.
+Krea 2 Turbo is confirmation-gated and uses the normal Run Preview → comparative scoring → exact-K selection → managed `preview-upscale` → Final img2img path. Txt2img and Composer source img2img both support K=1–4 output selection and 4/4/6/8 candidate pools. Defaults are 1024×1024, 8 steps, CFG 1, Euler/simple sampling, and batch size 1. Formal and Preview dimensions must preserve the requested aspect ratio and be divisible by 16; invalid source or saved dimensions fail before queueing rather than being rounded or stretched. Composer source denoise takes precedence over saved parameter denoise. Final redraw presets are 0.35/0.45/0.55 for Conservative/Balanced/Strong. Krea still excludes style/IPAdapter references, ControlNet, FaceDetailer, HandDetailer, Story, API/RAW, and inpaint. Until T42, only Final review, repair, and verification remain visibly `not-applicable` and make no external call. Completed legacy direct records stay read-only with truthful direct provenance; incomplete or continuable direct records stale and require a fresh confirmation without fabricated Preview or Final links.
 
 ## Timeline Nodes
 
@@ -122,7 +122,7 @@ Krea 2 Turbo is a confirmation-gated direct txt2img path: it always queues one o
 | Repair verification | Completed repair stage | One bounded Preview/Final/Repair comparison and local recommendation | Final repair | Retry verification only | At most one safe schema-repair attempt; no per-pair calls |
 | Result display | Completed managed variants and selection | One to four selected images, metadata, and candidate linkage | Repair verification, including safe unavailable results | Select Final, Preview, or a verified Repair | Selection autosaves without AI or generation |
 
-For Krea 2 Turbo, the Preview execution, Preview scoring, Final review, Final repair, and Repair verification rows are not applicable. `ComfyUI execution` instead produces the one direct confirmed txt2img output, and Result display exposes that output without a Preview fallback or variant selector.
+For Krea 2 Turbo, Preview execution, Preview scoring, exact-K selection, `preview-upscale`, and Final img2img use the ordinary Run path. Final review, Final repair, and Repair verification are not applicable until T42; Result display exposes the linked Final and managed Preview fallback.
 
 ## Dependency and Regeneration Rules
 

@@ -403,7 +403,7 @@ describe("timeline T8 server adapters", () => {
     expect(storeGeneratedImageMock).not.toHaveBeenCalled();
   });
 
-  it("marks Krea final review and repair stages not applicable without external calls", async () => {
+  it("marks Krea final review and repair as T42-unavailable without external calls", async () => {
     const base = createGateReadyWorkflow();
     const workflow = {
       ...base,
@@ -427,7 +427,11 @@ describe("timeline T8 server adapters", () => {
     for (const nodeId of skippedNodes) {
       await expect(adapters[nodeId]?.({ dependencies: [], nodeId, workflow })).resolves.toMatchObject({
         source: "system",
-        value: { status: "not-applicable", reason: "krea2-direct-txt2img" },
+        value: {
+          status: "not-applicable",
+          reason: "krea2-t42-unavailable",
+          message: expect.stringContaining("T42"),
+        },
       });
     }
 

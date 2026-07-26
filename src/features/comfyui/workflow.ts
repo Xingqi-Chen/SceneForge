@@ -731,15 +731,50 @@ function buildKrea2TextToImageWorkflow(
     },
     "Negative Krea Prompt",
   );
-  const latentImage = builder.addNode(
-    "EmptyLatentImage",
-    {
-      width: resolvedRequest.width,
-      height: resolvedRequest.height,
-      batch_size: 1,
-    },
-    "Empty Krea Latent",
-  );
+  let sourceImage: string | undefined;
+  let sourceImageScale: string | undefined;
+  let vaeEncode: string | undefined;
+  let latentImage: string;
+  let latentImageConnection: ComfyUiNodeConnection;
+  if (resolvedRequest.imageName) {
+    sourceImage = builder.addNode(
+      "LoadImage",
+      { image: resolvedRequest.imageName },
+      "Load Krea Img2Img Source",
+    );
+    sourceImageScale = builder.addNode(
+      "ImageScale",
+      {
+        image: builder.connect(sourceImage, 0),
+        upscale_method: "lanczos",
+        width: resolvedRequest.width,
+        height: resolvedRequest.height,
+        crop: "disabled",
+      },
+      "Resize Krea Img2Img Source",
+    );
+    vaeEncode = builder.addNode(
+      "VAEEncode",
+      {
+        pixels: builder.connect(sourceImageScale, 0),
+        vae: modelContext.vaeConnection,
+      },
+      "Encode Krea Img2Img Source",
+    );
+    latentImage = vaeEncode;
+    latentImageConnection = builder.connect(vaeEncode, 0);
+  } else {
+    latentImage = builder.addNode(
+      "EmptyLatentImage",
+      {
+        width: resolvedRequest.width,
+        height: resolvedRequest.height,
+        batch_size: 1,
+      },
+      "Empty Krea Latent",
+    );
+    latentImageConnection = builder.connect(latentImage, 0);
+  }
   const sampler = builder.addNode(
     "KSampler",
     {
@@ -752,7 +787,7 @@ function buildKrea2TextToImageWorkflow(
       model: modelContext.modelConnection,
       positive: builder.connect(positivePrompt, 0),
       negative: builder.connect(negativePrompt, 0),
-      latent_image: builder.connect(latentImage, 0),
+      latent_image: latentImageConnection,
     },
     "KSampler",
   );
@@ -779,6 +814,9 @@ function buildKrea2TextToImageWorkflow(
       ...modelContext.nodeIds,
       positivePrompt,
       negativePrompt,
+      ...(sourceImage ? { sourceImage } : {}),
+      ...(sourceImageScale ? { sourceImageScale } : {}),
+      ...(vaeEncode ? { vaeEncode } : {}),
       latentImage,
       sampler,
       vaeDecode,
