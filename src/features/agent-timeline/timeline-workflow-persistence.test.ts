@@ -207,6 +207,45 @@ function getMutablePersistedPreviewScoring(workflow: TimelineWorkflowState) {
   return workflow.nodes["preview-scoring"].result as MutablePersistedPreviewScoring;
 }
 
+function createPersistedFinalErrorWorkflow(error: {
+  code: string;
+  message: string;
+  details?: unknown;
+}) {
+  const raw = JSON.parse(JSON.stringify(createPersistedV2GenerationWorkflow(1))) as TimelineWorkflowState;
+  const partial = raw.nodes["comfyui-execution"].result as {
+    completed: boolean;
+    finals: Array<Record<string, unknown>>;
+  } & Record<string, unknown>;
+  const original = partial.finals[0]!;
+  partial.completed = false;
+  partial.finals[0] = {
+    candidateId: original.candidateId,
+    seed: original.seed,
+    rank: original.rank,
+    status: "error",
+    previewUpscale: original.previewUpscale,
+    finalPolicy: original.finalPolicy,
+    error,
+  };
+  raw.nodes["comfyui-execution"] = {
+    ...raw.nodes["comfyui-execution"],
+    status: "error",
+    result: undefined,
+    error: {
+      code: "comfyui_execution_failed",
+      message: "0 of 1 final images completed.",
+      details: { recoverable: true, partialResult: partial },
+    },
+  };
+  raw.nodes["result-display"] = {
+    ...raw.nodes["result-display"],
+    status: "blocked",
+    result: undefined,
+  };
+  return raw;
+}
+
 const readyStyleReference = {
   status: "ready",
   mode: "ipadapter",
@@ -2974,6 +3013,189 @@ describe("timeline workflow persistence", () => {
         resizeMode: "lanczos3-exact",
         storedImage: expect.objectContaining({ filename: `${"d".repeat(32)}.png` }),
       },
+    });
+  });
+
+  it("round-trips the original sanitized Final execution error without retaining sensitive details", () => {
+    const liveError = {
+      code: "comfyui_execution_failed",
+      message: "Maximum call stack size exceeded",
+      details: {
+        name: "RangeError",
+        sourceImageDataUrl: "data:image/png;base64,PRIVATE_IMAGE_BYTES",
+        apiKey: "PRIVATE_API_KEY",
+        nested: {
+          token: "PRIVATE_TOKEN",
+          note: "safe diagnostic",
+        },
+      },
+    };
+    const restored = sanitizeTimelineWorkflowState(
+      createPersistedFinalErrorWorkflow(liveError),
+    ) as TimelineWorkflowState;
+    const readFinalError = (workflow: TimelineWorkflowState) => {
+      const partialResult = (workflow.nodes["comfyui-execution"].error?.details as {
+        partialResult?: { finals?: Array<{ error?: unknown }> };
+      } | undefined)?.partialResult;
+      return partialResult?.finals?.[0]?.error;
+    };
+
+    expect(readFinalError(restored)).toEqual({
+      code: "comfyui_execution_failed",
+      message: "Maximum call stack size exceeded",
+      details: {
+        name: "RangeError",
+        sourceImageDataUrl: "[redacted]",
+        apiKey: "[redacted]",
+        nested: {
+          token: "[redacted]",
+          note: "safe diagnostic",
+        },
+      },
+    });
+
+    const serialized = serializeTimelineWorkflowRecord(createTimelineWorkflowRecord({
+      projectId: "final-error-round-trip",
+      name: "Final error round trip",
+      workflow: restored,
+      sceneRequest: "A persisted scored-preview Run",
+      selectedPromptProfile: "illustrious",
+      selectedImageCount: 1,
+      selectedNodeId: "comfyui-execution",
+      outputDisplayModes: { "comfyui-execution": "visual" },
+    }));
+    const roundTripped = parseTimelineWorkflowRecordJson(serialized);
+
+    expect(roundTripped && isSingleImageTimelineWorkflowRecord(roundTripped)).toBe(true);
+    if (!roundTripped || !isSingleImageTimelineWorkflowRecord(roundTripped)) {
+      throw new Error("Expected a single-image Final error record.");
+    }
+    expect(readFinalError(roundTripped.workflow)).toEqual(readFinalError(restored));
+    expect(serialized).not.toContain("PRIVATE_IMAGE_BYTES");
+    expect(serialized).not.toContain("PRIVATE_API_KEY");
+    expect(serialized).not.toContain("PRIVATE_TOKEN");
+    expect(serialized).not.toContain("data:image");
+  });
+
+  it("preserves a legitimate pre-upscale Final error without previewUpscale through sanitize and round-trip", () => {
+    const originalError = {
+      code: "comfyui_execution_failed",
+      message: "Final preparation failed before Preview upscale.",
+      details: { name: "RangeError", stage: "preview_upscale" },
+    };
+    const raw = createPersistedFinalErrorWorkflow(originalError);
+    const rawPartial = (raw.nodes["comfyui-execution"].error?.details as {
+      partialResult: { finals: Array<Record<string, unknown>> };
+    }).partialResult;
+    delete rawPartial.finals[0]!.previewUpscale;
+
+    const restored = sanitizeTimelineWorkflowState(raw) as TimelineWorkflowState;
+    const readFinal = (workflow: TimelineWorkflowState) => {
+      const partialResult = (workflow.nodes["comfyui-execution"].error?.details as {
+        partialResult?: { finals?: Array<Record<string, unknown>> };
+      } | undefined)?.partialResult;
+      return partialResult?.finals?.[0];
+    };
+    expect(readFinal(restored)).toMatchObject({
+      candidateId: "preview-1",
+      seed: 100,
+      rank: 1,
+      status: "error",
+      error: originalError,
+    });
+    expect(readFinal(restored)).not.toHaveProperty("previewUpscale");
+
+    const serialized = serializeTimelineWorkflowRecord(createTimelineWorkflowRecord({
+      projectId: "pre-upscale-error-round-trip",
+      name: "Pre-upscale Final error",
+      workflow: restored,
+      sceneRequest: "A persisted pre-upscale Final error",
+      selectedPromptProfile: "illustrious",
+      selectedImageCount: 1,
+      selectedNodeId: "comfyui-execution",
+      outputDisplayModes: { "comfyui-execution": "visual" },
+    }));
+    const roundTripped = parseTimelineWorkflowRecordJson(serialized);
+
+    expect(roundTripped && isSingleImageTimelineWorkflowRecord(roundTripped)).toBe(true);
+    if (!roundTripped || !isSingleImageTimelineWorkflowRecord(roundTripped)) {
+      throw new Error("Expected a round-tripped pre-upscale Final error.");
+    }
+    expect(readFinal(roundTripped.workflow)).toEqual(readFinal(restored));
+  });
+
+  it("fails closed when an error record includes a mismatched Preview upscale", () => {
+    const raw = createPersistedFinalErrorWorkflow({
+      code: "comfyui_execution_failed",
+      message: "Final queue failed after Preview upscale.",
+      details: { recoverable: true },
+    });
+    const rawPartial = (raw.nodes["comfyui-execution"].error?.details as {
+      partialResult: { finals: Array<Record<string, unknown>> };
+    }).partialResult;
+    const previewUpscale = rawPartial.finals[0]!.previewUpscale as Record<string, unknown>;
+    previewUpscale.width = 512;
+
+    const restored = sanitizeTimelineWorkflowState(raw) as TimelineWorkflowState;
+    const restoredPartial = (restored.nodes["comfyui-execution"].error?.details as {
+      partialResult?: { finals?: Array<{ error?: { code?: string; message?: string } }> };
+    } | undefined)?.partialResult;
+
+    expect(restoredPartial?.finals?.[0]?.error).toMatchObject({
+      code: "image_storage_invalid",
+    });
+    expect(restoredPartial?.finals?.[0]?.error?.message).not.toBe(
+      "Final queue failed after Preview upscale.",
+    );
+  });
+
+  it.each([
+    ["forged done image storage", (raw: TimelineWorkflowState) => {
+      const result = raw.nodes["comfyui-execution"].result as {
+        finals: Array<{ storedImage: Record<string, unknown> }>;
+      };
+      result.finals[0]!.storedImage = {
+        byteLength: 128,
+        contentType: "image/png",
+        filename: "../forged-final.png",
+        url: "https://attacker.invalid/forged-final.png",
+      };
+    }],
+    ["forged error candidate linkage", (raw: TimelineWorkflowState) => {
+      const partialResult = (raw.nodes["comfyui-execution"].error?.details as {
+        partialResult: { finals: Array<Record<string, unknown>> };
+      }).partialResult;
+      partialResult.finals[0]!.candidateId = "preview-999";
+    }],
+    ["malformed error without an error object", (raw: TimelineWorkflowState) => {
+      const partialResult = (raw.nodes["comfyui-execution"].error?.details as {
+        partialResult: { finals: Array<Record<string, unknown>> };
+      }).partialResult;
+      delete partialResult.finals[0]!.error;
+    }],
+  ] as const)("fails closed to image_storage_invalid for a %s record", (caseName, mutate) => {
+    const raw = caseName.startsWith("forged done")
+      ? JSON.parse(JSON.stringify(createPersistedV2GenerationWorkflow(1))) as TimelineWorkflowState
+      : createPersistedFinalErrorWorkflow({
+          code: "comfyui_execution_failed",
+          message: "Maximum call stack size exceeded",
+          details: { name: "RangeError" },
+        });
+    mutate(raw);
+
+    const restored = sanitizeTimelineWorkflowState(raw) as TimelineWorkflowState;
+    if (caseName.startsWith("forged done")) {
+      expect(restored.nodes["comfyui-execution"]).toMatchObject({
+        status: "error",
+        error: { code: "image_storage_invalid" },
+      });
+      return;
+    }
+    const partialResult = (restored.nodes["comfyui-execution"].error?.details as {
+      partialResult?: { finals?: Array<{ error?: { code?: string } }> };
+    } | undefined)?.partialResult;
+    expect(partialResult?.finals?.[0]?.error).toMatchObject({
+      code: "image_storage_invalid",
     });
   });
 

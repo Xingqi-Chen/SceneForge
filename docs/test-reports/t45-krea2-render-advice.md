@@ -22,7 +22,7 @@ Status: PASS
 - The Krea parameter UI shows the four canonical values, disables their controls, and writes the canonical values on save. Width, height, denoise, positive prompt, and negative additions remain editable.
 - Existing Illustrious and Anima adapter regressions remain green in the focused and full suites.
 
-## Commands and evidence
+## Prior T45 commands and evidence
 
 | Command | Result |
 | --- | --- |
@@ -36,6 +36,31 @@ Status: PASS
 Changed-file runtime-artifact scanning found no generated images, databases, logs, caches, or `data/` runtime files. Diff secret scanning found no credentials or private keys. Its only data-URL matches were synthetic test fixtures containing the base64 encoding of the word `source`.
 
 The round-one queue-boundary fix added a shared ComfyUI profile resolver export to the T8 adapter dependency surface. Two integration tests fully mocked that module, so their mocks were changed to partial mocks that preserve the real resolver while continuing to mock external ComfyUI operations. The previously affected two files pass all 62 tests.
+
+## PR #160 stack-safety and persistence follow-up
+
+Follow-up coverage:
+
+- The shared image data URL parser accepts a 4,600,000-character Base64 PNG payload representing 3,450,000 bytes without regular-expression stack exhaustion.
+- Shared parser, request validation, and the source-upload parser agree for PNG, JPG, JPEG, and WEBP.
+- An invalid Base64 character near the end of a 4.6 MB payload, an empty payload, and unsupported GIF/BMP MIME types fail closed.
+- Tests exercise only pure parsing and request validation. They do not create a ComfyUI client, upload an image, or queue a workflow.
+- A structurally valid Final `status:error` record preserves the original sanitized `{ code: "comfyui_execution_failed", message: "Maximum call stack size exceeded", details: { name: "RangeError" } }` through state restoration and workflow-record serialization/parsing.
+- Data URLs, API keys, and tokens nested in Final error details are replaced with `[redacted]` and absent from serialized output.
+- Forged done-image storage, forged error candidate linkage, and a malformed error record without an error object fail closed to `image_storage_invalid`.
+- A legitimate current-policy Final error that occurred before Preview upscale, and therefore has no `previewUpscale`, preserves its sanitized original error through state sanitization and workflow-record round-trip.
+- If an error record does include `previewUpscale`, its formal dimensions and selected-Preview linkage remain mandatory; a mismatched artifact fails closed to `image_storage_invalid`.
+
+Follow-up command totals:
+
+| Command | Result |
+| --- | --- |
+| `npm test -- src/features/comfyui/image-data-url.test.ts src/features/agent-timeline/timeline-workflow-persistence.test.ts` | PASS - 2 files, 152 tests |
+| `npm test` | PASS - 148 files, 1698 tests |
+| `npm run typecheck` | PASS |
+| `npm run lint` | PASS - 0 errors, 23 pre-existing warnings |
+| `npm run build` | PASS - Next.js production build completed |
+| `git diff --check` | PASS - exit 0; only Git line-ending notices |
 
 ## Manual QA
 

@@ -3,7 +3,7 @@ import type {
 } from "./client";
 import type { ComfyUiTextToImageRequest } from "./types";
 
-const SOURCE_IMAGE_DATA_URL_PATTERN = /^data:image\/(png|jpe?g|webp);base64,([A-Za-z0-9+/=]+)$/;
+import { parseComfyUiImageDataUrl } from "./image-data-url";
 
 function getSourceImageExtension(mimeSubtype: string) {
   return mimeSubtype === "jpeg" || mimeSubtype === "jpg" ? "jpg" : mimeSubtype;
@@ -14,23 +14,15 @@ function getSourceImageMimeType(mimeSubtype: string) {
 }
 
 export function parseComfyUiSourceImageDataUrl(dataUrl: string) {
-  const match = SOURCE_IMAGE_DATA_URL_PATTERN.exec(dataUrl.trim());
-
-  if (!match) {
+  const parsed = parseComfyUiImageDataUrl(dataUrl);
+  if (!parsed) {
     throw new Error("sourceImageDataUrl must be a PNG, JPEG, or WEBP data URL.");
   }
 
-  const mimeSubtype = match[1];
-  const base64 = match[2];
-
-  if (!mimeSubtype || !base64) {
-    throw new Error("sourceImageDataUrl must include image bytes.");
-  }
-
   return {
-    bytes: Buffer.from(base64, "base64"),
-    extension: getSourceImageExtension(mimeSubtype),
-    mimeType: getSourceImageMimeType(mimeSubtype),
+    bytes: Buffer.from(parsed.base64, "base64"),
+    extension: getSourceImageExtension(parsed.mimeSubtype),
+    mimeType: getSourceImageMimeType(parsed.mimeSubtype),
   };
 }
 
