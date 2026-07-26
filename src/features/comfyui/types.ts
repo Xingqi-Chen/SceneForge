@@ -65,6 +65,8 @@ export type ComfyUiTextToImageRequest = {
   controlNet?: ComfyUiControlNetConfig;
   controlNets?: ComfyUiControlNetUnitConfig[];
   characterReferences?: ComfyUiCharacterReferenceConfig[];
+  krea2StyleReference?: ComfyUiKrea2StyleReferenceConfig;
+  krea2StyleReferenceDescriptor?: ComfyUiKrea2StyleReferenceDescriptor;
   preview?: boolean;
 };
 
@@ -100,6 +102,7 @@ export type ComfyUiInpaintRequest = {
   growMaskBy?: number;
   faceDetailer?: ComfyUiFaceDetailerConfig;
   handDetailer?: ComfyUiHandDetailerConfig;
+  krea2StyleReferenceDescriptor?: ComfyUiKrea2StyleReferenceDescriptor;
   upscaleBeforeInpaint?: ComfyUiInpaintUpscaleConfig;
   preview?: boolean;
 };
@@ -266,6 +269,25 @@ export type ComfyUiCharacterReferenceConfig = {
   embedsScaling?: string;
 };
 
+/** Runtime-only input. Its ComfyUI image name is never timeline-persisted. */
+export type ComfyUiKrea2StyleReferenceConfig = {
+  imageName: string;
+  loraName?: string;
+  weight?: number;
+  startPercent?: number;
+  endPercent?: number;
+};
+
+/** Persistable Krea adapter identity. It intentionally contains no file or transport identifiers. */
+export type ComfyUiKrea2StyleReferenceDescriptor = {
+  version: 1;
+  referenceDigest: string;
+  loraName: string;
+  weight: number;
+  startPercent: number;
+  endPercent: number;
+};
+
 export type ComfyUiLoraInput = {
   loraName: string;
   strengthModel: number;
@@ -311,6 +333,8 @@ export type ResolvedComfyUiTextToImageRequest = {
   handDetailer: ResolvedComfyUiHandDetailerConfig;
   controlNets: ResolvedComfyUiControlNetUnitConfig[];
   characterReferences: ResolvedComfyUiCharacterReferenceConfig[];
+  krea2StyleReference?: Required<ComfyUiKrea2StyleReferenceConfig>;
+  krea2StyleReferenceDescriptor?: ComfyUiKrea2StyleReferenceDescriptor;
 };
 
 export type ResolvedComfyUiInpaintRequest = {
@@ -345,6 +369,7 @@ export type ResolvedComfyUiInpaintRequest = {
   growMaskBy: number;
   faceDetailer: ResolvedComfyUiFaceDetailerConfig;
   handDetailer: ResolvedComfyUiHandDetailerConfig;
+  krea2StyleReferenceDescriptor?: ComfyUiKrea2StyleReferenceDescriptor;
   upscaleBeforeInpaint: ResolvedComfyUiInpaintUpscaleConfig;
 };
 
@@ -488,6 +513,9 @@ export type BasicTextToImageNodeIds = {
   sourceImage?: string;
   sourceImageScale?: string;
   vaeEncode?: string;
+  styleReferenceImage?: string;
+  styleReferenceLora?: string;
+  styleReferencePatch?: string;
   latentImage: string;
   sampler: string;
   vaeDecode: string;
@@ -504,6 +532,8 @@ export type BasicInpaintNodeIds = {
   clipLoader?: string;
   vaeLoader?: string;
   loraLoaders: string[];
+  styleReferenceLora?: string;
+  styleReferencePatch?: string;
   positivePrompt: string;
   negativePrompt: string;
   sourceImage: string;

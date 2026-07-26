@@ -233,7 +233,7 @@ function createStyleReferenceWorkflow({
   mode?: "ipadapter" | "prompt-only";
   modelFileName?: string;
   name?: string;
-  promptProfile?: "anima" | "illustrious";
+  promptProfile?: "anima" | "illustrious" | "krea2";
 } = {}) {
   const styleReference = {
     status: "ready" as const,
@@ -298,6 +298,15 @@ function createStyleReferenceWorkflow({
           requestPreview: {
             ...((base.nodes["parameter-recommendation"].result as { requestPreview: object }).requestPreview),
             checkpointName: modelFileName,
+            ...(promptProfile === "krea2" ? {
+              cfg: 1,
+              modelBaseModel: "Krea 2",
+              modelStorageKind: "diffusion",
+              samplerName: "euler",
+              scheduler: "simple",
+              steps: 8,
+              workflowProfile: "krea2",
+            } : {}),
             positivePrompt: "glass greenhouse pilot, soft gouache, cobalt shadows",
           },
         },
@@ -403,7 +412,7 @@ describe("timeline T8 server adapters", () => {
     expect(storeGeneratedImageMock).not.toHaveBeenCalled();
   });
 
-  it("marks Krea final review and repair as T42-unavailable without external calls", async () => {
+  it("routes Krea review and repair through the paired-review stages instead of T42 placeholders", async () => {
     const base = createGateReadyWorkflow();
     const workflow = {
       ...base,
@@ -422,18 +431,24 @@ describe("timeline T8 server adapters", () => {
       },
     };
     const adapters = createTimelineT8ServerNodeAdapters();
-    const skippedNodes = ["final-review", "final-repair", "repair-verification"] as const;
 
-    for (const nodeId of skippedNodes) {
-      await expect(adapters[nodeId]?.({ dependencies: [], nodeId, workflow })).resolves.toMatchObject({
-        source: "system",
-        value: {
-          status: "not-applicable",
-          reason: "krea2-t42-unavailable",
-          message: expect.stringContaining("T42"),
-        },
-      });
-    }
+    await expect(adapters["final-review"]?.({
+      dependencies: [],
+      nodeId: "final-review",
+      workflow,
+    })).rejects.toThrow("Complete Final execution is required before Final review.");
+
+    await expect(adapters["final-repair"]?.({
+      dependencies: [],
+      nodeId: "final-repair",
+      workflow,
+    })).rejects.toThrow("Final review is required before local repair.");
+
+    await expect(adapters["repair-verification"]?.({
+      dependencies: [],
+      nodeId: "repair-verification",
+      workflow,
+    })).rejects.toThrow("Completed repair state is required before repair verification.");
 
     expect(comfyUiMocks.createComfyUiClient).not.toHaveBeenCalled();
     expect(comfyUiMocks.validateComfyUiTextToImageRequest).not.toHaveBeenCalled();
@@ -1300,6 +1315,50 @@ describe("timeline T8 server adapters", () => {
     });
   });
 
+  it("injects the preflight-approved Krea adapter only into the Krea queue request", async () => {
+    prepareStyleReferenceValidation();
+    uploadSequenceCharacterReferencesMock.mockResolvedValue([{
+      id: "run-style-reference",
+      name: "Run style reference",
+      prompt: "soft gouache, cobalt shadows",
+      enabled: true,
+      mode: "ipadapter",
+      references: [{ id: "run-style-reference-image", imageName: "sceneforge-krea-style.png", storedFilename: "0123456789abcdef0123456789abcdef.png", weight: 0.45 }],
+      weight: 0.45,
+      startPercent: 0,
+      endPercent: 1,
+    }]);
+
+    const result = await executeTimelineGraph(createStyleReferenceWorkflow({
+      baseModel: "Krea 2",
+      modelFileName: "krea-2-turbo-unet.safetensors",
+      name: "Krea 2 Turbo",
+      promptProfile: "krea2",
+    }), createTimelineT8ServerNodeAdapters());
+
+    expect(uploadSequenceCharacterReferencesMock).toHaveBeenCalledTimes(1);
+    expect(comfyUiMocks.buildComfyUiSequenceCharacterReference).not.toHaveBeenCalled();
+    expect(comfyUiMocks.validateComfyUiRequestAgainstObjectInfo).toHaveBeenCalledWith(
+      expect.objectContaining({
+        characterReferences: [],
+        krea2StyleReference: expect.objectContaining({
+          imageName: "sceneforge-krea-style.png",
+          loraName: "krea2_style_reference.safetensors",
+          weight: 0.45,
+          startPercent: 0,
+          endPercent: 1,
+        }),
+        krea2StyleReferenceDescriptor: expect.objectContaining({
+          version: 1,
+          referenceDigest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+          loraName: "krea2_style_reference.safetensors",
+        }),
+      }),
+      expect.anything(),
+    );
+    expect(result.nodes["comfyui-execution"].status).toBe("error");
+  });
+
   it.each([
     ["Anima", "Anima", "anima.safetensors", "Anima checkpoint", "anima"],
     ["unsupported", "SDXL", "sdxl.safetensors", "SDXL checkpoint", "illustrious"],
@@ -1468,14 +1527,16 @@ describe("timeline T8 server adapters", () => {
   });
 
   it.each([
-    ["valid stored Final", 3, 1, false, 0.45],
-    ["truncated stored Final", 99, 2, false, 0.45],
-    ["valid stored Final from another redraw preset", 3, 2, true, 0.55],
+    ["valid stored Final", 3, 1, false, false, 0.45],
+    ["truncated stored Final", 99, 2, false, false, 0.45],
+    ["valid stored Final from another redraw preset", 3, 2, true, false, 0.55],
+    ["valid stored Final after a Detailer-only change", 3, 2, false, true, 0.45],
   ] as const)("retries only missing or invalid work with a %s", async (
     _case,
     persistedFinalSize,
     expectedQueueCount,
     changePreset,
+    changeDetailer,
     expectedDenoise,
   ) => {
     const getObjectInfo = vi.fn().mockResolvedValue({ CheckpointLoaderSimple: {} });
@@ -1570,6 +1631,18 @@ describe("timeline T8 server adapters", () => {
             : managedImageMocks.pngBytes,
       );
       const restored = JSON.parse(JSON.stringify(first)) as TimelineWorkflowState;
+      if (changeDetailer) {
+        const sceneInput = restored.nodes["scene-input"].result as {
+          settingsSnapshot?: Record<string, unknown>;
+        };
+        sceneInput.settingsSnapshot = {
+          ...sceneInput.settingsSnapshot,
+          detailers: {
+            faceDetailer: { enabled: true, detectorModelName: "bbox/face_yolov8s.pt" },
+            handDetailer: { enabled: false },
+          },
+        };
+      }
       const retried = changePreset
         ? confirmTimelineGeneration(updateTimelineFinalRedrawPreset(restored, {
             ...getRunSceneInputSettings(restored.nodes["scene-input"].result as { settingsSnapshot?: unknown }),
@@ -1580,7 +1653,12 @@ describe("timeline T8 server adapters", () => {
 
       expect(generateImage).toHaveBeenCalledTimes(expectedQueueCount);
       expect(generateImage).toHaveBeenLastCalledWith(
-        expect.objectContaining({ seed: 101, batchSize: 1, denoise: expectedDenoise }),
+        expect.objectContaining({
+          seed: 101,
+          batchSize: 1,
+          denoise: expectedDenoise,
+          ...(changeDetailer ? { faceDetailer: expect.objectContaining({ enabled: true }) } : {}),
+        }),
         { clientId: "timeline-timeline-t8-server-final-preview-2" },
       );
       expect(storeGeneratedImageMock).toHaveBeenCalledTimes(expectedQueueCount);

@@ -363,7 +363,7 @@ describe("timeline T8 ComfyUI request conversion", () => {
     )).toBe(true);
   });
 
-  it("rejects a Krea automatic-repair setting before any direct queue provider can run", async () => {
+  it("keeps authorized Krea repair separate from Preview and Final queue construction", async () => {
     let workflow = createConfirmedWorkflow(1, undefined, {
       automaticLocalRepair: true,
       promptProfile: "krea2",
@@ -394,14 +394,17 @@ describe("timeline T8 ComfyUI request conversion", () => {
       scorePreviews: vi.fn(),
     });
 
-    expect(() => createConfirmedTimelineComfyUiRequest(workflow)).toThrow(
-      "Krea 2 Turbo does not support automatic local repair",
-    );
+    expect(createConfirmedTimelineComfyUiRequest(workflow)).toMatchObject({
+      batchSize: 1,
+      faceDetailer: { enabled: false },
+      handDetailer: { enabled: false },
+      workflowProfile: "krea2",
+    });
     await expect(adapters["comfyui-execution"]?.({
       dependencies: [],
       nodeId: "comfyui-execution",
       workflow,
-    })).rejects.toThrow("Krea 2 Turbo does not support automatic local repair");
+    })).rejects.toThrow("Preview results are required");
     expect(executeDirectFinal).not.toHaveBeenCalled();
     expect(executeFinals).not.toHaveBeenCalled();
   });
@@ -468,6 +471,67 @@ describe("timeline T8 ComfyUI request conversion", () => {
       positivePrompt: "glass greenhouse pilot, soft gouache, cobalt shadows",
       preview: false,
     });
+  });
+
+  it("keeps a preflight-approved Krea style prompt exactly once in every Preview and Final request", () => {
+    const kreaStyleReference = {
+      ...readyStyleReference,
+      settingsSnapshot: {
+        ...readyStyleReference.settingsSnapshot,
+        checkpointBaseModel: "Krea 2",
+        promptProfile: "krea2" as const,
+      },
+    };
+    let workflow = createConfirmedWorkflow(1, undefined, {
+      promptProfile: "krea2",
+      styleReference: kreaStyleReference,
+    });
+    workflow = setTimelineNodeManualResult(workflow, "resource-recommendation", {
+      checkpoint: { resource: {
+        baseModel: "Krea 2", id: "checkpoint-a", modelFileName: "krea-2-turbo-unet.safetensors",
+        modelStorageKind: "diffusion", name: "Krea 2 Turbo",
+      } },
+      loras: [],
+    });
+    workflow = setTimelineNodeManualResult(workflow, "parameter-recommendation", {
+      ...(workflow.nodes["parameter-recommendation"].result as object),
+      styleReference: kreaStyleReference,
+      requestPreview: {
+        batchSize: 1, checkpointName: "krea-2-turbo-unet.safetensors", cfg: 1, denoise: 1,
+        modelBaseModel: "Krea 2", modelStorageKind: "diffusion", negativePrompt: "blur",
+        positivePrompt: "glass greenhouse pilot, soft gouache, cobalt shadows", samplerName: "euler",
+        scheduler: "simple", steps: 8, workflowProfile: "krea2", width: 1024, height: 1024,
+      },
+    });
+    workflow = confirmTimelineGeneration(workflow);
+
+    const previews = createTimelinePreviewRequests(workflow);
+    expect(previews).toHaveLength(4);
+    for (const preview of previews) {
+      expect(preview.request.positivePrompt.match(/soft gouache, cobalt shadows/g)).toHaveLength(1);
+    }
+
+    workflow = setTimelineNodeManualResult(workflow, "preview-execution", {
+      baseSeed: 100, candidateCount: 4, finalCount: 1, previewWidth: 768, previewHeight: 768, previewSteps: 8,
+      candidates: previews.map((preview) => ({
+        candidateId: preview.candidateId, index: preview.index, seed: preview.seed, status: "done" as const,
+        storedImage: { byteLength: 1, contentType: "image/png", filename: `${preview.candidateId}.png`, url: `/generated/${preview.candidateId}.png` },
+      })),
+      successfulCount: 4, warnings: [],
+    });
+    workflow = setTimelineNodeManualResult(workflow, "preview-scoring", {
+      rubricVersion: 2,
+      scores: previews.map((preview, index) => ({
+        candidateId: preview.candidateId, adherence: 100 - index, composition: 100, anatomy: 100, style: 100,
+        technical: 100, total: 100 - index, criticalDefects: [], eligible: true, rank: index + 1,
+      })),
+      selectedCandidateIds: ["preview-1"], selectionSource: "ai",
+    });
+
+    const finals = createTimelineFinalRequests(workflow);
+    expect(finals).toHaveLength(1);
+    expect(finals[0]?.request.positivePrompt.match(/soft gouache, cobalt shadows/g)).toHaveLength(1);
+    expect(finals[0]?.request.krea2StyleReference).toBeUndefined();
   });
 
   it.each([

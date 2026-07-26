@@ -283,13 +283,9 @@ export function createConfirmedTimelineComfyUiRequest(workflow: TimelineWorkflow
   const sourceImage = getTimelineSourceImage(workflow);
   const sceneInput = workflow.nodes["scene-input"].result;
   const detailers = getGenerationInputDetailers(isRecord(sceneInput) ? sceneInput : {});
-  const settings = getRunSceneInputSettings(isRecord(sceneInput) ? sceneInput : {});
   const isKrea2 = parameterResult.requestPreview.workflowProfile === "krea2";
+  assertStyleReferenceUsable(workflow, parameterResult);
   if (isKrea2) {
-    if (settings.styleReference) invalidComfyUiRequest("Krea 2 Turbo does not support style or IPAdapter references.");
-    if (settings.automaticLocalRepair) {
-      invalidComfyUiRequest("Krea 2 Turbo does not support automatic local repair; disable it before confirmation.");
-    }
     const width = normalizeKrea2Dimension(parameterResult.requestPreview.width, "width");
     const height = normalizeKrea2Dimension(parameterResult.requestPreview.height, "height");
     if (sourceImage && (sourceImage.width !== width || sourceImage.height !== height)) {
@@ -319,7 +315,6 @@ export function createConfirmedTimelineComfyUiRequest(workflow: TimelineWorkflow
       characterReferences: [],
     };
   }
-  assertStyleReferenceUsable(workflow, parameterResult);
   return {
     ...parameterResult.requestPreview,
     faceDetailer: detailers.faceDetailer,

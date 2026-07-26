@@ -112,6 +112,7 @@ function stableCanonicalValue(value: unknown): unknown {
 const recursiveRepairTransportFields = new Set([
   "clientId",
   "client_id",
+  "krea2StyleReference",
   "maskDataUrl",
   "outputPrefix",
   "promptId",
@@ -140,7 +141,7 @@ function projectRepairSemanticValue(value: unknown, depth = 0): unknown {
   );
 }
 
-function digestCanonicalSemanticValue(value: unknown) {
+export function digestTimelineSemanticValue(value: unknown) {
   return `sha256:${sha256Hex(JSON.stringify(stableCanonicalValue(value)))}`;
 }
 
@@ -214,7 +215,7 @@ export function deriveRepairBaseRequestDigest(
   const validation = validateComfyUiTextToImageRequest(execution.request);
   if (!validation.ok) return null;
   const semanticRequest = projectRepairSemanticValue(validation.request);
-  return digestCanonicalSemanticValue({
+  return digestTimelineSemanticValue({
     version: 1,
     request: {
       ...(isRecord(semanticRequest) ? semanticRequest : {}),
@@ -234,8 +235,15 @@ export function createCanonicalRepairInpaintRequest(
   if (!final.previewUpscale) return null;
   const suffix = attemptId.slice(7, 31);
   const formal = execution.request;
+  const formalSemantic = { ...formal };
+  delete formalSemantic.krea2StyleReference;
+  const isKrea2 = formal.workflowProfile === "krea2";
+  const krea2LocalRegion = formal.workflowProfile === "krea2"
+    ? getKrea2RepairLocalRegion(diagnosis, final.previewUpscale.width, final.previewUpscale.height)
+    : null;
+  if (formal.workflowProfile === "krea2" && !krea2LocalRegion) return null;
   return {
-    ...formal,
+    ...formalSemantic,
     outputPrefix: `sceneforge/timeline-repair-${suffix}`,
     imageName: `sceneforge-repair-source-${suffix}.png`,
     maskName: `sceneforge-repair-mask-${suffix}.png`,
@@ -247,21 +255,118 @@ export function createCanonicalRepairInpaintRequest(
     inpaintMode: "latent-noise-mask",
     faceDetailer: {
       ...formal.faceDetailer,
-      enabled: diagnosis.faceDetailerEnabled ?? formal.faceDetailer?.enabled ?? false,
+      enabled: isKrea2
+        ? formal.faceDetailer?.enabled ?? false
+        : diagnosis.faceDetailerEnabled ?? formal.faceDetailer?.enabled ?? false,
     },
     handDetailer: {
       ...formal.handDetailer,
-      enabled: diagnosis.handDetailerEnabled ?? formal.handDetailer?.enabled ?? false,
+      enabled: isKrea2
+        ? formal.handDetailer?.enabled ?? false
+        : diagnosis.handDetailerEnabled ?? formal.handDetailer?.enabled ?? false,
     },
     upscaleBeforeInpaint: {
       enabled: true,
       mode: "lanczos",
       scaleBy: 2,
       strategy: "local-region",
-      localRegion: { source: "mask-bounds", padding: 32, feather: 16 },
+      localRegion: krea2LocalRegion ?? { source: "mask-bounds", padding: 32, feather: 16 },
     },
     preview: false,
   };
+}
+
+function getKrea2RepairLocalRegion(
+  diagnosis: TimelineRepairDiagnosis,
+  imageWidth: number,
+  imageHeight: number,
+) {
+  if (!Number.isSafeInteger(imageWidth) || !Number.isSafeInteger(imageHeight) || imageWidth < 16 || imageHeight < 16) {
+    return null;
+  }
+  const points = diagnosis.shapes.flatMap((shape) => {
+    switch (shape.type) {
+      case "ellipse": {
+        const rotation = ((shape.rotation ?? 0) * Math.PI) / 180;
+        const radiusX = Math.sqrt(
+          (shape.radiusX * Math.cos(rotation)) ** 2 + (shape.radiusY * Math.sin(rotation)) ** 2,
+        );
+        const radiusY = Math.sqrt(
+          (shape.radiusX * Math.sin(rotation)) ** 2 + (shape.radiusY * Math.cos(rotation)) ** 2,
+        );
+        return [
+          { x: shape.x - radiusX, y: shape.y - radiusY },
+          { x: shape.x + radiusX, y: shape.y + radiusY },
+        ];
+      }
+      case "rect": {
+        const rotation = ((shape.rotation ?? 0) * Math.PI) / 180;
+        const centerX = shape.x + shape.width / 2;
+        const centerY = shape.y + shape.height / 2;
+        return [-1, 1].flatMap((horizontal) => [-1, 1].map((vertical) => {
+          const x = horizontal * shape.width / 2;
+          const y = vertical * shape.height / 2;
+          return {
+            x: centerX + x * Math.cos(rotation) - y * Math.sin(rotation),
+            y: centerY + x * Math.sin(rotation) + y * Math.cos(rotation),
+          };
+        }));
+      }
+      case "polygon":
+        return shape.points;
+      case "stroke": {
+        const radius = (shape.brushSize ?? 1) / 2;
+        return shape.points.flatMap((point) => [
+          { x: point.x - radius, y: point.y - radius },
+          { x: point.x + radius, y: point.y + radius },
+        ]);
+      }
+    }
+  }).filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y));
+  if (points.length < 2) return null;
+
+  const padding = 32;
+  const boundsX = alignKrea2RepairCrop(
+    Math.max(0, Math.floor(Math.min(...points.map((point) => point.x)) - padding)),
+    Math.min(imageWidth, Math.ceil(Math.max(...points.map((point) => point.x)) + padding)),
+    imageWidth,
+  );
+  const boundsY = alignKrea2RepairCrop(
+    Math.max(0, Math.floor(Math.min(...points.map((point) => point.y)) - padding)),
+    Math.min(imageHeight, Math.ceil(Math.max(...points.map((point) => point.y)) + padding)),
+    imageHeight,
+  );
+  if (!boundsX || !boundsY) return null;
+  const { start: minX, end: maxX } = boundsX;
+  const { start: minY, end: maxY } = boundsY;
+  const width = maxX - minX;
+  const height = maxY - minY;
+  if (!Number.isSafeInteger(width) || !Number.isSafeInteger(height) || width < 1 || height < 1) return null;
+  return {
+    source: "mask-bounds" as const,
+    x: minX,
+    y: minY,
+    width,
+    height,
+    padding,
+    feather: 16,
+  };
+}
+
+function alignKrea2RepairCrop(start: number, end: number, maximum: number) {
+  const initialSize = end - start;
+  if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || !Number.isSafeInteger(maximum) ||
+      initialSize < 1 || end > maximum || maximum < 16 || maximum % 16 !== 0) return null;
+  const targetSize = Math.min(maximum, Math.ceil(initialSize / 8) * 8);
+  const extra = targetSize - initialSize;
+  const before = Math.min(start, Math.floor(extra / 2));
+  const after = extra - before;
+  const expandedStart = start - before;
+  const expandedEnd = Math.min(maximum, end + after);
+  const correctedStart = expandedEnd - expandedStart === targetSize
+    ? expandedStart
+    : Math.max(0, maximum - targetSize);
+  return { start: correctedStart, end: correctedStart + targetSize };
 }
 
 export function deriveRepairOutputNodeId(
@@ -285,7 +390,7 @@ export function deriveRepairRequestDigest(
   const validation = validateComfyUiInpaintRequest(request);
   if (!validation.ok) return null;
   const semanticRequest = projectRepairSemanticValue(validation.request);
-  return digestCanonicalSemanticValue({
+  return digestTimelineSemanticValue({
     version: 1,
     request: semanticRequest,
   });

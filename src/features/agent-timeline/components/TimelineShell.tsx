@@ -1296,14 +1296,13 @@ export function TimelineShell() {
     }> = {},
   ): RunSceneInputSettingsSnapshot {
     const promptProfile = overrides.promptProfile ?? selectedPromptProfile;
-    const isKrea2 = promptProfile === "krea2";
     return createRunSceneInputSettingsSnapshot({
-      automaticLocalRepair: isKrea2 ? false : overrides.automaticLocalRepair ?? automaticLocalRepair,
+      automaticLocalRepair: overrides.automaticLocalRepair ?? automaticLocalRepair,
       detailers: overrides.detailers ?? detailers,
       finalRedrawPreset: overrides.finalRedrawPreset ?? finalRedrawPreset,
       promptProfile,
       stylePalette: "stylePalette" in overrides ? overrides.stylePalette : stylePalette,
-      styleReference: isKrea2 ? undefined : "styleReference" in overrides ? overrides.styleReference : styleReference,
+      styleReference: "styleReference" in overrides ? overrides.styleReference : styleReference,
     });
   }
 
@@ -1352,38 +1351,12 @@ export function TimelineShell() {
       return;
     }
 
-    const restoredKrea2 = record.selectedPromptProfile === "krea2";
     const restoredImageCount = normalizeTimelineImageCount(record.selectedImageCount);
     const restoredSceneInput = record.workflow.nodes["scene-input"].result;
     const restoredSettings = getRunSceneInputSettings(
       isRecord(restoredSceneInput) ? restoredSceneInput : {},
     );
-    const restoredSourceImage = getSceneInputSourceImage(record.workflow);
-    const restoredKrea2HasUnsupportedControls = restoredKrea2 && (
-      restoredSettings.automaticLocalRepair ||
-      restoredSettings.styleReference !== undefined
-    );
-    const restoredWorkflow = isTimelineLegacyDirectReadOnly(record.workflow)
-      ? record.workflow
-      : restoredKrea2HasUnsupportedControls
-      ? setTimelineNodeManualResult(record.workflow, "scene-input", {
-          rawIntent: record.sceneRequest.trim() || getSceneInputRawIntent(record.workflow).trim(),
-          imageCount: restoredImageCount,
-          ...(useEditorStore.getState().project.settings.supportsNsfw === true ? { nsfw: true } : {}),
-          promptProfile: "krea2",
-          ...(restoredSourceImage ? {
-            sourceDenoise: getSceneInputSourceDenoise(record.workflow),
-            sourceImage: restoredSourceImage,
-          } : {}),
-          settingsSnapshot: createRunSceneInputSettingsSnapshot({
-            automaticLocalRepair: false,
-            detailers: restoredSettings.detailers,
-            finalRedrawPreset: restoredSettings.finalRedrawPreset,
-            promptProfile: "krea2",
-            stylePalette: restoredSettings.stylePalette,
-          }),
-        } satisfies SceneInputTimelineResult)
-      : record.workflow;
+    const restoredWorkflow = record.workflow;
     const projectId = record.projectId ?? null;
     const projectName = record.name ?? "";
     const autosaveInput: TimelineWorkflowRecordInput = {
@@ -1408,10 +1381,10 @@ export function TimelineShell() {
     setSelectedSourceDenoise(getSceneInputSourceDenoise(restoredWorkflow));
     setSelectedSourceImage(getSceneInputSourceImage(restoredWorkflow));
     setDetailers(restoredSettings.detailers);
-    setAutomaticLocalRepair(restoredKrea2 ? false : restoredSettings.automaticLocalRepair);
+    setAutomaticLocalRepair(restoredSettings.automaticLocalRepair);
     setFinalRedrawPreset(restoredSettings.finalRedrawPreset);
     setStylePalette(restoredSettings.stylePalette);
-    setStyleReference(restoredKrea2 ? undefined : restoredSettings.styleReference);
+    setStyleReference(restoredSettings.styleReference);
     setSelectedStyleCheckpointId(restoredSettings.stylePalette?.checkpointId ?? null);
     setSelectedStyleLoraIds(restoredSettings.stylePalette?.loras.map((lora) => lora.id) ?? []);
     setSelectedStyleResources(EMPTY_SELECTED_CIVITAI_RESOURCES);
@@ -1425,8 +1398,6 @@ export function TimelineShell() {
       ...current,
       [record.selectedNodeId]: isTimelineLegacyDirectReadOnly(restoredWorkflow)
         ? "This completed legacy Krea 2 Turbo direct txt2img Run is preserved as a read-only record."
-        : restoredKrea2HasUnsupportedControls
-        ? "Restored Krea 2 Turbo workflow after removing unsupported style-reference and repair settings. Confirm again to render."
         : message,
     }));
     setAutosaveStatus("saved");
@@ -2038,9 +2009,7 @@ export function TimelineShell() {
       if (!outcome || outcome.failedNodeId) return;
       setNotices((current) => ({
         ...current,
-        "result-display": isKrea2Profile
-          ? "Krea 2 Preview candidates and Final redraws are ready. Final review and repair remain unavailable until T42."
-          : "Preview, Final, and any verified Repair variants are ready for explicit selection.",
+        "result-display": "Preview, Final, and any verified Repair variants are ready for explicit selection.",
       }));
     } catch (error) {
       if (!isCurrentRun(runId)) {
@@ -2217,7 +2186,6 @@ export function TimelineShell() {
     setParametersOpen(false);
     if (isKrea2) {
       setAutomaticLocalRepair(false);
-      setStyleReference(undefined);
     }
 
     if (!workflow || isRunning) {
@@ -2242,7 +2210,11 @@ export function TimelineShell() {
       promptProfile,
       ...(selectedSourceImage ? { sourceDenoise: selectedSourceDenoise } : {}),
       ...(selectedSourceImage ? { sourceImage: selectedSourceImage } : {}),
-      settingsSnapshot: getComposerSettingsSnapshot({ promptProfile, stylePalette: undefined }),
+      settingsSnapshot: getComposerSettingsSnapshot({
+        automaticLocalRepair: isKrea2 ? false : automaticLocalRepair,
+        promptProfile,
+        stylePalette: undefined,
+      }),
     } satisfies SceneInputTimelineResult), {
       sceneRequest: rawIntent,
       selectedPromptProfile: promptProfile,
@@ -2521,14 +2493,6 @@ export function TimelineShell() {
 
   function handleStyleReferenceChange(nextStyleReference: StyleReferenceSnapshot | undefined) {
     if (rejectLegacyDirectMutation() || isRunningRef.current) {
-      return;
-    }
-    if (isKrea2Profile && nextStyleReference) {
-      setStyleReference(undefined);
-      setNotices((current) => ({
-        ...current,
-        "scene-input": "Krea 2 Turbo does not support style references or IPAdapter inputs.",
-      }));
       return;
     }
     const normalizedStyleReference = sanitizeStyleReferenceSnapshot(nextStyleReference);
@@ -2868,9 +2832,6 @@ export function TimelineShell() {
   }
 
   function handleNewScene() {
-    if (rejectLegacyDirectMutation()) {
-      return;
-    }
     invalidateTimelineRun();
     restoreVersionRef.current += 1;
     autosaveVersionRef.current += 1;
@@ -3164,9 +3125,24 @@ export function TimelineShell() {
           {isKrea2Profile ? (
             <>
               <p className="mt-3 rounded-md border border-indigo-100 bg-white px-3 py-2 text-xs leading-relaxed text-indigo-800">
-                Krea 2 Turbo uses its fixed local UNet, CLIP, VAE, and optional model-only LoRAs for 4/4/6/8 scored previews, exact-K selection, and Preview-to-Final img2img redraw. FaceDetailer and HandDetailer apply independently to Final only; Previews always remain Detailer-free. SceneForge checks the required Detailer nodes, inputs, and local models before queueing. Style references, review, and repair remain unavailable.
+                Krea 2 Turbo uses its fixed local UNet, CLIP, VAE, and optional model-only LoRAs for 4/4/6/8 scored previews, exact-K selection, and Preview-to-Final img2img redraw. Source img2img is supported. Paired review and explicit variant selection are available. One-shot Repair remains off by default and runs only when this local ComfyUI installation validates the Krea img2img/inpaint graph. The analyzed global style prompt is supported exactly once, and its optional reference adapter appears only after local Krea preflight. FaceDetailer and HandDetailer apply independently to Final and compatible Repair requests; Previews always remain Detailer-free. SceneForge checks their required nodes, inputs, samplers, detector models, and Krea model context before queueing.
               </p>
               {renderFinalRedrawStrengthControls()}
+              <label className="mt-3 flex items-start gap-2 rounded-md border border-indigo-100 bg-white px-3 py-2 text-xs text-slate-700">
+                <input
+                  checked={automaticLocalRepair}
+                  disabled={isRunning || isLegacyDirectReadOnly || Boolean(workflow)}
+                  onChange={(event) => setAutomaticLocalRepair(event.target.checked)}
+                  type="checkbox"
+                />
+                <span>
+                  <span className="font-semibold">Authorize one-shot local repair</span>
+                  <span className="mt-1 block leading-relaxed text-slate-500">
+                    Off by default. The signed confirmation may repair only reviewed local contact or object-count defects,
+                    once per Final, only after Krea graph validation, and never promotes Repair automatically.
+                  </span>
+                </span>
+              </label>
               <div className="mt-3 border-t border-indigo-100 pt-3">
                 <GenerationDetailerSettingsEditor
                   detailers={detailers}
@@ -3204,6 +3180,8 @@ export function TimelineShell() {
               onChange={handleDetailersChange}
             />
           </div>
+            </>
+          )}
           <StyleReferencePanel
             checkpointId={selectedStyleCheckpointId}
             disabled={isRunning || isLegacyDirectReadOnly}
@@ -3214,8 +3192,6 @@ export function TimelineShell() {
             snapshot={styleReference}
             workflowLabel="Run"
           />
-            </>
-          )}
           <ComfyUiGenerationDialog
             activePrompt={sceneRequest || "Run generation parameter preview"}
             advice={styleAdvice.result}
@@ -3480,7 +3456,7 @@ export function TimelineShell() {
           </div>
 
           <div className={timelineHeaderActionsClassName}>
-            <Button className="h-9 shrink-0 gap-2 px-2.5 text-xs shadow-none sm:px-3" disabled={isLegacyDirectReadOnly} onClick={handleNewScene} type="button" variant="secondary">
+            <Button className="h-9 shrink-0 gap-2 px-2.5 text-xs shadow-none sm:px-3" onClick={handleNewScene} type="button" variant="secondary">
               <RefreshCw className="size-3.5" />
               New scene
             </Button>
@@ -3751,7 +3727,7 @@ export function TimelineShell() {
         </div>
 
         <div className={timelineHeaderActionsClassName}>
-          <Button className="h-9 shrink-0 gap-2 px-2.5 text-xs shadow-none sm:px-3" disabled={isLegacyDirectReadOnly} onClick={handleNewScene} type="button" variant="secondary">
+          <Button className="h-9 shrink-0 gap-2 px-2.5 text-xs shadow-none sm:px-3" onClick={handleNewScene} type="button" variant="secondary">
             <RefreshCw className="size-3.5" />
             New scene
           </Button>

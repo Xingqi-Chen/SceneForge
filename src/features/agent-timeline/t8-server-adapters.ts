@@ -11,6 +11,7 @@ import {
   validateComfyUiRequestAgainstObjectInfo,
   validateComfyUiTextToImageRequest,
   buildComfyUiSequenceCharacterReference,
+  type ComfyUiKrea2StyleReferenceDescriptor,
   type ComfyUiTextToImageRequest,
 } from "@/features/comfyui";
 import {
@@ -30,10 +31,15 @@ import {
   buildStyleReferenceSequenceCharacter,
   getStyleReferenceCapability,
 } from "./style-reference";
+import {
+  getComfyUiKrea2StyleReferenceContextIssue,
+  isComfyUiKrea2StyleReferenceTimingSupported,
+  KREA2_STYLE_REFERENCE_LORA_NAME,
+} from "@/features/comfyui/krea2-style-reference";
 import { createTimelineT8NodeAdapters } from "./t8-node-adapters";
 import { reviewFinalExecution } from "./final-review.server";
 import { getFinalReviewResult } from "./final-review";
-import { getFinalRepairResult } from "./final-repair";
+import { digestTimelineSemanticValue, getFinalRepairResult } from "./final-repair";
 import { repairFinalExecution } from "./final-repair.server";
 import { verifyFinalRepairs } from "./repair-verification.server";
 import { createStoredImageVisionDataUrl } from "./vision-image-transcode.server";
@@ -106,20 +112,130 @@ function getValidatedTimelineCheckpoint(context: TimelineNodeExecutionContext) {
     : null;
 }
 
+const recursiveFinalTransportFields = new Set([
+  "clientId",
+  "client_id",
+  "krea2StyleReference",
+  "outputPrefix",
+  "promptId",
+  "prompt_id",
+  "sourceImageDataUrl",
+]);
+
+function projectFinalSemanticValue(value: unknown, depth = 0): unknown {
+  if (Array.isArray(value)) return value.map((entry) => projectFinalSemanticValue(entry, depth + 1));
+  if (!isRecord(value)) return value;
+  return Object.fromEntries(Object.entries(value)
+    .filter(([key, entry]) =>
+      entry !== undefined &&
+      !recursiveFinalTransportFields.has(key) &&
+      !(depth === 0 && key === "imageName"))
+    .map(([key, entry]) => [key, projectFinalSemanticValue(entry, depth + 1)]));
+}
+
+function getTimelineStyleReferenceBinding(context: TimelineNodeExecutionContext) {
+  const sceneInput = context.workflow.nodes["scene-input"].result;
+  const settings = getRunSceneInputSettings(isRecord(sceneInput) ? sceneInput : {});
+  const character = buildStyleReferenceSequenceCharacter(settings.styleReference, {
+    id: "run-style-reference",
+    name: "Run style reference",
+  });
+  const metadata = settings.styleReference?.metadata;
+  if (!character || !metadata) return null;
+  const referenceDigest = digestTimelineSemanticValue({
+    version: 1,
+    byteLength: metadata.byteLength,
+    contentType: metadata.contentType,
+    storedFilename: metadata.storedFilename,
+  });
+  return {
+    character,
+    identity: {
+      version: 1,
+      referenceDigest,
+      weight: character.weight ?? 0.45,
+      startPercent: character.startPercent ?? 0,
+      endPercent: character.endPercent ?? 1,
+    },
+  };
+}
+
+function createKrea2StyleReferenceDescriptor(
+  binding: NonNullable<ReturnType<typeof getTimelineStyleReferenceBinding>>,
+): ComfyUiKrea2StyleReferenceDescriptor {
+  return {
+    version: 1,
+    referenceDigest: binding.identity.referenceDigest,
+    loraName: KREA2_STYLE_REFERENCE_LORA_NAME,
+    weight: binding.character.weight ?? 0.45,
+    startPercent: binding.character.startPercent ?? 0,
+    endPercent: binding.character.endPercent ?? 1,
+  };
+}
+
+function bindTimelineFinalSemanticRequest(
+  request: ComfyUiTextToImageRequest,
+  binding: ReturnType<typeof getTimelineStyleReferenceBinding>,
+) {
+  return request.workflowProfile === "krea2" && binding
+    ? { ...request, krea2StyleReferenceDescriptor: createKrea2StyleReferenceDescriptor(binding) }
+    : request;
+}
+
+function deriveTimelineFinalRequestDigest(
+  request: ComfyUiTextToImageRequest,
+  binding: ReturnType<typeof getTimelineStyleReferenceBinding>,
+) {
+  return digestTimelineSemanticValue({
+    version: 1,
+    request: projectFinalSemanticValue(request),
+    ...(binding ? { styleReference: binding.identity } : {}),
+  });
+}
+
 async function applyTimelineStyleReference(
   client: ReturnType<typeof makeClient>,
   request: ComfyUiTextToImageRequest,
   context: TimelineNodeExecutionContext,
 ) {
-  const sceneInput = context.workflow.nodes["scene-input"].result;
-  const settings = getRunSceneInputSettings(isRecord(sceneInput) ? sceneInput : {});
+  const binding = getTimelineStyleReferenceBinding(context);
   const checkpoint = getValidatedTimelineCheckpoint(context);
-  if (!checkpoint || getStyleReferenceCapability({ baseModel: checkpoint.baseModel }).mode !== "ipadapter") return request;
-  const character = buildStyleReferenceSequenceCharacter(settings.styleReference, {
-    id: "run-style-reference",
-    name: "Run style reference",
-  });
-  if (!character) return request;
+  if (!binding) {
+    if (request.krea2StyleReferenceDescriptor) {
+      throw new TimelineNodeExecutionError(createTimelineNodeError(
+        "comfyui_request_invalid",
+        "The persisted Krea adapter identity no longer matches an available Run style reference.",
+      ));
+    }
+    return request;
+  }
+  const { character } = binding;
+
+  const isKrea2 = request.workflowProfile === "krea2";
+  if (!isKrea2 && (!checkpoint || getStyleReferenceCapability({ baseModel: checkpoint.baseModel }).mode !== "ipadapter")) {
+    return request;
+  }
+  if (isKrea2) {
+    const contextIssue = getComfyUiKrea2StyleReferenceContextIssue(request);
+    if (contextIssue) {
+      throw new TimelineNodeExecutionError(createTimelineNodeError("comfyui_request_invalid", contextIssue));
+    }
+    if (!isComfyUiKrea2StyleReferenceTimingSupported(character)) {
+      throw new TimelineNodeExecutionError(createTimelineNodeError(
+        "comfyui_request_invalid",
+        "Krea style reference supports only start_at=0 and end_at=1. Revert those adapter values or use prompt-only mode.",
+      ));
+    }
+    const descriptor = createKrea2StyleReferenceDescriptor(binding);
+    if (request.krea2StyleReferenceDescriptor &&
+        digestTimelineSemanticValue(request.krea2StyleReferenceDescriptor) !==
+          digestTimelineSemanticValue(descriptor)) {
+      throw new TimelineNodeExecutionError(createTimelineNodeError(
+        "comfyui_request_invalid",
+        "The Krea adapter identity does not match the current Run style reference.",
+      ));
+    }
+  }
 
   try {
     const [uploaded] = await uploadSequenceCharacterReferences(
@@ -128,6 +244,21 @@ async function applyTimelineStyleReference(
       [character],
     );
     if (!uploaded) throw new Error("Missing uploaded style reference.");
+    if (isKrea2) {
+      const imageName = uploaded.references[0]?.imageName;
+      if (!imageName) throw new Error("Missing uploaded Krea style reference image.");
+      return {
+        ...request,
+        krea2StyleReferenceDescriptor: createKrea2StyleReferenceDescriptor(binding),
+        krea2StyleReference: {
+          imageName,
+          loraName: KREA2_STYLE_REFERENCE_LORA_NAME,
+          weight: character.weight,
+          startPercent: character.startPercent,
+          endPercent: character.endPercent,
+        },
+      };
+    }
     const reference = buildComfyUiSequenceCharacterReference(
       uploaded,
       uploaded.references.map((item) => ({ id: item.id, imageName: item.imageName, weight: item.weight })),
@@ -814,7 +945,12 @@ async function executeFinals(
     .map((item) => [item.candidateId, item]));
   const finals: TimelineFinalExecutionRecord[] = [];
   const warnings: string[] = [...(previous?.warnings ?? [])];
+  const styleReferenceBinding = getTimelineStyleReferenceBinding(context);
+  let firstSemanticRequest: ComfyUiTextToImageRequest | undefined;
   for (const item of requests) {
+    const semanticRequest = bindTimelineFinalSemanticRequest(item.request, styleReferenceBinding);
+    firstSemanticRequest ??= semanticRequest;
+    const finalRequestDigest = deriveTimelineFinalRequestDigest(semanticRequest, styleReferenceBinding);
     const previousRecord = previousByCandidate.get(item.candidateId);
     let previewUpscale: TimelinePreviewUpscaleArtifact | undefined;
     try {
@@ -825,7 +961,8 @@ async function executeFinals(
         item.formalHeight,
         previousRecord?.previewUpscale,
       );
-      if (previousRecord?.seed === item.seed && previousRecord.rank === item.rank &&
+      if (previousRecord?.finalRequestDigest === finalRequestDigest &&
+          previousRecord.seed === item.seed && previousRecord.rank === item.rank &&
           JSON.stringify(previousRecord.finalPolicy) === JSON.stringify(item.finalPolicy) &&
           samePreviewUpscaleArtifact(previousRecord.previewUpscale, previewUpscale) &&
           await isReusableStoredFinal(previousRecord)) {
@@ -833,7 +970,7 @@ async function executeFinals(
         continue;
       }
       const request = {
-        ...item.request,
+        ...semanticRequest,
         sourceImageDataUrl: await storedImageDataUrl(previewUpscale.storedImage),
       };
       const result = await queueAndStore(client, await getObjectInfo(), request, context, `final-${item.candidateId}`);
@@ -860,6 +997,7 @@ async function executeFinals(
         storedImage: result.storedImage,
         previewUpscale,
         finalPolicy: item.finalPolicy,
+        finalRequestDigest,
       });
     } catch (error) {
       finals.push({
@@ -869,18 +1007,18 @@ async function executeFinals(
         status: "error",
         ...(previewUpscale ? { previewUpscale } : {}),
         finalPolicy: item.finalPolicy,
+        finalRequestDigest,
         error: normalizeTimelineError(error, "comfyui_execution_failed"),
       });
     }
   }
   finals.sort((a, b) => a.rank - b.rank);
-  const firstRequest = requests[0]?.request;
   const partialResult: ComfyUiExecutionTimelineResult = {
     completed: finals.every((item) => item.status === "done") && finals.length === requests.length,
     finalCount: requests.length,
     finals,
     finalPolicy: requests[0]?.finalPolicy,
-    request: { ...firstRequest!, sourceImageDataUrl: undefined, imageName: undefined },
+    request: { ...firstSemanticRequest!, sourceImageDataUrl: undefined, imageName: undefined },
     warnings: [...new Set(warnings)],
   };
   if (!partialResult.completed) {
@@ -891,12 +1029,6 @@ async function executeFinals(
     ));
   }
   return partialResult;
-}
-
-function isKrea2Run(context: TimelineNodeExecutionContext) {
-  const parameters = context.workflow.nodes["parameter-recommendation"].result;
-  return isRecord(parameters) && isRecord(parameters.requestPreview) &&
-    parameters.requestPreview.workflowProfile === "krea2";
 }
 
 function loadResultDisplay(execution: ComfyUiExecutionTimelineResult): ResultDisplayTimelineResult {
@@ -944,16 +1076,6 @@ export function createTimelineT8ServerNodeAdapters(
   return {
     ...adapters,
     "final-review": async (context) => {
-      if (isKrea2Run(context)) {
-        return {
-          value: {
-            status: "not-applicable",
-            reason: "krea2-t42-unavailable",
-            message: "Krea 2 staged Run preserves Preview and Final variants, but paired Final review is reserved for T42.",
-          },
-          source: "system",
-        };
-      }
       const previous = getFinalReviewResult(context.workflow);
       const reviewed = await reviewFinalExecution(getCompletedFinalExecution(context), context);
       const selectionByCandidate = new Map(previous?.pairs.flatMap((pair) =>
@@ -970,16 +1092,6 @@ export function createTimelineT8ServerNodeAdapters(
       };
     },
     "final-repair": async (context) => {
-      if (isKrea2Run(context)) {
-        return {
-          value: {
-            status: "not-applicable",
-            reason: "krea2-t42-unavailable",
-            message: "Krea 2 staged Run local repair is reserved for T42 and was not requested.",
-          },
-          source: "system",
-        };
-      }
       const review = getFinalReviewResult(context.workflow);
       if (!review) {
         throw new TimelineNodeExecutionError(createTimelineNodeError(
@@ -998,16 +1110,6 @@ export function createTimelineT8ServerNodeAdapters(
       };
     },
     "repair-verification": async (context) => {
-      if (isKrea2Run(context)) {
-        return {
-          value: {
-            status: "not-applicable",
-            reason: "krea2-t42-unavailable",
-            message: "Krea 2 staged Run repair verification is reserved for T42 and was not requested.",
-          },
-          source: "system",
-        };
-      }
       const review = getFinalReviewResult(context.workflow);
       const repair = getFinalRepairResult(context.workflow);
       if (!review || !repair) {

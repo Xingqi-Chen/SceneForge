@@ -137,6 +137,197 @@ const objectInfoWithKrea2 = {
   SaveImage: {},
 };
 
+const objectInfoWithKrea2Repair = {
+  ...objectInfoWithKrea2,
+  CLIPTextEncode: {
+    input: {
+      required: {
+        text: ["STRING", {}],
+      },
+      optional: {
+        clip: ["CLIP", {}],
+      },
+    },
+  },
+  KSampler: {
+    input: {
+      required: {
+        seed: ["INT", {}],
+        steps: ["INT", {}],
+        cfg: ["FLOAT", {}],
+        sampler_name: [["euler"], {}],
+        scheduler: [["simple"], {}],
+        denoise: ["FLOAT", {}],
+      },
+      optional: {
+        model: ["MODEL", {}],
+        positive: ["CONDITIONING", {}],
+        negative: ["CONDITIONING", {}],
+        latent_image: ["LATENT", {}],
+      },
+    },
+  },
+  LoadImageMask: {
+    input: {
+      required: {
+        image: ["STRING", {}],
+        channel: [["red", "green", "blue"], {}],
+      },
+    },
+  },
+  ImageScaleBy: {
+    input: {
+      required: {
+        upscale_method: [["lanczos", "nearest-exact"], {}],
+        scale_by: ["FLOAT", {}],
+      },
+      optional: {
+        image: ["IMAGE", {}],
+      },
+    },
+  },
+  MaskToImage: {
+    input: {
+      optional: {
+        mask: ["MASK", {}],
+      },
+    },
+  },
+  ImageToMask: {
+    input: {
+      required: {
+        channel: [["red", "green", "blue"], {}],
+      },
+      optional: {
+        image: ["IMAGE", {}],
+      },
+    },
+  },
+  VAEEncodeTiled: {
+    input: {
+      required: {
+        tile_size: ["INT", {}],
+        overlap: ["INT", {}],
+        temporal_size: ["INT", {}],
+        temporal_overlap: ["INT", {}],
+      },
+      optional: {
+        pixels: ["IMAGE", {}],
+        vae: ["VAE", {}],
+      },
+    },
+  },
+  SetLatentNoiseMask: {
+    input: {
+      optional: {
+        samples: ["LATENT", {}],
+        mask: ["MASK", {}],
+      },
+    },
+  },
+  VAEDecodeTiled: {
+    input: {
+      required: {
+        tile_size: ["INT", {}],
+        overlap: ["INT", {}],
+        temporal_size: ["INT", {}],
+        temporal_overlap: ["INT", {}],
+      },
+      optional: {
+        samples: ["LATENT", {}],
+        vae: ["VAE", {}],
+      },
+    },
+  },
+  ImageCrop: {
+    input: {
+      required: {
+        x: ["INT", {}],
+        y: ["INT", {}],
+        width: ["INT", {}],
+        height: ["INT", {}],
+      },
+      optional: {
+        image: ["IMAGE", {}],
+      },
+    },
+  },
+  CropMask: {
+    input: {
+      required: {
+        x: ["INT", {}],
+        y: ["INT", {}],
+        width: ["INT", {}],
+        height: ["INT", {}],
+      },
+      optional: {
+        mask: ["MASK", {}],
+      },
+    },
+  },
+  FeatherMask: {
+    input: {
+      required: {
+        left: ["INT", {}],
+        top: ["INT", {}],
+        right: ["INT", {}],
+        bottom: ["INT", {}],
+      },
+      optional: {
+        mask: ["MASK", {}],
+      },
+    },
+  },
+  ImageScale: {
+    input: {
+      required: {
+        upscale_method: [["lanczos"], {}],
+        width: ["INT", {}],
+        height: ["INT", {}],
+        crop: [["disabled"], {}],
+      },
+      optional: {
+        image: ["IMAGE", {}],
+      },
+    },
+  },
+  ImageCompositeMasked: {
+    input: {
+      required: {
+        x: ["INT", {}],
+        y: ["INT", {}],
+        resize_source: ["BOOLEAN", {}],
+      },
+      optional: {
+        destination: ["IMAGE", {}],
+        source: ["IMAGE", {}],
+        mask: ["MASK", {}],
+      },
+    },
+  },
+  PreviewImage: {
+    input: {
+      optional: {
+        images: ["IMAGE", {}],
+      },
+    },
+  },
+};
+
+const krea2RepairRequest = {
+  checkpointName: "krea-2-turbo-unet.safetensors",
+  modelBaseModel: "Krea 2",
+  modelStorageKind: "diffusion" as const,
+  positivePrompt: "repair the hand holding the cup",
+  sourceImage: { filename: "source.png", type: "output" as const },
+  maskName: "mask.png",
+  imageWidth: 64,
+  imageHeight: 64,
+  samplerName: "euler",
+  scheduler: "simple",
+  workflowProfile: "krea2" as const,
+};
+
 const objectInfoWithControlNet = {
   ...objectInfo,
   LoadImage: {},
@@ -1070,6 +1261,61 @@ describe("ComfyUI object info helpers", () => {
       "FaceDetailer detector model is not available in ComfyUI: bbox/face_yolov8s.pt",
       "FaceDetailer.cycle input is not available in ComfyUI object_info.",
     ]));
+
+    expect(
+      validateComfyUiRequestAgainstObjectInfo(
+        {
+          ...validRequest,
+          characterReferences: [{
+            enabled: true,
+            name: "reference",
+            images: [{ imageName: "reference.png" }],
+          }],
+        },
+        objectInfoWithKrea2,
+      ).errors,
+    ).toEqual(expect.arrayContaining([
+      "Krea 2 Turbo does not support entity or character references.",
+    ]));
+  });
+
+  it("requires the verified Krea reference adapter nodes, inputs, and fixed adapter file", () => {
+    const request = {
+      checkpointName: "krea-2-turbo-unet.safetensors",
+      workflowProfile: "krea2" as const,
+      modelBaseModel: "Krea 2",
+      modelStorageKind: "diffusion" as const,
+      positivePrompt: "a quiet station",
+      krea2StyleReference: { imageName: "sceneforge-krea-style.png" },
+    };
+    const compatibleObjectInfo = {
+      ...objectInfoWithKrea2,
+      LoadImage: { input: { required: { image: [["sceneforge-krea-style.png"], {}] } } },
+      LoraLoaderModelOnly: {
+        input: { required: {
+          model: ["MODEL", {}],
+          lora_name: [["krea-style.safetensors", "krea2_style_reference.safetensors"], {}],
+          strength_model: ["FLOAT", {}],
+        } },
+      },
+      TextEncodeKrea2OstrisEdit: {
+        input: { required: {
+          clip: ["CLIP", {}], prompt: ["STRING", {}], vae: ["VAE", {}], image1: ["IMAGE", {}],
+        } },
+      },
+      Krea2OstrisEditModelPatch: { input: { required: { model: ["MODEL", {}], kv_cache: ["BOOLEAN", {}] } } },
+    };
+
+    expect(validateComfyUiRequestAgainstObjectInfo(request, compatibleObjectInfo).errors).toEqual([]);
+    expect(validateComfyUiRequestAgainstObjectInfo(request, {
+      ...compatibleObjectInfo,
+      TextEncodeKrea2OstrisEdit: { input: { required: { clip: ["CLIP", {}], prompt: ["STRING", {}] } } },
+      Krea2OstrisEditModelPatch: undefined,
+    }).errors).toEqual(expect.arrayContaining([
+      "Krea2OstrisEditModelPatch node is not available in ComfyUI.",
+      "TextEncodeKrea2OstrisEdit.vae input is not available in ComfyUI object_info.",
+      "TextEncodeKrea2OstrisEdit.image1 input is not available in ComfyUI object_info.",
+    ]));
   });
 
   it("keeps unknown diffusion models on the fallback checkpoint profile", () => {
@@ -1471,6 +1717,167 @@ describe("ComfyUI object info helpers", () => {
         scheduler: "karras",
       },
     });
+  });
+
+  it("accepts the Krea repair preflight when ImageCompositeMasked.mask is optional", () => {
+    const result = validateComfyUiInpaintRequestAgainstObjectInfo(
+      krea2RepairRequest,
+      objectInfoWithKrea2Repair,
+    );
+
+    expect(result).toMatchObject({
+      errors: [],
+      request: {
+        checkpointName: "krea-2-turbo-unet.safetensors",
+        workflowProfile: "krea2",
+      },
+    });
+  });
+
+  it("validates enabled Krea Repair Detailer ports and detector models before queueing", () => {
+    const detailerInputs = [
+      "image", "model", "clip", "vae", "guide_size", "guide_size_for", "max_size", "seed", "steps", "cfg",
+      "sampler_name", "scheduler", "positive", "negative", "denoise", "feather", "noise_mask", "force_inpaint",
+      "bbox_threshold", "bbox_dilation", "bbox_crop_factor", "sam_detection_hint", "sam_dilation", "sam_threshold",
+      "sam_bbox_expansion", "sam_mask_hint_threshold", "sam_mask_hint_use_negative", "drop_size", "bbox_detector",
+      "wildcard", "cycle",
+    ];
+    const withDetailers = {
+      ...objectInfoWithKrea2Repair,
+      FaceDetailer: {
+        input: {
+          required: Object.fromEntries(detailerInputs.map((inputName) => [inputName, ["ANY", {}]])),
+        },
+      },
+      UltralyticsDetectorProvider: {
+        input: {
+          required: {
+            model_name: [["bbox/face_yolov8s.pt", "bbox/hand_yolov8s.pt"], {}],
+          },
+        },
+      },
+    };
+    const request = {
+      ...krea2RepairRequest,
+      faceDetailer: { enabled: true, detectorModelName: "bbox/face_yolov8s.pt" },
+      handDetailer: { enabled: false, detectorModelName: "bbox/hand_yolov8s.pt" },
+    };
+
+    expect(validateComfyUiInpaintRequestAgainstObjectInfo(request, withDetailers)).toMatchObject({
+      errors: [],
+      request: {
+        faceDetailer: { enabled: true, detectorModelName: "bbox/face_yolov8s.pt" },
+        handDetailer: { enabled: false },
+        workflowProfile: "krea2",
+      },
+    });
+    expect(validateComfyUiInpaintRequestAgainstObjectInfo(request, {
+      ...withDetailers,
+      FaceDetailer: {
+        input: {
+          required: Object.fromEntries(
+            detailerInputs
+              .filter((inputName) => inputName !== "cycle")
+              .map((inputName) => [inputName, ["ANY", {}]]),
+          ),
+        },
+      },
+      UltralyticsDetectorProvider: {
+        input: { required: { model_name: [["bbox/other.pt"], {}] } },
+      },
+    }).errors).toEqual(expect.arrayContaining([
+      "FaceDetailer detector model is not available in ComfyUI: bbox/face_yolov8s.pt",
+      "FaceDetailer.cycle input is not available in ComfyUI object_info.",
+    ]));
+  });
+
+  it("fails closed when the optional ImageCompositeMasked mask port is absent", () => {
+    const objectInfoWithoutCompositeMask = {
+      ...objectInfoWithKrea2Repair,
+      ImageCompositeMasked: {
+        input: {
+          ...objectInfoWithKrea2Repair.ImageCompositeMasked.input,
+          optional: {
+            destination: ["IMAGE", {}],
+            source: ["IMAGE", {}],
+          },
+        },
+      },
+    };
+
+    const result = validateComfyUiInpaintRequestAgainstObjectInfo(
+      krea2RepairRequest,
+      objectInfoWithoutCompositeMask,
+    );
+
+    expect(result.errors).toEqual([
+      "ImageCompositeMasked.mask input is not available in ComfyUI object_info.",
+    ]);
+  });
+
+  it.each([
+    [
+      "the nearest-exact ImageScaleBy option",
+      {
+        ImageScaleBy: {
+          input: { required: { upscale_method: [["lanczos"], {}] } },
+        },
+      },
+      "ImageScaleBy nearest-exact upscale method is not available in ComfyUI. It is required for high-res inpaint masks.",
+    ],
+    [
+      "the KSampler seed input",
+      {
+        KSampler: {
+          input: { required: { sampler_name: [["euler"], {}], scheduler: [["simple"], {}] } },
+        },
+      },
+      "KSampler.seed input is not available in ComfyUI object_info.",
+    ],
+    [
+      "the KSampler steps input",
+      {
+        KSampler: {
+          input: { required: { seed: ["INT", {}], sampler_name: [["euler"], {}], scheduler: [["simple"], {}] } },
+        },
+      },
+      "KSampler.steps input is not available in ComfyUI object_info.",
+    ],
+    [
+      "the KSampler cfg input",
+      {
+        KSampler: {
+          input: { required: { seed: ["INT", {}], steps: ["INT", {}], sampler_name: [["euler"], {}], scheduler: [["simple"], {}] } },
+        },
+      },
+      "KSampler.cfg input is not available in ComfyUI object_info.",
+    ],
+    [
+      "the KSampler denoise input",
+      {
+        KSampler: {
+          input: { required: { seed: ["INT", {}], steps: ["INT", {}], cfg: ["FLOAT", {}], sampler_name: [["euler"], {}], scheduler: [["simple"], {}] } },
+        },
+      },
+      "KSampler.denoise input is not available in ComfyUI object_info.",
+    ],
+  ])("fails the Krea repair object_info preflight when it lacks %s", (_label, override, expectedError) => {
+    const result = validateComfyUiInpaintRequestAgainstObjectInfo(
+      {
+        checkpointName: "krea-2-turbo-unet.safetensors",
+        modelBaseModel: "Krea 2",
+        modelStorageKind: "diffusion",
+        positivePrompt: "repair the hand holding the cup",
+        sourceImage: { filename: "source.png", type: "output" },
+        maskName: "mask.png",
+        samplerName: "euler",
+        scheduler: "simple",
+        workflowProfile: "krea2",
+      },
+      { ...objectInfoWithKrea2, ...override },
+    );
+
+    expect(result.errors).toContain(expectedError);
   });
 
   it("reports missing Anima inpaint profile files without requiring CheckpointLoaderSimple", () => {

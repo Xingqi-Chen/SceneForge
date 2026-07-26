@@ -34,6 +34,12 @@ import {
   DEFAULT_COMFYUI_KREA2_VAE_NAME,
   resolveComfyUiTextToImageWorkflowProfile,
 } from "./workflow-profiles";
+import {
+  getComfyUiKrea2StyleReferenceContextIssue,
+  KREA2_STYLE_REFERENCE_LORA_NAME,
+  KREA2_STYLE_REFERENCE_MODEL_PATCH_NODE,
+  KREA2_STYLE_REFERENCE_TEXT_ENCODE_NODE,
+} from "./krea2-style-reference";
 
 type ComfyUiObjectInfoNode = {
   input?: {
@@ -61,6 +67,132 @@ export type ComfyUiSam2MaskRequestObjectInfoValidation = {
   request: ComfyUiSam2MaskRequest;
   warnings: string[];
 };
+
+/**
+ * The Krea Repair route intentionally uses one bounded local, tiled inpaint
+ * graph. Keep this contract next to object_info validation so preflight checks
+ * the inputs and enum values that buildBasicInpaintWorkflow will actually send.
+ */
+const KREA2_REPAIR_REQUIRED_NODE_CLASSES = [
+  "UNETLoader",
+  "CLIPLoader",
+  "VAELoader",
+  "CLIPTextEncode",
+  "KSampler",
+  "LoadImage",
+  "LoadImageMask",
+  "ImageScaleBy",
+  "MaskToImage",
+  "ImageToMask",
+  "VAEEncodeTiled",
+  "SetLatentNoiseMask",
+  "VAEDecodeTiled",
+  "ImageCrop",
+  "CropMask",
+  "FeatherMask",
+  "ImageScale",
+  "ImageCompositeMasked",
+  "PreviewImage",
+] as const;
+
+const KREA2_REPAIR_REQUIRED_INPUTS = [
+  { classType: "UNETLoader", inputNames: ["unet_name", "weight_dtype"] },
+  { classType: "CLIPLoader", inputNames: ["clip_name", "type"] },
+  { classType: "VAELoader", inputNames: ["vae_name"] },
+  { classType: "CLIPTextEncode", inputNames: ["text"] },
+  {
+    classType: "KSampler",
+    inputNames: [
+      "seed",
+      "steps",
+      "cfg",
+      "sampler_name",
+      "scheduler",
+      "denoise",
+    ],
+  },
+  { classType: "LoadImage", inputNames: ["image"] },
+  { classType: "LoadImageMask", inputNames: ["image", "channel"] },
+  { classType: "ImageScaleBy", inputNames: ["upscale_method", "scale_by"] },
+  { classType: "ImageToMask", inputNames: ["channel"] },
+  {
+    classType: "VAEEncodeTiled",
+    inputNames: ["tile_size", "overlap", "temporal_size", "temporal_overlap"],
+  },
+  {
+    classType: "VAEDecodeTiled",
+    inputNames: ["tile_size", "overlap", "temporal_size", "temporal_overlap"],
+  },
+  { classType: "ImageCrop", inputNames: ["x", "y", "width", "height"] },
+  { classType: "CropMask", inputNames: ["x", "y", "width", "height"] },
+  { classType: "FeatherMask", inputNames: ["left", "top", "right", "bottom"] },
+  { classType: "ImageScale", inputNames: ["upscale_method", "width", "height", "crop"] },
+  {
+    classType: "ImageCompositeMasked",
+    inputNames: ["x", "y", "resize_source"],
+  },
+] as const;
+
+/**
+ * These ports are populated by edges in the repair graph. ComfyUI may declare
+ * connected ports under either input.required or input.optional, but a missing
+ * declaration must still fail preflight.
+ */
+const KREA2_REPAIR_CONNECTED_INPUTS = [
+  { classType: "CLIPTextEncode", inputNames: ["clip"] },
+  { classType: "KSampler", inputNames: ["model", "positive", "negative", "latent_image"] },
+  { classType: "ImageScaleBy", inputNames: ["image"] },
+  { classType: "MaskToImage", inputNames: ["mask"] },
+  { classType: "ImageToMask", inputNames: ["image"] },
+  { classType: "VAEEncodeTiled", inputNames: ["pixels", "vae"] },
+  { classType: "SetLatentNoiseMask", inputNames: ["samples", "mask"] },
+  { classType: "VAEDecodeTiled", inputNames: ["samples", "vae"] },
+  { classType: "ImageCrop", inputNames: ["image"] },
+  { classType: "CropMask", inputNames: ["mask"] },
+  { classType: "FeatherMask", inputNames: ["mask"] },
+  { classType: "ImageScale", inputNames: ["image"] },
+  { classType: "ImageCompositeMasked", inputNames: ["destination", "source", "mask"] },
+  { classType: "PreviewImage", inputNames: ["images"] },
+] as const;
+
+const KREA2_REPAIR_REQUIRED_OPTIONS = [
+  {
+    classType: "LoadImageMask",
+    inputName: "channel",
+    value: "red",
+    error: "LoadImageMask red channel is not available in ComfyUI. It is required for Krea 2 Turbo repair.",
+  },
+  {
+    classType: "ImageScaleBy",
+    inputName: "upscale_method",
+    value: "lanczos",
+    error: "ImageScaleBy lanczos upscale method is not available in ComfyUI. It is required for high-res inpaint source images.",
+  },
+  {
+    classType: "ImageScaleBy",
+    inputName: "upscale_method",
+    value: "nearest-exact",
+    error: "ImageScaleBy nearest-exact upscale method is not available in ComfyUI. It is required for high-res inpaint masks.",
+  },
+  {
+    classType: "ImageToMask",
+    inputName: "channel",
+    value: "red",
+    error: "ImageToMask red channel is not available in ComfyUI. It is required for Krea 2 Turbo repair.",
+  },
+  {
+    classType: "ImageScale",
+    inputName: "upscale_method",
+    value: "lanczos",
+    error: "ImageScale lanczos upscale method is not available in ComfyUI. It is required to resize local-region inpaint patches.",
+  },
+  {
+    classType: "ImageScale",
+    inputName: "crop",
+    value: "disabled",
+    error: "ImageScale disabled crop mode is not available in ComfyUI. It is required for Krea 2 Turbo repair.",
+  },
+] as const;
 
 const SAMPLER_ALIASES: Record<string, string> = {
   dpmpp2m: "dpmpp_2m",
@@ -95,11 +227,7 @@ const SAMPLER_ALIASES: Record<string, string> = {
   resmultistepcfgpp: "res_multistep_cfg_pp",
 };
 
-const KREA2_DETAILER_GRAPH_REQUIRED_INPUTS = [
-  ["CLIPTextEncode", ["text", "clip"]],
-  ["EmptyLatentImage", ["width", "height", "batch_size"]],
-  ["KSampler", ["model", "positive", "negative", "latent_image"]],
-  ["VAEDecode", ["samples", "vae"]],
+const KREA2_DETAILER_REQUIRED_INPUTS = [
   ["UltralyticsDetectorProvider", ["model_name"]],
   ["FaceDetailer", [
     "image",
@@ -134,6 +262,14 @@ const KREA2_DETAILER_GRAPH_REQUIRED_INPUTS = [
     "wildcard",
     "cycle",
   ]],
+] as const;
+
+const KREA2_DETAILER_GRAPH_REQUIRED_INPUTS = [
+  ["CLIPTextEncode", ["text", "clip"]],
+  ["EmptyLatentImage", ["width", "height", "batch_size"]],
+  ["KSampler", ["model", "positive", "negative", "latent_image"]],
+  ["VAEDecode", ["samples", "vae"]],
+  ...KREA2_DETAILER_REQUIRED_INPUTS,
   ["SaveImage", ["filename_prefix", "images"]],
 ] as const;
 
@@ -173,7 +309,7 @@ function readInputOptions(objectInfo: unknown, classType: string, inputName: str
   return [];
 }
 
-function hasInput(objectInfo: unknown, classType: string, inputName: string) {
+function hasInputPort(objectInfo: unknown, classType: string, inputName: string) {
   if (!isRecord(objectInfo)) {
     return false;
   }
@@ -229,6 +365,56 @@ function validateRequiredInputs(
     if (!hasRequiredInput(objectInfo, classType, inputName)) {
       errors.push(`${classType}.${inputName} input is not available in ComfyUI object_info.`);
     }
+  }
+}
+
+function validateRequiredInputPorts(
+  objectInfo: unknown,
+  classType: string,
+  inputNames: readonly string[],
+  errors: string[],
+) {
+  if (!hasNodeInfo(objectInfo, classType)) {
+    return;
+  }
+
+  for (const inputName of inputNames) {
+    if (!hasInputPort(objectInfo, classType, inputName)) {
+      errors.push(`${classType}.${inputName} input is not available in ComfyUI object_info.`);
+    }
+  }
+}
+
+function validateRequiredOption(
+  objectInfo: unknown,
+  classType: string,
+  inputName: string,
+  value: string,
+  error: string,
+  errors: string[],
+) {
+  if (!hasRequiredInput(objectInfo, classType, inputName)) {
+    return;
+  }
+
+  if (!findOption(value, readInputOptions(objectInfo, classType, inputName))) {
+    errors.push(error);
+  }
+}
+
+function validateKrea2RepairObjectInfoContract(objectInfo: unknown, errors: string[]) {
+  validateRequiredNodeClasses(objectInfo, KREA2_REPAIR_REQUIRED_NODE_CLASSES, errors);
+
+  for (const { classType, inputNames } of KREA2_REPAIR_REQUIRED_INPUTS) {
+    validateRequiredInputs(objectInfo, classType, inputNames, errors);
+  }
+
+  for (const { classType, inputNames } of KREA2_REPAIR_CONNECTED_INPUTS) {
+    validateRequiredInputPorts(objectInfo, classType, inputNames, errors);
+  }
+
+  for (const { classType, inputName, value, error } of KREA2_REPAIR_REQUIRED_OPTIONS) {
+    validateRequiredOption(objectInfo, classType, inputName, value, error, errors);
   }
 }
 
@@ -492,6 +678,50 @@ function validateAnimaCharacterReferenceNodes(
   }
 }
 
+function validateKrea2StyleReferenceNodes(
+  request: ComfyUiTextToImageRequest,
+  objectInfo: unknown,
+  errors: string[],
+) {
+  const reference = request.krea2StyleReference;
+  if (!reference) {
+    return;
+  }
+
+  const contextIssue = getComfyUiKrea2StyleReferenceContextIssue(request);
+  if (contextIssue) {
+    errors.push(contextIssue);
+    return;
+  }
+
+  validateRequiredNodeClasses(objectInfo, [
+    "LoadImage",
+    "LoraLoaderModelOnly",
+    KREA2_STYLE_REFERENCE_TEXT_ENCODE_NODE,
+    KREA2_STYLE_REFERENCE_MODEL_PATCH_NODE,
+  ], errors);
+  validateRequiredInputs(objectInfo, "LoadImage", ["image"], errors);
+  validateRequiredInputs(objectInfo, "LoraLoaderModelOnly", ["model", "lora_name", "strength_model"], errors);
+  validateRequiredInputs(objectInfo, KREA2_STYLE_REFERENCE_TEXT_ENCODE_NODE, ["clip", "prompt"], errors);
+  validateRequiredInputs(objectInfo, KREA2_STYLE_REFERENCE_MODEL_PATCH_NODE, ["model", "kv_cache"], errors);
+
+  for (const inputName of ["vae", "image1"] as const) {
+    if (hasNodeInfo(objectInfo, KREA2_STYLE_REFERENCE_TEXT_ENCODE_NODE) &&
+        !hasInputPort(objectInfo, KREA2_STYLE_REFERENCE_TEXT_ENCODE_NODE, inputName)) {
+      errors.push(`${KREA2_STYLE_REFERENCE_TEXT_ENCODE_NODE}.${inputName} input is not available in ComfyUI object_info.`);
+    }
+  }
+
+  const loraName = reference.loraName ?? KREA2_STYLE_REFERENCE_LORA_NAME;
+  if (loraName !== KREA2_STYLE_REFERENCE_LORA_NAME) {
+    errors.push("Krea style reference must use the verified krea2_style_reference.safetensors adapter file.");
+    return;
+  }
+  if (!findOption(loraName, readInputOptions(objectInfo, "LoraLoaderModelOnly", "lora_name"))) {
+    errors.push(`Krea style-reference adapter is not available in ComfyUI: ${loraName}`);
+  }
+}
+
 function validateDimension(value: number | undefined, label: string, latentImageNode: string, errors: string[]) {
   if (value === undefined) {
     return;
@@ -604,6 +834,40 @@ function validateKrea2DetailerGraphAgainstObjectInfo({
   }
 }
 
+function validateKrea2StyleReferenceModelPatch(
+  request: ComfyUiInpaintRequest,
+  objectInfo: unknown,
+  errors: string[],
+) {
+  const descriptor = request.krea2StyleReferenceDescriptor;
+  if (!descriptor) return;
+  const contextIssue = getComfyUiKrea2StyleReferenceContextIssue(request);
+  if (contextIssue) {
+    errors.push(contextIssue);
+    return;
+  }
+  validateRequiredNodeClasses(objectInfo, [
+    "LoraLoaderModelOnly",
+    KREA2_STYLE_REFERENCE_MODEL_PATCH_NODE,
+  ], errors);
+  validateRequiredInputs(objectInfo, "LoraLoaderModelOnly", ["model", "lora_name", "strength_model"], errors);
+  validateRequiredInputs(objectInfo, KREA2_STYLE_REFERENCE_MODEL_PATCH_NODE, ["model", "kv_cache"], errors);
+  if (descriptor.loraName !== KREA2_STYLE_REFERENCE_LORA_NAME) {
+    errors.push("Krea Repair must use the verified krea2_style_reference.safetensors adapter file.");
+  } else if (!findOption(
+    descriptor.loraName,
+    readInputOptions(objectInfo, "LoraLoaderModelOnly", "lora_name"),
+  )) {
+    errors.push(`Krea style-reference adapter is not available in ComfyUI: ${descriptor.loraName}`);
+  }
+}
+
+function validateKrea2DetailerInputsAgainstObjectInfo(objectInfo: unknown, errors: string[]) {
+  for (const [classType, inputNames] of KREA2_DETAILER_REQUIRED_INPUTS) {
+    validateRequiredInputs(objectInfo, classType, inputNames, errors);
+  }
+}
+
 function resolveAnimaProfileObjectInfoOptions({
   errors,
   objectInfo,
@@ -649,7 +913,7 @@ function resolveAnimaProfileObjectInfoOptions({
     objectInfo,
     requested: DEFAULT_COMFYUI_ANIMA_CLIP_TYPE,
   });
-  const clipDevice = hasInput(objectInfo, "CLIPLoader", "device")
+  const clipDevice = hasInputPort(objectInfo, "CLIPLoader", "device")
     ? resolveRequiredOption({
         classType: "CLIPLoader",
         errors,
@@ -686,8 +950,8 @@ function resolveKrea2ProfileObjectInfoOptions({
 }: {
   errors: string[];
   objectInfo: unknown;
-  request: Pick<ComfyUiTextToImageRequest, "checkpointName"> &
-    Partial<Pick<ComfyUiTextToImageRequest, "checkpointNameAliases">>;
+  request: Pick<ComfyUiTextToImageRequest | ComfyUiInpaintRequest, "checkpointName"> &
+    Partial<Pick<ComfyUiTextToImageRequest | ComfyUiInpaintRequest, "checkpointNameAliases">>;
 }) {
   const unetName = resolveRequiredOption({
     aliases: request.checkpointNameAliases,
@@ -893,8 +1157,9 @@ export function validateComfyUiRequestAgainstObjectInfo(
       errors.push("Krea 2 Turbo does not support ControlNet.");
     }
     if (characterReferences.some((reference) => reference.enabled !== false)) {
-      errors.push("Krea 2 Turbo does not support style or IPAdapter references.");
+      errors.push("Krea 2 Turbo does not support entity or character references.");
     }
+    validateKrea2StyleReferenceNodes(request, objectInfo, errors);
   }
   if (controlNets.some((unit) => unit.enabled)) {
     if (!hasNodeInfo(objectInfo, "LoadImage")) {
@@ -1022,25 +1287,31 @@ export function validateComfyUiInpaintRequestAgainstObjectInfo(
   const warnings: string[] = [];
   const profile = resolveComfyUiTextToImageWorkflowProfile(request);
   const isAnimaProfile = profile.id === "anima";
-  validateRequiredNodeClasses(
-    objectInfo,
-    isAnimaProfile
-      ? ["UNETLoader", "CLIPLoader", "VAELoader", "CLIPTextEncode", "KSampler", "PreviewImage"]
-      : ["CheckpointLoaderSimple", "CLIPTextEncode", "KSampler", "PreviewImage"],
-    errors,
-  );
-  validateRequiredInputs(objectInfo, "KSampler", ["sampler_name", "scheduler"], errors);
+  const isKrea2Profile = profile.id === "krea2";
+  if (isKrea2Profile) {
+    validateKrea2RepairObjectInfoContract(objectInfo, errors);
+    validateKrea2StyleReferenceModelPatch(request, objectInfo, errors);
+  } else {
+    validateRequiredNodeClasses(
+      objectInfo,
+      isAnimaProfile
+        ? ["UNETLoader", "CLIPLoader", "VAELoader", "CLIPTextEncode", "KSampler", "PreviewImage"]
+        : ["CheckpointLoaderSimple", "CLIPTextEncode", "KSampler", "PreviewImage"],
+      errors,
+    );
+    validateRequiredInputs(objectInfo, "KSampler", ["sampler_name", "scheduler"], errors);
+  }
 
   if (isAnimaProfile) {
     validateRequiredInputs(objectInfo, "UNETLoader", ["unet_name", "weight_dtype"], errors);
     validateRequiredInputs(objectInfo, "CLIPLoader", ["clip_name", "type"], errors);
     validateRequiredInputs(objectInfo, "VAELoader", ["vae_name"], errors);
-  } else {
+  } else if (!isKrea2Profile) {
     validateRequiredInputs(objectInfo, "CheckpointLoaderSimple", ["ckpt_name"], errors);
   }
 
   const checkpointOptions = readInputOptions(objectInfo, "CheckpointLoaderSimple", "ckpt_name");
-  const loraOptions = readInputOptions(objectInfo, "LoraLoader", "lora_name");
+  const loraOptions = readInputOptions(objectInfo, isKrea2Profile ? "LoraLoaderModelOnly" : "LoraLoader", "lora_name");
   const samplerOptions = readInputOptions(objectInfo, "KSampler", "sampler_name");
   const schedulerOptions = readInputOptions(objectInfo, "KSampler", "scheduler");
   const ultralyticsDetectorOptions = readInputOptions(objectInfo, "UltralyticsDetectorProvider", "model_name");
@@ -1050,6 +1321,9 @@ export function validateComfyUiInpaintRequestAgainstObjectInfo(
   const checkpointName = findOption(request.checkpointName, checkpointOptions);
   const animaOptions = isAnimaProfile
     ? resolveAnimaProfileObjectInfoOptions({ errors, objectInfo, request })
+    : undefined;
+  const krea2Options = isKrea2Profile
+    ? resolveKrea2ProfileObjectInfoOptions({ errors, objectInfo, request })
     : undefined;
   const sampler = findSampler(request.samplerName, samplerOptions, schedulerOptions);
   const samplerName = sampler.samplerName;
@@ -1094,8 +1368,15 @@ export function validateComfyUiInpaintRequestAgainstObjectInfo(
     };
   });
 
-  if (!isAnimaProfile && !checkpointName) {
+  if (!isAnimaProfile && !isKrea2Profile && !checkpointName) {
     errors.push(`Checkpoint is not available in ComfyUI: ${request.checkpointName}`);
+  }
+
+  if (isKrea2Profile && (request.loras ?? []).length > 0) {
+    if (!hasNodeInfo(objectInfo, "LoraLoaderModelOnly")) {
+      errors.push("LoraLoaderModelOnly node is not available in ComfyUI. It is required when Krea LoRAs are enabled.");
+    }
+    validateRequiredInputs(objectInfo, "LoraLoaderModelOnly", ["model", "lora_name", "strength_model"], errors);
   }
 
   if (request.samplerName && !samplerName) {
@@ -1264,6 +1545,19 @@ export function validateComfyUiInpaintRequestAgainstObjectInfo(
     ultralyticsDetectorOptions,
   });
 
+  if (isKrea2Profile) {
+    if (request.faceDetailer?.enabled || request.handDetailer?.enabled) {
+      validateKrea2DetailerInputsAgainstObjectInfo(objectInfo, errors);
+    }
+    const imageWidth = request.imageWidth;
+    const imageHeight = request.imageHeight;
+    if (typeof imageWidth !== "number" || typeof imageHeight !== "number" ||
+        !Number.isSafeInteger(imageWidth) || !Number.isSafeInteger(imageHeight) ||
+        imageWidth < 16 || imageHeight < 16 || imageWidth % 16 !== 0 || imageHeight % 16 !== 0) {
+      errors.push("Krea 2 Turbo repair source dimensions must be exact 16-pixel-aligned integers.");
+    }
+  }
+
   if (request.samplerName && samplerName && samplerName !== request.samplerName) {
     warnings.push(`Normalized sampler ${request.samplerName} to ${samplerName}.`);
   }
@@ -1284,11 +1578,15 @@ export function validateComfyUiInpaintRequestAgainstObjectInfo(
     request: {
       ...request,
       workflowProfile: profile.id,
-      checkpointName: isAnimaProfile ? animaOptions?.unetName ?? request.checkpointName : checkpointName ?? request.checkpointName,
-      clipName: isAnimaProfile ? animaOptions?.clipName : request.clipName,
+      checkpointName: isAnimaProfile
+        ? animaOptions?.unetName ?? request.checkpointName
+        : isKrea2Profile ? krea2Options?.unetName ?? request.checkpointName : checkpointName ?? request.checkpointName,
+      clipName: isAnimaProfile ? animaOptions?.clipName : isKrea2Profile ? krea2Options?.clipName : request.clipName,
       clipDevice: isAnimaProfile ? animaOptions?.clipDevice : request.clipDevice,
-      vaeName: isAnimaProfile ? animaOptions?.vaeName : request.vaeName,
-      unetWeightDtype: isAnimaProfile ? animaOptions?.unetWeightDtype : request.unetWeightDtype,
+      vaeName: isAnimaProfile ? animaOptions?.vaeName : isKrea2Profile ? krea2Options?.vaeName : request.vaeName,
+      unetWeightDtype: isAnimaProfile
+        ? animaOptions?.unetWeightDtype
+        : isKrea2Profile ? krea2Options?.unetWeightDtype : request.unetWeightDtype,
       samplerName: samplerName ?? request.samplerName,
       scheduler: scheduler ?? request.scheduler,
       inpaintMode,

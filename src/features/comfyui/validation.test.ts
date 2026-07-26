@@ -40,13 +40,13 @@ describe("Krea 2 ComfyUI request validation", () => {
   });
 
   it.each([
-    ["style reference", {
+    ["entity or character reference", {
       characterReferences: [{
         enabled: true,
         name: "reference",
         images: [{ imageName: "reference.png" }],
       }],
-    }, "does not support style or IPAdapter"],
+    }, "does not support entity or character references"],
     ["ControlNet", { controlNets: [{ type: "openpose", enabled: true, svg: "<svg />" }] }, "does not support ControlNet"],
   ])("rejects Krea %s requests", (_label, override, message) => {
     expect(validateComfyUiTextToImageRequest({ ...kreaRequest, ...override })).toMatchObject({
@@ -124,10 +124,48 @@ describe("Krea 2 ComfyUI request validation", () => {
     });
   });
 
-  it("rejects Krea inpaint and repair requests before source or mask handling", () => {
-    expect(validateComfyUiInpaintRequest(kreaRequest)).toEqual({
+  it("accepts only the bounded Krea repair graph with independently selected Detailers", () => {
+    const compatibleRepair = {
+      ...kreaRequest,
+      imageHeight: 1024,
+      imageWidth: 1024,
+      inpaintMode: "latent-noise-mask" as const,
+      maskDataUrl: "data:image/png;base64,aGVsbG8=",
+      sourceImageDataUrl: "data:image/png;base64,aGVsbG8=",
+      upscaleBeforeInpaint: {
+        enabled: true,
+        localRegion: { feather: 16, padding: 32, source: "mask-bounds" as const },
+        mode: "lanczos" as const,
+        scaleBy: 2 as const,
+        strategy: "local-region" as const,
+      },
+    };
+
+    expect(validateComfyUiInpaintRequest(compatibleRepair)).toMatchObject({
+      ok: true,
+      request: {
+        workflowProfile: "krea2",
+        inpaintMode: "latent-noise-mask",
+      },
+    });
+    expect(validateComfyUiInpaintRequest({
+      ...compatibleRepair,
+      faceDetailer: { enabled: true },
+      handDetailer: { enabled: false },
+    })).toMatchObject({
+      ok: true,
+      request: {
+        faceDetailer: { enabled: true },
+        handDetailer: { enabled: false },
+        workflowProfile: "krea2",
+      },
+    });
+    expect(validateComfyUiInpaintRequest({
+      ...compatibleRepair,
+      imageWidth: 1025,
+    })).toEqual({
       ok: false,
-      message: "Krea 2 Turbo supports direct txt2img only; inpaint and repair are not supported.",
+      message: "Krea 2 Turbo repair source dimensions must be exact 16-pixel-aligned integers.",
     });
   });
 
@@ -157,6 +195,41 @@ describe("Krea 2 ComfyUI request validation", () => {
       })).toMatchObject({
         ok: false,
         message: "Krea 2 Turbo requires a normalized Krea 2 base model and diffusion model storage.",
+      });
+    }
+  });
+
+  it("accepts only the verified Krea adapter file and fixed reference timing", () => {
+    expect(validateComfyUiTextToImageRequest({
+      ...kreaRequest,
+      krea2StyleReference: { imageName: "sceneforge-krea-style.png", weight: 0.55 },
+    })).toMatchObject({
+      ok: true,
+      request: {
+        krea2StyleReference: {
+          imageName: "sceneforge-krea-style.png",
+          weight: 0.55,
+        },
+      },
+    });
+    expect(resolveComfyUiTextToImageRequest({
+      ...kreaRequest,
+      krea2StyleReference: { imageName: "sceneforge-krea-style.png", weight: 0.55 },
+    }).krea2StyleReference).toEqual({
+      imageName: "sceneforge-krea-style.png",
+      loraName: "krea2_style_reference.safetensors",
+      weight: 0.55,
+      startPercent: 0,
+      endPercent: 1,
+    });
+
+    for (const krea2StyleReference of [
+      { imageName: "style.png", loraName: "other.safetensors" },
+      { imageName: "style.png", startPercent: 0.1 },
+      { imageName: "style.png", endPercent: 0.9 },
+    ]) {
+      expect(validateComfyUiTextToImageRequest({ ...kreaRequest, krea2StyleReference })).toMatchObject({
+        ok: false,
       });
     }
   });

@@ -11,15 +11,23 @@ Summary:
 - Enabled the existing independent FaceDetailer and HandDetailer controls for Krea 2 Final requests while retaining the explicit Preview-only disablement.
 - Added Krea Final graph wiring from the Krea UNET/CLIP/VAE model context through the selected Detailer nodes before `SaveImage`.
 - Added fail-closed Krea Detailer preflight checks for the complete generated graph, required node inputs, KSampler/detailer sampler settings, detector model, and exact Krea local UNET/CLIP/VAE files before any queue request.
-- Restored Krea workflows with their persisted Detailer choices, while legacy/missing settings still sanitize to both controls off. T42 Repair remains outside this branch's scope.
+- Restored Krea workflows with their persisted Detailer choices, while legacy/missing settings still sanitize to both controls off.
+- Synchronized the T44 implementation with merged T42/T43 behavior. Krea Repair now preserves the user's signed Detailer choices without diagnosis-controlled enablement changes; adapter + Detailer Final graphs preserve the selected model context, and Final/Repair keep Hand-before-Face ordering.
+- Bound reusable Finals to a canonical semantic request digest so Detailer-only changes cannot reuse an incompatible image while unchanged partial retries still reuse completed siblings. Krea adapter-enabled Finals now persist only a signed, transport-free adapter descriptor; Repair identity includes it and the Repair sampler/Detailers inherit the verified patched model context.
 
 Validation:
 
-- Focused affected validation passed: 8 files, 272 tests.
-- `npm test` passed: 146 files, 1,643 tests.
-- `npm run typecheck` passed.
-- `npm run lint` passed with 23 existing warnings and no errors.
-- `npm run build` and `git diff --check` passed.
+- Pre-sync T44 validation passed 272 focused and 1,643 full-suite tests. Final synchronized validation passed 552 focused tests across 12 affected files and 1,673 full-suite tests across 147 files, plus typecheck, lint with no errors, production build, and diff-check. Review Gate approved the T42/T43/T44 integration after Final reuse and adapter-enabled Repair identity hardening.
+
+### T43 / Issue #154 Krea 2 Global Style Prompt and Verified Reference Adapter
+
+Summary:
+
+- Extended the shared sanitized Run style-reference contract to Krea 2: the analyzed `stylePrompt` is appended exactly once to the natural-language Krea prompt and is reconfirmed across staged Preview and Final requests.
+- Preserved metadata-only workflow persistence; reference bytes, data URLs, and temporary ComfyUI input names remain outside persisted timeline state.
+- Added a visible no-queue Krea adapter preflight plus repeated queue-time fail-closed validation for compatible Krea 2 Turbo diffusion context, `TextEncodeKrea2OstrisEdit`, `Krea2OstrisEditModelPatch`, required ports, `LoraLoaderModelOnly`, and exact `krea2_style_reference.safetensors` availability.
+- Built the Krea-specific reference graph instead of reusing generic IPAdapter nodes. Prompt-only generation remains usable when no adapter is selected; a restored or explicitly enabled adapter stays selected and blocks while preflight is pending or unavailable until verification succeeds or the user explicitly opts out. Enabled adapters never queue when preflight or queue-time validation fails.
+- Kept ControlNet, entity references, Story, hidden adapter injection, and image-byte persistence outside the Krea scope. Reference edits continue to stale downstream parameter/generation work and cancel prior confirmation. T44 subsequently adds independently selected Detailers without weakening adapter preflight.
 
 ## 2026-07-25
 
@@ -1906,3 +1914,18 @@ Summary:
 - Added Composer source img2img with source-denoise precedence, fixed Krea UNET/CLIP/VAE/model-only-LoRA context in both stages, and fail-closed source-node/input, sampler, local-model-file, and exact-dimension validation.
 - Bound Krea Final redraw presets to Conservative/Balanced/Strong 0.35/0.45/0.55. Final review, repair, and verification now persist an explicit T42-unavailable result without invoking their providers.
 - Preserved completed legacy direct outputs as read-only direct provenance; incomplete direct records become stale and require new confirmation without fabricated Preview linkage.
+
+### T42 / Issue #152 Krea 2 Final Review and bounded Repair
+
+Summary:
+
+- Enabled the shared bounded Preview/Final review, local recommendation, and explicit variant selection for staged Krea 2 Runs.
+- Added default-off Krea Repair authorization to the signed confirmation contract while retaining one-shot checkpoints, recovery identity, no duplicate queueing, and explicit-only Repair promotion.
+- Added a Krea-only preflight before any new Repair queue. It accepts only the bounded local Lanczos/latent-noise-mask img2img/inpaint path and validates required graph classes, ports, sampler options, 16-aligned dimensions, and exact local UNET/CLIP/VAE/model-only-LoRA files through `object_info`.
+- Incompatible Krea installations return a safe `comfyui-unavailable` skipped Repair without diagnosis, uploads, or queueing; Preview and Final variants remain selectable. Historic T41 T42-unavailable node state migrates to an actionable review-only retry without an automatic external call.
+
+Validation:
+
+- `npm run typecheck`
+- `npm run lint` (passes with pre-existing warnings)
+- `npm run build`

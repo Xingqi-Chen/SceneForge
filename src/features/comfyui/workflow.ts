@@ -34,6 +34,10 @@ import {
   DEFAULT_COMFYUI_KREA2_VAE_NAME,
   resolveComfyUiTextToImageWorkflowProfile,
 } from "./workflow-profiles";
+import {
+  KREA2_STYLE_REFERENCE_MODEL_PATCH_NODE,
+  KREA2_STYLE_REFERENCE_TEXT_ENCODE_NODE,
+} from "./krea2-style-reference";
 
 const HIGH_RES_INPAINT_VAE_TILE_SIZE = 512;
 const HIGH_RES_INPAINT_VAE_TILE_OVERLAP = 64;
@@ -715,22 +719,72 @@ function buildKrea2TextToImageWorkflow(
 ): BasicTextToImageWorkflow {
   const builder = new ComfyUiWorkflowBuilder();
   const modelContext = addModelContextNodes({ builder, request: resolvedRequest });
-  const positivePrompt = builder.addNode(
-    "CLIPTextEncode",
-    {
-      text: applyPromptPrefix(resolvedRequest.promptWrapper.positivePrefix, resolvedRequest.positivePrompt),
-      clip: modelContext.clipConnection,
-    },
-    "Positive Krea Prompt",
-  );
-  const negativePrompt = builder.addNode(
-    "CLIPTextEncode",
-    {
-      text: applyPromptPrefix(resolvedRequest.promptWrapper.negativePrefix, resolvedRequest.negativePrompt),
-      clip: modelContext.clipConnection,
-    },
-    "Negative Krea Prompt",
-  );
+  const styleReference = resolvedRequest.krea2StyleReference;
+  if (resolvedRequest.krea2StyleReferenceDescriptor && !styleReference) {
+    throw new Error("Krea style-reference transport image is required for Final generation.");
+  }
+  let modelConnection = modelContext.modelConnection;
+  let styleReferenceImage: string | undefined;
+  let styleReferenceLora: string | undefined;
+  let styleReferencePatch: string | undefined;
+  if (styleReference) {
+    styleReferenceImage = builder.addNode(
+      "LoadImage",
+      { image: styleReference.imageName },
+      "Load Krea Style Reference",
+    );
+    styleReferenceLora = builder.addNode(
+      "LoraLoaderModelOnly",
+      {
+        model: modelConnection,
+        lora_name: styleReference.loraName,
+        strength_model: styleReference.weight,
+      },
+      "Load Krea Style Reference Adapter",
+    );
+    styleReferencePatch = builder.addNode(
+      KREA2_STYLE_REFERENCE_MODEL_PATCH_NODE,
+      { model: builder.connect(styleReferenceLora, 0), kv_cache: false },
+      "Patch Krea Style Reference Model",
+    );
+    modelConnection = builder.connect(styleReferencePatch, 0);
+  }
+  const positivePrompt = styleReference
+    ? builder.addNode(
+        KREA2_STYLE_REFERENCE_TEXT_ENCODE_NODE,
+        {
+          clip: modelContext.clipConnection,
+          prompt: applyPromptPrefix(resolvedRequest.promptWrapper.positivePrefix, resolvedRequest.positivePrompt),
+          vae: modelContext.vaeConnection,
+          image1: builder.connect(styleReferenceImage!, 0),
+        },
+        "Positive Krea Style Reference Prompt",
+      )
+    : builder.addNode(
+        "CLIPTextEncode",
+        {
+          text: applyPromptPrefix(resolvedRequest.promptWrapper.positivePrefix, resolvedRequest.positivePrompt),
+          clip: modelContext.clipConnection,
+        },
+        "Positive Krea Prompt",
+      );
+  const negativePrompt = styleReference
+    ? builder.addNode(
+        KREA2_STYLE_REFERENCE_TEXT_ENCODE_NODE,
+        {
+          clip: modelContext.clipConnection,
+          prompt: applyPromptPrefix(resolvedRequest.promptWrapper.negativePrefix, resolvedRequest.negativePrompt),
+        },
+        "Negative Krea Style Reference Prompt",
+      )
+    : builder.addNode(
+        "CLIPTextEncode",
+        {
+          text: applyPromptPrefix(resolvedRequest.promptWrapper.negativePrefix, resolvedRequest.negativePrompt),
+          clip: modelContext.clipConnection,
+        },
+        "Negative Krea Prompt",
+      );
   let sourceImage: string | undefined;
   let sourceImageScale: string | undefined;
   let vaeEncode: string | undefined;
@@ -784,7 +838,7 @@ function buildKrea2TextToImageWorkflow(
       sampler_name: resolvedRequest.samplerName,
       scheduler: resolvedRequest.scheduler,
       denoise: resolvedRequest.denoise,
-      model: modelContext.modelConnection,
+      model: modelConnection,
       positive: builder.connect(positivePrompt, 0),
       negative: builder.connect(negativePrompt, 0),
       latent_image: latentImageConnection,
@@ -812,7 +866,7 @@ function buildKrea2TextToImageWorkflow(
       config: resolvedRequest.handDetailer,
       detectorTitle: "Krea Hand Detector",
       image: outputImageConnection,
-      modelConnection: modelContext.modelConnection,
+      modelConnection,
       negativePrompt,
       positivePrompt,
       seed: resolvedRequest.seed,
@@ -831,7 +885,7 @@ function buildKrea2TextToImageWorkflow(
       config: resolvedRequest.faceDetailer,
       detectorTitle: "Krea Face Detector",
       image: outputImageConnection,
-      modelConnection: modelContext.modelConnection,
+      modelConnection,
       negativePrompt,
       positivePrompt,
       seed: resolvedRequest.seed,
@@ -860,6 +914,9 @@ function buildKrea2TextToImageWorkflow(
       ...(sourceImage ? { sourceImage } : {}),
       ...(sourceImageScale ? { sourceImageScale } : {}),
       ...(vaeEncode ? { vaeEncode } : {}),
+      ...(styleReferenceImage ? { styleReferenceImage } : {}),
+      ...(styleReferenceLora ? { styleReferenceLora } : {}),
+      ...(styleReferencePatch ? { styleReferencePatch } : {}),
       latentImage,
       sampler,
       vaeDecode,
@@ -879,7 +936,26 @@ export function buildBasicInpaintWorkflow(request: ComfyUiInpaintRequest): Basic
   const builder = new ComfyUiWorkflowBuilder();
 
   const modelContext = addModelContextNodes({ builder, request: resolvedRequest });
-  const modelConnection = modelContext.modelConnection;
+  let modelConnection = modelContext.modelConnection;
+  let styleReferenceLora: string | undefined;
+  let styleReferencePatch: string | undefined;
+  if (resolvedRequest.krea2StyleReferenceDescriptor) {
+    styleReferenceLora = builder.addNode(
+      "LoraLoaderModelOnly",
+      {
+        model: modelConnection,
+        lora_name: resolvedRequest.krea2StyleReferenceDescriptor.loraName,
+        strength_model: resolvedRequest.krea2StyleReferenceDescriptor.weight,
+      },
+      "Load Krea Style Reference Adapter",
+    );
+    styleReferencePatch = builder.addNode(
+      KREA2_STYLE_REFERENCE_MODEL_PATCH_NODE,
+      { model: builder.connect(styleReferenceLora, 0), kv_cache: false },
+      "Patch Krea Style Reference Model",
+    );
+    modelConnection = builder.connect(styleReferencePatch, 0);
+  }
   const clipConnection = modelContext.clipConnection;
   const vaeConnection = modelContext.vaeConnection;
   const positivePrompt = builder.addNode(
@@ -1243,6 +1319,8 @@ export function buildBasicInpaintWorkflow(request: ComfyUiInpaintRequest): Basic
     workflow: builder.toWorkflow(),
     nodeIds: {
       ...modelContext.nodeIds,
+      ...(styleReferenceLora ? { styleReferenceLora } : {}),
+      ...(styleReferencePatch ? { styleReferencePatch } : {}),
       positivePrompt,
       negativePrompt,
       sourceImage,
