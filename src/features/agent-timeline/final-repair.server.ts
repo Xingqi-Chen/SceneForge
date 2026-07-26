@@ -150,6 +150,44 @@ function makeClient() {
   });
 }
 
+function isKrea2RepairExecution(execution: ComfyUiExecutionTimelineResult) {
+  return execution.request.workflowProfile === "krea2";
+}
+
+async function validateKrea2RepairCompatibility(
+  execution: ComfyUiExecutionTimelineResult,
+  final: TimelineFinalExecutionRecord,
+) {
+  const request = createCanonicalRepairInpaintRequest(
+    execution,
+    final,
+    {
+      shapes: [{
+        type: "rect",
+        x: Math.max(0, Math.floor((final.previewUpscale?.width ?? 0) / 2) - 8),
+        y: Math.max(0, Math.floor((final.previewUpscale?.height ?? 0) / 2) - 8),
+        width: 16,
+        height: 16,
+      }],
+      denoise: 0.45,
+      growMaskBy: 0,
+    },
+    `sha256:${"0".repeat(64)}`,
+  );
+  if (!request) return false;
+  const validation = validateComfyUiInpaintRequest(request);
+  if (!validation.ok) return false;
+  try {
+    const objectInfo = await makeClient().getObjectInfo();
+    const objectValidation = validateComfyUiInpaintRequestAgainstObjectInfo(validation.request, objectInfo);
+    if (objectValidation.errors.length) return false;
+    buildBasicInpaintWorkflow(objectValidation.request);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function getExpectedRepairOutputNodeId(
   execution: ComfyUiExecutionTimelineResult,
   final: TimelineFinalExecutionRecord,
@@ -817,17 +855,25 @@ async function executeRepair(
     const validation = validateComfyUiInpaintRequest(request);
     if (!validation.ok) throw new Error(validation.message);
     const objectInfo = await client.getObjectInfo();
-    const sourceBytes = await sharp(Buffer.from((request.sourceImageDataUrl!.split(",")[1] ?? ""), "base64")).png().toBuffer();
+    const objectValidation = validateComfyUiInpaintRequestAgainstObjectInfo(validation.request, objectInfo);
+    if (objectValidation.errors.length) throw new Error(objectValidation.errors.join(" "));
+    const sourceBytes = await sharp(Buffer.from((objectValidation.request.sourceImageDataUrl!.split(",")[1] ?? ""), "base64")).png().toBuffer();
     const maskBytes = Buffer.from((maskDataUrl.split(",")[1] ?? ""), "base64");
     const suffix = attemptId.slice(7, 31);
     const [sourceUpload, maskUpload] = await Promise.all([
       client.uploadImage({ filename: `sceneforge-repair-source-${suffix}.png`, bytes: sourceBytes, mimeType: "image/png", overwrite: true, type: "input" }),
       client.uploadImage({ filename: `sceneforge-repair-mask-${suffix}.png`, bytes: maskBytes, mimeType: "image/png", overwrite: true, type: "input" }),
     ]);
-    const uploaded = { ...validation.request, sourceImageDataUrl: undefined, imageName: sourceUpload.imageName, maskDataUrl: undefined, maskName: maskUpload.imageName };
-    const objectValidation = validateComfyUiInpaintRequestAgainstObjectInfo(uploaded, objectInfo);
-    if (objectValidation.errors.length) throw new Error(objectValidation.errors.join(" "));
-    const workflow = buildBasicInpaintWorkflow(objectValidation.request);
+    const uploaded = {
+      ...objectValidation.request,
+      sourceImageDataUrl: undefined,
+      imageName: sourceUpload.imageName,
+      maskDataUrl: undefined,
+      maskName: maskUpload.imageName,
+    };
+    const uploadedObjectValidation = validateComfyUiInpaintRequestAgainstObjectInfo(uploaded, objectInfo);
+    if (uploadedObjectValidation.errors.length) throw new Error(uploadedObjectValidation.errors.join(" "));
+    const workflow = buildBasicInpaintWorkflow(uploadedObjectValidation.request);
     if (workflow.outputNodeId !== expectedOutputNodeId) throw new RepairAttemptIdentityError();
     const queueStarted: TimelineRepairAttempt = {
       attemptId,
@@ -875,6 +921,13 @@ export async function repairFinalExecution(
   const gate = context.workflow.nodes["generation-gate"].result;
   const authorized = isRecord(gate) && gate.confirmed === true && gate.automaticLocalRepairAuthorized === true;
   const previousByCandidate = new Map((previous?.pairs ?? []).map((pair) => [pair.candidateId, pair]));
+  const krea2RequiresNewQueue = isKrea2RepairExecution(execution) && authorized && review.status === "reviewed" &&
+    execution.finals.some((final) => getRepairTargets(review, final.candidateId).length > 0 &&
+      !previousByCandidate.get(final.candidateId)?.attempt);
+  const krea2RepairCompatible = !krea2RequiresNewQueue || await validateKrea2RepairCompatibility(
+    execution,
+    execution.finals.find((final) => getRepairTargets(review, final.candidateId).length > 0)!,
+  );
   const pairs: TimelineRepairPair[] = [];
   for (const final of [...execution.finals].sort((left, right) => left.rank - right.rank)) {
     const targets = getRepairTargets(review, final.candidateId);
@@ -887,6 +940,10 @@ export async function repairFinalExecution(
     }
     if (!targets.length || review.status !== "reviewed") {
       pairs.push({ ...base, status: "skipped", skipReason: "no-supported-finding" });
+      continue;
+    }
+    if (!krea2RepairCompatible && !previousPair?.attempt) {
+      pairs.push({ ...base, status: "skipped", skipReason: "comfyui-unavailable" });
       continue;
     }
     if (!reviewPair) {
@@ -1092,8 +1149,10 @@ export async function repairFinalExecution(
         requestPolicy: {
           version: 1,
           sourceVariant: "final",
-          requestLocalFaceDetailer: diagnosis.faceDetailerEnabled ?? execution.request.faceDetailer?.enabled ?? false,
-          requestLocalHandDetailer: diagnosis.handDetailerEnabled ?? execution.request.handDetailer?.enabled ?? false,
+          requestLocalFaceDetailer: !isKrea2RepairExecution(execution) &&
+            (diagnosis.faceDetailerEnabled ?? execution.request.faceDetailer?.enabled ?? false),
+          requestLocalHandDetailer: !isKrea2RepairExecution(execution) &&
+            (diagnosis.handDetailerEnabled ?? execution.request.handDetailer?.enabled ?? false),
         },
       });
     } catch (error) {

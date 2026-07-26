@@ -287,9 +287,6 @@ export function createConfirmedTimelineComfyUiRequest(workflow: TimelineWorkflow
   const isKrea2 = parameterResult.requestPreview.workflowProfile === "krea2";
   if (isKrea2) {
     if (settings.styleReference) invalidComfyUiRequest("Krea 2 Turbo does not support style or IPAdapter references.");
-    if (settings.automaticLocalRepair) {
-      invalidComfyUiRequest("Krea 2 Turbo does not support automatic local repair; disable it before confirmation.");
-    }
     if (detailers.faceDetailer.enabled || detailers.handDetailer.enabled) {
       invalidComfyUiRequest("Krea 2 Turbo does not support FaceDetailer or HandDetailer.");
     }
