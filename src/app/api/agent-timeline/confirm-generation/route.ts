@@ -6,10 +6,7 @@ import {
   createTimelineGenerationConfirmationFingerprint,
   isTimelineGenerationConfirmationCurrent,
 } from "@/features/agent-timeline/generation-confirmation.server";
-import {
-  resolveTimelineFinalGenerationPolicy,
-  timelineFinalGenerationPolicy,
-} from "@/features/agent-timeline/final-generation-policy";
+import { resolveTimelineFinalGenerationPolicy } from "@/features/agent-timeline/final-generation-policy";
 import { getRunSceneInputSettings } from "@/features/agent-timeline/run-input-settings";
 import {
   areTimelineNodeDependenciesSatisfied,
@@ -141,9 +138,10 @@ export async function POST(request: Request) {
           confirmationRequired: false,
           confirmed: true,
           confirmationFingerprint: createTimelineGenerationConfirmationFingerprint(workflow),
-          finalPolicyVersion: timelineFinalGenerationPolicy.version,
+          finalPolicyVersion: resolvedFinalPolicy.version,
           finalRedrawPreset: resolvedFinalPolicy.preset,
           finalGenerationFamily: resolvedFinalPolicy.family,
+          finalSteps: resolvedFinalPolicy.steps,
           finalDenoise: resolvedFinalPolicy.denoise,
           automaticLocalRepairAuthorized: settings.automaticLocalRepair,
         }) : workflow;

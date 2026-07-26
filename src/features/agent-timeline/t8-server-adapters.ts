@@ -472,8 +472,9 @@ async function isReusablePreviewUpscale(
   storedPreview: TimelineStoredGeneratedImage,
   width: number,
   height: number,
+  policyVersion: number,
 ) {
-  if (!artifact || artifact.policyVersion !== timelineFinalGenerationPolicy.version ||
+  if (!artifact || artifact.policyVersion !== policyVersion ||
       artifact.resizeMode !== timelineFinalGenerationPolicy.resizeMode ||
       artifact.width !== width || artifact.height !== height ||
       !sameStoredImageReference(artifact.sourcePreview, storedPreview)) return false;
@@ -503,6 +504,7 @@ async function preparePreviewUpscale(
   candidateId: string,
   width: number,
   height: number,
+  policyVersion: number,
   previous?: TimelinePreviewUpscaleArtifact,
 ): Promise<TimelinePreviewUpscaleArtifact> {
   if (![width, height].every((value) => Number.isSafeInteger(value) && value > 0)) {
@@ -512,7 +514,7 @@ async function preparePreviewUpscale(
       { candidateId, recoverable: true },
     ));
   }
-  if (await isReusablePreviewUpscale(previous, storedPreview, width, height)) return previous!;
+  if (await isReusablePreviewUpscale(previous, storedPreview, width, height, policyVersion)) return previous!;
 
   const sourcePath = getGeneratedImagePath(storedPreview.filename);
   if (!sourcePath) {
@@ -561,7 +563,7 @@ async function preparePreviewUpscale(
       throw new Error("Unexpected resized dimensions.");
     }
     return {
-      policyVersion: timelineFinalGenerationPolicy.version,
+      policyVersion,
       resizeMode: timelineFinalGenerationPolicy.resizeMode,
       width,
       height,
@@ -959,6 +961,7 @@ async function executeFinals(
         item.candidateId,
         item.formalWidth,
         item.formalHeight,
+        item.finalPolicy.version,
         previousRecord?.previewUpscale,
       );
       if (previousRecord?.finalRequestDigest === finalRequestDigest &&

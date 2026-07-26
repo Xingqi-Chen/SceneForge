@@ -330,6 +330,11 @@ describe("POST /api/agent-timeline/confirm-generation", () => {
             result: {
               automaticLocalRepairAuthorized: true,
               confirmed: true,
+              finalDenoise: 0.18,
+              finalGenerationFamily: "krea2",
+              finalPolicyVersion: 3,
+              finalRedrawPreset: "balanced",
+              finalSteps: 4,
             },
           },
           "final-repair": { status: "blocked" },

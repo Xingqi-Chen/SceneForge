@@ -353,7 +353,8 @@ describe("timeline T8 ComfyUI request conversion", () => {
       expect.objectContaining({
         candidateId: "preview-1",
         request: expect.objectContaining({
-          denoise: 0.45,
+          cfg: 1,
+          denoise: 0.18,
           faceDetailer: expect.objectContaining({
             enabled: true,
             detectorModelName: "bbox/custom-face.pt",
@@ -366,11 +367,23 @@ describe("timeline T8 ComfyUI request conversion", () => {
             steps: 21,
           }),
           sourceImageDataUrl: undefined,
+          samplerName: "euler",
+          scheduler: "simple",
+          seed: 100,
+          steps: 4,
           workflowProfile: "krea2",
           width: 1024,
           height: 1024,
         }),
         storedPreview: expect.objectContaining({ filename: "preview-1.png" }),
+        finalPolicy: {
+          denoise: 0.18,
+          family: "krea2",
+          preset: "balanced",
+          resizeMode: "lanczos3-exact",
+          steps: 4,
+          version: 3,
+        },
       }),
     ]), expect.any(Object), undefined);
     expect(executeFinals.mock.calls[0]?.[0]).toHaveLength(2);
@@ -533,7 +546,8 @@ describe("timeline T8 ComfyUI request conversion", () => {
     expect(createTimelineFinalRequests(workflow)).toMatchObject([{
       request: {
         workflowProfile: "krea2",
-        steps: 8,
+        steps: 4,
+        denoise: 0.18,
         cfg: 1,
         samplerName: "euler",
         scheduler: "simple",
@@ -1280,6 +1294,140 @@ describe("timeline T8 ComfyUI request conversion", () => {
       request.sourceImageDataUrl === "data:image/png;base64,aGVsbG8=" && request.denoise === 0.72
     )).toBe(true);
   });
+
+  it.each([
+    ["conservative", 4, 0.12],
+    ["balanced", 4, 0.18],
+    ["strong", 6, 0.28],
+  ] as const)(
+    "uses the Krea v3 %s Final preset while keeping formal and Preview sampling fixed",
+    (finalRedrawPreset, finalSteps, finalDenoise) => {
+      let workflow = createConfirmedWorkflow(1, {
+        dataUrl: "data:image/png;base64,aGVsbG8=",
+        filename: "krea-composer-source.png",
+        height: 1024,
+        mimeType: "image/png",
+        uploadedAt: "2026-07-26T00:00:00.000Z",
+        width: 1536,
+      }, {
+        finalRedrawPreset,
+        promptProfile: "krea2",
+      });
+      (workflow.nodes["scene-input"].result as SceneInputTimelineResult).sourceDenoise = 0.62;
+      const parameters = workflow.nodes["parameter-recommendation"].result as {
+        requestPreview: Record<string, unknown>;
+      } & Record<string, unknown>;
+      workflow = setTimelineNodeManualResult(workflow, "parameter-recommendation", {
+        ...parameters,
+        width: 1536,
+        height: 1024,
+        steps: 77,
+        cfg: 9,
+        samplerName: "uni_pc",
+        scheduler: "karras",
+        denoise: 0.62,
+        seedPolicy: { mode: "fixed", seed: 700 },
+        requestPreview: {
+          ...parameters.requestPreview,
+          checkpointName: "krea-2-turbo-unet.safetensors",
+          modelBaseModel: "Krea 2",
+          modelStorageKind: "diffusion",
+          workflowProfile: "krea2",
+          width: 1536,
+          height: 1024,
+          steps: 77,
+          cfg: 9,
+          samplerName: "uni_pc",
+          scheduler: "karras",
+          denoise: 0.62,
+        },
+      });
+      workflow = confirmTimelineGeneration(workflow);
+
+      expect(createConfirmedTimelineComfyUiRequest(workflow)).toMatchObject({
+        width: 1536,
+        height: 1024,
+        steps: 8,
+        cfg: 1,
+        samplerName: "euler",
+        scheduler: "simple",
+      });
+      const previews = createTimelinePreviewRequests(workflow);
+      expect(previews).toHaveLength(4);
+      expect(previews.every(({ request }) =>
+        request.steps === 8 &&
+        request.cfg === 1 &&
+        request.samplerName === "euler" &&
+        request.scheduler === "simple" &&
+        request.denoise === 0.62 &&
+        request.sourceImageDataUrl === "data:image/png;base64,aGVsbG8="
+      )).toBe(true);
+
+      workflow = setTimelineNodeManualResult(workflow, "preview-execution", {
+        baseSeed: 700,
+        candidateCount: 4,
+        finalCount: 1,
+        previewHeight: previews[0]?.request.height,
+        previewWidth: previews[0]?.request.width,
+        previewSteps: 8,
+        candidates: previews.map(({ candidateId, index, seed }) => ({
+          candidateId,
+          index,
+          seed,
+          status: "done" as const,
+          storedImage: {
+            byteLength: index + 1,
+            contentType: "image/png",
+            filename: `${candidateId}.png`,
+            url: `/api/comfyui/generated-images/${candidateId}.png`,
+          },
+        })),
+        successfulCount: 4,
+        warnings: [],
+      });
+      workflow = setTimelineNodeManualResult(workflow, "preview-scoring", {
+        rubricVersion: 2,
+        scores: previews.map(({ candidateId, index }) => ({
+          candidateId,
+          adherence: 100 - index,
+          composition: 100 - index,
+          anatomy: 100 - index,
+          style: 100 - index,
+          technical: 100 - index,
+          total: 100 - index,
+          criticalDefects: [],
+          eligible: true,
+          rank: index + 1,
+        })),
+        selectedCandidateIds: ["preview-1"],
+        selectionSource: "ai",
+      });
+
+      expect(createTimelineFinalRequests(workflow)).toMatchObject([{
+        candidateId: "preview-1",
+        seed: 700,
+        storedPreview: { filename: "preview-1.png" },
+        finalPolicy: {
+          version: 3,
+          preset: finalRedrawPreset,
+          family: "krea2",
+          steps: finalSteps,
+          denoise: finalDenoise,
+        },
+        request: {
+          width: 1536,
+          height: 1024,
+          steps: finalSteps,
+          cfg: 1,
+          samplerName: "euler",
+          scheduler: "simple",
+          denoise: finalDenoise,
+          preview: false,
+          sourceImageDataUrl: undefined,
+        },
+      }]);
+    },
+  );
 
   it.each([
     ["Illustrious", "illustrious", 20, 0.4],

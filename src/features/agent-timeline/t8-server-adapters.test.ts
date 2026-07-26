@@ -225,6 +225,48 @@ function confirmWorkflow(workflow: TimelineWorkflowState, clock = createClock())
   return confirmed;
 }
 
+function applyKreaV3Profile(workflow: TimelineWorkflowState) {
+  const sceneInput = workflow.nodes["scene-input"].result as Record<string, unknown>;
+  const parameters = workflow.nodes["parameter-recommendation"].result as {
+    requestPreview: Record<string, unknown>;
+  } & Record<string, unknown>;
+  return {
+    ...workflow,
+    nodes: {
+      ...workflow.nodes,
+      "scene-input": {
+        ...workflow.nodes["scene-input"],
+        result: {
+          ...sceneInput,
+          promptProfile: "krea2",
+          settingsSnapshot: {
+            ...((sceneInput.settingsSnapshot as Record<string, unknown> | undefined) ?? {}),
+            finalRedrawPreset: "balanced",
+            promptProfile: "krea2",
+          },
+        },
+      },
+      "parameter-recommendation": {
+        ...workflow.nodes["parameter-recommendation"],
+        result: {
+          ...parameters,
+          requestPreview: {
+            ...parameters.requestPreview,
+            cfg: 1,
+            checkpointName: "krea-2-turbo-unet.safetensors",
+            modelBaseModel: "Krea 2",
+            modelStorageKind: "diffusion",
+            samplerName: "euler",
+            scheduler: "simple",
+            steps: 8,
+            workflowProfile: "krea2",
+          },
+        },
+      },
+    },
+  };
+}
+
 function createStyleReferenceWorkflow({
   baseModel = "Illustrious",
   mode = "ipadapter",
@@ -1530,17 +1572,21 @@ describe("timeline T8 server adapters", () => {
   });
 
   it.each([
-    ["valid stored Final", 3, 1, false, false, 0.45],
-    ["truncated stored Final", 99, 2, false, false, 0.45],
-    ["valid stored Final from another redraw preset", 3, 2, true, false, 0.55],
-    ["valid stored Final after a Detailer-only change", 3, 2, false, true, 0.45],
+    ["valid stored Final", 3, 1, false, false, false, 0.45, 28],
+    ["truncated stored Final", 99, 2, false, false, false, 0.45, 28],
+    ["valid stored Final from another redraw preset", 3, 2, true, false, false, 0.55, 28],
+    ["valid stored Final after a Detailer-only change", 3, 2, false, true, false, 0.45, 28],
+    ["valid stored same-policy Krea v3 Final", 3, 1, false, false, true, 0.18, 4],
+    ["valid stored Krea v3 Final from another preset", 3, 2, true, false, true, 0.28, 6],
   ] as const)("retries only missing or invalid work with a %s", async (
     _case,
     persistedFinalSize,
     expectedQueueCount,
     changePreset,
     changeDetailer,
+    useKrea,
     expectedDenoise,
+    expectedSteps,
   ) => {
     const getObjectInfo = vi.fn().mockResolvedValue({ CheckpointLoaderSimple: {} });
     const generateImage = vi.fn()
@@ -1586,8 +1632,9 @@ describe("timeline T8 server adapters", () => {
     }));
 
     try {
+      const initialWorkflow = createGateReadyWorkflow(createClock(), 2);
       const first = await executeTimelineGraph(
-        confirmWorkflow(createGateReadyWorkflow(createClock(), 2)),
+        confirmWorkflow(useKrea ? applyKreaV3Profile(initialWorkflow) : initialWorkflow),
         createTimelineT8ServerNodeAdapters(),
       );
       expect(first.nodes["comfyui-execution"]).toMatchObject({
@@ -1660,6 +1707,7 @@ describe("timeline T8 server adapters", () => {
           seed: 101,
           batchSize: 1,
           denoise: expectedDenoise,
+          steps: expectedSteps,
           ...(changeDetailer ? { faceDetailer: expect.objectContaining({ enabled: true }) } : {}),
         }),
         { clientId: "timeline-timeline-t8-server-final-preview-2" },
@@ -1671,12 +1719,158 @@ describe("timeline T8 server adapters", () => {
           completed: true,
           finalCount: 2,
           finals: [
-            expect.objectContaining({ candidateId: "preview-1", status: "done" }),
+            expect.objectContaining({
+              candidateId: "preview-1",
+              status: "done",
+              ...(useKrea ? {
+                finalPolicy: expect.objectContaining({
+                  version: 3,
+                  family: "krea2",
+                  preset: changePreset ? "strong" : "balanced",
+                  steps: expectedSteps,
+                  denoise: expectedDenoise,
+                }),
+              } : {}),
+            }),
             expect.objectContaining({ candidateId: "preview-2", status: "done" }),
           ],
         },
       });
       expect(second.nodes["result-display"].status).toBe("done");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("regenerates a genuine staged Krea v2 Final and managed fallback under v3", async () => {
+    const originalFetch = globalThis.fetch;
+    const { generateImage } = prepareFinalExecutionHarness({
+      fallbackFilename: "fresh-krea-v3-upscale.png",
+      images: [{ filename: "fresh-krea-v3-final.png", nodeId: "9", type: "output" }],
+      storedFilename: "fresh-krea-v3-final.png",
+    });
+    const legacyKreaV2Policy = {
+      version: 2,
+      resizeMode: "lanczos3-exact",
+      preset: "balanced",
+      family: "krea2",
+      denoise: 0.45,
+    } as const;
+
+    try {
+      const workflow = confirmWorkflow(applyKreaV3Profile(createGateReadyWorkflow()));
+      const previewResult = workflow.nodes["preview-execution"].result as {
+        candidates: Array<{
+          candidateId: string;
+          seed: number;
+          storedImage: {
+            byteLength: number;
+            contentType: "image/png";
+            filename: string;
+            url: string;
+          };
+        }>;
+      };
+      const selectedPreview = previewResult.candidates[0]!;
+      const legacyUpscale = {
+        policyVersion: 2,
+        resizeMode: "lanczos3-exact",
+        width: 1024,
+        height: 1024,
+        sourcePreview: selectedPreview.storedImage,
+        storedImage: {
+          byteLength: managedImageMocks.pngBytes.byteLength,
+          contentType: "image/png" as const,
+          filename: "legacy-krea-v2-upscale.png",
+          url: "/api/comfyui/generated-images/legacy-krea-v2-upscale.png",
+        },
+      };
+      const legacyPartial = {
+        completed: false,
+        finalCount: 1,
+        finalPolicy: legacyKreaV2Policy,
+        finals: [{
+          candidateId: selectedPreview.candidateId,
+          seed: selectedPreview.seed,
+          rank: 1,
+          status: "done" as const,
+          promptId: "legacy-krea-v2-final-prompt",
+          sourceImage: { filename: "legacy-krea-v2-final.png", nodeId: "9", type: "output" as const },
+          storedImage: {
+            byteLength: managedImageMocks.pngBytes.byteLength,
+            contentType: "image/png" as const,
+            filename: "legacy-krea-v2-final.png",
+            url: "/api/comfyui/generated-images/legacy-krea-v2-final.png",
+          },
+          previewUpscale: legacyUpscale,
+          finalPolicy: legacyKreaV2Policy,
+          finalRequestDigest: `sha256:${"a".repeat(64)}`,
+        }],
+        request: {
+          checkpointName: "krea-2-turbo-unet.safetensors",
+          cfg: 1,
+          denoise: 0.45,
+          samplerName: "euler",
+          scheduler: "simple",
+          steps: 8,
+          workflowProfile: "krea2",
+        },
+        warnings: [],
+      };
+      workflow.nodes["comfyui-execution"] = {
+        ...workflow.nodes["comfyui-execution"],
+        status: "error",
+        result: undefined,
+        source: "system",
+        error: {
+          code: "comfyui_execution_failed",
+          message: "Legacy Krea v2 staged Final requires a current-policy retry.",
+          details: { recoverable: true, partialResult: legacyPartial },
+        },
+      };
+
+      const retried = retryTimelineGenerationFrom(workflow, "comfyui-execution");
+      const result = await executeTimelineGraph(retried, createTimelineT8ServerNodeAdapters());
+
+      expect(generateImage).toHaveBeenCalledTimes(1);
+      expect(generateImage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          denoise: 0.18,
+          steps: 4,
+          seed: selectedPreview.seed,
+        }),
+        { clientId: "timeline-timeline-t8-server-final-preview-1" },
+      );
+      expect(storeGeneratedImageMock).toHaveBeenCalledTimes(2);
+      expect(result.nodes["comfyui-execution"]).toMatchObject({
+        status: "done",
+        result: {
+          completed: true,
+          finalPolicy: {
+            version: 3,
+            preset: "balanced",
+            family: "krea2",
+            steps: 4,
+            denoise: 0.18,
+          },
+          finals: [expect.objectContaining({
+            candidateId: "preview-1",
+            status: "done",
+            storedImage: expect.objectContaining({ filename: "fresh-krea-v3-final.png" }),
+            previewUpscale: expect.objectContaining({
+              policyVersion: 3,
+              storedImage: expect.objectContaining({ filename: "fresh-krea-v3-upscale.png" }),
+            }),
+            finalPolicy: expect.objectContaining({
+              version: 3,
+              steps: 4,
+              denoise: 0.18,
+            }),
+          })],
+        },
+      });
+      expect(JSON.stringify(result.nodes["comfyui-execution"].result))
+        .not.toContain("legacy-krea-v2");
     } finally {
       globalThis.fetch = originalFetch;
     }

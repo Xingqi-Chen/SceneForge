@@ -35,6 +35,13 @@ import type {
 const managedPreviewFilename = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png";
 const managedFinalFilename = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.png";
 const persistedBalancedFallbackPolicy = resolveTimelineFinalGenerationPolicy({}, "balanced");
+const persistedBalancedKreaV2Policy = {
+  version: 2,
+  resizeMode: "lanczos3-exact",
+  preset: "balanced",
+  family: "krea2",
+  denoise: 0.45,
+} as const;
 
 function managedStoredImage(hex: string) {
   const filename = `${hex.repeat(32)}.png`;
@@ -189,6 +196,78 @@ function createPersistedV2GenerationWorkflow(finalCount = 2) {
       },
     },
   } satisfies TimelineWorkflowState;
+}
+
+function createPersistedStagedKreaV2Workflow(finalCount = 1) {
+  const raw = JSON.parse(JSON.stringify(
+    createPersistedV2GenerationWorkflow(finalCount),
+  )) as TimelineWorkflowState;
+  raw.workflowId = `persisted-staged-krea-v2-${finalCount}`;
+  const sceneInput = raw.nodes["scene-input"].result as Record<string, unknown>;
+  sceneInput.promptProfile = "krea2";
+  sceneInput.settingsSnapshot = {
+    ...((sceneInput.settingsSnapshot as Record<string, unknown> | undefined) ?? {}),
+    finalRedrawPreset: "balanced",
+    promptProfile: "krea2",
+  };
+  const parameters = raw.nodes["parameter-recommendation"].result as {
+    requestPreview: Record<string, unknown>;
+  } & Record<string, unknown>;
+  Object.assign(parameters, {
+    steps: 8,
+    cfg: 1,
+    samplerName: "euler",
+    scheduler: "simple",
+  });
+  parameters.requestPreview = {
+    ...parameters.requestPreview,
+    checkpointName: "krea-2-turbo-unet.safetensors",
+    modelBaseModel: "Krea 2",
+    modelStorageKind: "diffusion",
+    workflowProfile: "krea2",
+    steps: 8,
+    cfg: 1,
+    samplerName: "euler",
+    scheduler: "simple",
+  };
+  const execution = raw.nodes["comfyui-execution"].result as {
+    finalPolicy: unknown;
+    finals: Array<{
+      finalPolicy: unknown;
+      previewUpscale: { policyVersion: number };
+    }>;
+    request: Record<string, unknown>;
+  };
+  execution.request = {
+    batchSize: 1,
+    checkpointName: "krea-2-turbo-unet.safetensors",
+    cfg: 1,
+    denoise: persistedBalancedKreaV2Policy.denoise,
+    modelBaseModel: "Krea 2",
+    modelStorageKind: "diffusion",
+    positivePrompt: "persisted staged Krea v2 scene",
+    preview: false,
+    samplerName: "euler",
+    scheduler: "simple",
+    steps: 8,
+    workflowProfile: "krea2",
+    width: 1024,
+    height: 1024,
+  };
+  execution.finalPolicy = persistedBalancedKreaV2Policy;
+  for (const final of execution.finals) {
+    final.finalPolicy = persistedBalancedKreaV2Policy;
+    final.previewUpscale.policyVersion = persistedBalancedKreaV2Policy.version;
+  }
+  const gate = raw.nodes["generation-gate"].result as Record<string, unknown>;
+  Object.assign(gate, {
+    finalPolicyVersion: persistedBalancedKreaV2Policy.version,
+    finalRedrawPreset: persistedBalancedKreaV2Policy.preset,
+    finalGenerationFamily: persistedBalancedKreaV2Policy.family,
+    finalDenoise: persistedBalancedKreaV2Policy.denoise,
+  });
+  delete gate.finalSteps;
+  return raw;
 }
 
 type MutablePersistedPreviewScore = Record<string, unknown>;
@@ -505,7 +584,79 @@ describe("timeline workflow persistence", () => {
     expect(restored.nodes["generation-gate"].status).not.toBe("blocked");
   });
 
-  it("migrates staged T41 Krea review placeholders into retryable review while preserving Preview and Final", () => {
+  it("keeps a completed staged Krea v2 result and its linked fallback safely displayable", () => {
+    const restored = sanitizeTimelineWorkflowState(
+      createPersistedStagedKreaV2Workflow(1),
+    ) as TimelineWorkflowState;
+    const execution = restored.nodes["comfyui-execution"].result as {
+      finalPolicy?: Record<string, unknown>;
+      finals: Array<{
+        finalPolicy?: Record<string, unknown>;
+        previewUpscale?: { policyVersion?: number; sourcePreview?: unknown; storedImage?: unknown };
+        status: string;
+      }>;
+    };
+
+    expect(restored.legacyDirectProvenance).toBeUndefined();
+    expect(restored.generationConfirmed).toBe(true);
+    expect(restored.nodes["generation-gate"].status).not.toBe("blocked");
+    expect(restored.nodes["comfyui-execution"].status).toBe("done");
+    expect(execution.finalPolicy).toEqual(persistedBalancedKreaV2Policy);
+    expect(execution.finalPolicy).not.toHaveProperty("steps");
+    expect(execution.finals).toEqual([
+      expect.objectContaining({
+        status: "done",
+        finalPolicy: persistedBalancedKreaV2Policy,
+        previewUpscale: expect.objectContaining({
+          policyVersion: 2,
+          sourcePreview: expect.any(Object),
+          storedImage: expect.any(Object),
+        }),
+      }),
+    ]);
+    expect(restored.nodes["result-display"]).toMatchObject({
+      status: "done",
+      result: {
+        completed: true,
+        fallbacks: [expect.objectContaining({ candidateId: "preview-1" })],
+        storedImages: [expect.any(Object)],
+      },
+    });
+  });
+
+  it("requires reconfirmation for an incomplete confirmed staged Krea v2 Run", () => {
+    const raw = createPersistedStagedKreaV2Workflow(1);
+    raw.nodes["result-display"] = {
+      ...raw.nodes["result-display"],
+      status: "blocked",
+      result: undefined,
+    };
+
+    const restored = sanitizeTimelineWorkflowState(raw) as TimelineWorkflowState;
+
+    expect(restored.generationConfirmed).toBe(false);
+    expect(restored.nodes["generation-gate"]).toMatchObject({
+      status: "blocked",
+      error: { code: "confirmation_required" },
+    });
+    for (const nodeId of [
+      "preview-execution",
+      "preview-scoring",
+      "comfyui-execution",
+      "final-review",
+      "final-repair",
+      "repair-verification",
+      "result-display",
+    ] as const) {
+      expect(restored.nodes[nodeId].status, nodeId).toBe("blocked");
+    }
+    const serialized = JSON.stringify(restored);
+    expect(serialized).not.toContain('"finalSteps"');
+    expect(serialized).toContain('"finalPolicyVersion":2');
+    expect(serialized).toContain('"finalDenoise":0.45');
+  });
+
+  it("fails closed when staged Krea artifacts are rebound to v3 without a complete same-policy contract", () => {
     const raw = JSON.parse(JSON.stringify(createPersistedV2GenerationWorkflow(1))) as {
       nodes: Record<string, { result?: Record<string, unknown>; source?: unknown; status?: unknown }>;
     };
@@ -534,7 +685,10 @@ describe("timeline workflow persistence", () => {
       finalPolicy: kreaPolicy,
     }));
     Object.assign(gate, {
+      finalPolicyVersion: kreaPolicy.version,
+      finalRedrawPreset: kreaPolicy.preset,
       finalGenerationFamily: "krea2",
+      finalSteps: kreaPolicy.steps,
       finalDenoise: kreaPolicy.denoise,
     });
     for (const nodeId of ["final-review", "final-repair", "repair-verification"] as const) {
@@ -551,37 +705,18 @@ describe("timeline workflow persistence", () => {
     }
 
     const restored = sanitizeTimelineWorkflowState(raw) as TimelineWorkflowState;
-    const review = restored.nodes["final-review"].result as {
-      pairs: Array<{ defaultVariant: string; recommendedVariant: unknown; variants: Record<string, unknown> }>;
-      status: string;
-      error?: { code?: string; recoverable?: boolean };
-    };
-    const repair = restored.nodes["final-repair"].result as {
-      authorized?: boolean;
-      pairs: Array<{ skipReason?: string; status?: string }>;
-    };
-
-    expect(restored.nodes["final-review"]).toMatchObject({
-      status: "done",
-      result: {
-        status: "failed",
-        error: { code: "timeline_node_stale" },
-      },
+    expect(restored.generationConfirmed).toBe(false);
+    expect(restored.nodes["generation-gate"]).toMatchObject({
+      status: "blocked",
+      error: { code: "confirmation_required" },
     });
-    expect(review.pairs).toEqual([expect.objectContaining({
-      defaultVariant: "final",
-      recommendedVariant: null,
-      variants: expect.objectContaining({ final: expect.any(Object), previewUpscale: expect.any(Object) }),
-    })]);
-    expect(restored.nodes["final-repair"]).toMatchObject({
-      status: "done",
-      result: { authorized: false, pairs: [expect.objectContaining({ status: "skipped", skipReason: "repair-disabled" })] },
-    });
-    expect(repair.authorized).toBe(false);
-    expect(restored.nodes["repair-verification"]).toMatchObject({
-      status: "done",
-      result: { status: "skipped", pairs: [] },
-    });
+    expect(restored.nodes["preview-execution"].status).toBe("blocked");
+    expect(restored.nodes["preview-scoring"].status).toBe("blocked");
+    expect(restored.nodes["comfyui-execution"].status).toBe("blocked");
+    expect(restored.nodes["final-review"].status).toBe("blocked");
+    expect(restored.nodes["final-repair"].status).toBe("blocked");
+    expect(restored.nodes["repair-verification"].status).toBe("blocked");
+    expect(restored.nodes["result-display"].status).toBe("blocked");
   });
 
   it.each([

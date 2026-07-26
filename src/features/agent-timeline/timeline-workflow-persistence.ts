@@ -39,8 +39,11 @@ import {
 } from "./story-style-palette";
 import { getRunSceneInputSettings, sanitizeRunSceneInputSettingsSnapshot } from "./run-input-settings";
 import {
+  getTimelineFinalGenerationPolicyVersion,
   isTimelineFinalRedrawPreset,
   resolveTimelineFinalDimensions,
+  resolveTimelineFinalGenerationPolicy,
+  timelineLegacyKrea2FinalGenerationPolicy,
   timelineFinalGenerationPolicy,
 } from "./final-generation-policy";
 import {
@@ -700,7 +703,12 @@ function sanitizeSingleImageWorkflowState(raw: Record<string, unknown>): Timelin
   const isLegacyRepair = !("final-repair" in rawNodes) || !("repair-verification" in rawNodes);
   const rawGateNode = isRecord(rawNodes["generation-gate"]) ? rawNodes["generation-gate"] : {};
   const rawGateResult = isRecord(rawGateNode.result) ? rawGateNode.result : {};
-  const requireCurrentFinalPolicy = rawGateResult.finalPolicyVersion === timelineFinalGenerationPolicy.version;
+  const expectedFinalPolicyVersion = getTimelineFinalGenerationPolicyVersion(
+    isKrea2Workflow ? "krea2" : "fallback",
+  );
+  const requireCurrentFinalPolicy = rawGateResult.finalPolicyVersion === expectedFinalPolicyVersion;
+  const hasPersistedCompletedDisplay = isRecord(rawNodes["result-display"]) &&
+    rawNodes["result-display"].status === "done";
   const definition = getTimelineWorkflowDefinition(singleImageWorkflowMode);
   const nodes = Object.fromEntries(
     definition.nodeIds.map((nodeId) => [
@@ -749,7 +757,9 @@ function sanitizeSingleImageWorkflowState(raw: Record<string, unknown>): Timelin
   }
   if (!isLegacyWorkflow && !isKrea2LegacyDirect) {
     const scoringIsTrusted = reconcilePersistedPreviewScoring(nodes, updatedAt);
-    reconcilePersistedGenerationLinkage(nodes, updatedAt, { requireCurrentFinalPolicy: isKrea2Workflow });
+    reconcilePersistedGenerationLinkage(nodes, updatedAt, {
+      requireCurrentFinalPolicy: isKrea2Workflow && !hasPersistedCompletedDisplay,
+    });
     if (hasKrea2T42UnavailableResult && nodes["comfyui-execution"].status === "done") {
       const execution = nodes["comfyui-execution"].result;
       const finals = isRecord(execution) && Array.isArray(execution.finals) ? execution.finals : [];
@@ -886,9 +896,27 @@ function sanitizeSingleImageWorkflowState(raw: Record<string, unknown>): Timelin
   const hasConfirmationFingerprint = isRecord(gateResult) &&
     typeof gateResult.confirmationFingerprint === "string" &&
     /^hmac-sha256:[a-f0-9]{64}$/.test(gateResult.confirmationFingerprint);
+  const persistedParameterResult = nodes["parameter-recommendation"].result;
+  const persistedRequestPreview = isRecord(persistedParameterResult) &&
+    isRecord(persistedParameterResult.requestPreview)
+    ? persistedParameterResult.requestPreview
+    : {};
+  const persistedSceneInput = nodes["scene-input"].result;
+  const persistedSettings = getRunSceneInputSettings(isRecord(persistedSceneInput) ? persistedSceneInput : {});
+  const resolvedFinalPolicy = resolveTimelineFinalGenerationPolicy(
+    persistedRequestPreview,
+    persistedSettings.finalRedrawPreset,
+  );
+  const hasCurrentKrea2GatePolicy = !isKrea2Workflow || isRecord(gateResult) &&
+    gateResult.finalPolicyVersion === resolvedFinalPolicy.version &&
+    gateResult.finalRedrawPreset === resolvedFinalPolicy.preset &&
+    gateResult.finalGenerationFamily === "krea2" &&
+    gateResult.finalSteps === resolvedFinalPolicy.steps &&
+    gateResult.finalDenoise === resolvedFinalPolicy.denoise;
   const requiresReconfirmation = !legacyCompleted &&
     (isKrea2LegacyDirect || isLegacyWorkflow || raw.generationConfirmed === true && (
-      !hasConfirmationFingerprint || (isRecord(gateResult) && gateResult.finalPolicyVersion === 1)
+      !hasConfirmationFingerprint || !hasCurrentKrea2GatePolicy ||
+      (!isKrea2Workflow && isRecord(gateResult) && gateResult.finalPolicyVersion === 1)
     ));
   const generationConfirmed = requiresReconfirmation
     ? false
@@ -1245,14 +1273,40 @@ function sanitizeFinalExecutionResult(
   if (!finalCount || finalCount > 4) return undefined;
   const isKrea2DirectFinal = isRecord(value.request) && value.request.workflowProfile === "krea2";
   const sanitizeFinalPolicy = (raw: unknown) => {
-    if (!isRecord(raw) || raw.version !== timelineFinalGenerationPolicy.version ||
-        raw.resizeMode !== timelineFinalGenerationPolicy.resizeMode ||
+    if (!isRecord(raw) || raw.resizeMode !== timelineFinalGenerationPolicy.resizeMode ||
         !isTimelineFinalRedrawPreset(raw.preset) ||
         (raw.family !== "illustrious" && raw.family !== "anima" && raw.family !== "fallback" && raw.family !== "krea2")) return undefined;
     const preset = raw.preset;
     const family = raw.family;
+    if (family === "krea2") {
+      const currentSteps = timelineFinalGenerationPolicy.krea2StepsByPreset[preset];
+      const currentDenoise = timelineFinalGenerationPolicy.denoiseByPreset[preset].krea2;
+      if (raw.version === timelineFinalGenerationPolicy.krea2Version &&
+          raw.steps === currentSteps && raw.denoise === currentDenoise) {
+        return {
+          version: timelineFinalGenerationPolicy.krea2Version,
+          resizeMode: timelineFinalGenerationPolicy.resizeMode,
+          preset,
+          family,
+          steps: currentSteps,
+          denoise: currentDenoise,
+        };
+      }
+      const legacyDenoise = timelineLegacyKrea2FinalGenerationPolicy.denoiseByPreset[preset];
+      return raw.version === timelineLegacyKrea2FinalGenerationPolicy.version &&
+        raw.steps === undefined && raw.denoise === legacyDenoise
+        ? {
+            version: timelineLegacyKrea2FinalGenerationPolicy.version,
+            resizeMode: timelineFinalGenerationPolicy.resizeMode,
+            preset,
+            family,
+            denoise: legacyDenoise,
+          }
+        : undefined;
+    }
     const denoise = timelineFinalGenerationPolicy.denoiseByPreset[preset][family];
-    return raw.denoise === denoise ? {
+    return raw.version === timelineFinalGenerationPolicy.version &&
+      raw.steps === undefined && raw.denoise === denoise ? {
       version: timelineFinalGenerationPolicy.version,
       resizeMode: timelineFinalGenerationPolicy.resizeMode,
       preset,
@@ -1261,8 +1315,16 @@ function sanitizeFinalExecutionResult(
     } : undefined;
   };
   const finalPolicy = sanitizeFinalPolicy(value.finalPolicy);
+  const isCurrentFinalPolicy = (policy: ReturnType<typeof sanitizeFinalPolicy>) =>
+    Boolean(policy && (policy.family === "krea2"
+      ? policy.version === timelineFinalGenerationPolicy.krea2Version &&
+        policy.steps === timelineFinalGenerationPolicy.krea2StepsByPreset[policy.preset]
+      : policy.version === timelineFinalGenerationPolicy.version));
   const sanitizePreviewUpscale = (raw: unknown) => {
-    if (!isRecord(raw) || (raw.policyVersion !== 1 && raw.policyVersion !== timelineFinalGenerationPolicy.version) ||
+    if (!isRecord(raw) ||
+        (raw.policyVersion !== 1 &&
+          raw.policyVersion !== timelineFinalGenerationPolicy.version &&
+          raw.policyVersion !== timelineFinalGenerationPolicy.krea2Version) ||
         raw.resizeMode !== timelineFinalGenerationPolicy.resizeMode) return undefined;
     const width = safeNonNegativeInteger(raw.width);
     const height = safeNonNegativeInteger(raw.height);
@@ -1270,7 +1332,7 @@ function sanitizeFinalExecutionResult(
     const storedImage = sanitizeTimelineStoredImage(raw.storedImage);
     return width && height && sourcePreview && storedImage
       ? {
-          policyVersion: raw.policyVersion as 1 | typeof timelineFinalGenerationPolicy.version,
+          policyVersion: raw.policyVersion as number,
           resizeMode: timelineFinalGenerationPolicy.resizeMode,
           width,
           height,
@@ -1292,7 +1354,8 @@ function sanitizeFinalExecutionResult(
     const finalRequestDigest = sanitizeRepairSemanticDigest(raw.finalRequestDigest);
     const persistedError = sanitizeNodeError(raw.error, { redactDataUrls: true });
     const validDone = raw.status === "done" && candidateId && seed !== null && rank !== null && rank >= 1 && rank <= 8 &&
-      sourceImage && storedImage && promptId && (isKrea2DirectFinal || !options.requireCurrentFinalPolicy || finalPolicy) && (!finalPolicy || (
+      sourceImage && storedImage && promptId &&
+      (isKrea2DirectFinal || !options.requireCurrentFinalPolicy || isCurrentFinalPolicy(finalPolicy)) && (!finalPolicy || (
         previewUpscale && recordFinalPolicy && JSON.stringify(recordFinalPolicy) === JSON.stringify(finalPolicy)
       ));
     if (validDone) {
@@ -2155,11 +2218,19 @@ function reconcilePersistedFinalResult(
   const rawRecords = value.finals.filter(isRecord);
   const rawDone = rawRecords.filter((item) => item.status === "done");
   const currentPolicy = isRecord(value.finalPolicy) &&
-    value.finalPolicy.version === timelineFinalGenerationPolicy.version &&
-    value.finalPolicy.resizeMode === timelineFinalGenerationPolicy.resizeMode;
+    value.finalPolicy.resizeMode === timelineFinalGenerationPolicy.resizeMode &&
+    (value.finalPolicy.family === "krea2"
+      ? value.finalPolicy.version === timelineFinalGenerationPolicy.krea2Version &&
+        isTimelineFinalRedrawPreset(value.finalPolicy.preset) &&
+        value.finalPolicy.steps === timelineFinalGenerationPolicy.krea2StepsByPreset[value.finalPolicy.preset] &&
+        value.finalPolicy.denoise === timelineFinalGenerationPolicy.denoiseByPreset[value.finalPolicy.preset].krea2
+      : value.finalPolicy.version === timelineFinalGenerationPolicy.version);
+  const currentPolicyVersion = currentPolicy && isRecord(value.finalPolicy)
+    ? value.finalPolicy.version
+    : null;
   const matchesCurrentFallback = (item: Record<string, unknown>, link: PersistedFinalLink) =>
     link.formalWidth !== null && link.formalHeight !== null &&
-    isRecord(item.previewUpscale) && item.previewUpscale.policyVersion === timelineFinalGenerationPolicy.version &&
+    isRecord(item.previewUpscale) && item.previewUpscale.policyVersion === currentPolicyVersion &&
     item.previewUpscale.resizeMode === timelineFinalGenerationPolicy.resizeMode &&
     item.previewUpscale.width === link.formalWidth && item.previewUpscale.height === link.formalHeight &&
     samePersistedStoredImage(item.previewUpscale.sourcePreview, link.sourcePreview) &&
