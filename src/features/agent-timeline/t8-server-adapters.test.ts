@@ -1758,7 +1758,7 @@ describe("timeline T8 server adapters", () => {
     } as const;
 
     try {
-      let workflow = confirmWorkflow(applyKreaV3Profile(createGateReadyWorkflow()));
+      const workflow = confirmWorkflow(applyKreaV3Profile(createGateReadyWorkflow()));
       const previewResult = workflow.nodes["preview-execution"].result as {
         candidates: Array<{
           candidateId: string;
