@@ -363,6 +363,178 @@ describe("timeline T8 ComfyUI request conversion", () => {
     )).toBe(true);
   });
 
+  it.each([
+    {
+      label: "settings profile with a missing request profile",
+      settingsSnapshot: { promptProfile: "krea2" as const },
+      requestProfile: undefined,
+      modelBaseModel: "Unknown",
+      modelStorageKind: "checkpoint" as const,
+    },
+    {
+      label: "settings profile with a tampered default request profile",
+      settingsSnapshot: { promptProfile: "krea2" as const },
+      requestProfile: "default" as const,
+      modelBaseModel: "Unknown",
+      modelStorageKind: "checkpoint" as const,
+    },
+    {
+      label: "Krea diffusion metadata with a tampered default request profile",
+      settingsSnapshot: undefined,
+      requestProfile: "default" as const,
+      modelBaseModel: "Krea 2",
+      modelStorageKind: "diffusion" as const,
+    },
+  ])("re-locks $label for confirmed, Preview, and Final requests", ({
+    settingsSnapshot,
+    requestProfile,
+    modelBaseModel,
+    modelStorageKind,
+  }) => {
+    let workflow = createConfirmedWorkflow(1, undefined, settingsSnapshot);
+    const parameters = workflow.nodes["parameter-recommendation"].result as {
+      requestPreview: Record<string, unknown>;
+    } & Record<string, unknown>;
+    const requestPreview: Record<string, unknown> = {
+      ...parameters.requestPreview,
+      checkpointName: modelBaseModel === "Krea 2"
+        ? "krea-2-turbo-unet.safetensors"
+        : "restored-model.safetensors",
+      modelBaseModel,
+      modelStorageKind,
+      steps: 77,
+      cfg: 9,
+      samplerName: "uni_pc",
+      scheduler: "sgm_uniform",
+    };
+    if (requestProfile === undefined) {
+      delete requestPreview.workflowProfile;
+    } else {
+      requestPreview.workflowProfile = requestProfile;
+    }
+    workflow = setTimelineNodeManualResult(workflow, "parameter-recommendation", {
+      ...parameters,
+      steps: 91,
+      cfg: 12,
+      samplerName: "dpmpp_2m",
+      scheduler: "karras",
+      requestPreview,
+    });
+    workflow = confirmTimelineGeneration(workflow);
+
+    expect(createConfirmedTimelineComfyUiRequest(workflow)).toMatchObject({
+      workflowProfile: "krea2",
+      steps: 8,
+      cfg: 1,
+      samplerName: "euler",
+      scheduler: "simple",
+      batchSize: 1,
+      preview: false,
+    });
+    const previews = createTimelinePreviewRequests(workflow);
+    expect(previews.every(({ request }) => (
+      request.steps === 8
+      && request.cfg === 1
+      && request.samplerName === "euler"
+      && request.scheduler === "simple"
+      && request.batchSize === 1
+      && request.preview === true
+    ))).toBe(true);
+
+    workflow = setTimelineNodeManualResult(workflow, "preview-execution", {
+      baseSeed: previews[0]?.seed,
+      candidateCount: previews.length,
+      finalCount: 1,
+      previewHeight: previews[0]?.request.height,
+      previewWidth: previews[0]?.request.width,
+      previewSteps: 8,
+      candidates: previews.map(({ candidateId, index, seed }) => ({
+        candidateId,
+        index,
+        seed,
+        status: "done" as const,
+        storedImage: {
+          byteLength: index + 1,
+          contentType: "image/png",
+          filename: `${candidateId}.png`,
+          url: `/api/comfyui/generated-images/${candidateId}.png`,
+        },
+      })),
+      successfulCount: previews.length,
+      warnings: [],
+    });
+    workflow = setTimelineNodeManualResult(workflow, "preview-scoring", {
+      rubricVersion: 2,
+      scores: previews.map(({ candidateId, index }) => ({
+        candidateId,
+        adherence: 100 - index,
+        composition: 100 - index,
+        anatomy: 100 - index,
+        style: 100 - index,
+        technical: 100 - index,
+        total: 100 - index,
+        criticalDefects: [],
+        eligible: true,
+        rank: index + 1,
+      })),
+      selectedCandidateIds: ["preview-1"],
+      selectionSource: "ai",
+    });
+    expect(createTimelineFinalRequests(workflow)).toMatchObject([{
+      request: {
+        workflowProfile: "krea2",
+        steps: 8,
+        cfg: 1,
+        samplerName: "euler",
+        scheduler: "simple",
+        batchSize: 1,
+        preview: false,
+      },
+    }]);
+  });
+
+  it("does not apply Krea sampling locks to an ordinary default diffusion request", () => {
+    let workflow = createConfirmedWorkflow(1);
+    const parameters = workflow.nodes["parameter-recommendation"].result as {
+      requestPreview: Record<string, unknown>;
+    } & Record<string, unknown>;
+    workflow = setTimelineNodeManualResult(workflow, "parameter-recommendation", {
+      ...parameters,
+      steps: 77,
+      cfg: 9,
+      samplerName: "uni_pc",
+      scheduler: "sgm_uniform",
+      requestPreview: {
+        ...parameters.requestPreview,
+        workflowProfile: "default",
+        modelBaseModel: "FLUX.1 Dev",
+        modelStorageKind: "diffusion",
+        steps: 77,
+        cfg: 9,
+        samplerName: "uni_pc",
+        scheduler: "sgm_uniform",
+      },
+    });
+    workflow = confirmTimelineGeneration(workflow);
+
+    expect(createConfirmedTimelineComfyUiRequest(workflow)).toMatchObject({
+      workflowProfile: "default",
+      modelBaseModel: "FLUX.1 Dev",
+      modelStorageKind: "diffusion",
+      steps: 77,
+      cfg: 9,
+      samplerName: "uni_pc",
+      scheduler: "sgm_uniform",
+    });
+    expect(createTimelinePreviewRequests(workflow).every(({ request }) => (
+      request.steps !== 8
+      && request.cfg === 9
+      && request.samplerName === "uni_pc"
+      && request.scheduler === "sgm_uniform"
+      && request.workflowProfile === "default"
+    ))).toBe(true);
+  });
+
   it("keeps authorized Krea repair separate from Preview and Final queue construction", async () => {
     let workflow = createConfirmedWorkflow(1, undefined, {
       automaticLocalRepair: true,

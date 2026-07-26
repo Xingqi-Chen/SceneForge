@@ -4,6 +4,28 @@ This log records dated implementation and documentation work. Keep entries conci
 
 ## 2026-07-26
 
+### T45 / Issue #159 Krea 2 Render Prompt AI Advice
+
+Summary:
+
+- Restored the shared resource-aware Style Advice call for unsaved Krea 2 Run parameters while preserving the saved-parameter skip and local fallback paths.
+- Kept the deterministic local Krea renderer authoritative for the final positive prompt while allowing compatible advised resolution, negative-prompt additions, selected-LoRA weights, and rationale through the existing resolver.
+- Preserved source dimension and Composer denoise precedence and added strict validation of effective Krea dimensions before the shared resolver can round them.
+- Hard-locked the main Krea request to 8 steps, CFG 1, Euler, and simple scheduling in the displayed result, request preview, manual parameter workspace, and confirmed execution boundary. The execution boundary recognizes Krea independently from Run input settings, request metadata, or an existing Krea request profile so a missing or conflicting request profile cannot bypass the lock. Independent Detailer settings remain unchanged.
+- Replaced full-payload image data URL regular expressions with fixed-prefix parsing and iterative base64 character validation. This avoids runtime regular-expression stack exhaustion when a formal-size managed Preview fallback is carried into the Final img2img upload path while preserving the accepted PNG/JPEG/WEBP contract.
+- Preserved sanitized per-Final execution errors when an error record has valid candidate linkage. A current-policy pre-upscale error may omit fallback metadata; when fallback metadata is present, it must still match the selected Preview and formal dimensions exactly. Malformed completed Final records continue to fail closed with `image_storage_invalid`.
+- Clarified the Krea-only scene prompt instructions so the positive prompt and ordered Krea sections remain free of negative language while `negativeSuggestions` still returns concise, English, comma-ready undesirable visual concepts. The prompt forbids sentence-like or imperative instructions, positive desired outcomes, and invented negatives, and permits an empty array when none is justified.
+
+Implementation Gate validation:
+
+- `npm test -- src/features/agent-timeline/t7-node-adapters.test.ts src/features/agent-timeline/t8-node-adapters.test.ts` passed during implementation; final focused and full-suite totals belong to the Test Gate report.
+- `npm run typecheck` passed.
+- Targeted ESLint passed for the scoped production modules.
+- `git diff --check` passed with line-ending warnings only.
+- Follow-up validation passed the focused ComfyUI validation, Final server adapter, and timeline persistence suites: 3 files and 178 tests.
+- Persistence reconciliation follow-up passed `src/features/agent-timeline/timeline-workflow-persistence.test.ts`: 1 file and 141 tests.
+- Krea negative-suggestion prompt follow-up passed `src/features/agent-timeline/t5-node-adapters.test.ts`: 1 file and 8 tests; targeted ESLint and `npm run typecheck` also passed.
+
 ### T44 / Issue #155 Krea 2 FaceDetailer and HandDetailer
 
 Summary:

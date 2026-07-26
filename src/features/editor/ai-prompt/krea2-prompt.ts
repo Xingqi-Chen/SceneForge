@@ -190,7 +190,7 @@ export function buildKrea2AiResponseInstructions() {
   return [
     "Use Krea 2 Turbo's natural-language prompting order. Return only JSON with a krea2Sections object.",
     "Required ordered keys: subjectMood, subjectAttributesAndActions, visualStyleAndMedium, lightingColorAndTexture, spatialCompositionAndFraming.",
-    "Write English natural-language clauses, never booru tags, quality tags, negative prompts, Markdown, or reasoning.",
+    "Within krea2Sections, write English natural-language clauses, never booru tags, quality tags, negative prompts, Markdown, or reasoning.",
     "Keep subject, action, explicit colors, visible text in double quotes, requested medium, and spatial relations faithful to the user input.",
     "Do not invent characters, animals, props, outfits, materials, colors, or other unsupported details.",
     "Bind each subject's attributes and actions to that subject. Keep user-specified media exactly as specified.",

@@ -45,17 +45,18 @@ function isParameterRecommendationResult(value: unknown): value is ParameterReco
 }
 
 function makeDraft(result: ParameterRecommendationTimelineResult): Draft {
+  const isKrea2 = result.requestPreview.workflowProfile === "krea2";
   return {
-    cfg: String(result.cfg),
+    cfg: String(isKrea2 ? 1 : result.cfg),
     denoise: String(result.denoise),
     height: String(result.height),
     negativeAdditions: result.negativeAdditions.join(", "),
     positivePrompt: result.finalPositivePrompt ?? result.requestPreview.positivePrompt ?? "",
-    samplerName: result.samplerName,
-    scheduler: result.scheduler,
+    samplerName: isKrea2 ? "euler" : result.samplerName,
+    scheduler: isKrea2 ? "simple" : result.scheduler,
     seed: result.seedPolicy.mode === "fixed" ? String(result.seedPolicy.seed) : "",
     seedMode: result.seedPolicy.mode,
-    steps: String(result.steps),
+    steps: String(isKrea2 ? 8 : result.steps),
     width: String(result.width),
   };
 }
@@ -150,15 +151,15 @@ export function TimelineParameterRecommendationWorkspace({
     );
   }
 
+  const isKrea2 = result.requestPreview.workflowProfile === "krea2";
   const samplerOptions = uniqueOptions(
     Array.isArray(result.availableSamplers) ? result.availableSamplers : [],
-    result.samplerName,
+    isKrea2 ? "euler" : result.samplerName,
   );
   const schedulerOptions = uniqueOptions(
     Array.isArray(result.availableSchedulers) ? result.availableSchedulers : [],
-    result.scheduler,
+    isKrea2 ? "simple" : result.scheduler,
   );
-  const isKrea2 = result.requestPreview.workflowProfile === "krea2";
   const dimensionAlignment = isKrea2 ? 16 : 8;
 
   function updateDraft(patch: Partial<Draft>) {
@@ -173,8 +174,8 @@ export function TimelineParameterRecommendationWorkspace({
     const dimensionRounding = isKrea2 ? "up" : "nearest";
     const width = clampDimension(draft.width, result.width, dimensionAlignment, dimensionRounding);
     const height = clampDimension(draft.height, result.height, dimensionAlignment, dimensionRounding);
-    const steps = clampInteger(draft.steps, result.steps, 1, 150);
-    const cfg = clampNumber(draft.cfg, result.cfg, 0, 30);
+    const steps = isKrea2 ? 8 : clampInteger(draft.steps, result.steps, 1, 150);
+    const cfg = isKrea2 ? 1 : clampNumber(draft.cfg, result.cfg, 0, 30);
     const denoise = clampNumber(draft.denoise, result.denoise, 0, 1);
     const seed = clampInteger(draft.seed, 0, 0, Number.MAX_SAFE_INTEGER);
     const seedPolicy = draft.seedMode === "fixed" ? { mode: "fixed" as const, seed } : { mode: "random" as const };
@@ -184,8 +185,12 @@ export function TimelineParameterRecommendationWorkspace({
       negativeAdditions,
     );
     const positivePrompt = draft.positivePrompt.trim() || result.finalPositivePrompt || result.requestPreview.positivePrompt;
-    const samplerName = pickAllowedValue(draft.samplerName, samplerOptions, result.samplerName);
-    const scheduler = pickAllowedValue(draft.scheduler, schedulerOptions, result.scheduler);
+    const samplerName = isKrea2
+      ? "euler"
+      : pickAllowedValue(draft.samplerName, samplerOptions, result.samplerName);
+    const scheduler = isKrea2
+      ? "simple"
+      : pickAllowedValue(draft.scheduler, schedulerOptions, result.scheduler);
 
     onSave({
       ...result,
@@ -229,6 +234,12 @@ export function TimelineParameterRecommendationWorkspace({
         />
       </label>
 
+      {isKrea2 ? (
+        <p className="text-xs leading-relaxed text-slate-500">
+          Krea 2 Turbo fixes the primary sampler at 8 steps, CFG 1, Euler, and simple scheduling.
+        </p>
+      ) : null}
+
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
         <label className="flex flex-col gap-1 text-xs font-medium text-slate-700">
           Width
@@ -260,7 +271,7 @@ export function TimelineParameterRecommendationWorkspace({
           Steps
           <input
             className="h-9 rounded-md border border-slate-200 px-2 text-xs outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
-            disabled={!editable}
+            disabled={!editable || isKrea2}
             max={150}
             min={1}
             onChange={(event) => updateDraft({ steps: event.target.value })}
@@ -272,7 +283,7 @@ export function TimelineParameterRecommendationWorkspace({
           CFG
           <input
             className="h-9 rounded-md border border-slate-200 px-2 text-xs outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
-            disabled={!editable}
+            disabled={!editable || isKrea2}
             max={30}
             min={0}
             onChange={(event) => updateDraft({ cfg: event.target.value })}
@@ -323,7 +334,7 @@ export function TimelineParameterRecommendationWorkspace({
           Sampler
           <select
             className="h-9 rounded-md border border-slate-200 bg-white px-2 text-xs outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
-            disabled={!editable}
+            disabled={!editable || isKrea2}
             onChange={(event) => updateDraft({ samplerName: event.target.value })}
             value={draft.samplerName}
           >
@@ -338,7 +349,7 @@ export function TimelineParameterRecommendationWorkspace({
           Scheduler
           <select
             className="h-9 rounded-md border border-slate-200 bg-white px-2 text-xs outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
-            disabled={!editable}
+            disabled={!editable || isKrea2}
             onChange={(event) => updateDraft({ scheduler: event.target.value })}
             value={draft.scheduler}
           >

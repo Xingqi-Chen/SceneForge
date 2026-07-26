@@ -623,6 +623,21 @@ export function createTimelineParameterRecommendation({
   const baseNegativePrompt = scenePrompt.negativeSuggestions.join(", ");
   const resolvedAiAdvice =
     aiAdvice ?? createAiAdvice(resourceResult, scenePrompt, canvasBinding, samplerOptions, finalPositivePrompt, sourceImage);
+  const parsedAiAdvice = parseComfyUiAiGenerationParameters(resolvedAiAdvice.parameterSuggestions);
+  const krea2Dimensions = isKrea2Profile
+    ? {
+        width: normalizeKrea2RenderDimension(
+          sourceImage?.width ?? savedParameters?.width ?? parsedAiAdvice?.width,
+          1024,
+          "width",
+        ),
+        height: normalizeKrea2RenderDimension(
+          sourceImage?.height ?? savedParameters?.height ?? parsedAiAdvice?.height,
+          1024,
+          "height",
+        ),
+      }
+    : null;
   const settings = resolveComfyUiGenerationSettings({
     activePrompt: finalPositivePrompt,
     activePromptAlreadyFormatted: true,
@@ -633,8 +648,12 @@ export function createTimelineParameterRecommendation({
     supportsNsfw,
   });
   const request = settings.request;
-  const samplerName = pickSupportedValue(request.samplerName, samplerOptions.samplers, "euler");
-  const scheduler = pickSupportedValue(request.scheduler, samplerOptions.schedulers, "normal");
+  const samplerName = isKrea2Profile
+    ? "euler"
+    : pickSupportedValue(request.samplerName, samplerOptions.samplers, "euler");
+  const scheduler = isKrea2Profile
+    ? "simple"
+    : pickSupportedValue(request.scheduler, samplerOptions.schedulers, "normal");
   const denoise = sourceImage ? normalizeTimelineSourceDenoise(sourceDenoise) : request.denoise ?? 1;
   const rawRequestPreview = {
     ...request,
@@ -663,12 +682,12 @@ export function createTimelineParameterRecommendation({
         ...rawRequestPreview,
         workflowProfile: "krea2" as const,
         modelStorageKind: "diffusion" as const,
-        width: rawRequestPreview.width ?? 1024,
-        height: rawRequestPreview.height ?? 1024,
-        steps: rawRequestPreview.steps ?? 8,
-        cfg: rawRequestPreview.cfg ?? 1,
-        samplerName: pickSupportedValue("euler", samplerOptions.samplers, "euler"),
-        scheduler: pickSupportedValue("simple", samplerOptions.schedulers, "simple"),
+        width: krea2Dimensions?.width ?? 1024,
+        height: krea2Dimensions?.height ?? 1024,
+        steps: 8,
+        cfg: 1,
+        samplerName,
+        scheduler,
         denoise,
         batchSize: 1,
         latentImageNode: "EmptyLatentImage" as const,
@@ -695,8 +714,8 @@ export function createTimelineParameterRecommendation({
     height,
     steps: requestPreview.steps ?? 30,
     cfg: requestPreview.cfg ?? 7,
-    samplerName,
-    scheduler,
+    samplerName: requestPreview.samplerName ?? samplerName,
+    scheduler: requestPreview.scheduler ?? scheduler,
     denoise,
     seedPolicy: makeSeedPolicy(requestPreview.seed),
     finalPositivePrompt: requestPreview.positivePrompt,
@@ -796,7 +815,7 @@ export function createTimelineT7NodeAdapters({
         inputSettings.stylePalette,
         selectedResources,
       );
-      const aiAdvice = promptProfile !== "krea2" && !savedParameters && adviseStyle
+      const aiAdvice = !savedParameters && adviseStyle
         ? await adviseStyle(
             {
               baseNegativePrompt,

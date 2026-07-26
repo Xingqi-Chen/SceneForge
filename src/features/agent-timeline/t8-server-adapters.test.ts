@@ -70,7 +70,10 @@ vi.mock("node:fs/promises", () => ({
   default: { readFile: managedImageMocks.readFile, stat: managedImageMocks.stat },
 }));
 
-vi.mock("@/features/comfyui", () => comfyUiMocks);
+vi.mock("@/features/comfyui", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/features/comfyui")>()),
+  ...comfyUiMocks,
+}));
 
 vi.mock("@/features/comfyui/generated-image-storage", () => ({
   getGeneratedImageContentType: vi.fn(() => "image/png"),

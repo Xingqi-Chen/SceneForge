@@ -1290,6 +1290,7 @@ function sanitizeFinalExecutionResult(
     const previewUpscale = sanitizePreviewUpscale(raw.previewUpscale);
     const recordFinalPolicy = sanitizeFinalPolicy(raw.finalPolicy);
     const finalRequestDigest = sanitizeRepairSemanticDigest(raw.finalRequestDigest);
+    const persistedError = sanitizeNodeError(raw.error, { redactDataUrls: true });
     const validDone = raw.status === "done" && candidateId && seed !== null && rank !== null && rank >= 1 && rank <= 8 &&
       sourceImage && storedImage && promptId && (isKrea2DirectFinal || !options.requireCurrentFinalPolicy || finalPolicy) && (!finalPolicy || (
         previewUpscale && recordFinalPolicy && JSON.stringify(recordFinalPolicy) === JSON.stringify(finalPolicy)
@@ -1306,6 +1307,23 @@ function sanitizeFinalExecutionResult(
         ...(previewUpscale ? { previewUpscale } : {}),
         ...(recordFinalPolicy ? { finalPolicy: recordFinalPolicy } : {}),
         ...(finalRequestDigest ? { finalRequestDigest } : {}),
+      };
+    }
+    const validError = raw.status === "error" && candidateId && seed !== null &&
+      rank !== null && rank >= 1 && rank <= 8 && persistedError &&
+      (raw.previewUpscale === undefined || previewUpscale) &&
+      (raw.finalPolicy === undefined || recordFinalPolicy) &&
+      (raw.finalRequestDigest === undefined || finalRequestDigest);
+    if (validError) {
+      return {
+        candidateId,
+        seed,
+        rank,
+        status: "error" as const,
+        ...(previewUpscale ? { previewUpscale } : {}),
+        ...(recordFinalPolicy ? { finalPolicy: recordFinalPolicy } : {}),
+        ...(finalRequestDigest ? { finalRequestDigest } : {}),
+        error: persistedError,
       };
     }
     return {
@@ -2153,7 +2171,9 @@ function reconcilePersistedFinalResult(
     const trusted = matches.filter((item) =>
       item.status === "done"
         ? (!options.requireCurrentFinalPolicy || currentPolicy) && (!currentPolicy || matchesCurrentFallback(item, link))
-        : item.status === "error" && currentPolicy && matchesCurrentFallback(item, link),
+        : item.status === "error" &&
+          currentPolicy &&
+          (item.previewUpscale === undefined || matchesCurrentFallback(item, link)),
     );
     return matches.length === 1 && trusted.length === 1 ? trusted[0] : createUntrustedPersistedFinal(link);
   });

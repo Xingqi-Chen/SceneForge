@@ -63,6 +63,7 @@ import {
   KREA2_STYLE_REFERENCE_LORA_NAME,
   normalizeComfyUiKrea2StyleReferenceDescriptor,
 } from "./krea2-style-reference";
+import { parseComfyUiImageDataUrl } from "./image-data-url";
 
 export const COMFYUI_INPAINT_UPSCALE_MODEL_PRESETS = {
   "real-esrgan-x2": {
@@ -418,11 +419,11 @@ function isInpaintLocalRegionSource(value: unknown): value is ComfyUiInpaintLoca
 }
 
 function isPngDataUrl(value: string) {
-  return /^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(value.trim());
+  return parseComfyUiImageDataUrl(value)?.mimeSubtype === "png";
 }
 
 function isImageDataUrl(value: string) {
-  return /^data:image\/(?:png|jpe?g|webp);base64,[A-Za-z0-9+/=]+$/.test(value.trim());
+  return parseComfyUiImageDataUrl(value) !== null;
 }
 
 function normalizeImageReference(value: unknown) {

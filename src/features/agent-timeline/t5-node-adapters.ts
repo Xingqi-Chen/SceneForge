@@ -561,6 +561,10 @@ function buildPromptProfileSceneInstructions(promptProfile: PromptProfileId) {
       buildKrea2AiResponseInstructions(),
       "For this scene context response, set promptProfile to krea2 and include krea2Sections.",
       "Make positivePrompt a single faithful natural-language paragraph, not tag soup.",
+      "The instruction to never write negative prompts applies only to positivePrompt and krea2Sections; still return the top-level negativeSuggestions array.",
+      "Each negativeSuggestions item must be one concise English undesirable visual concept: a short noun or adjective fragment that is directly comma-ready.",
+      "Never write negativeSuggestions as sentences or instructions, never use imperative wording such as \"Do not\", \"Don't\", or \"Avoid\", and never express a positive desired outcome.",
+      "Return [] when no undesirable visual concept is justified by the user input; do not invent negative content.",
     ].join("\n");
   }
 
