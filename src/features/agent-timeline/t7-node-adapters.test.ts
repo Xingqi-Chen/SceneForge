@@ -123,8 +123,9 @@ function makeKreaScenePrompt(): ScenePromptTimelineResult {
     positivePrompt: "flat fallback should not become authoritative",
     krea2Sections: {
       subjectMood: "A courier waits",
+      environmentAndBackground: "A quiet station surrounds the platform",
       visualStyleAndMedium: "watercolor illustration",
-      spatialCompositionAndFraming: "at the center of a station",
+      spatialCompositionAndFraming: "the courier stands at the center of the frame",
     },
   };
 }
@@ -813,6 +814,48 @@ describe("T7 timeline adapters", () => {
     }
   });
 
+  it("appends a Krea Run style prompt once after the environment-aware paragraph", () => {
+    const resourceResult = makeKreaResourceResult();
+    const kreaStyleReference = {
+      ...makeStyleReference(),
+      settingsSnapshot: {
+        ...makeStyleReference().settingsSnapshot,
+        checkpointBaseModel: "Krea 2",
+        checkpointId: "checkpoint-krea",
+        promptProfile: "krea2" as const,
+      },
+    };
+    const scenePrompt = {
+      ...makeKreaScenePrompt(),
+      krea2Sections: {
+        ...makeKreaScenePrompt().krea2Sections,
+        spatialCompositionAndFraming: "the courier remains centered.",
+      },
+    };
+
+    const first = buildTimelineFinalPositivePrompt({
+      promptProfile: "krea2",
+      resourceResult,
+      scenePrompt,
+      styleReference: kreaStyleReference,
+    });
+    const second = buildTimelineFinalPositivePrompt({
+      promptProfile: "krea2",
+      resourceResult,
+      scenePrompt: { ...scenePrompt, positivePrompt: first },
+      styleReference: kreaStyleReference,
+    });
+
+    expect(first).toBe(
+      "A courier waits, A quiet station surrounds the platform, watercolor illustration, " +
+      "the courier remains centered. krea_style, soft gouache, cobalt shadows",
+    );
+    expect(first.match(/A quiet station surrounds the platform/g)).toHaveLength(1);
+    expect(first.match(/soft gouache, cobalt shadows/g)).toHaveLength(1);
+    expect(second).toBe(first);
+    expect(first).not.toMatch(/\.\s*,|,,|;\s*,|\s+[,.!?;:]/u);
+  });
+
   it("blocks parameter preview for pending, failed, invalid, or mismatched Run references", async () => {
     const checkpoint = makeResource("model", "checkpoint-local", "Local Checkpoint", "Illustrious");
     const resourceResult: ResourceRecommendationTimelineResult = {
@@ -1256,8 +1299,9 @@ describe("T7 timeline adapters", () => {
       positivePrompt: "flat fallback",
       krea2Sections: {
         subjectMood: "A courier waits",
+        environmentAndBackground: "A quiet station surrounds the platform",
         visualStyleAndMedium: "watercolor illustration",
-        spatialCompositionAndFraming: "at the center of a station",
+        spatialCompositionAndFraming: "the courier stands at the center of the frame",
       },
     };
 
@@ -1281,7 +1325,8 @@ describe("T7 timeline adapters", () => {
       batchSize: 1,
     });
     expect(result.requestPreview.positivePrompt).toBe(
-      "A courier waits, watercolor illustration, at the center of a station, krea_style",
+      "A courier waits, A quiet station surrounds the platform, watercolor illustration, " +
+      "the courier stands at the center of the frame, krea_style",
     );
   });
 
@@ -1336,7 +1381,9 @@ describe("T7 timeline adapters", () => {
     expect(adviseStyle).toHaveBeenCalledTimes(1);
     expect(adviseStyle).toHaveBeenCalledWith(
       expect.objectContaining({
-        finalPositivePrompt: "A courier waits, watercolor illustration, at the center of a station, krea_style",
+        finalPositivePrompt:
+          "A courier waits, A quiet station surrounds the platform, watercolor illustration, " +
+          "the courier stands at the center of the frame, krea_style",
         selectedResources: expect.objectContaining({
           checkpoint: expect.objectContaining({ id: "checkpoint-krea" }),
           loras: [expect.objectContaining({ id: "lora-krea" })],
@@ -1363,7 +1410,8 @@ describe("T7 timeline adapters", () => {
       },
     });
     expect(result.finalPositivePrompt).toBe(
-      "A courier waits, watercolor illustration, at the center of a station, krea_style",
+      "A courier waits, A quiet station surrounds the platform, watercolor illustration, " +
+      "the courier stands at the center of the frame, krea_style",
     );
     expect(result.requestPreview.positivePrompt).toBe(result.finalPositivePrompt);
     expect(result.requestPreview.positivePrompt).not.toContain("LLM replacement");

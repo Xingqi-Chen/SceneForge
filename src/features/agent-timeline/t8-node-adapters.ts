@@ -2,6 +2,7 @@ import {
   resolveComfyUiTextToImageWorkflowProfile,
   type ComfyUiTextToImageRequest,
 } from "@/features/comfyui";
+import { hasKrea2PromptSegmentExactlyOnceAtTail } from "@/features/editor/ai-prompt/krea2-prompt";
 
 import {
   resolveTimelineFinalGenerationPolicy,
@@ -224,7 +225,11 @@ function getValidatedStyleReferenceCheckpoint(workflow: TimelineWorkflowState) {
     : null;
 }
 
-function assertStyleReferenceUsable(workflow: TimelineWorkflowState, parameterResult: ParameterRecommendationTimelineResult) {
+function assertStyleReferenceUsable(
+  workflow: TimelineWorkflowState,
+  parameterResult: ParameterRecommendationTimelineResult,
+  isKrea2: boolean,
+) {
   const sceneInput = workflow.nodes["scene-input"].result;
   const settings = getRunSceneInputSettings(isRecord(sceneInput) ? sceneInput : {});
   const issue = getStyleReferenceBlockingIssue(settings.styleReference, "Run");
@@ -237,7 +242,10 @@ function assertStyleReferenceUsable(workflow: TimelineWorkflowState, parameterRe
   if (!current) return;
   if (isStyleReferenceReady(current)) {
     const stylePrompt = current.analysis.stylePrompt.trim();
-    if (!hasOpaqueStylePromptExactlyOnceAtTail(parameterResult.requestPreview.positivePrompt, stylePrompt)) {
+    const hasStylePromptExactlyOnce = isKrea2
+      ? hasKrea2PromptSegmentExactlyOnceAtTail(parameterResult.requestPreview.positivePrompt, stylePrompt)
+      : hasOpaqueStylePromptExactlyOnceAtTail(parameterResult.requestPreview.positivePrompt, stylePrompt);
+    if (!hasStylePromptExactlyOnce) {
       invalidComfyUiRequest("Run request preview must include the complete style prompt exactly once at the tail.");
     }
   }
@@ -289,9 +297,8 @@ export function createConfirmedTimelineComfyUiRequest(workflow: TimelineWorkflow
   const inputSettings = getRunSceneInputSettings(isRecord(sceneInput) ? sceneInput : {});
   const isKrea2 = inputSettings.promptProfile === "krea2" ||
     (isRecord(sceneInput) && sceneInput.promptProfile === "krea2") ||
-    parameterResult.requestPreview.workflowProfile === "krea2" ||
     resolveComfyUiTextToImageWorkflowProfile(parameterResult.requestPreview).id === "krea2";
-  assertStyleReferenceUsable(workflow, parameterResult);
+  assertStyleReferenceUsable(workflow, parameterResult, isKrea2);
   if (isKrea2) {
     const width = normalizeKrea2Dimension(parameterResult.requestPreview.width, "width");
     const height = normalizeKrea2Dimension(parameterResult.requestPreview.height, "height");

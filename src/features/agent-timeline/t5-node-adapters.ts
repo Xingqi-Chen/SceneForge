@@ -533,7 +533,7 @@ function buildScenePromptRequest(context: TimelineNodeExecutionContext): LlmChat
       },
     ],
     temperature: 0.35,
-    maxTokens: 900,
+    maxTokens: sceneInput.promptProfile === "krea2" ? 1800 : 900,
   };
 }
 

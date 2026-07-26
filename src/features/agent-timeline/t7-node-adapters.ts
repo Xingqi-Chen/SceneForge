@@ -15,7 +15,10 @@ import type { CivitaiAiPromptResult } from "@/features/editor/ai-prompt/civitai-
 import {
   renderAnimaPrompt,
 } from "@/features/editor/ai-prompt/anima-prompt";
-import { renderKrea2Prompt } from "@/features/editor/ai-prompt/krea2-prompt";
+import {
+  appendKrea2PromptSegmentExactlyOnce,
+  renderKrea2Prompt,
+} from "@/features/editor/ai-prompt/krea2-prompt";
 import {
   classifyFlatPromptToIllustriousSections,
   renderIllustriousPrompt,
@@ -43,6 +46,7 @@ import {
 import { getRunSceneInputSettings } from "./run-input-settings";
 import {
   appendStyleReferencePromptExactlyOnce,
+  getStyleReferencePrompt,
   getStyleReferenceBlockingIssue,
   getStyleReferenceContextMismatch,
   type StyleReferenceSnapshot,
@@ -455,11 +459,11 @@ export function buildTimelineFinalPositivePrompt({
   }
 
   if (resolvedProfile === "krea2") {
-    return appendStyleReferencePromptExactlyOnce(renderKrea2Prompt({
+    return appendKrea2PromptSegmentExactlyOnce(renderKrea2Prompt({
       resources,
       sections: scenePrompt.krea2Sections,
       sourcePrompt,
-    }), styleReference);
+    }), getStyleReferencePrompt(styleReference));
   }
 
   return appendStyleReferencePromptExactlyOnce(sourcePrompt, styleReference);

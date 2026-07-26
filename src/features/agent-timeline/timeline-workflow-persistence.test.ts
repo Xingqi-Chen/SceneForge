@@ -281,6 +281,84 @@ const readyStyleReference = {
 } as const;
 
 describe("timeline workflow persistence", () => {
+  it("round-trips environmentAndBackground only inside a new Krea scene result", () => {
+    let workflow = createTimelineWorkflowState({
+      promptProfile: "krea2",
+      sceneRequest: "A courier waits on a rain-dark station platform",
+      workflowId: "krea-environment-round-trip",
+    });
+    workflow = completeTimelineNode(workflow, "scene-prompt", {
+      promptProfile: "krea2",
+      primaryCharacter: {
+        name: "Courier",
+        identity: "A focused courier",
+        publicFacts: ["blue parcel"],
+      },
+      sceneIntent: "A courier waits on a rain-dark station platform",
+      styleTone: "cinematic",
+      setting: "station platform",
+      sharedFacts: ["rain"],
+      positivePrompt: "A focused courier waits on a rain-dark station platform.",
+      negativeSuggestions: ["blur"],
+      style: [],
+      camera: [],
+      lighting: [],
+      krea2Sections: {
+        subjectMood: "A focused courier waits",
+        subjectAttributesAndActions: "holding a blue parcel",
+        environmentAndBackground: "rain crosses the station platform beneath a steel canopy",
+        visualStyleAndMedium: "cinematic digital photography",
+        lightingColorAndTexture: "cool reflections on wet pavement",
+        spatialCompositionAndFraming:
+          "the courier fills the foreground against a smaller distant platform",
+      },
+    }, "ai");
+
+    const serialized = serializeTimelineWorkflowRecord(createTimelineWorkflowRecord({
+      projectId: "krea-environment-round-trip",
+      name: "Krea environment round trip",
+      workflow,
+      sceneRequest: "A courier waits on a rain-dark station platform",
+      selectedPromptProfile: "krea2",
+      selectedImageCount: 1,
+      selectedNodeId: "scene-prompt",
+    }));
+    const parsed = parseTimelineWorkflowRecordJson(serialized);
+
+    expect(parsed && isSingleImageTimelineWorkflowRecord(parsed)).toBe(true);
+    if (!parsed || !isSingleImageTimelineWorkflowRecord(parsed)) {
+      throw new Error("Expected a single-image Krea timeline record.");
+    }
+    expect(parsed.workflow.nodes["scene-prompt"].result).toMatchObject({
+      promptProfile: "krea2",
+      krea2Sections: {
+        environmentAndBackground:
+          "rain crosses the station platform beneath a steel canopy",
+      },
+    });
+    expect(serialized.match(/environmentAndBackground/g)).toHaveLength(1);
+
+    const illustrious = createTimelineWorkflowRecord({
+      projectId: "illustrious-no-krea-environment",
+      name: "Illustrious scene",
+      workflow: completeTimelineNode(createTimelineWorkflowState({
+        promptProfile: "illustrious",
+        sceneRequest: "A courier portrait",
+      }), "scene-prompt", {
+        promptProfile: "illustrious",
+        positivePrompt: "solo courier portrait",
+        illustriousSections: { subjectIdentity: ["solo courier"] },
+      }, "ai"),
+      sceneRequest: "A courier portrait",
+      selectedPromptProfile: "illustrious",
+      selectedImageCount: 1,
+      selectedNodeId: "scene-prompt",
+    });
+    expect(serializeTimelineWorkflowRecord(illustrious)).not.toContain(
+      "environmentAndBackground",
+    );
+  });
+
   it("restores legacy Story Krea profile fields as Illustrious without enabling Run-only behavior", () => {
     const started = startStoryGraphWorkflow({
       rawIntent: "A persisted legacy Story record.",

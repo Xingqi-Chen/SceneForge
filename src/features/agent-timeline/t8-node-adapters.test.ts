@@ -101,6 +101,56 @@ const readyStyleReference = {
   },
 };
 
+function createKreaArtStyleWorkflow(positivePrompt: string) {
+  const styleReference = {
+    ...readyStyleReference,
+    analysis: {
+      ...readyStyleReference.analysis,
+      stylePrompt: "art",
+    },
+    settingsSnapshot: {
+      ...readyStyleReference.settingsSnapshot,
+      checkpointBaseModel: "Krea 2",
+      promptProfile: "krea2" as const,
+    },
+  };
+  let workflow = createConfirmedWorkflow(1, undefined, {
+    promptProfile: "krea2",
+    styleReference,
+  });
+  workflow = setTimelineNodeManualResult(workflow, "resource-recommendation", {
+    checkpoint: { resource: {
+      baseModel: "Krea 2",
+      id: "checkpoint-a",
+      modelFileName: "krea-2-turbo-unet.safetensors",
+      modelStorageKind: "diffusion",
+      name: "Krea 2 Turbo",
+    } },
+    loras: [],
+  });
+  workflow = setTimelineNodeManualResult(workflow, "parameter-recommendation", {
+    ...(workflow.nodes["parameter-recommendation"].result as object),
+    styleReference,
+    requestPreview: {
+      batchSize: 1,
+      checkpointName: "krea-2-turbo-unet.safetensors",
+      cfg: 1,
+      denoise: 1,
+      modelBaseModel: "Krea 2",
+      modelStorageKind: "diffusion",
+      negativePrompt: "blur",
+      positivePrompt,
+      samplerName: "euler",
+      scheduler: "simple",
+      steps: 8,
+      workflowProfile: "krea2",
+      width: 1024,
+      height: 1024,
+    },
+  });
+  return confirmTimelineGeneration(workflow);
+}
+
 describe("timeline T8 ComfyUI request conversion", () => {
   it("refuses to construct the ComfyUI request before explicit confirmation", () => {
     const workflow = createConfirmedWorkflow();
@@ -671,16 +721,31 @@ describe("timeline T8 ComfyUI request conversion", () => {
       requestPreview: {
         batchSize: 1, checkpointName: "krea-2-turbo-unet.safetensors", cfg: 1, denoise: 1,
         modelBaseModel: "Krea 2", modelStorageKind: "diffusion", negativePrompt: "blur",
-        positivePrompt: "glass greenhouse pilot, soft gouache, cobalt shadows", samplerName: "euler",
+        positivePrompt: "glass greenhouse pilot. soft gouache, cobalt shadows", samplerName: "euler",
         scheduler: "simple", steps: 8, workflowProfile: "krea2", width: 1024, height: 1024,
       },
     });
+    const duplicateStyleWorkflow = setTimelineNodeManualResult(workflow, "parameter-recommendation", {
+      ...(workflow.nodes["parameter-recommendation"].result as object),
+      styleReference: kreaStyleReference,
+      requestPreview: {
+        ...((workflow.nodes["parameter-recommendation"].result as {
+          requestPreview: Record<string, unknown>;
+        }).requestPreview),
+        positivePrompt:
+          "soft gouache, cobalt shadows. glass greenhouse pilot. soft gouache, cobalt shadows",
+      },
+    });
+    expect(() => createConfirmedTimelineComfyUiRequest(
+      confirmTimelineGeneration(duplicateStyleWorkflow),
+    )).toThrow("complete style prompt exactly once at the tail");
     workflow = confirmTimelineGeneration(workflow);
 
     const previews = createTimelinePreviewRequests(workflow);
     expect(previews).toHaveLength(4);
     for (const preview of previews) {
       expect(preview.request.positivePrompt.match(/soft gouache, cobalt shadows/g)).toHaveLength(1);
+      expect(preview.request.positivePrompt).not.toMatch(/\.\s*,|,,|;\s*,|\s+[,.!?;:]/u);
     }
 
     workflow = setTimelineNodeManualResult(workflow, "preview-execution", {
@@ -703,8 +768,127 @@ describe("timeline T8 ComfyUI request conversion", () => {
     const finals = createTimelineFinalRequests(workflow);
     expect(finals).toHaveLength(1);
     expect(finals[0]?.request.positivePrompt.match(/soft gouache, cobalt shadows/g)).toHaveLength(1);
+    expect(finals[0]?.request.positivePrompt).toBe(
+      "glass greenhouse pilot. soft gouache, cobalt shadows",
+    );
     expect(finals[0]?.request.krea2StyleReference).toBeUndefined();
   });
+
+  it.each([
+    ["missing", undefined],
+    ["defaulted", "default" as const],
+    ["spoofed non-Krea", "anima" as const],
+  ])(
+    "uses authoritative Krea settings/model validation when workflowProfile is %s",
+    async (_label, requestProfile) => {
+      const kreaStyleReference = {
+        ...readyStyleReference,
+        settingsSnapshot: {
+          ...readyStyleReference.settingsSnapshot,
+          checkpointBaseModel: "Krea 2",
+          promptProfile: "krea2" as const,
+        },
+      };
+      let workflow = createConfirmedWorkflow(1, undefined, {
+        promptProfile: "krea2",
+        styleReference: kreaStyleReference,
+      });
+      workflow = setTimelineNodeManualResult(workflow, "resource-recommendation", {
+        checkpoint: { resource: {
+          baseModel: "Krea 2",
+          id: "checkpoint-a",
+          modelFileName: "krea-2-turbo-unet.safetensors",
+          modelStorageKind: "diffusion",
+          name: "Krea 2 Turbo",
+        } },
+        loras: [],
+      });
+      const requestPreview: Record<string, unknown> = {
+        batchSize: 1,
+        checkpointName: "krea-2-turbo-unet.safetensors",
+        cfg: 1,
+        denoise: 1,
+        modelBaseModel: "Krea 2",
+        modelStorageKind: "diffusion",
+        negativePrompt: "blur",
+        positivePrompt:
+          "intro, soft gouache, cobalt shadows — bridge, soft gouache, cobalt shadows",
+        samplerName: "euler",
+        scheduler: "simple",
+        steps: 8,
+        width: 1024,
+        height: 1024,
+      };
+      if (requestProfile !== undefined) {
+        requestPreview.workflowProfile = requestProfile;
+      }
+      workflow = setTimelineNodeManualResult(workflow, "parameter-recommendation", {
+        ...(workflow.nodes["parameter-recommendation"].result as object),
+        styleReference: kreaStyleReference,
+        requestPreview,
+      });
+      workflow = confirmTimelineGeneration(workflow);
+
+      const executePreviews = vi.fn();
+      const adapters = createTimelineT8NodeAdapters({
+        executeFinals: vi.fn(),
+        executePreviews,
+        loadResultDisplay: vi.fn(),
+        scorePreviews: vi.fn(),
+      });
+
+      await expect(adapters["preview-execution"]?.({
+        dependencies: [],
+        nodeId: "preview-execution",
+        workflow,
+      })).rejects.toThrow("complete style prompt exactly once at the tail");
+      expect(executePreviews).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    "art_style portrait, art",
+    "art-based portrait, art",
+    "art_style and art-based portrait, art",
+  ])("accepts standalone art at the tail when earlier content contains only compounds: %s", (positivePrompt) => {
+    expect(createConfirmedTimelineComfyUiRequest(
+      createKreaArtStyleWorkflow(positivePrompt),
+    )).toMatchObject({
+      positivePrompt,
+      workflowProfile: "krea2",
+    });
+  });
+
+  it.each([
+    ["double hyphen", " -- "],
+    ["em dash", " — "],
+    ["pipe", " | "],
+    ["CJK full stop", "。 "],
+    ["CJK comma", "、 "],
+    ["parentheses", " (bridge) "],
+    ["brackets", " [bridge] "],
+  ])(
+    "rejects prior standalone art across %s before any Preview execution",
+    async (_label, separator) => {
+      const workflow = createKreaArtStyleWorkflow(
+        `art${separator}main subject, art`,
+      );
+      const executePreviews = vi.fn();
+      const adapters = createTimelineT8NodeAdapters({
+        executeFinals: vi.fn(),
+        executePreviews,
+        loadResultDisplay: vi.fn(),
+        scorePreviews: vi.fn(),
+      });
+
+      await expect(adapters["preview-execution"]?.({
+        dependencies: [],
+        nodeId: "preview-execution",
+        workflow,
+      })).rejects.toThrow("complete style prompt exactly once at the tail");
+      expect(executePreviews).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     "cartoon portrait, art",
