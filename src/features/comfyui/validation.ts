@@ -12,6 +12,7 @@ import type {
   ComfyUiInpaintUpscaleConfig,
   ComfyUiInpaintUpscaleMode,
   ComfyUiInpaintUpscaleStrategy,
+  ComfyUiKrea2StyleReferenceConfig,
   ComfyUiLoraInput,
   ComfyUiModelStorageKind,
   ComfyUiSam2Bbox,
@@ -56,6 +57,11 @@ import {
   DEFAULT_COMFYUI_KREA2_VAE_NAME,
   resolveComfyUiTextToImageWorkflowProfile,
 } from "./workflow-profiles";
+import {
+  getComfyUiKrea2StyleReferenceContextIssue,
+  isComfyUiKrea2StyleReferenceTimingSupported,
+  KREA2_STYLE_REFERENCE_LORA_NAME,
+} from "./krea2-style-reference";
 
 export const COMFYUI_INPAINT_UPSCALE_MODEL_PRESETS = {
   "real-esrgan-x2": {
@@ -950,6 +956,32 @@ function normalizeCharacterReferences(value: unknown): ComfyUiCharacterReference
   return references as ComfyUiCharacterReferenceConfig[];
 }
 
+function normalizeKrea2StyleReference(value: unknown): ComfyUiKrea2StyleReferenceConfig | null | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!isRecord(value) || !hasNonEmptyString(value.imageName) ||
+      !isOptionalString(value.loraName) || !isOptionalFiniteNumber(value.weight) ||
+      !isOptionalFiniteNumber(value.startPercent) || !isOptionalFiniteNumber(value.endPercent)) {
+    return null;
+  }
+
+  const weight = typeof value.weight === "number" ? value.weight : undefined;
+  const startPercent = typeof value.startPercent === "number" ? value.startPercent : undefined;
+  const endPercent = typeof value.endPercent === "number" ? value.endPercent : undefined;
+  if ([weight, startPercent, endPercent].some((item) => item !== undefined && (item < 0 || item > 1))) {
+    return null;
+  }
+
+  return {
+    imageName: value.imageName.trim(),
+    ...(hasNonEmptyString(value.loraName) ? { loraName: value.loraName.trim() } : {}),
+    ...(weight !== undefined ? { weight } : {}),
+    ...(startPercent !== undefined ? { startPercent } : {}),
+    ...(endPercent !== undefined ? { endPercent } : {}),
+  };
+}
+
 function getLegacyControlNetSvg(controlNet: ComfyUiControlNetConfig | undefined) {
   return controlNet?.svg ?? controlNet?.openPoseSvg;
 }
@@ -1122,6 +1154,14 @@ export function validateComfyUiTextToImageRequest(value: unknown): ComfyUiTextTo
     };
   }
 
+  const krea2StyleReference = normalizeKrea2StyleReference(value.krea2StyleReference);
+  if (krea2StyleReference === null) {
+    return {
+      ok: false,
+      message: "krea2StyleReference must contain a safe input image name and 0-to-1 adapter values when provided.",
+    };
+  }
+
   const invalidCharacterReferenceTiming = characterReferences?.find((reference) =>
     reference.enabled !== false &&
     typeof reference.startPercent === "number" &&
@@ -1261,6 +1301,13 @@ export function validateComfyUiTextToImageRequest(value: unknown): ComfyUiTextTo
     modelStorageKind: isComfyUiModelStorageKind(value.modelStorageKind) ? value.modelStorageKind : undefined,
   }).id;
 
+  if (krea2StyleReference && workflowProfile !== "krea2") {
+    return {
+      ok: false,
+      message: "Krea style reference is available only for a compatible Krea 2 Turbo diffusion workflow.",
+    };
+  }
+
   if (workflowProfile === "krea2") {
     if (faceDetailer?.enabled || handDetailer?.enabled) {
       return { ok: false, message: "Krea 2 Turbo does not support FaceDetailer or HandDetailer." };
@@ -1269,7 +1316,26 @@ export function validateComfyUiTextToImageRequest(value: unknown): ComfyUiTextTo
       return { ok: false, message: "Krea 2 Turbo does not support ControlNet." };
     }
     if (characterReferences?.some((reference) => reference.enabled !== false)) {
-      return { ok: false, message: "Krea 2 Turbo does not support style or IPAdapter references." };
+      return { ok: false, message: "Krea 2 Turbo does not support entity or character references." };
+    }
+    if (krea2StyleReference) {
+      const contextIssue = getComfyUiKrea2StyleReferenceContextIssue({
+        checkpointName: value.checkpointName.trim(),
+        workflowProfile: isComfyUiTextToImageWorkflowProfileId(value.workflowProfile)
+          ? value.workflowProfile
+          : undefined,
+        modelBaseModel: getOptionalTrimmedStringValue(value.modelBaseModel),
+        modelStorageKind: isComfyUiModelStorageKind(value.modelStorageKind)
+          ? value.modelStorageKind
+          : undefined,
+      });
+      if (contextIssue) return { ok: false, message: contextIssue };
+      if ((krea2StyleReference.loraName ?? KREA2_STYLE_REFERENCE_LORA_NAME) !== KREA2_STYLE_REFERENCE_LORA_NAME) {
+        return { ok: false, message: "Krea style reference must use the verified krea2_style_reference.safetensors adapter file." };
+      }
+      if (!isComfyUiKrea2StyleReferenceTimingSupported(krea2StyleReference)) {
+        return { ok: false, message: "Krea style reference supports only start_at=0 and end_at=1." };
+      }
     }
     if ((typeof value.width === "number" && value.width % 16 !== 0) ||
         (typeof value.height === "number" && value.height % 16 !== 0)) {
@@ -1313,6 +1379,7 @@ export function validateComfyUiTextToImageRequest(value: unknown): ComfyUiTextTo
       controlNet,
       controlNets,
       characterReferences,
+      krea2StyleReference,
       preview: typeof value.preview === "boolean" ? value.preview : undefined,
     },
   };
@@ -1983,6 +2050,17 @@ export function resolveComfyUiTextToImageRequest(
       : resolveDetailerConfig(request.handDetailer, request, DEFAULT_TEXT_TO_IMAGE_REQUEST.handDetailer),
     controlNets: isKrea2Profile ? [] : resolveControlNetUnits(request),
     characterReferences: isKrea2Profile ? [] : resolveCharacterReferences(request),
+    ...(isKrea2Profile && request.krea2StyleReference
+      ? {
+          krea2StyleReference: {
+            imageName: request.krea2StyleReference.imageName.trim(),
+            loraName: request.krea2StyleReference.loraName ?? KREA2_STYLE_REFERENCE_LORA_NAME,
+            weight: request.krea2StyleReference.weight ?? 0.45,
+            startPercent: request.krea2StyleReference.startPercent ?? 0,
+            endPercent: request.krea2StyleReference.endPercent ?? 1,
+          },
+        }
+      : {}),
   };
 }
 

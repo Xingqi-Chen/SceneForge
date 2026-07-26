@@ -233,7 +233,7 @@ function createStyleReferenceWorkflow({
   mode?: "ipadapter" | "prompt-only";
   modelFileName?: string;
   name?: string;
-  promptProfile?: "anima" | "illustrious";
+  promptProfile?: "anima" | "illustrious" | "krea2";
 } = {}) {
   const styleReference = {
     status: "ready" as const,
@@ -298,6 +298,15 @@ function createStyleReferenceWorkflow({
           requestPreview: {
             ...((base.nodes["parameter-recommendation"].result as { requestPreview: object }).requestPreview),
             checkpointName: modelFileName,
+            ...(promptProfile === "krea2" ? {
+              cfg: 1,
+              modelBaseModel: "Krea 2",
+              modelStorageKind: "diffusion",
+              samplerName: "euler",
+              scheduler: "simple",
+              steps: 8,
+              workflowProfile: "krea2",
+            } : {}),
             positivePrompt: "glass greenhouse pilot, soft gouache, cobalt shadows",
           },
         },
@@ -1295,6 +1304,44 @@ describe("timeline T8 server adapters", () => {
         },
       },
     });
+  });
+
+  it("injects the preflight-approved Krea adapter only into the Krea queue request", async () => {
+    prepareStyleReferenceValidation();
+    uploadSequenceCharacterReferencesMock.mockResolvedValue([{
+      id: "run-style-reference",
+      name: "Run style reference",
+      prompt: "soft gouache, cobalt shadows",
+      enabled: true,
+      mode: "ipadapter",
+      references: [{ id: "run-style-reference-image", imageName: "sceneforge-krea-style.png", storedFilename: "0123456789abcdef0123456789abcdef.png", weight: 0.45 }],
+      weight: 0.45,
+      startPercent: 0,
+      endPercent: 1,
+    }]);
+
+    const result = await executeTimelineGraph(createStyleReferenceWorkflow({
+      baseModel: "Krea 2",
+      modelFileName: "krea-2-turbo-unet.safetensors",
+      name: "Krea 2 Turbo",
+      promptProfile: "krea2",
+    }), createTimelineT8ServerNodeAdapters());
+
+    expect(uploadSequenceCharacterReferencesMock).toHaveBeenCalledTimes(1);
+    expect(comfyUiMocks.buildComfyUiSequenceCharacterReference).not.toHaveBeenCalled();
+    expect(comfyUiMocks.validateComfyUiRequestAgainstObjectInfo).toHaveBeenCalledWith(
+      expect.objectContaining({
+        characterReferences: [],
+        krea2StyleReference: {
+          imageName: "sceneforge-krea-style.png",
+          weight: 0.45,
+          startPercent: 0,
+          endPercent: 1,
+        },
+      }),
+      expect.anything(),
+    );
+    expect(result.nodes["comfyui-execution"].status).toBe("error");
   });
 
   it.each([

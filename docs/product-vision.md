@@ -61,7 +61,7 @@ Every timeline node must allow user intervention:
 - Generation parameters can be edited with the same style of controls used by the original ComfyUI configuration UI.
 - Explicit Run resources bypass AI resource recommendation; saved Run parameters bypass automatic parameter advice, while an unsaved parameter state preserves the automatic path.
 - FaceDetailer and HandDetailer are controlled only by the user and stay outside AI input.
-- One optional global Run style reference is shared across simple and detailed Composer modes. Its analyzed style prompt applies to every preview and final output; Illustrious may optionally add the same stored image through IPAdapter, while Anima and unsupported contexts remain prompt-only.
+- One optional global Run style reference is shared across simple and detailed Composer modes. Its analyzed style prompt applies exactly once to every preview and final output, including Krea 2. Illustrious may optionally add the same stored image through IPAdapter. Krea 2 Turbo may expose only its verified Krea-specific reference adapter after local graph/input/model-file/context preflight; an explicitly selected Krea adapter remains selected and blocks while verification is pending or unavailable until the user opts out. Anima and unknown contexts remain visibly prompt-only.
 - Every node can ask AI for another suggestion based on user guidance.
 
 Manual intervention is not an escape hatch from the workflow. It is part of the workflow. When a user changes a node, dependent downstream nodes should regenerate and unrelated nodes should remain stable.
