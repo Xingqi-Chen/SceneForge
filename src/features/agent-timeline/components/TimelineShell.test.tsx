@@ -3528,17 +3528,27 @@ describe("TimelineShell", () => {
     }
   });
 
-  it("allows T1 suggest and rewrite before the workflow has run", async () => {
+  it("routes empty Suggest through diversity API while preserving pre-run Rewrite generic-chat behavior", async () => {
     const originalFetch = globalThis.fetch;
     const t5FetchMock = mockT5Fetch();
     const sceneInputRequests: Array<{ action?: unknown; currentSceneRequest?: unknown }> = [];
     const sceneInputSystemPrompts: string[] = [];
+    const genericChatBodies: Array<Record<string, unknown>> = [];
+    const emptySuggestionBodies: Array<Record<string, unknown>> = [];
     const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
       const url = getFetchUrl(input);
       const sceneInputAction = getSceneInputAiAction(init);
 
+      if (url === "/api/agent-timeline/run-scene-suggestion") {
+        emptySuggestionBodies.push(getFetchBody(init) ?? {});
+        return createJsonResponse({
+          sceneRequest: " \n A suggested pre-run moonlit observatory command  with internal spacing. \n ",
+        });
+      }
+
       if (url === "/api/llm/chat" && sceneInputAction) {
         const body = getFetchBody(init);
+        genericChatBodies.push(body ?? {});
         const systemContent = body?.messages?.[0]?.content;
         if (typeof systemContent === "string") {
           sceneInputSystemPrompts.push(systemContent);
@@ -3576,12 +3586,8 @@ describe("TimelineShell", () => {
       await flushAsyncWork();
 
       expect((container.querySelector("#scene-request") as HTMLTextAreaElement | null)?.value).toBe(
-        "A suggested pre-run moonlit observatory command",
+        "A suggested pre-run moonlit observatory command  with internal spacing.",
       );
-      expect(sceneInputSystemPrompts[0]).toContain("Japanese illustration / anime-inspired style only");
-      expect(sceneInputSystemPrompts[0]).toContain("Do not add Japanese cultural content unless the user asks for it");
-      expect(sceneInputSystemPrompts[0]).toContain("Prioritize character details over environment");
-      expect(sceneInputSystemPrompts[0]).toContain("Keep the setting brief and supportive");
       expect(getSectionByHeading("Scene input").textContent).toContain("Run the timeline when ready.");
 
       act(() => {
@@ -3591,16 +3597,19 @@ describe("TimelineShell", () => {
 
       expect(sceneInputRequests).toEqual([
         {
-          action: "suggest",
-          currentSceneRequest: "",
-          promptProfile: "illustrious",
-        },
-        {
           action: "rewrite",
-          currentSceneRequest: "A suggested pre-run moonlit observatory command",
+          currentSceneRequest: "A suggested pre-run moonlit observatory command  with internal spacing.",
           promptProfile: "illustrious",
         },
       ]);
+      expect(emptySuggestionBodies).toEqual([{ promptProfile: "illustrious", nsfw: false }]);
+      expect(genericChatBodies).toHaveLength(1);
+      expect(genericChatBodies[0]).toMatchObject({
+        purpose: "stable-diffusion-prompt-generation",
+        temperature: 0.25,
+        maxTokens: 300,
+      });
+      expect(sceneInputSystemPrompts[0]).toContain("Preserve the user's subject, setting, mood, camera intent, and constraints.");
       expect((container.querySelector("#scene-request") as HTMLTextAreaElement | null)?.value).toBe(
         "A rewritten pre-run observatory command",
       );
@@ -3610,6 +3619,254 @@ describe("TimelineShell", () => {
       globalThis.fetch = originalFetch;
     }
   });
+
+  it.each(["simple", "detailed"] as const)(
+    "uses the dedicated empty Suggest route in %s mode without generation side effects",
+    async (displayMode) => {
+      const originalFetch = globalThis.fetch;
+      const t5FetchMock = mockT5Fetch();
+      const routeBodies: Array<Record<string, unknown>> = [];
+      const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+        const url = getFetchUrl(input);
+        if (url === "/api/settings") {
+          return createTimelineSettingsResponse({ displayMode });
+        }
+        if (url === "/api/agent-timeline/run-scene-suggestion") {
+          routeBodies.push(getFetchBody(init) ?? {});
+          return createJsonResponse({
+            sceneRequest: " \n A cartographer charts bioluminescent caverns  while a storm approaches. \n ",
+          });
+        }
+        return t5FetchMock(input, init);
+      });
+      globalThis.fetch = fetchMock;
+
+      try {
+        act(() => {
+          root.render(<TimelineShell />);
+        });
+        await flushAsyncWork();
+        const callsBeforeSuggest = fetchMock.mock.calls.length;
+
+        act(() => {
+          getButtonByText("Suggest").click();
+        });
+        await flushAsyncWork();
+
+        expect(routeBodies).toEqual([{ promptProfile: "illustrious", nsfw: false }]);
+        expect((container.querySelector("#scene-request") as HTMLTextAreaElement | null)?.value).toBe(
+          "A cartographer charts bioluminescent caverns  while a storm approaches.",
+        );
+        expect(container.textContent).toContain("Run the timeline when ready.");
+        expect(fetchMock.mock.calls.slice(callsBeforeSuggest).map(([input]) => getFetchUrl(input))).toEqual([
+          "/api/agent-timeline/run-scene-suggestion",
+        ]);
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    },
+  );
+
+  it.each(["simple", "detailed"] as const)(
+    "keeps the %s Composer and workflow unchanged when empty Suggest returns no valid candidate",
+    async (displayMode) => {
+      const originalFetch = globalThis.fetch;
+      const t5FetchMock = mockT5Fetch();
+      const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+        const url = getFetchUrl(input);
+        if (url === "/api/settings") {
+          return createTimelineSettingsResponse({ displayMode });
+        }
+        if (url === "/api/agent-timeline/run-scene-suggestion") {
+          return createJsonResponse({
+            error: {
+              code: "no_valid_candidates",
+              message: "AI did not return a valid profile-compatible scene suggestion. The Composer was not changed; retry Suggest.",
+            },
+          }, 502);
+        }
+        return t5FetchMock(input, init);
+      });
+      globalThis.fetch = fetchMock;
+
+      try {
+        act(() => {
+          root.render(<TimelineShell />);
+        });
+        await flushAsyncWork();
+        const callsBeforeSuggest = fetchMock.mock.calls.length;
+
+        act(() => {
+          getButtonByText("Suggest").click();
+        });
+        await flushAsyncWork();
+
+        expect((container.querySelector("#scene-request") as HTMLTextAreaElement | null)?.value).toBe("");
+        expect(container.textContent).toContain("Composer was not changed; retry Suggest.");
+        expect(getButtonByText("Start workflow").disabled).toBe(true);
+        expect(getButtonByText("Rewrite").disabled).toBe(true);
+        const suggestionCalls = fetchMock.mock.calls.slice(callsBeforeSuggest);
+        expect(suggestionCalls.map(([input]) => getFetchUrl(input))).toEqual([
+          "/api/agent-timeline/run-scene-suggestion",
+        ]);
+        const forbiddenPatterns = [
+          "/api/llm/chat",
+          "/api/civitai-lora-library",
+          "/api/comfyui",
+          "/api/agent-timeline/confirm-generation",
+          "/api/agent-timeline/workflows",
+          "/api/agent-timeline/active-workflow",
+          "/api/comfyui/generated-images",
+        ];
+        expect(suggestionCalls.some(([input]) =>
+          forbiddenPatterns.some((pattern) => getFetchUrl(input).startsWith(pattern))
+        )).toBe(false);
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    },
+  );
+
+  it.each([
+    ["simple", "success"],
+    ["detailed", "success"],
+    ["simple", "failure"],
+    ["detailed", "failure"],
+  ] as const)(
+    "uses visible emptiness for restored active-workflow Suggest in %s mode on %s",
+    async (displayMode, outcome) => {
+      const originalFetch = globalThis.fetch;
+      const t5FetchMock = mockT5Fetch();
+      const persistedIntent = `A restored ${displayMode} observatory with a clockmaker`;
+      const suggestedIntent = `A new ${displayMode} glacier courier scene`;
+      let workflow = createTimelineWorkflowState({
+        workflowId: `timeline-restored-empty-suggest-${displayMode}-${outcome}`,
+        sceneRequest: persistedIntent,
+        promptProfile: "anima",
+        now: () => "2026-07-27T01:00:00.000Z",
+      });
+      workflow = completeTimelineNode(workflow, "scene-prompt", {
+        positivePrompt: `persisted downstream prompt for ${displayMode}`,
+      }, "ai");
+      const activeRecord = createTimelineWorkflowRecord({
+        workflow,
+        sceneRequest: persistedIntent,
+        selectedPromptProfile: "anima",
+        selectedImageCount: 1,
+        selectedNodeId: "scene-input",
+      });
+      const routeBodies: Array<Record<string, unknown>> = [];
+      const savedRecords: Array<Record<string, unknown>> = [];
+      const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+        const url = getFetchUrl(input);
+        if (url === "/api/settings") {
+          return createTimelineSettingsResponse({ displayMode });
+        }
+        if (url === "/api/agent-timeline/active-workflow") {
+          if (init?.method === "PUT") {
+            const body = getFetchBody(init) ?? {};
+            savedRecords.push(body);
+            return createJsonResponse({ ok: true, record: body });
+          }
+          return createJsonResponse(activeRecord);
+        }
+        if (url === "/api/agent-timeline/run-scene-suggestion") {
+          routeBodies.push(getFetchBody(init) ?? {});
+          return outcome === "success"
+            ? createJsonResponse({ sceneRequest: `  ${suggestedIntent}  ` })
+            : createJsonResponse({
+                error: {
+                  code: "no_valid_candidates",
+                  message: "No valid restored-workflow suggestion. The Composer was not changed.",
+                },
+              }, 502);
+        }
+        if (url === "/api/llm/chat") {
+          return createJsonResponse({
+            role: "assistant",
+            content: JSON.stringify({ sceneRequest: "generic chat must never be used" }),
+          });
+        }
+        return t5FetchMock(input, init);
+      });
+      globalThis.fetch = fetchMock;
+
+      try {
+        act(() => {
+          root.render(<TimelineShell />);
+        });
+        await flushAsyncWork();
+
+        const textarea = container.querySelector("#scene-request") as HTMLTextAreaElement;
+        expect(textarea.value).toBe(persistedIntent);
+        if (displayMode === "detailed") {
+          expect(getWorkflowStepButton("scene-prompt").textContent).toContain("Done");
+        }
+
+        act(() => {
+          setNativeTextAreaValue(textarea, "");
+        });
+        expect(textarea.value).toBe("");
+        const callsBeforeSuggest = fetchMock.mock.calls.length;
+
+        act(() => {
+          getButtonByText("Suggest").click();
+        });
+        await flushAsyncWork();
+
+        const actionUrls = fetchMock.mock.calls
+          .slice(callsBeforeSuggest)
+          .map(([input]) => getFetchUrl(input))
+          .filter((url) =>
+            url === "/api/agent-timeline/run-scene-suggestion" ||
+            url === "/api/llm/chat"
+          );
+        expect(actionUrls).toEqual(["/api/agent-timeline/run-scene-suggestion"]);
+        expect(routeBodies).toEqual([{ promptProfile: "anima", nsfw: false }]);
+
+        if (outcome === "success") {
+          expect(textarea.value).toBe(suggestedIntent);
+          if (displayMode === "detailed") {
+            expect(getWorkflowStepButton("scene-prompt").textContent).toContain("Pending");
+          }
+          expect(container.textContent).toContain("Downstream nodes are pending regeneration.");
+        } else {
+          expect(textarea.value).toBe("");
+          if (displayMode === "detailed") {
+            expect(getWorkflowStepButton("scene-prompt").textContent).toContain("Done");
+          }
+          expect(container.textContent).toContain("Composer was not changed.");
+        }
+
+        act(() => {
+          root.unmount();
+          rootIsMounted = false;
+        });
+        await flushAsyncWork();
+        const savedWorkflow = savedRecords.at(-1)?.workflow as TimelineWorkflowState | undefined;
+        expect(savedWorkflow?.workflowId).toBe(
+          `timeline-restored-empty-suggest-${displayMode}-${outcome}`,
+        );
+        if (outcome === "success") {
+          expect((savedWorkflow?.nodes["scene-input"].result as { rawIntent?: string } | undefined)?.rawIntent)
+            .toBe(suggestedIntent);
+          expect(savedWorkflow?.nodes["scene-prompt"].status).not.toBe("done");
+        } else {
+          expect((savedWorkflow?.nodes["scene-input"].result as { rawIntent?: string } | undefined)?.rawIntent)
+            .toBe(persistedIntent);
+          expect(savedWorkflow?.nodes["scene-prompt"].status).toBe("done");
+        }
+      } finally {
+        if (rootIsMounted) {
+          act(() => {
+            root.unmount();
+            rootIsMounted = false;
+          });
+        }
+        globalThis.fetch = originalFetch;
+      }
+    },
+  );
 
   it("rewrites the T1 scene input and marks downstream nodes pending", async () => {
     const originalFetch = globalThis.fetch;
@@ -3675,12 +3932,14 @@ describe("TimelineShell", () => {
     const originalFetch = globalThis.fetch;
     const t5FetchMock = mockT5Fetch();
     const sceneInputRequests: Array<{ action?: unknown; currentSceneRequest?: unknown }> = [];
+    const sceneInputBodies: Array<Record<string, unknown>> = [];
     const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
       const url = getFetchUrl(input);
       const sceneInputAction = getSceneInputAiAction(init);
 
       if (url === "/api/llm/chat" && sceneInputAction) {
         sceneInputRequests.push(sceneInputAction);
+        sceneInputBodies.push(getFetchBody(init) ?? {});
 
         return createJsonResponse({
           role: "assistant",
@@ -3722,6 +3981,13 @@ describe("TimelineShell", () => {
           currentSceneRequest: "A quiet archive atrium",
           promptProfile: "illustrious",
         },
+      ]);
+      expect(sceneInputBodies).toEqual([
+        expect.objectContaining({
+          purpose: "stable-diffusion-prompt-generation",
+          temperature: 0.55,
+          maxTokens: 300,
+        }),
       ]);
       expect((container.querySelector("#scene-request") as HTMLTextAreaElement | null)?.value).toBe(
         "A suggested moonlit archive atrium with one archivist sorting glowing glass slides",

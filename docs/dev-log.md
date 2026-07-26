@@ -4,6 +4,19 @@ This log records dated implementation and documentation work. Keep entries conci
 
 ## 2026-07-26
 
+### T48 / Issue #165 Empty Run Suggest diversity
+
+Summary:
+
+- Routed only empty-input Run Suggest through a dedicated thin API and existing LiteLLM client, requesting six complete LLM-authored scene candidates with explicit profile compatibility and bounded concept fingerprints. Nonempty Suggest and Rewrite retain their existing generic-chat path.
+- Added pure typed parsing, structured profile validation, duplicate rejection, deterministic history/batch novelty ranking, and the required weighted 3/2/1 candidate selection. Selected `sceneRequest` text is preserved intact except outer trim.
+- Added one bounded schema-repair attempt and zero-candidate fail-closed behavior that restores the original Composer/workflow state.
+- Added installation-local schema-v1 JSON history with serialized atomic writes, 64 KiB read bound, latest-20 pruning, fingerprint-only avoidance context, nonblocking read/write degradation, and no Civitai, ComfyUI, workflow-start, or asset coupling.
+
+Implementation Gate validation:
+
+- `npm run typecheck` passed.
+
 ### T47 / Issue #163 Krea 2 Final second-pass tuning
 
 Summary:
