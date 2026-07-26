@@ -35,6 +35,16 @@ function createPoseResponse() {
   });
 }
 
+const KREA_ONLY_NEGATIVE_SUGGESTION_INSTRUCTION_SNIPPETS = [
+  "still return the top-level negativeSuggestions array",
+  "one concise English undesirable visual concept",
+  "short noun or adjective fragment that is directly comma-ready",
+  "never use imperative wording",
+  "never express a positive desired outcome",
+  "Return [] when no undesirable visual concept is justified",
+  "do not invent negative content",
+];
+
 describe("T5 timeline node adapters", () => {
   beforeEach(() => {
     useEditorStore.getState().setProject(createDefaultProject());
@@ -119,6 +129,13 @@ describe("T5 timeline node adapters", () => {
         { strictPromptProfile: false },
       ).promptProfile,
     ).toBe("illustrious");
+
+    expect(
+      normalizeScenePromptTimelineResult({
+        positivePrompt: "legacy prompt",
+        negativeSuggestions: [" Do not add crowds ", "Avoid blur", " keep a single subject "],
+      }).negativeSuggestions,
+    ).toEqual(["Do not add crowds", "Avoid blur", "keep a single subject"]);
   });
 
   it("defaults scene input to Illustrious and builds profile-specific scene prompt instructions", async () => {
@@ -156,10 +173,14 @@ describe("T5 timeline node adapters", () => {
     });
 
     expect(requests).toHaveLength(1);
-    expect(String(requests[0]?.messages[0]?.content)).toContain("Selected prompt profile: Illustrious (illustrious)");
-    expect(String(requests[0]?.messages[0]?.content)).toContain("include illustriousSections");
-    expect(String(requests[0]?.messages[0]?.content)).toContain('"promptProfile":"illustrious|anima|krea2"');
-    expect(String(requests[0]?.messages[0]?.content)).not.toContain("generic");
+    const systemText = String(requests[0]?.messages[0]?.content);
+    expect(systemText).toContain("Selected prompt profile: Illustrious (illustrious)");
+    expect(systemText).toContain("include illustriousSections");
+    expect(systemText).toContain('"promptProfile":"illustrious|anima|krea2"');
+    expect(systemText).not.toContain("generic");
+    for (const snippet of KREA_ONLY_NEGATIVE_SUGGESTION_INSTRUCTION_SNIPPETS) {
+      expect(systemText).not.toContain(snippet);
+    }
     expect(JSON.parse(String(requests[0]?.messages[1]?.content))).toMatchObject({
       promptProfile: "illustrious",
       sceneRequest: "A pilot in a glass greenhouse",
@@ -323,8 +344,12 @@ describe("T5 timeline node adapters", () => {
       workflow,
     });
 
-    expect(String(requests[0]?.messages[0]?.content)).toContain("Selected prompt profile: Anima (anima)");
-    expect(String(requests[0]?.messages[0]?.content)).toContain("include animaSections");
+    const systemText = String(requests[0]?.messages[0]?.content);
+    expect(systemText).toContain("Selected prompt profile: Anima (anima)");
+    expect(systemText).toContain("include animaSections");
+    for (const snippet of KREA_ONLY_NEGATIVE_SUGGESTION_INSTRUCTION_SNIPPETS) {
+      expect(systemText).not.toContain(snippet);
+    }
     expect(JSON.parse(String(requests[0]?.messages[1]?.content))).toMatchObject({
       promptProfile: "anima",
     });
@@ -333,6 +358,71 @@ describe("T5 timeline node adapters", () => {
         promptProfile: "anima",
         animaSections: {
           character: ["1girl courier"],
+        },
+      },
+    });
+  });
+
+  it("requests concise Krea negative concepts and preserves a compliant response", async () => {
+    const requests: LlmChatRequest[] = [];
+    const workflow = createTimelineWorkflowState({
+      workflowId: "profile-krea-negative-suggestions",
+      promptProfile: "krea2",
+      sceneRequest: "A courier waits beneath a neon station canopy",
+      now: () => "2026-07-26T00:00:00.000Z",
+    });
+    const adapter = createTimelineT5NodeAdapters({
+      completeChat: async (request) => {
+        requests.push(request);
+        return {
+          role: "assistant",
+          content: JSON.stringify({
+            promptProfile: "krea2",
+            positivePrompt:
+              "A focused courier waits beneath a neon station canopy in cinematic rain.",
+            negativeSuggestions: [" blurry ", "extra fingers", " watermark "],
+            krea2Sections: {
+              subjectMood: "A focused courier waits beneath a neon station canopy",
+              subjectAttributesAndActions: "standing calmly with a messenger bag",
+              visualStyleAndMedium: "cinematic digital photography",
+              lightingColorAndTexture: "neon reflections across wet surfaces",
+              spatialCompositionAndFraming: "a medium-wide eye-level composition",
+            },
+          }),
+        };
+      },
+    })["scene-prompt"];
+
+    const result = await adapter?.({
+      dependencies: [workflow.nodes["scene-input"]],
+      nodeId: "scene-prompt",
+      workflow,
+    });
+
+    expect(requests).toHaveLength(1);
+    const systemText = String(requests[0]?.messages[0]?.content ?? "");
+    expect(systemText).toContain("Selected prompt profile: Krea 2 Turbo (krea2)");
+    expect(systemText).toContain("still return the top-level negativeSuggestions array");
+    expect(systemText).toContain("one concise English undesirable visual concept");
+    expect(systemText).toContain("short noun or adjective fragment that is directly comma-ready");
+    expect(systemText).toContain(
+      'never use imperative wording such as "Do not", "Don\'t", or "Avoid"',
+    );
+    expect(systemText).toContain("never express a positive desired outcome");
+    expect(systemText).toContain("Return [] when no undesirable visual concept is justified");
+    expect(systemText).toContain("do not invent negative content");
+    expect(result).toMatchObject({
+      value: {
+        promptProfile: "krea2",
+        positivePrompt:
+          "A focused courier waits beneath a neon station canopy in cinematic rain.",
+        negativeSuggestions: ["blurry", "extra fingers", "watermark"],
+        krea2Sections: {
+          subjectMood: "A focused courier waits beneath a neon station canopy",
+          subjectAttributesAndActions: "standing calmly with a messenger bag",
+          visualStyleAndMedium: "cinematic digital photography",
+          lightingColorAndTexture: "neon reflections across wet surfaces",
+          spatialCompositionAndFraming: "a medium-wide eye-level composition",
         },
       },
     });

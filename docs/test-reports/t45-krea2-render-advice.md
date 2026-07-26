@@ -62,6 +62,30 @@ Follow-up command totals:
 | `npm run build` | PASS - Next.js production build completed |
 | `git diff --check` | PASS - exit 0; only Git line-ending notices |
 
+## Krea Prompt Generation negativeSuggestions follow-up
+
+Follow-up coverage:
+
+- The Krea scene-prompt system message explicitly requests the top-level `negativeSuggestions` array while keeping negative language out of `positivePrompt` and `krea2Sections`.
+- Each Krea suggestion is requested as one concise English undesirable visual concept: a comma-ready noun or adjective fragment, not a sentence or instruction.
+- The Krea-only instructions explicitly forbid imperative `Do not` / `Don't` / `Avoid` wording and positive desired outcomes.
+- The Krea contract permits `[]` when no undesirable concept is justified and instructs the model not to invent negative content.
+- A mocked compliant response trims and preserves `["blurry", "extra fingers", "watermark"]` while leaving the Krea `positivePrompt` and all five ordered `krea2Sections` values intact.
+- Illustrious and Anima system messages do not contain any of the Krea-only negative-suggestion wording.
+- The shared normalizer trims but does not semantically rewrite legacy imperative values such as `Do not add crowds`, `Avoid blur`, or `keep a single subject`, proving backward compatibility and no local migration.
+
+Follow-up command totals:
+
+| Command | Result |
+| --- | --- |
+| `npm test -- src/features/agent-timeline/t5-node-adapters.test.ts` | PASS - 1 file, 9 tests |
+| `npm test -- src/features/agent-timeline/t5-node-adapters.test.ts src/features/agent-timeline/t7-node-adapters.test.ts` | PASS - 2 files, 43 tests |
+| `npm test` | PASS - 148 files, 1699 tests |
+| `npm run typecheck` | PASS |
+| `npm run lint` | PASS - 0 errors, 23 pre-existing warnings |
+| `npm run build` | PASS - Next.js production build completed |
+| `git diff --check` | PASS - exit 0; only Git line-ending notices |
+
 ## Manual QA
 
 Live LiteLLM and Krea ComfyUI queue verification was not performed because availability and configured local model resources were not established during this test gate. The provider call contract, effective request values, confirmation boundary, Preview queue boundary, and UI behavior are covered with local deterministic tests.

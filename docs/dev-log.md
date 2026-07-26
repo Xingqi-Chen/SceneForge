@@ -14,6 +14,7 @@ Summary:
 - Hard-locked the main Krea request to 8 steps, CFG 1, Euler, and simple scheduling in the displayed result, request preview, manual parameter workspace, and confirmed execution boundary. The execution boundary recognizes Krea independently from Run input settings, request metadata, or an existing Krea request profile so a missing or conflicting request profile cannot bypass the lock. Independent Detailer settings remain unchanged.
 - Replaced full-payload image data URL regular expressions with fixed-prefix parsing and iterative base64 character validation. This avoids runtime regular-expression stack exhaustion when a formal-size managed Preview fallback is carried into the Final img2img upload path while preserving the accepted PNG/JPEG/WEBP contract.
 - Preserved sanitized per-Final execution errors when an error record has valid candidate linkage. A current-policy pre-upscale error may omit fallback metadata; when fallback metadata is present, it must still match the selected Preview and formal dimensions exactly. Malformed completed Final records continue to fail closed with `image_storage_invalid`.
+- Clarified the Krea-only scene prompt instructions so the positive prompt and ordered Krea sections remain free of negative language while `negativeSuggestions` still returns concise, English, comma-ready undesirable visual concepts. The prompt forbids sentence-like or imperative instructions, positive desired outcomes, and invented negatives, and permits an empty array when none is justified.
 
 Implementation Gate validation:
 
@@ -23,6 +24,7 @@ Implementation Gate validation:
 - `git diff --check` passed with line-ending warnings only.
 - Follow-up validation passed the focused ComfyUI validation, Final server adapter, and timeline persistence suites: 3 files and 178 tests.
 - Persistence reconciliation follow-up passed `src/features/agent-timeline/timeline-workflow-persistence.test.ts`: 1 file and 141 tests.
+- Krea negative-suggestion prompt follow-up passed `src/features/agent-timeline/t5-node-adapters.test.ts`: 1 file and 8 tests; targeted ESLint and `npm run typecheck` also passed.
 
 ### T44 / Issue #155 Krea 2 FaceDetailer and HandDetailer
 
