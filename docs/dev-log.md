@@ -8,6 +8,7 @@ This log records dated implementation and documentation work. Keep entries conci
 
 Summary:
 
+- Merged PR #157 into `master` as `bae3db0`; Issue #155 closed.
 - Enabled the existing independent FaceDetailer and HandDetailer controls for Krea 2 Final requests while retaining the explicit Preview-only disablement.
 - Added Krea Final graph wiring from the Krea UNET/CLIP/VAE model context through the selected Detailer nodes before `SaveImage`.
 - Added fail-closed Krea Detailer preflight checks for the complete generated graph, required node inputs, KSampler/detailer sampler settings, detector model, and exact Krea local UNET/CLIP/VAE files before any queue request.
