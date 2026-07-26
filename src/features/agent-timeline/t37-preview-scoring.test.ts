@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import sharp from "sharp";
 
 const completeChatMock = vi.hoisted(() => vi.fn());
@@ -88,13 +88,16 @@ function createScoringWorkflow({
   candidateCount = 3,
   finalCount = 2,
   nsfw = false,
+  promptProfile,
 }: {
   candidateCount?: number;
   finalCount?: number;
   nsfw?: boolean;
+  promptProfile?: "illustrious" | "krea2";
 } = {}) {
   let workflow = createTimelineWorkflowState({
     imageCount: finalCount,
+    promptProfile,
     sceneRequest: "A pilot in a greenhouse",
     workflowId: "t37-scoring",
   });
@@ -167,6 +170,10 @@ function validResponse() {
     ],
   });
 }
+
+beforeEach(() => {
+  process.env.LITELLM_DEFAULT_MODEL = "default-model";
+});
 
 afterEach(() => {
   completeChatMock.mockReset();
@@ -602,13 +609,14 @@ describe("T37 structured preview scoring", () => {
     expect(JSON.stringify(completeChatMock.mock.calls)).not.toContain("Repair the response schema");
   });
 
-  it("uses Vision with default fallback for ordinary previews", async () => {
+  it("uses only the default model for ordinary previews even when Vision and NSFW overrides are configured", async () => {
     process.env.LITELLM_VISION_MODEL = "vision-model";
+    process.env.LITELLM_NSFW_MODEL = "nsfw-model";
     process.env.LITELLM_DEFAULT_MODEL = "default-model";
     completeChatMock.mockResolvedValue({ content: validResponse() });
     await score(createScoringWorkflow());
     expect(completeChatMock).toHaveBeenLastCalledWith(expect.objectContaining({
-      model: "vision-model",
+      model: "default-model",
       nsfw: false,
       maxTokens: 4_000,
     }));
@@ -629,24 +637,50 @@ describe("T37 structured preview scoring", () => {
     expect(scoringPrompt).toEqual(expect.stringContaining("skin or hair"));
     expect(scoringPrompt).toEqual(expect.stringContaining("SceneForge derives eligibility locally"));
     expect(scoringPrompt).not.toEqual(expect.stringContaining('"eligible"'));
-
-    delete process.env.LITELLM_VISION_MODEL;
-    completeChatMock.mockClear();
-    await score(createScoringWorkflow());
-    expect(completeChatMock).toHaveBeenLastCalledWith(expect.objectContaining({ model: "default-model", nsfw: false }));
   });
 
-  it("uses only the NSFW multimodal model and never falls back to ordinary models", async () => {
+  it("uses only the default model for NSFW previews while preserving the true NSFW request flag", async () => {
     process.env.LITELLM_NSFW_MODEL = "nsfw-vision-model";
     process.env.LITELLM_VISION_MODEL = "ordinary-vision-model";
-    process.env.LITELLM_DEFAULT_MODEL = "ordinary-default-model";
+    process.env.LITELLM_DEFAULT_MODEL = "default-model";
     completeChatMock.mockResolvedValue({ content: validResponse() });
     await score(createScoringWorkflow({ nsfw: true }));
-    expect(completeChatMock).toHaveBeenLastCalledWith(expect.objectContaining({ model: "nsfw-vision-model", nsfw: true }));
+    expect(completeChatMock).toHaveBeenLastCalledWith(expect.objectContaining({
+      model: "default-model",
+      nsfw: true,
+      purpose: "single-image-preview-scoring",
+    }));
+  });
 
-    delete process.env.LITELLM_NSFW_MODEL;
-    completeChatMock.mockClear();
-    await expect(score(createScoringWorkflow({ nsfw: true }))).rejects.toMatchObject({ code: "llm_config" });
+  it("uses only the default model for Krea preview scoring semantics", async () => {
+    process.env.LITELLM_NSFW_MODEL = "nsfw-vision-model";
+    process.env.LITELLM_VISION_MODEL = "ordinary-vision-model";
+    process.env.LITELLM_DEFAULT_MODEL = "default-model";
+    completeChatMock.mockResolvedValue({ content: validResponse() });
+
+    await score(createScoringWorkflow({ promptProfile: "krea2" }));
+
+    expect(completeChatMock).toHaveBeenLastCalledWith(expect.objectContaining({
+      model: "default-model",
+      nsfw: false,
+      purpose: "single-image-preview-scoring",
+    }));
+  });
+
+  it.each([
+    ["ordinary", false],
+    ["NSFW", true],
+  ])("fails %s scoring recoverably before provider completion when the default model is missing", async (_label, nsfw) => {
+    process.env.LITELLM_NSFW_MODEL = "nsfw-vision-model";
+    process.env.LITELLM_VISION_MODEL = "ordinary-vision-model";
+    delete process.env.LITELLM_DEFAULT_MODEL;
+
+    await expect(score(createScoringWorkflow({ nsfw }))).rejects.toMatchObject({
+      code: "llm_config",
+      message: expect.stringContaining("LITELLM_DEFAULT_MODEL"),
+      details: { recoverable: true },
+    });
     expect(completeChatMock).not.toHaveBeenCalled();
+    expect(readFileMock).not.toHaveBeenCalled();
   });
 });

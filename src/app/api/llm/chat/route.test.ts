@@ -1,8 +1,29 @@
 // @vitest-environment node
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { resolveDefaultModel, resolveRequestModel } from "./route";
+const completeChatMock = vi.hoisted(() => vi.fn());
+const createLiteLlmClientMock = vi.hoisted(() => vi.fn(() => ({
+  completeChat: completeChatMock,
+})));
+
+vi.mock("@/features/llm", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/features/llm")>();
+  return {
+    ...actual,
+    createLiteLlmClient: createLiteLlmClientMock,
+  };
+});
+
+vi.mock("@/features/llm/llm-local-log", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/features/llm/llm-local-log")>();
+  return {
+    ...actual,
+    appendLlmLocalLog: vi.fn(async () => undefined),
+  };
+});
+
+import { POST, resolveDefaultModel, resolveRequestModel } from "./route";
 
 const ENV_KEYS = [
   "LITELLM_DEFAULT_MODEL",
@@ -27,6 +48,8 @@ describe("LLM chat route model selection", () => {
   });
 
   afterEach(() => {
+    completeChatMock.mockReset();
+    createLiteLlmClientMock.mockClear();
     for (const key of ENV_KEYS) {
       const value = previousEnv[key];
       if (value === undefined) {
@@ -169,6 +192,61 @@ describe("LLM chat route model selection", () => {
         messages: [{ role: "user", content: "Analyze this style reference" }],
       }),
     ).toBe("explicit-vision-model");
+  });
+
+  it.each([
+    ["ordinary", false],
+    ["NSFW", true],
+  ])("fixes %s preview scoring to the default model despite explicit, Vision, and NSFW overrides", (_label, nsfw) => {
+    const request = {
+      model: "explicit-model",
+      purpose: "single-image-preview-scoring" as const,
+      nsfw,
+      messages: [{ role: "user" as const, content: "Score these previews" }],
+    };
+
+    expect(resolveDefaultModel(request)).toBe("default-model");
+    expect(resolveRequestModel(request)).toBe("default-model");
+  });
+
+  it("does not let an explicit preview-scoring model bypass a missing default model", () => {
+    delete process.env.LITELLM_DEFAULT_MODEL;
+
+    const request = {
+      model: "explicit-model",
+      purpose: "single-image-preview-scoring" as const,
+      nsfw: true,
+      messages: [{ role: "user" as const, content: "Score these previews" }],
+    };
+
+    expect(resolveDefaultModel(request)).toBeUndefined();
+    expect(resolveRequestModel(request)).toBeUndefined();
+  });
+
+  it("returns a safe recoverable config error before creating a provider client when preview scoring has no default model", async () => {
+    delete process.env.LITELLM_DEFAULT_MODEL;
+
+    const response = await POST(new Request("http://localhost/api/llm/chat", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "explicit-model",
+        purpose: "single-image-preview-scoring",
+        nsfw: true,
+        messages: [{ role: "user", content: "Score these previews" }],
+      }),
+    }));
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: "llm_config",
+        message: "LITELLM_DEFAULT_MODEL must be configured with a model that supports multimodal image input and permits the content being scored.",
+        details: { recoverable: true },
+      },
+    });
+    expect(createLiteLlmClientMock).not.toHaveBeenCalled();
+    expect(completeChatMock).not.toHaveBeenCalled();
   });
 
   it("still routes ordinary NSFW requests to the NSFW model", () => {

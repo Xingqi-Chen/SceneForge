@@ -4,6 +4,26 @@ This log records dated implementation and documentation work. Keep entries conci
 
 ## 2026-07-26
 
+### T49 / Issue #167 Preview Scoring default-model routing
+
+Summary:
+
+- Locked ordinary, NSFW, and Krea single-image Preview Scoring to `LITELLM_DEFAULT_MODEL` in both the direct timeline adapter and `/api/llm/chat`, ignoring Vision, NSFW, and request-level model overrides for this purpose while preserving the true `nsfw` flag.
+- Added a safe recoverable `llm_config` failure before any provider call when the default model is absent; completed Preview candidates remain available for a scoring retry and Final generation does not advance.
+- Documented that the configured default must support multimodal image input and a content policy that permits the ordinary or NSFW images it is expected to score. Final Review, Repair, style-reference analysis, Story, and other model routes remain unchanged.
+
+Implementation Gate validation:
+
+- `npm run typecheck`
+- `npx eslint src/app/api/llm/chat/route.ts src/features/agent-timeline/t8-server-adapters.ts`
+- `git diff --check`
+
+Closeout:
+
+- Test Gate passed 46 focused and 1,820 full-suite tests with typecheck, lint, build, and diff-check.
+- Review Gate returned `APPROVE` with no blocking findings.
+- Opened PR #168.
+
 ### T48 / Issue #165 Empty Run Suggest diversity
 
 Summary:

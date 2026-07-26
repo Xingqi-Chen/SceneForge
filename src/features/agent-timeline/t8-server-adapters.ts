@@ -805,15 +805,12 @@ async function scorePreviews(
   const canvas = context.workflow.nodes["canvas-binding"].result;
   const parameters = context.workflow.nodes["parameter-recommendation"].result;
   const nsfw = isRecord(sceneInput) && sceneInput.nsfw === true;
-  const model = nsfw
-    ? process.env.LITELLM_NSFW_MODEL
-    : process.env.LITELLM_VISION_MODEL || process.env.LITELLM_DEFAULT_MODEL;
+  const model = process.env.LITELLM_DEFAULT_MODEL;
   if (!model) {
     throw new TimelineNodeExecutionError(createTimelineNodeError(
       "llm_config",
-      nsfw
-        ? "LITELLM_NSFW_MODEL must be configured with multimodal support to score NSFW previews."
-        : "LITELLM_VISION_MODEL or LITELLM_DEFAULT_MODEL is required to score previews.",
+      "LITELLM_DEFAULT_MODEL must be configured with a model that supports multimodal image input and permits the content being scored.",
+      { recoverable: true },
     ));
   }
   const content: Array<{ type: "text"; text: string } | { type: "image_url"; image_url: { url: string; detail: "high" } }> = [{
@@ -902,7 +899,7 @@ async function scorePreviews(
   if (lastFailure === "upstream") {
     throw new TimelineNodeExecutionError(createTimelineNodeError(
       "llm_upstream",
-      "Preview scoring could not be completed by the configured Vision model. The previews were retained; retry scoring to continue.",
+      "Preview scoring could not be completed by the configured default model. The previews were retained; retry scoring to continue.",
       {
         recoverable: true,
         ...(lastUpstreamError instanceof LiteLlmError && lastUpstreamError.statusCode
