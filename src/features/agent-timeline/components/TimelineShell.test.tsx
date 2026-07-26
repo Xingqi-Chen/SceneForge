@@ -2331,6 +2331,13 @@ describe("TimelineShell", () => {
         await flushAsyncWork();
 
         const profile = container.querySelector("#prompt-profile") as HTMLSelectElement;
+        const previousAuthorizeRepair = Array.from(container.querySelectorAll('input[type="checkbox"]')).find((input) =>
+          input.parentElement?.textContent?.includes("Authorize one-shot local repair"),
+        ) as HTMLInputElement | undefined;
+        act(() => {
+          previousAuthorizeRepair?.click();
+        });
+        expect(previousAuthorizeRepair?.checked).toBe(true);
         act(() => {
           setNativeSelectValue(profile, "krea2");
         });
@@ -2345,6 +2352,8 @@ describe("TimelineShell", () => {
         expect(container.textContent).toContain("4/4/6/8 scored previews, exact-K selection, and Preview-to-Final img2img redraw.");
         expect(container.textContent).toContain("Paired review and explicit variant selection are available.");
         expect(container.textContent).toContain("One-shot Repair remains off by default");
+        expect(container.textContent).toContain("The analyzed global style prompt is supported exactly once");
+        expect(container.textContent).toContain("optional reference adapter appears only after local Krea preflight");
         const authorizeRepair = Array.from(container.querySelectorAll('input[type="checkbox"]')).find((input) =>
           input.parentElement?.textContent?.includes("Authorize one-shot local repair"),
         ) as HTMLInputElement | undefined;

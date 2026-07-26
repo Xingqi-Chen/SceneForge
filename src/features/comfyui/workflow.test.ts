@@ -339,6 +339,32 @@ describe("ComfyUI workflow builder", () => {
     expect(Object.values(result.workflow).some((node) => node.class_type === "EmptyLatentImage")).toBe(false);
   });
 
+  it("builds the verified Krea reference-adapter graph with fixed LoRA and Ostris inputs", () => {
+    const result = buildBasicTextToImageWorkflow({
+      checkpointName: "krea-2-turbo-unet.safetensors",
+      modelBaseModel: "Krea 2",
+      modelStorageKind: "diffusion",
+      positivePrompt: "a quiet station, soft gouache",
+      negativePrompt: "blur",
+      seed: 123,
+      krea2StyleReference: { imageName: "sceneforge-krea-style.png", weight: 0.55 },
+    });
+
+    expect(result.nodeIds).toMatchObject({ styleReferenceImage: "4", styleReferenceLora: "5", styleReferencePatch: "6" });
+    expect(result.workflow["4"]).toMatchObject({ class_type: "LoadImage", inputs: { image: "sceneforge-krea-style.png" } });
+    expect(result.workflow["5"]).toMatchObject({
+      class_type: "LoraLoaderModelOnly",
+      inputs: { model: ["1", 0], lora_name: "krea2_style_reference.safetensors", strength_model: 0.55 },
+    });
+    expect(result.workflow["6"]).toMatchObject({ class_type: "Krea2OstrisEditModelPatch", inputs: { model: ["5", 0], kv_cache: false } });
+    expect(result.workflow["7"]).toMatchObject({
+      class_type: "TextEncodeKrea2OstrisEdit",
+      inputs: { clip: ["2", 0], prompt: "a quiet station, soft gouache", vae: ["3", 0], image1: ["4", 0] },
+    });
+    expect(result.workflow["8"]).toMatchObject({ class_type: "TextEncodeKrea2OstrisEdit", inputs: { clip: ["2", 0], prompt: "blur" } });
+    expect(result.workflow["10"].inputs.model).toEqual(["6", 0]);
+  });
+
   it("builds the Anima img2img workflow from the Anima VAE", () => {
     const result = buildBasicTextToImageWorkflow({
       checkpointName: "pencil-xl-diffusion.safetensors",

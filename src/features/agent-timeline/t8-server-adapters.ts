@@ -30,6 +30,10 @@ import {
   buildStyleReferenceSequenceCharacter,
   getStyleReferenceCapability,
 } from "./style-reference";
+import {
+  getComfyUiKrea2StyleReferenceContextIssue,
+  isComfyUiKrea2StyleReferenceTimingSupported,
+} from "@/features/comfyui/krea2-style-reference";
 import { createTimelineT8NodeAdapters } from "./t8-node-adapters";
 import { reviewFinalExecution } from "./final-review.server";
 import { getFinalReviewResult } from "./final-review";
@@ -114,12 +118,28 @@ async function applyTimelineStyleReference(
   const sceneInput = context.workflow.nodes["scene-input"].result;
   const settings = getRunSceneInputSettings(isRecord(sceneInput) ? sceneInput : {});
   const checkpoint = getValidatedTimelineCheckpoint(context);
-  if (!checkpoint || getStyleReferenceCapability({ baseModel: checkpoint.baseModel }).mode !== "ipadapter") return request;
   const character = buildStyleReferenceSequenceCharacter(settings.styleReference, {
     id: "run-style-reference",
     name: "Run style reference",
   });
   if (!character) return request;
+
+  const isKrea2 = request.workflowProfile === "krea2";
+  if (!isKrea2 && (!checkpoint || getStyleReferenceCapability({ baseModel: checkpoint.baseModel }).mode !== "ipadapter")) {
+    return request;
+  }
+  if (isKrea2) {
+    const contextIssue = getComfyUiKrea2StyleReferenceContextIssue(request);
+    if (contextIssue) {
+      throw new TimelineNodeExecutionError(createTimelineNodeError("comfyui_request_invalid", contextIssue));
+    }
+    if (!isComfyUiKrea2StyleReferenceTimingSupported(character)) {
+      throw new TimelineNodeExecutionError(createTimelineNodeError(
+        "comfyui_request_invalid",
+        "Krea style reference supports only start_at=0 and end_at=1. Revert those adapter values or use prompt-only mode.",
+      ));
+    }
+  }
 
   try {
     const [uploaded] = await uploadSequenceCharacterReferences(
@@ -128,6 +148,19 @@ async function applyTimelineStyleReference(
       [character],
     );
     if (!uploaded) throw new Error("Missing uploaded style reference.");
+    if (isKrea2) {
+      const imageName = uploaded.references[0]?.imageName;
+      if (!imageName) throw new Error("Missing uploaded Krea style reference image.");
+      return {
+        ...request,
+        krea2StyleReference: {
+          imageName,
+          weight: character.weight,
+          startPercent: character.startPercent,
+          endPercent: character.endPercent,
+        },
+      };
+    }
     const reference = buildComfyUiSequenceCharacterReference(
       uploaded,
       uploaded.references.map((item) => ({ id: item.id, imageName: item.imageName, weight: item.weight })),

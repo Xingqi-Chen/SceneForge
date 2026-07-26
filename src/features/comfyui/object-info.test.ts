@@ -1217,7 +1217,46 @@ describe("ComfyUI object info helpers", () => {
       ).errors,
     ).toEqual(expect.arrayContaining([
       "Krea 2 Turbo does not support Detailer nodes.",
-      "Krea 2 Turbo does not support style or IPAdapter references.",
+      "Krea 2 Turbo does not support entity or character references.",
+    ]));
+  });
+
+  it("requires the verified Krea reference adapter nodes, inputs, and fixed adapter file", () => {
+    const request = {
+      checkpointName: "krea-2-turbo-unet.safetensors",
+      workflowProfile: "krea2" as const,
+      modelBaseModel: "Krea 2",
+      modelStorageKind: "diffusion" as const,
+      positivePrompt: "a quiet station",
+      krea2StyleReference: { imageName: "sceneforge-krea-style.png" },
+    };
+    const compatibleObjectInfo = {
+      ...objectInfoWithKrea2,
+      LoadImage: { input: { required: { image: [["sceneforge-krea-style.png"], {}] } } },
+      LoraLoaderModelOnly: {
+        input: { required: {
+          model: ["MODEL", {}],
+          lora_name: [["krea-style.safetensors", "krea2_style_reference.safetensors"], {}],
+          strength_model: ["FLOAT", {}],
+        } },
+      },
+      TextEncodeKrea2OstrisEdit: {
+        input: { required: {
+          clip: ["CLIP", {}], prompt: ["STRING", {}], vae: ["VAE", {}], image1: ["IMAGE", {}],
+        } },
+      },
+      Krea2OstrisEditModelPatch: { input: { required: { model: ["MODEL", {}], kv_cache: ["BOOLEAN", {}] } } },
+    };
+
+    expect(validateComfyUiRequestAgainstObjectInfo(request, compatibleObjectInfo).errors).toEqual([]);
+    expect(validateComfyUiRequestAgainstObjectInfo(request, {
+      ...compatibleObjectInfo,
+      TextEncodeKrea2OstrisEdit: { input: { required: { clip: ["CLIP", {}], prompt: ["STRING", {}] } } },
+      Krea2OstrisEditModelPatch: undefined,
+    }).errors).toEqual(expect.arrayContaining([
+      "Krea2OstrisEditModelPatch node is not available in ComfyUI.",
+      "TextEncodeKrea2OstrisEdit.vae input is not available in ComfyUI object_info.",
+      "TextEncodeKrea2OstrisEdit.image1 input is not available in ComfyUI object_info.",
     ]));
   });
 

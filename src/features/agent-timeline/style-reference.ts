@@ -223,11 +223,13 @@ export function getStyleReferenceCapability({
   modelBaseModel,
   modelFileName,
   name,
+  promptProfile,
 }: {
   baseModel?: string | null;
   modelBaseModel?: string | null;
   modelFileName?: string | null;
   name?: string | null;
+  promptProfile?: PromptProfileId;
 }): { mode: StyleReferenceMode; reason: string } {
   const text = [modelBaseModel, baseModel, modelFileName, name]
     .map((item) => item?.trim().toLocaleLowerCase())
@@ -236,6 +238,12 @@ export function getStyleReferenceCapability({
 
   if (/\banima\b/.test(text)) {
     return { mode: "prompt-only", reason: "Anima workflows use the analyzed style prompt only." };
+  }
+  if (promptProfile === "krea2" || /\bkrea[\s_-]*2\b/.test(text)) {
+    return {
+      mode: "prompt-only",
+      reason: "Krea 2 uses the analyzed style prompt. Its optional reference adapter is available only after local ComfyUI preflight verifies the Krea 2 Turbo graph and adapter file.",
+    };
   }
   if (/\billustrious\b/.test(text)) {
     return {
@@ -398,7 +406,10 @@ export function getStyleReferenceAiContext(value: StyleReferenceSnapshot | undef
 }
 
 function normalizeContextValue(value: string | null | undefined) {
-  return value?.trim().toLowerCase() || null;
+  const normalized = value?.trim().toLowerCase() || null;
+  if (!normalized) return null;
+  if (/\bkrea[\s_-]*2\b/.test(normalized)) return "krea2";
+  return normalized;
 }
 
 export function getStyleReferenceContextMismatch(

@@ -2,6 +2,18 @@
 
 This log records dated implementation and documentation work. Keep entries concise and evidence-oriented.
 
+## 2026-07-26
+
+### T43 / Issue #154 Krea 2 Global Style Prompt and Verified Reference Adapter
+
+Summary:
+
+- Extended the shared sanitized Run style-reference contract to Krea 2: the analyzed `stylePrompt` is appended exactly once to the natural-language Krea prompt and is reconfirmed across staged Preview and Final requests.
+- Preserved metadata-only workflow persistence; reference bytes, data URLs, and temporary ComfyUI input names remain outside persisted timeline state.
+- Added a visible no-queue Krea adapter preflight plus repeated queue-time fail-closed validation for compatible Krea 2 Turbo diffusion context, `TextEncodeKrea2OstrisEdit`, `Krea2OstrisEditModelPatch`, required ports, `LoraLoaderModelOnly`, and exact `krea2_style_reference.safetensors` availability.
+- Built the Krea-specific reference graph instead of reusing generic IPAdapter nodes. Prompt-only generation remains usable when no adapter is selected; a restored or explicitly enabled adapter stays selected and blocks while preflight is pending or unavailable until verification succeeds or the user explicitly opts out. Enabled adapters never queue when preflight or queue-time validation fails.
+- Kept ControlNet, entity references, Story, hidden adapter injection, Detailers, and image-byte persistence outside the Krea scope. Reference edits continue to stale downstream parameter/generation work and cancel prior confirmation.
+
 ## 2026-07-25
 
 ### T40 / Issue #147 Civitai Red Import Without Content Filtering
