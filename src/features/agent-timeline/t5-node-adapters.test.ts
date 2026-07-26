@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { createDefaultProject } from "@/features/editor/store/defaults";
+import { renderKrea2Prompt } from "@/features/editor/ai-prompt/krea2-prompt";
 import { useEditorStore } from "@/features/editor/store/editor-store";
 import type { LlmChatRequest, LlmChatResponse } from "@/features/llm";
 
@@ -138,6 +139,31 @@ describe("T5 timeline node adapters", () => {
     ).toEqual(["Do not add crowds", "Avoid blur", "keep a single subject"]);
   });
 
+  it("preserves opaque quoted text from a T5-shaped Krea response through final rendering", () => {
+    const result = normalizeScenePromptTimelineResult(JSON.stringify({
+      promptProfile: "krea2",
+      positivePrompt: "flat prompt is not authoritative",
+      krea2Sections: {
+        subjectMood: '  A   sign reads "GO   NOW  . ,"   beneath   the canopy  ',
+        environmentAndBackground: "  Rain   crosses   the station platform  ",
+        spatialCompositionAndFraming: "  centered   at eye level  ",
+      },
+    }), "krea2");
+
+    expect(result.krea2Sections).toEqual({
+      subjectMood: 'A sign reads "GO   NOW  . ," beneath the canopy',
+      environmentAndBackground: "Rain crosses the station platform",
+      spatialCompositionAndFraming: "centered at eye level",
+    });
+    expect(renderKrea2Prompt({
+      sections: result.krea2Sections,
+      sourcePrompt: result.positivePrompt,
+    })).toBe(
+      'A sign reads "GO   NOW  . ," beneath the canopy, ' +
+      "Rain crosses the station platform, centered at eye level",
+    );
+  });
+
   it("defaults scene input to Illustrious and builds profile-specific scene prompt instructions", async () => {
     const requests: LlmChatRequest[] = [];
     const workflow = createTimelineWorkflowState({
@@ -173,6 +199,7 @@ describe("T5 timeline node adapters", () => {
     });
 
     expect(requests).toHaveLength(1);
+    expect(requests[0]?.maxTokens).toBe(900);
     const systemText = String(requests[0]?.messages[0]?.content);
     expect(systemText).toContain("Selected prompt profile: Illustrious (illustrious)");
     expect(systemText).toContain("include illustriousSections");
@@ -345,6 +372,7 @@ describe("T5 timeline node adapters", () => {
     });
 
     const systemText = String(requests[0]?.messages[0]?.content);
+    expect(requests[0]?.maxTokens).toBe(900);
     expect(systemText).toContain("Selected prompt profile: Anima (anima)");
     expect(systemText).toContain("include animaSections");
     for (const snippet of KREA_ONLY_NEGATIVE_SUGGESTION_INSTRUCTION_SNIPPETS) {
@@ -384,6 +412,8 @@ describe("T5 timeline node adapters", () => {
             krea2Sections: {
               subjectMood: "A focused courier waits beneath a neon station canopy",
               subjectAttributesAndActions: "standing calmly with a messenger bag",
+              environmentAndBackground:
+                "a rain-dark station platform extends beneath the canopy",
               visualStyleAndMedium: "cinematic digital photography",
               lightingColorAndTexture: "neon reflections across wet surfaces",
               spatialCompositionAndFraming: "a medium-wide eye-level composition",
@@ -400,8 +430,19 @@ describe("T5 timeline node adapters", () => {
     });
 
     expect(requests).toHaveLength(1);
+    expect(requests[0]?.maxTokens).toBe(1800);
     const systemText = String(requests[0]?.messages[0]?.content ?? "");
     expect(systemText).toContain("Selected prompt profile: Krea 2 Turbo (krea2)");
+    expect(systemText).toContain("must include environmentAndBackground");
+    expect(systemText).toContain("roughly 160-240 English words");
+    expect(systemText).toContain("guidance, not a hard limit");
+    expect(systemText).toContain("environmentAndBackground alone owns");
+    expect(systemText).toContain("spatialCompositionAndFraming alone owns foreground");
+    expect(systemText).toContain("relative scale");
+    expect(systemText).toContain("atmospheric depth");
+    expect(systemText).toContain("subject-background separation or contrast");
+    expect(systemText).toContain("one cohesive paragraph");
+    expect(systemText).toContain("Do not invent unsupported characters");
     expect(systemText).toContain("still return the top-level negativeSuggestions array");
     expect(systemText).toContain("one concise English undesirable visual concept");
     expect(systemText).toContain("short noun or adjective fragment that is directly comma-ready");
@@ -420,6 +461,8 @@ describe("T5 timeline node adapters", () => {
         krea2Sections: {
           subjectMood: "A focused courier waits beneath a neon station canopy",
           subjectAttributesAndActions: "standing calmly with a messenger bag",
+          environmentAndBackground:
+            "a rain-dark station platform extends beneath the canopy",
           visualStyleAndMedium: "cinematic digital photography",
           lightingColorAndTexture: "neon reflections across wet surfaces",
           spatialCompositionAndFraming: "a medium-wide eye-level composition",

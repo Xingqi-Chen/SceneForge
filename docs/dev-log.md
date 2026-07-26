@@ -4,6 +4,29 @@ This log records dated implementation and documentation work. Keep entries conci
 
 ## 2026-07-26
 
+### T46 / Issue #161 Krea 2 Environment-Aware Prompt Composition
+
+Summary:
+
+- Added `environmentAndBackground` to the persisted Krea section map, response aliases, and authoritative render order. Generation now explicitly requires the field for ordinary character-and-scene Krea responses; optional parsing remains only as malformed-response and manual-input tolerance, with no historical-project migration or compatibility branch.
+- Expanded only the Krea scene-prompt contract with non-overlapping environment/composition ownership, supported foreground/midground/background layers, relative scale, atmospheric depth, subject-background contrast, faithfulness and non-invention rules, cohesive-paragraph output, and approximate 160-240-word guidance without local enforcement.
+- Increased only the Krea structured scene-response budget from 900 to 1800 tokens while leaving Illustrious, Anima, and Krea negative-suggestion behavior unchanged.
+- Added punctuation-aware local Krea section, selected-LoRA-trigger, and opaque style-reference assembly. Krea confirmation uses matching normalized tail/exact-once validation; other profiles retain their existing style-reference append and validation paths.
+
+Implementation Gate validation:
+
+- `npm run typecheck` passed.
+- Targeted ESLint passed for the scoped Krea and timeline modules.
+- Focused Krea/T5/T7/T8 Vitest validation passed: 4 files and 117 tests.
+- `git diff --check` passed with line-ending warnings only.
+
+Final gates:
+
+- Test Gate passed 5 focused files and 296 tests, then the full 148-file, 1,735-test suite.
+- `npm run typecheck`, `npm run lint` (0 errors and 23 existing warnings), `npm run build`, `git diff --check`, and scoped secret/runtime-artifact scans passed.
+- Review Gate approved after three fix loops covering authoritative Krea style validation, opaque quoted JSON content, Unicode and prose separators, and distinct exact-token handling for triggers such as `art_style`, `art`, and `art-based`.
+- Live LiteLLM and ComfyUI generation remain environment-dependent manual follow-up; deterministic tests cover JSON parsing through final prompt assembly and confirmation.
+
 ### T45 / Issue #159 Krea 2 Render Prompt AI Advice
 
 Summary:
