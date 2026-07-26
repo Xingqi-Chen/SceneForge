@@ -335,7 +335,7 @@ describe("timeline T8 ComfyUI request conversion", () => {
     )).toBe(true);
   });
 
-  it("rejects a Krea automatic-repair setting before any direct queue provider can run", async () => {
+  it("keeps authorized Krea repair separate from Preview and Final queue construction", async () => {
     let workflow = createConfirmedWorkflow(1, undefined, {
       automaticLocalRepair: true,
       promptProfile: "krea2",
@@ -366,14 +366,17 @@ describe("timeline T8 ComfyUI request conversion", () => {
       scorePreviews: vi.fn(),
     });
 
-    expect(() => createConfirmedTimelineComfyUiRequest(workflow)).toThrow(
-      "Krea 2 Turbo does not support automatic local repair",
-    );
+    expect(createConfirmedTimelineComfyUiRequest(workflow)).toMatchObject({
+      batchSize: 1,
+      faceDetailer: { enabled: false },
+      handDetailer: { enabled: false },
+      workflowProfile: "krea2",
+    });
     await expect(adapters["comfyui-execution"]?.({
       dependencies: [],
       nodeId: "comfyui-execution",
       workflow,
-    })).rejects.toThrow("Krea 2 Turbo does not support automatic local repair");
+    })).rejects.toThrow("Preview results are required");
     expect(executeDirectFinal).not.toHaveBeenCalled();
     expect(executeFinals).not.toHaveBeenCalled();
   });

@@ -1887,3 +1887,18 @@ Summary:
 - Added Composer source img2img with source-denoise precedence, fixed Krea UNET/CLIP/VAE/model-only-LoRA context in both stages, and fail-closed source-node/input, sampler, local-model-file, and exact-dimension validation.
 - Bound Krea Final redraw presets to Conservative/Balanced/Strong 0.35/0.45/0.55. Final review, repair, and verification now persist an explicit T42-unavailable result without invoking their providers.
 - Preserved completed legacy direct outputs as read-only direct provenance; incomplete direct records become stale and require new confirmation without fabricated Preview linkage.
+
+### T42 / Issue #152 Krea 2 Final Review and bounded Repair
+
+Summary:
+
+- Enabled the shared bounded Preview/Final review, local recommendation, and explicit variant selection for staged Krea 2 Runs.
+- Added default-off Krea Repair authorization to the signed confirmation contract while retaining one-shot checkpoints, recovery identity, no duplicate queueing, and explicit-only Repair promotion.
+- Added a Krea-only preflight before any new Repair queue. It accepts only the bounded local Lanczos/latent-noise-mask img2img/inpaint path and validates required graph classes, ports, sampler options, 16-aligned dimensions, and exact local UNET/CLIP/VAE/model-only-LoRA files through `object_info`.
+- Incompatible Krea installations return a safe `comfyui-unavailable` skipped Repair without diagnosis, uploads, or queueing; Preview and Final variants remain selectable. Historic T41 T42-unavailable node state migrates to an actionable review-only retry without an automatic external call.
+
+Validation:
+
+- `npm run typecheck`
+- `npm run lint` (passes with pre-existing warnings)
+- `npm run build`

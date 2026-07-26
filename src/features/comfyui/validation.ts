@@ -1371,17 +1371,12 @@ export function validateComfyUiInpaintRequest(value: unknown): ComfyUiInpaintVal
     };
   }
 
-  if (resolveComfyUiTextToImageWorkflowProfile({
+  const resolvedWorkflowProfile = resolveComfyUiTextToImageWorkflowProfile({
     checkpointName: value.checkpointName.trim(),
     workflowProfile: isComfyUiTextToImageWorkflowProfileId(value.workflowProfile) ? value.workflowProfile : undefined,
     modelBaseModel: getOptionalTrimmedStringValue(value.modelBaseModel),
     modelStorageKind: isComfyUiModelStorageKind(value.modelStorageKind) ? value.modelStorageKind : undefined,
-  }).id === "krea2") {
-    return {
-      ok: false,
-      message: "Krea 2 Turbo supports direct txt2img only; inpaint and repair are not supported.",
-    };
-  }
+  }).id;
 
   if (value.negativePrompt !== undefined && typeof value.negativePrompt !== "string") {
     return {
@@ -1502,6 +1497,34 @@ export function validateComfyUiInpaintRequest(value: unknown): ComfyUiInpaintVal
       ok: false,
       message: "localRegion is required when high-res inpaint strategy is local-region.",
     };
+  }
+
+  if (resolvedWorkflowProfile === "krea2") {
+    if (faceDetailer?.enabled || handDetailer?.enabled) {
+      return { ok: false, message: "Krea 2 Turbo repair does not support Detailer nodes." };
+    }
+    const imageWidth = value.imageWidth;
+    const imageHeight = value.imageHeight;
+    if (typeof imageWidth !== "number" || typeof imageHeight !== "number" ||
+        !Number.isSafeInteger(imageWidth) || !Number.isSafeInteger(imageHeight) ||
+        imageWidth < 16 || imageHeight < 16 || imageWidth % 16 !== 0 || imageHeight % 16 !== 0) {
+      return {
+        ok: false,
+        message: "Krea 2 Turbo repair source dimensions must be exact 16-pixel-aligned integers.",
+      };
+    }
+    if (value.inpaintMode !== "latent-noise-mask") {
+      return { ok: false, message: "Krea 2 Turbo repair requires latent-noise-mask inpaint mode." };
+    }
+    const localRegion = upscaleBeforeInpaint?.localRegion;
+    if (upscaleBeforeInpaint?.enabled !== true || upscaleBeforeInpaint.mode !== "lanczos" ||
+        upscaleBeforeInpaint.scaleBy !== 2 || upscaleBeforeInpaint.strategy !== "local-region" ||
+        !localRegion || localRegion.source !== "mask-bounds" || localRegion.harmonizeAfter?.enabled === true) {
+      return {
+        ok: false,
+        message: "Krea 2 Turbo repair requires the bounded local Lanczos img2img/inpaint workflow.",
+      };
+    }
   }
 
   if (value.inpaintMode !== undefined && !normalizeComfyUiInpaintMode(value.inpaintMode)) {
@@ -1974,6 +1997,7 @@ export function resolveComfyUiInpaintRequest(request: ComfyUiInpaintRequest): Re
     modelStorageKind,
   }).id;
   const isAnimaProfile = workflowProfile === "anima";
+  const isKrea2Profile = workflowProfile === "krea2";
   const inpaintMode = request.inpaintMode ?? DEFAULT_INPAINT_REQUEST.inpaintMode;
 
   return {
@@ -1982,12 +2006,16 @@ export function resolveComfyUiInpaintRequest(request: ComfyUiInpaintRequest): Re
     workflowProfile,
     modelBaseModel,
     modelStorageKind,
-    clipName: isAnimaProfile ? DEFAULT_COMFYUI_ANIMA_CLIP_NAME : getOptionalTrimmedStringValue(request.clipName),
+    clipName: isAnimaProfile
+      ? DEFAULT_COMFYUI_ANIMA_CLIP_NAME
+      : isKrea2Profile ? DEFAULT_COMFYUI_KREA2_CLIP_NAME : getOptionalTrimmedStringValue(request.clipName),
     clipDevice: getOptionalTrimmedStringValue(request.clipDevice),
-    vaeName: isAnimaProfile ? DEFAULT_COMFYUI_ANIMA_VAE_NAME : getOptionalTrimmedStringValue(request.vaeName),
+    vaeName: isAnimaProfile
+      ? DEFAULT_COMFYUI_ANIMA_VAE_NAME
+      : isKrea2Profile ? DEFAULT_COMFYUI_KREA2_VAE_NAME : getOptionalTrimmedStringValue(request.vaeName),
     unetWeightDtype: isAnimaProfile
       ? DEFAULT_COMFYUI_ANIMA_UNET_WEIGHT_DTYPE
-      : getOptionalTrimmedStringValue(request.unetWeightDtype),
+      : isKrea2Profile ? DEFAULT_COMFYUI_KREA2_UNET_WEIGHT_DTYPE : getOptionalTrimmedStringValue(request.unetWeightDtype),
     positivePrompt: request.positivePrompt.trim(),
     negativePrompt: getString(request.negativePrompt, DEFAULT_INPAINT_REQUEST.negativePrompt),
     loras: (request.loras ?? []).map((lora) => ({
@@ -1996,10 +2024,10 @@ export function resolveComfyUiInpaintRequest(request: ComfyUiInpaintRequest): Re
       strengthClip: lora.strengthClip ?? lora.strengthModel,
     })),
     seed: request.seed ?? createRandomSeed(),
-    steps: request.steps ?? DEFAULT_INPAINT_REQUEST.steps,
-    cfg: request.cfg ?? DEFAULT_INPAINT_REQUEST.cfg,
+    steps: request.steps ?? (isKrea2Profile ? 8 : DEFAULT_INPAINT_REQUEST.steps),
+    cfg: request.cfg ?? (isKrea2Profile ? 1 : DEFAULT_INPAINT_REQUEST.cfg),
     samplerName: getString(request.samplerName, DEFAULT_INPAINT_REQUEST.samplerName),
-    scheduler: getString(request.scheduler, DEFAULT_INPAINT_REQUEST.scheduler),
+    scheduler: getString(request.scheduler, isKrea2Profile ? "simple" : DEFAULT_INPAINT_REQUEST.scheduler),
     denoise: normalizeComfyUiInpaintDenoiseForMode(request.denoise ?? DEFAULT_INPAINT_REQUEST.denoise, inpaintMode),
     promptWrapper: {
       positivePrefix: request.promptWrapper?.positivePrefix ?? DEFAULT_INPAINT_REQUEST.promptWrapper.positivePrefix,
