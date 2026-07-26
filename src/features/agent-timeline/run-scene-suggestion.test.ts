@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   createRunSceneSuggestionFingerprintKey,
+  isUnambiguous21PlusAgeGroup,
   parseRunSceneSuggestionCandidates,
   rankRunSceneSuggestionCandidates,
   runSceneSuggestionFingerprintFields,
@@ -70,6 +71,48 @@ describe("Run empty-scene suggestion candidate contract", () => {
     const value = { ...candidate(1) } as Record<string, unknown>;
     mutate(value);
     expect(sanitizeRunSceneSuggestionCandidate(value, "illustrious")).toBeNull();
+  });
+
+  it.each([
+    "21+",
+    "age 21",
+    "aged 35 years old",
+    "42-year-old adult",
+    "adults ages 21 and 67",
+    "ages 21-25",
+  ])("accepts the unambiguous NSFW ageGroup format %s", (ageGroup) => {
+    expect(isUnambiguous21PlusAgeGroup(ageGroup)).toBe(true);
+    expect(sanitizeRunSceneSuggestionCandidate(
+      candidate(1, { ageGroup }),
+      "illustrious",
+      true,
+    )).toMatchObject({ ageGroup: ageGroup.toLocaleLowerCase() });
+  });
+
+  it.each([
+    ["vague adult label", "adult"],
+    ["ambiguous young-adult label", "young adult"],
+    ["bare age without context", "21"],
+    ["below-21 age", "20 years old"],
+    ["multiple ages all below 21", "ages 18 and 20"],
+    ["mixed ages", "adults ages 21 and 19"],
+    ["mixed ages with an older adult", "ages 25 and 20"],
+    ["non-adult category despite a numeric age", "teen aged 25"],
+    ["plural minor category despite a numeric age", "minors age 25"],
+    ["youth category despite a numeric age", "youth aged 25"],
+    ["schoolgirl category despite a numeric age", "schoolgirl age 25"],
+    ["schoolboy category despite a numeric age", "schoolboy age 25"],
+    ["preteen category despite a numeric age", "preteen age 25"],
+    ["toddler category despite a numeric age", "toddler age 25"],
+    ["incidental non-age number", "adult shoe size 25"],
+  ])("rejects %s only for NSFW candidates", (_label, ageGroup) => {
+    const value = candidate(1, { ageGroup });
+
+    expect(isUnambiguous21PlusAgeGroup(ageGroup)).toBe(false);
+    expect(sanitizeRunSceneSuggestionCandidate(value, "illustrious", true)).toBeNull();
+    expect(sanitizeRunSceneSuggestionCandidate(value, "illustrious", false)).toMatchObject({
+      ageGroup: ageGroup.toLocaleLowerCase(),
+    });
   });
 
   it("normalizes only bounded fingerprint fields and creates a stable identity key", () => {

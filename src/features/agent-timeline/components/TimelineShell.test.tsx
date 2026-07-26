@@ -3620,6 +3620,51 @@ describe("TimelineShell", () => {
     }
   });
 
+  it("propagates enabled NSFW state only through the dedicated empty Suggest request", async () => {
+    const originalFetch = globalThis.fetch;
+    const t5FetchMock = mockT5Fetch();
+    const emptySuggestionBodies: Array<Record<string, unknown>> = [];
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = getFetchUrl(input);
+      if (url === "/api/settings") {
+        return createTimelineSettingsResponse({ supportsNsfw: true });
+      }
+      if (url === "/api/agent-timeline/run-scene-suggestion") {
+        emptySuggestionBodies.push(getFetchBody(init) ?? {});
+        return createJsonResponse({
+          sceneRequest: "A mature 28-year-old model poses in a private moonlit studio.",
+        });
+      }
+      return t5FetchMock(input, init);
+    });
+    setProjectSupportsNsfw(true);
+    globalThis.fetch = fetchMock;
+
+    try {
+      act(() => {
+        root.render(<TimelineShell />);
+      });
+      await flushAsyncWork();
+
+      act(() => {
+        getButtonByText("Suggest").click();
+      });
+      await flushAsyncWork();
+
+      expect(emptySuggestionBodies).toEqual([{
+        promptProfile: "illustrious",
+        nsfw: true,
+      }]);
+      expect((container.querySelector("#scene-request") as HTMLTextAreaElement | null)?.value)
+        .toBe("A mature 28-year-old model poses in a private moonlit studio.");
+      expect(fetchMock.mock.calls.filter(([input]) =>
+        getFetchUrl(input) === "/api/agent-timeline/run-scene-suggestion"
+      )).toHaveLength(1);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it.each(["simple", "detailed"] as const)(
     "uses the dedicated empty Suggest route in %s mode without generation side effects",
     async (displayMode) => {
