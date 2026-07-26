@@ -65,6 +65,7 @@ export type ComfyUiTextToImageRequest = {
   controlNet?: ComfyUiControlNetConfig;
   controlNets?: ComfyUiControlNetUnitConfig[];
   characterReferences?: ComfyUiCharacterReferenceConfig[];
+  krea2StyleReference?: ComfyUiKrea2StyleReferenceConfig;
   preview?: boolean;
 };
 
@@ -266,6 +267,15 @@ export type ComfyUiCharacterReferenceConfig = {
   embedsScaling?: string;
 };
 
+/** Runtime-only input. Its ComfyUI image name is never timeline-persisted. */
+export type ComfyUiKrea2StyleReferenceConfig = {
+  imageName: string;
+  loraName?: string;
+  weight?: number;
+  startPercent?: number;
+  endPercent?: number;
+};
+
 export type ComfyUiLoraInput = {
   loraName: string;
   strengthModel: number;
@@ -311,6 +321,7 @@ export type ResolvedComfyUiTextToImageRequest = {
   handDetailer: ResolvedComfyUiHandDetailerConfig;
   controlNets: ResolvedComfyUiControlNetUnitConfig[];
   characterReferences: ResolvedComfyUiCharacterReferenceConfig[];
+  krea2StyleReference?: Required<ComfyUiKrea2StyleReferenceConfig>;
 };
 
 export type ResolvedComfyUiInpaintRequest = {
@@ -488,6 +499,9 @@ export type BasicTextToImageNodeIds = {
   sourceImage?: string;
   sourceImageScale?: string;
   vaeEncode?: string;
+  styleReferenceImage?: string;
+  styleReferenceLora?: string;
+  styleReferencePatch?: string;
   latentImage: string;
   sampler: string;
   vaeDecode: string;

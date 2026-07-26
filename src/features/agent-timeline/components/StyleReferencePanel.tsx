@@ -29,6 +29,12 @@ type StyleReferenceFileInfo = {
   name: string;
 };
 
+type KreaAdapterPreflight = {
+  available: boolean;
+  key: string;
+  reason: string;
+};
+
 type Props = {
   checkpointId?: string | null;
   disabled?: boolean;
@@ -203,9 +209,27 @@ export function StyleReferencePanel({
   const [dataUrl, setDataUrl] = useState<string>();
   const [fileInfo, setFileInfo] = useState<StyleReferenceFileInfo>();
   const [isProcessing, setIsProcessing] = useState(false);
-  const capability = getStyleReferenceCapability({
+  const [kreaAdapterPreflight, setKreaAdapterPreflight] = useState<KreaAdapterPreflight>();
+  const baseCapability = getStyleReferenceCapability({
     baseModel: selectedCheckpoint ? selectedCheckpoint.baseModel ?? null : promptProfile,
+    modelFileName: selectedCheckpoint?.modelFileName,
+    promptProfile,
   });
+  const isKrea2 = promptProfile === "krea2";
+  const kreaAdapterPreflightKey = isKrea2 && selectedCheckpoint?.modelFileName && selectedCheckpoint.baseModel
+    ? `${selectedCheckpoint.baseModel}\u0000${selectedCheckpoint.modelFileName}`
+    : "";
+  const currentKreaAdapterPreflight = kreaAdapterPreflight?.key === kreaAdapterPreflightKey
+    ? kreaAdapterPreflight
+    : undefined;
+  const capability = isKrea2 && currentKreaAdapterPreflight?.available
+    ? {
+        mode: "ipadapter" as const,
+        reason: currentKreaAdapterPreflight.reason,
+      }
+    : isKrea2 && currentKreaAdapterPreflight
+      ? { mode: "prompt-only" as const, reason: currentKreaAdapterPreflight.reason }
+      : baseCapability;
   const currentCheckpointBaseModel = selectedCheckpoint
     ? selectedCheckpoint.baseModel ?? null
     : (checkpointId && checkpointId === snapshot?.settingsSnapshot?.checkpointId
@@ -218,6 +242,50 @@ export function StyleReferencePanel({
   });
   const busy = isProcessing;
   const ipAdapter = sanitizeStyleReferenceIpAdapterSettings(snapshot?.ipAdapter);
+
+  useEffect(() => {
+    if (!isKrea2) {
+      return;
+    }
+    if (!selectedCheckpoint?.modelFileName || !selectedCheckpoint.baseModel) {
+      return;
+    }
+
+    let cancelled = false;
+    void fetch("/api/comfyui/krea2-style-reference-capability", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        checkpointName: selectedCheckpoint.modelFileName,
+        modelBaseModel: selectedCheckpoint.baseModel,
+        modelStorageKind: "diffusion",
+      }),
+    })
+      .then(async (response) => {
+        const payload: unknown = await response.json().catch(() => null);
+        if (!response.ok || !isRecord(payload) || typeof payload.available !== "boolean" ||
+            typeof payload.reason !== "string") {
+          throw new Error("Krea adapter preflight is unavailable.");
+        }
+        return { available: payload.available, reason: payload.reason };
+      })
+      .then((next) => {
+        if (!cancelled) setKreaAdapterPreflight({ ...next, key: kreaAdapterPreflightKey });
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setKreaAdapterPreflight({
+            available: false,
+            key: kreaAdapterPreflightKey,
+            reason: "Krea adapter preflight is unavailable. The analyzed style prompt remains usable without an adapter.",
+          });
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isKrea2, kreaAdapterPreflightKey, selectedCheckpoint?.baseModel, selectedCheckpoint?.modelFileName]);
 
   useEffect(() => {
     if (mismatch && snapshot?.status === "ready") {
@@ -384,11 +452,16 @@ export function StyleReferencePanel({
             Use IPAdapter in addition to the style prompt
           </label>
           {snapshot.mode === "ipadapter" ? (
-            <div className="grid gap-3 sm:grid-cols-3">
-              <NumberInput label="weight" onChange={(weight) => updateReady({ ipAdapter: sanitizeStyleReferenceIpAdapterSettings({ ...ipAdapter, weight }) })} value={ipAdapter.weight} />
-              <NumberInput label="start_at" onChange={(startPercent) => updateReady({ ipAdapter: sanitizeStyleReferenceIpAdapterSettings({ ...ipAdapter, startPercent }) })} value={ipAdapter.startPercent} />
-              <NumberInput label="end_at" onChange={(endPercent) => updateReady({ ipAdapter: sanitizeStyleReferenceIpAdapterSettings({ ...ipAdapter, endPercent }) })} value={ipAdapter.endPercent} />
-            </div>
+            <>
+              <div className="grid gap-3 sm:grid-cols-3">
+                <NumberInput label="weight" onChange={(weight) => updateReady({ ipAdapter: sanitizeStyleReferenceIpAdapterSettings({ ...ipAdapter, weight }) })} value={ipAdapter.weight} />
+                {!isKrea2 ? <>
+                  <NumberInput label="start_at" onChange={(startPercent) => updateReady({ ipAdapter: sanitizeStyleReferenceIpAdapterSettings({ ...ipAdapter, startPercent }) })} value={ipAdapter.startPercent} />
+                  <NumberInput label="end_at" onChange={(endPercent) => updateReady({ ipAdapter: sanitizeStyleReferenceIpAdapterSettings({ ...ipAdapter, endPercent }) })} value={ipAdapter.endPercent} />
+                </> : null}
+              </div>
+              {isKrea2 ? <p className="text-xs leading-relaxed text-slate-600">Krea reference timing is fixed to start_at 0 and end_at 1 by its verified adapter graph.</p> : null}
+            </>
           ) : null}
         </div>
       ) : null}

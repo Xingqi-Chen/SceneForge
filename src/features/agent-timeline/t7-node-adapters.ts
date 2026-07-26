@@ -455,11 +455,11 @@ export function buildTimelineFinalPositivePrompt({
   }
 
   if (resolvedProfile === "krea2") {
-    return renderKrea2Prompt({
+    return appendStyleReferencePromptExactlyOnce(renderKrea2Prompt({
       resources,
       sections: scenePrompt.krea2Sections,
       sourcePrompt,
-    });
+    }), styleReference);
   }
 
   return appendStyleReferencePromptExactlyOnce(sourcePrompt, styleReference);
@@ -611,9 +611,6 @@ export function createTimelineParameterRecommendation({
   styleReference?: StyleReferenceSnapshot;
 }): ParameterRecommendationTimelineResult {
   const isKrea2Profile = normalizePromptProfileId(promptProfile ?? scenePrompt.promptProfile) === "krea2";
-  if (isKrea2Profile && styleReference) {
-    invalidTimelineInput("Krea 2 Turbo does not support style or IPAdapter references.");
-  }
   if (isKrea2Profile && (detailers?.faceDetailer.enabled || detailers?.handDetailer.enabled)) {
     invalidTimelineInput("Krea 2 Turbo does not support FaceDetailer or HandDetailer.");
   }
@@ -623,7 +620,7 @@ export function createTimelineParameterRecommendation({
     promptProfile,
     resourceResult,
     scenePrompt,
-    styleReference: isKrea2Profile ? undefined : styleReference,
+    styleReference,
     supportsNsfw,
   });
   const baseNegativePrompt = scenePrompt.negativeSuggestions.join(", ");
@@ -711,7 +708,7 @@ export function createTimelineParameterRecommendation({
     negativeAdditions: scenePrompt.negativeSuggestions,
     negativePrompt: requestPreview.negativePrompt ?? "",
     requestPreview,
-    ...(!isKrea2Profile && styleReference ? { styleReference } : {}),
+    ...(styleReference ? { styleReference } : {}),
     reason: savedParameters
       ? "Used generation parameters saved in the Run Scene Composer."
       : aiAdvice
@@ -789,13 +786,10 @@ export function createTimelineT7NodeAdapters({
       const sourceImage = getSceneInputSourceImage(context.workflow);
       const inputSettings = getSceneInputSettings(context.workflow);
       const styleReferenceIssue = getStyleReferenceBlockingIssue(inputSettings.styleReference, "Run");
-      if (promptProfile === "krea2" && inputSettings.styleReference) {
-        invalidTimelineInput("Krea 2 Turbo does not support style or IPAdapter references.");
-      }
       if (styleReferenceIssue) {
         invalidTimelineInput(styleReferenceIssue);
       }
-      const styleReferenceMismatch = promptProfile === "krea2" ? null : getStyleReferenceContextMismatch(inputSettings.styleReference, {
+      const styleReferenceMismatch = getStyleReferenceContextMismatch(inputSettings.styleReference, {
         checkpointBaseModel: resourceResult.checkpoint.resource.baseModel ?? promptProfile,
         checkpointId: resourceResult.checkpoint.resource.id,
         promptProfile,
@@ -840,7 +834,7 @@ export function createTimelineT7NodeAdapters({
           ),
           scenePrompt,
           savedParameters,
-          styleReference: promptProfile === "krea2" ? undefined : inputSettings.styleReference,
+          styleReference: inputSettings.styleReference,
           sourceDenoise: sourceImage ? getSceneInputSourceDenoise(context.workflow) : undefined,
           sourceImage,
           supportsNsfw: supportsNsfw(),

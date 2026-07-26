@@ -2329,7 +2329,8 @@ describe("TimelineShell", () => {
         expect(sourceButton.disabled).toBe(false);
         expect(container.textContent).toContain("Krea 2 Turbo uses its fixed local UNet");
         expect(container.textContent).toContain("4/4/6/8 scored previews, exact-K selection, and Preview-to-Final img2img redraw.");
-        expect(container.textContent).toContain("Source img2img is supported; style references, Detailers, review, and repair remain unavailable.");
+        expect(container.textContent).toContain("style references, Detailers, review, and repair remain unavailable to unsupported Krea adapter graphs.");
+        expect(container.textContent).toContain("The analyzed global style prompt is supported, and its optional reference adapter appears only after local Krea preflight.");
       } finally {
         globalThis.fetch = originalFetch;
       }

@@ -51,6 +51,49 @@ function Harness() {
   );
 }
 
+function KreaHarness() {
+  const [snapshot, setSnapshot] = useState<StyleReferenceSnapshot | undefined>({
+    status: "ready",
+    mode: "prompt-only",
+    metadata: {
+      byteLength: 512,
+      contentType: "image/png",
+      filename: "style.png",
+      storedFilename: "0123456789abcdef0123456789abcdef.png",
+      uploadedAt: "2026-07-26T00:00:00.000Z",
+      url: "/api/comfyui/sequence-references/0123456789abcdef0123456789abcdef.png",
+    },
+    analysis: {
+      analyzedAt: "2026-07-26T00:00:01.000Z",
+      stylePrompt: "soft gouache, cobalt shadows",
+      summary: "Soft gouache.",
+    },
+    settingsSnapshot: {
+      capturedAt: "2026-07-26T00:00:02.000Z",
+      checkpointBaseModel: "Krea 2",
+      checkpointId: "checkpoint-krea",
+      modeReason: "Krea adapter preflight pending.",
+      promptProfile: "krea2",
+    },
+  });
+
+  return <StyleReferencePanel
+    checkpointId="checkpoint-krea"
+    nsfwEnabled={false}
+    onChange={setSnapshot}
+    promptProfile="krea2"
+    selectedCheckpoint={{
+      id: "checkpoint-krea", resourceType: "model", name: "Krea 2 Turbo", versionName: "v1",
+      baseModel: "Krea 2", creator: "creator", trainedWords: [], tags: [], categories: [],
+      usageGuide: null, descriptionSnippet: null, averageWeight: null, minWeight: null, maxWeight: null,
+      recommendations: [], previewImage: null, modelFileName: "krea-2-turbo-unet.safetensors",
+      modelStorageKind: "diffusion",
+    }}
+    snapshot={snapshot}
+    workflowLabel="Run"
+  />;
+}
+
 async function flush() {
   await act(async () => {
     await Promise.resolve();
@@ -178,5 +221,36 @@ describe("StyleReferencePanel", () => {
 
     expect(container.textContent).toContain("Run style reference must be a PNG, JPEG, or WEBP image.");
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("enables the Krea adapter only after its local preflight verifies the selected checkpoint", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      expect(input).toBe("/api/comfyui/krea2-style-reference-capability");
+      expect(init?.method).toBe("POST");
+      expect(JSON.parse(String(init?.body))).toEqual({
+        checkpointName: "krea-2-turbo-unet.safetensors",
+        modelBaseModel: "Krea 2",
+        modelStorageKind: "diffusion",
+      });
+      return Response.json({
+        available: true,
+        reason: "Krea style-reference adapter verified for this local Krea 2 Turbo checkpoint.",
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await act(async () => root.render(<KreaHarness />));
+    await flush();
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(container.textContent).toContain("Krea style-reference adapter verified");
+    expect(container.textContent).toContain("Use IPAdapter in addition to the style prompt");
+    const adapterCheckbox = container.querySelector('input[type="checkbox"]') as HTMLInputElement;
+    await act(async () => {
+      adapterCheckbox.click();
+      await Promise.resolve();
+    });
+    expect(container.textContent).toContain("Krea reference timing is fixed to start_at 0 and end_at 1");
+    expect(Array.from(container.querySelectorAll('input[type="number"]'))).toHaveLength(1);
   });
 });

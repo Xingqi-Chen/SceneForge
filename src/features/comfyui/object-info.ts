@@ -34,6 +34,12 @@ import {
   DEFAULT_COMFYUI_KREA2_VAE_NAME,
   resolveComfyUiTextToImageWorkflowProfile,
 } from "./workflow-profiles";
+import {
+  getComfyUiKrea2StyleReferenceContextIssue,
+  KREA2_STYLE_REFERENCE_LORA_NAME,
+  KREA2_STYLE_REFERENCE_MODEL_PATCH_NODE,
+  KREA2_STYLE_REFERENCE_TEXT_ENCODE_NODE,
+} from "./krea2-style-reference";
 
 type ComfyUiObjectInfoNode = {
   input?: {
@@ -450,6 +456,50 @@ function validateAnimaCharacterReferenceNodes(
   }
 }
 
+function validateKrea2StyleReferenceNodes(
+  request: ComfyUiTextToImageRequest,
+  objectInfo: unknown,
+  errors: string[],
+) {
+  const reference = request.krea2StyleReference;
+  if (!reference) {
+    return;
+  }
+
+  const contextIssue = getComfyUiKrea2StyleReferenceContextIssue(request);
+  if (contextIssue) {
+    errors.push(contextIssue);
+    return;
+  }
+
+  validateRequiredNodeClasses(objectInfo, [
+    "LoadImage",
+    "LoraLoaderModelOnly",
+    KREA2_STYLE_REFERENCE_TEXT_ENCODE_NODE,
+    KREA2_STYLE_REFERENCE_MODEL_PATCH_NODE,
+  ], errors);
+  validateRequiredInputs(objectInfo, "LoadImage", ["image"], errors);
+  validateRequiredInputs(objectInfo, "LoraLoaderModelOnly", ["model", "lora_name", "strength_model"], errors);
+  validateRequiredInputs(objectInfo, KREA2_STYLE_REFERENCE_TEXT_ENCODE_NODE, ["clip", "prompt"], errors);
+  validateRequiredInputs(objectInfo, KREA2_STYLE_REFERENCE_MODEL_PATCH_NODE, ["model", "kv_cache"], errors);
+
+  for (const inputName of ["vae", "image1"] as const) {
+    if (hasNodeInfo(objectInfo, KREA2_STYLE_REFERENCE_TEXT_ENCODE_NODE) &&
+        !hasInput(objectInfo, KREA2_STYLE_REFERENCE_TEXT_ENCODE_NODE, inputName)) {
+      errors.push(`${KREA2_STYLE_REFERENCE_TEXT_ENCODE_NODE}.${inputName} input is not available in ComfyUI object_info.`);
+    }
+  }
+
+  const loraName = reference.loraName ?? KREA2_STYLE_REFERENCE_LORA_NAME;
+  if (loraName !== KREA2_STYLE_REFERENCE_LORA_NAME) {
+    errors.push("Krea style reference must use the verified krea2_style_reference.safetensors adapter file.");
+    return;
+  }
+  if (!findOption(loraName, readInputOptions(objectInfo, "LoraLoaderModelOnly", "lora_name"))) {
+    errors.push(`Krea style-reference adapter is not available in ComfyUI: ${loraName}`);
+  }
+}
+
 function validateDimension(value: number | undefined, label: string, latentImageNode: string, errors: string[]) {
   if (value === undefined) {
     return;
@@ -835,6 +885,7 @@ export function validateComfyUiRequestAgainstObjectInfo(
     if (characterReferences.some((reference) => reference.enabled !== false)) {
       errors.push("Krea 2 Turbo does not support style or IPAdapter references.");
     }
+    validateKrea2StyleReferenceNodes(request, objectInfo, errors);
   }
   if (controlNets.some((unit) => unit.enabled)) {
     if (!hasNodeInfo(objectInfo, "LoadImage")) {
