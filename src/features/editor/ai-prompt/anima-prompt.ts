@@ -32,6 +32,7 @@ export type AnimaPromptSectionKey =
   | "character"
   | "source"
   | "artist"
+  | "visualStyleAndMedium"
   | "general";
 
 export type AnimaPromptSections = Partial<Record<AnimaPromptSectionKey, string | string[]>>;
@@ -46,6 +47,9 @@ export type AnimaPromptContext = {
 const SECTION_KEY_ALIASES: Record<string, AnimaPromptSectionKey> = {
   artist: "artist",
   artists: "artist",
+  medium: "visualStyleAndMedium",
+  visualmedium: "visualStyleAndMedium",
+  visualstyleandmedium: "visualStyleAndMedium",
   character: "character",
   characters: "character",
   general: "general",
@@ -70,6 +74,7 @@ const ANIMA_RENDER_ORDER: AnimaPromptSectionKey[] = [
   "character",
   "source",
   "artist",
+  "visualStyleAndMedium",
   "general",
 ];
 
@@ -115,6 +120,7 @@ function createEmptyAnimaSections(): Record<AnimaPromptSectionKey, string[]> {
     character: [],
     source: [],
     artist: [],
+    visualStyleAndMedium: [],
     general: [],
   };
 }
@@ -305,6 +311,7 @@ export function renderAnimaPrompt({
   resources = { checkpoint: null, loras: [] },
   sections = {},
   sourcePrompt,
+  suppressAuthoredArtist = false,
   supportsNsfw = false,
 }: {
   includeDefaultQualityTags?: boolean;
@@ -312,6 +319,7 @@ export function renderAnimaPrompt({
   resources?: SelectedCivitaiResourcesPreview;
   sections?: AnimaPromptSections;
   sourcePrompt?: string;
+  suppressAuthoredArtist?: boolean;
   supportsNsfw?: boolean;
 }) {
   const merged = createEmptyAnimaSections();
@@ -319,8 +327,10 @@ export function renderAnimaPrompt({
   const resourceSections = collectResourceTriggerSections(resources);
 
   for (const key of ANIMA_RENDER_ORDER) {
-    appendSection(merged, key, sectionValueToParts(sourceSections[key]));
-    appendSection(merged, key, sectionValueToParts(sections[key]));
+    if (!(key === "artist" && suppressAuthoredArtist)) {
+      appendSection(merged, key, sectionValueToParts(sourceSections[key]));
+      appendSection(merged, key, sectionValueToParts(sections[key]));
+    }
     appendSection(merged, key, sectionValueToParts(resourceSections[key]));
   }
 
@@ -522,7 +532,7 @@ export function buildAnimaAiResponseInstructions() {
   return [
     "Stable Diffusion uses Anima prompt ordering.",
     "Return JSON only. Do not wrap it in markdown.",
-    "Shape: { \"sections\": { \"qualityMetaSafety\"?: string[], \"subjectCount\"?: string[], \"character\"?: string[], \"source\"?: string[], \"artist\"?: string[], \"general\"?: string[] } }.",
+    "Shape: { \"sections\": { \"qualityMetaSafety\"?: string[], \"subjectCount\"?: string[], \"character\"?: string[], \"source\"?: string[], \"artist\"?: string[], \"visualStyleAndMedium\"?: string[], \"general\"?: string[] } }.",
     "Write each section as detailed English anime-style visual phrases or short descriptive clauses.",
     "Keep output comma-separated and prompt-like; do not write paragraph fiction or full prose paragraphs.",
     "Prefer visible descriptive clauses over bare tags for action, expression, scene, lighting, atmosphere, camera, and composition.",
@@ -531,7 +541,7 @@ export function buildAnimaAiResponseInstructions() {
     "Describe environment and objects, foreground/background relationship, lighting or mood, camera/framing/composition, and visible motion or atmosphere when available.",
     "Avoid abstract psychological narration unless it is visible through expression, pose, lighting, or atmosphere.",
     "Example style: 1girl, standing beside a rain-streaked window in an unlit room, gazing out at the rainy night with a quiet and pensive expression, faint blue-gray light coming from outside, cinematic over-shoulder composition.",
-    "Use this positive order: quality/meta/year/safety, subject count, character, series/source, artist, general tags.",
+    "Use this positive order: quality/meta/year/safety, subject count, character, series/source, artist, visual style/medium, general tags.",
     "Default quality/meta tags will be added locally: masterpiece, best quality, score_9, score_8, score_7.",
     "Do not add safety or rating tags unless they are explicitly provided by the scene or user.",
     "Use selected Civitai trainedWords only when useful, and never invent trigger words.",

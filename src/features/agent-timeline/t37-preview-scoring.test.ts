@@ -164,9 +164,9 @@ async function score(workflow: TimelineWorkflowState) {
 function validResponse() {
   return JSON.stringify({
     candidates: [
-      { candidateId: "preview-3", criticalDefects: [], adherence: 80, composition: 80, anatomy: 80, style: 80, technical: 80 },
-      { candidateId: "preview-2", criticalDefects: [], adherence: 70, composition: 92, anatomy: 80, style: 80, technical: 80 },
-      { candidateId: "preview-1", criticalDefects: [], adherence: 80, composition: 80, anatomy: 80, style: 80, technical: 80 },
+      { candidateId: "preview-3", visualStyleMatch: true, criticalDefects: [], adherence: 80, composition: 80, anatomy: 80, style: 80, technical: 80 },
+      { candidateId: "preview-2", visualStyleMatch: true, criticalDefects: [], adherence: 70, composition: 92, anatomy: 80, style: 80, technical: 80 },
+      { candidateId: "preview-1", visualStyleMatch: true, criticalDefects: [], adherence: 80, composition: 80, anatomy: 80, style: 80, technical: 80 },
     ],
   });
 }
@@ -216,6 +216,7 @@ describe("T37 structured preview scoring", () => {
     process.env.LITELLM_VISION_MODEL = "vision-model";
     const candidates = Array.from({ length: 8 }, (_, index) => ({
       candidateId: `preview-${index + 1}`,
+      visualStyleMatch: true,
       criticalDefects: [],
       adherence: 90 - index,
       composition: 90 - index,
@@ -298,6 +299,7 @@ describe("T37 structured preview scoring", () => {
       candidates: [
         {
           candidateId: "preview-1",
+          visualStyleMatch: true,
           adherence: 80.0133333333,
           composition: 80,
           anatomy: 80,
@@ -307,6 +309,7 @@ describe("T37 structured preview scoring", () => {
         },
         {
           candidateId: "preview-2",
+          visualStyleMatch: true,
           adherence: 63.3433333333,
           composition: 100,
           anatomy: 80,
@@ -316,6 +319,7 @@ describe("T37 structured preview scoring", () => {
         },
         {
           candidateId: "preview-3",
+          visualStyleMatch: true,
           adherence: 70,
           composition: 70,
           anatomy: 70,
@@ -333,6 +337,62 @@ describe("T37 structured preview scoring", () => {
       { candidateId: "preview-2", composition: 100, total: 80, rank: 2 },
     ]);
     expect(result.selectedCandidateIds).toEqual(["preview-1", "preview-2"]);
+  });
+
+  it("excludes a higher-scoring visual-style mismatch from ranking and selection", async () => {
+    const candidates = JSON.parse(validResponse()).candidates as Array<Record<string, unknown>>;
+    Object.assign(candidates[0]!, {
+      visualStyleMatch: false,
+      adherence: 100,
+      composition: 100,
+      anatomy: 100,
+      style: 100,
+      technical: 100,
+    });
+    completeChatMock.mockResolvedValue({ content: JSON.stringify({ candidates }) });
+
+    await expect(score(createScoringWorkflow({ finalCount: 2 }))).resolves.toMatchObject({
+      visualStyle: "anime",
+      selectedCandidateIds: ["preview-2", "preview-1"],
+      scores: [
+        { candidateId: "preview-2", visualStyleMatch: true, rank: 1 },
+        { candidateId: "preview-1", visualStyleMatch: true, rank: 2 },
+        { candidateId: "preview-3", visualStyleMatch: false, rank: 3 },
+      ],
+    });
+  });
+
+  it("stops recoverably before Final when fewer than K candidates match the visual style", async () => {
+    const candidates = JSON.parse(validResponse()).candidates as Array<Record<string, unknown>>;
+    candidates[0]!.visualStyleMatch = false;
+    candidates[1]!.visualStyleMatch = false;
+    completeChatMock.mockResolvedValue({ content: JSON.stringify({ candidates }) });
+
+    await expect(score(createScoringWorkflow({ finalCount: 2 }))).rejects.toMatchObject({
+      code: "timeline_request_invalid",
+      details: {
+        finalCount: 2,
+        matchingCount: 1,
+        recoverable: true,
+        visualStyle: "anime",
+      },
+    });
+    expect(completeChatMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails closed after the bounded repair when visualStyleMatch is missing", async () => {
+    const candidates = JSON.parse(validResponse()).candidates as Array<Record<string, unknown>>;
+    delete candidates[0]!.visualStyleMatch;
+    completeChatMock.mockResolvedValue({ content: JSON.stringify({ candidates }) });
+
+    await expect(score(createScoringWorkflow())).rejects.toMatchObject({
+      code: "llm_malformed_response",
+      details: {
+        recoverable: true,
+        validationCode: "visual_style_match_missing",
+      },
+    });
+    expect(completeChatMock).toHaveBeenCalledTimes(2);
   });
 
   it.each([

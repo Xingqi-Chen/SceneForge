@@ -262,6 +262,21 @@ Implementation expectations:
 
 ## Timeline Persistence Contract
 
+### Run visual-style contract
+
+`RunVisualStyle` is the closed enum `anime | photoreal`, stored in the sanitized single-image scene-input settings snapshot independently from `PromptProfileId`. New Runs and continuable legacy records with no stored value normalize to `anime`. The Simple and Detailed Composer controls share the same state. A style change cancels confirmation and stales from `scene-prompt` through `result-display`, but it must retain explicit checkpoint/LoRA selections, saved generation parameters, source-img2img state, FaceDetailer/HandDetailer settings, and the uploaded style-reference snapshot. Because style-reference analysis is context-bound, a retained snapshot analyzed for the old style blocks reuse until it is reanalyzed, replaced, or removed.
+
+The selected value is explicit input to empty and nonempty Suggest, Rewrite, Scene Prompt, resource recommendation, Style Advice, and style-reference analysis. Prompt-profile rendering exposes one structured `visualStyleAndMedium` section. Local compilation inserts these exact positive strings once in that dedicated section:
+
+- Anime tag profiles: `anime illustration, clean lineart, anime coloring, stylized character design`
+- Photoreal tag profiles: `live-action photography, natural skin texture, realistic material response, physically plausible lighting, photographic camera optics`
+- Anime Krea: `Rendered as a polished Japanese anime illustration with stylized character design, clean linework, and illustrated shading.`
+- Photoreal Krea: `Rendered as a live-action photograph with natural human proportions, realistic skin and material response, physically plausible lighting, and photographic camera optics.`
+
+The matching minimal negative additions are `live-action human photography, documentary photograph, photographic skin texture` for Anime and `anime illustration, manga, cel shading, cartoon character rendering` for Photoreal. Only a strong opposing-domain signal can replace the whole dedicated style/medium section. SceneForge does not globally delete prompt text, and generic photo, realistic, photorealistic, camera/lens, bokeh, or depth-of-field terms are not opposing-domain classifiers by themselves. Photoreal compilation suppresses LLM-authored Illustrious `artistStyle` and Anima `artist` content, but resource-derived checkpoint and LoRA trigger words remain intact.
+
+Preview scoring requires boolean `visualStyleMatch` for every successful candidate and persists the assessed `visualStyle`. Style matching is a hard gate separate from blocking-defect eligibility: only matching candidates may enter automatic or Detailed exact-K selection, and fewer than K matching candidates produces a recoverable scoring error before Final. Final review separately requires a boolean match for every Final; false, missing, malformed, failed, unavailable, or unreconciled assessment keeps that Final unselectable and uses only its already verified `preview-upscale`. Repair verification follows the same rule and never promotes a false or unassessed Repair. Confirmation, retry reuse, persistence, restoration, selection, and result display reconcile the same style identity before reuse. Completed pre-feature history stays displayable as `style-unassessed` without automatic LLM or ComfyUI calls; a continuable pre-feature Run defaults to Anime, requires reconfirmation, and must cross the new Preview assessment gate before Final. Story profile behavior, LiteLLM purpose/model routing, and environment variables are unchanged.
+
 ### Empty Run Suggest boundary
 
 Only `suggest` with an effective scene request that is empty after trimming uses `POST /api/agent-timeline/run-scene-suggestion`. The client sends only the selected `promptProfile` and NSFW routing flag. The Node route delegates to a server feature module that loads bounded history, calls the existing LiteLLM client, validates and ranks candidates with pure functions, performs one weighted draw, and attempts the history append. Nonempty Suggest and Rewrite continue through `/api/llm/chat` with their existing message construction, temperatures, response normalization, and downstream staling behavior.

@@ -31,6 +31,8 @@ import {
   type TimelineRepairTarget,
   type TimelineWorkflowState,
 } from "./types";
+import { isRunVisualStyle, type RunVisualStyle } from "./run-visual-style";
+import { getRunSceneInputSettings } from "./run-input-settings";
 
 const scoreFields = ["adherence", "composition", "anatomy", "style", "technical"] as const;
 const sha256RoundConstants = [
@@ -405,6 +407,7 @@ export function sanitizeTimelineRepairParentBinding(
     "reviewUpdatedAt",
     "reviewedFindings",
     "reviewedTargets",
+    "visualStyle",
   ])) return null;
   const storedRecord = value.finalStoredImage;
   const finalStoredImage = isRecord(storedRecord) &&
@@ -461,6 +464,7 @@ export function sanitizeTimelineRepairParentBinding(
     reviewUpdatedAt: value.reviewUpdatedAt,
     reviewedFindings: reviewedFindings as TimelineFinalReviewFinding[],
     reviewedTargets: reviewedTargets as TimelineRepairTarget[],
+    ...(isRunVisualStyle(value.visualStyle) ? { visualStyle: value.visualStyle } : {}),
   };
 }
 
@@ -720,6 +724,7 @@ export function createRepairParentBinding(
   reviewPair: TimelineFinalReviewPair,
   targets: TimelineRepairTarget[],
   reviewUpdatedAt: string,
+  visualStyle?: RunVisualStyle,
 ): TimelineRepairParentBinding | null {
   if (!final.storedImage || !sameStoredImage(final.storedImage, reviewPair.variants.final)) return null;
   return {
@@ -727,6 +732,7 @@ export function createRepairParentBinding(
     reviewUpdatedAt,
     reviewedFindings: reviewPair.findings ?? [],
     reviewedTargets: targets,
+    ...(visualStyle ? { visualStyle } : {}),
   };
 }
 
@@ -734,11 +740,13 @@ export function repairPairMatchesReviewPair(
   repairPair: TimelineRepairPair,
   reviewPair: TimelineFinalReviewPair,
   reviewUpdatedAt?: string,
+  visualStyle?: RunVisualStyle,
 ) {
   const expectedTargets = getRepairTargets({ reviewVersion: 1, status: "reviewed", pairs: [reviewPair] }, reviewPair.candidateId);
   return Boolean(repairPair.parent &&
     repairPair.rank === reviewPair.rank && repairPair.seed === reviewPair.seed &&
     sameStoredImage(repairPair.parent.finalStoredImage, reviewPair.variants.final) &&
+    (!visualStyle || repairPair.parent.visualStyle === visualStyle) &&
     (!reviewUpdatedAt || repairPair.parent.reviewUpdatedAt === reviewUpdatedAt) &&
     JSON.stringify(repairPair.parent.reviewedFindings) === JSON.stringify(reviewPair.findings ?? []) &&
     JSON.stringify(repairPair.parent.reviewedTargets) === JSON.stringify(expectedTargets) &&
@@ -771,7 +779,8 @@ export function repairVerificationMatchesRepairPair(
   verificationPair: TimelineRepairVerificationPair,
   repairPair: TimelineRepairPair,
 ) {
-  return Boolean(repairPair.parent && repairPair.status === "repaired" && repairPair.storedImage &&
+  return Boolean(verificationPair.visualStyleMatch !== false &&
+    repairPair.parent && repairPair.status === "repaired" && repairPair.storedImage &&
     repairPairHasCanonicalAttemptSource(repairPair) &&
     JSON.stringify(verificationPair.repairParent) === JSON.stringify(repairPair.parent) &&
     sameStoredImage(verificationPair.repairStoredImage, repairPair.storedImage));
@@ -827,7 +836,7 @@ export function getRepairTargets(review: FinalReviewTimelineResult, candidateId:
   const pair = review.status === "reviewed"
     ? review.pairs.find((item) => item.candidateId === candidateId)
     : undefined;
-  if (!pair?.findings) return [];
+  if (!pair?.findings || review.visualStyle && pair.visualStyleMatch?.final !== true) return [];
   return pair.findings.flatMap((finding) =>
     (finding.operation === "contact" || finding.operation === "object-count") &&
       (finding.severity === "major" || finding.severity === "blocking") &&
@@ -877,6 +886,7 @@ export function parseRepairVerificationResponse(
   content: string,
   repair: FinalRepairTimelineResult,
   review: FinalReviewTimelineResult,
+  visualStyle?: RunVisualStyle,
 ): RepairVerificationTimelineResult | null {
   let parsed: unknown;
   try {
@@ -888,7 +898,7 @@ export function parseRepairVerificationResponse(
     const reviewPair = review.pairs.find((candidate) => candidate.candidateId === pair.candidateId);
     return pair.status === "repaired" && pair.storedImage && reviewPair &&
       repairPairHasCanonicalAttemptSource(pair) &&
-      repairPairMatchesReviewPair(pair, reviewPair);
+      repairPairMatchesReviewPair(pair, reviewPair, undefined, review.visualStyle);
   });
   if (!isRecord(parsed) || !Array.isArray(parsed.pairs) || parsed.pairs.length !== repaired.length) return null;
   const seen = new Set<string>();
@@ -897,11 +907,16 @@ export function parseRepairVerificationResponse(
     const repairPair = repaired.find((pair) => pair.candidateId === entry.candidateId);
     const reviewPair = review.pairs.find((pair) => pair.candidateId === entry.candidateId);
     if (!repairPair || !reviewPair?.scores || !repairPairHasCanonicalAttemptSource(repairPair) ||
-        !repairPairMatchesReviewPair(repairPair, reviewPair) || !isRecord(entry.scores)) return null;
+        !repairPairMatchesReviewPair(repairPair, reviewPair, undefined, review.visualStyle) ||
+        !isRecord(entry.scores)) return null;
     const finalScores = normalizeScores(entry.scores.final);
     const repairScores = normalizeScores(entry.scores.repair);
     const findings = normalizeVerificationFindings(entry.findings);
-    if (!finalScores || !repairScores || !findings) return null;
+    const visualStyleMatch = typeof entry.visualStyleMatch === "boolean"
+      ? entry.visualStyleMatch
+      : null;
+    if (!finalScores || !repairScores || !findings ||
+        visualStyle && visualStyleMatch === null) return null;
     seen.add(entry.candidateId);
     const targetedDefectsResolved = repairPair.targets.every((target) => {
       const finding = findings.find((candidate) => candidate.operation === target.operation);
@@ -911,7 +926,8 @@ export function parseRepairVerificationResponse(
       (finding.severity === "major" || finding.severity === "blocking") &&
       !repairPair.targets.some((target) => target.operation === finding.operation),
     );
-    const recommended = targetedDefectsResolved && !newMajorOrBlockingIssue &&
+    const recommended = visualStyleMatch !== false &&
+      targetedDefectsResolved && !newMajorOrBlockingIssue &&
       repairScores.total >= finalScores.total;
     return {
       candidateId: entry.candidateId,
@@ -922,13 +938,19 @@ export function parseRepairVerificationResponse(
       newMajorOrBlockingIssue,
       findings,
       recommended,
+      ...(visualStyle ? { visualStyleMatch: visualStyleMatch! } : {}),
       ...(typeof entry.rationale === "string" && entry.rationale.trim()
         ? { rationale: entry.rationale.trim().slice(0, 1_000) }
         : {}),
     };
   });
   if (!pairs.every((pair): pair is NonNullable<typeof pair> => pair !== null) || seen.size !== repaired.length) return null;
-  return { verificationVersion: 1, status: "verified", pairs };
+  return {
+    verificationVersion: 1,
+    status: "verified",
+    pairs,
+    ...(visualStyle ? { visualStyle } : {}),
+  };
 }
 
 export function selectRepairVariant(
@@ -937,17 +959,44 @@ export function selectRepairVariant(
   variant: "final" | "preview-upscale" | "repair",
   updatedAt = new Date().toISOString(),
 ) {
+  if (workflow.nodes["final-review"].status !== "done") return workflow;
   const review = workflow.nodes["final-review"].result;
   if (!isRecord(review) || !Array.isArray(review.pairs)) return workflow;
+  const reviewPair = review.pairs.find((pair) =>
+    isRecord(pair) && pair.candidateId === candidateId) as TimelineFinalReviewPair | undefined;
+  if (!reviewPair) return workflow;
+  const sceneInput = workflow.nodes["scene-input"].result;
+  const configuredVisualStyle = isRecord(sceneInput) &&
+    isRecord(sceneInput.settingsSnapshot) &&
+    isRunVisualStyle(sceneInput.settingsSnapshot.visualStyle)
+    ? sceneInput.settingsSnapshot.visualStyle
+    : null;
+  const styleEnforced = configuredVisualStyle !== null || isRunVisualStyle(review.visualStyle);
+  const currentVisualStyle = getRunSceneInputSettings(isRecord(sceneInput) ? sceneInput : {}).visualStyle;
+  if (styleEnforced && !isRunVisualStyle(review.visualStyle)) return workflow;
+  if (styleEnforced && review.visualStyle !== currentVisualStyle) return workflow;
+  if (styleEnforced && variant === "final" && reviewPair.visualStyleMatch?.final !== true) return workflow;
+  if (styleEnforced && variant === "preview-upscale" &&
+      reviewPair.visualStyleMatch?.previewUpscale !== true) return workflow;
   if (variant === "repair") {
+    if (workflow.nodes["repair-verification"].status !== "done") return workflow;
     const repair = getFinalRepairResult(workflow)?.pairs.find((pair) => pair.candidateId === candidateId);
-    const verification = getRepairVerificationResult(workflow)?.pairs.find((pair) => pair.candidateId === candidateId);
-    const reviewPair = review.pairs.find((pair) => isRecord(pair) && pair.candidateId === candidateId) as TimelineFinalReviewPair | undefined;
+    const verificationResult = getRepairVerificationResult(workflow);
+    const verification = verificationResult?.pairs.find((pair) => pair.candidateId === candidateId);
     if (repair?.status !== "repaired" || !repair.storedImage || !verification ||
+        styleEnforced && (
+          verificationResult?.visualStyle !== review.visualStyle ||
+          verification.visualStyleMatch !== true ||
+          repair.parent?.visualStyle !== review.visualStyle
+        ) ||
         !repairVerificationMatchesRepairPair(verification, repair) || !reviewPair ||
-        !repairPairMatchesReviewPair(repair, reviewPair, workflow.nodes["final-review"].updatedAt)) return workflow;
+        !repairPairMatchesReviewPair(
+          repair,
+          reviewPair,
+          workflow.nodes["final-review"].updatedAt,
+          review.visualStyle as RunVisualStyle | undefined,
+        )) return workflow;
   }
-  if (!review.pairs.some((pair) => isRecord(pair) && pair.candidateId === candidateId)) return workflow;
   return {
     ...workflow,
     updatedAt,

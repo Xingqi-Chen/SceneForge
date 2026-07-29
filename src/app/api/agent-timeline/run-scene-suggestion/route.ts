@@ -5,6 +5,10 @@ import {
   RunSceneSuggestionError,
 } from "@/features/agent-timeline/run-scene-suggestion.server";
 import { isPromptProfileId } from "@/shared/prompt-profile";
+import {
+  isRunVisualStyle,
+  normalizeRunVisualStyle,
+} from "@/features/agent-timeline/run-visual-style";
 
 export const runtime = "nodejs";
 
@@ -21,6 +25,7 @@ export async function POST(request: Request) {
   }
   if (!isRecord(payload) ||
       !isPromptProfileId(payload.promptProfile) ||
+      (payload.visualStyle !== undefined && !isRunVisualStyle(payload.visualStyle)) ||
       (payload.nsfw !== undefined && typeof payload.nsfw !== "boolean")) {
     return NextResponse.json(
       { error: { message: "A valid Run prompt profile is required." } },
@@ -31,6 +36,9 @@ export async function POST(request: Request) {
     return NextResponse.json(await createEmptyRunSceneSuggestion({
       promptProfile: payload.promptProfile,
       nsfw: payload.nsfw === true,
+      ...(payload.visualStyle !== undefined
+        ? { visualStyle: normalizeRunVisualStyle(payload.visualStyle) }
+        : {}),
     }));
   } catch (error) {
     if (error instanceof RunSceneSuggestionError) {

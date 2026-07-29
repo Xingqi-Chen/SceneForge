@@ -7,6 +7,12 @@ import {
   parseFinalReviewResponse,
 } from "./final-review";
 import { createTimelineNodeError } from "./state";
+import { getRunSceneInputSettings } from "./run-input-settings";
+import {
+  formatRunVisualStyleLabel,
+  getRunVisualStyleNegativeGuidance,
+  getRunVisualStylePositiveGuidance,
+} from "./run-visual-style";
 import {
   timelineFinalReviewOperations,
   timelineFinalReviewScopes,
@@ -26,8 +32,22 @@ export async function reviewFinalExecution(
   execution: ComfyUiExecutionTimelineResult,
   context: TimelineNodeExecutionContext,
 ): Promise<FinalReviewTimelineResult> {
-  const pairs = getCompletedFinalReviewPairs(execution);
   const sceneInput = context.workflow.nodes["scene-input"].result;
+  const settings = getRunSceneInputSettings(isRecord(sceneInput) ? sceneInput : {});
+  const scoring = context.workflow.nodes["preview-scoring"].result;
+  const verifiedPreviewCandidateIds = new Set(
+    isRecord(scoring) && scoring.visualStyle === settings.visualStyle && Array.isArray(scoring.scores)
+      ? scoring.scores.flatMap((score) =>
+          isRecord(score) && typeof score.candidateId === "string" && score.visualStyleMatch === true
+            ? [score.candidateId]
+            : [])
+      : [],
+  );
+  const reviewOptions = {
+    verifiedPreviewCandidateIds,
+    visualStyle: settings.visualStyle,
+  };
+  const pairs = getCompletedFinalReviewPairs(execution, reviewOptions);
   const action = context.workflow.nodes["character-action"].result;
   const canvas = context.workflow.nodes["canvas-binding"].result;
   const parameters = context.workflow.nodes["parameter-recommendation"].result;
@@ -40,10 +60,10 @@ export async function reviewFinalExecution(
     return createFailedFinalReviewResult(execution, createTimelineNodeError(
       "llm_config",
       nsfw
-        ? "LITELLM_BASE_URL and a multimodal LITELLM_NSFW_MODEL are required before this NSFW Final can be reviewed. Both variants remain selectable."
-        : "Configure LITELLM_BASE_URL and LITELLM_VISION_MODEL or LITELLM_DEFAULT_MODEL to review Final variants. Both variants remain selectable.",
+        ? "LITELLM_BASE_URL and a multimodal LITELLM_NSFW_MODEL are required before this NSFW Final can be validated. Final remains unavailable; the verified Preview fallback stays selectable."
+        : "Configure LITELLM_BASE_URL and LITELLM_VISION_MODEL or LITELLM_DEFAULT_MODEL to validate Final style. Final remains unavailable; the verified Preview fallback stays selectable.",
       { recoverable: true },
-    ));
+    ), reviewOptions);
   }
 
   const content: Array<
@@ -53,7 +73,10 @@ export async function reviewFinalExecution(
     type: "text",
     text: [
       "Compare every labeled formal-size Preview fallback with its paired Final. Return exactly one JSON object and no recommendation fields.",
-      '{"pairs":[{"candidateId":"preview-1","scores":{"previewUpscale":{"adherence":0,"composition":0,"anatomy":0,"style":0,"technical":0},"final":{"adherence":0,"composition":0,"anatomy":0,"style":0,"technical":0}},"findings":[{"operation":"pose","severity":"none","scope":"pair","introducedByFinal":false,"description":"concise finding"}],"rationale":"concise comparison"}]}',
+      '{"pairs":[{"candidateId":"preview-1","visualStyleMatch":true,"scores":{"previewUpscale":{"adherence":0,"composition":0,"anatomy":0,"style":0,"technical":0},"final":{"adherence":0,"composition":0,"anatomy":0,"style":0,"technical":0}},"findings":[{"operation":"pose","severity":"none","scope":"pair","introducedByFinal":false,"description":"concise finding"}],"rationale":"concise comparison"}]}',
+      `The authoritative visual domain is ${formatRunVisualStyleLabel(settings.visualStyle)} (${settings.visualStyle}): ${getRunVisualStylePositiveGuidance(settings.visualStyle)}.`,
+      `Set visualStyleMatch false when Final belongs to an opposing domain such as: ${getRunVisualStyleNegativeGuidance(settings.visualStyle).join(", ")}.`,
+      "visualStyleMatch is required for Final. Generic photo, realistic, photorealistic, camera/lens, bokeh, and depth-of-field vocabulary alone does not decide the rendered domain.",
       `Every pair must contain exactly one finding for: ${timelineFinalReviewOperations.join(", ")}.`,
       `Severity must be one of: ${timelineFinalReviewSeverities.join(", ")}. Scope must be one of: ${timelineFinalReviewScopes.join(", ")}. introducedByFinal must be boolean.`,
       "Use severity none when the operation is consistent. Use major or blocking only for material defects. Mark introducedByFinal true only when the defect is absent from Preview and appears in Final.",
@@ -89,10 +112,10 @@ export async function reviewFinalExecution(
       ? createTimelineNodeError(error.code, error.message, error.details)
       : createTimelineNodeError(
           "image_storage_failed",
-          "Managed Preview/Final images could not be prepared for review. Both variants remain selectable.",
+          "Managed Preview/Final images could not be prepared for validation. Final remains unavailable; the verified Preview fallback stays selectable.",
           { recoverable: true },
         );
-    return createFailedFinalReviewResult(execution, safeError);
+    return createFailedFinalReviewResult(execution, safeError, reviewOptions);
   }
 
   const request = {
@@ -118,14 +141,14 @@ export async function reviewFinalExecution(
           messages: [...request.messages, {
             role: "user" as const,
             content: `Repair the schema. Safe validation reason: ${validationError.message.slice(0, 240)} ` +
-              "Return one object, every pair once, all five finite scores, and exactly four closed-contract findings per pair.",
+              "Return one object, every pair once, boolean visualStyleMatch, all five finite scores, and exactly four closed-contract findings per pair.",
           }],
         }
       : request;
     try {
       const response = await client.completeChat(attemptRequest);
       try {
-        return parseFinalReviewResponse(response.content, pairs);
+        return parseFinalReviewResponse(response.content, pairs, settings.visualStyle);
       } catch (error) {
         terminal = "validation";
         validationError = error instanceof FinalReviewValidationError
@@ -143,7 +166,7 @@ export async function reviewFinalExecution(
   return createFailedFinalReviewResult(execution, terminal === "validation"
     ? createTimelineNodeError(
         "llm_malformed_response",
-        "Final review returned an invalid schema after the bounded repair attempt. Both variants remain selectable; retry review in place.",
+        "Final validation returned an invalid schema after the bounded repair attempt. Final remains unavailable; the verified Preview fallback stays selectable. Retry review in place.",
         {
           recoverable: true,
           validationCode: validationError?.reasonCode ?? "unknown_schema",
@@ -152,12 +175,12 @@ export async function reviewFinalExecution(
       )
     : createTimelineNodeError(
         "llm_upstream",
-        "Final review could not be completed by the configured Vision model. Both variants remain selectable; retry review in place.",
+        "Final validation could not be completed by the configured Vision model. Final remains unavailable; the verified Preview fallback stays selectable. Retry review in place.",
         {
           recoverable: true,
           ...(upstreamError instanceof LiteLlmError && upstreamError.statusCode
             ? { statusCode: upstreamError.statusCode }
             : {}),
         },
-      ));
+      ), reviewOptions);
 }

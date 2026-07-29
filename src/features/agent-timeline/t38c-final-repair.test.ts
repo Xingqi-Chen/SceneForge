@@ -86,11 +86,20 @@ function reviewPair(): TimelineFinalReviewPair {
     ],
     recommendedVariant: "preview-upscale",
     defaultVariant: "preview-upscale",
+    visualStyleMatch: {
+      final: true,
+      previewUpscale: true,
+    },
   };
 }
 
 function review(): FinalReviewTimelineResult {
-  return { reviewVersion: 1, status: "reviewed", pairs: [reviewPair()] };
+  return {
+    reviewVersion: 1,
+    status: "reviewed",
+    pairs: [reviewPair()],
+    visualStyle: "anime",
+  };
 }
 
 function repair(): FinalRepairTimelineResult {
@@ -103,6 +112,7 @@ function repair(): FinalRepairTimelineResult {
     reviewUpdatedAt,
     reviewedFindings: reviewPair().findings!,
     reviewedTargets: targets,
+    visualStyle: "anime" as const,
   };
   const diagnosis = {
     shapes: [{ type: "rect" as const, x: 0.4, y: 0.4, width: 0.1, height: 0.1 }],
@@ -154,7 +164,11 @@ function context(nsfw = false): TimelineNodeExecutionContext {
       ...base.nodes,
       "scene-input": {
         ...base.nodes["scene-input"],
-        result: { rawIntent: "PRIVATE_INTENT", nsfw },
+        result: {
+          rawIntent: "PRIVATE_INTENT",
+          nsfw,
+          settingsSnapshot: { visualStyle: "anime" },
+        },
       },
       "final-review": {
         ...base.nodes["final-review"],
@@ -256,6 +270,7 @@ function inpaintSemanticDigestFixture(workflowId: string) {
     reviewUpdatedAt,
     reviewedFindings: reviewPair().findings!,
     reviewedTargets: getRepairTargets(review(), final.candidateId),
+    visualStyle: "anime" as const,
   };
   const baseRequestDigest = deriveRepairBaseRequestDigest(execution, final)!;
   const attemptId = deriveRepairAttemptId(
@@ -283,6 +298,7 @@ function inpaintSemanticDigestFixture(workflowId: string) {
 function verificationResponse(overrides: Record<string, unknown> = {}) {
   return JSON.stringify({ pairs: [{
     candidateId: "preview-1",
+    visualStyleMatch: true,
     scores: {
       final: { adherence: 80, composition: 80, anatomy: 80, style: 80, technical: 80 },
       repair: { adherence: 82, composition: 82, anatomy: 82, style: 82, technical: 82 },
@@ -654,7 +670,7 @@ describe("T38C one-shot local repair", () => {
     workflow.nodes["repair-verification"] = {
       ...workflow.nodes["repair-verification"],
       status: "done",
-      result: { verificationVersion: 1, status: "verified", pairs: [{
+      result: { verificationVersion: 1, status: "verified", visualStyle: "anime", pairs: [{
         candidateId: "preview-1",
         repairParent: repairResult.pairs[0]!.parent!,
         repairStoredImage: repairResult.pairs[0]!.storedImage!,
@@ -663,6 +679,7 @@ describe("T38C one-shot local repair", () => {
         newMajorOrBlockingIssue: false,
         findings: reviewPair().findings!,
         recommended: true,
+        visualStyleMatch: true,
       }] },
     };
     const selected = selectRepairVariant(workflow, "preview-1", "repair", "2026-07-22T00:00:00.000Z");
@@ -673,6 +690,53 @@ describe("T38C one-shot local repair", () => {
     expect(selected.nodes["final-repair"].status).toBe("done");
     expect(selected.nodes["repair-verification"].status).toBe("done");
   });
+
+  it.each(["final", "preview-upscale", "repair"] as const)(
+    "rejects forged prior-style %s selection retained after a style change",
+    (variant) => {
+      const workflow = createTimelineWorkflowState({
+        workflowId: `prior-style-${variant}`,
+        sceneRequest: "A retained prior-style result",
+        settingsSnapshot: { visualStyle: "photoreal" },
+      });
+      const repairResult = repair();
+      workflow.nodes["final-review"] = {
+        ...workflow.nodes["final-review"],
+        status: "done",
+        updatedAt: reviewUpdatedAt,
+        result: review(),
+      };
+      workflow.nodes["final-repair"] = {
+        ...workflow.nodes["final-repair"],
+        status: "done",
+        result: repairResult,
+      };
+      workflow.nodes["repair-verification"] = {
+        ...workflow.nodes["repair-verification"],
+        status: "done",
+        result: {
+          verificationVersion: 1,
+          status: "verified",
+          visualStyle: "anime",
+          pairs: [{
+            candidateId: "preview-1",
+            repairParent: repairResult.pairs[0]!.parent!,
+            repairStoredImage: repairResult.pairs[0]!.storedImage!,
+            scores: { final: reviewPair().scores!.final, repair: reviewPair().scores!.final },
+            targetedDefectsResolved: true,
+            newMajorOrBlockingIssue: false,
+            findings: reviewPair().findings!,
+            recommended: true,
+            visualStyleMatch: true,
+          }],
+        },
+      };
+
+      expect(selectRepairVariant(workflow, "preview-1", variant)).toBe(workflow);
+      expect((workflow.nodes["final-review"].result as FinalReviewTimelineResult).pairs[0])
+        .not.toHaveProperty("userSelectedVariant");
+    },
+  );
 
   it("refuses Repair promotion when its top-level source differs from the attempt source", () => {
     const workflow = createTimelineWorkflowState({ workflowId: "repair-selection-source-mismatch" });
@@ -833,6 +897,49 @@ describe("T38C Repair verification provider boundary", () => {
     expect(createStoredImageVisionDataUrlMock).toHaveBeenCalledTimes(3);
     expect(JSON.stringify(result)).not.toContain("data:image");
     expect(JSON.stringify(result)).not.toContain("PRIVATE_");
+  });
+
+  it("keeps a style-mismatched Repair unverified and unavailable for promotion", async () => {
+    process.env.LITELLM_BASE_URL = "http://litellm.test";
+    process.env.LITELLM_VISION_MODEL = "vision-model";
+    completeChatMock.mockResolvedValue({
+      content: verificationResponse({ visualStyleMatch: false }),
+    });
+
+    const result = await verifyFinalRepairs(repair(), review(), context());
+
+    expect(result).toMatchObject({
+      status: "verified",
+      visualStyle: "anime",
+      pairs: [{
+        candidateId: "preview-1",
+        visualStyleMatch: false,
+        recommended: false,
+      }],
+    });
+    expect(completeChatMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails closed after bounded repair when Repair style verification is missing", async () => {
+    process.env.LITELLM_BASE_URL = "http://litellm.test";
+    process.env.LITELLM_VISION_MODEL = "vision-model";
+    completeChatMock.mockResolvedValue({
+      content: verificationResponse({ visualStyleMatch: undefined }),
+    });
+
+    const result = await verifyFinalRepairs(repair(), review(), context());
+
+    expect(result).toMatchObject({
+      status: "failed",
+      visualStyle: "anime",
+      error: {
+        code: "llm_malformed_response",
+        details: {
+          recoverable: true,
+        },
+      },
+    });
+    expect(completeChatMock).toHaveBeenCalledTimes(2);
   });
 
   it("uses one safe schema repair, redacts raw completions, and never makes a third call", async () => {

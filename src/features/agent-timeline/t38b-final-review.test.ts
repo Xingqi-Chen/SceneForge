@@ -100,6 +100,7 @@ function finding(
 function pairResponse(candidateId: string, override: Record<string, unknown> = {}) {
   return {
     candidateId,
+    visualStyleMatch: true,
     scores: {
       previewUpscale: { adherence: 80, composition: 70, anatomy: 90, style: 60, technical: 100 },
       final: { adherence: "90", composition: 80, anatomy: 70, style: 100, technical: 60 },
@@ -135,7 +136,11 @@ function createContext(execution: ComfyUiExecutionTimelineResult, nsfw = false):
       ...base.nodes,
       "scene-input": {
         ...base.nodes["scene-input"],
-        result: { rawIntent: "PRIVATE_ORIGINAL_INTENT", nsfw },
+        result: {
+          rawIntent: "PRIVATE_ORIGINAL_INTENT",
+          nsfw,
+          settingsSnapshot: { visualStyle: "anime" },
+        },
       },
       "character-action": {
         ...base.nodes["character-action"],
@@ -148,6 +153,30 @@ function createContext(execution: ComfyUiExecutionTimelineResult, nsfw = false):
       "parameter-recommendation": {
         ...base.nodes["parameter-recommendation"],
         result: { requestPreview: { positivePrompt: "PRIVATE_FORMAL_PROMPT" } },
+      },
+      "preview-scoring": {
+        ...base.nodes["preview-scoring"],
+        status: "done",
+        source: "ai",
+        result: {
+          rubricVersion: 2,
+          scores: execution.finals.map((item) => ({
+            candidateId: item.candidateId,
+            adherence: 80,
+            composition: 80,
+            anatomy: 80,
+            style: 80,
+            technical: 80,
+            total: 80,
+            criticalDefects: [],
+            eligible: true,
+            visualStyleMatch: true,
+            rank: item.rank,
+          })),
+          selectedCandidateIds: execution.finals.map((item) => item.candidateId),
+          selectionSource: "ai",
+          visualStyle: "anime",
+        },
       },
       "comfyui-execution": {
         ...base.nodes["comfyui-execution"],
@@ -234,6 +263,28 @@ describe("T38B Final review parser and local policy", () => {
         expect.objectContaining({ operation: "object-count" }),
         expect.objectContaining({ operation: "composition-consistency" }),
       ]),
+    });
+  });
+
+  it("makes a style-mismatched Final unavailable and keeps only the verified Preview fallback", () => {
+    const sourcePairs = getCompletedFinalReviewPairs(createExecution(1), {
+      verifiedPreviewCandidateIds: new Set(["preview-1"]),
+      visualStyle: "anime",
+    });
+    const result = parseFinalReviewResponse(
+      validResponse(1, { 0: { visualStyleMatch: false } }),
+      sourcePairs,
+      "anime",
+    );
+
+    expect(result).toMatchObject({
+      status: "reviewed",
+      visualStyle: "anime",
+      pairs: [{
+        defaultVariant: "preview-upscale",
+        recommendedVariant: "preview-upscale",
+        visualStyleMatch: { final: false, previewUpscale: true },
+      }],
     });
   });
 
@@ -333,7 +384,15 @@ describe("T38B Final review provider boundary", () => {
     process.env.LITELLM_DEFAULT_MODEL = "ordinary-default";
 
     const unavailable = await reviewFinalExecution(createExecution(1), createContext(createExecution(1), true));
-    expect(unavailable).toMatchObject({ status: "failed", error: { code: "llm_config", details: { recoverable: true } } });
+    expect(unavailable).toMatchObject({
+      status: "failed",
+      visualStyle: "anime",
+      error: { code: "llm_config", details: { recoverable: true } },
+      pairs: [{
+        defaultVariant: "preview-upscale",
+        visualStyleMatch: { final: null, previewUpscale: true },
+      }],
+    });
     expect(completeChatMock).not.toHaveBeenCalled();
 
     process.env.LITELLM_NSFW_MODEL = "nsfw-vision";
@@ -358,6 +417,28 @@ describe("T38B Final review provider boundary", () => {
       })]),
     });
     expect(JSON.stringify(completeChatMock.mock.calls[1]?.[0])).not.toContain("PRIVATE_RAW_RESPONSE");
+  });
+
+  it("keeps Final unavailable after missing style validation exhausts the bounded repair", async () => {
+    process.env.LITELLM_BASE_URL = "http://litellm.test";
+    process.env.LITELLM_VISION_MODEL = "vision-model";
+    completeChatMock.mockResolvedValue({
+      content: validResponse(1, { 0: { visualStyleMatch: undefined } }),
+    });
+
+    await expect(reviewFinalExecution(createExecution(1), createContext(createExecution(1)))).resolves.toMatchObject({
+      status: "failed",
+      visualStyle: "anime",
+      error: {
+        code: "llm_malformed_response",
+        details: { recoverable: true, validationCode: "visual_style_match_missing" },
+      },
+      pairs: [{
+        defaultVariant: "preview-upscale",
+        visualStyleMatch: { final: null, previewUpscale: true },
+      }],
+    });
+    expect(completeChatMock).toHaveBeenCalledTimes(2);
   });
 
   it("separates terminal upstream and malformed-schema failures and redacts unsafe details", async () => {
@@ -430,7 +511,7 @@ describe("T38B Final review provider boundary", () => {
     expect(JSON.stringify(result)).not.toContain("data:image");
   });
 
-  it("keeps both variants selectable when image preparation fails without calling the provider", async () => {
+  it("keeps only the verified Preview selectable when Final validation images are unavailable", async () => {
     process.env.LITELLM_BASE_URL = "http://litellm.test";
     process.env.LITELLM_VISION_MODEL = "vision-model";
     createStoredImageVisionDataUrlMock.mockRejectedValueOnce(new Error("C:\\PRIVATE\\secret.png data:image/png;base64,SECRET"));
@@ -440,7 +521,11 @@ describe("T38B Final review provider boundary", () => {
     expect(result).toMatchObject({
       status: "failed",
       error: { code: "image_storage_failed", details: { recoverable: true } },
-      pairs: [{ recommendedVariant: null, defaultVariant: "final" }],
+      pairs: [{
+        recommendedVariant: null,
+        defaultVariant: "preview-upscale",
+        visualStyleMatch: { final: null, previewUpscale: true },
+      }],
     });
     expect(completeChatMock).not.toHaveBeenCalled();
     expect(JSON.stringify(result)).not.toContain("PRIVATE");

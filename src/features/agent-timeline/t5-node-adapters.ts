@@ -35,6 +35,8 @@ import {
 } from "@/shared/prompt-profile";
 
 import { createLlmTimelineNodeAdapter, type TimelineCompleteChat } from "./llm-adapter";
+import { getRunSceneInputSettings } from "./run-input-settings";
+import { buildRunVisualStyleLlmInstructions } from "./run-visual-style";
 import { createTimelineNodeError } from "./state";
 import {
   TimelineNodeExecutionError,
@@ -497,6 +499,7 @@ function getCharacterActionResult(workflow: TimelineNodeExecutionContext["workfl
 
 function buildScenePromptRequest(context: TimelineNodeExecutionContext): LlmChatRequest {
   const sceneInput = getSceneInput(context.workflow);
+  const visualStyle = getRunSceneInputSettings(sceneInput).visualStyle;
   const profileInstructions = buildPromptProfileSceneInstructions(sceneInput.promptProfile);
 
   return {
@@ -512,6 +515,7 @@ function buildScenePromptRequest(context: TimelineNodeExecutionContext): LlmChat
           "All generated natural-language fields must be English, including positivePrompt, negativeSuggestions, labels, prompts, character identity, scene intent, style, camera, and lighting.",
           "Do not choose checkpoints, LoRAs, render parameters, file paths, or external resources.",
           `Selected prompt profile: ${formatPromptProfileLabel(sceneInput.promptProfile)} (${sceneInput.promptProfile}).`,
+          buildRunVisualStyleLlmInstructions(visualStyle, sceneInput.promptProfile),
           profileInstructions,
           'Required shape: {"promptProfile":"illustrious|anima|krea2","primaryCharacter":{"name":"...","identity":"...","publicFacts":["..."]},"sceneIntent":"...","styleTone":"...","setting":"...","sharedFacts":["..."],"positivePrompt":"...","negativeSuggestions":["..."],"style":[{"label":"...","prompt":"..."}],"camera":[{"label":"...","prompt":"..."}],"lighting":[{"label":"...","prompt":"..."}],"illustriousSections"?:{},"animaSections"?:{},"krea2Sections"?:{}}',
         ].join("\n"),
@@ -522,6 +526,7 @@ function buildScenePromptRequest(context: TimelineNodeExecutionContext): LlmChat
           {
             sceneRequest: sceneInput.rawIntent,
             promptProfile: sceneInput.promptProfile,
+            visualStyle,
             notes: [
               "Keep this single-image only.",
               "Keep the schema narrow and suitable for a fixed editable table.",
@@ -717,7 +722,13 @@ export function createTimelineT5NodeAdapters({
       completeChat,
       buildRequest: buildScenePromptRequest,
       parseResponse: (response, context) =>
-        normalizeScenePromptTimelineResult(response.content, getSceneInput(context.workflow).promptProfile),
+        ({
+          ...normalizeScenePromptTimelineResult(
+            response.content,
+            getSceneInput(context.workflow).promptProfile,
+          ),
+          visualStyle: getRunSceneInputSettings(getSceneInput(context.workflow)).visualStyle,
+        }),
     }),
     "character-tags": createLlmTimelineNodeAdapter({
       completeChat,

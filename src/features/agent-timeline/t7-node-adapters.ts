@@ -45,6 +45,13 @@ import {
 } from "./generation-style-palette";
 import { getRunSceneInputSettings } from "./run-input-settings";
 import {
+  appendRunVisualStyleNegativeGuidance,
+  buildAuthoritativeRunVisualStyleSection,
+  formatRunVisualStyleLabel,
+  getRunVisualStylePositiveGuidance,
+  type RunVisualStyle,
+} from "./run-visual-style";
+import {
   appendStyleReferencePromptExactlyOnce,
   getStyleReferencePrompt,
   getStyleReferenceBlockingIssue,
@@ -76,6 +83,7 @@ export type TimelineResourceRecommendationRequest = {
   desiredEffect: string;
   maxLoras: number;
   promptProfile: PromptProfileId;
+  visualStyle: RunVisualStyle;
 };
 
 export type TimelineResourceRecommendationProvider = (
@@ -100,6 +108,7 @@ export type TimelineStyleAdviceRequest = {
     width: number;
   };
   selectedResources: SelectedCivitaiResourcesPreview;
+  visualStyle: RunVisualStyle;
 };
 
 export type TimelineStyleAdviceProvider = (
@@ -280,9 +289,11 @@ function buildDesiredEffect(context: TimelineNodeExecutionContext) {
   const action = getCharacterActionResult(context.workflow);
   const tagPrompts = characterTags.items.map((item) => item.prompt).filter(Boolean);
   const promptProfile = getTimelinePromptProfile(context.workflow);
+  const visualStyle = getSceneInputSettings(context.workflow).visualStyle;
 
   return [
     `Prompt profile: ${formatPromptProfileLabel(promptProfile)} (${promptProfile})`,
+    `Authoritative visual style: ${formatRunVisualStyleLabel(visualStyle)} (${visualStyle}) — ${getRunVisualStylePositiveGuidance(visualStyle)}`,
     scenePrompt.sceneIntent,
     scenePrompt.positivePrompt,
     scenePrompt.styleTone,
@@ -427,41 +438,76 @@ export function buildTimelineFinalPositivePrompt({
   scenePrompt,
   styleReference,
   supportsNsfw = false,
+  visualStyle,
 }: {
   promptProfile?: PromptProfileId;
   resourceResult: ResourceRecommendationTimelineResult;
   scenePrompt: ScenePromptTimelineResult;
   styleReference?: StyleReferenceSnapshot;
   supportsNsfw?: boolean;
+  visualStyle?: RunVisualStyle;
 }) {
   const resources = getSelectedResources(resourceResult);
   const resolvedProfile = normalizePromptProfileId(promptProfile ?? scenePrompt.promptProfile);
   const sourcePrompt = scenePrompt.positivePrompt;
 
   if (resolvedProfile === "anima") {
+    const authoredSections = hasPromptSectionContent(scenePrompt.animaSections)
+      ? scenePrompt.animaSections
+      : undefined;
+    const sections = visualStyle
+      ? {
+          ...(authoredSections ?? {}),
+          visualStyleAndMedium: buildAuthoritativeRunVisualStyleSection(
+            authoredSections?.visualStyleAndMedium,
+            visualStyle,
+          ),
+        }
+      : authoredSections;
     return appendStyleReferencePromptExactlyOnce(renderAnimaPrompt({
       resources,
-      ...(hasPromptSectionContent(scenePrompt.animaSections)
-        ? { sections: scenePrompt.animaSections }
-        : { sourcePrompt }),
+      ...(sections ? { sections } : {}),
+      ...(!authoredSections ? { sourcePrompt } : {}),
       qualityMetaTags: scenePrompt.animaPromptOptions?.qualityMetaTags,
+      suppressAuthoredArtist: visualStyle === "photoreal",
       supportsNsfw,
     }), styleReference);
   }
 
   if (resolvedProfile === "illustrious") {
+    const authoredSections = hasPromptSectionContent(scenePrompt.illustriousSections)
+      ? scenePrompt.illustriousSections ?? {}
+      : classifyFlatPromptToIllustriousSections(sourcePrompt);
+    const sections = visualStyle
+      ? {
+          ...authoredSections,
+          visualStyleAndMedium: buildAuthoritativeRunVisualStyleSection(
+            authoredSections.visualStyleAndMedium,
+            visualStyle,
+          ),
+        }
+      : authoredSections;
     return appendStyleReferencePromptExactlyOnce(renderIllustriousPrompt({
       resources,
-      sections: hasPromptSectionContent(scenePrompt.illustriousSections)
-        ? scenePrompt.illustriousSections
-        : classifyFlatPromptToIllustriousSections(sourcePrompt),
+      sections,
+      suppressAuthoredArtistStyle: visualStyle === "photoreal",
     }), styleReference);
   }
 
   if (resolvedProfile === "krea2") {
+    const sections = visualStyle
+      ? {
+          ...scenePrompt.krea2Sections,
+          visualStyleAndMedium: buildAuthoritativeRunVisualStyleSection(
+            scenePrompt.krea2Sections?.visualStyleAndMedium,
+            visualStyle,
+            "krea2",
+          ),
+        }
+      : scenePrompt.krea2Sections;
     return appendKrea2PromptSegmentExactlyOnce(renderKrea2Prompt({
       resources,
-      sections: scenePrompt.krea2Sections,
+      sections,
       sourcePrompt,
     }), getStyleReferencePrompt(styleReference));
   }
@@ -549,6 +595,7 @@ function createAiAdvice(
   samplerOptions: TimelineSamplerOptions,
   finalPositivePrompt: string,
   sourceImage?: SceneInputTimelineResult["sourceImage"],
+  baseNegativePrompt = scenePrompt.negativeSuggestions.join(", "),
 ): CivitaiAiPromptResult {
   const isKrea2Profile = scenePrompt.promptProfile === "krea2";
   const checkpoint = resourceResult.checkpoint.resource;
@@ -578,7 +625,7 @@ function createAiAdvice(
         name: lora.resource.name,
         suggestedWeight: lora.suggestedWeight,
       })),
-      negativePromptAdditions: scenePrompt.negativeSuggestions.join(", "),
+      negativePromptAdditions: baseNegativePrompt,
       resolution: isKrea2Profile ? "1024x1024" : referenceResolution,
       sampler: samplerName,
       scheduler: isKrea2Profile ? "simple" : scheduler,
@@ -600,6 +647,7 @@ export function createTimelineParameterRecommendation({
   detailers,
   savedParameters,
   styleReference,
+  visualStyle,
 }: {
   promptProfile?: PromptProfileId;
   resourceResult: ResourceRecommendationTimelineResult;
@@ -613,6 +661,7 @@ export function createTimelineParameterRecommendation({
   detailers?: GenerationDetailerSettingsSnapshot;
   savedParameters?: SavedComfyUiGenerationParams | null;
   styleReference?: StyleReferenceSnapshot;
+  visualStyle?: RunVisualStyle;
 }): ParameterRecommendationTimelineResult {
   const isKrea2Profile = normalizePromptProfileId(promptProfile ?? scenePrompt.promptProfile) === "krea2";
   const samplerOptions = normalizeTimelineSamplerOptions(rawSamplerOptions);
@@ -623,10 +672,21 @@ export function createTimelineParameterRecommendation({
     scenePrompt,
     styleReference,
     supportsNsfw,
+    visualStyle,
   });
-  const baseNegativePrompt = scenePrompt.negativeSuggestions.join(", ");
+  const baseNegativePrompt = visualStyle
+    ? appendRunVisualStyleNegativeGuidance(scenePrompt.negativeSuggestions.join(", "), visualStyle)
+    : scenePrompt.negativeSuggestions.join(", ");
   const resolvedAiAdvice =
-    aiAdvice ?? createAiAdvice(resourceResult, scenePrompt, canvasBinding, samplerOptions, finalPositivePrompt, sourceImage);
+    aiAdvice ?? createAiAdvice(
+      resourceResult,
+      scenePrompt,
+      canvasBinding,
+      samplerOptions,
+      finalPositivePrompt,
+      sourceImage,
+      baseNegativePrompt,
+    );
   const parsedAiAdvice = parseComfyUiAiGenerationParameters(resolvedAiAdvice.parameterSuggestions);
   const krea2Dimensions = isKrea2Profile
     ? {
@@ -723,7 +783,7 @@ export function createTimelineParameterRecommendation({
     denoise,
     seedPolicy: makeSeedPolicy(requestPreview.seed),
     finalPositivePrompt: requestPreview.positivePrompt,
-    negativeAdditions: scenePrompt.negativeSuggestions,
+    negativeAdditions: splitPromptParts(baseNegativePrompt),
     negativePrompt: requestPreview.negativePrompt ?? "",
     requestPreview,
     ...(styleReference ? { styleReference } : {}),
@@ -752,6 +812,7 @@ export function createTimelineT7NodeAdapters({
     "resource-recommendation": async (context) => {
       const desiredEffect = buildDesiredEffect(context);
       const promptProfile = getTimelinePromptProfile(context.workflow);
+      const visualStyle = getSceneInputSettings(context.workflow).visualStyle;
       const candidates = filterTimelineResourceCandidatesForPromptProfile(
         await loadResourceCandidates(desiredEffect, context),
         promptProfile,
@@ -778,6 +839,7 @@ export function createTimelineT7NodeAdapters({
           desiredEffect,
           maxLoras: maxTimelineLoras,
           promptProfile,
+          visualStyle,
         },
         context,
       );
@@ -793,16 +855,20 @@ export function createTimelineT7NodeAdapters({
       const resourceResult = getResourceRecommendationResult(context.workflow.nodes["resource-recommendation"]);
       const samplerOptions = loadSamplerOptions ? await loadSamplerOptions(context) : defaultTimelineSamplerOptions;
       const selectedResources = getSelectedResources(resourceResult);
+      const inputSettings = getSceneInputSettings(context.workflow);
       const finalPositivePrompt = buildTimelineFinalPositivePrompt({
         promptProfile,
         resourceResult,
         scenePrompt,
         styleReference: getSceneInputSettings(context.workflow).styleReference,
         supportsNsfw: supportsNsfw(),
+        visualStyle: inputSettings.visualStyle,
       });
-      const baseNegativePrompt = scenePrompt.negativeSuggestions.join(", ");
+      const baseNegativePrompt = appendRunVisualStyleNegativeGuidance(
+        scenePrompt.negativeSuggestions.join(", "),
+        inputSettings.visualStyle,
+      );
       const sourceImage = getSceneInputSourceImage(context.workflow);
-      const inputSettings = getSceneInputSettings(context.workflow);
       const styleReferenceIssue = getStyleReferenceBlockingIssue(inputSettings.styleReference, "Run");
       if (styleReferenceIssue) {
         invalidTimelineInput(styleReferenceIssue);
@@ -811,6 +877,7 @@ export function createTimelineT7NodeAdapters({
         checkpointBaseModel: resourceResult.checkpoint.resource.baseModel ?? promptProfile,
         checkpointId: resourceResult.checkpoint.resource.id,
         promptProfile,
+        visualStyle: inputSettings.visualStyle,
       });
       if (styleReferenceMismatch) {
         invalidTimelineInput(styleReferenceMismatch);
@@ -833,6 +900,7 @@ export function createTimelineT7NodeAdapters({
                   }
                 : {}),
               selectedResources,
+              visualStyle: inputSettings.visualStyle,
             },
             context,
           )
@@ -853,6 +921,7 @@ export function createTimelineT7NodeAdapters({
           scenePrompt,
           savedParameters,
           styleReference: inputSettings.styleReference,
+          visualStyle: inputSettings.visualStyle,
           sourceDenoise: sourceImage ? getSceneInputSourceDenoise(context.workflow) : undefined,
           sourceImage,
           supportsNsfw: supportsNsfw(),

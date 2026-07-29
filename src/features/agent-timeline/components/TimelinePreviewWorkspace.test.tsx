@@ -38,6 +38,7 @@ const previews: PreviewExecutionTimelineResult = {
 
 const scoring: PreviewScoringTimelineResultV2 = {
   rubricVersion: 2,
+  visualStyle: "anime",
   scores: [1, 2, 3].map((number) => ({
     candidateId: `preview-${number}`,
     adherence: 90 - number,
@@ -48,6 +49,7 @@ const scoring: PreviewScoringTimelineResultV2 = {
     total: 79 - number,
     criticalDefects: [],
     eligible: true,
+    visualStyleMatch: true,
     rank: number,
   })),
   selectedCandidateIds: ["preview-1", "preview-2"],
@@ -173,6 +175,32 @@ describe("TimelinePreviewWorkspace", () => {
     expect(container.textContent).toContain("Legacy rubric · eligibility not assessed");
     expect(container.textContent).not.toContain("Ineligible");
     expect(getRegenerateButton(container).disabled).toBe(true);
+    expect(onRegenerate).not.toHaveBeenCalled();
+  });
+
+  it("rejects manual selection of a visual-style mismatch", () => {
+    const mismatchScoring: PreviewScoringTimelineResultV2 = {
+      ...scoring,
+      selectedCandidateIds: ["preview-1", "preview-2"],
+      scores: scoring.scores.map((score) => score.candidateId === "preview-3"
+        ? { ...score, visualStyleMatch: false }
+        : score),
+    };
+    const onRegenerate = vi.fn();
+    act(() => root.render(
+      <TimelinePreviewWorkspace
+        onRegenerate={onRegenerate}
+        previews={previews}
+        scoring={mismatchScoring}
+      />,
+    ));
+
+    const mismatch = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
+      (button) => button.textContent?.includes("preview-3"),
+    );
+    expect(mismatch?.disabled).toBe(true);
+    expect(mismatch?.textContent).toContain("Visual style mismatch · unavailable");
+    act(() => mismatch?.click());
     expect(onRegenerate).not.toHaveBeenCalled();
   });
 });

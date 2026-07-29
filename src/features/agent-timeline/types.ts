@@ -17,6 +17,7 @@ import type { TimelineWorkflowMode } from "./workflow-definitions";
 import type { RunSceneInputSettingsSnapshot } from "./run-input-settings";
 import type { TimelineFinalGenerationFamily, TimelineFinalRedrawPreset } from "./final-generation-policy";
 import type { StyleReferenceSnapshot } from "./style-reference";
+import type { RunVisualStyle } from "./run-visual-style";
 
 export type AnimaPromptProfileOptions = {
   qualityMetaTags?: string[];
@@ -131,6 +132,8 @@ export type TimelineWorkflowState = {
     kind: "krea2-direct-txt2img";
     readOnly: true;
   };
+  /** Completed pre-T51 history remains visible without claiming or requesting style validation. */
+  legacyVisualStyleUnassessed?: true;
 };
 
 export function isTimelineLegacyDirectReadOnly(
@@ -164,6 +167,7 @@ export type TimelinePromptFragment = {
 
 export type ScenePromptTimelineResult = {
   promptProfile: PromptProfileId;
+  visualStyle?: RunVisualStyle;
   primaryCharacter: {
     name: string;
     identity: string;
@@ -280,6 +284,7 @@ export type GenerationGateTimelineResult = {
   finalSteps?: number;
   finalDenoise?: number;
   automaticLocalRepairAuthorized?: boolean;
+  visualStyle?: RunVisualStyle;
 };
 
 export const previewScoringRubric = {
@@ -325,6 +330,7 @@ export type TimelinePreviewCriticalDefect = {
 export type TimelinePreviewEligibleScore = TimelinePreviewScore & {
   criticalDefects: TimelinePreviewCriticalDefect[];
   eligible: boolean;
+  visualStyleMatch?: boolean;
 };
 
 export type TimelinePreviewCandidate = {
@@ -401,6 +407,7 @@ export type PreviewScoringTimelineResultV1 = PreviewScoringTimelineResultBase & 
 export type PreviewScoringTimelineResultV2 = PreviewScoringTimelineResultBase & {
   rubricVersion: 2;
   scores: Array<TimelinePreviewEligibleScore & { candidateId: string; rank: number }>;
+  visualStyle?: RunVisualStyle;
 } & Partial<TimelinePreviewSelectionFallbackMetadata>;
 
 export type PreviewScoringTimelineResult = PreviewScoringTimelineResultV1 | PreviewScoringTimelineResultV2;
@@ -507,12 +514,17 @@ export type TimelineFinalReviewPair = {
   recommendedVariant: Exclude<TimelineFinalReviewVariant, "repair"> | null;
   defaultVariant: Exclude<TimelineFinalReviewVariant, "repair">;
   userSelectedVariant?: TimelineFinalReviewVariant;
+  visualStyleMatch?: {
+    final: boolean | null;
+    previewUpscale: boolean;
+  };
 };
 
 export type FinalReviewTimelineResult = {
   reviewVersion: 1;
   status: "reviewed" | "failed" | "unavailable";
   pairs: TimelineFinalReviewPair[];
+  visualStyle?: RunVisualStyle;
   error?: TimelineNodeError;
 };
 
@@ -546,6 +558,7 @@ export type TimelineRepairParentBinding = {
   reviewUpdatedAt: string;
   reviewedFindings: TimelineFinalReviewFinding[];
   reviewedTargets: TimelineRepairTarget[];
+  visualStyle?: RunVisualStyle;
 };
 
 export type TimelineRepairAttempt = {
@@ -630,6 +643,7 @@ export type TimelineRepairVerificationPair = {
   newMajorOrBlockingIssue: boolean;
   findings: TimelineFinalReviewFinding[];
   recommended: boolean;
+  visualStyleMatch?: boolean;
   rationale?: string;
 };
 
@@ -637,6 +651,7 @@ export type RepairVerificationTimelineResult = {
   verificationVersion: 1;
   status: "verified" | "skipped" | "failed";
   pairs: TimelineRepairVerificationPair[];
+  visualStyle?: RunVisualStyle;
   error?: TimelineNodeError;
 };
 
@@ -649,6 +664,8 @@ export type TimelineStoredGeneratedImage = {
 
 export type ResultDisplayTimelineResult = {
   completed: boolean;
+  visualStyle?: RunVisualStyle;
+  visualStyleAssessment?: "verified" | "style-unassessed";
   image: {
     filename: string;
     nodeId: string;

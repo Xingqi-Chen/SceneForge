@@ -147,6 +147,7 @@ describe("Run scene input generation settings", () => {
   it("defaults legacy records to both detailers disabled", () => {
     const settings = sanitizeRunSceneInputSettingsSnapshot(undefined);
 
+    expect(settings.visualStyle).toBe("anime");
     expect(settings.stylePalette).toBeUndefined();
     expect(settings.styleReference).toBeUndefined();
     expect(settings.automaticLocalRepair).toBe(false);
@@ -161,6 +162,26 @@ describe("Run scene input generation settings", () => {
         detectorModelName: "bbox/hand_yolov8s.pt",
       },
     });
+  });
+
+  it("accepts only the closed visual-style values and otherwise defaults to anime", () => {
+    expect(sanitizeRunSceneInputSettingsSnapshot({ visualStyle: "anime" }).visualStyle).toBe("anime");
+    expect(sanitizeRunSceneInputSettingsSnapshot({ visualStyle: "photoreal" }).visualStyle).toBe("photoreal");
+
+    for (const visualStyle of [
+      undefined,
+      null,
+      "",
+      "realistic",
+      "photo",
+      "ANIME",
+      "__proto__",
+      1,
+      {},
+      [],
+    ]) {
+      expect(sanitizeRunSceneInputSettingsSnapshot({ visualStyle }).visualStyle).toBe("anime");
+    }
   });
 
   it("accepts only an explicit boolean true for automatic local repair", () => {

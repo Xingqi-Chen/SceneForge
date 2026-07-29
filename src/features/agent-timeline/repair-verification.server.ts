@@ -6,6 +6,12 @@ import {
   repairPairMatchesReviewPair,
 } from "./final-repair";
 import { createTimelineNodeError } from "./state";
+import { getRunSceneInputSettings } from "./run-input-settings";
+import {
+  formatRunVisualStyleLabel,
+  getRunVisualStyleNegativeGuidance,
+  getRunVisualStylePositiveGuidance,
+} from "./run-visual-style";
 import { createStoredImageVisionDataUrl } from "./vision-image-transcode.server";
 import type {
   FinalRepairTimelineResult,
@@ -22,16 +28,21 @@ function finishRepairVerification(
   result: RepairVerificationTimelineResult,
   context: TimelineNodeExecutionContext,
 ) {
-  if (result.status !== "verified") {
-    const reviewNode = context.workflow.nodes["final-review"];
-    if (isRecord(reviewNode.result) && Array.isArray(reviewNode.result.pairs)) {
-      reviewNode.result = {
-        ...reviewNode.result,
-        pairs: reviewNode.result.pairs.map((pair) => isRecord(pair) && pair.userSelectedVariant === "repair"
+  const reviewNode = context.workflow.nodes["final-review"];
+  if (isRecord(reviewNode.result) && Array.isArray(reviewNode.result.pairs)) {
+    const verifiedMatches = new Set(
+      result.status === "verified"
+        ? result.pairs.filter((pair) => pair.visualStyleMatch === true).map((pair) => pair.candidateId)
+        : [],
+    );
+    reviewNode.result = {
+      ...reviewNode.result,
+      pairs: reviewNode.result.pairs.map((pair) =>
+        isRecord(pair) && pair.userSelectedVariant === "repair" &&
+          !verifiedMatches.has(String(pair.candidateId))
           ? { ...pair, userSelectedVariant: pair.defaultVariant }
           : pair),
-      };
-    }
+    };
   }
   return result;
 }
@@ -41,16 +52,28 @@ export async function verifyFinalRepairs(
   review: FinalReviewTimelineResult,
   context: TimelineNodeExecutionContext,
 ): Promise<RepairVerificationTimelineResult> {
+  const sceneInput = context.workflow.nodes["scene-input"].result;
+  const visualStyle = getRunSceneInputSettings(isRecord(sceneInput) ? sceneInput : {}).visualStyle;
   const repaired = repair.pairs.filter((pair) => {
     const reviewPair = review.pairs.find((candidate) => candidate.candidateId === pair.candidateId);
     return pair.status === "repaired" && pair.storedImage && reviewPair &&
       repairPairHasCanonicalAttemptSource(pair) &&
-      repairPairMatchesReviewPair(pair, reviewPair, context.workflow.nodes["final-review"].updatedAt);
+      pair.parent?.visualStyle === visualStyle &&
+      repairPairMatchesReviewPair(
+        pair,
+        reviewPair,
+        context.workflow.nodes["final-review"].updatedAt,
+        visualStyle,
+      );
   });
   if (!repair.authorized || repaired.length === 0) {
-    return finishRepairVerification({ verificationVersion: 1, status: "skipped", pairs: [] }, context);
+    return finishRepairVerification({
+      verificationVersion: 1,
+      status: "skipped",
+      pairs: [],
+      visualStyle,
+    }, context);
   }
-  const sceneInput = context.workflow.nodes["scene-input"].result;
   const nsfw = isRecord(sceneInput) && sceneInput.nsfw === true;
   const model = nsfw
     ? process.env.LITELLM_NSFW_MODEL
@@ -61,6 +84,7 @@ export async function verifyFinalRepairs(
       verificationVersion: 1,
       status: "failed",
       pairs: [],
+      visualStyle,
       error: createTimelineNodeError(
         "llm_config",
         nsfw
@@ -77,7 +101,10 @@ export async function verifyFinalRepairs(
     type: "text",
     text: [
       "Verify every labeled Preview/Final/Repair triple in one response. Return exactly one JSON object and no recommendation or resolved booleans.",
-      '{"pairs":[{"candidateId":"preview-1","scores":{"final":{"adherence":0,"composition":0,"anatomy":0,"style":0,"technical":0},"repair":{"adherence":0,"composition":0,"anatomy":0,"style":0,"technical":0}},"findings":[{"operation":"pose","severity":"none","scope":"pair","description":"concise finding"}],"rationale":"concise comparison"}]}',
+      '{"pairs":[{"candidateId":"preview-1","visualStyleMatch":true,"scores":{"final":{"adherence":0,"composition":0,"anatomy":0,"style":0,"technical":0},"repair":{"adherence":0,"composition":0,"anatomy":0,"style":0,"technical":0}},"findings":[{"operation":"pose","severity":"none","scope":"pair","description":"concise finding"}],"rationale":"concise comparison"}]}',
+      `The authoritative visual domain is ${formatRunVisualStyleLabel(visualStyle)} (${visualStyle}): ${getRunVisualStylePositiveGuidance(visualStyle)}.`,
+      `Set visualStyleMatch false when Repair belongs to an opposing domain such as: ${getRunVisualStyleNegativeGuidance(visualStyle).join(", ")}.`,
+      "visualStyleMatch is required for every Repair. Generic photo, realistic, photorealistic, camera/lens, bokeh, and depth-of-field vocabulary alone does not decide the rendered domain.",
       "Each pair must contain exactly one pose, contact, object-count, and composition-consistency finding.",
       "Use only severity none, minor, major, or blocking and scope preview-upscale, final, or pair.",
       "Judge whether localized targets improved while checking for new major/blocking regressions. SceneForge computes recommendations locally.",
@@ -100,6 +127,7 @@ export async function verifyFinalRepairs(
       verificationVersion: 1,
       status: "failed",
       pairs: [],
+      visualStyle,
       error: createTimelineNodeError("image_storage_failed", "Managed repair images could not be prepared for verification.", { recoverable: true }),
     }, context);
   }
@@ -119,7 +147,7 @@ export async function verifyFinalRepairs(
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
       const response = await client.completeChat(nextRequest);
-      const parsed = parseRepairVerificationResponse(response.content, repair, review);
+      const parsed = parseRepairVerificationResponse(response.content, repair, review, visualStyle);
       if (parsed) return finishRepairVerification(parsed, context);
       validationReason = "Response did not cover the repaired pairs with the required closed schema.";
       upstream = undefined;
@@ -129,7 +157,7 @@ export async function verifyFinalRepairs(
           ...request,
           messages: [...request.messages, {
             role: "user" as const,
-            content: `Repair the schema only. ${validationReason} Return every pair once, all five finite scores, and exactly four closed findings per pair.`,
+            content: `Repair the schema only. ${validationReason} Return every pair once, boolean visualStyleMatch, all five finite scores, and exactly four closed findings per pair.`,
           }],
         };
       }
@@ -143,6 +171,7 @@ export async function verifyFinalRepairs(
     verificationVersion: 1,
     status: "failed",
     pairs: [],
+    visualStyle,
     error: terminalFailure === "upstream"
       ? createTimelineNodeError("llm_upstream", "Repair verification failed upstream after bounded attempts.", {
           recoverable: true,

@@ -422,6 +422,66 @@ export function updateTimelineSceneInputSettings(
   return refreshTimelineReadiness(withUpdatedWorkflow(workflow, nodes, updatedAt, false));
 }
 
+export function updateTimelineVisualStyle(
+  workflow: TimelineWorkflowState,
+  settingsSnapshot: RunSceneInputSettingsSnapshot,
+  options: TimelineMutationOptions = {},
+): TimelineWorkflowState {
+  const sceneInput = workflow.nodes["scene-input"].result;
+  if (!isRecord(sceneInput)) {
+    throw new TimelineNodeExecutionError(
+      createTimelineNodeError("timeline_request_invalid", "Visual style requires a completed scene input."),
+    );
+  }
+
+  const now = options.now ?? defaultNow;
+  const updatedAt = now();
+  const definition = getTimelineWorkflowDefinition(workflow.workflowMode);
+  const nodes = cloneNodeMap(workflow.nodes);
+  const staleNodeIds = [
+    "scene-prompt" as const,
+    ...getCommonWorkflowDownstreamClosure("scene-prompt", definition.nodeIds, definition.dependencyDag),
+  ];
+  const styleBoundArtifactNodeIds = new Set<TimelineNodeId>([
+    "generation-gate",
+    "preview-execution",
+    "preview-scoring",
+    "comfyui-execution",
+    "final-review",
+    "final-repair",
+    "repair-verification",
+    "result-display",
+  ]);
+
+  nodes["scene-input"] = {
+    ...nodes["scene-input"],
+    result: {
+      ...sceneInput,
+      settingsSnapshot: sanitizeRunSceneInputSettingsSnapshot(settingsSnapshot),
+    } as SceneInputTimelineResult,
+    updatedAt,
+  };
+
+  for (const nodeId of staleNodeIds) {
+    const clearStyleBoundArtifact = styleBoundArtifactNodeIds.has(nodeId);
+    nodes[nodeId] = {
+      ...nodes[nodeId],
+      status: "stale",
+      ...(clearStyleBoundArtifact
+        ? { result: undefined, source: "system" as const }
+        : {}),
+      error: undefined,
+      updatedAt,
+    };
+  }
+
+  const updatedWorkflow = withUpdatedWorkflow(workflow, nodes, updatedAt, false);
+  return refreshTimelineReadiness({
+    ...updatedWorkflow,
+    legacyVisualStyleUnassessed: undefined,
+  });
+}
+
 export function updateTimelineFinalRedrawPreset(
   workflow: TimelineWorkflowState,
   settingsSnapshot: RunSceneInputSettingsSnapshot,

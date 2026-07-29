@@ -222,6 +222,108 @@ describe("TimelineResultDisplayWorkspace fallbacks", () => {
     expect(container.textContent).toContain("Finals remain the default result.");
   });
 
+  it("labels completed historical output as style-unassessed", () => {
+    act(() => root.render(
+      <TimelineResultDisplayWorkspace
+        draft={null}
+        emptyState="No Final image yet."
+        result={{ ...completedResult, visualStyleAssessment: "style-unassessed" }}
+        selectedResources={{ checkpoint: null, loras: [] }}
+      />,
+    ));
+
+    expect(container.querySelector("[data-testid='timeline-visual-style-unassessed']"))
+      .not.toBeNull();
+    expect(container.textContent).toContain("completed legacy result");
+  });
+
+  it("removes a mismatched Final and selects its verified Preview fallback", () => {
+    const mismatchedReview: FinalReviewTimelineResult = {
+      ...reviewedPair,
+      visualStyle: "anime",
+      pairs: reviewedPair.pairs.map((pair) => ({
+        ...pair,
+        defaultVariant: "final",
+        recommendedVariant: null,
+        visualStyleMatch: { final: false, previewUpscale: true },
+      })),
+    };
+    const onSelectVariant = vi.fn();
+    act(() => root.render(
+      <TimelineResultDisplayWorkspace
+        draft={null}
+        emptyState="No Final image yet."
+        finalReview={mismatchedReview}
+        onSelectVariant={onSelectVariant}
+        result={{ ...completedResult, visualStyleAssessment: "verified" }}
+        selectedResources={{ checkpoint: null, loras: [] }}
+      />,
+    ));
+
+    const buttons = Array.from(
+      container.querySelectorAll<HTMLButtonElement>("[data-testid='timeline-final-review'] button"),
+    );
+    expect(buttons).toHaveLength(1);
+    expect(buttons[0]?.textContent).toContain("Preview fallback");
+    expect(buttons[0]?.getAttribute("aria-pressed")).toBe("true");
+    expect(container.textContent).toContain("Final is unavailable because its visual style");
+    expect(Array.from(container.querySelectorAll("img")).at(-1)?.getAttribute("src"))
+      .toBe(fallback.storedImage.url);
+  });
+
+  it("makes forged prior-style result props non-actionable and omits manual Inpaint", () => {
+    const onSelectVariant = vi.fn();
+    const fetchMock = vi.fn<typeof fetch>();
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = fetchMock;
+    const priorStyleReview: FinalReviewTimelineResult = {
+      ...reviewedPair,
+      visualStyle: "anime",
+      pairs: reviewedPair.pairs.map((pair) => ({
+        ...pair,
+        defaultVariant: "final",
+        userSelectedVariant: "final",
+        visualStyleMatch: { final: true, previewUpscale: true },
+      })),
+    };
+
+    try {
+      act(() => root.render(
+        <TimelineResultDisplayWorkspace
+          actionsAllowed
+          draft={null}
+          emptyState="No Final image yet."
+          finalReview={priorStyleReview}
+          inpaintAllowed
+          onSelectVariant={onSelectVariant}
+          result={{
+            ...completedResult,
+            visualStyle: "anime",
+            visualStyleAssessment: "verified",
+          }}
+          selectedResources={{ checkpoint: null, loras: [] }}
+          visualStyle="photoreal"
+        />,
+      ));
+
+      const variantButtons = Array.from(
+        container.querySelectorAll<HTMLButtonElement>("[data-testid='timeline-final-review'] button"),
+      );
+      expect(variantButtons).toHaveLength(2);
+      expect(variantButtons.every((button) => button.disabled)).toBe(true);
+      act(() => {
+        variantButtons.forEach((button) => button.click());
+      });
+      expect(onSelectVariant).not.toHaveBeenCalled();
+      expect(Array.from(container.querySelectorAll("button")).some(
+        (button) => button.textContent?.includes("Inpaint"),
+      )).toBe(false);
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("shows a concise Simple selector and keeps both variants selectable when review is unavailable", () => {
     const onSelectVariant = vi.fn();
     const failedReview: FinalReviewTimelineResult = {

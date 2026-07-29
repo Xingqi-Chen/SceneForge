@@ -955,11 +955,13 @@ export async function repairFinalExecution(
       reviewPair,
       targets,
       context.workflow.nodes["final-review"].updatedAt,
+      review.visualStyle,
     );
     if (!parent || previousPair && !repairPairMatchesReviewPair(
       previousPair,
       reviewPair,
       context.workflow.nodes["final-review"].updatedAt,
+      review.visualStyle,
     )) {
       pairs.push({ ...base, status: "skipped", skipReason: "parent-mismatch" });
       continue;
