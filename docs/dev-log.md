@@ -2,6 +2,14 @@
 
 This log records dated implementation and documentation work. Keep entries concise and evidence-oriented.
 
+## 2026-07-29
+
+### T51 / Issue #172 merge closeout
+
+- Merged PR #173 into `master` with merge commit `3a9c8ab`.
+- Confirmed PR-target CI passed and Issue #172 closed automatically.
+- Marked T51 `Done` after Test Gate `PASS` and Review Gate `APPROVE`.
+
 ## 2026-07-27
 
 ### T51 / Issue #172 Run visual-style control
