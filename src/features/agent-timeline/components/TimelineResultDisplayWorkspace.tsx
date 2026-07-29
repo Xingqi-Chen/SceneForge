@@ -17,6 +17,7 @@ import type {
   ResultDisplayTimelineResult,
   TimelineFinalReviewVariant,
 } from "@/features/agent-timeline/types";
+import type { RunVisualStyle } from "@/features/agent-timeline/run-visual-style";
 import type { SelectedCivitaiResourcesPreview } from "@/features/civitai-lora-library/types";
 import type { ComfyUiGeneratedImage, ComfyUiPromptHistoryResponse } from "@/features/comfyui";
 import type { ComfyUiGenerationLoraSetting } from "@/features/editor/ai-prompt/comfyui-generation-params";
@@ -32,6 +33,8 @@ import { cn } from "@/shared/utils/cn";
 type GeneratedImageText = (item: GeneratedImageItem, index: number, total: number) => string;
 
 export type TimelineResultDisplayWorkspaceProps = {
+  /** Allows result mutations only while the owning workflow says these artifacts are current. */
+  actionsAllowed?: boolean;
   draft: GenerationDraft | null;
   emptyState: string;
   errorMessage?: string;
@@ -50,6 +53,7 @@ export type TimelineResultDisplayWorkspaceProps = {
   result: ResultDisplayTimelineResult | null;
   selectedResources: SelectedCivitaiResourcesPreview;
   testId?: string;
+  visualStyle?: RunVisualStyle;
 };
 
 export type TimelineFallbackDisplayItem = NonNullable<ResultDisplayTimelineResult["fallbacks"]>[number];
@@ -283,6 +287,7 @@ async function saveTimelineInpaintImage(image: ComfyUiGeneratedImage) {
 }
 
 export function TimelineResultDisplayWorkspace({
+  actionsAllowed = true,
   draft,
   emptyState,
   errorMessage,
@@ -300,11 +305,22 @@ export function TimelineResultDisplayWorkspace({
   result,
   selectedResources,
   testId = "timeline-result-workspace",
+  visualStyle,
 }: TimelineResultDisplayWorkspaceProps) {
   const [inpaintImageItem, setInpaintImageItem] = useState<GeneratedImageItem | null>(null);
   const [inpaintItems, setInpaintItems] = useState<GeneratedImageItem[]>([]);
   const [inpaintStatus, setInpaintStatus] = useState<"idle" | "loading" | "success" | "error">("idle");
   const [inpaintMessage, setInpaintMessage] = useState("");
+  const legacyShapedTransientResult = result?.visualStyle === undefined &&
+    result?.visualStyleAssessment === undefined;
+  const visualStyleActionsAllowed = visualStyle === undefined ||
+    legacyShapedTransientResult || (
+    result?.visualStyle === visualStyle &&
+    result.visualStyleAssessment === "verified" &&
+    finalReview?.visualStyle === visualStyle
+  );
+  const resultActionsAllowed = actionsAllowed && visualStyleActionsAllowed;
+  const resultInpaintAllowed = resultActionsAllowed && inpaintAllowed;
   const loraSettings: ComfyUiGenerationLoraSetting[] = useMemo(() => selectedResources.loras
     .map((resource, index) => {
       const draftLora = draft?.loras.find((lora) => lora.loraName === resource.modelFileName) ?? draft?.loras[index];
@@ -383,9 +399,18 @@ export function TimelineResultDisplayWorkspace({
     const repairPair = finalRepair?.pairs.find((item) => item.candidateId === pair.candidateId);
     const verificationPair = repairVerification?.pairs.find((item) => item.candidateId === pair.candidateId);
     const verifiedRepair = Boolean(repairPair && verificationPair &&
+      (!finalReview?.visualStyle || (
+        repairVerification?.visualStyle === finalReview.visualStyle &&
+        repairPair.parent?.visualStyle === finalReview.visualStyle &&
+        verificationPair.visualStyleMatch === true
+      )) &&
       repairVerificationMatchesRepairPair(verificationPair, repairPair));
     const requestedVariant = pair.userSelectedVariant ?? pair.defaultVariant;
-    const selectedVariant = requestedVariant === "repair" && !verifiedRepair ? pair.defaultVariant : requestedVariant;
+    const finalAvailable = !finalReview?.visualStyle || pair.visualStyleMatch?.final === true;
+    const selectedVariant = requestedVariant === "repair" && !verifiedRepair ||
+        requestedVariant === "final" && !finalAvailable
+      ? "preview-upscale"
+      : requestedVariant;
     if (selectedVariant === "repair" && repairPair?.status === "repaired" && repairPair.storedImage) {
       return {
         image: {
@@ -432,7 +457,7 @@ export function TimelineResultDisplayWorkspace({
   }));
 
   async function submitTimelineInpaint(input: InpaintSubmitInput) {
-    if (!inpaintAllowed || !draft || !inpaintImageItem) {
+    if (!resultInpaintAllowed || !draft || !inpaintImageItem) {
       throw new Error("Inpaint settings are not ready.");
     }
 
@@ -498,6 +523,24 @@ export function TimelineResultDisplayWorkspace({
 
   return (
     <div className="flex flex-col gap-3" data-testid={testId}>
+      {result.visualStyleAssessment === "style-unassessed" ? (
+        <div
+          className="rounded-md border border-amber-200 bg-amber-50 p-3 text-xs leading-relaxed text-amber-900"
+          data-testid="timeline-visual-style-unassessed"
+        >
+          Visual style: <span className="font-semibold">style-unassessed</span>. This completed legacy result predates
+          visual-style verification and remains available as historical output.
+        </div>
+      ) : result.visualStyle ? (
+        <div
+          className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-900"
+          data-testid="timeline-visual-style-verified"
+        >
+          Visual style verified: <span className="font-semibold">
+            {result.visualStyle === "photoreal" ? "Photoreal" : "Anime"}
+          </span>
+        </div>
+      ) : null}
       {finalReview ? (
         <section className={cn(
           "rounded-md border p-3",
@@ -523,9 +566,13 @@ export function TimelineResultDisplayWorkspace({
               const verifiedRepair = Boolean(repairPair && verificationPair &&
                 repairVerificationMatchesRepairPair(verificationPair, repairPair));
               const requestedVariant = pair.userSelectedVariant ?? pair.defaultVariant;
-              const selected = requestedVariant === "repair" && !verifiedRepair ? pair.defaultVariant : requestedVariant;
+              const finalAvailable = !finalReview.visualStyle || pair.visualStyleMatch?.final === true;
+              const selected = requestedVariant === "repair" && !verifiedRepair ||
+                  requestedVariant === "final" && !finalAvailable
+                ? "preview-upscale"
+                : requestedVariant;
               const availableVariants: TimelineFinalReviewVariant[] = [
-                "final",
+                ...(finalAvailable ? ["final" as const] : []),
                 "preview-upscale",
                 ...(repairPair?.status === "repaired" && repairPair.storedImage && verifiedRepair ? ["repair" as const] : []),
               ];
@@ -551,9 +598,13 @@ export function TimelineResultDisplayWorkspace({
                             "overflow-hidden rounded-md border bg-white text-left transition",
                             selected === variant ? "border-blue-500 ring-2 ring-blue-100" : "border-slate-200 hover:border-slate-400",
                           )}
-                          disabled={!onSelectVariant}
+                          disabled={!resultActionsAllowed || !onSelectVariant}
                           key={variant}
-                          onClick={() => onSelectVariant?.(pair.candidateId, variant)}
+                          onClick={() => {
+                            if (resultActionsAllowed) {
+                              onSelectVariant?.(pair.candidateId, variant);
+                            }
+                          }}
                           type="button"
                         >
                           <Image
@@ -572,6 +623,11 @@ export function TimelineResultDisplayWorkspace({
                       );
                     })}
                   </div>
+                  {!finalAvailable ? (
+                    <p className="mt-2 text-[11px] leading-relaxed text-amber-700">
+                      Final is unavailable because its visual style was mismatched or could not be verified. The verified Preview fallback remains selectable.
+                    </p>
+                  ) : null}
                   {detailedReview && pair.scores && pair.findings ? (
                     <div className="mt-3 grid gap-2 text-[11px] text-slate-600">
                       <div className="grid grid-cols-2 gap-2">
@@ -664,7 +720,7 @@ export function TimelineResultDisplayWorkspace({
                   resultImages.length > 1 ? `Image ${index + 1} of ${resultImages.length}` : "Generated image"
                 )}
               </figcaption>
-              {inpaintAllowed ? (
+              {resultInpaintAllowed ? (
                 <Button
                   className="h-8 gap-1.5 rounded-md bg-sky-600 px-2.5 text-xs text-white hover:bg-sky-700 disabled:opacity-60"
                   disabled={!draft || inpaintStatus === "loading" || reviewedSelections?.[index]?.selectedVariant === "preview-upscale"}
@@ -713,7 +769,7 @@ export function TimelineResultDisplayWorkspace({
           {inpaintMessage}
         </div>
       ) : null}
-      {inpaintAllowed && draft && inpaintImageItem ? (
+      {resultInpaintAllowed && draft && inpaintImageItem ? (
         <InpaintMaskDialog
           busy={inpaintStatus === "loading"}
           draft={draft}

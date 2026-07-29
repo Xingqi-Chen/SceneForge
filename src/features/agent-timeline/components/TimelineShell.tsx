@@ -41,6 +41,7 @@ import {
   setTimelineNodeManualResult,
   updateTimelineFinalRedrawPreset,
   updateTimelineSceneInputSettings,
+  updateTimelineVisualStyle,
 } from "@/features/agent-timeline/state";
 import {
   resolveTimelineFinalGenerationPolicy,
@@ -103,6 +104,7 @@ import {
 import {
   getRepairManualRecoveryState,
   isRepairManualRecoveryRequired,
+  repairVerificationMatchesRepairPair,
   selectRepairVariant,
 } from "@/features/agent-timeline/final-repair";
 import type {
@@ -168,6 +170,14 @@ import type {
   TimelineWorkflowRecordInput,
 } from "@/features/agent-timeline/timeline-workflow-persistence";
 import { isSingleImageTimelineWorkflowRecord } from "@/features/agent-timeline/timeline-workflow-persistence";
+import {
+  buildRunVisualStyleLlmInstructions,
+  DEFAULT_RUN_VISUAL_STYLE,
+  formatRunVisualStyleLabel,
+  normalizeRunVisualStyle,
+  runVisualStyles,
+  type RunVisualStyle,
+} from "@/features/agent-timeline/run-visual-style";
 import type { CharacterPromptTagTarget } from "@/features/prompt-engine/prompt-library/character-image-prompt-tags";
 import {
   defaultSceneForgeUserSettings,
@@ -399,12 +409,16 @@ async function completeTimelineChatViaApi(
   return payload;
 }
 
-async function requestEmptyRunSceneSuggestionViaApi(promptProfile: PromptProfileId) {
+async function requestEmptyRunSceneSuggestionViaApi(
+  promptProfile: PromptProfileId,
+  visualStyle: RunVisualStyle,
+) {
   const response = await fetch("/api/agent-timeline/run-scene-suggestion", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
       promptProfile,
+      visualStyle,
       nsfw: useEditorStore.getState().project.settings.supportsNsfw === true,
     }),
   });
@@ -437,9 +451,50 @@ function isTimelineNotApplicableResult(value: unknown): value is TimelineNotAppl
     typeof value.message === "string";
 }
 
+function getTimelineWorkflowVisualStyle(workflow: TimelineWorkflowState) {
+  return getRunSceneInputSettings(
+    isRecord(workflow.nodes["scene-input"].result)
+      ? workflow.nodes["scene-input"].result
+      : {},
+  ).visualStyle;
+}
+
+function isCurrentPreviewScoringResult(
+  workflow: TimelineWorkflowState,
+): workflow is TimelineWorkflowState & {
+  nodes: TimelineWorkflowState["nodes"] & {
+    "preview-scoring": TimelineWorkflowState["nodes"]["preview-scoring"] & {
+      result: PreviewScoringTimelineResult;
+    };
+  };
+} {
+  const node = workflow.nodes["preview-scoring"];
+  if (node.status !== "done" && node.status !== "manual") return false;
+  if (!isPreviewScoringResult(node.result)) return false;
+  return workflow.legacyVisualStyleUnassessed === true ||
+    node.result.rubricVersion === 2 &&
+    node.result.visualStyle === getTimelineWorkflowVisualStyle(workflow);
+}
+
+function getCurrentPreviewExecutionResult(workflow: TimelineWorkflowState) {
+  const node = workflow.nodes["preview-execution"];
+  return (node.status === "done" || node.status === "error") &&
+    isPreviewExecutionResult(node.result)
+    ? node.result
+    : null;
+}
+
+function getCurrentPreviewScoringResult(workflow: TimelineWorkflowState) {
+  return isCurrentPreviewScoringResult(workflow)
+    ? workflow.nodes["preview-scoring"].result
+    : null;
+}
+
 function getTimelineFinalExecutionState(workflow: TimelineWorkflowState | null) {
   if (!workflow) return null;
   const node = workflow.nodes["comfyui-execution"];
+  if (node.status !== "done" && node.status !== "error") return null;
+  if (!isCurrentPreviewScoringResult(workflow)) return null;
   if (isRecord(node.result) && Array.isArray(node.result.finals)) return node.result;
   const details = node.error?.details;
   return isRecord(details) && isRecord(details.partialResult) && Array.isArray(details.partialResult.finals)
@@ -468,21 +523,97 @@ function isRepairVerificationResult(value: unknown): value is RepairVerification
   return isRecord(value) && value.verificationVersion === 1 && Array.isArray(value.pairs);
 }
 
+function getCurrentFinalReviewResult(workflow: TimelineWorkflowState) {
+  const node = workflow.nodes["final-review"];
+  if (node.status !== "done" && node.status !== "error") return null;
+  if (!isFinalReviewResult(node.result)) return null;
+  return workflow.legacyVisualStyleUnassessed === true ||
+    node.result.visualStyle === getTimelineWorkflowVisualStyle(workflow)
+    ? node.result
+    : null;
+}
+
+function getCurrentFinalRepairResult(workflow: TimelineWorkflowState) {
+  const node = workflow.nodes["final-repair"];
+  if (node.status !== "done" && node.status !== "error") return null;
+  if (!isFinalRepairResult(node.result) || !getCurrentFinalReviewResult(workflow)) return null;
+  if (workflow.legacyVisualStyleUnassessed === true) return node.result;
+  const visualStyle = getTimelineWorkflowVisualStyle(workflow);
+  return node.result.pairs.some((pair) =>
+    pair.status === "repaired" && pair.parent?.visualStyle !== visualStyle)
+    ? null
+    : node.result;
+}
+
+function getCurrentRepairVerificationResult(workflow: TimelineWorkflowState) {
+  const node = workflow.nodes["repair-verification"];
+  if (node.status !== "done" && node.status !== "error") return null;
+  if (!isRepairVerificationResult(node.result)) return null;
+  return workflow.legacyVisualStyleUnassessed === true ||
+    node.result.visualStyle === getTimelineWorkflowVisualStyle(workflow)
+    ? node.result
+    : null;
+}
+
+function getCurrentResultDisplayResult(workflow: TimelineWorkflowState) {
+  const node = workflow.nodes["result-display"];
+  if (node.status !== "done" || !isResultDisplayTimelineResult(node.result)) return null;
+  if (workflow.legacyVisualStyleUnassessed === true || isTimelineLegacyDirectReadOnly(workflow)) {
+    return node.result;
+  }
+  const visualStyle = getTimelineWorkflowVisualStyle(workflow);
+  return (node.result.visualStyle === undefined || node.result.visualStyle === visualStyle) &&
+    (node.result.visualStyleAssessment === undefined || node.result.visualStyleAssessment === "verified")
+    ? node.result
+    : null;
+}
+
+function canActOnCurrentResultArtifacts(workflow: TimelineWorkflowState) {
+  const result = getCurrentResultDisplayResult(workflow);
+  const review = getCurrentFinalReviewResult(workflow);
+  const visualStyle = getTimelineWorkflowVisualStyle(workflow);
+  const legacyShapedTransientResult = result?.visualStyle === undefined &&
+    result?.visualStyleAssessment === undefined;
+  return workflow.legacyVisualStyleUnassessed !== true &&
+    !isTimelineLegacyDirectReadOnly(workflow) &&
+    Boolean(result && (
+      legacyShapedTransientResult ||
+      workflow.nodes["final-review"].status === "done" &&
+      review?.visualStyle === visualStyle &&
+      result.visualStyle === visualStyle
+    ));
+}
+
 function getSelectedTimelineArtifactUrl(workflow: TimelineWorkflowState) {
-  const display = workflow.nodes["result-display"].result;
-  if (!isResultDisplayTimelineResult(display)) return null;
-  const review = workflow.nodes["final-review"].result;
-  if (!isFinalReviewResult(review) || !review.pairs.length) return display.image.url;
+  const display = getCurrentResultDisplayResult(workflow);
+  if (!display) return null;
+  const review = getCurrentFinalReviewResult(workflow);
+  if (!review?.pairs.length) return display.image.url;
   const pair = [...review.pairs].sort((left, right) => left.rank - right.rank)[0]!;
-  const selected = pair.userSelectedVariant ?? pair.defaultVariant;
+  const requestedVariant = pair.userSelectedVariant ?? pair.defaultVariant;
+  const finalAvailable = !review.visualStyle || pair.visualStyleMatch?.final === true;
+  let selected = requestedVariant === "final" && !finalAvailable
+    ? "preview-upscale"
+    : requestedVariant;
   if (selected === "preview-upscale") return pair.variants.previewUpscale.url;
   if (selected === "repair") {
-    const repair = workflow.nodes["final-repair"].result;
-    if (isFinalRepairResult(repair)) {
-      const stored = repair.pairs.find((item) => item.candidateId === pair.candidateId)?.storedImage;
-      if (stored) return stored.url;
+    const repairResult = getCurrentFinalRepairResult(workflow);
+    const verificationResult = getCurrentRepairVerificationResult(workflow);
+    const repair = repairResult?.pairs.find((item) => item.candidateId === pair.candidateId);
+    const verification = verificationResult?.pairs.find((item) => item.candidateId === pair.candidateId);
+    const verifiedRepair = Boolean(repair?.status === "repaired" && repair.storedImage && verification &&
+      (!review.visualStyle || (
+        repair.parent?.visualStyle === review.visualStyle &&
+        verificationResult?.visualStyle === review.visualStyle &&
+        verification.visualStyleMatch === true
+      )) &&
+      repairVerificationMatchesRepairPair(verification, repair));
+    if (verifiedRepair && repair?.storedImage) {
+      return repair.storedImage.url;
     }
+    selected = "preview-upscale";
   }
+  if (selected === "preview-upscale") return pair.variants.previewUpscale.url;
   const index = display.finalLinks?.findIndex((link) => link.candidateId === pair.candidateId) ?? -1;
   return index >= 0 ? display.images?.[index]?.url ?? display.image.url : display.image.url;
 }
@@ -614,9 +745,11 @@ async function loadTimelineResourceCandidatesViaApi(promptProfile: PromptProfile
 async function recommendTimelineResourcesViaApi({
   desiredEffect,
   promptProfile,
+  visualStyle,
 }: {
   desiredEffect: string;
   promptProfile: PromptProfileId;
+  visualStyle: RunVisualStyle;
 }) {
   const response = await fetch("/api/civitai-lora-library/ai-recommendation", {
     method: "POST",
@@ -627,6 +760,7 @@ async function recommendTimelineResourcesViaApi({
       desiredEffect,
       maxLoras: 3,
       promptProfile,
+      visualStyle,
     }),
   });
   const payload: unknown = await response.json();
@@ -643,6 +777,7 @@ async function loadTimelineStyleAdviceViaApi({
   finalPositivePrompt,
   referenceResolution,
   selectedResources,
+  visualStyle,
 }: {
   baseNegativePrompt: string;
   finalPositivePrompt: string;
@@ -651,6 +786,7 @@ async function loadTimelineStyleAdviceViaApi({
     width: number;
   };
   selectedResources: SelectedCivitaiResourcesPreview;
+  visualStyle: RunVisualStyle;
 }) {
   if (!selectedResources.checkpoint) {
     return null;
@@ -672,7 +808,12 @@ async function loadTimelineStyleAdviceViaApi({
         artistPrompts: [],
         preset,
         resources: selectedResources,
-      }),
+      }).map((message, index) => index === 0 && typeof message.content === "string"
+        ? {
+            ...message,
+            content: `${message.content}\n${buildRunVisualStyleLlmInstructions(visualStyle)}`,
+          }
+        : message),
       temperature: 0.25,
       maxTokens: 900,
     },
@@ -787,10 +928,12 @@ function buildSceneInputAiRequest({
   action,
   promptProfile,
   sceneRequest,
+  visualStyle,
 }: {
   action: SceneInputAiAction;
   promptProfile: PromptProfileId;
   sceneRequest: string;
+  visualStyle: RunVisualStyle;
 }): LlmChatRequest {
   const actionInstruction = action === "rewrite"
     ? [
@@ -802,7 +945,9 @@ function buildSceneInputAiRequest({
         sceneRequest
           ? "Suggest one stronger alternate scene request inspired by the current draft, with the main character as the clear focus."
           : "Suggest one concise, visually rich single-image scene request centered on one clearly described main character.",
-        "Use Japanese illustration / anime-inspired style only as the rendering style: clean character design, expressive eyes, readable silhouette, polished linework, and painterly color accents.",
+        visualStyle === "anime"
+          ? "Use Japanese anime illustration only as the rendering style: stylized character design, clean linework, anime coloring, and illustrated shading."
+          : "Use live-action photography/film only as the rendering style: natural human proportions, skin and material response, physically plausible lighting, and photographic optics.",
         "Do not add Japanese cultural content unless the user asks for it; avoid inventing shrine, kimono, school uniform, samurai, archer, yokai, torii, katana, or other Japan-themed setting, clothing, action, or props just because of the style.",
         "Prioritize character details over environment: identity or role, visible appearance, clothing, expression, pose/action, and how the character relates to the scene.",
         "Keep the setting brief and supportive; avoid long background, atmosphere, prop, or lighting lists that can dilute character detail.",
@@ -821,6 +966,7 @@ function buildSceneInputAiRequest({
           "All natural-language fields must be English.",
           "Keep the result as a single-image scene request for an editable visual prompt workflow.",
           `Selected prompt profile: ${formatPromptProfileLabel(promptProfile)} (${promptProfile}).`,
+          buildRunVisualStyleLlmInstructions(visualStyle, promptProfile),
           ...actionInstruction,
           'Required shape: {"sceneRequest":"..."}',
         ].join("\n"),
@@ -832,6 +978,7 @@ function buildSceneInputAiRequest({
             action,
             currentSceneRequest: sceneRequest,
             promptProfile,
+            visualStyle,
           },
           null,
           2,
@@ -1156,6 +1303,9 @@ function getNewPromptTagApplyMode(
 }
 
 function getTimelineExecutionDraft(workflow: TimelineWorkflowState): GenerationDraft | null {
+  if (!getTimelineFinalExecutionState(workflow)) {
+    return null;
+  }
   const execution = workflow.nodes["comfyui-execution"].result;
 
   if (!isRecord(execution) || !isRecord(execution.request)) {
@@ -1194,6 +1344,8 @@ export function TimelineShell() {
   const [sceneRequest, setSceneRequest] = useState("");
   const [selectedPromptProfile, setSelectedPromptProfile] =
     useState<PromptProfileId>(defaultPromptProfileId);
+  const [selectedVisualStyle, setSelectedVisualStyle] =
+    useState<RunVisualStyle>(DEFAULT_RUN_VISUAL_STYLE);
   const [selectedImageCount, setSelectedImageCount] = useState(DEFAULT_TIMELINE_IMAGE_COUNT);
   const [selectedSourceDenoise, setSelectedSourceDenoise] = useState(DEFAULT_TIMELINE_SOURCE_DENOISE);
   const [selectedSourceImage, setSelectedSourceImage] = useState<TimelineSourceImage | null>(null);
@@ -1242,8 +1394,21 @@ export function TimelineShell() {
 
   const previewWorkflow = useMemo(() => createTimelineWorkflowState({ workflowId: "draft-workflow" }), []);
   const activeWorkflow = workflow ?? previewWorkflow;
+  const currentPreviewExecution = getCurrentPreviewExecutionResult(activeWorkflow);
+  const currentPreviewScoring = getCurrentPreviewScoringResult(activeWorkflow);
+  const currentFinalExecution = getTimelineFinalExecutionState(activeWorkflow);
+  const currentFinalReview = getCurrentFinalReviewResult(activeWorkflow);
+  const currentFinalRepair = getCurrentFinalRepairResult(activeWorkflow);
+  const currentRepairVerification = getCurrentRepairVerificationResult(activeWorkflow);
+  const currentResultDisplay = getCurrentResultDisplayResult(activeWorkflow);
+  const activeWorkflowAllowsPreviewSelection =
+    activeWorkflow.legacyVisualStyleUnassessed !== true &&
+    activeWorkflow.nodes["preview-execution"].status === "done" &&
+    Boolean(currentPreviewExecution && currentPreviewScoring);
+  const activeWorkflowAllowsResultActions = canActOnCurrentResultArtifacts(activeWorkflow);
   const activeWorkflowAllowsInpaint = !isTimelineLegacyDirectReadOnly(activeWorkflow) &&
-    getTimelineWorkflowPromptProfile(activeWorkflow) !== "krea2";
+    getTimelineWorkflowPromptProfile(activeWorkflow) !== "krea2" &&
+    activeWorkflowAllowsResultActions;
   const selectedArtifactUrl = getSelectedTimelineArtifactUrl(activeWorkflow);
   const selectedNode = activeWorkflow.nodes[selectedNodeId];
   const selectedContent = timelineNodeContent[selectedNodeId];
@@ -1273,8 +1438,8 @@ export function TimelineShell() {
   );
   const sceneRequestIsUsable = sceneRequest.trim().length > 0;
   const isKrea2Profile = selectedPromptProfile === "krea2";
-  const repairManualRecoveryPair = isFinalRepairResult(activeWorkflow.nodes["final-repair"].result)
-    ? activeWorkflow.nodes["final-repair"].result.pairs.find(isRepairManualRecoveryRequired)
+  const repairManualRecoveryPair = currentFinalRepair
+    ? currentFinalRepair.pairs.find(isRepairManualRecoveryRequired)
     : undefined;
   const repairManualRecovery = repairManualRecoveryPair
     ? getRepairManualRecoveryState(repairManualRecoveryPair)
@@ -1320,6 +1485,7 @@ export function TimelineShell() {
       promptProfile: PromptProfileId;
       stylePalette: GenerationStylePaletteSnapshot | undefined;
       styleReference: StyleReferenceSnapshot | undefined;
+      visualStyle: RunVisualStyle;
     }> = {},
   ): RunSceneInputSettingsSnapshot {
     const promptProfile = overrides.promptProfile ?? selectedPromptProfile;
@@ -1330,6 +1496,7 @@ export function TimelineShell() {
       promptProfile,
       stylePalette: "stylePalette" in overrides ? overrides.stylePalette : stylePalette,
       styleReference: "styleReference" in overrides ? overrides.styleReference : styleReference,
+      visualStyle: overrides.visualStyle ?? selectedVisualStyle,
     });
   }
 
@@ -1404,6 +1571,7 @@ export function TimelineShell() {
     setWorkflowProjectName(projectName);
     setSceneRequest(record.sceneRequest);
     setSelectedPromptProfile(record.selectedPromptProfile);
+    setSelectedVisualStyle(restoredSettings.visualStyle);
     setSelectedImageCount(restoredImageCount);
     setSelectedSourceDenoise(getSceneInputSourceDenoise(restoredWorkflow));
     setSelectedSourceImage(getSceneInputSourceImage(restoredWorkflow));
@@ -1589,6 +1757,7 @@ export function TimelineShell() {
     workflow,
     sceneRequest,
     selectedPromptProfile,
+    selectedVisualStyle,
     selectedImageCount,
     selectedNodeId,
     outputDisplayModes,
@@ -1882,6 +2051,7 @@ export function TimelineShell() {
               return recommendTimelineResourcesViaApi({
                 desiredEffect: request.desiredEffect,
                 promptProfile: request.promptProfile,
+                visualStyle: request.visualStyle,
               });
             },
             supportsNsfw: () => useEditorStore.getState().project.settings.supportsNsfw,
@@ -2092,13 +2262,16 @@ export function TimelineShell() {
   }
 
   function handlePreviewSelection(selectedCandidateIds: string[]) {
-    if (!workflow || isRunningRef.current) return;
+    if (!workflow || isRunningRef.current || !isCurrentPreviewScoringResult(workflow) ||
+        workflow.nodes["preview-execution"].status !== "done") return;
     const scoring = workflow.nodes["preview-scoring"].result;
     const previews = workflow.nodes["preview-execution"].result;
     if (!isPreviewScoringResult(scoring) || scoring.rubricVersion !== 2 || !isPreviewExecutionResult(previews) ||
         selectedCandidateIds.length !== previews.finalCount || new Set(selectedCandidateIds).size !== previews.finalCount) return;
     const successfulIds = new Set(previews.candidates.filter((candidate) => candidate.status === "done").map((candidate) => candidate.candidateId));
-    const scoredIds = new Set(scoring.scores.map((score) => score.candidateId));
+    const scoredIds = new Set(scoring.scores
+      .filter((score) => "visualStyleMatch" in score && score.visualStyleMatch === true)
+      .map((score) => score.candidateId));
     if (!selectedCandidateIds.every((id) => successfulIds.has(id) && scoredIds.has(id))) return;
     const manuallySelected = setTimelineNodeManualResult(workflow, "preview-scoring", {
       ...scoring,
@@ -2122,7 +2295,7 @@ export function TimelineShell() {
   }
 
   function handleFinalVariantSelection(candidateId: string, variant: "final" | "preview-upscale" | "repair") {
-    if (!workflow || isRunningRef.current) return;
+    if (!workflow || isRunningRef.current || !canActOnCurrentResultArtifacts(workflow)) return;
     const selected = selectRepairVariant(workflow, candidateId, variant);
     if (selected === workflow) return;
     commitWorkflow(selected, { selectedNodeId });
@@ -2247,6 +2420,36 @@ export function TimelineShell() {
       selectedPromptProfile: promptProfile,
       selectedImageCount: nextImageCount,
     });
+  }
+
+  function handleVisualStyleChange(value: string) {
+    if (rejectLegacyDirectMutation() || isRunningRef.current) {
+      return;
+    }
+    const visualStyle = normalizeRunVisualStyle(value);
+    if (visualStyle === selectedVisualStyle) {
+      return;
+    }
+
+    setSelectedVisualStyle(visualStyle);
+    setStyleAdvice(EMPTY_STYLE_PALETTE_ADVICE);
+    setParametersOpen(false);
+
+    if (!workflow) {
+      return;
+    }
+
+    invalidateTimelineRun();
+    commitWorkflow(updateTimelineVisualStyle(
+      workflow,
+      getComposerSettingsSnapshot({ visualStyle }),
+    ));
+    setNotices((current) => ({
+      ...current,
+      "scene-input":
+        `Visual style changed to ${formatRunVisualStyleLabel(visualStyle)}. ` +
+        "Scene Prompt and downstream nodes are stale; explicit resources and generation settings were preserved.",
+    }));
   }
 
   function handleImageCountChange(value: string) {
@@ -2481,10 +2684,16 @@ export function TimelineShell() {
     const selectedIds = scoringNode.result.selectedCandidateIds;
     if (!Number.isSafeInteger(finalCount) || (finalCount as number) < 1 ||
         selectedIds.length !== finalCount || new Set(selectedIds).size !== finalCount) return false;
-    return selectedIds.every((candidateId) => typeof candidateId === "string" &&
+    return scoringNode.result.visualStyle === getRunSceneInputSettings(
+      isRecord(candidateWorkflow.nodes["scene-input"].result)
+        ? candidateWorkflow.nodes["scene-input"].result
+        : {},
+    ).visualStyle &&
+      selectedIds.every((candidateId) => typeof candidateId === "string" &&
       candidates.filter((candidate) => isRecord(candidate) && candidate.candidateId === candidateId &&
         candidate.status === "done" && isRecord(candidate.storedImage)).length === 1 &&
-      scores.filter((score) => isRecord(score) && score.candidateId === candidateId).length === 1);
+      scores.filter((score) => isRecord(score) && score.candidateId === candidateId &&
+        score.visualStyleMatch === true).length === 1);
   }
 
   function handleFinalRedrawPresetChange(nextPreset: TimelineFinalRedrawPreset) {
@@ -2515,6 +2724,7 @@ export function TimelineShell() {
           : selectedPromptProfile),
       checkpointId: selectedStyleCheckpointId,
       promptProfile: selectedPromptProfile,
+      visualStyle: selectedVisualStyle,
     });
   }
 
@@ -2740,7 +2950,7 @@ export function TimelineShell() {
 
     try {
       const emptySuggestion = isEmptySuggestion
-        ? await requestEmptyRunSceneSuggestionViaApi(selectedPromptProfile)
+        ? await requestEmptyRunSceneSuggestionViaApi(selectedPromptProfile, selectedVisualStyle)
         : null;
       const response = emptySuggestion
         ? null
@@ -2749,6 +2959,7 @@ export function TimelineShell() {
               action,
               promptProfile: selectedPromptProfile,
               sceneRequest: currentSceneRequest,
+              visualStyle: selectedVisualStyle,
             }),
           );
 
@@ -2881,6 +3092,7 @@ export function TimelineShell() {
     setWorkflowProjectName("");
     setSceneRequest("");
     setSelectedPromptProfile(defaultPromptProfileId);
+    setSelectedVisualStyle(DEFAULT_RUN_VISUAL_STYLE);
     setSelectedImageCount(DEFAULT_TIMELINE_IMAGE_COUNT);
     setSelectedSourceDenoise(DEFAULT_TIMELINE_SOURCE_DENOISE);
     setSelectedSourceImage(null);
@@ -3228,6 +3440,7 @@ export function TimelineShell() {
             promptProfile={selectedPromptProfile}
             selectedCheckpoint={selectedStyleResources.checkpoint}
             snapshot={styleReference}
+            visualStyle={selectedVisualStyle}
             workflowLabel="Run"
           />
           <ComfyUiGenerationDialog
@@ -3259,6 +3472,7 @@ export function TimelineShell() {
               sceneRequest,
               selectedStyleCheckpointId ?? "",
               selectedStyleLoraIds.join(","),
+              selectedVisualStyle,
             ].join("\u0000")}
             savedParameters={savedStyleParameters}
             selectedCheckpointId={selectedStyleCheckpointId}
@@ -3295,6 +3509,25 @@ export function TimelineShell() {
             {promptProfileIds.map((profile) => (
               <option key={profile} value={profile}>
                 {formatPromptProfileLabel(profile)}
+              </option>
+            ))}
+          </select>
+          <label
+            className="ml-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500"
+            htmlFor="run-visual-style"
+          >
+            Visual style
+          </label>
+          <select
+            className="h-8 rounded-md border border-slate-200 bg-white px-2 text-xs text-slate-800 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+            disabled={isRunning || isLegacyDirectReadOnly}
+            id="run-visual-style"
+            onChange={(event) => handleVisualStyleChange(event.target.value)}
+            value={selectedVisualStyle}
+          >
+            {runVisualStyles.map((visualStyle) => (
+              <option key={visualStyle} value={visualStyle}>
+                {formatRunVisualStyleLabel(visualStyle)}
               </option>
             ))}
           </select>
@@ -3436,7 +3669,7 @@ export function TimelineShell() {
       (isRunning && singleImageGenerationStageNodeIds.includes(selectedNodeId as TimelineGenerationStage)
         ? selectedNodeId as TimelineGenerationStage
         : undefined);
-    const simpleFinalResult = getTimelineFinalExecutionState(activeWorkflow);
+    const simpleFinalResult = currentFinalExecution;
     const simpleFallbacks = getTimelineExecutionFallbacks(simpleFinalResult);
     const simpleFinalDoneCount = isRecord(simpleFinalResult) && Array.isArray(simpleFinalResult.finals)
       ? simpleFinalResult.finals.filter((item) => isRecord(item) && item.status === "done").length
@@ -3444,14 +3677,10 @@ export function TimelineShell() {
     const simpleFinalCount = isRecord(simpleFinalResult) && typeof simpleFinalResult.finalCount === "number"
       ? simpleFinalResult.finalCount
       : selectedImageCount;
-    const simpleScoringResult = activeWorkflow.nodes["preview-scoring"].result;
-    const simpleFinalReview = isFinalReviewResult(activeWorkflow.nodes["final-review"].result)
-      ? activeWorkflow.nodes["final-review"].result
-      : null;
-    const simpleFinalRepair = isFinalRepairResult(activeWorkflow.nodes["final-repair"].result)
-      ? activeWorkflow.nodes["final-repair"].result : null;
-    const simpleRepairVerification = isRepairVerificationResult(activeWorkflow.nodes["repair-verification"].result)
-      ? activeWorkflow.nodes["repair-verification"].result : null;
+    const simpleScoringResult = currentPreviewScoring;
+    const simpleFinalReview = currentFinalReview;
+    const simpleFinalRepair = currentFinalRepair;
+    const simpleRepairVerification = currentRepairVerification;
     const simpleRepairManualRecoveryPair = simpleFinalRepair?.pairs.find(isRepairManualRecoveryRequired);
     const simpleRepairManualRecovery = simpleRepairManualRecoveryPair
       ? getRepairManualRecoveryState(simpleRepairManualRecoveryPair)
@@ -3703,6 +3932,7 @@ export function TimelineShell() {
                 <h2 className="text-sm font-bold text-slate-900">Artifact result</h2>
                 <div className="mt-3">
                   <TimelineResultDisplayWorkspace
+                    actionsAllowed={activeWorkflowAllowsResultActions}
                     draft={timelineResultDraft}
                     emptyState={timelineNodeContent["result-display"].emptyState}
                     errorMessage={resultNode.error?.message}
@@ -3711,10 +3941,13 @@ export function TimelineShell() {
                     finalReview={simpleFinalReview}
                     key={resultNode.updatedAt}
                     inpaintAllowed={activeWorkflowAllowsInpaint}
-                    onSelectVariant={handleFinalVariantSelection}
+                    onSelectVariant={activeWorkflowAllowsResultActions
+                      ? handleFinalVariantSelection
+                      : undefined}
                     repairVerification={simpleRepairVerification}
-                    result={isResultDisplayTimelineResult(resultNode.result) ? resultNode.result : null}
+                    result={currentResultDisplay}
                     selectedResources={timelineResultSelectedResources}
+                    visualStyle={getTimelineWorkflowVisualStyle(activeWorkflow)}
                   />
                 </div>
               </section>
@@ -3935,6 +4168,25 @@ export function TimelineShell() {
                         {promptProfileIds.map((profile) => (
                           <option key={profile} value={profile}>
                             {formatPromptProfileLabel(profile)}
+                          </option>
+                        ))}
+                      </select>
+                      <label
+                        className="ml-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500"
+                        htmlFor="run-visual-style"
+                      >
+                        Visual style
+                      </label>
+                      <select
+                        className="h-8 rounded-md border border-slate-200 bg-white px-2 text-xs text-slate-800 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+                        disabled={isRunning || isLegacyDirectReadOnly}
+                        id="run-visual-style"
+                        onChange={(event) => handleVisualStyleChange(event.target.value)}
+                        value={selectedVisualStyle}
+                      >
+                        {runVisualStyles.map((visualStyle) => (
+                          <option key={visualStyle} value={visualStyle}>
+                            {formatRunVisualStyleLabel(visualStyle)}
                           </option>
                         ))}
                       </select>
@@ -4250,35 +4502,35 @@ export function TimelineShell() {
                   ) : selectedOutputDisplayMode === "visual" &&
                       (selectedWorkspaceKey === "preview-execution" || selectedWorkspaceKey === "preview-scoring") ? (
                     <TimelinePreviewWorkspace
-                      disabled={isRunning || isLegacyDirectReadOnly}
+                      disabled={isRunning || isLegacyDirectReadOnly || !activeWorkflowAllowsPreviewSelection}
                       key={`${activeWorkflow.nodes["preview-execution"].updatedAt}-${activeWorkflow.nodes["preview-scoring"].updatedAt}`}
-                      onRegenerate={handlePreviewSelection}
-                      previews={isPreviewExecutionResult(activeWorkflow.nodes["preview-execution"].result)
-                        ? activeWorkflow.nodes["preview-execution"].result : null}
-                      scoring={isPreviewScoringResult(activeWorkflow.nodes["preview-scoring"].result)
-                        ? activeWorkflow.nodes["preview-scoring"].result : null}
+                      onRegenerate={activeWorkflowAllowsPreviewSelection
+                        ? handlePreviewSelection
+                        : undefined}
+                      previews={currentPreviewExecution}
+                      scoring={currentPreviewScoring}
                     />
                   ) : selectedOutputDisplayMode === "visual" &&
                       (selectedWorkspaceKey === "final-review" || selectedWorkspaceKey === "final-repair" ||
                         selectedWorkspaceKey === "repair-verification" || selectedWorkspaceKey === "result-display") ? (
                     <TimelineResultDisplayWorkspace
+                      actionsAllowed={activeWorkflowAllowsResultActions}
                       draft={timelineResultDraft}
                       emptyState={selectedContent.emptyState}
                       detailedReview
                       errorMessage={activeWorkflow.nodes["final-review"].error?.message ?? selectedNode.error?.message}
-                      fallbacks={getTimelineExecutionFallbacks(getTimelineFinalExecutionState(activeWorkflow))}
-                      finalRepair={isFinalRepairResult(activeWorkflow.nodes["final-repair"].result)
-                        ? activeWorkflow.nodes["final-repair"].result : null}
-                      finalReview={isFinalReviewResult(activeWorkflow.nodes["final-review"].result)
-                        ? activeWorkflow.nodes["final-review"].result : null}
+                      fallbacks={getTimelineExecutionFallbacks(currentFinalExecution)}
+                      finalRepair={currentFinalRepair}
+                      finalReview={currentFinalReview}
                       key={selectedNode.updatedAt}
                       inpaintAllowed={activeWorkflowAllowsInpaint}
-                      onSelectVariant={handleFinalVariantSelection}
-                      repairVerification={isRepairVerificationResult(activeWorkflow.nodes["repair-verification"].result)
-                        ? activeWorkflow.nodes["repair-verification"].result : null}
-                      result={isResultDisplayTimelineResult(activeWorkflow.nodes["result-display"].result)
-                        ? activeWorkflow.nodes["result-display"].result : null}
+                      onSelectVariant={activeWorkflowAllowsResultActions
+                        ? handleFinalVariantSelection
+                        : undefined}
+                      repairVerification={currentRepairVerification}
+                      result={currentResultDisplay}
                       selectedResources={timelineResultSelectedResources}
+                      visualStyle={getTimelineWorkflowVisualStyle(activeWorkflow)}
                     />
                   ) : selectedOutputDisplayMode === "visual" && isTimelineEditorWorkspaceNode(selectedNodeId) ? (
                     <TimelineEditorWorkspace

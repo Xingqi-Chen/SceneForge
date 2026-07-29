@@ -25,6 +25,12 @@ import { ComfyUiSequenceReferenceStorageError } from "@/features/comfyui/sequenc
 import { createLiteLlmClient, LiteLlmError } from "@/features/llm";
 
 import { getRunSceneInputSettings } from "./run-input-settings";
+import {
+  formatRunVisualStyleLabel,
+  getRunVisualStyleNegativeGuidance,
+  getRunVisualStylePositiveGuidance,
+  type RunVisualStyle,
+} from "./run-visual-style";
 import { timelineFinalGenerationPolicy } from "./final-generation-policy";
 import { createTimelineNodeError, normalizeTimelineError } from "./state";
 import {
@@ -695,6 +701,7 @@ function validateScores(
   content: string,
   candidates: TimelinePreviewCandidate[],
   finalCount: number,
+  visualStyle: RunVisualStyle,
 ): PreviewScoringTimelineResultV2 {
   const parsed = parseJsonObject(content);
   if (!Array.isArray(parsed.candidates)) {
@@ -722,6 +729,12 @@ function validateScores(
       }
       return [field, value];
     })) as Record<(typeof fieldNames)[number], number>;
+    if (typeof entry.visualStyleMatch !== "boolean") {
+      invalidPreviewScoring(
+        "visual_style_match_missing",
+        `visualStyleMatch for ${entry.candidateId} must be a boolean.`,
+      );
+    }
     if (!Array.isArray(entry.criticalDefects) || entry.criticalDefects.length > 32) {
       invalidPreviewScoring(
         "critical_defects_missing",
@@ -758,6 +771,7 @@ function validateScores(
       ...values,
       criticalDefects,
       eligible,
+      visualStyleMatch: entry.visualStyleMatch,
       rawTotal,
       total: Number(rawTotal.toFixed(2)),
       ...(typeof entry.rationale === "string" && entry.rationale.trim()
@@ -769,7 +783,8 @@ function validateScores(
     invalidPreviewScoring("candidate_coverage", "Scoring response omitted one or more preview candidates.");
   }
   const indexById = new Map(expectedIds.map((id, index) => [id, index]));
-  scores.sort((a, b) => Number(b.eligible) - Number(a.eligible) ||
+  scores.sort((a, b) => Number(b.visualStyleMatch) - Number(a.visualStyleMatch) ||
+    Number(b.eligible) - Number(a.eligible) ||
     b.rawTotal - a.rawTotal || b.composition - a.composition ||
     (indexById.get(a.candidateId) ?? 0) - (indexById.get(b.candidateId) ?? 0));
   const ranked = scores.map((score, index) => ({
@@ -782,15 +797,31 @@ function validateScores(
     total: score.total,
     criticalDefects: score.criticalDefects,
     eligible: score.eligible,
+    visualStyleMatch: score.visualStyleMatch,
     ...(score.rationale ? { rationale: score.rationale } : {}),
     rank: index + 1,
   }));
-  const selectedCandidateIds = ranked.slice(0, finalCount).map((score) => score.candidateId);
+  const matching = ranked.filter((score) => score.visualStyleMatch);
+  if (matching.length < finalCount) {
+    throw new TimelineNodeExecutionError(createTimelineNodeError(
+      "timeline_request_invalid",
+      `Only ${matching.length} of ${candidates.length} Preview candidates matched the selected ${formatRunVisualStyleLabel(visualStyle)} style. ` +
+        `At least ${finalCount} matching candidate${finalCount === 1 ? " is" : "s are"} required before Final generation. Retry Preview generation or change the prompt/resources.`,
+      {
+        finalCount,
+        matchingCount: matching.length,
+        recoverable: true,
+        visualStyle,
+      },
+    ));
+  }
+  const selectedCandidateIds = matching.slice(0, finalCount).map((score) => score.candidateId);
   return {
     rubricVersion: 2,
     scores: ranked,
     selectedCandidateIds,
     selectionSource: "ai",
+    visualStyle,
     ...createTimelinePreviewSelectionFallbackMetadata(ranked, selectedCandidateIds),
   };
 }
@@ -805,6 +836,7 @@ async function scorePreviews(
   const canvas = context.workflow.nodes["canvas-binding"].result;
   const parameters = context.workflow.nodes["parameter-recommendation"].result;
   const nsfw = isRecord(sceneInput) && sceneInput.nsfw === true;
+  const visualStyle = getRunSceneInputSettings(isRecord(sceneInput) ? sceneInput : {}).visualStyle;
   const model = process.env.LITELLM_DEFAULT_MODEL;
   if (!model) {
     throw new TimelineNodeExecutionError(createTimelineNodeError(
@@ -817,7 +849,10 @@ async function scorePreviews(
     type: "text",
     text: [
       "Compare every labeled candidate against the same intended scene before assigning scores. Return JSON only with this exact shape:",
-      "{\"candidates\":[{\"candidateId\":\"preview-1\",\"criticalDefects\":[],\"adherence\":0,\"composition\":0,\"anatomy\":0,\"style\":0,\"technical\":0,\"rationale\":\"concise comparative assessment\"}]}",
+      "{\"candidates\":[{\"candidateId\":\"preview-1\",\"visualStyleMatch\":true,\"criticalDefects\":[],\"adherence\":0,\"composition\":0,\"anatomy\":0,\"style\":0,\"technical\":0,\"rationale\":\"concise comparative assessment\"}]}",
+      `The authoritative visual domain is ${formatRunVisualStyleLabel(visualStyle)} (${visualStyle}): ${getRunVisualStylePositiveGuidance(visualStyle)}.`,
+      `Set visualStyleMatch false when the rendered image belongs to an opposing domain such as: ${getRunVisualStyleNegativeGuidance(visualStyle).join(", ")}.`,
+      "visualStyleMatch must be a boolean for every candidate. Judge the rendered image, not generic prompt vocabulary. Generic photo, realistic, photorealistic, camera/lens, bokeh, and depth-of-field terms alone do not decide the image domain.",
       `Allowed criticalDefects categories: ${timelinePreviewCriticalDefectCategories.join(", ")}.`,
       "criticalDefects must be an array of those category strings. SceneForge derives eligibility locally; do not add an eligibility decision.",
       "Each numeric score must be 0-100. Preserve independent scores for prompt adherence, composition, anatomy/structure, style/identity, and technical quality.",
@@ -869,7 +904,7 @@ async function scorePreviews(
               role: "user" as const,
               content: "Repair the response schema. The previous response failed validation: " +
                 `${lastValidationError.message.slice(0, 240)} Return exactly one JSON object, cover every candidate ID once, ` +
-                "use only allowed criticalDefects category strings, and use 0-100 finite numbers or numeric strings.",
+                "include boolean visualStyleMatch for every candidate, use only allowed criticalDefects category strings, and use 0-100 finite numbers or numeric strings.",
             },
           ],
         }
@@ -884,7 +919,7 @@ async function scorePreviews(
       continue;
     }
     try {
-      return validateScores(completion.content, candidates, previews.finalCount);
+      return validateScores(completion.content, candidates, previews.finalCount, visualStyle);
     } catch (error) {
       if (error instanceof TimelineNodeExecutionError) throw error;
       lastFailure = "validation";
@@ -1031,12 +1066,17 @@ async function executeFinals(
   return partialResult;
 }
 
-function loadResultDisplay(execution: ComfyUiExecutionTimelineResult): ResultDisplayTimelineResult {
+function loadResultDisplay(
+  execution: ComfyUiExecutionTimelineResult,
+  context: TimelineNodeExecutionContext,
+): ResultDisplayTimelineResult {
   const completed = execution.finals.filter((item) => item.status === "done" && item.sourceImage && item.storedImage && item.promptId);
   if (!execution.completed || completed.length !== execution.finalCount) {
     throw new TimelineNodeExecutionError(createTimelineNodeError("comfyui_execution_failed", "All selected finals must complete before result display."));
   }
   const first = completed[0]!;
+  const sceneInput = context.workflow.nodes["scene-input"].result;
+  const visualStyle = getRunSceneInputSettings(isRecord(sceneInput) ? sceneInput : {}).visualStyle;
   const fallbacks = completed.flatMap((item) => item.previewUpscale ? [{
     candidateId: item.candidateId,
     rank: item.rank,
@@ -1045,6 +1085,8 @@ function loadResultDisplay(execution: ComfyUiExecutionTimelineResult): ResultDis
   }] : []);
   return {
     completed: true,
+    visualStyle,
+    visualStyleAssessment: "verified",
     image: { ...first.sourceImage!, url: first.storedImage!.url },
     images: completed.map((item) => ({ ...item.sourceImage!, url: item.storedImage!.url })),
     promptId: first.promptId!,
@@ -1085,7 +1127,9 @@ export function createTimelineT8ServerNodeAdapters(
           ...reviewed,
           pairs: reviewed.pairs.map((pair) => {
             const userSelectedVariant = selectionByCandidate.get(pair.candidateId);
-            return userSelectedVariant ? { ...pair, userSelectedVariant } : pair;
+            const selectable = userSelectedVariant === "preview-upscale" ||
+              userSelectedVariant === "final" && pair.visualStyleMatch?.final === true;
+            return userSelectedVariant && selectable ? { ...pair, userSelectedVariant } : pair;
           }),
         },
         source: "ai",

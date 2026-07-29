@@ -48,6 +48,22 @@ describe("Run generation confirmation contract", () => {
       .not.toBe(createTimelineGenerationConfirmationFingerprint(enabled));
   });
 
+  it("binds the normalized visual style", () => {
+    const anime = createTimelineWorkflowState({
+      workflowId: "confirmation-visual-style",
+      sceneRequest: "A glass greenhouse",
+      settingsSnapshot: { visualStyle: "anime" },
+    });
+    const photoreal = createTimelineWorkflowState({
+      workflowId: "confirmation-visual-style",
+      sceneRequest: "A glass greenhouse",
+      settingsSnapshot: { visualStyle: "photoreal" },
+    });
+
+    expect(createTimelineGenerationConfirmationFingerprint(anime))
+      .not.toBe(createTimelineGenerationConfirmationFingerprint(photoreal));
+  });
+
   it("requires the complete Krea v3 preset, family, step, and denoise contract", () => {
     let workflow = createTimelineWorkflowState({
       workflowId: "confirmation-krea-v3-policy",
@@ -73,6 +89,7 @@ describe("Run generation confirmation contract", () => {
       finalPolicyVersion: 3,
       finalRedrawPreset: "balanced",
       finalSteps: 4,
+      visualStyle: "anime",
     });
 
     expect(isTimelineGenerationConfirmationCurrent(workflow)).toBe(true);

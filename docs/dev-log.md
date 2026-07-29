@@ -2,6 +2,34 @@
 
 This log records dated implementation and documentation work. Keep entries concise and evidence-oriented.
 
+## 2026-07-27
+
+### T51 / Issue #172 Run visual-style control
+
+Summary:
+
+- Added one independent Anime/Photoreal Run selector to Simple and Detailed Composer modes, propagated it through suggestion/rewrite, Scene Prompt, resource/parameter advice, style-reference analysis, confirmation, and persistence, and preserved explicit resources and generation settings while staling from Scene Prompt on change.
+- Added deterministic profile-aware prompt compilation with an authoritative structured `visualStyleAndMedium` section, exact local positive guidance, minimal opposing-domain negatives, narrow conflict fallback, and Photoreal suppression of only LLM-authored artist fields while preserving selected resource triggers.
+- Added per-candidate Preview style assessment as a hard gate separate from defect eligibility, plus fail-closed Final and Repair verification. Mismatched or unavailable Final/Repair artifacts cannot be selected or reused; verified formal-size Preview fallbacks remain available.
+- Added persistence identity reconciliation across scoring, Final review, Repair parents/verification, confirmation, retry, and result display. Continuable legacy Runs normalize to Anime and require the current assessment path; completed legacy history restores without provider calls and is labeled `style-unassessed`.
+- Kept Story behavior, existing LiteLLM purpose/model routing, and environment configuration unchanged.
+
+Implementation Gate validation:
+
+- `npm run typecheck` passed.
+- `npm run lint` passed with zero errors and 23 unrelated pre-existing warnings.
+- `npm run build` passed.
+- `npx vitest run src/features/editor/ai-prompt/illustrious-prompt.test.ts src/features/editor/ai-prompt/anima-prompt.test.ts src/features/agent-timeline/run-scene-suggestion.server.test.ts src/app/api/agent-timeline/run-scene-suggestion/route.test.ts` passed (4 files, 51 tests).
+- `git diff --check` passed.
+
+Test and Review Gate validation:
+
+- Focused visual-style and review-fix coverage passed with 233 tests.
+- `npm test` passed with 153 files and 1,908 tests.
+- `npm run typecheck`, `npm run lint`, `npm run build`, and `git diff --check` passed; lint retained 23 unrelated baseline warnings and the build generated 48 static pages.
+- Simple and Detailed jsdom UI coverage verified selector propagation, cross-style artifact removal, variant rejection, sidebar/result hiding, and Inpaint suppression. A completed active-workflow browser smoke remains environment-dependent.
+- Review Gate returned `APPROVE` after one fix loop cleared stale generation artifacts, added current-style/status action guards, and covered bounded `3D cartoon` and `semi-real illustration` conflict variants.
+
 ## 2026-07-26
 
 ### T50 / Issue #169 Adult NSFW empty Run suggestions

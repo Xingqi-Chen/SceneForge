@@ -39,6 +39,10 @@ import {
 } from "./story-style-palette";
 import { getRunSceneInputSettings, sanitizeRunSceneInputSettingsSnapshot } from "./run-input-settings";
 import {
+  isRunVisualStyle,
+  type RunVisualStyle,
+} from "./run-visual-style";
+import {
   getTimelineFinalGenerationPolicyVersion,
   isTimelineFinalRedrawPreset,
   resolveTimelineFinalDimensions,
@@ -697,6 +701,10 @@ function sanitizeSingleImageWorkflowState(raw: Record<string, unknown>): Timelin
   const updatedAt = sanitizeDateString(raw.updatedAt, fallback.updatedAt);
   const rawNodes = isRecord(raw.nodes) ? raw.nodes : {};
   const rawSceneInput = isRecord(rawNodes["scene-input"]) ? rawNodes["scene-input"].result : undefined;
+  const rawSettings = isRecord(rawSceneInput) && isRecord(rawSceneInput.settingsSnapshot)
+    ? rawSceneInput.settingsSnapshot
+    : {};
+  const hasPersistedVisualStyle = isRunVisualStyle(rawSettings.visualStyle);
   const isKrea2Workflow = isRecord(rawSceneInput) && coercePromptProfileId(rawSceneInput.promptProfile) === "krea2";
   const isLegacyWorkflow = !("preview-execution" in rawNodes) || !("preview-scoring" in rawNodes);
   const isLegacyFinalReview = !("final-review" in rawNodes);
@@ -709,6 +717,16 @@ function sanitizeSingleImageWorkflowState(raw: Record<string, unknown>): Timelin
   const requireCurrentFinalPolicy = rawGateResult.finalPolicyVersion === expectedFinalPolicyVersion;
   const hasPersistedCompletedDisplay = isRecord(rawNodes["result-display"]) &&
     rawNodes["result-display"].status === "done";
+  const rawResultDisplay = isRecord(rawNodes["result-display"]) &&
+    isRecord(rawNodes["result-display"].result)
+    ? rawNodes["result-display"].result
+    : {};
+  const hasDurableLegacyVisualStyleMarker = raw.legacyVisualStyleUnassessed === true &&
+    hasPersistedCompletedDisplay &&
+    rawResultDisplay.visualStyleAssessment === "style-unassessed";
+  const legacyVisualStyleUnassessed = hasDurableLegacyVisualStyleMarker ||
+    !hasPersistedVisualStyle && hasPersistedCompletedDisplay;
+  const requiresVisualStyleMigration = !hasPersistedVisualStyle && !hasPersistedCompletedDisplay;
   const definition = getTimelineWorkflowDefinition(singleImageWorkflowMode);
   const nodes = Object.fromEntries(
     definition.nodeIds.map((nodeId) => [
@@ -716,6 +734,94 @@ function sanitizeSingleImageWorkflowState(raw: Record<string, unknown>): Timelin
       sanitizeTimelineNode(nodeId, rawNodes[nodeId], updatedAt, { requireCurrentFinalPolicy }),
     ]),
   ) as TimelineNodeMap;
+  const persistedVisualStyle = getRunSceneInputSettings(
+    isRecord(nodes["scene-input"].result) ? nodes["scene-input"].result : {},
+  ).visualStyle;
+  let visualStyleIdentityInvalidated = false;
+  const staleVisualStyleNodes = (nodeIds: readonly TimelineNodeId[]) => {
+    visualStyleIdentityInvalidated = true;
+    for (const nodeId of nodeIds) {
+      nodes[nodeId] = {
+        ...nodes[nodeId],
+        status: "stale",
+        result: undefined,
+        error: undefined,
+        source: "system",
+        updatedAt,
+      };
+    }
+  };
+  if (requiresVisualStyleMigration &&
+      (nodes["scene-input"].status === "done" || nodes["scene-input"].status === "manual")) {
+    if ((nodes["scene-prompt"].status === "done" || nodes["scene-prompt"].status === "manual") &&
+        isRecord(nodes["scene-prompt"].result)) {
+      nodes["scene-prompt"] = {
+        ...nodes["scene-prompt"],
+        result: {
+          ...nodes["scene-prompt"].result,
+          visualStyle: persistedVisualStyle,
+        },
+      };
+    }
+    for (const nodeId of [
+      "preview-scoring",
+      "comfyui-execution",
+      "final-review",
+      "final-repair",
+      "repair-verification",
+      "result-display",
+    ] as const) {
+      nodes[nodeId] = {
+        ...nodes[nodeId],
+        status: "stale",
+        result: undefined,
+        error: undefined,
+        source: "system",
+        updatedAt,
+      };
+    }
+  } else if (!legacyVisualStyleUnassessed &&
+      (nodes["scene-prompt"].status === "done" || nodes["scene-prompt"].status === "manual") &&
+      (!isRecord(nodes["scene-prompt"].result) ||
+        nodes["scene-prompt"].result.visualStyle !== persistedVisualStyle)) {
+    staleVisualStyleNodes([
+      "scene-prompt",
+      "resource-recommendation",
+      "parameter-recommendation",
+      "generation-gate",
+      "preview-execution",
+      "preview-scoring",
+      "comfyui-execution",
+      "final-review",
+      "final-repair",
+      "repair-verification",
+      "result-display",
+    ] as const);
+  } else if (!legacyVisualStyleUnassessed &&
+      (nodes["generation-gate"].status === "done" || nodes["generation-gate"].status === "manual") &&
+      (!isRecord(nodes["generation-gate"].result) ||
+        nodes["generation-gate"].result.visualStyle !== persistedVisualStyle)) {
+    staleVisualStyleNodes([
+      "generation-gate",
+      "preview-execution",
+      "preview-scoring",
+      "comfyui-execution",
+      "final-review",
+      "final-repair",
+      "repair-verification",
+      "result-display",
+    ] as const);
+  }
+  if (legacyVisualStyleUnassessed && nodes["result-display"].status === "done" &&
+      isRecord(nodes["result-display"].result)) {
+    nodes["result-display"] = {
+      ...nodes["result-display"],
+      result: {
+        ...nodes["result-display"].result,
+        visualStyleAssessment: "style-unassessed",
+      },
+    };
+  }
   const isKrea2LegacyDirect = isKrea2Workflow && isKrea2LegacyDirectRun(nodes);
   const hasKrea2T42UnavailableResult = isKrea2Workflow &&
     (["final-review", "final-repair", "repair-verification"] as const).some((nodeId) => {
@@ -755,10 +861,15 @@ function sanitizeSingleImageWorkflowState(raw: Record<string, unknown>): Timelin
       };
     }
   }
-  if (!isLegacyWorkflow && !isKrea2LegacyDirect) {
-    const scoringIsTrusted = reconcilePersistedPreviewScoring(nodes, updatedAt);
+  if (!isLegacyWorkflow && !isKrea2LegacyDirect && !visualStyleIdentityInvalidated) {
+    const scoringIsTrusted = reconcilePersistedPreviewScoring(
+      nodes,
+      updatedAt,
+      legacyVisualStyleUnassessed ? {} : { visualStyle: persistedVisualStyle },
+    );
     reconcilePersistedGenerationLinkage(nodes, updatedAt, {
       requireCurrentFinalPolicy: isKrea2Workflow && !hasPersistedCompletedDisplay,
+      ...(legacyVisualStyleUnassessed ? {} : { visualStyle: persistedVisualStyle }),
     });
     if (hasKrea2T42UnavailableResult && nodes["comfyui-execution"].status === "done") {
       const execution = nodes["comfyui-execution"].result;
@@ -820,7 +931,12 @@ function sanitizeSingleImageWorkflowState(raw: Record<string, unknown>): Timelin
         };
       }
     }
-    reconcilePersistedRepairLinkage(nodes, updatedAt, raw.workflowId.trim());
+    reconcilePersistedRepairLinkage(
+      nodes,
+      updatedAt,
+      raw.workflowId.trim(),
+      legacyVisualStyleUnassessed ? undefined : persistedVisualStyle,
+    );
     if (!scoringIsTrusted) {
       invalidatePersistedScoringDownstream(nodes, updatedAt);
     }
@@ -918,10 +1034,10 @@ function sanitizeSingleImageWorkflowState(raw: Record<string, unknown>): Timelin
       !hasConfirmationFingerprint || !hasCurrentKrea2GatePolicy ||
       (!isKrea2Workflow && isRecord(gateResult) && gateResult.finalPolicyVersion === 1)
     ));
-  const generationConfirmed = requiresReconfirmation
+  const generationConfirmed = visualStyleIdentityInvalidated || requiresReconfirmation
     ? false
     : typeof raw.generationConfirmed === "boolean" ? raw.generationConfirmed : false;
-  if (requiresReconfirmation) {
+  if (requiresReconfirmation || requiresVisualStyleMigration) {
     nodes["generation-gate"] = {
       ...nodes["generation-gate"],
       status: "blocked",
@@ -948,6 +1064,7 @@ function sanitizeSingleImageWorkflowState(raw: Record<string, unknown>): Timelin
     updatedAt,
     generationConfirmed,
     nodes,
+    ...(legacyVisualStyleUnassessed ? { legacyVisualStyleUnassessed: true as const } : {}),
     ...(legacyDirectProvenance ? { legacyDirectProvenance } : {}),
   });
 }
@@ -1240,6 +1357,9 @@ function sanitizePreviewScoringResult(value: unknown) {
       technical,
       total,
       ...eligibility,
+      ...(typeof entry.visualStyleMatch === "boolean"
+        ? { visualStyleMatch: entry.visualStyleMatch }
+        : {}),
       ...(typeof entry.rationale === "string" && entry.rationale.trim()
         ? { rationale: entry.rationale.trim().slice(0, 2_000) }
         : {}),
@@ -1255,6 +1375,7 @@ function sanitizePreviewScoringResult(value: unknown) {
     scores: safeScores,
     selectedCandidateIds: safeSelectedCandidateIds,
     selectionSource: value.selectionSource,
+    ...(isRunVisualStyle(value.visualStyle) ? { visualStyle: value.visualStyle } : {}),
     ...(rubricVersion === 2
       ? createTimelinePreviewSelectionFallbackMetadata(
           safeScores.map((score) => ({ candidateId: score.candidateId, eligible: score.eligible === true })),
@@ -1443,6 +1564,7 @@ function sanitizeFinalReviewResult(value: unknown) {
   const severitySet = new Set<string>(timelineFinalReviewSeverities);
   const scopeSet = new Set<string>(timelineFinalReviewScopes);
   const operationSet = new Set<string>(timelineFinalReviewOperations);
+  const visualStyle = isRunVisualStyle(value.visualStyle) ? value.visualStyle : undefined;
   const seen = new Set<string>();
   const pairs = value.pairs.map((entry) => {
     if (!isRecord(entry) || !safePreviewCandidateId(entry.candidateId) || seen.has(entry.candidateId as string) ||
@@ -1469,6 +1591,18 @@ function sanitizeFinalReviewResult(value: unknown) {
       final: normalizeScores(entry.scores.final),
       previewUpscale: normalizeScores(entry.scores.previewUpscale),
     } : null;
+    const visualStyleMatch = visualStyle && isRecord(entry.visualStyleMatch) &&
+      entry.visualStyleMatch.previewUpscale === true &&
+      (typeof entry.visualStyleMatch.final === "boolean" || entry.visualStyleMatch.final === null)
+      ? {
+          final: entry.visualStyleMatch.final as boolean | null,
+          previewUpscale: true as const,
+        }
+      : null;
+    if (visualStyle && (!visualStyleMatch ||
+        (value.status === "reviewed" && typeof visualStyleMatch.final !== "boolean") ||
+        (value.status !== "reviewed" && visualStyleMatch.final !== null) ||
+        (entry.userSelectedVariant === "final" && visualStyleMatch.final !== true))) return null;
     const findings = Array.isArray(entry.findings) ? entry.findings.map((finding) => {
       if (!isRecord(finding) || !operationSet.has(finding.operation as string) ||
           !severitySet.has(finding.severity as string) || !scopeSet.has(finding.scope as string) ||
@@ -1486,10 +1620,14 @@ function sanitizeFinalReviewResult(value: unknown) {
         findings.length !== timelineFinalReviewOperations.length ||
         new Set(findings.map((finding) => finding?.operation)).size !== timelineFinalReviewOperations.length ||
         findings.some((finding) => !finding) || entry.recommendedVariant !== entry.defaultVariant)) return null;
-    const locallyRecommended = findings?.some((finding) => finding?.introducedByFinal === true &&
-      (finding.severity === "major" || finding.severity === "blocking")) ? "preview-upscale" : "final";
+    const locallyRecommended = visualStyleMatch?.final === false ||
+      findings?.some((finding) => finding?.introducedByFinal === true &&
+        (finding.severity === "major" || finding.severity === "blocking"))
+      ? "preview-upscale"
+      : "final";
     if (value.status === "reviewed" && entry.recommendedVariant !== locallyRecommended) return null;
-    if (value.status !== "reviewed" && (entry.recommendedVariant !== null || entry.defaultVariant !== "final" ||
+    if (value.status !== "reviewed" && (entry.recommendedVariant !== null ||
+        entry.defaultVariant !== (visualStyle ? "preview-upscale" : "final") ||
         entry.scores !== undefined || entry.findings !== undefined)) return null;
     return {
       candidateId: entry.candidateId as string,
@@ -1503,6 +1641,7 @@ function sanitizeFinalReviewResult(value: unknown) {
         : {}),
       recommendedVariant: entry.recommendedVariant as "final" | "preview-upscale" | null,
       defaultVariant: entry.defaultVariant as "final" | "preview-upscale",
+      ...(visualStyleMatch ? { visualStyleMatch } : {}),
       ...(entry.userSelectedVariant ? { userSelectedVariant: entry.userSelectedVariant as "final" | "preview-upscale" | "repair" } : {}),
     };
   });
@@ -1513,6 +1652,7 @@ function sanitizeFinalReviewResult(value: unknown) {
     reviewVersion: 1 as const,
     status: value.status,
     pairs,
+    ...(visualStyle ? { visualStyle } : {}),
     ...(error ? { error } : {}),
   };
 }
@@ -1738,6 +1878,7 @@ function sanitizeRepairParentBinding(value: unknown) {
     reviewUpdatedAt: value.reviewUpdatedAt,
     reviewedFindings,
     reviewedTargets,
+    ...(isRunVisualStyle(value.visualStyle) ? { visualStyle: value.visualStyle } : {}),
   };
 }
 
@@ -1786,7 +1927,8 @@ function sanitizeFinalRepairResult(value: unknown) {
       parentFindings.every(Boolean) && new Set(parentFindings.map((finding) => finding?.operation)).size === timelineFinalReviewOperations.length &&
       parentTargets.every(Boolean) && JSON.stringify(parentTargets) === JSON.stringify(targets)
       ? { finalStoredImage: parentFinalStoredImage, reviewUpdatedAt: parentRecord.reviewUpdatedAt,
-          reviewedFindings: parentFindings, reviewedTargets: parentTargets }
+          reviewedFindings: parentFindings, reviewedTargets: parentTargets,
+          ...(isRunVisualStyle(parentRecord.visualStyle) ? { visualStyle: parentRecord.visualStyle } : {}) }
       : null;
     const attempt = sanitizeTimelineRepairAttempt(entry.attempt);
     const maskRecord = isRecord(entry.mask) ? entry.mask : null;
@@ -1866,6 +2008,7 @@ function sanitizeRepairVerificationResult(value: unknown) {
   const operationSet = new Set<string>(timelineFinalReviewOperations);
   const severitySet = new Set<string>(timelineFinalReviewSeverities);
   const scopeSet = new Set<string>(timelineFinalReviewScopes);
+  const visualStyle = isRunVisualStyle(value.visualStyle) ? value.visualStyle : undefined;
   const pairs = value.pairs.map((entry) => {
     if (!isRecord(entry) || !safePreviewCandidateId(entry.candidateId) || !isRecord(entry.scores)) return null;
     const repairParent = sanitizeRepairParentBinding(entry.repairParent);
@@ -1889,16 +2032,28 @@ function sanitizeRepairVerificationResult(value: unknown) {
         new Set(findings.map((finding) => finding?.operation)).size !== 4 ||
         typeof entry.targetedDefectsResolved !== "boolean" || typeof entry.newMajorOrBlockingIssue !== "boolean" ||
         typeof entry.recommended !== "boolean") return null;
+    const visualStyleMatch = typeof entry.visualStyleMatch === "boolean"
+      ? entry.visualStyleMatch
+      : undefined;
+    if (visualStyle && (repairParent.visualStyle !== visualStyle ||
+        visualStyleMatch === undefined || visualStyleMatch === false && entry.recommended === true)) return null;
     return { candidateId: entry.candidateId, repairParent, repairStoredImage, scores: { final, repair }, findings,
       targetedDefectsResolved: entry.targetedDefectsResolved, newMajorOrBlockingIssue: entry.newMajorOrBlockingIssue,
       recommended: entry.recommended,
+      ...(visualStyleMatch !== undefined ? { visualStyleMatch } : {}),
       ...(typeof entry.rationale === "string" && entry.rationale.trim() ? { rationale: entry.rationale.trim().slice(0, 1_000) } : {}) };
   });
   if (pairs.some((pair) => !pair) || (value.status === "verified" && pairs.length < 1) ||
       (value.status !== "verified" && pairs.length > 0)) return undefined;
   const error = sanitizeRepairVerificationError(value.error);
   if (value.status === "failed" && !error) return undefined;
-  return { verificationVersion: 1 as const, status: value.status, pairs, ...(error ? { error } : {}) };
+  return {
+    verificationVersion: 1 as const,
+    status: value.status,
+    pairs,
+    ...(visualStyle ? { visualStyle } : {}),
+    ...(error ? { error } : {}),
+  };
 }
 
 function sanitizeResultDisplayResult(value: unknown) {
@@ -1955,6 +2110,10 @@ function sanitizeResultDisplayResult(value: unknown) {
       new Set(fallbacks.map((entry) => entry?.rank)).size !== fallbacks.length)) return undefined;
   return {
     completed: true,
+    ...(isRunVisualStyle(value.visualStyle) ? { visualStyle: value.visualStyle } : {}),
+    ...(value.visualStyleAssessment === "verified" || value.visualStyleAssessment === "style-unassessed"
+      ? { visualStyleAssessment: value.visualStyleAssessment }
+      : {}),
     image: images[0],
     images,
     promptId,
@@ -1968,7 +2127,11 @@ function sanitizeResultDisplayResult(value: unknown) {
   };
 }
 
-function reconcilePersistedPreviewScoring(nodes: TimelineNodeMap, updatedAt: string) {
+function reconcilePersistedPreviewScoring(
+  nodes: TimelineNodeMap,
+  updatedAt: string,
+  options: { visualStyle?: RunVisualStyle } = {},
+) {
   const scoringNode = nodes["preview-scoring"];
   if (scoringNode.status === "error" && scoringNode.error?.code === "timeline_request_invalid") {
     const details = scoringNode.error.details;
@@ -1999,7 +2162,8 @@ function reconcilePersistedPreviewScoring(nodes: TimelineNodeMap, updatedAt: str
     isRecord(preview) && Array.isArray(preview.candidates) &&
     isRecord(scoring) && (scoring.rubricVersion === 1 || scoring.rubricVersion === 2) && Array.isArray(scoring.scores) &&
     Array.isArray(scoring.selectedCandidateIds) &&
-    (scoring.selectionSource === "ai" || scoring.selectionSource === "manual");
+    (scoring.selectionSource === "ai" || scoring.selectionSource === "manual") &&
+    (!options.visualStyle || scoring.rubricVersion === 2 && scoring.visualStyle === options.visualStyle);
   if (valid && isRecord(preview) && Array.isArray(preview.candidates) &&
       isRecord(scoring) && Array.isArray(scoring.scores) && Array.isArray(scoring.selectedCandidateIds)) {
     const successfulCandidates = preview.candidates.filter((candidate) =>
@@ -2022,7 +2186,11 @@ function reconcilePersistedPreviewScoring(nodes: TimelineNodeMap, updatedAt: str
       const rank = safeNonNegativeInteger(score.rank);
       if (rank === null || rank < 1) return [];
       const eligible = scoring.rubricVersion === 2 ? score.eligible : true;
+      const visualStyleMatch = typeof score.visualStyleMatch === "boolean"
+        ? score.visualStyleMatch
+        : undefined;
       if (typeof eligible !== "boolean" ||
+          options.visualStyle && visualStyleMatch === undefined ||
           (scoring.rubricVersion === 2 && (!Array.isArray(score.criticalDefects) ||
             score.criticalDefects.some((defect) => !isRecord(defect) ||
               typeof defect.category !== "string" ||
@@ -2044,9 +2212,11 @@ function reconcilePersistedPreviewScoring(nodes: TimelineNodeMap, updatedAt: str
         rank,
         style: score.style,
         technical: score.technical,
+        ...(visualStyleMatch !== undefined ? { visualStyleMatch } : {}),
       }];
     });
     const expectedOrder = [...validatedScores].sort((left, right) =>
+      Number(right.visualStyleMatch !== false) - Number(left.visualStyleMatch !== false) ||
       Number(right.eligible) - Number(left.eligible) ||
       calculatePreviewScoreRawTotal(right) - calculatePreviewScoreRawTotal(left) ||
       right.composition - left.composition ||
@@ -2081,6 +2251,11 @@ function reconcilePersistedPreviewScoring(nodes: TimelineNodeMap, updatedAt: str
       scoring.selectedCandidateIds.length === finalCount &&
       new Set(scoring.selectedCandidateIds).size === finalCount &&
       scoring.selectedCandidateIds.every((candidateId) => typeof candidateId === "string" && successfulIds.includes(candidateId)) &&
+      (!options.visualStyle || (
+        validatedScores.filter((score) => score.visualStyleMatch === true).length >= finalCount &&
+        scoring.selectedCandidateIds.every((candidateId) =>
+          validatedScores.some((score) => score.candidateId === candidateId && score.visualStyleMatch === true))
+      )) &&
       fallbackMetadataMatches &&
       (scoring.selectionSource === "manual"
         ? true
@@ -2324,7 +2499,7 @@ function resultDisplayMatchesFinals(display: unknown, finalResult: unknown) {
 function reconcilePersistedGenerationLinkage(
   nodes: TimelineNodeMap,
   updatedAt: string,
-  options: { requireCurrentFinalPolicy?: boolean } = {},
+  options: { requireCurrentFinalPolicy?: boolean; visualStyle?: RunVisualStyle } = {},
 ) {
   const expected = getPersistedExpectedFinalLinks(nodes);
   const finalNode = nodes["comfyui-execution"];
@@ -2384,12 +2559,25 @@ function reconcilePersistedGenerationLinkage(
   const reviewNode = nodes["final-review"];
   if (reviewNode.status === "done" && isRecord(reviewNode.result) && Array.isArray(reviewNode.result.pairs) &&
       isRecord(trustedFinalResult) && Array.isArray(trustedFinalResult.finals)) {
+    const reviewResult = reviewNode.result;
+    const reviewPairs = reviewResult.pairs as unknown[];
     const finalByCandidate = new Map(trustedFinalResult.finals.flatMap((entry) =>
       isRecord(entry) && typeof entry.candidateId === "string" ? [[entry.candidateId, entry] as const] : []));
-    const reviewMatches = reviewNode.result.pairs.length === finalByCandidate.size && reviewNode.result.pairs.every((entry) => {
+    const reviewStyleMatches = !options.visualStyle ||
+      reviewResult.visualStyle === options.visualStyle;
+    const reviewMatches = reviewStyleMatches &&
+      reviewPairs.length === finalByCandidate.size && reviewPairs.every((entry) => {
       if (!isRecord(entry) || typeof entry.candidateId !== "string" || !isRecord(entry.variants)) return false;
       const final = finalByCandidate.get(entry.candidateId);
-      return Boolean(final && entry.rank === final.rank && entry.seed === final.seed &&
+      const complianceMatches = !options.visualStyle || (
+        isRecord(entry.visualStyleMatch) &&
+        entry.visualStyleMatch.previewUpscale === true &&
+        (reviewResult.status === "reviewed"
+          ? typeof entry.visualStyleMatch.final === "boolean"
+          : entry.visualStyleMatch.final === null) &&
+        (entry.userSelectedVariant !== "final" || entry.visualStyleMatch.final === true)
+      );
+      return Boolean(complianceMatches && final && entry.rank === final.rank && entry.seed === final.seed &&
         samePersistedStoredImage(entry.variants.final, final.storedImage) && isRecord(final.previewUpscale) &&
         samePersistedStoredImage(entry.variants.previewUpscale, final.previewUpscale.storedImage));
     });
@@ -2408,8 +2596,12 @@ function reconcilePersistedGenerationLinkage(
     }
   }
   const displayNode = nodes["result-display"];
+  const displayStyleMatches = !options.visualStyle || isRecord(displayNode.result) &&
+    displayNode.result.visualStyle === options.visualStyle &&
+    displayNode.result.visualStyleAssessment === "verified";
   if (displayNode.status === "done" &&
-      (trustedFinalNode.status !== "done" || !resultDisplayMatchesFinals(displayNode.result, trustedFinalResult))) {
+      (!displayStyleMatches || trustedFinalNode.status !== "done" ||
+        !resultDisplayMatchesFinals(displayNode.result, trustedFinalResult))) {
     nodes["result-display"] = {
       nodeId: "result-display",
       status: "error",
@@ -2428,6 +2620,7 @@ function reconcilePersistedRepairLinkage(
   nodes: TimelineNodeMap,
   updatedAt: string,
   workflowId: string,
+  visualStyle?: RunVisualStyle,
 ) {
   const repairNode = nodes["final-repair"];
   const verificationNode = nodes["repair-verification"];
@@ -2453,7 +2646,12 @@ function reconcilePersistedRepairLinkage(
       status: "done",
       source: "system",
       updatedAt,
-      result: { verificationVersion: 1, status: "skipped", pairs: [] },
+      result: {
+        verificationVersion: 1,
+        status: "skipped",
+        pairs: [],
+        ...(visualStyle ? { visualStyle } : {}),
+      },
     };
   };
   if (repairNode.status !== "done" || !isRecord(repairNode.result) || !Array.isArray(repairNode.result.pairs)) {
@@ -2472,7 +2670,9 @@ function reconcilePersistedRepairLinkage(
     isRecord(entry) && typeof entry.candidateId === "string" ? [[entry.candidateId, entry] as const] : []));
   const reviewByCandidate = new Map(reviewResult.pairs.flatMap((entry) =>
     isRecord(entry) && typeof entry.candidateId === "string" ? [[entry.candidateId, entry] as const] : []));
-  const linkageMatches = authorizationMatches && repairResult.pairs.length === reviewByCandidate.size &&
+  const linkageMatches = authorizationMatches &&
+    (!visualStyle || reviewResult.visualStyle === visualStyle) &&
+    repairResult.pairs.length === reviewByCandidate.size &&
     repairResult.pairs.every((entry) => {
       if (!isRecord(entry) || typeof entry.candidateId !== "string") return false;
       const final = finalByCandidate.get(entry.candidateId);
@@ -2486,6 +2686,7 @@ function reconcilePersistedRepairLinkage(
           ? [{ operation: finding.operation, severity: finding.severity, description: finding.description }]
           : []) : [];
         if (!isRecord(entry.parent) || !samePersistedStoredImage(entry.parent.finalStoredImage, final.storedImage) ||
+            visualStyle && entry.parent.visualStyle !== visualStyle ||
             entry.parent.reviewUpdatedAt !== reviewNode.updatedAt ||
             JSON.stringify(entry.parent.reviewedFindings) !== JSON.stringify(review.findings) ||
             JSON.stringify(entry.parent.reviewedTargets) !== JSON.stringify(expectedTargets) ||
@@ -2565,7 +2766,8 @@ function reconcilePersistedRepairLinkage(
   const repairByCandidate = new Map(repairResult.pairs.flatMap((entry) =>
     isRecord(entry) && typeof entry.candidateId === "string" && entry.status === "repaired"
       ? [[entry.candidateId, entry] as const] : []));
-  const verificationMatches = verificationResult.pairs.length === repairByCandidate.size &&
+  const verificationMatches = (!visualStyle || verificationResult.visualStyle === visualStyle) &&
+    verificationResult.pairs.length === repairByCandidate.size &&
     verificationResult.pairs.every((entry) => {
       if (!isRecord(entry) || typeof entry.candidateId !== "string" || !isRecord(entry.scores) ||
           !isRecord(entry.scores.final) || !isRecord(entry.scores.repair) || !Array.isArray(entry.findings) ||
@@ -2581,10 +2783,15 @@ function reconcilePersistedRepairLinkage(
       const newRegression = findings.some((finding) => isRecord(finding) &&
         (finding.severity === "major" || finding.severity === "blocking") &&
         !targets.some((target) => isRecord(target) && target.operation === finding.operation));
-      const recommended = targetsResolved && !newRegression &&
+      const visualStyleMatches = !visualStyle || (
+        entry.visualStyleMatch === true &&
+        entry.repairParent.visualStyle === visualStyle
+      );
+      const recommended = visualStyleMatches && targetsResolved && !newRegression &&
         Number(entry.scores.repair.total) >= Number(entry.scores.final.total);
       return entry.targetedDefectsResolved === targetsResolved && entry.newMajorOrBlockingIssue === newRegression &&
-        entry.recommended === recommended;
+        entry.recommended === recommended &&
+        visualStyleMatches;
     });
   if (!verificationMatches) {
     resetRepairSelections();

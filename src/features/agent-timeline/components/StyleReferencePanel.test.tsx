@@ -48,6 +48,7 @@ function Harness() {
           modelStorageKind: "checkpoint",
         }}
         snapshot={snapshot}
+        visualStyle="photoreal"
         workflowLabel="Run"
       />
     </div>
@@ -184,9 +185,16 @@ describe("StyleReferencePanel", () => {
       }
       if (target === "/api/llm/chat") {
         analysisCount += 1;
-        const body = JSON.parse(String(init?.body)) as { purpose?: string; messages?: unknown };
+        const body = JSON.parse(String(init?.body)) as {
+          purpose?: string;
+          messages?: Array<{ content?: unknown }>;
+        };
         expect(body.purpose).toBe("story-style-reference-analysis");
         expect(JSON.stringify(body.messages)).toContain("image_url");
+        expect(String(body.messages?.[0]?.content)).toContain(
+          "Selected visual style: Photoreal (photoreal)",
+        );
+        expect(JSON.stringify(body.messages)).toContain("photoreal");
         if (analysisCount === 1) {
           return new Response(JSON.stringify({ error: { message: "Vision model unavailable." } }), {
             status: 503,

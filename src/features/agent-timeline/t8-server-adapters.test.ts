@@ -207,6 +207,7 @@ function confirmWorkflow(workflow: TimelineWorkflowState, clock = createClock())
   }, "system", { now: clock });
   confirmed = completeTimelineNode(confirmed, "preview-scoring", {
     rubricVersion: 2,
+    visualStyle: "anime",
     scores: candidates.map((candidate, index) => ({
       candidateId: candidate.candidateId,
       adherence: 100 - index,
@@ -217,6 +218,7 @@ function confirmWorkflow(workflow: TimelineWorkflowState, clock = createClock())
       total: 100 - index,
       criticalDefects: [],
       eligible: true,
+      visualStyleMatch: true,
       rank: index + 1,
     })),
     selectedCandidateIds: candidates.slice(0, finalCount).map((candidate) => candidate.candidateId),
@@ -303,6 +305,7 @@ function createStyleReferenceWorkflow({
       checkpointId: "checkpoint-a",
       modeReason: "Reviewed style-reference capability.",
       promptProfile,
+      visualStyle: "anime",
     },
   };
   const base = createGateReadyWorkflow();
@@ -317,6 +320,7 @@ function createStyleReferenceWorkflow({
           ...(base.nodes["scene-input"].result as object),
           settingsSnapshot: {
             promptProfile,
+            visualStyle: "anime",
             styleReference,
           },
         },
@@ -1274,6 +1278,7 @@ describe("timeline T8 server adapters", () => {
         checkpointBaseModel: "Illustrious",
         modeReason: "Illustrious supports IPAdapter.",
         promptProfile: "illustrious" as const,
+        visualStyle: "anime" as const,
       },
     };
     const base = createGateReadyWorkflow();
@@ -1291,6 +1296,7 @@ describe("timeline T8 server adapters", () => {
                 handDetailer: { enabled: false },
               },
               promptProfile: "illustrious",
+              visualStyle: "anime",
               styleReference,
             },
           },

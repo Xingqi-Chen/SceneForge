@@ -98,6 +98,7 @@ const readyStyleReference = {
     checkpointId: "checkpoint-a",
     modeReason: "Illustrious supports IPAdapter.",
     promptProfile: "illustrious" as const,
+    visualStyle: "anime" as const,
   },
 };
 
@@ -323,6 +324,7 @@ describe("timeline T8 ComfyUI request conversion", () => {
     });
     const scoringResult = {
       rubricVersion: 2,
+      visualStyle: "anime" as const,
       scores: [1, 2, 3, 4].map((number) => ({
         candidateId: `preview-${number}`,
         adherence: 100 - number,
@@ -333,6 +335,7 @@ describe("timeline T8 ComfyUI request conversion", () => {
         total: 100 - number,
         criticalDefects: [],
         eligible: true,
+        visualStyleMatch: true,
         rank: number,
       })),
       selectedCandidateIds: ["preview-1", "preview-2"],
@@ -528,6 +531,7 @@ describe("timeline T8 ComfyUI request conversion", () => {
     });
     workflow = setTimelineNodeManualResult(workflow, "preview-scoring", {
       rubricVersion: 2,
+      visualStyle: "anime",
       scores: previews.map(({ candidateId, index }) => ({
         candidateId,
         adherence: 100 - index,
@@ -538,6 +542,7 @@ describe("timeline T8 ComfyUI request conversion", () => {
         total: 100 - index,
         criticalDefects: [],
         eligible: true,
+        visualStyleMatch: true,
         rank: index + 1,
       })),
       selectedCandidateIds: ["preview-1"],
@@ -772,9 +777,10 @@ describe("timeline T8 ComfyUI request conversion", () => {
     });
     workflow = setTimelineNodeManualResult(workflow, "preview-scoring", {
       rubricVersion: 2,
+      visualStyle: "anime",
       scores: previews.map((preview, index) => ({
         candidateId: preview.candidateId, adherence: 100 - index, composition: 100, anatomy: 100, style: 100,
-        technical: 100, total: 100 - index, criticalDefects: [], eligible: true, rank: index + 1,
+        technical: 100, total: 100 - index, criticalDefects: [], eligible: true, visualStyleMatch: true, rank: index + 1,
       })),
       selectedCandidateIds: ["preview-1"], selectionSource: "ai",
     });
@@ -1387,6 +1393,7 @@ describe("timeline T8 ComfyUI request conversion", () => {
       });
       workflow = setTimelineNodeManualResult(workflow, "preview-scoring", {
         rubricVersion: 2,
+        visualStyle: "anime",
         scores: previews.map(({ candidateId, index }) => ({
           candidateId,
           adherence: 100 - index,
@@ -1397,6 +1404,7 @@ describe("timeline T8 ComfyUI request conversion", () => {
           total: 100 - index,
           criticalDefects: [],
           eligible: true,
+          visualStyleMatch: true,
           rank: index + 1,
         })),
         selectedCandidateIds: ["preview-1"],
@@ -1501,6 +1509,7 @@ describe("timeline T8 ComfyUI request conversion", () => {
       });
       workflow = setTimelineNodeManualResult(workflow, "preview-scoring", {
         rubricVersion: 2,
+        visualStyle: "anime",
         scores: previewRequests.map((item) => ({
           candidateId: item.candidateId,
           adherence: 100 - item.index,
@@ -1511,6 +1520,7 @@ describe("timeline T8 ComfyUI request conversion", () => {
           total: 100 - item.index,
           criticalDefects: [],
           eligible: true,
+          visualStyleMatch: true,
           rank: item.index + 1,
         })),
         selectedCandidateIds: ["preview-1"],
@@ -1562,9 +1572,10 @@ describe("timeline T8 ComfyUI request conversion", () => {
     });
     workflow = setTimelineNodeManualResult(workflow, "preview-scoring", {
       rubricVersion: 2,
+      visualStyle: "anime",
       scores: [
-        { candidateId: "preview-3", adherence: 90, composition: 91, anatomy: 92, style: 93, technical: 94, total: 91.5, criticalDefects: [], eligible: true, rank: 1 },
-        { candidateId: "preview-1", adherence: 80, composition: 81, anatomy: 82, style: 83, technical: 84, total: 81.5, criticalDefects: [], eligible: true, rank: 2 },
+        { candidateId: "preview-3", adherence: 90, composition: 91, anatomy: 92, style: 93, technical: 94, total: 91.5, criticalDefects: [], eligible: true, visualStyleMatch: true, rank: 1 },
+        { candidateId: "preview-1", adherence: 80, composition: 81, anatomy: 82, style: 83, technical: 84, total: 81.5, criticalDefects: [], eligible: true, visualStyleMatch: true, rank: 2 },
       ],
       selectedCandidateIds: ["preview-3", "preview-1"],
       selectionSource: "ai",
@@ -1638,6 +1649,7 @@ describe("timeline T8 ComfyUI request conversion", () => {
     });
     workflow = setTimelineNodeManualResult(workflow, "preview-scoring", {
       rubricVersion: 2,
+      visualStyle: "anime",
       scores: [1, 2, 3, 4].map((number) => ({
         candidateId: `preview-${number}`,
         adherence: 100 - number,
@@ -1648,6 +1660,7 @@ describe("timeline T8 ComfyUI request conversion", () => {
         total: 100 - number,
         criticalDefects: [],
         eligible: true,
+        visualStyleMatch: true,
         rank: number,
       })),
       selectedCandidateIds: ["preview-1"],
@@ -1699,6 +1712,7 @@ describe("timeline T8 ComfyUI request conversion", () => {
     });
     workflow = setTimelineNodeManualResult(workflow, "preview-scoring", {
       rubricVersion: 2,
+      visualStyle: "anime",
       scores: [1, 2, 3, 4].map((number) => ({
         candidateId: `preview-${number}`,
         adherence: 100 - number,
@@ -1709,6 +1723,7 @@ describe("timeline T8 ComfyUI request conversion", () => {
         total: 100 - number,
         criticalDefects: [],
         eligible: true,
+        visualStyleMatch: true,
         rank: number,
       })),
       selectedCandidateIds: ["preview-1", "preview-3"],
@@ -1722,10 +1737,10 @@ describe("timeline T8 ComfyUI request conversion", () => {
   });
 
   it.each([
-    ["too few", ["preview-1"]],
-    ["duplicate", ["preview-1", "preview-1"]],
-    ["unknown", ["preview-1", "preview-9"]],
-  ])("rejects a persisted/manual %s Top-K selection server-side", (_case, selectedCandidateIds) => {
+    ["too few", ["preview-1"], /requires exactly 2/i],
+    ["duplicate", ["preview-1", "preview-1"], /requires exactly 2/i],
+    ["unknown", ["preview-1", "preview-9"], /visual-style-verified Preview scoring is required/i],
+  ])("rejects a persisted/manual %s Top-K selection server-side", (_case, selectedCandidateIds, expectedError) => {
     let workflow = confirmTimelineGeneration(createConfirmedWorkflow(2));
     workflow = setTimelineNodeManualResult(workflow, "preview-execution", {
       baseSeed: 100,
@@ -1751,12 +1766,25 @@ describe("timeline T8 ComfyUI request conversion", () => {
     });
     workflow = setTimelineNodeManualResult(workflow, "preview-scoring", {
       rubricVersion: 2,
-      scores: [],
+      visualStyle: "anime",
+      scores: [1, 2].map((number) => ({
+        candidateId: `preview-${number}`,
+        adherence: 100,
+        composition: 100,
+        anatomy: 100,
+        style: 100,
+        technical: 100,
+        total: 100,
+        criticalDefects: [],
+        eligible: true,
+        visualStyleMatch: true,
+        rank: number,
+      })),
       selectedCandidateIds,
       selectionSource: "manual",
     });
 
-    expect(() => createTimelineFinalRequests(workflow)).toThrow(/requires exactly 2/i);
+    expect(() => createTimelineFinalRequests(workflow)).toThrow(expectedError);
   });
 
   it("accepts an ineligible fallback in a manual exact-K selection and rejects forged fallback metadata", () => {
@@ -1780,6 +1808,7 @@ describe("timeline T8 ComfyUI request conversion", () => {
     });
     workflow = setTimelineNodeManualResult(workflow, "preview-scoring", {
       rubricVersion: 2,
+      visualStyle: "anime",
       scores: [{
         candidateId: "preview-1",
         adherence: 100,
@@ -1790,6 +1819,7 @@ describe("timeline T8 ComfyUI request conversion", () => {
         total: 100,
         criticalDefects: [{ category: "anatomy_or_structure", description: "missing hand" }],
         eligible: false,
+        visualStyleMatch: true,
         rank: 1,
       }],
       selectedCandidateIds: ["preview-1"],

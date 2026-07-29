@@ -80,6 +80,11 @@ export function TimelinePreviewWorkspace({
           const score = scoreById.get(candidate.candidateId);
           const selected = selection.includes(candidate.candidateId);
           const eligible = score && "eligible" in score ? score.eligible : false;
+          const visualStyleMatch = legacyRubric || (
+            score && "visualStyleMatch" in score
+              ? score.visualStyleMatch === true
+              : false
+          );
           const criticalDefects = score && "criticalDefects" in score ? score.criticalDefects : [];
           return (
             <button
@@ -89,7 +94,7 @@ export function TimelinePreviewWorkspace({
                 candidate.status !== "done" && "cursor-not-allowed opacity-60",
                 candidate.status === "done" && score && !eligible && "border-amber-300",
               )}
-              disabled={disabled || candidate.status !== "done" || !score || legacyRubric}
+              disabled={disabled || candidate.status !== "done" || !score || legacyRubric || !visualStyleMatch}
               key={candidate.candidateId}
               onClick={() => toggle(candidate.candidateId)}
               type="button"
@@ -116,9 +121,11 @@ export function TimelinePreviewWorkspace({
                     <span>Technical {score.technical}</span>
                     <span>{legacyRubric
                       ? "Legacy rubric · eligibility not assessed"
-                      : eligible
-                        ? criticalDefects.length > 0 ? "Eligible · non-blocking annotations" : "Eligible"
-                        : "Ineligible · fallback allowed"}</span>
+                      : !visualStyleMatch
+                        ? "Visual style mismatch · unavailable"
+                        : eligible
+                          ? criticalDefects.length > 0 ? "Eligible · non-blocking annotations" : "Eligible"
+                          : "Ineligible · fallback allowed"}</span>
                   </div>
                 ) : null}
                 {criticalDefects.length > 0 ? (

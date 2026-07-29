@@ -294,6 +294,7 @@ function createQueueOutcomeUnknownRepairWorkflow() {
   workflow = completeTimelineNode(workflow, "final-review", {
     reviewVersion: 1,
     status: "reviewed",
+    visualStyle: "anime",
     pairs: [{
       candidateId: firstFinal.candidateId,
       rank: firstFinal.rank,
@@ -303,6 +304,7 @@ function createQueueOutcomeUnknownRepairWorkflow() {
       findings: localFindings,
       recommendedVariant: "preview-upscale",
       defaultVariant: "preview-upscale",
+      visualStyleMatch: { final: true, previewUpscale: true },
     }, {
       candidateId: secondFinal.candidateId,
       rank: secondFinal.rank,
@@ -312,6 +314,7 @@ function createQueueOutcomeUnknownRepairWorkflow() {
       findings: clearFindings,
       recommendedVariant: "final",
       defaultVariant: "final",
+      visualStyleMatch: { final: true, previewUpscale: true },
     }],
   }, "ai");
   const reviewUpdatedAt = workflow.nodes["final-review"].updatedAt;
@@ -320,6 +323,7 @@ function createQueueOutcomeUnknownRepairWorkflow() {
     reviewUpdatedAt,
     reviewedFindings: localFindings,
     reviewedTargets: targets,
+    visualStyle: "anime" as const,
   };
   const repairDiagnosis = {
     shapes: [{ type: "rect" as const, x: 0.4, y: 0.4, width: 0.1, height: 0.1 }],
@@ -384,6 +388,51 @@ function createQueueOutcomeUnknownRepairWorkflow() {
   };
 }
 
+function createCompletedVisualStyleRunForUi() {
+  let workflow: TimelineWorkflowState = createQueueOutcomeUnknownRepairWorkflow();
+  const execution = workflow.nodes["comfyui-execution"].result as ComfyUiExecutionTimelineResult;
+  const finals = execution.finals.filter((final) =>
+    final.status === "done" && final.promptId && final.sourceImage && final.storedImage && final.previewUpscale,
+  );
+  if (finals.length !== 2) {
+    throw new Error("Completed visual-style UI fixture requires two completed Finals.");
+  }
+
+  workflow = completeTimelineNode(workflow, "repair-verification", {
+    verificationVersion: 1,
+    status: "skipped",
+    visualStyle: "anime",
+    pairs: [],
+  }, "system");
+  workflow = completeTimelineNode(workflow, "result-display", {
+    completed: true,
+    visualStyle: "anime",
+    visualStyleAssessment: "verified",
+    image: { ...finals[0]!.sourceImage!, url: finals[0]!.storedImage!.url },
+    images: finals.map((final) => ({ ...final.sourceImage!, url: final.storedImage!.url })),
+    promptId: finals[0]!.promptId!,
+    sourceImage: finals[0]!.sourceImage!,
+    sourceImages: finals.map((final) => final.sourceImage!),
+    storedImage: finals[0]!.storedImage!,
+    storedImages: finals.map((final) => final.storedImage!),
+    fallbacks: finals.map((final) => ({
+      candidateId: final.candidateId,
+      rank: final.rank,
+      seed: final.seed,
+      storedImage: final.previewUpscale!.storedImage,
+    })),
+    finalLinks: finals.map((final) => ({
+      candidateId: final.candidateId,
+      promptId: final.promptId!,
+      rank: final.rank,
+      seed: final.seed,
+    })),
+    warnings: [],
+  }, "system");
+
+  return workflow;
+}
+
 function createPreparationOutcomeUnknownRepairWorkflow(
   stage: "diagnosis-outcome" | "sam2-outcome",
 ) {
@@ -415,6 +464,7 @@ function createPreparationOutcomeUnknownRepairWorkflow(
 function createScenePromptResultWithProfile(promptProfile: string): ScenePromptTimelineResult {
   return {
     promptProfile: promptProfile as ScenePromptTimelineResult["promptProfile"],
+    visualStyle: "anime",
     primaryCharacter: {
       name: "Courier",
       identity: "A courier in a glass station.",
@@ -522,6 +572,7 @@ function createSimpleGenerationPhaseErrorWorkflow(
   }
   workflow = setTimelineNodeManualResult(workflow, "scene-prompt", {
     prompt: "A simple mode retry scene",
+    visualStyle: "anime",
   });
   workflow = setTimelineNodeManualResult(workflow, "character-tags", { tags: [] });
   workflow = setTimelineNodeManualResult(workflow, "character-action", { action: "sitting" });
@@ -556,6 +607,7 @@ function createSimpleGenerationPhaseErrorWorkflow(
     confirmationFingerprint: `hmac-sha256:${"a".repeat(64)}`,
     finalPolicyVersion: timelineFinalGenerationPolicy.version,
     automaticLocalRepairAuthorized: automaticLocalRepair,
+    visualStyle: "anime",
   });
   const candidates = [1, 2, 3, 4].map((number, index) => {
     const filename = `${number.toString(16).repeat(32)}.png`;
@@ -587,6 +639,7 @@ function createSimpleGenerationPhaseErrorWorkflow(
   };
   const scoring = {
     rubricVersion: 2 as const,
+    visualStyle: "anime" as const,
     scores: candidates.map((candidate, index) => ({
       candidateId: candidate.candidateId,
       adherence: 100 - index,
@@ -597,6 +650,7 @@ function createSimpleGenerationPhaseErrorWorkflow(
       total: 100 - index,
       criticalDefects: [],
       eligible: true,
+      visualStyleMatch: true,
       rank: index + 1,
     })),
     selectedCandidateIds: ["preview-1", "preview-2"],
@@ -1365,6 +1419,7 @@ describe("TimelineShell", () => {
         },
         sceneIntent: "Restored command deck",
         styleTone: "clean sci-fi",
+        visualStyle: "anime",
         setting: "greenhouse command deck",
         sharedFacts: [],
         positivePrompt: "restored greenhouse command deck",
@@ -2209,6 +2264,7 @@ describe("TimelineShell", () => {
 
       const sceneInput = container.querySelector("#scene-request") as HTMLTextAreaElement | null;
       const promptProfile = container.querySelector("#prompt-profile") as HTMLSelectElement | null;
+      const visualStyle = container.querySelector("#run-visual-style") as HTMLSelectElement | null;
       const imageCount = container.querySelector("#timeline-image-count") as HTMLSelectElement | null;
       const startButton = getButtonByText("Start workflow");
       const parametersButton = getButtonByText("Parameters");
@@ -2224,6 +2280,14 @@ describe("TimelineShell", () => {
 
       expect(sceneInput).not.toBeNull();
       expect(promptProfile?.value).toBe("illustrious");
+      expect(visualStyle?.value).toBe("anime");
+      expect(Array.from(visualStyle?.options ?? []).map((option) => [
+        option.value,
+        option.textContent,
+      ])).toEqual([
+        ["anime", "Anime"],
+        ["photoreal", "Photoreal"],
+      ]);
       expect(imageCount?.value).toBe("1");
       expect(Array.from(imageCount?.options ?? []).map((option) => option.value)).toEqual([
         "1",
@@ -2311,6 +2375,127 @@ describe("TimelineShell", () => {
       globalThis.fetch = originalFetch;
     }
   });
+
+  it.each(["simple", "detailed"] as const)(
+    "shows the closed visual style selector in %s Composer mode",
+    async (displayMode) => {
+      const originalFetch = globalThis.fetch;
+      const t5Fetch = mockT5Fetch();
+      globalThis.fetch = vi.fn<typeof fetch>(async (input, init) => {
+        if (getFetchUrl(input) === "/api/settings") {
+          return createTimelineSettingsResponse({ displayMode });
+        }
+        return t5Fetch(input, init);
+      });
+
+      try {
+        act(() => root.render(<TimelineShell />));
+        await flushAsyncWork();
+
+        const selector = container.querySelector("#run-visual-style") as HTMLSelectElement | null;
+        expect(selector?.value).toBe("anime");
+        expect(Array.from(selector?.options ?? []).map((option) => option.value)).toEqual([
+          "anime",
+          "photoreal",
+        ]);
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    },
+  );
+
+  it.each(["simple", "detailed"] as const)(
+    "removes prior-style result actions and sidebar artifacts after a %s mode style change",
+    async (displayMode) => {
+      const originalFetch = globalThis.fetch;
+      const workflow = createCompletedVisualStyleRunForUi();
+      const activeRecord = createTimelineWorkflowRecord({
+        workflow,
+        sceneRequest: "A preserved Final with an uncertain Repair queue outcome",
+        selectedPromptProfile: "illustrious",
+        selectedImageCount: 2,
+        selectedNodeId: "result-display",
+        outputDisplayModes: { "result-display": "visual" },
+      });
+      const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+        const url = getFetchUrl(input);
+        if (url === "/api/settings") {
+          return createTimelineSettingsResponse({ displayMode });
+        }
+        if (url === "/api/agent-timeline/active-workflow") {
+          return init?.method === "PUT"
+            ? createJsonResponse({ ok: true, record: JSON.parse(String(init.body)) })
+            : createJsonResponse(activeRecord);
+        }
+        if (url.startsWith("/api/agent-timeline/workflows")) {
+          return createJsonResponse({ workflows: [] });
+        }
+        if (url === "/api/agent-timeline/confirm-generation" || url === "/api/comfyui/inpaint-image") {
+          throw new Error(`Prior-style actions must not call ${url}.`);
+        }
+        return createJsonResponse({ role: "assistant", content: "{}" });
+      });
+      globalThis.fetch = fetchMock;
+
+      try {
+        act(() => root.render(<TimelineShell />));
+        await flushAsyncWork();
+
+        const priorStyleFilename = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png";
+        expect(container.innerHTML).toContain(priorStyleFilename);
+        expect(container.querySelectorAll("[data-testid='timeline-final-review'] button").length)
+          .toBeGreaterThan(0);
+        expect(Array.from(container.querySelectorAll("button")).some(
+          (button) => button.textContent?.includes("Inpaint"),
+        )).toBe(true);
+        if (displayMode === "detailed") {
+          expect(container.querySelector('img[alt="Timeline generated artifact"]')).not.toBeNull();
+          act(() => {
+            getWorkflowStepButton("scene-input").click();
+          });
+        }
+
+        const selector = container.querySelector("#run-visual-style") as HTMLSelectElement;
+        expect(selector.value).toBe("anime");
+
+        act(() => {
+          setNativeSelectValue(selector, "photoreal");
+        });
+        await flushAsyncWork();
+
+        expect(selector.value).toBe("photoreal");
+        expect(container.textContent).toContain(
+          "Visual style changed to Photoreal. Scene Prompt and downstream nodes are stale",
+        );
+        expect(container.innerHTML).not.toContain(priorStyleFilename);
+        if (displayMode === "detailed") {
+          expect(container.querySelector('img[alt="Timeline generated artifact"]')).toBeNull();
+          expect(container.textContent).toContain(
+            "Artifact preview will appear after confirmed render execution.",
+          );
+        }
+        expect(container.querySelectorAll("[data-testid='timeline-final-review'] button")).toHaveLength(0);
+        expect(Array.from(container.querySelectorAll("button")).some(
+          (button) => button.textContent?.includes("Inpaint"),
+        )).toBe(false);
+        expect(Array.from(container.querySelectorAll("button")).some(
+          (button) => button.textContent?.match(/^Retry (preview|scoring|final|repair|verification)$/i),
+        )).toBe(false);
+        expect(fetchMock.mock.calls.map(([input]) => getFetchUrl(input))).not.toContain(
+          "/api/agent-timeline/confirm-generation",
+        );
+        expect(fetchMock.mock.calls.map(([input]) => getFetchUrl(input))).not.toContain(
+          "/api/comfyui/inpaint-image",
+        );
+      } finally {
+        act(() => {
+          root.unmount();
+        });
+        rootIsMounted = false;
+        globalThis.fetch = originalFetch;
+      }
+    },
+  );
 
   it.each(["simple", "detailed"] as const)(
     "switches %s Run composer to Krea staged preview and img2img controls",
@@ -3577,6 +3762,12 @@ describe("TimelineShell", () => {
       });
       await flushAsyncWork();
 
+      act(() => {
+        setNativeSelectValue(
+          container.querySelector("#run-visual-style") as HTMLSelectElement,
+          "photoreal",
+        );
+      });
       expect(getButtonByText("Suggest").hasAttribute("disabled")).toBe(false);
       expect(getButtonByText("Rewrite").hasAttribute("disabled")).toBe(true);
 
@@ -3600,9 +3791,14 @@ describe("TimelineShell", () => {
           action: "rewrite",
           currentSceneRequest: "A suggested pre-run moonlit observatory command  with internal spacing.",
           promptProfile: "illustrious",
+          visualStyle: "photoreal",
         },
       ]);
-      expect(emptySuggestionBodies).toEqual([{ promptProfile: "illustrious", nsfw: false }]);
+      expect(emptySuggestionBodies).toEqual([{
+        promptProfile: "illustrious",
+        visualStyle: "photoreal",
+        nsfw: false,
+      }]);
       expect(genericChatBodies).toHaveLength(1);
       expect(genericChatBodies[0]).toMatchObject({
         purpose: "stable-diffusion-prompt-generation",
@@ -3610,6 +3806,7 @@ describe("TimelineShell", () => {
         maxTokens: 300,
       });
       expect(sceneInputSystemPrompts[0]).toContain("Preserve the user's subject, setting, mood, camera intent, and constraints.");
+      expect(sceneInputSystemPrompts[0]).toContain("Selected visual style: Photoreal (photoreal)");
       expect((container.querySelector("#scene-request") as HTMLTextAreaElement | null)?.value).toBe(
         "A rewritten pre-run observatory command",
       );
@@ -3653,6 +3850,7 @@ describe("TimelineShell", () => {
 
       expect(emptySuggestionBodies).toEqual([{
         promptProfile: "illustrious",
+        visualStyle: "anime",
         nsfw: true,
       }]);
       expect((container.querySelector("#scene-request") as HTMLTextAreaElement | null)?.value)
@@ -3698,7 +3896,11 @@ describe("TimelineShell", () => {
         });
         await flushAsyncWork();
 
-        expect(routeBodies).toEqual([{ promptProfile: "illustrious", nsfw: false }]);
+        expect(routeBodies).toEqual([{
+          promptProfile: "illustrious",
+          visualStyle: "anime",
+          nsfw: false,
+        }]);
         expect((container.querySelector("#scene-request") as HTMLTextAreaElement | null)?.value).toBe(
           "A cartographer charts bioluminescent caverns  while a storm approaches.",
         );
@@ -3792,6 +3994,7 @@ describe("TimelineShell", () => {
       });
       workflow = completeTimelineNode(workflow, "scene-prompt", {
         positivePrompt: `persisted downstream prompt for ${displayMode}`,
+        visualStyle: "anime",
       }, "ai");
       const activeRecord = createTimelineWorkflowRecord({
         workflow,
@@ -3867,7 +4070,11 @@ describe("TimelineShell", () => {
             url === "/api/llm/chat"
           );
         expect(actionUrls).toEqual(["/api/agent-timeline/run-scene-suggestion"]);
-        expect(routeBodies).toEqual([{ promptProfile: "anima", nsfw: false }]);
+        expect(routeBodies).toEqual([{
+          promptProfile: "anima",
+          visualStyle: "anime",
+          nsfw: false,
+        }]);
 
         if (outcome === "success") {
           expect(textarea.value).toBe(suggestedIntent);
@@ -3941,6 +4148,13 @@ describe("TimelineShell", () => {
       act(() => {
         root.render(<TimelineShell />);
       });
+      await flushAsyncWork();
+      act(() => {
+        setNativeSelectValue(
+          container.querySelector("#run-visual-style") as HTMLSelectElement,
+          "photoreal",
+        );
+      });
 
       await submitSceneAndChoosePromptTagReview(
         "A glass greenhouse control room",
@@ -3961,6 +4175,7 @@ describe("TimelineShell", () => {
           action: "rewrite",
           currentSceneRequest: "A glass greenhouse control room",
           promptProfile: "illustrious",
+          visualStyle: "photoreal",
         },
       ]);
       expect((container.querySelector("#scene-request") as HTMLTextAreaElement | null)?.value).toBe(
@@ -4003,6 +4218,13 @@ describe("TimelineShell", () => {
       act(() => {
         root.render(<TimelineShell />);
       });
+      await flushAsyncWork();
+      act(() => {
+        setNativeSelectValue(
+          container.querySelector("#run-visual-style") as HTMLSelectElement,
+          "photoreal",
+        );
+      });
 
       await submitSceneAndChoosePromptTagReview(
         "A quiet archive atrium",
@@ -4025,6 +4247,7 @@ describe("TimelineShell", () => {
           action: "suggest",
           currentSceneRequest: "A quiet archive atrium",
           promptProfile: "illustrious",
+          visualStyle: "photoreal",
         },
       ]);
       expect(sceneInputBodies).toEqual([

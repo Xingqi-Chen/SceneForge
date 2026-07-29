@@ -16,6 +16,7 @@ import {
   setTimelineNodeManualResult,
   updateTimelineSceneInputSettings,
   updateTimelineFinalRedrawPreset,
+  updateTimelineVisualStyle,
   validateTimelineDependencyDag,
   type TimelineNodeAdapters,
   type TimelineWorkflowState,
@@ -54,6 +55,7 @@ const runStyleReference = {
     checkpointId: "checkpoint-a",
     modeReason: "Illustrious supports IPAdapter.",
     promptProfile: "illustrious" as const,
+    visualStyle: "anime" as const,
   },
 };
 
@@ -328,6 +330,340 @@ describe("agent timeline workflow foundation", () => {
     expect(edited.nodes["scene-input"].result).toMatchObject({
       settingsSnapshot: { styleReference: runStyleReference },
     });
+  });
+
+  it.each([
+    ["anime", "photoreal"],
+    ["photoreal", "anime"],
+  ] as const)(
+    "changes visual style from %s to %s while clearing completed artifacts and preserving Composer inputs",
+    (initialVisualStyle, nextVisualStyle) => {
+    const clock = createClock();
+    const stylePalette = {
+      checkpointId: "checkpoint-a",
+      loras: [{
+        id: "lora-a",
+        enabled: true,
+        strengthModel: 0.63,
+        strengthClip: 0.47,
+      }],
+      parameters: {
+        width: 960,
+        height: 1280,
+        steps: 42,
+        cfg: 5.5,
+        samplerName: "euler",
+        scheduler: "normal",
+        denoise: 0.82,
+        seed: 1234,
+      },
+    };
+    const styleReference = {
+      ...runStyleReference,
+      settingsSnapshot: {
+        ...runStyleReference.settingsSnapshot,
+        visualStyle: initialVisualStyle,
+      },
+    };
+    let workflow = createTimelineWorkflowState({
+      workflowId: "visual-style-stale-boundary",
+      sceneRequest: "A pilot in a glass greenhouse",
+      sourceDenoise: 0.37,
+      sourceImage: {
+        dataUrl: "data:image/png;base64,c291cmNl",
+        filename: "source.png",
+        height: 768,
+        mimeType: "image/png",
+        uploadedAt: "2026-07-27T00:00:00.000Z",
+        width: 1024,
+      },
+      settingsSnapshot: {
+        automaticLocalRepair: true,
+        detailers: {
+          faceDetailer: { enabled: true, detectorModelName: "bbox/custom-face.pt", steps: 18 },
+          handDetailer: { enabled: false, detectorModelName: "bbox/custom-hand.pt", steps: 21 },
+        },
+        finalRedrawPreset: "strong",
+        promptProfile: "illustrious",
+        stylePalette,
+        styleReference,
+        visualStyle: initialVisualStyle,
+      },
+      now: clock,
+    });
+    workflow = setTimelineNodeManualResult(
+      workflow,
+      "scene-prompt",
+      { prompt: "glass greenhouse", visualStyle: initialVisualStyle },
+      { now: clock },
+    );
+    workflow = setTimelineNodeManualResult(workflow, "character-tags", { tags: ["pilot"] }, { now: clock });
+    workflow = setTimelineNodeManualResult(workflow, "character-action", { action: "checking controls" }, { now: clock });
+    workflow = setTimelineNodeManualResult(workflow, "canvas-binding", { primaryCharacterId: "character-1" }, { now: clock });
+    workflow = setTimelineNodeManualResult(
+      workflow,
+      "resource-recommendation",
+      { checkpoint: "local.safetensors", loras: [] },
+      { now: clock },
+    );
+    workflow = setTimelineNodeManualResult(workflow, "parameter-recommendation", { width: 960 }, { now: clock });
+    workflow = confirmTimelineGeneration(workflow, undefined, { now: clock });
+    const priorStyleStoredImage = {
+      byteLength: 128,
+      contentType: "image/png",
+      filename: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png",
+      url: "/api/comfyui/generated-images/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png",
+    };
+    const priorStylePreviewStoredImage = {
+      byteLength: 96,
+      contentType: "image/png",
+      filename: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.png",
+      url: "/api/comfyui/generated-images/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.png",
+    };
+    const priorStyleRepairStoredImage = {
+      byteLength: 64,
+      contentType: "image/png",
+      filename: "cccccccccccccccccccccccccccccccc.png",
+      url: "/api/comfyui/generated-images/cccccccccccccccccccccccccccccccc.png",
+    };
+    const priorStyleSourceImage = {
+      filename: "final-output.png",
+      nodeId: "9",
+      type: "output" as const,
+    };
+    const priorStyleReviewParent = {
+      finalStoredImage: priorStyleStoredImage,
+      reviewUpdatedAt: "2026-07-28T00:00:00.000Z",
+      reviewedFindings: [],
+      reviewedTargets: [],
+      visualStyle: initialVisualStyle,
+    };
+    workflow.nodes["preview-execution"] = {
+      ...workflow.nodes["preview-execution"],
+      status: "done",
+      source: "system",
+      result: {
+        advanceSeedOnRetry: true,
+        baseSeed: 1234,
+        candidateCount: 1,
+        finalCount: 1,
+        previewHeight: 640,
+        previewWidth: 480,
+        previewSteps: 12,
+        candidates: [{
+          candidateId: "preview-1",
+          index: 0,
+          seed: 1234,
+          status: "done",
+          promptId: "preview-prompt-1",
+          sourceImage: { filename: "preview-output.png", nodeId: "9", type: "output" },
+          storedImage: priorStylePreviewStoredImage,
+        }],
+        successfulCount: 1,
+        warnings: [],
+      } as never,
+    };
+    workflow.nodes["preview-scoring"] = {
+      ...workflow.nodes["preview-scoring"],
+      status: "done",
+      source: "ai",
+      result: {
+        rubricVersion: 2,
+        visualStyle: initialVisualStyle,
+        scores: [{
+          candidateId: "preview-1",
+          adherence: 90,
+          composition: 90,
+          anatomy: 90,
+          style: 90,
+          technical: 90,
+          total: 90,
+          criticalDefects: [],
+          eligible: true,
+          visualStyleMatch: true,
+          rank: 1,
+        }],
+        selectedCandidateIds: ["preview-1"],
+        selectionSource: "ai",
+      },
+    };
+    workflow.nodes["comfyui-execution"] = {
+      ...workflow.nodes["comfyui-execution"],
+      status: "done",
+      source: "system",
+      result: {
+        completed: true,
+        finalCount: 1,
+        finals: [{
+          candidateId: "preview-1",
+          seed: 1234,
+          rank: 1,
+          status: "done",
+          promptId: "final-prompt-1",
+          sourceImage: priorStyleSourceImage,
+          storedImage: priorStyleStoredImage,
+          previewUpscale: {
+            policyVersion: 2,
+            resizeMode: "lanczos3-exact",
+            width: 960,
+            height: 1280,
+            sourcePreview: priorStylePreviewStoredImage,
+            storedImage: priorStylePreviewStoredImage,
+          },
+        }],
+        request: { checkpointName: "local.safetensors", positivePrompt: "prior-style result" },
+        warnings: [],
+      } as never,
+    };
+    workflow.nodes["final-review"] = {
+      ...workflow.nodes["final-review"],
+      status: "done",
+      source: "ai",
+      result: {
+        reviewVersion: 1,
+        status: "reviewed",
+        visualStyle: initialVisualStyle,
+        pairs: [{
+          candidateId: "preview-1",
+          rank: 1,
+          seed: 1234,
+          variants: { final: priorStyleStoredImage, previewUpscale: priorStylePreviewStoredImage },
+          recommendedVariant: "final",
+          defaultVariant: "final",
+          userSelectedVariant: "repair",
+          visualStyleMatch: { final: true, previewUpscale: true },
+        }],
+      } as never,
+    };
+    workflow.nodes["final-repair"] = {
+      ...workflow.nodes["final-repair"],
+      status: "done",
+      source: "system",
+      result: {
+        repairVersion: 1,
+        authorized: true,
+        completed: true,
+        pairs: [{
+          candidateId: "preview-1",
+          rank: 1,
+          seed: 1234,
+          status: "repaired",
+          targets: [],
+          parent: priorStyleReviewParent,
+          promptId: "repair-prompt-1",
+          sourceImage: { filename: "repair-output.png", nodeId: "9", type: "output" },
+          storedImage: priorStyleRepairStoredImage,
+        }],
+      } as never,
+    };
+    workflow.nodes["repair-verification"] = {
+      ...workflow.nodes["repair-verification"],
+      status: "done",
+      source: "ai",
+      result: {
+        verificationVersion: 1,
+        status: "verified",
+        visualStyle: initialVisualStyle,
+        pairs: [{
+          candidateId: "preview-1",
+          repairParent: priorStyleReviewParent,
+          repairStoredImage: priorStyleRepairStoredImage,
+          targetedDefectsResolved: true,
+          newMajorOrBlockingIssue: false,
+          findings: [],
+          recommended: true,
+          visualStyleMatch: true,
+        }],
+      } as never,
+    };
+    workflow.nodes["result-display"] = {
+      ...workflow.nodes["result-display"],
+      status: "done",
+      source: "system",
+      result: {
+        completed: true,
+        visualStyle: initialVisualStyle,
+        visualStyleAssessment: "verified",
+        image: { ...priorStyleSourceImage, url: priorStyleStoredImage.url },
+        promptId: "final-prompt-1",
+        sourceImage: priorStyleSourceImage,
+        storedImage: priorStyleStoredImage,
+        warnings: [],
+      },
+    };
+
+    const edited = updateTimelineVisualStyle(
+      workflow,
+      sanitizeRunSceneInputSettingsSnapshot({
+        automaticLocalRepair: true,
+        detailers: {
+          faceDetailer: { enabled: true, detectorModelName: "bbox/custom-face.pt", steps: 18 },
+          handDetailer: { enabled: false, detectorModelName: "bbox/custom-hand.pt", steps: 21 },
+        },
+        finalRedrawPreset: "strong",
+        promptProfile: "illustrious",
+        stylePalette,
+        styleReference,
+        visualStyle: nextVisualStyle,
+      }),
+      { now: clock },
+    );
+
+    expect(edited.generationConfirmed).toBe(false);
+    expect(edited.legacyVisualStyleUnassessed).toBeUndefined();
+    expect(edited.nodes["scene-input"]).toMatchObject({
+      status: "manual",
+      result: {
+        sourceDenoise: 0.37,
+        sourceImage: { filename: "source.png", width: 1024, height: 768 },
+        settingsSnapshot: {
+          automaticLocalRepair: true,
+          finalRedrawPreset: "strong",
+          promptProfile: "illustrious",
+          stylePalette,
+          styleReference,
+          visualStyle: nextVisualStyle,
+          detailers: {
+            faceDetailer: { enabled: true, detectorModelName: "bbox/custom-face.pt", steps: 18 },
+            handDetailer: { enabled: false, detectorModelName: "bbox/custom-hand.pt", steps: 21 },
+          },
+        },
+      },
+    });
+    for (const nodeId of [
+      "scene-prompt",
+      "character-tags",
+      "character-action",
+      "canvas-binding",
+      "resource-recommendation",
+      "parameter-recommendation",
+      "generation-gate",
+      "preview-execution",
+      "preview-scoring",
+      "comfyui-execution",
+      "final-review",
+      "final-repair",
+      "repair-verification",
+      "result-display",
+    ] as const) {
+      expect(edited.nodes[nodeId].status, nodeId).toBe("stale");
+    }
+    for (const nodeId of [
+      "generation-gate",
+      "preview-execution",
+      "preview-scoring",
+      "comfyui-execution",
+      "final-review",
+      "final-repair",
+      "repair-verification",
+      "result-display",
+    ] as const) {
+      expect(edited.nodes[nodeId].result, nodeId).toBeUndefined();
+    }
+    expect(JSON.stringify(edited)).not.toContain("advanceSeedOnRetry");
+    expect(JSON.stringify(edited)).not.toContain("final-prompt-1");
+    expect(JSON.stringify(edited)).not.toContain("repair-prompt-1");
+    expect(JSON.stringify(edited)).not.toContain("/api/comfyui/generated-images/");
   });
 
   it("allows stale nodes to regenerate only after dependencies are valid", () => {

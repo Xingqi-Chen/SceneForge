@@ -1,5 +1,9 @@
 import type { ComfyUiSequenceCharacter } from "@/features/comfyui/sequence";
 import type { PromptProfileId } from "@/shared/prompt-profile";
+import {
+  isRunVisualStyle,
+  type RunVisualStyle,
+} from "./run-visual-style";
 
 export type StyleReferenceMode = "prompt-only" | "ipadapter";
 export type StyleReferenceStatus = "pending" | "ready" | "failed" | "mismatch" | "invalid";
@@ -32,6 +36,7 @@ export type StyleReferenceSettingsSnapshot = {
   checkpointId?: string;
   modeReason: string;
   promptProfile?: PromptProfileId;
+  visualStyle?: RunVisualStyle;
 };
 
 export type StyleReferenceSnapshot = {
@@ -215,6 +220,7 @@ export function sanitizeStyleReferenceSettingsSnapshot(
     ...(optionalString(value.promptProfile)
       ? { promptProfile: optionalString(value.promptProfile) as PromptProfileId }
       : {}),
+    ...(isRunVisualStyle(value.visualStyle) ? { visualStyle: value.visualStyle } : {}),
   };
 }
 
@@ -302,6 +308,7 @@ export function createStyleReferenceSnapshot({
   mode,
   modeReason,
   promptProfile,
+  visualStyle,
 }: {
   analysis: StyleReferenceAnalysis;
   capturedAt: string;
@@ -312,6 +319,7 @@ export function createStyleReferenceSnapshot({
   mode: StyleReferenceMode;
   modeReason: string;
   promptProfile?: PromptProfileId;
+  visualStyle?: RunVisualStyle;
 }): StyleReferenceSnapshot {
   return sanitizeStyleReferenceSnapshot({
     analysis,
@@ -324,6 +332,7 @@ export function createStyleReferenceSnapshot({
       ...(checkpointId ? { checkpointId } : {}),
       modeReason,
       ...(promptProfile ? { promptProfile } : {}),
+      ...(visualStyle ? { visualStyle } : {}),
     },
     status: "ready",
   }) ?? invalidStyleReference("Style reference is invalid.");
@@ -418,6 +427,7 @@ export function getStyleReferenceContextMismatch(
     checkpointBaseModel?: string | null;
     checkpointId?: string | null;
     promptProfile?: PromptProfileId;
+    visualStyle?: RunVisualStyle;
   },
 ) {
   if (!isStyleReferenceReady(value)) {
@@ -429,6 +439,7 @@ export function getStyleReferenceContextMismatch(
   }
   if (
     (current.promptProfile !== undefined && analyzed.promptProfile !== current.promptProfile) ||
+    (current.visualStyle !== undefined && analyzed.visualStyle !== current.visualStyle) ||
     normalizeContextValue(analyzed.checkpointBaseModel) !== normalizeContextValue(current.checkpointBaseModel) ||
     (analyzed.checkpointId !== undefined && analyzed.checkpointId !== (current.checkpointId ?? undefined))
   ) {

@@ -67,7 +67,8 @@ export function isTimelineGenerationConfirmationCurrent(workflow: TimelineWorkfl
       gate.finalGenerationFamily !== resolvedFinalPolicy.family ||
       gate.finalSteps !== resolvedFinalPolicy.steps ||
       gate.finalDenoise !== resolvedFinalPolicy.denoise ||
-      gate.automaticLocalRepairAuthorized !== settings.automaticLocalRepair) return false;
+      gate.automaticLocalRepairAuthorized !== settings.automaticLocalRepair ||
+      gate.visualStyle !== settings.visualStyle) return false;
   if (typeof fingerprint !== "string" || !/^hmac-sha256:[a-f0-9]{64}$/.test(fingerprint)) return false;
   const expected = createTimelineGenerationConfirmationFingerprint(workflow);
   return crypto.timingSafeEqual(Buffer.from(fingerprint), Buffer.from(expected));

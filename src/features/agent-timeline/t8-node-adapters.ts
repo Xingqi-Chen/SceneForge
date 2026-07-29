@@ -257,6 +257,7 @@ function assertStyleReferenceUsable(
     checkpointBaseModel: checkpoint.baseModel,
     checkpointId: checkpoint.id,
     promptProfile: settings.promptProfile,
+    visualStyle: settings.visualStyle,
   });
   if (mismatch) invalidComfyUiRequest(mismatch);
 }
@@ -400,12 +401,22 @@ function requirePreviewResult(workflow: TimelineWorkflowState): PreviewExecution
 
 function requireScoringResult(workflow: TimelineWorkflowState): PreviewScoringTimelineResultV2 {
   const value = workflow.nodes["preview-scoring"].result;
-  if (isRecord(value) && value.rubricVersion === 2 && Array.isArray(value.selectedCandidateIds)) {
-    return value as PreviewScoringTimelineResultV2;
+  const sceneInput = workflow.nodes["scene-input"].result;
+  const visualStyle = getRunSceneInputSettings(isRecord(sceneInput) ? sceneInput : {}).visualStyle;
+  if (isRecord(value) && value.rubricVersion === 2 && value.visualStyle === visualStyle &&
+      Array.isArray(value.selectedCandidateIds) && Array.isArray(value.scores)) {
+    const scores = value.scores;
+    const selectedMatch = value.selectedCandidateIds.every((candidateId) =>
+      scores.some((score) => isRecord(score) &&
+        score.candidateId === candidateId &&
+        score.visualStyleMatch === true));
+    if (selectedMatch) {
+      return value as PreviewScoringTimelineResultV2;
+    }
   }
   throw new TimelineNodeExecutionError(createTimelineNodeError(
     "timeline_node_blocked",
-    "Current eligibility-aware preview scoring is required. Retry preview scoring before final generation.",
+    "Current visual-style-verified Preview scoring is required. Retry Preview scoring before Final generation.",
   ));
 }
 
@@ -468,6 +479,7 @@ export function createTimelineFinalRequests(workflow: TimelineWorkflowState) {
       !Number.isSafeInteger(item.candidates[0].seed) ||
       item.candidates[0].seed < 0 ||
       item.scores.length !== 1 ||
+      item.scores[0]?.visualStyleMatch !== true ||
       !Number.isSafeInteger(item.scores[0]?.rank) ||
       (item.scores[0]?.rank ?? 0) < 1 ||
       (item.scores[0]?.rank ?? 0) > scoring.scores.length

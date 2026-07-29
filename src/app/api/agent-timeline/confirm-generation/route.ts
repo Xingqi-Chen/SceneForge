@@ -144,6 +144,7 @@ export async function POST(request: Request) {
           finalSteps: resolvedFinalPolicy.steps,
           finalDenoise: resolvedFinalPolicy.denoise,
           automaticLocalRepairAuthorized: settings.automaticLocalRepair,
+          visualStyle: settings.visualStyle,
         }) : workflow;
     if (stage && !areTimelineNodeDependenciesSatisfied(runnableWorkflow, stage)) {
       return errorResponse(`Generation stage "${stage}" cannot run until its dependencies are complete.`, 409, {

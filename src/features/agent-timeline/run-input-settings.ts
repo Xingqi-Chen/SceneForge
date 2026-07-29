@@ -16,6 +16,10 @@ import {
   sanitizeTimelineFinalRedrawPreset,
   type TimelineFinalRedrawPreset,
 } from "./final-generation-policy";
+import {
+  normalizeRunVisualStyle,
+  type RunVisualStyle,
+} from "./run-visual-style";
 
 export type RunSceneInputSettingsSnapshot = {
   automaticLocalRepair: boolean;
@@ -24,6 +28,7 @@ export type RunSceneInputSettingsSnapshot = {
   promptProfile?: PromptProfileId;
   stylePalette?: GenerationStylePaletteSnapshot;
   styleReference?: StyleReferenceSnapshot;
+  visualStyle: RunVisualStyle;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -38,6 +43,7 @@ export function createRunSceneInputSettingsSnapshot(
     promptProfile?: PromptProfileId;
     stylePalette?: GenerationStylePaletteSnapshot;
     styleReference?: StyleReferenceSnapshot;
+    visualStyle?: RunVisualStyle;
   } = {},
 ): RunSceneInputSettingsSnapshot {
   const stylePalette = sanitizeGenerationStylePaletteSnapshot(value.stylePalette);
@@ -46,6 +52,7 @@ export function createRunSceneInputSettingsSnapshot(
     automaticLocalRepair: value.automaticLocalRepair === true,
     detailers: createGenerationDetailerSettingsSnapshot(value.detailers),
     finalRedrawPreset: sanitizeTimelineFinalRedrawPreset(value.finalRedrawPreset),
+    visualStyle: normalizeRunVisualStyle(value.visualStyle),
     ...(value.promptProfile ? { promptProfile: normalizePromptProfileId(value.promptProfile) } : {}),
     ...(stylePalette ? { stylePalette } : {}),
     ...(styleReference ? { styleReference } : {}),
@@ -60,6 +67,7 @@ export function sanitizeRunSceneInputSettingsSnapshot(value: unknown): RunSceneI
     automaticLocalRepair: raw.automaticLocalRepair === true,
     detailers: sanitizeGenerationDetailerSettingsSnapshot(raw.detailers),
     finalRedrawPreset: sanitizeTimelineFinalRedrawPreset(raw.finalRedrawPreset),
+    visualStyle: normalizeRunVisualStyle(raw.visualStyle),
     ...(typeof raw.promptProfile === "string"
       ? { promptProfile: coercePromptProfileId(raw.promptProfile) }
       : {}),

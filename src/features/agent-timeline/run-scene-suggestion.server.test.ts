@@ -120,6 +120,35 @@ describe("empty Run scene suggestion request", () => {
     expect(JSON.stringify(payload)).not.toContain("sceneRequest");
   });
 
+  it("propagates Photoreal through empty Suggest and its repair request", () => {
+    const initial = buildEmptyRunSceneSuggestionRequest({
+      nsfw: false,
+      promptProfile: "illustrious",
+      recentConceptsToAvoid: [],
+      visualStyle: "photoreal",
+    });
+    const repair = buildEmptyRunSceneSuggestionRequest({
+      nsfw: false,
+      promptProfile: "illustrious",
+      recentConceptsToAvoid: [],
+      repairReason: "Only 0 valid candidates remained.",
+      visualStyle: "photoreal",
+    });
+
+    for (const request of [initial, repair]) {
+      expect(String(request.messages[0]?.content)).toContain(
+        "Selected visual style: Photoreal (photoreal)",
+      );
+      expect(String(request.messages[0]?.content)).toContain(
+        "live-action photography, natural skin texture, realistic material response, physically plausible lighting, photographic camera optics",
+      );
+      expect(JSON.parse(String(request.messages[1]?.content))).toMatchObject({
+        promptProfile: "illustrious",
+        visualStyle: "photoreal",
+      });
+    }
+  });
+
   it("applies the sole-female safe-scene contract to both SFW initial and repair requests", () => {
     const initial = buildEmptyRunSceneSuggestionRequest({
       nsfw: false,

@@ -166,7 +166,9 @@ describe("PromptPreviewPanel AI prompt messages", () => {
     expect(systemPrompt).toContain("distinct hairstyle and a distinct pose or action");
     expect(systemPrompt).toContain("Avoid abstract psychological narration");
     expect(systemPrompt).toContain("Anima prompt ordering");
-    expect(systemPrompt).toContain("quality/meta/year/safety, subject count, character, series/source, artist, general");
+    expect(systemPrompt).toContain(
+      "quality/meta/year/safety, subject count, character, series/source, artist, visual style/medium, general",
+    );
     expect(systemPrompt).toContain("Use @artist syntax");
     expect(systemPrompt).not.toContain("Danbooru-style pose/action tags");
     expect(systemPrompt).not.toContain("Danbooru/booru-style anime tags and short tag phrases; not natural language");

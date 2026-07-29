@@ -12,6 +12,7 @@ export type IllustriousPromptSectionKey =
   | "aestheticVersion"
   | "rating"
   | "artistStyle"
+  | "visualStyleAndMedium"
   | "styleLoraTriggers"
   | "checkpointTriggerWords"
   | "subjectIdentity"
@@ -39,6 +40,7 @@ const ILLUSTRIOUS_RENDER_ORDER: IllustriousPromptSectionKey[] = [
   "aestheticVersion",
   "rating",
   "artistStyle",
+  "visualStyleAndMedium",
   "styleLoraTriggers",
   "checkpointTriggerWords",
   "subjectIdentity",
@@ -70,6 +72,9 @@ const SECTION_KEY_ALIASES: Record<string, IllustriousPromptSectionKey> = {
   artistandstyle: "artistStyle",
   style: "artistStyle",
   styletags: "artistStyle",
+  medium: "visualStyleAndMedium",
+  visualmedium: "visualStyleAndMedium",
+  visualstyleandmedium: "visualStyleAndMedium",
   styleloratriggers: "styleLoraTriggers",
   checkpoint: "checkpointTriggerWords",
   checkpointtriggerwords: "checkpointTriggerWords",
@@ -262,6 +267,7 @@ function createEmptySections(): Record<IllustriousPromptSectionKey, string[]> {
     aestheticVersion: [],
     rating: [],
     artistStyle: [],
+    visualStyleAndMedium: [],
     styleLoraTriggers: [],
     checkpointTriggerWords: [],
     subjectIdentity: [],
@@ -506,17 +512,21 @@ export function renderIllustriousPrompt({
   resourceTriggerSelections,
   resources = { checkpoint: null, loras: [] },
   sections = {},
+  suppressAuthoredArtistStyle = false,
 }: {
   includeDefaultQualityTags?: boolean;
   resourceTriggerSelections?: IllustriousResourceTriggerSelection[];
   resources?: SelectedCivitaiResourcesPreview;
   sections?: IllustriousPromptSections;
+  suppressAuthoredArtistStyle?: boolean;
 }) {
   const merged = createEmptySections();
   const resourceSections = collectCivitaiTriggerSections(resources, resourceTriggerSelections);
 
   for (const key of ILLUSTRIOUS_RENDER_ORDER) {
-    appendSection(merged, key, sectionValueToParts(sections[key]));
+    if (!(key === "artistStyle" && suppressAuthoredArtistStyle)) {
+      appendSection(merged, key, sectionValueToParts(sections[key]));
+    }
     appendSection(merged, key, sectionValueToParts(resourceSections[key]));
   }
 
@@ -587,9 +597,9 @@ export function buildIllustriousAiResponseInstructions() {
   return [
     "Stable Diffusion uses Illustrious prompt ordering.",
     "Return JSON only. Do not wrap it in markdown.",
-    "Shape: { \"sections\": { \"quality\"?: string[], \"aestheticVersion\"?: string[], \"rating\"?: string[], \"artistStyle\"?: string[], \"subjectIdentity\"?: string[], \"appearancePhysicalTraits\"?: string[], \"clothingAccessories\"?: string[], \"poseActionExpression\"?: string[], \"backgroundEnvironmentObjects\"?: string[], \"spatialComposition\"?: string[], \"cameraFraming\"?: string[], \"lightingFocus\"?: string[], \"detailResolution\"?: string[] } }.",
+    "Shape: { \"sections\": { \"quality\"?: string[], \"aestheticVersion\"?: string[], \"rating\"?: string[], \"artistStyle\"?: string[], \"visualStyleAndMedium\"?: string[], \"subjectIdentity\"?: string[], \"appearancePhysicalTraits\"?: string[], \"clothingAccessories\"?: string[], \"poseActionExpression\"?: string[], \"backgroundEnvironmentObjects\"?: string[], \"spatialComposition\"?: string[], \"cameraFraming\"?: string[], \"lightingFocus\"?: string[], \"detailResolution\"?: string[] } }.",
     "Write each section as concise booru-style tags or short tag phrases.",
-    "Use this positive order: quality, aesthetic/version, rating, artist/style and style LoRA triggers, checkpoint trigger words, subject identity, character LoRA triggers, unknown LoRA triggers, appearance/physical traits, clothing/accessories, pose/action/expression, background/environment/objects, spatial composition, camera/framing, lighting/focus, detail/resolution.",
+    "Use this positive order: quality, aesthetic/version, rating, artist/style, visual style/medium, style LoRA triggers, checkpoint trigger words, subject identity, character LoRA triggers, unknown LoRA triggers, appearance/physical traits, clothing/accessories, pose/action/expression, background/environment/objects, spatial composition, camera/framing, lighting/focus, detail/resolution.",
     "Default quality and aesthetic/version tags will be added locally: masterpiece, best quality, amazing quality, very aesthetic, newest.",
     "Do not add rating tags unless they are explicitly provided by the scene or user.",
     "Use selected Civitai trainedWords only when useful, and never invent trigger words.",

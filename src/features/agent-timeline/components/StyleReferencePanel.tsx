@@ -22,6 +22,10 @@ import {
   type LlmChatRequest,
 } from "@/features/llm";
 import type { PromptProfileId } from "@/shared/prompt-profile";
+import {
+  buildRunVisualStyleLlmInstructions,
+  type RunVisualStyle,
+} from "@/features/agent-timeline/run-visual-style";
 
 type StyleReferenceFileInfo = {
   byteLength: number;
@@ -50,6 +54,7 @@ type Props = {
   promptProfile: PromptProfileId;
   selectedCheckpoint: SelectedCivitaiResourcesPreview["checkpoint"];
   snapshot?: StyleReferenceSnapshot;
+  visualStyle?: RunVisualStyle;
   workflowLabel: string;
 };
 
@@ -79,12 +84,14 @@ function buildAnalysisRequest({
   fileInfo,
   nsfwEnabled,
   promptProfile,
+  visualStyle,
   workflowLabel,
 }: {
   dataUrl: string;
   fileInfo: StyleReferenceFileInfo;
   nsfwEnabled: boolean;
   promptProfile: PromptProfileId;
+  visualStyle?: RunVisualStyle;
   workflowLabel: string;
 }): LlmChatRequest {
   const modelInstruction = promptProfile === "anima"
@@ -107,6 +114,7 @@ function buildAnalysisRequest({
           "Do not reproduce the image subject, identity, pose, or narrative content.",
           "The stylePrompt must be directly reusable as one opaque positive-prompt addition.",
           modelInstruction,
+          ...(visualStyle ? [buildRunVisualStyleLlmInstructions(visualStyle, promptProfile)] : []),
           '{"summary":"one concise sentence","stylePrompt":"one reusable visual style segment"}',
         ].join("\n"),
       },
@@ -119,6 +127,7 @@ function buildAnalysisRequest({
               contentType: fileInfo.contentType,
               filename: fileInfo.name,
               promptProfile,
+              ...(visualStyle ? { visualStyle } : {}),
             }),
           },
           { type: "image_url", image_url: { url: dataUrl, detail: "high" } },
@@ -158,18 +167,27 @@ async function analyzeReference({
   fileInfo,
   nsfwEnabled,
   promptProfile,
+  visualStyle,
   workflowLabel,
 }: {
   dataUrl: string;
   fileInfo: StyleReferenceFileInfo;
   nsfwEnabled: boolean;
   promptProfile: PromptProfileId;
+  visualStyle?: RunVisualStyle;
   workflowLabel: string;
 }): Promise<StyleReferenceAnalysis> {
   const response = await fetch("/api/llm/chat", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify(buildAnalysisRequest({ dataUrl, fileInfo, nsfwEnabled, promptProfile, workflowLabel })),
+    body: JSON.stringify(buildAnalysisRequest({
+      dataUrl,
+      fileInfo,
+      nsfwEnabled,
+      promptProfile,
+      visualStyle,
+      workflowLabel,
+    })),
   });
   const payload: unknown = await response.json().catch(() => null);
   if (!response.ok) {
@@ -224,6 +242,7 @@ export function StyleReferencePanel({
   promptProfile,
   selectedCheckpoint,
   snapshot,
+  visualStyle,
   workflowLabel,
 }: Props) {
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -278,6 +297,7 @@ export function StyleReferencePanel({
     checkpointBaseModel: currentCheckpointBaseModel,
     checkpointId,
     promptProfile,
+    visualStyle,
   });
   const busy = isProcessing;
   const ipAdapter = sanitizeStyleReferenceIpAdapterSettings(snapshot?.ipAdapter);
@@ -409,6 +429,7 @@ export function StyleReferencePanel({
       fileInfo: nextFileInfo,
       nsfwEnabled,
       promptProfile,
+      visualStyle,
       workflowLabel,
     });
     onChange(createStyleReferenceSnapshot({
@@ -421,6 +442,7 @@ export function StyleReferencePanel({
       mode: preserveKreaAdapter || capability.mode === "ipadapter" ? "ipadapter" : "prompt-only",
       modeReason: capability.reason,
       promptProfile,
+      visualStyle,
     }));
   }
 

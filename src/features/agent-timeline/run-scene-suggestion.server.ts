@@ -6,6 +6,11 @@ import {
   serializeErrorForLlmLog,
 } from "@/features/llm/llm-local-log";
 import { formatPromptProfileLabel, type PromptProfileId } from "@/shared/prompt-profile";
+import {
+  DEFAULT_RUN_VISUAL_STYLE,
+  buildRunVisualStyleLlmInstructions,
+  type RunVisualStyle,
+} from "./run-visual-style";
 
 import {
   appendRunSceneSuggestionHistory,
@@ -72,13 +77,16 @@ export function buildEmptyRunSceneSuggestionRequest({
   promptProfile,
   recentConceptsToAvoid,
   repairReason,
+  visualStyle,
 }: {
   nsfw: boolean;
   promptProfile: PromptProfileId;
   recentConceptsToAvoid: readonly RunSceneSuggestionFingerprint[];
   repairReason?: string;
+  visualStyle?: RunVisualStyle;
 }): LlmChatRequest {
   const profileLabel = formatPromptProfileLabel(promptProfile);
+  const resolvedVisualStyle = visualStyle ?? DEFAULT_RUN_VISUAL_STYLE;
   return {
     purpose: "stable-diffusion-prompt-generation",
     nsfw,
@@ -102,6 +110,7 @@ export function buildEmptyRunSceneSuggestionRequest({
               ]),
           "Write every sceneRequest yourself as the complete authoritative semantic request. Do not return fragments and do not derive it mechanically from category labels.",
           `Every candidate must be compatible with ${profileLabel} (${promptProfile}) and must include compatiblePromptProfiles containing "${promptProfile}".`,
+          buildRunVisualStyleLlmInstructions(resolvedVisualStyle, promptProfile),
           "Categorical fingerprint values must be concise English labels of at most 64 characters.",
           "Diversify protagonist type, age group, occupation family, setting, era, action, tone, and palette within this batch and against recentConceptsToAvoid.",
           "Do not include file paths, model/checkpoint/LoRA names, render parameters, implementation details, or additional fields.",
@@ -120,6 +129,7 @@ export function buildEmptyRunSceneSuggestionRequest({
           action: repairReason ? "repair-empty-suggestion-candidates" : "suggest-empty-scene",
           candidateCount: REQUESTED_CANDIDATE_COUNT,
           promptProfile,
+          ...(visualStyle ? { visualStyle } : {}),
           recentConceptsToAvoid: recentConceptsToAvoid.slice(-20),
         }),
       },
@@ -201,11 +211,13 @@ export async function createEmptyRunSceneSuggestion({
   promptProfile,
   random = Math.random,
   now = () => new Date(),
+  visualStyle = DEFAULT_RUN_VISUAL_STYLE,
 }: {
   nsfw: boolean;
   promptProfile: PromptProfileId;
   random?: () => number;
   now?: () => Date;
+  visualStyle?: RunVisualStyle;
 }): Promise<RunSceneSuggestionResult> {
   const history = await loadRunSceneSuggestionHistory();
   const recentConceptsToAvoid = history.slice(-20).map((record) => record.fingerprint);
@@ -213,6 +225,7 @@ export async function createEmptyRunSceneSuggestion({
     nsfw,
     promptProfile,
     recentConceptsToAvoid,
+    visualStyle,
   }), "initial");
   let parsed = parseRunSceneSuggestionCandidates(initial.content, promptProfile, nsfw);
   if (parsed.malformed || parsed.candidates.length < 3) {
@@ -221,6 +234,7 @@ export async function createEmptyRunSceneSuggestion({
       promptProfile,
       recentConceptsToAvoid,
       repairReason: repairReason(parsed.malformed, parsed.candidates.length, parsed.rejectedCount),
+      visualStyle,
     }), "repair");
     parsed = parseRunSceneSuggestionCandidates(repair.content, promptProfile, nsfw);
   }

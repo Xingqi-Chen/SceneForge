@@ -10,6 +10,7 @@ import {
   type TimelineFinalReviewScores,
   type TimelineWorkflowState,
 } from "./types";
+import type { RunVisualStyle } from "./run-visual-style";
 
 const scoreFields = ["adherence", "composition", "anatomy", "style", "technical"] as const;
 
@@ -125,24 +126,39 @@ function normalizeFindings(value: unknown): TimelineFinalReviewFinding[] {
   return findings;
 }
 
-export function getCompletedFinalReviewPairs(execution: ComfyUiExecutionTimelineResult): TimelineFinalReviewPair[] {
+export function getCompletedFinalReviewPairs(
+  execution: ComfyUiExecutionTimelineResult,
+  options: {
+    verifiedPreviewCandidateIds?: ReadonlySet<string>;
+    visualStyle?: RunVisualStyle;
+  } = {},
+): TimelineFinalReviewPair[] {
   const completed = execution.finals.filter((item) => item.status === "done" && item.storedImage && item.previewUpscale);
   if (!execution.completed || completed.length !== execution.finalCount || completed.length < 1 || completed.length > 4) {
     invalid("pair_source", "Final review requires one to four complete managed Preview/Final pairs.");
   }
-  return completed.sort((left, right) => left.rank - right.rank).map((item) => ({
-    candidateId: item.candidateId,
-    rank: item.rank,
-    seed: item.seed,
-    variants: { final: item.storedImage!, previewUpscale: item.previewUpscale!.storedImage },
-    recommendedVariant: null,
-    defaultVariant: "final",
-  }));
+  return completed.sort((left, right) => left.rank - right.rank).map((item) => {
+    if (options.visualStyle && !options.verifiedPreviewCandidateIds?.has(item.candidateId)) {
+      invalid("preview_style_unverified", "Final review requires an already style-verified Preview fallback.");
+    }
+    return {
+      candidateId: item.candidateId,
+      rank: item.rank,
+      seed: item.seed,
+      variants: { final: item.storedImage!, previewUpscale: item.previewUpscale!.storedImage },
+      recommendedVariant: null,
+      defaultVariant: options.visualStyle ? "preview-upscale" : "final",
+      ...(options.visualStyle
+        ? { visualStyleMatch: { final: null, previewUpscale: true } }
+        : {}),
+    };
+  });
 }
 
 export function parseFinalReviewResponse(
   content: string,
   sourcePairs: TimelineFinalReviewPair[],
+  visualStyle?: RunVisualStyle,
 ): FinalReviewTimelineResult {
   let parsed: unknown;
   try {
@@ -164,8 +180,14 @@ export function parseFinalReviewResponse(
     if (!source) invalid("pair_identity", "Final review referenced an unknown candidate pair.");
     seen.add(entry.candidateId);
     if (!isRecord(entry.scores)) invalid("scores_missing", "Every pair must include Preview and Final scores.");
+    const finalVisualStyleMatch = typeof entry.visualStyleMatch === "boolean"
+      ? entry.visualStyleMatch
+      : null;
+    if (visualStyle && finalVisualStyleMatch === null) {
+      invalid("visual_style_match_missing", "Every Final must include boolean visualStyleMatch.");
+    }
     const findings = normalizeFindings(entry.findings);
-    const recommendedVariant = findings.some((finding) =>
+    const recommendedVariant = finalVisualStyleMatch === false || findings.some((finding) =>
       finding.introducedByFinal && (finding.severity === "major" || finding.severity === "blocking"))
       ? "preview-upscale" as const
       : "final" as const;
@@ -181,18 +203,41 @@ export function parseFinalReviewResponse(
         : {}),
       recommendedVariant,
       defaultVariant: recommendedVariant,
+      ...(visualStyle
+        ? {
+            visualStyleMatch: {
+              final: finalVisualStyleMatch,
+              previewUpscale: true,
+            },
+          }
+        : {}),
     };
   });
   if (seen.size !== sourcePairs.length) invalid("pair_coverage", "Final review omitted one or more managed pairs.");
   pairs.sort((left, right) => left.rank - right.rank);
-  return { reviewVersion: 1, status: "reviewed", pairs };
+  return {
+    reviewVersion: 1,
+    status: "reviewed",
+    pairs,
+    ...(visualStyle ? { visualStyle } : {}),
+  };
 }
 
 export function createFailedFinalReviewResult(
   execution: ComfyUiExecutionTimelineResult,
   error: FinalReviewTimelineResult["error"],
+  options: {
+    verifiedPreviewCandidateIds?: ReadonlySet<string>;
+    visualStyle?: RunVisualStyle;
+  } = {},
 ): FinalReviewTimelineResult {
-  return { reviewVersion: 1, status: "failed", pairs: getCompletedFinalReviewPairs(execution), error };
+  return {
+    reviewVersion: 1,
+    status: "failed",
+    pairs: getCompletedFinalReviewPairs(execution, options),
+    ...(options.visualStyle ? { visualStyle: options.visualStyle } : {}),
+    error,
+  };
 }
 
 export function getFinalReviewResult(workflow: TimelineWorkflowState) {
@@ -210,7 +255,11 @@ export function selectFinalReviewVariant(
 ) {
   if (variant !== "final" && variant !== "preview-upscale") return workflow;
   const review = getFinalReviewResult(workflow);
-  if (!review || !review.pairs.some((pair) => pair.candidateId === candidateId)) return workflow;
+  const selectedPair = review?.pairs.find((pair) => pair.candidateId === candidateId);
+  if (!review || !selectedPair ||
+      review.visualStyle && variant === "final" && selectedPair.visualStyleMatch?.final !== true ||
+      review.visualStyle && variant === "preview-upscale" &&
+        selectedPair.visualStyleMatch?.previewUpscale !== true) return workflow;
   return {
     ...workflow,
     updatedAt,

@@ -215,9 +215,55 @@ describe("T5 timeline node adapters", () => {
     expect(result).toMatchObject({
       value: {
         promptProfile: "illustrious",
+        visualStyle: "anime",
         illustriousSections: {
           subjectIdentity: ["solo pilot"],
         },
+      },
+    });
+  });
+
+  it("propagates Photoreal into the Scene Prompt request and normalized result", async () => {
+    const requests: LlmChatRequest[] = [];
+    const workflow = createTimelineWorkflowState({
+      sceneRequest: "A pilot in a glass greenhouse",
+      settingsSnapshot: { visualStyle: "photoreal" },
+    });
+    const adapter = createTimelineT5NodeAdapters({
+      completeChat: async (request) => {
+        requests.push(request);
+        return {
+          role: "assistant",
+          content: JSON.stringify({
+            positivePrompt: "solo pilot, glass greenhouse",
+            illustriousSections: {
+              subjectIdentity: ["solo pilot"],
+              visualStyleAndMedium: ["natural light photography"],
+            },
+          }),
+        };
+      },
+    })["scene-prompt"];
+
+    const result = await adapter?.({
+      dependencies: [workflow.nodes["scene-input"]],
+      nodeId: "scene-prompt",
+      workflow,
+    });
+
+    const systemText = String(requests[0]?.messages[0]?.content);
+    expect(systemText).toContain("Selected visual style: Photoreal (photoreal)");
+    expect(systemText).toContain(
+      "live-action photography, natural skin texture, realistic material response, physically plausible lighting, photographic camera optics",
+    );
+    expect(JSON.parse(String(requests[0]?.messages[1]?.content))).toMatchObject({
+      promptProfile: "illustrious",
+      visualStyle: "photoreal",
+    });
+    expect(result).toMatchObject({
+      value: {
+        promptProfile: "illustrious",
+        visualStyle: "photoreal",
       },
     });
   });

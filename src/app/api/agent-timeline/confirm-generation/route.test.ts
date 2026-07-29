@@ -62,12 +62,15 @@ import { POST } from "./route";
 function createGateReadyWorkflow(automaticLocalRepair = false) {
   let workflow: TimelineWorkflowState = createTimelineWorkflowState({
     sceneRequest: "A pilot in a greenhouse",
-    settingsSnapshot: { automaticLocalRepair },
+    settingsSnapshot: { automaticLocalRepair, visualStyle: "anime" },
     workflowId: "timeline-confirm-api",
     now: () => "2026-06-02T00:00:00.000Z",
   });
 
-  workflow = completeTimelineNode(workflow, "scene-prompt", { positivePrompt: "glass greenhouse pilot" }, "ai");
+  workflow = completeTimelineNode(workflow, "scene-prompt", {
+    positivePrompt: "glass greenhouse pilot",
+    visualStyle: "anime",
+  }, "ai");
   workflow = completeTimelineNode(workflow, "character-tags", { items: [] }, "ai");
   workflow = completeTimelineNode(workflow, "character-action", { action: "checking controls" }, "ai");
   workflow = completeTimelineNode(
@@ -193,6 +196,8 @@ function createCompletedLegacyDirectKreaWorkflow() {
   }, "system");
   workflow = completeTimelineNode(workflow, "result-display", {
     completed: true,
+    visualStyle: "anime",
+    visualStyleAssessment: "verified",
     finalLinks: [{ candidateId: "preview-1", promptId: "legacy-direct-prompt", rank: 1, seed: 123 }],
     image: { ...sourceImage, url: storedImage.url },
     images: [{ ...sourceImage, url: storedImage.url }],
@@ -238,6 +243,7 @@ function createSignedConfirmedWorkflow() {
     finalGenerationFamily: finalPolicy.family,
     finalDenoise: finalPolicy.denoise,
     automaticLocalRepairAuthorized: false,
+    visualStyle: "anime",
   });
 }
 
@@ -547,7 +553,10 @@ describe("POST /api/agent-timeline/confirm-generation", () => {
 
   it.each([
     ["prompt", (workflow: TimelineWorkflowState) => {
-      workflow.nodes["scene-prompt"].result = { positivePrompt: "tampered prompt" };
+      workflow.nodes["scene-prompt"].result = {
+        positivePrompt: "tampered prompt",
+        visualStyle: "anime",
+      };
     }],
     ["resource", (workflow: TimelineWorkflowState) => {
       workflow.nodes["resource-recommendation"].result = { checkpoint: "tampered.safetensors", loras: [] };
@@ -696,7 +705,10 @@ describe("POST /api/agent-timeline/confirm-generation", () => {
 
   it("does not let a staged continuation bypass confirmation fingerprint validation", async () => {
     const workflow = JSON.parse(JSON.stringify(createSignedConfirmedWorkflow())) as TimelineWorkflowState;
-    workflow.nodes["scene-prompt"].result = { positivePrompt: "tampered staged prompt" };
+    workflow.nodes["scene-prompt"].result = {
+      positivePrompt: "tampered staged prompt",
+      visualStyle: "anime",
+    };
 
     const response = await POST(new Request("http://localhost/api/agent-timeline/confirm-generation", {
       body: JSON.stringify({
@@ -770,6 +782,7 @@ describe("POST /api/agent-timeline/confirm-generation", () => {
     let workflow = createSignedWorkflowWithCompletedPreviews(2);
     workflow = completeTimelineNode(workflow, "preview-scoring", {
       rubricVersion: 2,
+      visualStyle: "anime",
       scores: [1, 2, 3, 4].map((number) => ({
         candidateId: `preview-${number}`,
         adherence: 90,
@@ -780,6 +793,7 @@ describe("POST /api/agent-timeline/confirm-generation", () => {
         total: 90,
         criticalDefects: [],
         eligible: true,
+        visualStyleMatch: true,
         rank: number === 1 ? 2 : number === 2 ? 1 : number,
       })),
       selectedCandidateIds: ["preview-1", "preview-2"],

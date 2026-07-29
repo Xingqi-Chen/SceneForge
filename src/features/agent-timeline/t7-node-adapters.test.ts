@@ -176,6 +176,7 @@ function makeStyleReference(status: "pending" | "ready" | "failed" | "invalid" |
       checkpointId: "checkpoint-local",
       modeReason: "Illustrious supports IPAdapter.",
       promptProfile: "illustrious" as const,
+      visualStyle: "anime" as const,
     },
   };
 }
@@ -197,6 +198,7 @@ describe("T7 timeline adapters", () => {
           checkpointId: checkpoint.id,
           loras: [{ id: lora.id, enabled: true, strengthModel: 0.61, strengthClip: 0.48 }],
         },
+        visualStyle: "photoreal",
       },
     });
     workflow = completeTimelineNode(workflow, "scene-prompt", makeScenePrompt(), "ai");
@@ -224,6 +226,51 @@ describe("T7 timeline adapters", () => {
         }],
       },
     });
+  });
+
+  it("propagates Photoreal through automatic resource recommendation", async () => {
+    const checkpoint = makeResource(
+      "model",
+      "checkpoint-local",
+      "Local Checkpoint",
+      "Illustrious",
+    );
+    const recommendResources = vi.fn(() => ({
+      checkpoint: { resource: checkpoint, reason: "Local checkpoint." },
+      loras: [],
+      recommendationReason: "Use the local checkpoint.",
+      overallEffect: "Natural portrait.",
+      warnings: [],
+    }));
+    let workflow = createTimelineWorkflowState({
+      sceneRequest: "A courier in a greenhouse",
+      settingsSnapshot: { visualStyle: "photoreal" },
+    });
+    workflow = completeTimelineNode(workflow, "scene-prompt", makeScenePrompt(), "ai");
+    const adapter = createTimelineT7NodeAdapters({
+      loadResourceCandidates: () => ({
+        checkpoints: [makeCandidate(checkpoint)],
+        loras: [],
+      }),
+      recommendResources,
+    })["resource-recommendation"];
+
+    await adapter?.({
+      dependencies: [workflow.nodes["scene-prompt"]],
+      nodeId: "resource-recommendation",
+      workflow,
+    });
+
+    expect(recommendResources).toHaveBeenCalledWith(
+      expect.objectContaining({
+        promptProfile: "illustrious",
+        visualStyle: "photoreal",
+        desiredEffect: expect.stringContaining(
+          "Authoritative visual style: Photoreal (photoreal)",
+        ),
+      }),
+      expect.any(Object),
+    );
   });
 
   it("rejects an unavailable explicit Run resource before recommendation", async () => {
@@ -782,6 +829,173 @@ describe("T7 timeline adapters", () => {
       resourceResult,
       scenePrompt: makeScenePrompt(),
     })).toBe("masterpiece, best quality, amazing quality, very aesthetic, newest, cinematic anime, neon_style, courier, neon alley");
+  });
+
+  it("suppresses authored artists for Photoreal while preserving resource triggers", () => {
+    const buildResourceResult = (
+      promptProfile: "illustrious" | "anima",
+    ): ResourceRecommendationTimelineResult => {
+      const checkpoint = makeResource(
+        "model",
+        `checkpoint-${promptProfile}`,
+        `${promptProfile} checkpoint`,
+        promptProfile,
+      );
+      const lora = makeResource(
+        "lora",
+        `lora-${promptProfile}`,
+        `${promptProfile} LoRA`,
+        promptProfile,
+        { trainedWords: [`${promptProfile}_resource_trigger`] },
+      );
+      return {
+        checkpoint: { resource: checkpoint, reason: "Local checkpoint." },
+        loras: [{ resource: lora, suggestedWeight: 0.7, reason: "Local LoRA." }],
+        candidates: {
+          checkpoints: [makeCandidate(checkpoint)],
+          loras: [makeCandidate(lora)],
+        },
+        recommendationReason: "Local recommendation.",
+        overallEffect: "Portrait.",
+        warnings: [],
+      };
+    };
+    const guidance =
+      "live-action photography, natural skin texture, realistic material response, physically plausible lighting, photographic camera optics";
+    const illustrious = buildTimelineFinalPositivePrompt({
+      promptProfile: "illustrious",
+      resourceResult: buildResourceResult("illustrious"),
+      scenePrompt: {
+        ...makeScenePrompt("illustrious"),
+        illustriousSections: {
+          artistStyle: ["artist:authored_illustrator"],
+          visualStyleAndMedium: ["cinematic lighting"],
+          subjectIdentity: ["solo courier"],
+        },
+      },
+      visualStyle: "photoreal",
+    });
+    const anima = buildTimelineFinalPositivePrompt({
+      promptProfile: "anima",
+      resourceResult: buildResourceResult("anima"),
+      scenePrompt: {
+        ...makeScenePrompt("anima"),
+        animaSections: {
+          artist: ["artist:authored_illustrator"],
+          visualStyleAndMedium: ["cinematic lighting"],
+          character: ["solo courier"],
+        },
+      },
+      visualStyle: "photoreal",
+    });
+
+    for (const [prompt, trigger] of [
+      [illustrious, "illustrious_resource_trigger"],
+      [anima, "anima_resource_trigger"],
+    ]) {
+      expect(prompt).not.toContain("artist:authored_illustrator");
+      expect(prompt).toContain(trigger);
+      expect(prompt.match(new RegExp(guidance, "g"))).toHaveLength(1);
+    }
+  });
+
+  it("replaces only a conflicting Photoreal style section and preserves unrelated scene sections", () => {
+    const tagGuidance =
+      "live-action photography, natural skin texture, realistic material response, physically plausible lighting, photographic camera optics";
+    const kreaGuidance =
+      "Rendered as a live-action photograph with natural human proportions, realistic skin and material response, physically plausible lighting, and photographic camera optics.";
+    const makeResourceResult = (
+      promptProfile: "illustrious" | "anima",
+    ): ResourceRecommendationTimelineResult => {
+      const checkpoint = makeResource(
+        "model",
+        `checkpoint-${promptProfile}`,
+        `${promptProfile} checkpoint`,
+        promptProfile,
+      );
+      return {
+        checkpoint: { resource: checkpoint, reason: "Local checkpoint." },
+        loras: [],
+        candidates: { checkpoints: [makeCandidate(checkpoint)], loras: [] },
+        recommendationReason: "Local recommendation.",
+        overallEffect: "Portrait.",
+        warnings: [],
+      };
+    };
+    const prompts = [
+      {
+        guidance: tagGuidance,
+        prompt: buildTimelineFinalPositivePrompt({
+        promptProfile: "illustrious",
+        resourceResult: makeResourceResult("illustrious"),
+        scenePrompt: {
+          ...makeScenePrompt("illustrious"),
+          illustriousSections: {
+            visualStyleAndMedium: [
+              "soft amber palette, semi-realistic rendering, fine surface texture",
+            ],
+            subjectIdentity: ["courier holding a red umbrella"],
+            backgroundEnvironmentObjects: ["rain-soaked station with two ticket gates"],
+            cameraFraming: ["85mm lens, shallow depth of field"],
+            lightingFocus: ["warm platform lights behind the subject"],
+          },
+        },
+        visualStyle: "photoreal",
+        }),
+      },
+      {
+        guidance: tagGuidance,
+        prompt: buildTimelineFinalPositivePrompt({
+        promptProfile: "anima",
+        resourceResult: makeResourceResult("anima"),
+        scenePrompt: {
+          ...makeScenePrompt("anima"),
+          animaSections: {
+            visualStyleAndMedium: [
+              "soft amber palette, semi-realistic rendering, fine surface texture",
+            ],
+            character: ["courier holding a red umbrella"],
+            general: [
+              "rain-soaked station with two ticket gates",
+              "85mm lens, shallow depth of field",
+              "warm platform lights behind the subject",
+            ],
+          },
+        },
+        visualStyle: "photoreal",
+        }),
+      },
+      {
+        guidance: kreaGuidance,
+        prompt: buildTimelineFinalPositivePrompt({
+        promptProfile: "krea2",
+        resourceResult: makeKreaResourceResult(),
+        scenePrompt: {
+          ...makeKreaScenePrompt(),
+          krea2Sections: {
+            subjectMood: "A courier holding a red umbrella waits calmly.",
+            environmentAndBackground:
+              "A rain-soaked station with two ticket gates surrounds the subject.",
+            visualStyleAndMedium:
+              "Soft amber palette, semi-realistic rendering, and fine surface texture.",
+            lightingColorAndTexture: "Warm platform lights glow behind the subject.",
+            spatialCompositionAndFraming:
+              "An 85mm lens frames the full body with shallow depth of field.",
+          },
+        },
+        visualStyle: "photoreal",
+        }),
+      },
+    ];
+
+    for (const { guidance, prompt } of prompts) {
+      expect(prompt).not.toMatch(/semi-realistic rendering|fine surface texture/i);
+      expect(prompt).toMatch(/courier holding a red umbrella/i);
+      expect(prompt).toMatch(/rain-soaked station with two ticket gates/i);
+      expect(prompt).toMatch(/85mm lens/i);
+      expect(prompt).toMatch(/warm platform lights/i);
+      expect(prompt.match(new RegExp(guidance, "gi"))).toHaveLength(1);
+    }
   });
 
   it("appends the Run style prompt exactly once after resource-aware formatting for every profile", () => {
@@ -1382,8 +1596,11 @@ describe("T7 timeline adapters", () => {
     expect(adviseStyle).toHaveBeenCalledWith(
       expect.objectContaining({
         finalPositivePrompt:
-          "A courier waits, A quiet station surrounds the platform, watercolor illustration, " +
+          "A courier waits, A quiet station surrounds the platform, Rendered as a polished Japanese anime illustration with stylized character design, clean linework, and illustrated shading. watercolor illustration, " +
           "the courier stands at the center of the frame, krea_style",
+        baseNegativePrompt:
+          "low quality, bad hands, live-action human photography, documentary photograph, photographic skin texture",
+        visualStyle: "anime",
         selectedResources: expect.objectContaining({
           checkpoint: expect.objectContaining({ id: "checkpoint-krea" }),
           loras: [expect.objectContaining({ id: "lora-krea" })],
@@ -1410,7 +1627,7 @@ describe("T7 timeline adapters", () => {
       },
     });
     expect(result.finalPositivePrompt).toBe(
-      "A courier waits, A quiet station surrounds the platform, watercolor illustration, " +
+      "A courier waits, A quiet station surrounds the platform, Rendered as a polished Japanese anime illustration with stylized character design, clean linework, and illustrated shading. watercolor illustration, " +
       "the courier stands at the center of the frame, krea_style",
     );
     expect(result.requestPreview.positivePrompt).toBe(result.finalPositivePrompt);
