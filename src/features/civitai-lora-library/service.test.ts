@@ -4,16 +4,39 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { importCivitaiImageUrlToSqlite, parseCivitaiImageUrl } from "./service";
 import type { CivitaiClient } from "./client";
+import type { LlmEmbeddingRequest, LlmEmbeddingResponse } from "@/features/llm";
 import {
   getCivitaiResourceDetailFromSqlite,
   openSceneForgeSqliteDatabase,
 } from "@/features/persistence/sqlite-storage";
 
+const createTestEmbedding = async (
+  request: LlmEmbeddingRequest,
+): Promise<LlmEmbeddingResponse> => ({
+  embeddings: (Array.isArray(request.input) ? request.input : [request.input]).map(
+    (_, index) => [1, index + 1],
+  ),
+});
+
 describe("Civitai LoRA import service", () => {
+  const previousEmbeddingModel = process.env.LITELLM_CIVITAI_EMBEDDING_MODEL;
+
+  beforeAll(() => {
+    process.env.LITELLM_CIVITAI_EMBEDDING_MODEL = "test-embedding-model";
+  });
+
+  afterAll(() => {
+    if (previousEmbeddingModel === undefined) {
+      delete process.env.LITELLM_CIVITAI_EMBEDDING_MODEL;
+    } else {
+      process.env.LITELLM_CIVITAI_EMBEDDING_MODEL = previousEmbeddingModel;
+    }
+  });
+
   it("uses modelVersionIds as the primary resource source and reports filtered resources", async () => {
     const client: CivitaiClient = {
       async getImageById() {
@@ -771,12 +794,15 @@ describe("Civitai LoRA import service", () => {
     expect(selectedKey).toBeDefined();
 
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "sceneforge-civitai-import-"));
-    const db = await openSceneForgeSqliteDatabase(path.join(tempDir, "sceneforge.sqlite"));
+    const db = await openSceneForgeSqliteDatabase(path.join(tempDir, "sceneforge.sqlite"), {
+      allowExtensions: true,
+    });
     try {
       const result = await importCivitaiImageUrlToSqlite({
         db,
         imageUrl: "https://civitai.com/images/3",
         client,
+        createEmbedding: createTestEmbedding,
         enricher,
         selectedImportResourceKeys: [selectedKey!],
       });
@@ -859,12 +885,15 @@ describe("Civitai LoRA import service", () => {
         error: null,
       });
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "sceneforge-civitai-reimport-"));
-    const db = await openSceneForgeSqliteDatabase(path.join(tempDir, "sceneforge.sqlite"));
+    const db = await openSceneForgeSqliteDatabase(path.join(tempDir, "sceneforge.sqlite"), {
+      allowExtensions: true,
+    });
     try {
       await importCivitaiImageUrlToSqlite({
         db,
         imageUrl: "https://civitai.com/images/4",
         client,
+        createEmbedding: createTestEmbedding,
         enricher,
       });
       const preview = await parseCivitaiImageUrl({
@@ -961,6 +990,7 @@ describe("Civitai LoRA import service", () => {
       },
     };
     let enrichCalls = 0;
+    const createEmbedding = vi.fn(createTestEmbedding);
     const enricher = async () => {
       enrichCalls += 1;
       return {
@@ -976,15 +1006,19 @@ describe("Civitai LoRA import service", () => {
       };
     };
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "sceneforge-civitai-existing-link-"));
-    const db = await openSceneForgeSqliteDatabase(path.join(tempDir, "sceneforge.sqlite"));
+    const db = await openSceneForgeSqliteDatabase(path.join(tempDir, "sceneforge.sqlite"), {
+      allowExtensions: true,
+    });
     try {
       await importCivitaiImageUrlToSqlite({
         db,
         imageUrl: "https://civitai.com/images/8",
         client,
+        createEmbedding,
         enricher,
       });
       expect(enrichCalls).toBe(1);
+      expect(createEmbedding).toHaveBeenCalledTimes(1);
 
       const preview = await parseCivitaiImageUrl({
         db,
@@ -1003,6 +1037,7 @@ describe("Civitai LoRA import service", () => {
         db,
         imageUrl: "https://civitai.com/images/9",
         client,
+        createEmbedding,
         enricher,
         selectedImportResourceKeys: [],
       });
@@ -1010,6 +1045,7 @@ describe("Civitai LoRA import service", () => {
       expect(result.resources[0]?.isNewResource).toBe(false);
       expect(result.resources[0]?.usage.importedImageId).toBe(result.importedImage.id);
       expect(enrichCalls).toBe(1);
+      expect(createEmbedding).toHaveBeenCalledTimes(1);
       const resourceAfter = db
         .prepare("SELECT * FROM civitai_resources WHERE id = ?")
         .get(existingResource!.existingResourceId!);
@@ -1032,12 +1068,14 @@ describe("Civitai LoRA import service", () => {
         db,
         imageUrl: "https://civitai.com/images/10",
         client,
+        createEmbedding,
         enricher,
         selectedImportResourceKeys: [selectedExistingResource!.importResourceKey],
       });
 
       expect(selectedExistingResult.resources[0]?.isNewResource).toBe(false);
       expect(enrichCalls).toBe(1);
+      expect(createEmbedding).toHaveBeenCalledTimes(1);
       const selectedResourceAfter = db
         .prepare("SELECT * FROM civitai_resources WHERE id = ?")
         .get(existingResource!.existingResourceId!);

@@ -2,6 +2,27 @@
 
 This log records dated implementation and documentation work. Keep entries concise and evidence-oriented.
 
+## 2026-07-29
+
+### T52 / Issue #175 Incremental Civitai recommendation indexing
+
+Summary:
+
+- Kept Civitai parse preview free of embedding calls and derived-index writes, and kept existing-resource imports link-only.
+- Added deterministic per-resource FTS source construction plus bounded LiteLLM embedding preparation for only new or changed resource chunks.
+- Added empty-library bootstrap and strict nonempty baseline validation across FTS source text, vector chunk metadata, embedding model/dimensions, schema, chunk configuration, global source fingerprint, indexed count, and timestamp.
+- Revalidated the baseline after `BEGIN IMMEDIATE`, then committed business rows, categories, image usage, FTS rows, vector chunks, and global metadata atomically. Concurrent changes, malformed provider output, dimension mismatch, and provider failures fail with sanitized messages and no partial database mutation.
+- Updated confirmed reanalysis to skip embedding when deterministic search text is unchanged and otherwise replace only the affected resource. Conflict merges remove obsolete derived rows in the same transaction.
+- Preserved the complete `civitai:reindex` and `civitai:reindex-embeddings` commands as repair/configuration-change paths.
+
+Final validation:
+
+- Focused Vitest passed 64 tests across persistence, service, import, reanalysis, and recommendation coverage.
+- Full `npm test` passed 1,934 tests across 154 files.
+- `npm run typecheck`, `npm run lint`, `npm run build`, and `git diff --check` passed; lint retained 22 pre-existing `no-img-element` warnings outside T52 scope.
+- Review Gate approved after fixes added exact FTS5/`unicode61` and vec0 `float[N]` compatibility checks, post-conversion Float32 overflow rejection, and correct 409 preservation for local index conflicts.
+- Live LiteLLM smoke validation was not run because it depends on local provider configuration.
+
 ## 2026-07-27
 
 ### T51 / Issue #172 Run visual-style control

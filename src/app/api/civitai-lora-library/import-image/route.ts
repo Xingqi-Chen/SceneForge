@@ -5,6 +5,7 @@ import {
   CivitaiImageImportInputError,
   importCivitaiImageUrlToSqlite,
 } from "@/features/civitai-lora-library";
+import { CivitaiIncrementalIndexError } from "@/features/persistence/civitai-embedding-index";
 import { openSceneForgeSqliteDatabase } from "@/features/persistence/sqlite-storage";
 
 export const runtime = "nodejs";
@@ -23,6 +24,10 @@ function errorResponse(message: string, status: number, details?: unknown) {
 
 function getErrorStatus(error: unknown) {
   if (error instanceof CivitaiImageImportInputError) {
+    return error.statusCode;
+  }
+
+  if (error instanceof CivitaiIncrementalIndexError) {
     return error.statusCode;
   }
 
@@ -96,7 +101,7 @@ export async function POST(request: Request) {
     ? selectedImportResourceKeys.filter((key): key is string => typeof key === "string" && key.trim().length > 0)
     : undefined;
 
-  const db = await openSceneForgeSqliteDatabase();
+  const db = await openSceneForgeSqliteDatabase(undefined, { allowExtensions: true });
   try {
     const result = await importCivitaiImageUrlToSqlite({
       db,
@@ -113,7 +118,9 @@ export async function POST(request: Request) {
       status,
     });
     const message =
-      error instanceof CivitaiApiError || error instanceof CivitaiImageImportInputError
+      error instanceof CivitaiApiError ||
+      error instanceof CivitaiImageImportInputError ||
+      error instanceof CivitaiIncrementalIndexError
         ? error.message
         : "导入 Civitai 图片元数据失败。";
     return errorResponse(message, status);
