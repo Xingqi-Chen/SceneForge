@@ -223,6 +223,154 @@ describe("Civitai incremental import and reanalysis integration", () => {
     }
   });
 
+  it("re-prepares once after an import baseline conflict without duplicating results or writes", async () => {
+    const existingInput = makeResourceInput("lora", 8251);
+    const existing = upsertCivitaiResourceToSqlite(db, existingInput).resource;
+    rebuildCivitaiSearchIndex(db);
+    rebuildCivitaiEmbeddingIndex(db, {
+      model: "test-embedding-model",
+      embeddings: listCivitaiResourceEmbeddingInputs(db).map((input) => ({
+        chunkFingerprint: input.chunkFingerprint,
+        chunkIndex: input.chunkIndex,
+        embedding: [1, 0],
+        resourceId: input.resourceId,
+        resourceType: input.resourceType,
+        sourceFingerprint: input.sourceFingerprint,
+      })),
+    });
+    const client = makeClient(8250, [
+      makeVersion(8251, "lora"),
+      makeVersion(8252, "model"),
+    ]);
+    let embeddingCallCount = 0;
+    const createEmbedding = vi.fn(async (request: LlmEmbeddingRequest) => {
+      embeddingCallCount += 1;
+      if (embeddingCallCount === 1) {
+        db.prepare(`
+          UPDATE civitai_resource_embedding_index_metadata
+          SET value = ?
+          WHERE key = 'indexed_at'
+        `).run("2026-07-30T01:00:00.000Z");
+      }
+      return embeddingResponse(request);
+    });
+
+    const result = await importCivitaiImageUrlToSqlite({
+      client,
+      createEmbedding,
+      db,
+      enricher: fallbackEnricher,
+      imageUrl: "https://civitai.com/images/8250",
+    });
+
+    expect(createEmbedding).toHaveBeenCalledTimes(2);
+    expect(result.resources).toHaveLength(2);
+    expect(result.resources.filter((entry) => entry.isNewResource)).toHaveLength(1);
+    expect(new Set(result.resources.map((entry) => entry.resource.id)).size).toBe(2);
+    expect(result.resources.find((entry) => !entry.isNewResource)?.resource.id).toBe(existing.id);
+    expect(db.prepare("SELECT COUNT(*) AS count FROM imported_images").get()).toEqual({ count: 1 });
+    expect(db.prepare("SELECT COUNT(*) AS count FROM civitai_resources").get()).toEqual({ count: 2 });
+    expect(db.prepare("SELECT COUNT(*) AS count FROM image_resource_usages").get()).toEqual({ count: 2 });
+    expect(assertCivitaiEmbeddingIndexReady(db, "test-embedding-model")).toBeTruthy();
+  });
+
+  it("stops after one import retry when the baseline changes twice", async () => {
+    const existingInput = makeResourceInput("lora", 8261);
+    upsertCivitaiResourceToSqlite(db, existingInput);
+    rebuildCivitaiSearchIndex(db);
+    rebuildCivitaiEmbeddingIndex(db, {
+      model: "test-embedding-model",
+      embeddings: listCivitaiResourceEmbeddingInputs(db).map((input) => ({
+        chunkFingerprint: input.chunkFingerprint,
+        chunkIndex: input.chunkIndex,
+        embedding: [1, 0],
+        resourceId: input.resourceId,
+        resourceType: input.resourceType,
+        sourceFingerprint: input.sourceFingerprint,
+      })),
+    });
+    const client = makeClient(8260, [
+      makeVersion(8261, "lora"),
+      makeVersion(8262, "model"),
+    ]);
+    let embeddingCallCount = 0;
+    const createEmbedding = vi.fn(async (request: LlmEmbeddingRequest) => {
+      embeddingCallCount += 1;
+      db.prepare(`
+        UPDATE civitai_resource_embedding_index_metadata
+        SET value = ?
+        WHERE key = 'indexed_at'
+      `).run(`2026-07-30T02:00:0${embeddingCallCount}.000Z`);
+      return embeddingResponse(request);
+    });
+
+    await expect(importCivitaiImageUrlToSqlite({
+      client,
+      createEmbedding,
+      db,
+      enricher: fallbackEnricher,
+      imageUrl: "https://civitai.com/images/8260",
+    })).rejects.toMatchObject({
+      message: "The Civitai library or recommendation indexes changed during indexing. No database changes were saved. Try the operation again.",
+      statusCode: 409,
+    });
+
+    expect(createEmbedding).toHaveBeenCalledTimes(2);
+    expect(db.prepare("SELECT COUNT(*) AS count FROM imported_images").get()).toEqual({ count: 0 });
+    expect(db.prepare("SELECT COUNT(*) AS count FROM civitai_resources").get()).toEqual({ count: 1 });
+    expect(db.prepare("SELECT COUNT(*) AS count FROM image_resource_usages").get()).toEqual({ count: 0 });
+    expect(assertCivitaiEmbeddingIndexReady(db, "test-embedding-model")).toBeTruthy();
+  });
+
+  it("does not retry stale import classification when the target becomes existing", async () => {
+    const targetVersionId = 8272;
+    const client = makeClient(8270, [makeVersion(targetVersionId, "model")]);
+    const concurrentInput = makeResourceInput("model", targetVersionId, {
+      usageGuide: "Concurrent importer owns this metadata.",
+    });
+    const createEmbedding = vi.fn(async (request: LlmEmbeddingRequest) => {
+      upsertCivitaiResourceToSqlite(db, concurrentInput);
+      rebuildCivitaiSearchIndex(db);
+      rebuildCivitaiEmbeddingIndex(db, {
+        model: "test-embedding-model",
+        embeddings: listCivitaiResourceEmbeddingInputs(db).map((input) => ({
+          chunkFingerprint: input.chunkFingerprint,
+          chunkIndex: input.chunkIndex,
+          embedding: [1, 0],
+          resourceId: input.resourceId,
+          resourceType: input.resourceType,
+          sourceFingerprint: input.sourceFingerprint,
+        })),
+      });
+      return embeddingResponse(request);
+    });
+
+    await expect(importCivitaiImageUrlToSqlite({
+      client,
+      createEmbedding,
+      db,
+      enricher: fallbackEnricher,
+      imageUrl: "https://civitai.com/images/8270",
+    })).rejects.toMatchObject({
+      message: "The Civitai library or recommendation indexes changed during indexing. No database changes were saved. Try the operation again.",
+      statusCode: 409,
+    });
+
+    expect(createEmbedding).toHaveBeenCalledTimes(1);
+    expect(db.prepare("SELECT COUNT(*) AS count FROM imported_images").get()).toEqual({ count: 0 });
+    expect(db.prepare("SELECT COUNT(*) AS count FROM civitai_resources").get()).toEqual({ count: 1 });
+    expect(db.prepare("SELECT COUNT(*) AS count FROM image_resource_usages").get()).toEqual({ count: 0 });
+    const concurrentResource = db.prepare(`
+      SELECT id
+      FROM civitai_resources
+      WHERE civitai_model_version_id = ?
+    `).get(targetVersionId) as { id: string };
+    expect(getCivitaiResourceDetailFromSqlite(db, concurrentResource.id)?.usageGuide).toBe(
+      "Concurrent importer owns this metadata.",
+    );
+    expect(assertCivitaiEmbeddingIndexReady(db, "test-embedding-model")).toBeTruthy();
+  });
+
   it.each([
     {
       name: "provider rejection",
@@ -333,6 +481,109 @@ describe("Civitai incremental import and reanalysis integration", () => {
       FROM civitai_resource_embedding_vec
       WHERE resource_id = ?
     `).all(second.id)).toEqual(secondVectorBefore);
+    expect(assertCivitaiEmbeddingIndexReady(db, "test-embedding-model")).toBeTruthy();
+  });
+
+  it("re-prepares once after a reanalysis baseline conflict", async () => {
+    const input = makeResourceInput("lora", 8451);
+    const resource = upsertCivitaiResourceToSqlite(db, input).resource;
+    rebuildCivitaiSearchIndex(db);
+    rebuildCivitaiEmbeddingIndex(db, {
+      model: "test-embedding-model",
+      embeddings: listCivitaiResourceEmbeddingInputs(db).map((entry) => ({
+        chunkFingerprint: entry.chunkFingerprint,
+        chunkIndex: entry.chunkIndex,
+        embedding: [1, 0],
+        resourceId: entry.resourceId,
+        resourceType: entry.resourceType,
+        sourceFingerprint: entry.sourceFingerprint,
+      })),
+    });
+    let embeddingCallCount = 0;
+    const createEmbedding = vi.fn(async (request: LlmEmbeddingRequest) => {
+      embeddingCallCount += 1;
+      if (embeddingCallCount === 1) {
+        db.prepare(`
+          UPDATE civitai_resource_embedding_index_metadata
+          SET value = ?
+          WHERE key = 'indexed_at'
+        `).run("2026-07-30T03:00:00.000Z");
+      }
+      return embeddingResponse(request);
+    });
+    const current = getCivitaiResourceDetailFromSqlite(db, resource.id);
+
+    const updated = await applyCivitaiResourceReanalysisToSqlite({
+      createEmbedding,
+      currentResource: current!,
+      db,
+      updatedInput: {
+        ...input,
+        usageGuide: "Updated after one baseline retry.",
+      },
+    });
+
+    expect(createEmbedding).toHaveBeenCalledTimes(2);
+    expect(updated.id).toBe(resource.id);
+    expect(db.prepare("SELECT COUNT(*) AS count FROM civitai_resources").get()).toEqual({ count: 1 });
+    expect(getCivitaiResourceDetailFromSqlite(db, resource.id)?.usageGuide).toBe(
+      "Updated after one baseline retry.",
+    );
+    expect(assertCivitaiEmbeddingIndexReady(db, "test-embedding-model")).toBeTruthy();
+  });
+
+  it("does not retry unchanged reanalysis over a concurrent source update", async () => {
+    const input = makeResourceInput("lora", 8461);
+    const resource = upsertCivitaiResourceToSqlite(db, input).resource;
+    rebuildCivitaiSearchIndex(db);
+    rebuildCivitaiEmbeddingIndex(db, {
+      model: "test-embedding-model",
+      embeddings: listCivitaiResourceEmbeddingInputs(db).map((entry) => ({
+        chunkFingerprint: entry.chunkFingerprint,
+        chunkIndex: entry.chunkIndex,
+        embedding: [1, 0],
+        resourceId: entry.resourceId,
+        resourceType: entry.resourceType,
+        sourceFingerprint: entry.sourceFingerprint,
+      })),
+    });
+    const current = getCivitaiResourceDetailFromSqlite(db, resource.id);
+    const reanalysis = applyCivitaiResourceReanalysisToSqlite({
+      createEmbedding: vi.fn(async (request: LlmEmbeddingRequest) => embeddingResponse(request)),
+      currentResource: current!,
+      db,
+      updatedInput: {
+        ...input,
+        enrichmentStatus: "ai_enriched",
+      },
+    });
+
+    upsertCivitaiResourceToSqlite(db, {
+      ...input,
+      enrichmentStatus: "ai_enriched",
+      usageGuide: "Concurrent reanalysis source text.",
+    });
+    rebuildCivitaiSearchIndex(db);
+    rebuildCivitaiEmbeddingIndex(db, {
+      model: "test-embedding-model",
+      embeddings: listCivitaiResourceEmbeddingInputs(db).map((entry) => ({
+        chunkFingerprint: entry.chunkFingerprint,
+        chunkIndex: entry.chunkIndex,
+        embedding: [1, 0],
+        resourceId: entry.resourceId,
+        resourceType: entry.resourceType,
+        sourceFingerprint: entry.sourceFingerprint,
+      })),
+    });
+
+    await expect(reanalysis).rejects.toMatchObject({
+      message: "The Civitai library or recommendation indexes changed during indexing. No database changes were saved. Try the operation again.",
+      statusCode: 409,
+    });
+    expect(db.prepare("SELECT COUNT(*) AS count FROM civitai_resources").get()).toEqual({ count: 1 });
+    expect(getCivitaiResourceDetailFromSqlite(db, resource.id)?.usageGuide).toBe(
+      "Concurrent reanalysis source text.",
+    );
     expect(assertCivitaiEmbeddingIndexReady(db, "test-embedding-model")).toBeTruthy();
   });
 

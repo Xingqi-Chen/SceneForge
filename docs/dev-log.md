@@ -17,10 +17,10 @@ Summary:
 
 Final validation:
 
-- Focused Vitest passed 64 tests across persistence, service, import, reanalysis, and recommendation coverage.
-- Full `npm test` passed 1,934 tests across 154 files.
+- Focused Vitest passed 69 tests across persistence, service, import, reanalysis, and recommendation coverage.
+- Full `npm test` passed 1,939 tests across 154 files.
 - `npm run typecheck`, `npm run lint`, `npm run build`, and `git diff --check` passed; lint retained 22 pre-existing `no-img-element` warnings outside T52 scope.
-- Review Gate approved after fixes added exact FTS5/`unicode61` and vec0 `float[N]` compatibility checks, post-conversion Float32 overflow rejection, and correct 409 preservation for local index conflicts.
+- Review Gate approved after fixes added exact FTS5/`unicode61` and vec0 `float[N]` compatibility checks, post-conversion Float32 overflow rejection, correct 409 preservation, one bounded `indexed_at`-only baseline retry, and fail-closed handling when concurrent work changes resource/source compatibility.
 - Live LiteLLM smoke validation was not run because it depends on local provider configuration.
 
 ## 2026-07-27

@@ -61,6 +61,16 @@ export class CivitaiIncrementalIndexError extends Error {
   }
 }
 
+export class CivitaiIncrementalBaselineChangedError extends CivitaiIncrementalIndexError {
+  readonly retryableWithSameInputs: boolean;
+
+  constructor(retryableWithSameInputs = false) {
+    super(CIVITAI_INCREMENTAL_BASELINE_CHANGED_MESSAGE);
+    this.name = "CivitaiIncrementalBaselineChangedError";
+    this.retryableWithSameInputs = retryableWithSameInputs;
+  }
+}
+
 export type CivitaiIncrementalIndexBaseline = {
   dimensions: number | null;
   indexedAt: string | null;
@@ -757,13 +767,21 @@ function sameCivitaiIncrementalIndexBaseline(
   left: CivitaiIncrementalIndexBaseline,
   right: CivitaiIncrementalIndexBaseline,
 ): boolean {
+  return left.indexedAt === right.indexedAt && sameCivitaiIncrementalIndexCompatibility(left, right);
+}
+
+function sameCivitaiIncrementalIndexCompatibility(
+  left: CivitaiIncrementalIndexBaseline,
+  right: CivitaiIncrementalIndexBaseline,
+): boolean {
+  const leftEntries = Object.entries(left).filter(([key]) => key !== "indexedAt");
+  const rightEntries = new Map(
+    Object.entries(right).filter(([key]) => key !== "indexedAt"),
+  );
+
   return (
-    left.dimensions === right.dimensions &&
-    left.indexedAt === right.indexedAt &&
-    left.indexedCount === right.indexedCount &&
-    left.mode === right.mode &&
-    left.model === right.model &&
-    left.sourceFingerprint === right.sourceFingerprint
+    leftEntries.length === rightEntries.size &&
+    leftEntries.every(([key, value]) => rightEntries.get(key) === value)
   );
 }
 
@@ -771,15 +789,13 @@ export function assertCivitaiIncrementalIndexBaselineUnchanged(
   db: SceneForgeSqliteDatabase,
   baseline: CivitaiIncrementalIndexBaseline,
 ): void {
-  let current: CivitaiIncrementalIndexBaseline;
-  try {
-    current = readCivitaiIncrementalIndexBaseline(db, baseline.model);
-  } catch {
-    throw new CivitaiIncrementalIndexError(CIVITAI_INCREMENTAL_BASELINE_CHANGED_MESSAGE);
-  }
+  const current = readCivitaiIncrementalIndexBaseline(db, baseline.model);
 
   if (!sameCivitaiIncrementalIndexBaseline(current, baseline)) {
-    throw new CivitaiIncrementalIndexError(CIVITAI_INCREMENTAL_BASELINE_CHANGED_MESSAGE);
+    throw new CivitaiIncrementalBaselineChangedError(
+      sameCivitaiIncrementalIndexCompatibility(current, baseline) &&
+        current.indexedAt !== baseline.indexedAt,
+    );
   }
 }
 

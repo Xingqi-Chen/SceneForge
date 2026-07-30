@@ -35,6 +35,7 @@ import type {
 } from "@/features/llm";
 import {
   CIVITAI_INCREMENTAL_BASELINE_CHANGED_MESSAGE,
+  CivitaiIncrementalBaselineChangedError,
   CivitaiIncrementalIndexError,
   applyPreparedCivitaiIncrementalEmbeddingUpdate,
   assertCivitaiIncrementalIndexBaselineUnchanged,
@@ -57,6 +58,7 @@ import {
 const IMPORT_METADATA_MESSAGE =
   "已从 Civitai 图片公开元数据中识别资源；部分资源可能因隐藏元数据、权限限制或 API 返回不完整而无法解析。";
 const OFFICIAL_RESOURCE_CACHE_CONCURRENCY = 3;
+const CIVITAI_INCREMENTAL_BASELINE_COMMIT_ATTEMPTS = 2;
 
 export class CivitaiImageImportInputError extends Error {
   readonly statusCode = 400;
@@ -87,6 +89,51 @@ async function mapWithConcurrency<T, R>(
   );
 
   return results;
+}
+
+function runCivitaiSqliteTransaction<T>(
+  db: SceneForgeSqliteDatabase,
+  operation: () => T,
+): T {
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const result = operation();
+    db.exec("COMMIT");
+    return result;
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+async function commitPreparedCivitaiIncrementalUpdateWithRetry<T>(options: {
+  apply: (prepared: PreparedCivitaiIncrementalEmbeddingUpdate) => T;
+  db: SceneForgeSqliteDatabase;
+  initialPrepared: PreparedCivitaiIncrementalEmbeddingUpdate;
+  prepare: () => Promise<PreparedCivitaiIncrementalEmbeddingUpdate>;
+}): Promise<T> {
+  let prepared = options.initialPrepared;
+
+  for (let attempt = 0; attempt < CIVITAI_INCREMENTAL_BASELINE_COMMIT_ATTEMPTS; attempt += 1) {
+    try {
+      return runCivitaiSqliteTransaction(options.db, () => {
+        assertCivitaiIncrementalIndexBaselineUnchanged(options.db, prepared.baseline);
+        return options.apply(prepared);
+      });
+    } catch (error) {
+      const canRetry =
+        error instanceof CivitaiIncrementalBaselineChangedError &&
+        error.retryableWithSameInputs &&
+        attempt + 1 < CIVITAI_INCREMENTAL_BASELINE_COMMIT_ATTEMPTS;
+      if (!canRetry) {
+        throw error;
+      }
+    }
+
+    prepared = await options.prepare();
+  }
+
+  throw new CivitaiIncrementalBaselineChangedError();
 }
 
 type CivitaiResourceEnricher = typeof enrichCivitaiResource;
@@ -593,20 +640,20 @@ export async function importCivitaiImageUrlToSqlite(options: {
     throw new CivitaiImageImportInputError("请至少选择一个 LoRA 或 checkpoint/model 再导入。");
   }
 
-  let preparedIndexUpdate: PreparedCivitaiIncrementalEmbeddingUpdate | null = null;
-  if (selectedNewResourcePreviews.length > 0) {
-    preparedIndexUpdate = await prepareCivitaiIncrementalEmbeddingUpdate(options.db, {
+  const incrementalIndexSources = selectedNewResourcePreviews.map((preview) => ({
+    resourceKey: makePreviewResourceKey(preview),
+    resourceType: preview.upsertInput.resourceType as "model" | "lora",
+    searchText: buildCivitaiResourceSearchTextFromUpsertInput(preview.upsertInput),
+  }));
+  const prepareIndexUpdate = () =>
+    prepareCivitaiIncrementalEmbeddingUpdate(options.db, {
       createEmbedding: options.createEmbedding ?? createCivitaiEmbedding,
       model: process.env.LITELLM_CIVITAI_EMBEDDING_MODEL,
-      sources: selectedNewResourcePreviews.map((preview) => ({
-        resourceKey: makePreviewResourceKey(preview),
-        resourceType: preview.upsertInput.resourceType as "model" | "lora",
-        searchText: buildCivitaiResourceSearchTextFromUpsertInput(preview.upsertInput),
-      })),
+      sources: incrementalIndexSources,
     });
-  }
+  const preparedIndexUpdate =
+    incrementalIndexSources.length > 0 ? await prepareIndexUpdate() : null;
 
-  const importedResources: CivitaiImportResult["resources"] = [];
   const cachedImageUrl = await cacheCivitaiImageUrl(image.imageUrl, {
     cacheKey: `imported-image:${image.civitaiImageId}`,
     maxSize: 768,
@@ -650,12 +697,10 @@ export async function importCivitaiImageUrlToSqlite(options: {
   });
   await cleanupLegacyOriginalCachedImages();
 
-  options.db.exec("BEGIN IMMEDIATE");
-  try {
-    if (preparedIndexUpdate) {
-      assertCivitaiIncrementalIndexBaselineUnchanged(options.db, preparedIndexUpdate.baseline);
-    }
-
+  const commitImport = (
+    prepared: PreparedCivitaiIncrementalEmbeddingUpdate | null,
+  ): CivitaiImportResult => {
+    const importedResources: CivitaiImportResult["resources"] = [];
     const importedImage = upsertImportedCivitaiImageToSqlite(
       options.db,
       imageToImport,
@@ -721,25 +766,31 @@ export async function importCivitaiImageUrlToSqlite(options: {
       });
     }
 
-    if (preparedIndexUpdate) {
+    if (prepared) {
       applyPreparedCivitaiIncrementalEmbeddingUpdate(options.db, {
         obsoleteResourceIds,
-        prepared: preparedIndexUpdate,
+        prepared,
         resources: indexedResources,
       });
     }
 
-    options.db.exec("COMMIT");
-    await cleanupUnreferencedCachedImages(new Set(listReferencedCivitaiLocalImageUrlsFromSqlite(options.db)));
     return {
       importedImage,
       resources: importedResources,
       message: IMPORT_METADATA_MESSAGE,
     };
-  } catch (error) {
-    options.db.exec("ROLLBACK");
-    throw error;
-  }
+  };
+
+  const result = preparedIndexUpdate
+    ? await commitPreparedCivitaiIncrementalUpdateWithRetry({
+        apply: commitImport,
+        db: options.db,
+        initialPrepared: preparedIndexUpdate,
+        prepare: prepareIndexUpdate,
+      })
+    : runCivitaiSqliteTransaction(options.db, () => commitImport(null));
+  await cleanupUnreferencedCachedImages(new Set(listReferencedCivitaiLocalImageUrlsFromSqlite(options.db)));
+  return result;
 }
 
 export async function applyCivitaiResourceReanalysisToSqlite(options: {
@@ -752,47 +803,49 @@ export async function applyCivitaiResourceReanalysisToSqlite(options: {
   const updatedSearchText = buildCivitaiResourceSearchTextFromUpsertInput(options.updatedInput);
   const searchTextChanged = currentSearchText !== updatedSearchText;
   const resourceKey = options.currentResource.id;
-  const prepared = await prepareCivitaiIncrementalEmbeddingUpdate(options.db, {
-    createEmbedding: options.createEmbedding ?? createCivitaiEmbedding,
-    model: process.env.LITELLM_CIVITAI_EMBEDDING_MODEL,
-    sources: searchTextChanged
-      ? [{
-          resourceKey,
-          resourceType: options.updatedInput.resourceType as "model" | "lora",
-          searchText: updatedSearchText,
-        }]
-      : [],
+  const incrementalIndexSources = searchTextChanged
+    ? [{
+        resourceKey,
+        resourceType: options.updatedInput.resourceType as "model" | "lora",
+        searchText: updatedSearchText,
+      }]
+    : [];
+  const prepareIndexUpdate = () =>
+    prepareCivitaiIncrementalEmbeddingUpdate(options.db, {
+      createEmbedding: options.createEmbedding ?? createCivitaiEmbedding,
+      model: process.env.LITELLM_CIVITAI_EMBEDDING_MODEL,
+      sources: incrementalIndexSources,
+    });
+  const prepared = await prepareIndexUpdate();
+
+  return commitPreparedCivitaiIncrementalUpdateWithRetry({
+    apply: (currentPrepared) => {
+      const { resource, mergedResourceIds } = upsertCivitaiResourceToSqlite(
+        options.db,
+        options.updatedInput,
+      );
+
+      if (searchTextChanged) {
+        applyPreparedCivitaiIncrementalEmbeddingUpdate(options.db, {
+          obsoleteResourceIds: mergedResourceIds,
+          prepared: currentPrepared,
+          resources: [{
+            resourceId: resource.id,
+            resourceKey,
+            resourceType: options.updatedInput.resourceType as "model" | "lora",
+            searchText: updatedSearchText,
+          }],
+        });
+      } else if (mergedResourceIds.length > 0) {
+        throw new CivitaiIncrementalIndexError(CIVITAI_INCREMENTAL_BASELINE_CHANGED_MESSAGE);
+      }
+
+      return resource;
+    },
+    db: options.db,
+    initialPrepared: prepared,
+    prepare: prepareIndexUpdate,
   });
-
-  options.db.exec("BEGIN IMMEDIATE");
-  try {
-    assertCivitaiIncrementalIndexBaselineUnchanged(options.db, prepared.baseline);
-    const { resource, mergedResourceIds } = upsertCivitaiResourceToSqlite(
-      options.db,
-      options.updatedInput,
-    );
-
-    if (searchTextChanged) {
-      applyPreparedCivitaiIncrementalEmbeddingUpdate(options.db, {
-        obsoleteResourceIds: mergedResourceIds,
-        prepared,
-        resources: [{
-          resourceId: resource.id,
-          resourceKey,
-          resourceType: options.updatedInput.resourceType as "model" | "lora",
-          searchText: updatedSearchText,
-        }],
-      });
-    } else if (mergedResourceIds.length > 0) {
-      throw new CivitaiIncrementalIndexError(CIVITAI_INCREMENTAL_BASELINE_CHANGED_MESSAGE);
-    }
-
-    options.db.exec("COMMIT");
-    return resource;
-  } catch (error) {
-    options.db.exec("ROLLBACK");
-    throw error;
-  }
 }
 
 export { IMPORT_METADATA_MESSAGE };
