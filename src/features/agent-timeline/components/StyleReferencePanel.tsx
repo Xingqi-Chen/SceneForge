@@ -13,6 +13,7 @@ import {
   sanitizeStyleReferenceIpAdapterSettings,
   sanitizeStyleReferenceMetadata,
   type StyleReferenceAnalysis,
+  type CharacterReferenceSnapshot,
   type StyleReferenceMetadata,
   type StyleReferenceSnapshot,
 } from "@/features/agent-timeline/style-reference";
@@ -47,6 +48,7 @@ type KreaAdapterAvailability = {
 const KREA_ADAPTER_PREFLIGHT_ERROR_PREFIX = "Krea adapter preflight blocks generation:";
 
 type Props = {
+  characterReference?: CharacterReferenceSnapshot;
   checkpointId?: string | null;
   disabled?: boolean;
   nsfwEnabled: boolean;
@@ -202,6 +204,35 @@ async function analyzeReference({
   });
 }
 
+async function preflightKreaReferenceBeforeUpload({
+  hasCharacterReference,
+  selectedCheckpoint,
+}: {
+  hasCharacterReference: boolean;
+  selectedCheckpoint: SelectedCivitaiResourcesPreview["checkpoint"];
+}) {
+  if (!selectedCheckpoint?.baseModel || !selectedCheckpoint.modelFileName) {
+    throw new Error("Select a compatible local Krea 2 Turbo diffusion checkpoint before uploading a Krea reference.");
+  }
+  const response = await fetch("/api/comfyui/krea2-style-reference-capability", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      checkpointName: selectedCheckpoint.modelFileName,
+      modelBaseModel: selectedCheckpoint.baseModel,
+      modelStorageKind: "diffusion",
+      hasStyleReference: true,
+      hasCharacterReference,
+    }),
+  });
+  const payload: unknown = await response.json().catch(() => null);
+  if (!response.ok || !isRecord(payload) || payload.available !== true) {
+    throw new Error(isRecord(payload) && typeof payload.reason === "string"
+      ? payload.reason
+      : "Krea reference-adapter preflight is unavailable. Reference upload remains blocked.");
+  }
+}
+
 function NumberInput({ label, onChange, value }: { label: string; onChange: (value: number) => void; value: number }) {
   return (
     <label className="grid gap-1">
@@ -235,6 +266,7 @@ function isKreaAdapterPreflightBlockingSnapshot(snapshot: StyleReferenceSnapshot
 }
 
 export function StyleReferencePanel({
+  characterReference,
   checkpointId,
   disabled = false,
   nsfwEnabled,
@@ -326,6 +358,7 @@ export function StyleReferencePanel({
         checkpointName: selectedCheckpoint.modelFileName,
         modelBaseModel: selectedCheckpoint.baseModel,
         modelStorageKind: "diffusion",
+        hasCharacterReference: characterReference?.status === "ready",
       }),
     })
       .then(async (response) => {
@@ -352,7 +385,7 @@ export function StyleReferencePanel({
     return () => {
       cancelled = true;
     };
-  }, [isKrea2, kreaAdapterPreflightKey, selectedCheckpoint?.baseModel, selectedCheckpoint?.modelFileName]);
+  }, [characterReference?.status, isKrea2, kreaAdapterPreflightKey, selectedCheckpoint?.baseModel, selectedCheckpoint?.modelFileName]);
 
   useEffect(() => {
     if (mismatch && snapshot?.status === "ready") {
@@ -463,6 +496,12 @@ export function StyleReferencePanel({
     });
     let uploadedMetadata: StyleReferenceMetadata | undefined;
     try {
+      if (isKrea2) {
+        await preflightKreaReferenceBeforeUpload({
+          hasCharacterReference: characterReference?.status === "ready",
+          selectedCheckpoint,
+        });
+      }
       const nextDataUrl = await readFileAsDataUrl(file);
       setDataUrl(nextDataUrl);
       uploadedMetadata = await uploadReference(nextDataUrl, nextFileInfo);
@@ -607,13 +646,13 @@ export function StyleReferencePanel({
           {snapshot.mode === "ipadapter" ? (
             <>
               <div className="grid gap-3 sm:grid-cols-3">
-                <NumberInput label="weight" onChange={(weight) => updateAnalyzed({ ipAdapter: sanitizeStyleReferenceIpAdapterSettings({ ...ipAdapter, weight }) })} value={ipAdapter.weight} />
                 {!isKrea2 ? <>
+                  <NumberInput label="weight" onChange={(weight) => updateAnalyzed({ ipAdapter: sanitizeStyleReferenceIpAdapterSettings({ ...ipAdapter, weight }) })} value={ipAdapter.weight} />
                   <NumberInput label="start_at" onChange={(startPercent) => updateAnalyzed({ ipAdapter: sanitizeStyleReferenceIpAdapterSettings({ ...ipAdapter, startPercent }) })} value={ipAdapter.startPercent} />
                   <NumberInput label="end_at" onChange={(endPercent) => updateAnalyzed({ ipAdapter: sanitizeStyleReferenceIpAdapterSettings({ ...ipAdapter, endPercent }) })} value={ipAdapter.endPercent} />
                 </> : null}
               </div>
-              {isKrea2 ? <p className="text-xs leading-relaxed text-slate-600">Krea reference timing is fixed to start_at 0 and end_at 1 by its verified adapter graph.</p> : null}
+              {isKrea2 ? <p className="text-xs leading-relaxed text-slate-600">Krea timing is fixed to start_at 0 and end_at 1. Its shared reference strength is controlled with the Run character-reference setting.</p> : null}
             </>
           ) : null}
         </div>

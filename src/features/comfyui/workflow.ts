@@ -725,14 +725,29 @@ function buildKrea2TextToImageWorkflow(
   }
   let modelConnection = modelContext.modelConnection;
   let styleReferenceImage: string | undefined;
+  let styleReferenceCharacterImage: string | undefined;
   let styleReferenceLora: string | undefined;
   let styleReferencePatch: string | undefined;
   if (styleReference) {
+    const styleImageName = styleReference.styleImageName ??
+      (styleReference.characterImageName ? undefined : styleReference.imageName);
+    const characterImageName = styleReference.characterImageName;
+    const image1Name = styleImageName ?? characterImageName;
+    if (!image1Name) {
+      throw new Error("Krea reference adapter requires at least one role image.");
+    }
     styleReferenceImage = builder.addNode(
       "LoadImage",
-      { image: styleReference.imageName },
-      "Load Krea Style Reference",
+      { image: image1Name },
+      styleImageName ? "Load Krea Style Reference" : "Load Krea Character Reference",
     );
+    if (styleImageName && characterImageName) {
+      styleReferenceCharacterImage = builder.addNode(
+        "LoadImage",
+        { image: characterImageName },
+        "Load Krea Character Reference",
+      );
+    }
     styleReferenceLora = builder.addNode(
       "LoraLoaderModelOnly",
       {
@@ -757,6 +772,7 @@ function buildKrea2TextToImageWorkflow(
           prompt: applyPromptPrefix(resolvedRequest.promptWrapper.positivePrefix, resolvedRequest.positivePrompt),
           vae: modelContext.vaeConnection,
           image1: builder.connect(styleReferenceImage!, 0),
+          ...(styleReferenceCharacterImage ? { image2: builder.connect(styleReferenceCharacterImage, 0) } : {}),
         },
         "Positive Krea Style Reference Prompt",
       )
@@ -915,6 +931,7 @@ function buildKrea2TextToImageWorkflow(
       ...(sourceImageScale ? { sourceImageScale } : {}),
       ...(vaeEncode ? { vaeEncode } : {}),
       ...(styleReferenceImage ? { styleReferenceImage } : {}),
+      ...(styleReferenceCharacterImage ? { styleReferenceCharacterImage } : {}),
       ...(styleReferenceLora ? { styleReferenceLora } : {}),
       ...(styleReferencePatch ? { styleReferencePatch } : {}),
       latentImage,

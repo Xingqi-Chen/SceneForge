@@ -99,6 +99,7 @@ import {
   updateTimelineFinalRedrawPreset,
 } from ".";
 import { getRunSceneInputSettings } from "./run-input-settings";
+import { deriveTimelineConfirmedReferenceContext } from "./run-reference-context";
 import { ComfyUiSequenceReferenceStorageError } from "@/features/comfyui/sequence-reference-storage";
 import { createTimelineT8ServerNodeAdapters } from "./t8-server-adapters";
 import type { TimelineWorkflowState } from "./types";
@@ -178,7 +179,11 @@ function createGateReadyWorkflow(clock = createClock(), imageCount = 1) {
 }
 
 function confirmWorkflow(workflow: TimelineWorkflowState, clock = createClock()) {
-  let confirmed = confirmTimelineGeneration(workflow, undefined, { now: clock });
+  let confirmed = confirmTimelineGeneration(workflow, {
+    confirmationRequired: false,
+    confirmed: true,
+    referenceContext: deriveTimelineConfirmedReferenceContext(workflow) ?? undefined,
+  }, { now: clock });
   const sceneInput = confirmed.nodes["scene-input"].result as { imageCount?: number };
   const finalCount = Math.min(4, Math.max(1, Math.round(sceneInput.imageCount ?? 1)));
   const candidateCount = Math.min(8, Math.max(4, finalCount * 2));
@@ -1368,6 +1373,10 @@ describe("timeline T8 server adapters", () => {
 
   it("injects the preflight-approved Krea adapter only into the Krea queue request", async () => {
     prepareStyleReferenceValidation();
+    comfyUiMocks.validateComfyUiRequestAgainstObjectInfo
+      .mockReset()
+      .mockReturnValueOnce({ errors: [], request: {}, warnings: [] })
+      .mockReturnValue({ errors: ["Stop after the Krea queue request was prepared."], request: {}, warnings: [] });
     uploadSequenceCharacterReferencesMock.mockResolvedValue([{
       id: "run-style-reference",
       name: "Run style reference",
@@ -1389,13 +1398,27 @@ describe("timeline T8 server adapters", () => {
 
     expect(uploadSequenceCharacterReferencesMock).toHaveBeenCalledTimes(1);
     expect(comfyUiMocks.buildComfyUiSequenceCharacterReference).not.toHaveBeenCalled();
+    expect(comfyUiMocks.validateComfyUiRequestAgainstObjectInfo).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        characterReferences: [],
+        krea2StyleReference: expect.objectContaining({
+          styleImageName: "sceneforge-krea-style-0123456789abcdef0123456789abcdef.png",
+          loraName: "krea2_style_reference.safetensors",
+          weight: 0.8,
+          startPercent: 0,
+          endPercent: 1,
+        }),
+      }),
+      expect.anything(),
+    );
     expect(comfyUiMocks.validateComfyUiRequestAgainstObjectInfo).toHaveBeenCalledWith(
       expect.objectContaining({
         characterReferences: [],
         krea2StyleReference: expect.objectContaining({
-          imageName: "sceneforge-krea-style.png",
+          styleImageName: "sceneforge-krea-style.png",
           loraName: "krea2_style_reference.safetensors",
-          weight: 0.45,
+          weight: 0.8,
           startPercent: 0,
           endPercent: 1,
         }),

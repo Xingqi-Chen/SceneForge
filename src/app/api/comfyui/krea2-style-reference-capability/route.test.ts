@@ -17,10 +17,10 @@ vi.mock("@/features/comfyui", () => ({
 
 import { POST } from "./route";
 
-describe("Krea style-reference capability route", () => {
+describe("Krea reference-adapter capability route", () => {
   afterEach(() => vi.resetAllMocks());
 
-  it("performs a no-queue probe for the fixed Krea graph and adapter context", async () => {
+  it("performs a no-queue probe for the fixed dual-reference Krea graph and adapter context", async () => {
     const getObjectInfo = vi.fn().mockResolvedValue({ TextEncodeKrea2OstrisEdit: {} });
     mocks.createComfyUiClient.mockReturnValue({ getObjectInfo, generateImage: vi.fn() });
     mocks.validateComfyUiTextToImageRequest.mockImplementation((request) => ({ ok: true, request }));
@@ -33,6 +33,7 @@ describe("Krea style-reference capability route", () => {
         checkpointName: "krea-2-turbo-unet.safetensors",
         modelBaseModel: "Krea 2",
         modelStorageKind: "diffusion",
+        hasCharacterReference: true,
       }),
     }));
 
@@ -41,7 +42,10 @@ describe("Krea style-reference capability route", () => {
     expect(mocks.validateComfyUiTextToImageRequest).toHaveBeenCalledWith(expect.objectContaining({
       checkpointName: "krea-2-turbo-unet.safetensors",
       workflowProfile: "krea2",
-      krea2StyleReference: { imageName: "sceneforge-krea-style-reference-preflight.png" },
+      krea2StyleReference: {
+        styleImageName: "sceneforge-krea-style-reference-preflight.png",
+        characterImageName: "sceneforge-krea-character-reference-preflight.png",
+      },
     }));
     expect(getObjectInfo).toHaveBeenCalledTimes(1);
     expect(mocks.validateComfyUiRequestAgainstObjectInfo).toHaveBeenCalledTimes(1);

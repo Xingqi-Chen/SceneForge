@@ -962,9 +962,19 @@ function normalizeKrea2StyleReference(value: unknown): ComfyUiKrea2StyleReferenc
   if (value === undefined) {
     return undefined;
   }
-  if (!isRecord(value) || !hasNonEmptyString(value.imageName) ||
+  if (!isRecord(value) ||
       !isOptionalString(value.loraName) || !isOptionalFiniteNumber(value.weight) ||
       !isOptionalFiniteNumber(value.startPercent) || !isOptionalFiniteNumber(value.endPercent)) {
+    return null;
+  }
+
+  const legacyImageName = hasNonEmptyString(value.imageName) ? value.imageName.trim() : undefined;
+  const styleImageName = hasNonEmptyString(value.styleImageName) ? value.styleImageName.trim() : legacyImageName;
+  const characterImageName = hasNonEmptyString(value.characterImageName) ? value.characterImageName.trim() : undefined;
+  if (!styleImageName && !characterImageName ||
+      value.imageName !== undefined && !hasNonEmptyString(value.imageName) ||
+      value.styleImageName !== undefined && !hasNonEmptyString(value.styleImageName) ||
+      value.characterImageName !== undefined && !hasNonEmptyString(value.characterImageName)) {
     return null;
   }
 
@@ -976,7 +986,9 @@ function normalizeKrea2StyleReference(value: unknown): ComfyUiKrea2StyleReferenc
   }
 
   return {
-    imageName: value.imageName.trim(),
+    ...(legacyImageName ? { imageName: legacyImageName } : {}),
+    ...(styleImageName ? { styleImageName } : {}),
+    ...(characterImageName ? { characterImageName } : {}),
     ...(hasNonEmptyString(value.loraName) ? { loraName: value.loraName.trim() } : {}),
     ...(weight !== undefined ? { weight } : {}),
     ...(startPercent !== undefined ? { startPercent } : {}),
@@ -1155,12 +1167,18 @@ export function validateComfyUiTextToImageRequest(value: unknown): ComfyUiTextTo
       message: "characterReferences must be an array of valid character reference values when provided.",
     };
   }
+  if (!isOptionalBoolean(value.strictCharacterReferences)) {
+    return {
+      ok: false,
+      message: "strictCharacterReferences must be a boolean when provided.",
+    };
+  }
 
   const krea2StyleReference = normalizeKrea2StyleReference(value.krea2StyleReference);
   if (krea2StyleReference === null) {
     return {
       ok: false,
-      message: "krea2StyleReference must contain a safe input image name and 0-to-1 adapter values when provided.",
+      message: "krea2StyleReference must contain one or two safe role image names and 0-to-1 adapter values when provided.",
     };
   }
   const krea2StyleReferenceDescriptor =
@@ -1396,6 +1414,9 @@ export function validateComfyUiTextToImageRequest(value: unknown): ComfyUiTextTo
       controlNet,
       controlNets,
       characterReferences,
+      strictCharacterReferences: typeof value.strictCharacterReferences === "boolean"
+        ? value.strictCharacterReferences
+        : undefined,
       krea2StyleReference,
       krea2StyleReferenceDescriptor,
       preview: typeof value.preview === "boolean" ? value.preview : undefined,
@@ -2092,7 +2113,15 @@ export function resolveComfyUiTextToImageRequest(
     ...(isKrea2Profile && request.krea2StyleReference
       ? {
           krea2StyleReference: {
-            imageName: request.krea2StyleReference.imageName.trim(),
+            imageName: (request.krea2StyleReference.styleImageName ??
+              request.krea2StyleReference.imageName ??
+              request.krea2StyleReference.characterImageName)!.trim(),
+            ...(request.krea2StyleReference.styleImageName
+              ? { styleImageName: request.krea2StyleReference.styleImageName.trim() }
+              : {}),
+            ...(request.krea2StyleReference.characterImageName
+              ? { characterImageName: request.krea2StyleReference.characterImageName.trim() }
+              : {}),
             loraName: request.krea2StyleReference.loraName ?? KREA2_STYLE_REFERENCE_LORA_NAME,
             weight: request.krea2StyleReference.weight ?? 0.45,
             startPercent: request.krea2StyleReference.startPercent ?? 0,

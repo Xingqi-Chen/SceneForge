@@ -423,6 +423,43 @@ describe("ComfyUI workflow builder", () => {
     expect(result.workflow["10"].inputs.model).toEqual(["6", 0]);
   });
 
+  it.each([
+    ["character only", { characterImageName: "sceneforge-krea-character.png", weight: 0.72 }, ["sceneforge-krea-character.png"], false],
+    ["style only", { styleImageName: "sceneforge-krea-style.png", weight: 0.72 }, ["sceneforge-krea-style.png"], false],
+    ["style and character", {
+      styleImageName: "sceneforge-krea-style.png",
+      characterImageName: "sceneforge-krea-character.png",
+      weight: 0.72,
+    }, ["sceneforge-krea-style.png", "sceneforge-krea-character.png"], true],
+  ] as const)("maps Krea %s references to image1/image2 with one shared adapter patch", (_label, krea2StyleReference, imageNames, hasImage2) => {
+    const result = buildBasicTextToImageWorkflow({
+      checkpointName: "krea-2-turbo-unet.safetensors",
+      modelBaseModel: "Krea 2",
+      modelStorageKind: "diffusion",
+      positivePrompt: "a quiet station",
+      negativePrompt: "blur",
+      krea2StyleReference,
+    });
+    const loaders = Object.entries(result.workflow).filter(([, node]) => node.class_type === "LoadImage");
+    const loras = Object.entries(result.workflow).filter(([, node]) => node.class_type === "LoraLoaderModelOnly");
+    const patches = Object.entries(result.workflow).filter(([, node]) => node.class_type === "Krea2OstrisEditModelPatch");
+    const positive = Object.entries(result.workflow).find(([, node]) =>
+      node.class_type === "TextEncodeKrea2OstrisEdit" && node.inputs.prompt === "a quiet station",
+    );
+
+    expect(loaders.map(([, node]) => node.inputs.image)).toEqual(imageNames);
+    expect(loras).toHaveLength(1);
+    expect(loras[0]?.[1].inputs).toMatchObject({
+      lora_name: "krea2_style_reference.safetensors",
+      strength_model: 0.72,
+    });
+    expect(patches).toHaveLength(1);
+    expect(positive?.[1].inputs.image1).toEqual([loaders[0]?.[0], 0]);
+    expect(positive?.[1].inputs.image2).toEqual(hasImage2 ? [loaders[1]?.[0], 0] : undefined);
+    expect(result.nodeIds.styleReferenceCharacterImage).toBe(hasImage2 ? loaders[1]?.[0] : undefined);
+    expect(Object.values(result.workflow).some((node) => node.class_type === "IPAdapterAdvanced")).toBe(false);
+  });
+
   it("builds the Anima img2img workflow from the Anima VAE", () => {
     const result = buildBasicTextToImageWorkflow({
       checkpointName: "pencil-xl-diffusion.safetensors",

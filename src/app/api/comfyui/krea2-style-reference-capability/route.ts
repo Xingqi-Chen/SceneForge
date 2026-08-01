@@ -33,6 +33,8 @@ export async function POST(request: Request) {
     : {};
   const checkpointName = readRequiredString(input.checkpointName);
   const modelBaseModel = readRequiredString(input.modelBaseModel);
+  const hasStyleReference = input.hasStyleReference !== false;
+  const hasCharacterReference = input.hasCharacterReference === true;
   if (!checkpointName || !modelBaseModel || input.modelStorageKind !== "diffusion") {
     return NextResponse.json({
       available: false,
@@ -53,7 +55,8 @@ export async function POST(request: Request) {
     samplerName: "euler",
     scheduler: "simple",
     krea2StyleReference: {
-      imageName: "sceneforge-krea-style-reference-preflight.png",
+      ...(hasStyleReference ? { styleImageName: "sceneforge-krea-style-reference-preflight.png" } : {}),
+      ...(hasCharacterReference ? { characterImageName: "sceneforge-krea-character-reference-preflight.png" } : {}),
     },
   });
   if (!validation.ok) {
@@ -78,8 +81,8 @@ export async function POST(request: Request) {
         });
   } catch (error) {
     const reason = error instanceof ComfyUiApiError
-      ? "ComfyUI is unavailable for Krea adapter preflight. Prompt-only style remains available."
-      : "Krea adapter preflight failed. Prompt-only style remains available.";
+      ? "ComfyUI is unavailable for Krea reference-adapter preflight. Reference upload and queueing remain blocked."
+      : "Krea reference-adapter preflight failed. Reference upload and queueing remain blocked.";
     return NextResponse.json({ available: false, reason });
   }
 }

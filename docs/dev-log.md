@@ -2093,6 +2093,9 @@ Summary:
 Validation:
 
 - `npm run typecheck`
+- `npm test -- --run src/features/agent-timeline/style-reference.test.ts src/features/agent-timeline/t8-node-adapters.test.ts src/features/comfyui/workflow.test.ts src/features/comfyui/validation.test.ts src/features/comfyui/object-info.test.ts` (197 passed)
+- `npm run lint` (0 errors; existing image-element warnings)
+- `git diff --check`
 - `npm run lint` (passes with pre-existing warnings)
 - `npm run build`
 
@@ -2115,3 +2118,16 @@ Validation:
 - `npm run lint` (0 errors; 22 pre-existing warnings)
 - `npm run build`
 - `git diff --check`
+
+### T53 / Issue #178 Run character-reference adapters
+
+Summary:
+
+- Added one separately stored, byte-free Run character reference with normalized strength and shared Simple/Detailed Composer UI.
+- Captured ordered style/character identities and effective values in the signed confirmation context so Preview, Final, and Repair persistence cannot drift to later Composer settings.
+- Made non-Krea Run character IPAdapter injection strict, and added Krea-only dual-role Krea2OstrisEdit transport (`image1` style-or-character, optional `image2` character), shared strength, and preflight/queue checks.
+- Constrained confirmed style-reference context construction to the effective selected resource and resolved workflow profile, keeping crafted or legacy Anima, unsupported, and unknown `ipadapter` snapshots prompt-only.
+
+Validation:
+
+- `npm run typecheck`

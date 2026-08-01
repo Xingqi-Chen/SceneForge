@@ -548,6 +548,41 @@ describe("T38C durable repair attempts", () => {
     },
   );
 
+  it("binds immutable confirmed reference identities into Final and Repair attempt digests", async () => {
+    const fixture = await fullSemanticDigestFixture("semantic-confirmed-reference-context");
+    const withReferences = structuredClone(fixture.execution);
+    withReferences.referenceContext = {
+      version: 1,
+      adapter: "ipadapter",
+      references: [{
+        role: "character",
+        storedFilename: "fedcba9876543210fedcba9876543210.png",
+        contentType: "image/png",
+        byteLength: 512,
+        strength: 0.8,
+      }],
+      startPercent: 0,
+      endPercent: 1,
+    };
+    const tampered = structuredClone(withReferences);
+    tampered.referenceContext!.references[0]!.storedFilename = "00112233445566778899aabbccddeeff.png";
+
+    const confirmedDigest = deriveRepairBaseRequestDigest(withReferences, fixture.final)!;
+    expect(confirmedDigest).not.toBe(fixture.baseRequestDigest);
+    expect(deriveRepairBaseRequestDigest(tampered, fixture.final)).not.toBe(confirmedDigest);
+    expect(deriveRepairAttemptId(
+      "semantic-confirmed-reference-context",
+      fixture.final.candidateId,
+      fixture.parent,
+      confirmedDigest,
+    )).not.toBe(deriveRepairAttemptId(
+      "semantic-confirmed-reference-context",
+      fixture.final.candidateId,
+      fixture.parent,
+      deriveRepairBaseRequestDigest(tampered, fixture.final)!,
+    ));
+  });
+
   it("canonicalizes object-key order while excluding transient transport payload fields", async () => {
     const fixture = await fullSemanticDigestFixture("semantic-canonical-objects");
     const reorderedExecution = {

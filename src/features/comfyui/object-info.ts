@@ -711,6 +711,11 @@ function validateKrea2StyleReferenceNodes(
       errors.push(`${KREA2_STYLE_REFERENCE_TEXT_ENCODE_NODE}.${inputName} input is not available in ComfyUI object_info.`);
     }
   }
+  if (reference.styleImageName && reference.characterImageName &&
+      hasNodeInfo(objectInfo, KREA2_STYLE_REFERENCE_TEXT_ENCODE_NODE) &&
+      !hasInputPort(objectInfo, KREA2_STYLE_REFERENCE_TEXT_ENCODE_NODE, "image2")) {
+    errors.push(`${KREA2_STYLE_REFERENCE_TEXT_ENCODE_NODE}.image2 input is not available in ComfyUI object_info for dual style and character references.`);
+  }
 
   const loraName = reference.loraName ?? KREA2_STYLE_REFERENCE_LORA_NAME;
   if (loraName !== KREA2_STYLE_REFERENCE_LORA_NAME) {
@@ -1152,6 +1157,7 @@ export function validateComfyUiRequestAgainstObjectInfo(
 
   let controlNets = getRequestControlNetUnits(request);
   let characterReferences = request.characterReferences ?? [];
+  const strictCharacterReferences = request.strictCharacterReferences === true;
   if (isKrea2Profile) {
     if (controlNets.some((unit) => unit.enabled)) {
       errors.push("Krea 2 Turbo does not support ControlNet.");
@@ -1209,6 +1215,13 @@ export function validateComfyUiRequestAgainstObjectInfo(
 
       const missingNodes = getMissingCharacterReferenceNodes(reference, objectInfo);
       if (missingNodes.length === 0) {
+        return reference;
+      }
+
+      if (strictCharacterReferences) {
+        errors.push(
+          `Character reference "${reference.name}" requires ComfyUI nodes: ${missingNodes.join(", ")}. Install ComfyUI_IPAdapter_plus before queueing this Run.`,
+        );
         return reference;
       }
 

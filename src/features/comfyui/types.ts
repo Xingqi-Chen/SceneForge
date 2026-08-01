@@ -65,6 +65,8 @@ export type ComfyUiTextToImageRequest = {
   controlNet?: ComfyUiControlNetConfig;
   controlNets?: ComfyUiControlNetUnitConfig[];
   characterReferences?: ComfyUiCharacterReferenceConfig[];
+  /** Run-level character identity conditioning must not silently downgrade. */
+  strictCharacterReferences?: boolean;
   krea2StyleReference?: ComfyUiKrea2StyleReferenceConfig;
   krea2StyleReferenceDescriptor?: ComfyUiKrea2StyleReferenceDescriptor;
   preview?: boolean;
@@ -271,7 +273,10 @@ export type ComfyUiCharacterReferenceConfig = {
 
 /** Runtime-only input. Its ComfyUI image name is never timeline-persisted. */
 export type ComfyUiKrea2StyleReferenceConfig = {
-  imageName: string;
+  /** Legacy single style image name. New callers use the explicit role fields. */
+  imageName?: string;
+  styleImageName?: string;
+  characterImageName?: string;
   loraName?: string;
   weight?: number;
   startPercent?: number;
@@ -286,6 +291,11 @@ export type ComfyUiKrea2StyleReferenceDescriptor = {
   weight: number;
   startPercent: number;
   endPercent: number;
+  /** Ordered role identities for the verified Krea dual-reference adapter. */
+  references?: Array<{
+    role: "style" | "character";
+    referenceDigest: string;
+  }>;
 };
 
 export type ComfyUiLoraInput = {
@@ -333,7 +343,16 @@ export type ResolvedComfyUiTextToImageRequest = {
   handDetailer: ResolvedComfyUiHandDetailerConfig;
   controlNets: ResolvedComfyUiControlNetUnitConfig[];
   characterReferences: ResolvedComfyUiCharacterReferenceConfig[];
-  krea2StyleReference?: Required<ComfyUiKrea2StyleReferenceConfig>;
+  krea2StyleReference?: {
+    /** The adapter's required image1 input; style wins when both roles are active. */
+    imageName: string;
+    styleImageName?: string;
+    characterImageName?: string;
+    loraName: string;
+    weight: number;
+    startPercent: number;
+    endPercent: number;
+  };
   krea2StyleReferenceDescriptor?: ComfyUiKrea2StyleReferenceDescriptor;
 };
 
@@ -514,6 +533,7 @@ export type BasicTextToImageNodeIds = {
   sourceImageScale?: string;
   vaeEncode?: string;
   styleReferenceImage?: string;
+  styleReferenceCharacterImage?: string;
   styleReferenceLora?: string;
   styleReferencePatch?: string;
   latentImage: string;

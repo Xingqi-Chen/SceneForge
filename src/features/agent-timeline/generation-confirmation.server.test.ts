@@ -11,6 +11,40 @@ import {
 } from "./state";
 
 describe("Run generation confirmation contract", () => {
+  it("binds the selected Run character storage identity and strength", () => {
+    const characterReference = {
+      status: "ready" as const,
+      strength: 0.8,
+      metadata: {
+        byteLength: 512,
+        contentType: "image/png",
+        storedFilename: "fedcba9876543210fedcba9876543210.png",
+        uploadedAt: "2026-07-19T00:00:00.000Z",
+        url: "/api/comfyui/sequence-references/fedcba9876543210fedcba9876543210.png",
+      },
+    };
+    let workflow = createTimelineWorkflowState({
+      workflowId: "confirmation-character-reference",
+      sceneRequest: "A glass greenhouse",
+      settingsSnapshot: { characterReference, promptProfile: "illustrious" },
+    });
+    workflow = setTimelineNodeManualResult(workflow, "parameter-recommendation", {
+      characterReference,
+      requestPreview: { checkpointName: "local.safetensors", positivePrompt: "glass greenhouse" },
+    });
+    const fingerprint = createTimelineGenerationConfirmationFingerprint(workflow);
+
+    const differentImage = structuredClone(workflow);
+    ((differentImage.nodes["scene-input"].result as { settingsSnapshot: { characterReference: { metadata: { storedFilename: string } } } })
+      .settingsSnapshot.characterReference.metadata.storedFilename = "00112233445566778899aabbccddeeff.png");
+    const differentStrength = structuredClone(workflow);
+    ((differentStrength.nodes["scene-input"].result as { settingsSnapshot: { characterReference: { strength: number } } })
+      .settingsSnapshot.characterReference.strength = 0.35);
+
+    expect(createTimelineGenerationConfirmationFingerprint(differentImage)).not.toBe(fingerprint);
+    expect(createTimelineGenerationConfirmationFingerprint(differentStrength)).not.toBe(fingerprint);
+  });
+
   it("binds the selected preset and resolved family/denoise policy", () => {
     const createWorkflow = (finalRedrawPreset: "balanced" | "strong") => {
       let workflow = createTimelineWorkflowState({

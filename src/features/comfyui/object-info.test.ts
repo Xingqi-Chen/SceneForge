@@ -687,6 +687,38 @@ describe("ComfyUI object info helpers", () => {
     });
   });
 
+  it.each([
+    ["default Illustrious", {
+      checkpointName: "model.safetensors",
+      modelBaseModel: "Illustrious",
+      positivePrompt: "scene",
+    }, objectInfo],
+    ["Anima", {
+      checkpointName: "pencil-xl-diffusion.safetensors",
+      modelBaseModel: "Anima",
+      modelStorageKind: "diffusion" as const,
+      positivePrompt: "scene",
+    }, objectInfoWithAnima],
+  ] as const)("fails closed instead of silently disabling a strict selected character on %s", (_label, baseRequest, unavailableObjectInfo) => {
+    const result = validateComfyUiRequestAgainstObjectInfo({
+      ...baseRequest,
+      strictCharacterReferences: true,
+      characterReferences: [{
+        id: "run-character-reference",
+        name: "Run character reference",
+        images: [{ imageName: "sceneforge-character-preflight.png", weight: 0.8 }],
+        weight: 0.8,
+        startPercent: 0,
+        endPercent: 1,
+      }],
+    }, unavailableObjectInfo);
+
+    expect(result.errors.join(" ")).toContain("Character reference \"Run character reference\" requires ComfyUI nodes");
+    expect(result.warnings).toEqual([]);
+    expect(result.request.characterReferences?.[0]).toMatchObject({ id: "run-character-reference" });
+    expect(result.request.characterReferences?.[0]?.enabled).toBeUndefined();
+  });
+
   it("reports unavailable models and invalid latent dimensions before queueing", () => {
     expect(
       validateComfyUiRequestAgainstObjectInfo(
@@ -1316,6 +1348,27 @@ describe("ComfyUI object info helpers", () => {
       "TextEncodeKrea2OstrisEdit.vae input is not available in ComfyUI object_info.",
       "TextEncodeKrea2OstrisEdit.image1 input is not available in ComfyUI object_info.",
     ]));
+
+    const dualRequest = {
+      ...request,
+      krea2StyleReference: {
+        styleImageName: "sceneforge-krea-style.png",
+        characterImageName: "sceneforge-krea-character.png",
+        weight: 0.8,
+      },
+    };
+    const dualCompatibleObjectInfo = {
+      ...compatibleObjectInfo,
+      TextEncodeKrea2OstrisEdit: {
+        input: { required: {
+          clip: ["CLIP", {}], prompt: ["STRING", {}], vae: ["VAE", {}], image1: ["IMAGE", {}], image2: ["IMAGE", {}],
+        } },
+      },
+    };
+    expect(validateComfyUiRequestAgainstObjectInfo(dualRequest, dualCompatibleObjectInfo).errors).toEqual([]);
+    expect(validateComfyUiRequestAgainstObjectInfo(dualRequest, compatibleObjectInfo).errors).toEqual([
+      "TextEncodeKrea2OstrisEdit.image2 input is not available in ComfyUI object_info for dual style and character references.",
+    ]);
   });
 
   it("keeps unknown diffusion models on the fallback checkpoint profile", () => {

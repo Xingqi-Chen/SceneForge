@@ -7,6 +7,7 @@ import {
 
 export type StyleReferenceMode = "prompt-only" | "ipadapter";
 export type StyleReferenceStatus = "pending" | "ready" | "failed" | "mismatch" | "invalid";
+export type CharacterReferenceStatus = "pending" | "ready" | "failed" | "invalid";
 
 export type StyleReferenceMetadata = {
   byteLength: number;
@@ -49,11 +50,26 @@ export type StyleReferenceSnapshot = {
   status: StyleReferenceStatus;
 };
 
+/**
+ * A Run has one optional identity image. Unlike the global style reference it
+ * is not analyzed or added to the prompt: it is only a safe pointer to an
+ * image in the sequence-reference store plus the effective non-Krea weight.
+ */
+export type CharacterReferenceSnapshot = {
+  error?: string;
+  metadata?: StyleReferenceMetadata;
+  status: CharacterReferenceStatus;
+  strength: number;
+};
+
 export const STYLE_REFERENCE_IP_ADAPTER_DEFAULTS = {
   endPercent: 1,
   startPercent: 0,
   weight: 0.45,
 } as const satisfies StyleReferenceIpAdapterSettings;
+
+export const CHARACTER_REFERENCE_DEFAULT_STRENGTH = 0.8;
+export const KREA_REFERENCE_DEFAULT_STRENGTH = 0.8;
 
 const SEQUENCE_REFERENCE_FILENAME_PATTERN = /^[a-f0-9]{32}\.(?:jpg|jpeg|png|webp)$/i;
 
@@ -122,6 +138,10 @@ function normalizeStatus(value: unknown): StyleReferenceStatus {
 
 function normalizeMode(value: unknown): StyleReferenceMode {
   return value === "ipadapter" ? "ipadapter" : "prompt-only";
+}
+
+function normalizeCharacterReferenceStatus(value: unknown): CharacterReferenceStatus {
+  return value === "pending" || value === "failed" || value === "invalid" ? value : "ready";
 }
 
 function invalidStyleReference(message: string): StyleReferenceSnapshot {
@@ -368,6 +388,85 @@ export function sanitizeStyleReferenceSnapshot(value: unknown): StyleReferenceSn
     mode,
     ...(settingsSnapshot ? { settingsSnapshot } : {}),
     status,
+  };
+}
+
+export function sanitizeCharacterReferenceSnapshot(value: unknown): CharacterReferenceSnapshot | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (!isRecord(value)) {
+    return {
+      error: "Character reference must be a metadata object.",
+      status: "invalid",
+      strength: CHARACTER_REFERENCE_DEFAULT_STRENGTH,
+    };
+  }
+
+  const status = normalizeCharacterReferenceStatus(value.status);
+  const metadata = sanitizeStyleReferenceMetadata(value.metadata);
+  const error = compactText(value.error, 600);
+  if (status === "ready" && !metadata) {
+    return {
+      error: "Character reference storage is missing or invalid. Replace or remove the reference.",
+      status: "invalid",
+      strength: numberZeroToOne(value.strength, CHARACTER_REFERENCE_DEFAULT_STRENGTH),
+    };
+  }
+
+  return {
+    ...(error ? { error } : {}),
+    ...(metadata ? { metadata } : {}),
+    status,
+    strength: numberZeroToOne(value.strength, CHARACTER_REFERENCE_DEFAULT_STRENGTH),
+  };
+}
+
+export function createCharacterReferenceSnapshot({
+  metadata,
+  strength = CHARACTER_REFERENCE_DEFAULT_STRENGTH,
+}: {
+  metadata: StyleReferenceMetadata;
+  strength?: number;
+}): CharacterReferenceSnapshot {
+  return sanitizeCharacterReferenceSnapshot({ metadata, status: "ready", strength }) ?? {
+    error: "Character reference is invalid.",
+    status: "invalid",
+    strength: CHARACTER_REFERENCE_DEFAULT_STRENGTH,
+  };
+}
+
+export function isCharacterReferenceReady(
+  value: CharacterReferenceSnapshot | undefined,
+): value is CharacterReferenceSnapshot & { metadata: StyleReferenceMetadata } {
+  return Boolean(value?.status === "ready" && value.metadata?.storedFilename);
+}
+
+export function getCharacterReferenceBlockingIssue(value: CharacterReferenceSnapshot | undefined) {
+  if (!value || value.status === "ready") {
+    return "";
+  }
+  return value.error ?? "Run character reference must be uploaded or removed before continuing.";
+}
+
+export function buildCharacterReferenceSequenceCharacter(
+  value: CharacterReferenceSnapshot | undefined,
+  options: { id?: string; name?: string; strength?: number } = {},
+): ComfyUiSequenceCharacter | null {
+  if (!isCharacterReferenceReady(value)) {
+    return null;
+  }
+  const id = options.id ?? "character-reference";
+  const strength = numberZeroToOne(options.strength, value.strength);
+  return {
+    id,
+    name: options.name ?? "Run character reference",
+    enabled: true,
+    mode: "ipadapter",
+    references: [{ id: `${id}-image`, storedFilename: value.metadata.storedFilename }],
+    weight: strength,
+    startPercent: 0,
+    endPercent: 1,
   };
 }
 

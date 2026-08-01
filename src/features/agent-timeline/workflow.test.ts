@@ -59,6 +59,19 @@ const runStyleReference = {
   },
 };
 
+const runCharacterReference = {
+  status: "ready" as const,
+  strength: 0.8,
+  metadata: {
+    byteLength: 512,
+    contentType: "image/png",
+    filename: "hero.png",
+    storedFilename: "fedcba9876543210fedcba9876543210.png",
+    uploadedAt: "2026-07-19T00:00:00.000Z",
+    url: "/api/comfyui/sequence-references/fedcba9876543210fedcba9876543210.png",
+  },
+};
+
 function createReadyForGateWorkflow(clock = createClock()) {
   let workflow = createTimelineWorkflowState({
     workflowId: "workflow-ready-for-gate",
@@ -330,6 +343,59 @@ describe("agent timeline workflow foundation", () => {
     expect(edited.nodes["scene-input"].result).toMatchObject({
       settingsSnapshot: { styleReference: runStyleReference },
     });
+  });
+
+  it.each([
+    ["replace", { ...runCharacterReference, metadata: {
+      ...runCharacterReference.metadata,
+      storedFilename: "00112233445566778899aabbccddeeff.png",
+    } }],
+    ["change strength", { ...runCharacterReference, strength: 0.35 }],
+    ["remove", undefined],
+  ] as const)("stales parameter generation and revokes confirmation when a Run character reference is %s", (_action, characterReference) => {
+    const clock = createClock();
+    const workflow = confirmTimelineGeneration(createReadyForGateWorkflow(clock), undefined, { now: clock });
+    const attached = updateTimelineSceneInputSettings(
+      workflow,
+      sanitizeRunSceneInputSettingsSnapshot({
+        detailers: { faceDetailer: { enabled: false }, handDetailer: { enabled: false } },
+        promptProfile: "illustrious",
+        characterReference: runCharacterReference,
+      }),
+      "parameter-recommendation",
+      { now: clock },
+    );
+    const edited = updateTimelineSceneInputSettings(
+      attached,
+      sanitizeRunSceneInputSettingsSnapshot({
+        detailers: { faceDetailer: { enabled: false }, handDetailer: { enabled: false } },
+        promptProfile: "illustrious",
+        ...(characterReference ? { characterReference } : {}),
+      }),
+      "parameter-recommendation",
+      { now: clock },
+    );
+
+    expect(edited.generationConfirmed).toBe(false);
+    expect(edited.nodes["resource-recommendation"]).toMatchObject(workflow.nodes["resource-recommendation"]);
+    for (const nodeId of ["parameter-recommendation", "generation-gate", "preview-execution", "comfyui-execution", "result-display"] as const) {
+      expect(edited.nodes[nodeId].status, nodeId).toBe("stale");
+    }
+    expect(edited.nodes["scene-input"].result).toMatchObject({
+      settingsSnapshot: characterReference ? {
+        characterReference: {
+          status: "ready",
+          strength: characterReference.strength,
+          metadata: {
+            storedFilename: characterReference.metadata.storedFilename,
+            url: `/api/comfyui/sequence-references/${characterReference.metadata.storedFilename}`,
+          },
+        },
+      } : {},
+    });
+    if (!characterReference) {
+      expect(JSON.stringify(edited.nodes["scene-input"].result)).not.toContain("characterReference");
+    }
   });
 
   it.each([

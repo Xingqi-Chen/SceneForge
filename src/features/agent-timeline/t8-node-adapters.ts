@@ -16,11 +16,17 @@ import {
   normalizeTimelineSourceDenoise,
 } from "./state";
 import {
+  getCharacterReferenceBlockingIssue,
   getStyleReferenceBlockingIssue,
   getStyleReferenceContextMismatch,
   isStyleReferenceReady,
+  sanitizeCharacterReferenceSnapshot,
   sanitizeStyleReferenceSnapshot,
 } from "./style-reference";
+import {
+  deriveTimelineConfirmedReferenceContext,
+  getConfirmedTimelineReferenceContext,
+} from "./run-reference-context";
 import {
   createTimelinePreviewSelectionFallbackMetadata,
   TimelineNodeExecutionError,
@@ -236,12 +242,18 @@ function assertStyleReferenceUsable(
   const settings = getRunSceneInputSettings(isRecord(sceneInput) ? sceneInput : {});
   const issue = getStyleReferenceBlockingIssue(settings.styleReference, "Run");
   if (issue) invalidComfyUiRequest(issue);
+  const characterIssue = getCharacterReferenceBlockingIssue(settings.characterReference);
+  if (characterIssue) invalidComfyUiRequest(characterIssue);
   const current = sanitizeStyleReferenceSnapshot(settings.styleReference);
   const reviewed = sanitizeStyleReferenceSnapshot(parameterResult.styleReference);
   if (JSON.stringify(current) !== JSON.stringify(reviewed)) {
     invalidComfyUiRequest("Run style reference changed after parameter review. Regenerate parameters before confirmation.");
   }
-  if (!current) return;
+  const currentCharacter = sanitizeCharacterReferenceSnapshot(settings.characterReference);
+  const reviewedCharacter = sanitizeCharacterReferenceSnapshot(parameterResult.characterReference);
+  if (JSON.stringify(currentCharacter) !== JSON.stringify(reviewedCharacter)) {
+    invalidComfyUiRequest("Run character reference changed after parameter review. Regenerate parameters before confirmation.");
+  }
   if (isStyleReferenceReady(current)) {
     const stylePrompt = current.analysis.stylePrompt.trim();
     const hasStylePromptExactlyOnce = isKrea2
@@ -251,15 +263,24 @@ function assertStyleReferenceUsable(
       invalidComfyUiRequest("Run request preview must include the complete style prompt exactly once at the tail.");
     }
   }
-  const checkpoint = getValidatedStyleReferenceCheckpoint(workflow);
-  if (!checkpoint) invalidComfyUiRequest("Run style reference requires a validated checkpoint recommendation.");
-  const mismatch = getStyleReferenceContextMismatch(current, {
-    checkpointBaseModel: checkpoint.baseModel,
-    checkpointId: checkpoint.id,
-    promptProfile: settings.promptProfile,
-    visualStyle: settings.visualStyle,
-  });
-  if (mismatch) invalidComfyUiRequest(mismatch);
+  if (current) {
+    const checkpoint = getValidatedStyleReferenceCheckpoint(workflow);
+    if (!checkpoint) invalidComfyUiRequest("Run style reference requires a validated checkpoint recommendation.");
+    const mismatch = getStyleReferenceContextMismatch(current, {
+      checkpointBaseModel: checkpoint.baseModel,
+      checkpointId: checkpoint.id,
+      promptProfile: settings.promptProfile,
+      visualStyle: settings.visualStyle,
+    });
+    if (mismatch) invalidComfyUiRequest(mismatch);
+  }
+
+  const expectedReferenceContext = deriveTimelineConfirmedReferenceContext(workflow);
+  const confirmedReferenceContext = getConfirmedTimelineReferenceContext(workflow);
+  if (expectedReferenceContext && confirmedReferenceContext &&
+      JSON.stringify(expectedReferenceContext) !== JSON.stringify(confirmedReferenceContext)) {
+    invalidComfyUiRequest("Run reference settings changed after confirmation. Review and confirm the Run again.");
+  }
 }
 
 function materializeBaseSeed(

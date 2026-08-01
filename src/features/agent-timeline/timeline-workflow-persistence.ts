@@ -92,6 +92,7 @@ import {
   sanitizeTimelineRepairAttempt,
 } from "./final-repair";
 import { normalizeComfyUiKrea2StyleReferenceDescriptor } from "@/features/comfyui/krea2-style-reference";
+import { sanitizeTimelineConfirmedReferenceContext } from "./run-reference-context";
 
 export const TIMELINE_WORKFLOW_RECORD_KIND = "sceneforge-timeline-workflow" as const;
 export const TIMELINE_WORKFLOW_RECORD_VERSION = 1 as const;
@@ -734,6 +735,19 @@ function sanitizeSingleImageWorkflowState(raw: Record<string, unknown>): Timelin
       sanitizeTimelineNode(nodeId, rawNodes[nodeId], updatedAt, { requireCurrentFinalPolicy }),
     ]),
   ) as TimelineNodeMap;
+  const persistedGateResult = nodes["generation-gate"].result;
+  if (isRecord(persistedGateResult) && "referenceContext" in persistedGateResult) {
+    const referenceContext = sanitizeTimelineConfirmedReferenceContext(persistedGateResult.referenceContext);
+    const safeGateResult = { ...persistedGateResult };
+    delete safeGateResult.referenceContext;
+    nodes["generation-gate"] = {
+      ...nodes["generation-gate"],
+      result: {
+        ...safeGateResult,
+        ...(referenceContext ? { referenceContext } : {}),
+      },
+    };
+  }
   const persistedVisualStyle = getRunSceneInputSettings(
     isRecord(nodes["scene-input"].result) ? nodes["scene-input"].result : {},
   ).visualStyle;
@@ -1546,11 +1560,13 @@ function sanitizeFinalExecutionResult(
       ...(descriptor ? { krea2StyleReferenceDescriptor: descriptor } : {}),
     };
   })();
+  const referenceContext = sanitizeTimelineConfirmedReferenceContext(value.referenceContext);
   return {
     completed: value.completed === true && validCompleteSet,
     finalCount,
     finals,
     ...(finalPolicy ? { finalPolicy } : {}),
+    ...(referenceContext ? { referenceContext } : {}),
     request,
     warnings: sanitizeStringArray(value.warnings),
   };
