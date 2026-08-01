@@ -1,10 +1,19 @@
-import type { CivitaiResourceType } from "@/features/civitai-lora-library/types";
+import type {
+  CivitaiResourceType,
+  CivitaiResourceUpsertInput,
+} from "@/features/civitai-lora-library/types";
 
 import type { SceneForgeSqliteDatabase } from "./sqlite-storage";
 
 export const CIVITAI_SEARCH_INDEX_TABLE = "civitai_resource_search_fts";
 export const CIVITAI_SEARCH_INDEX_MISSING_MESSAGE =
   "Civitai search index is missing. Run npm run civitai:reindex, then try the recommendation again.";
+
+export type CivitaiSearchIndexSource = {
+  resourceId: string;
+  resourceType: Extract<CivitaiResourceType, "model" | "lora">;
+  searchText: string;
+};
 
 const DOMAIN_SYNONYM_RULES: Array<{ tests: string[]; tokens: string[] }> = [
   { tests: ["赛博", "赛博朋克", "霓虹", "cyber", "neon"], tokens: ["cyberpunk", "neon", "techwear", "futuristic"] },
@@ -154,13 +163,16 @@ export function buildCivitaiResourceSearchText(input: {
   description: string | null;
   recommendations: unknown[];
 }) {
+  const categories = Array.from(new Set(
+    input.categories.filter((category) => category.trim().length > 0),
+  )).sort();
   const rawText = [
     input.name,
     input.versionName,
     input.baseModel,
     ...input.trainedWords,
     ...input.tags,
-    ...input.categories,
+    ...categories,
     input.usageGuide,
     input.description,
     ...input.recommendations.map(recommendationText),
@@ -168,6 +180,26 @@ export function buildCivitaiResourceSearchText(input: {
   const tokens = tokenizeCivitaiSearchText(rawText);
 
   return [rawText, ...tokens].join(" ");
+}
+
+export function buildCivitaiResourceSearchTextFromUpsertInput(
+  input: CivitaiResourceUpsertInput,
+): string {
+  return buildCivitaiResourceSearchText({
+    name: input.name,
+    versionName: input.versionName,
+    baseModel: input.baseModel,
+    trainedWords: input.trainedWords,
+    tags: input.tags,
+    categories: input.categories.length > 0
+      ? input.categories
+      : input.category
+        ? [input.category]
+        : [],
+    usageGuide: input.usageGuide,
+    description: input.description,
+    recommendations: input.recommendations,
+  });
 }
 
 export function isCivitaiSearchIndexAvailable(db: SceneForgeSqliteDatabase): boolean {
@@ -180,65 +212,122 @@ export function isCivitaiSearchIndexAvailable(db: SceneForgeSqliteDatabase): boo
   return readTextColumn(row, "name") === CIVITAI_SEARCH_INDEX_TABLE;
 }
 
-export function rebuildCivitaiSearchIndex(db: SceneForgeSqliteDatabase): { indexedCount: number } {
-  db.exec("BEGIN IMMEDIATE");
-  try {
-    db.exec(`
-      DROP TABLE IF EXISTS ${CIVITAI_SEARCH_INDEX_TABLE};
-      CREATE VIRTUAL TABLE ${CIVITAI_SEARCH_INDEX_TABLE}
-      USING fts5(
-        resource_id UNINDEXED,
-        resource_type UNINDEXED,
-        search_text,
-        tokenize = 'unicode61'
-      );
-    `);
+export function createCivitaiSearchIndexTable(db: SceneForgeSqliteDatabase): void {
+  db.exec(`
+    CREATE VIRTUAL TABLE ${CIVITAI_SEARCH_INDEX_TABLE}
+    USING fts5(
+      resource_id UNINDEXED,
+      resource_type UNINDEXED,
+      search_text,
+      tokenize = 'unicode61'
+    );
+  `);
+}
 
-    const rows = db.prepare(`
-      SELECT
-        r.id,
-        r.resource_type,
-        r.name,
-        r.version_name,
-        r.base_model,
-        r.trained_words_json,
-        r.tags_json,
-        r.category,
-        r.usage_guide,
-        r.description,
-        r.recommendations_json,
-        (
-          SELECT json_group_array(rc.category)
+export function replaceCivitaiSearchIndexResource(
+  db: SceneForgeSqliteDatabase,
+  source: CivitaiSearchIndexSource,
+): void {
+  db.prepare(`
+    DELETE FROM ${CIVITAI_SEARCH_INDEX_TABLE}
+    WHERE resource_id = ?
+  `).run(source.resourceId);
+  db.prepare(`
+    INSERT INTO ${CIVITAI_SEARCH_INDEX_TABLE} (resource_id, resource_type, search_text)
+    VALUES (?, ?, ?)
+  `).run(source.resourceId, source.resourceType, source.searchText);
+}
+
+export function deleteCivitaiSearchIndexResource(
+  db: SceneForgeSqliteDatabase,
+  resourceId: string,
+): void {
+  db.prepare(`
+    DELETE FROM ${CIVITAI_SEARCH_INDEX_TABLE}
+    WHERE resource_id = ?
+  `).run(resourceId);
+}
+
+export function listCivitaiSearchIndexSources(
+  db: SceneForgeSqliteDatabase,
+): CivitaiSearchIndexSource[] {
+  if (!isCivitaiSearchIndexAvailable(db)) {
+    return [];
+  }
+
+  return db.prepare(`
+    SELECT resource_id, resource_type, search_text
+    FROM ${CIVITAI_SEARCH_INDEX_TABLE}
+    WHERE resource_type IN ('model', 'lora')
+    ORDER BY resource_type, resource_id
+  `).all().map((row) => ({
+    resourceId: readTextColumn(row, "resource_id") ?? "",
+    resourceType: readTextColumn(row, "resource_type") === "model" ? "model" as const : "lora" as const,
+    searchText: readTextColumn(row, "search_text") ?? "",
+  })).filter((row) => row.resourceId.length > 0 && row.searchText.trim().length > 0);
+}
+
+export function listCivitaiResourceSearchSources(
+  db: SceneForgeSqliteDatabase,
+): CivitaiSearchIndexSource[] {
+  const rows = db.prepare(`
+    SELECT
+      r.id,
+      r.resource_type,
+      r.name,
+      r.version_name,
+      r.base_model,
+      r.trained_words_json,
+      r.tags_json,
+      r.category,
+      r.usage_guide,
+      r.description,
+      r.recommendations_json,
+      (
+        SELECT json_group_array(ordered_categories.category)
+        FROM (
+          SELECT rc.category
           FROM civitai_resource_categories rc
           WHERE rc.resource_id = r.id
           ORDER BY rc.sort_order, rc.category
-        ) AS categories_json
-      FROM civitai_resources r
-      WHERE r.resource_type IN ('model', 'lora')
-    `).all();
-    const insert = db.prepare(`
-      INSERT INTO ${CIVITAI_SEARCH_INDEX_TABLE} (resource_id, resource_type, search_text)
-      VALUES (?, ?, ?)
-    `);
+        ) ordered_categories
+      ) AS categories_json
+    FROM civitai_resources r
+    WHERE r.resource_type IN ('model', 'lora')
+    ORDER BY r.resource_type, r.id
+  `).all();
 
+  return rows.map((row) => {
+    const category = readTextColumn(row, "category");
+    const categories = textList(readJsonArray(readTextColumn(row, "categories_json")));
+
+    return {
+      resourceId: readTextColumn(row, "id") ?? "",
+      resourceType: readTextColumn(row, "resource_type") === "model" ? "model" as const : "lora" as const,
+      searchText: buildCivitaiResourceSearchText({
+        name: readTextColumn(row, "name") ?? null,
+        versionName: readTextColumn(row, "version_name") ?? null,
+        baseModel: readTextColumn(row, "base_model") ?? null,
+        trainedWords: textList(readJsonArray(readTextColumn(row, "trained_words_json"))),
+        tags: textList(readJsonArray(readTextColumn(row, "tags_json"))),
+        categories: categories.length > 0 ? categories : category ? [category] : [],
+        usageGuide: readTextColumn(row, "usage_guide") ?? null,
+        description: readTextColumn(row, "description") ?? null,
+        recommendations: readJsonArray(readTextColumn(row, "recommendations_json")),
+      }),
+    };
+  }).filter((row) => row.resourceId.length > 0);
+}
+
+export function rebuildCivitaiSearchIndex(db: SceneForgeSqliteDatabase): { indexedCount: number } {
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    db.exec(`DROP TABLE IF EXISTS ${CIVITAI_SEARCH_INDEX_TABLE}`);
+    createCivitaiSearchIndexTable(db);
+
+    const rows = listCivitaiResourceSearchSources(db);
     for (const row of rows) {
-      const category = readTextColumn(row, "category");
-      const categories = textList(readJsonArray(readTextColumn(row, "categories_json")));
-      insert.run(
-        readTextColumn(row, "id") ?? "",
-        readTextColumn(row, "resource_type") ?? "",
-        buildCivitaiResourceSearchText({
-          name: readTextColumn(row, "name") ?? null,
-          versionName: readTextColumn(row, "version_name") ?? null,
-          baseModel: readTextColumn(row, "base_model") ?? null,
-          trainedWords: textList(readJsonArray(readTextColumn(row, "trained_words_json"))),
-          tags: textList(readJsonArray(readTextColumn(row, "tags_json"))),
-          categories: categories.length > 0 ? categories : category ? [category] : [],
-          usageGuide: readTextColumn(row, "usage_guide") ?? null,
-          description: readTextColumn(row, "description") ?? null,
-          recommendations: readJsonArray(readTextColumn(row, "recommendations_json")),
-        }),
-      );
+      replaceCivitaiSearchIndexResource(db, row);
     }
 
     db.exec("COMMIT");

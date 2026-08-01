@@ -31,7 +31,7 @@ SceneForge currently includes reusable capabilities that the timeline MVP should
 - Local project save/load through Next.js API routes backed by local disk storage.
 - LiteLLM-compatible chat support for AI-assisted prompt and recommendation flows.
 - ComfyUI workflow generation, generated image history, inpainting, sequence references, control image helpers, and diagnostic helpers.
-- Civitai resource discovery, selected checkpoints/LoRAs, import image parsing, download support, cache repair, and recommendation helpers.
+- Civitai resource discovery, selected checkpoints/LoRAs, import image parsing, download support, cache repair, and recommendation helpers. Parse preview never calls the embedding provider or mutates recommendation indexes. Confirmed import incrementally embeds only new selected resources against a healthy compatible baseline, while existing resources remain link-only; confirmed reanalysis embeds only when deterministic recommendation search text changes. The first new resource can bootstrap indexes only in a genuinely empty model/LoRA library. Nonempty missing, stale, legacy, or configuration-incompatible indexes require the explicit full-rebuild commands.
 - Artist string library resources and selection.
 - Tavily-backed web context for ComfyUI diagnosis when configured.
 

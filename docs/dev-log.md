@@ -2,6 +2,27 @@
 
 This log records dated implementation and documentation work. Keep entries concise and evidence-oriented.
 
+## 2026-07-29
+
+### T52 / Issue #175 Incremental Civitai recommendation indexing
+
+Summary:
+
+- Kept Civitai parse preview free of embedding calls and derived-index writes, and kept existing-resource imports link-only.
+- Added deterministic per-resource FTS source construction plus bounded LiteLLM embedding preparation for only new or changed resource chunks.
+- Added empty-library bootstrap and strict nonempty baseline validation across FTS source text, vector chunk metadata, embedding model/dimensions, schema, chunk configuration, global source fingerprint, indexed count, and timestamp.
+- Revalidated the baseline after `BEGIN IMMEDIATE`, then committed business rows, categories, image usage, FTS rows, vector chunks, and global metadata atomically. Concurrent changes, malformed provider output, dimension mismatch, and provider failures fail with sanitized messages and no partial database mutation.
+- Updated confirmed reanalysis to skip embedding when deterministic search text is unchanged and otherwise replace only the affected resource. Conflict merges remove obsolete derived rows in the same transaction.
+- Preserved the complete `civitai:reindex` and `civitai:reindex-embeddings` commands as repair/configuration-change paths.
+
+Final validation:
+
+- Focused Vitest passed 69 tests across persistence, service, import, reanalysis, and recommendation coverage.
+- Full `npm test` passed 1,939 tests across 154 files.
+- `npm run typecheck`, `npm run lint`, `npm run build`, and `git diff --check` passed; lint retained 22 pre-existing `no-img-element` warnings outside T52 scope.
+- Review Gate approved after fixes added exact FTS5/`unicode61` and vec0 `float[N]` compatibility checks, post-conversion Float32 overflow rejection, correct 409 preservation, one bounded `indexed_at`-only baseline retry, and fail-closed handling when concurrent work changes resource/source compatibility.
+- Live LiteLLM smoke validation was not run because it depends on local provider configuration.
+
 ## 2026-07-27
 
 ### T51 / Issue #172 Run visual-style control
@@ -2074,3 +2095,23 @@ Validation:
 - `npm run typecheck`
 - `npm run lint` (passes with pre-existing warnings)
 - `npm run build`
+
+### Issue #175 Civitai incremental import category ordering fix
+
+Summary:
+
+- Fixed deterministic incremental-index conflicts when imported resources have multiple categories by ordering category rows before JSON aggregation.
+- Applied the same ordering contract to resource upsert, list, and detail reads so returned category arrays preserve their persisted `sort_order`.
+- Canonicalized categories as a deduplicated, sorted set only when building search and embedding text, preserving compatibility with existing indexes independently of API display order.
+- Preserved exact search-text consistency checks and atomic rollback behavior; the fix aligns persisted category order with the text embedded before the transaction.
+
+Validation:
+
+- Current configured database passed `readCivitaiIncrementalIndexBaseline` without rebuilding (`incremental`, 302 indexed chunks, 1536 dimensions).
+- Live import of Civitai image `136499926` succeeded with HTTP 200, persisted 13 resource usages, kept resource and FTS counts aligned at 128, and incremented the embedding index from 302 to 319 chunks.
+- `npm test -- --run src/features/persistence/civitai-embedding-index.test.ts src/features/persistence/sqlite-storage.test.ts` (36 tests passed)
+- `npm test` (154 files, 1,941 tests passed)
+- `npm run typecheck`
+- `npm run lint` (0 errors; 22 pre-existing warnings)
+- `npm run build`
+- `git diff --check`

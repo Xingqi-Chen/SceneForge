@@ -29,14 +29,16 @@ The Story Graph planning surface is available at [http://localhost:3000/story](h
 
 Civitai image import accepts a numeric image ID or an `/images/<id>` page on `civitai.com`, `www.civitai.com`, `civitai.red`, or `www.civitai.red`. The page URL is used only to extract the numeric ID, and the fixed Civitai API lookup always includes `nsfw=X` so explicit metadata imports are not filtered by SceneForge generation settings. Import does not change or authorize NSFW behavior in Run, Story, Editor generation, LiteLLM routing, or ComfyUI.
 
-After importing or changing local Civitai model/LoRA metadata, rebuild the derived FTS search index and then the derived sqlite-vec embedding index used by recommendation ranking:
+Confirmed Civitai imports keep recommendation indexes current automatically. Parse preview is read-only. A new selected model or LoRA is embedded in bounded LiteLLM batches and becomes available to BM25 and semantic recommendation immediately after one atomic database commit; linking an image to an existing resource does not overwrite or re-embed that resource. Confirmed reanalysis follows the same rule and embeds only when its deterministic recommendation search text changed.
+
+Incremental indexing requires `LITELLM_CIVITAI_EMBEDDING_MODEL` and a healthy compatible FTS/sqlite-vec baseline. The first import may initialize both indexes only when the model/LoRA library is genuinely empty. For a nonempty library with missing, stale, legacy, or incompatible indexes—or after changing the embedding model, vector dimensions, schema, chunk size, or overlap—repair the complete derived indexes with:
 
 ```bash
 npm run civitai:reindex
 npm run civitai:reindex-embeddings
 ```
 
-Both commands read `SCENEFORGE_SQLITE_FILE` from the shell environment first, then from `.env.local` or `.env`, and otherwise use `data/sceneforge.sqlite`. `npm run civitai:reindex` rebuilds only the derived Civitai FTS index and does not rewrite original Civitai resource rows. `npm run civitai:reindex-embeddings` requires the FTS index to already exist, reads `LITELLM_BASE_URL`, optional `LITELLM_API_KEY`, and `LITELLM_CIVITAI_EMBEDDING_MODEL`, then rebuilds only derived chunked vector tables/metadata from the full FTS source text. Run both again after importing or modifying Civitai resources so recommendations do not use stale indexes.
+Both commands read `SCENEFORGE_SQLITE_FILE` from the shell environment first, then from `.env.local` or `.env`, and otherwise use `data/sceneforge.sqlite`. `npm run civitai:reindex` rebuilds only the derived Civitai FTS index and does not rewrite original Civitai resource rows. `npm run civitai:reindex-embeddings` requires the FTS index to already exist, reads `LITELLM_BASE_URL`, optional `LITELLM_API_KEY`, and `LITELLM_CIVITAI_EMBEDDING_MODEL`, then rebuilds only derived chunked vector tables/metadata from the full FTS source text. These commands remain the explicit repair and configuration-change path, not an ordinary post-import step.
 
 ## Continuous Integration
 
