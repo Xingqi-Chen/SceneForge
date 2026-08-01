@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   buildCivitaiResourceSearchTextFromUpsertInput,
+  listCivitaiResourceSearchSources,
   listCivitaiSearchIndexSources,
   rankCivitaiResourceIdsBySearchIndex,
   rebuildCivitaiSearchIndex,
@@ -112,6 +113,22 @@ describe("Civitai sqlite-vec embedding index", () => {
   afterEach(async () => {
     db.close();
     await fs.rm(tempDir, { recursive: true, force: true });
+  });
+
+  it("canonicalizes category permutations and duplicates in resource search text", () => {
+    const resourceInput = makeResource("lora", "Canonical Category LoRA", {
+      categories: ["style", "lighting"],
+    });
+    const canonicalSearchText = buildCivitaiResourceSearchTextFromUpsertInput(resourceInput);
+
+    expect(buildCivitaiResourceSearchTextFromUpsertInput({
+      ...resourceInput,
+      categories: ["lighting", "style"],
+    })).toBe(canonicalSearchText);
+    expect(buildCivitaiResourceSearchTextFromUpsertInput({
+      ...resourceInput,
+      categories: ["style", "lighting", "style"],
+    })).toBe(canonicalSearchText);
   });
 
   it("keeps extension loading disabled outside sqlite-vec load windows", () => {
@@ -598,6 +615,74 @@ describe("Civitai sqlite-vec embedding index", () => {
         resourceIds: [added.id],
         resourceType: "lora",
       }).has(added.id)).toBe(true);
+    } catch (error) {
+      db.exec("ROLLBACK");
+      throw error;
+    }
+  });
+
+  it("preserves multi-category order when applying an incremental resource update", async () => {
+    upsertCivitaiResourceToSqlite(
+      db,
+      makeResource("model", "Multi-category Baseline Checkpoint", {
+        civitaiModelId: 7151,
+        civitaiModelVersionId: 7152,
+      }),
+    );
+    rebuildHealthyIndexes(db);
+    const resourceInput = makeResource("lora", "Image 136499926 Multi-category LoRA", {
+      civitaiModelId: 7153,
+      civitaiModelVersionId: 7154,
+      category: "style",
+      categories: ["style", "lighting"],
+    });
+    const searchText = buildCivitaiResourceSearchTextFromUpsertInput(resourceInput);
+    const prepared = await prepareCivitaiIncrementalEmbeddingUpdate(db, {
+      createEmbedding: async ({ input }) => ({
+        embeddings: (Array.isArray(input) ? input : [input]).map(() => [0, 1]),
+      }),
+      model: "embedding-model",
+      sources: [{
+        resourceKey: "image-136499926-multi-category-lora",
+        resourceType: "lora",
+        searchText,
+      }],
+    });
+
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      assertCivitaiIncrementalIndexBaselineUnchanged(db, prepared.baseline);
+      const added = upsertCivitaiResourceToSqlite(db, resourceInput).resource;
+
+      expect(added.categories).toEqual(["style", "lighting"]);
+      expect(db.prepare(`
+        SELECT category, sort_order
+        FROM civitai_resource_categories
+        WHERE resource_id = ?
+        ORDER BY sort_order, category
+      `).all(added.id)).toEqual([
+        { category: "style", sort_order: 0 },
+        { category: "lighting", sort_order: 1 },
+      ]);
+      expect(listCivitaiResourceSearchSources(db).find(
+        (source) => source.resourceId === added.id,
+      )?.searchText).toBe(searchText);
+
+      expect(() => applyPreparedCivitaiIncrementalEmbeddingUpdate(db, {
+        prepared,
+        resources: [{
+          resourceId: added.id,
+          resourceKey: "image-136499926-multi-category-lora",
+          resourceType: "lora",
+          searchText,
+        }],
+      })).not.toThrow();
+      db.exec("COMMIT");
+
+      expect(listCivitaiSearchIndexSources(db).find(
+        (source) => source.resourceId === added.id,
+      )?.searchText).toBe(searchText);
+      expect(assertCivitaiEmbeddingIndexReady(db, "embedding-model")).toBeTruthy();
     } catch (error) {
       db.exec("ROLLBACK");
       throw error;

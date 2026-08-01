@@ -163,13 +163,16 @@ export function buildCivitaiResourceSearchText(input: {
   description: string | null;
   recommendations: unknown[];
 }) {
+  const categories = Array.from(new Set(
+    input.categories.filter((category) => category.trim().length > 0),
+  )).sort();
   const rawText = [
     input.name,
     input.versionName,
     input.baseModel,
     ...input.trainedWords,
     ...input.tags,
-    ...input.categories,
+    ...categories,
     input.usageGuide,
     input.description,
     ...input.recommendations.map(recommendationText),
@@ -281,10 +284,13 @@ export function listCivitaiResourceSearchSources(
       r.description,
       r.recommendations_json,
       (
-        SELECT json_group_array(rc.category)
-        FROM civitai_resource_categories rc
-        WHERE rc.resource_id = r.id
-        ORDER BY rc.sort_order, rc.category
+        SELECT json_group_array(ordered_categories.category)
+        FROM (
+          SELECT rc.category
+          FROM civitai_resource_categories rc
+          WHERE rc.resource_id = r.id
+          ORDER BY rc.sort_order, rc.category
+        ) ordered_categories
       ) AS categories_json
     FROM civitai_resources r
     WHERE r.resource_type IN ('model', 'lora')

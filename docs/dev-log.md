@@ -2095,3 +2095,23 @@ Validation:
 - `npm run typecheck`
 - `npm run lint` (passes with pre-existing warnings)
 - `npm run build`
+
+### Issue #175 Civitai incremental import category ordering fix
+
+Summary:
+
+- Fixed deterministic incremental-index conflicts when imported resources have multiple categories by ordering category rows before JSON aggregation.
+- Applied the same ordering contract to resource upsert, list, and detail reads so returned category arrays preserve their persisted `sort_order`.
+- Canonicalized categories as a deduplicated, sorted set only when building search and embedding text, preserving compatibility with existing indexes independently of API display order.
+- Preserved exact search-text consistency checks and atomic rollback behavior; the fix aligns persisted category order with the text embedded before the transaction.
+
+Validation:
+
+- Current configured database passed `readCivitaiIncrementalIndexBaseline` without rebuilding (`incremental`, 302 indexed chunks, 1536 dimensions).
+- Live import of Civitai image `136499926` succeeded with HTTP 200, persisted 13 resource usages, kept resource and FTS counts aligned at 128, and incremented the embedding index from 302 to 319 chunks.
+- `npm test -- --run src/features/persistence/civitai-embedding-index.test.ts src/features/persistence/sqlite-storage.test.ts` (36 tests passed)
+- `npm test` (154 files, 1,941 tests passed)
+- `npm run typecheck`
+- `npm run lint` (0 errors; 22 pre-existing warnings)
+- `npm run build`
+- `git diff --check`

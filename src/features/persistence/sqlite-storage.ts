@@ -1479,10 +1479,13 @@ function getResourceRowById(db: SceneForgeSqliteDatabase, id: string) {
     SELECT
       r.*,
       (
-        SELECT json_group_array(rc.category)
-        FROM civitai_resource_categories rc
-        WHERE rc.resource_id = r.id
-        ORDER BY rc.sort_order, rc.category
+        SELECT json_group_array(ordered_categories.category)
+        FROM (
+          SELECT rc.category
+          FROM civitai_resource_categories rc
+          WHERE rc.resource_id = r.id
+          ORDER BY rc.sort_order, rc.category
+        ) ordered_categories
       ) AS categories_json
     FROM civitai_resources r
     WHERE r.id = ?
@@ -1842,10 +1845,13 @@ export function listCivitaiResourcesFromSqlite(
     SELECT
       r.*,
       (
-        SELECT json_group_array(rc.category)
-        FROM civitai_resource_categories rc
-        WHERE rc.resource_id = r.id
-        ORDER BY rc.sort_order, rc.category
+        SELECT json_group_array(ordered_categories.category)
+        FROM (
+          SELECT rc.category
+          FROM civitai_resource_categories rc
+          WHERE rc.resource_id = r.id
+          ORDER BY rc.sort_order, rc.category
+        ) ordered_categories
       ) AS categories_json,
       COUNT(DISTINCT iru.imported_image_id) AS imported_image_count,
       AVG(iru.weight) AS average_weight,
@@ -1868,10 +1874,13 @@ export function getCivitaiResourceDetailFromSqlite(
     SELECT
       r.*,
       (
-        SELECT json_group_array(rc.category)
-        FROM civitai_resource_categories rc
-        WHERE rc.resource_id = r.id
-        ORDER BY rc.sort_order, rc.category
+        SELECT json_group_array(ordered_categories.category)
+        FROM (
+          SELECT rc.category
+          FROM civitai_resource_categories rc
+          WHERE rc.resource_id = r.id
+          ORDER BY rc.sort_order, rc.category
+        ) ordered_categories
       ) AS categories_json,
       COUNT(DISTINCT iru.imported_image_id) AS imported_image_count,
       AVG(iru.weight) AS average_weight,
