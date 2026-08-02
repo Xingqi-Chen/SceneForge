@@ -568,21 +568,34 @@ describe("ComfyUI workflow builder", () => {
         apply: "8",
       },
     ]);
-    expect(result.workflow["7"]).toMatchObject({
-      class_type: "IPAdapterUnifiedLoader",
+    expect(result.workflow["7"]).toEqual({
+      class_type: "AnimaIPAdapterLoader",
+      inputs: {
+        ip_adapter_name: "ip_adapter-Character_Reference-10.safetensors",
+        auto_download: false,
+      },
+      _meta: { title: "Load Hero Anima IP-Adapter" },
+    });
+    expect(result.workflow["8"]).toEqual({
+      class_type: "AnimaIPAdapterApply",
       inputs: {
         model: ["1", 0],
-        preset: "PLUS (high strength)",
+        ip_adapter: ["7", 0],
+        ref_image: ["6", 0],
+        strength: 0.8,
+        ref_image_size: 512,
+        siglip_layer: -1,
+        ip_cfg_scale: 4,
+        ip_cfg_separate: false,
+        gray_null: false,
+        use_lora: true,
       },
+      _meta: { title: "Apply Hero Anima IP-Adapter" },
     });
-    expect(result.workflow["8"]).toMatchObject({
-      class_type: "IPAdapterAdvanced",
-      inputs: {
-        model: ["7", 0],
-        ipadapter: ["7", 1],
-        image: ["6", 0],
-      },
-    });
+    expect(Object.values(result.workflow).some((node) => [
+      "IPAdapterUnifiedLoader",
+      "IPAdapterAdvanced",
+    ].includes(node.class_type))).toBe(false);
     expect(result.workflow["10"].inputs.model).toEqual(["8", 0]);
     expect(result.workflow["11"].inputs.vae).toEqual(["3", 0]);
   });

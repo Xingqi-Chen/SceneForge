@@ -38,6 +38,11 @@ import {
   KREA2_STYLE_REFERENCE_MODEL_PATCH_NODE,
   KREA2_STYLE_REFERENCE_TEXT_ENCODE_NODE,
 } from "./krea2-style-reference";
+import {
+  ANIMA_CHARACTER_REFERENCE_APPLY_NODE,
+  ANIMA_CHARACTER_REFERENCE_LOADER_NODE,
+  COMFYUI_ANIMA_CHARACTER_REFERENCE_ADAPTER,
+} from "./anima-character-reference";
 
 const HIGH_RES_INPAINT_VAE_TILE_SIZE = 512;
 const HIGH_RES_INPAINT_VAE_TILE_OVERLAP = 64;
@@ -289,11 +294,14 @@ function addCharacterReferenceNodes({
   builder,
   modelConnection,
   references,
+  workflowProfile,
 }: {
   builder: ComfyUiWorkflowBuilder;
   modelConnection: ComfyUiNodeConnection;
   references: ResolvedComfyUiCharacterReferenceConfig[];
+  workflowProfile: ResolvedComfyUiTextToImageRequest["workflowProfile"];
 }) {
+  const isAnimaProfile = workflowProfile === "anima";
   const nodeIds = references
     .filter((reference) => reference.enabled && reference.images.length > 0)
     .map((reference) => {
@@ -322,7 +330,7 @@ function addCharacterReferenceNodes({
         imageConnection = builder.connect(batcher, 0);
       }
 
-      const maskImage = reference.maskImageName
+      const maskImage = !isAnimaProfile && reference.maskImageName
         ? builder.addNode(
             "LoadImage",
             {
@@ -331,39 +339,64 @@ function addCharacterReferenceNodes({
             `Load ${reference.name} Attention Mask`,
           )
         : undefined;
-      const loaderClassType = reference.mode === "faceid"
-        ? "IPAdapterUnifiedLoaderFaceID"
-        : "IPAdapterUnifiedLoader";
-      const loader = builder.addNode(
-        loaderClassType,
-        {
-          model: modelConnection,
-          preset: reference.preset,
-          ...(reference.mode === "faceid"
-            ? {
-                lora_strength: reference.loraStrength,
-                provider: reference.provider,
-              }
-            : {}),
-        },
-        `Load ${reference.name} IPAdapter`,
-      );
-      const apply = builder.addNode(
-        "IPAdapterAdvanced",
-        {
-          model: builder.connect(loader, 0),
-          ipadapter: builder.connect(loader, 1),
-          image: imageConnection,
-          weight: reference.weight,
-          weight_type: reference.weightType,
-          combine_embeds: reference.combineEmbeds,
-          start_at: reference.startPercent,
-          end_at: reference.endPercent,
-          embeds_scaling: reference.embedsScaling,
-          ...(maskImage ? { attn_mask: builder.connect(maskImage, 1) } : {}),
-        },
-        `Apply ${reference.name} IPAdapter`,
-      );
+      const loader = isAnimaProfile
+        ? builder.addNode(
+            ANIMA_CHARACTER_REFERENCE_LOADER_NODE,
+            {
+              ip_adapter_name: COMFYUI_ANIMA_CHARACTER_REFERENCE_ADAPTER.modelName,
+              auto_download: COMFYUI_ANIMA_CHARACTER_REFERENCE_ADAPTER.autoDownload,
+            },
+            `Load ${reference.name} Anima IP-Adapter`,
+          )
+        : builder.addNode(
+            reference.mode === "faceid"
+              ? "IPAdapterUnifiedLoaderFaceID"
+              : "IPAdapterUnifiedLoader",
+            {
+              model: modelConnection,
+              preset: reference.preset,
+              ...(reference.mode === "faceid"
+                ? {
+                    lora_strength: reference.loraStrength,
+                    provider: reference.provider,
+                  }
+                : {}),
+            },
+            `Load ${reference.name} IPAdapter`,
+          );
+      const apply = isAnimaProfile
+        ? builder.addNode(
+            ANIMA_CHARACTER_REFERENCE_APPLY_NODE,
+            {
+              model: modelConnection,
+              ip_adapter: builder.connect(loader, 0),
+              ref_image: imageConnection,
+              strength: Math.min(1, Math.max(0, reference.weight)),
+              ref_image_size: COMFYUI_ANIMA_CHARACTER_REFERENCE_ADAPTER.refImageSize,
+              siglip_layer: COMFYUI_ANIMA_CHARACTER_REFERENCE_ADAPTER.siglipLayer,
+              ip_cfg_scale: COMFYUI_ANIMA_CHARACTER_REFERENCE_ADAPTER.ipCfgScale,
+              ip_cfg_separate: COMFYUI_ANIMA_CHARACTER_REFERENCE_ADAPTER.ipCfgSeparate,
+              gray_null: COMFYUI_ANIMA_CHARACTER_REFERENCE_ADAPTER.grayNull,
+              use_lora: COMFYUI_ANIMA_CHARACTER_REFERENCE_ADAPTER.useLora,
+            },
+            `Apply ${reference.name} Anima IP-Adapter`,
+          )
+        : builder.addNode(
+            "IPAdapterAdvanced",
+            {
+              model: builder.connect(loader, 0),
+              ipadapter: builder.connect(loader, 1),
+              image: imageConnection,
+              weight: reference.weight,
+              weight_type: reference.weightType,
+              combine_embeds: reference.combineEmbeds,
+              start_at: reference.startPercent,
+              end_at: reference.endPercent,
+              embeds_scaling: reference.embedsScaling,
+              ...(maskImage ? { attn_mask: builder.connect(maskImage, 1) } : {}),
+            },
+            `Apply ${reference.name} IPAdapter`,
+          );
 
       modelConnection = builder.connect(apply, 0);
 
@@ -551,6 +584,7 @@ function buildDefaultTextToImageWorkflow(
     builder,
     modelConnection,
     references: resolvedRequest.characterReferences,
+    workflowProfile: resolvedRequest.workflowProfile,
   });
   modelConnection = characterReferenceNodes.modelConnection;
 

@@ -64,6 +64,7 @@ import {
   normalizeComfyUiKrea2StyleReferenceDescriptor,
 } from "./krea2-style-reference";
 import { parseComfyUiImageDataUrl } from "./image-data-url";
+import { COMFYUI_ANIMA_CHARACTER_REFERENCE_ADAPTER } from "./anima-character-reference";
 
 export const COMFYUI_INPAINT_UPSCALE_MODEL_PRESETS = {
   "real-esrgan-x2": {
@@ -1336,6 +1337,44 @@ export function validateComfyUiTextToImageRequest(value: unknown): ComfyUiTextTo
     };
   }
 
+  if (workflowProfile === "anima") {
+    const enabledCharacterReferences = characterReferences?.filter((reference) => reference.enabled !== false) ?? [];
+    const unsupportedMode = enabledCharacterReferences.find((reference) =>
+      reference.mode !== undefined && reference.mode !== "ipadapter"
+    );
+    if (unsupportedMode) {
+      return {
+        ok: false,
+        message: `Anima character reference "${unsupportedMode.name}" supports only the dedicated IP-Adapter mode; Face and FaceID modes are not supported.`,
+      };
+    }
+    const maskedReference = enabledCharacterReferences.find((reference) => reference.maskImageName);
+    if (maskedReference) {
+      return {
+        ok: false,
+        message: `Anima character reference "${maskedReference.name}" does not support an IP-Adapter attention mask.`,
+      };
+    }
+    const unsupportedTiming = enabledCharacterReferences.find((reference) =>
+      (reference.startPercent ?? 0) !== 0 || (reference.endPercent ?? 1) !== 1
+    );
+    if (unsupportedTiming) {
+      return {
+        ok: false,
+        message: `Anima character reference "${unsupportedTiming.name}" supports only the full generation interval (startPercent=0, endPercent=1).`,
+      };
+    }
+    const invalidStrength = enabledCharacterReferences.find((reference) =>
+      reference.weight !== undefined && (reference.weight < 0 || reference.weight > 1)
+    );
+    if (invalidStrength) {
+      return {
+        ok: false,
+        message: `Anima character reference "${invalidStrength.name}" strength must be between 0 and 1.`,
+      };
+    }
+  }
+
   if (workflowProfile === "krea2") {
     if (controlNetUnitsForValidation.some((unit) => unit.enabled)) {
       return { ok: false, message: "Krea 2 Turbo does not support ControlNet." };
@@ -1945,7 +1984,10 @@ function resolveControlNetUnits(request: ComfyUiTextToImageRequest): ResolvedCom
     .map(toResolvedControlNetUnit);
 }
 
-function resolveCharacterReferences(request: ComfyUiTextToImageRequest): ResolvedComfyUiCharacterReferenceConfig[] {
+function resolveCharacterReferences(
+  request: ComfyUiTextToImageRequest,
+  defaultWeight = 0.45,
+): ResolvedComfyUiCharacterReferenceConfig[] {
   return (request.characterReferences ?? []).map((reference, referenceIndex) => {
     const id = getString(reference.id, `character-${referenceIndex + 1}`);
     const mode = reference.mode ?? "ipadapter";
@@ -1962,7 +2004,7 @@ function resolveCharacterReferences(request: ComfyUiTextToImageRequest): Resolve
         weight: image.weight ?? 1,
       })),
       maskImageName: getString(reference.maskImageName, ""),
-      weight: reference.weight ?? 0.45,
+      weight: reference.weight ?? defaultWeight,
       weightType: getString(reference.weightType, "linear"),
       combineEmbeds: reference.combineEmbeds ?? "concat",
       startPercent: reference.startPercent ?? 0,
@@ -2109,7 +2151,12 @@ export function resolveComfyUiTextToImageRequest(
     faceDetailer: resolveDetailerConfig(request.faceDetailer, request, DEFAULT_TEXT_TO_IMAGE_REQUEST.faceDetailer),
     handDetailer: resolveDetailerConfig(request.handDetailer, request, DEFAULT_TEXT_TO_IMAGE_REQUEST.handDetailer),
     controlNets: isKrea2Profile ? [] : resolveControlNetUnits(request),
-    characterReferences: isKrea2Profile ? [] : resolveCharacterReferences(request),
+    characterReferences: isKrea2Profile
+      ? []
+      : resolveCharacterReferences(
+          request,
+          isAnimaProfile ? COMFYUI_ANIMA_CHARACTER_REFERENCE_ADAPTER.defaultStrength : 0.45,
+        ),
     ...(isKrea2Profile && request.krea2StyleReference
       ? {
           krea2StyleReference: {

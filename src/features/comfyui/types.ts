@@ -271,6 +271,18 @@ export type ComfyUiCharacterReferenceConfig = {
   embedsScaling?: string;
 };
 
+export type ComfyUiAnimaCharacterReferenceAdapterConfig = {
+  modelName: string;
+  autoDownload: boolean;
+  defaultStrength: number;
+  refImageSize: number;
+  siglipLayer: number;
+  ipCfgScale: number;
+  ipCfgSeparate: boolean;
+  grayNull: boolean;
+  useLora: boolean;
+};
+
 /** Runtime-only input. Its ComfyUI image name is never timeline-persisted. */
 export type ComfyUiKrea2StyleReferenceConfig = {
   /** Legacy single style image name. New callers use the explicit role fields. */

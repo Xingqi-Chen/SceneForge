@@ -11,6 +11,7 @@ import {
   validateComfyUiRequestAgainstObjectInfo,
   validateComfyUiTextToImageRequest,
   buildComfyUiSequenceCharacterReference,
+  resolveComfyUiTextToImageWorkflowProfile,
   type ComfyUiSequenceCharacter,
   type ComfyUiKrea2StyleReferenceDescriptor,
   type ComfyUiTextToImageRequest,
@@ -226,11 +227,32 @@ function preflightTimelineReferences(
   referenceContext: TimelineConfirmedReferenceContext,
   objectInfo: unknown,
 ) {
-  // Only Krea has a mandatory no-upload capability preflight. Non-Krea
-  // references retain the established upload followed by queue-time
-  // object_info validation path, while character injection remains strict.
-  if (request.workflowProfile !== "krea2" || referenceContext.references.length === 0) return;
-  const prepared = createKreaReferenceTransport(request, referenceContext);
+  if (referenceContext.references.length === 0) return;
+  const profile = resolveComfyUiTextToImageWorkflowProfile(request).id;
+  const animaCharacterReferences = referenceContext.references.filter((reference) => reference.role === "character");
+  if (profile !== "krea2" && (profile !== "anima" || animaCharacterReferences.length === 0)) return;
+  const prepared = profile === "krea2"
+    ? createKreaReferenceTransport(request, referenceContext)
+    : {
+        ...request,
+        characterReferences: [
+          ...(request.characterReferences ?? []),
+          ...animaCharacterReferences.map((reference, index) => ({
+            id: "run-character-reference",
+            name: "Run character reference",
+            enabled: true,
+            mode: "ipadapter" as const,
+            images: [{
+              id: "run-character-reference-image",
+              imageName: `sceneforge-anima-character-preflight-${index + 1}.png`,
+            }],
+            weight: reference.strength,
+            startPercent: 0,
+            endPercent: 1,
+          })),
+        ],
+        strictCharacterReferences: true,
+      };
   const validation = validateComfyUiTextToImageRequest(prepared);
   if (!validation.ok) {
     throw new TimelineNodeExecutionError(createTimelineNodeError("comfyui_request_invalid", validation.message, validation.details));
@@ -250,9 +272,16 @@ async function applyTimelineReferences(
   request: ComfyUiTextToImageRequest,
   context: TimelineNodeExecutionContext,
 ) {
-  const referenceContext = getConfirmedReferenceContext(context);
+  const confirmedReferenceContext = getConfirmedReferenceContext(context);
+  const profile = resolveComfyUiTextToImageWorkflowProfile(request).id;
+  const referenceContext = profile === "anima"
+    ? {
+        ...confirmedReferenceContext,
+        references: confirmedReferenceContext.references.filter((reference) => reference.role === "character"),
+      }
+    : confirmedReferenceContext;
   if (referenceContext.references.length === 0) return request;
-  const isKrea2 = request.workflowProfile === "krea2";
+  const isKrea2 = profile === "krea2";
   if (isKrea2) {
     const contextIssue = getComfyUiKrea2StyleReferenceContextIssue(request);
     if (contextIssue) {

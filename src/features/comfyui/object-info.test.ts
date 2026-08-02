@@ -365,7 +365,45 @@ const objectInfoWithAnimaControlNet = {
 
 const objectInfoWithAnimaIpAdapter = {
   ...objectInfoWithAnima,
-  ...objectInfoWithIpAdapter,
+  LoadImage: {
+    input: {
+      required: {
+        image: [["hero.png"], {}],
+      },
+    },
+  },
+  ImageBatch: {
+    input: {
+      required: {
+        image1: ["IMAGE", {}],
+        image2: ["IMAGE", {}],
+      },
+    },
+  },
+  AnimaIPAdapterLoader: {
+    input: {
+      required: {
+        ip_adapter_name: [["ip_adapter-Character_Reference-10.safetensors"], {}],
+        auto_download: ["BOOLEAN", {}],
+      },
+    },
+  },
+  AnimaIPAdapterApply: {
+    input: {
+      required: {
+        model: ["MODEL", {}],
+        ip_adapter: ["IPADAPTER", {}],
+        ref_image: ["IMAGE", {}],
+        strength: ["FLOAT", {}],
+        ref_image_size: ["INT", {}],
+        siglip_layer: ["INT", {}],
+        ip_cfg_scale: ["FLOAT", {}],
+        ip_cfg_separate: ["BOOLEAN", {}],
+        gray_null: ["BOOLEAN", {}],
+        use_lora: ["BOOLEAN", {}],
+      },
+    },
+  },
 };
 
 const objectInfoWithInpaint = {
@@ -692,14 +730,19 @@ describe("ComfyUI object info helpers", () => {
       checkpointName: "model.safetensors",
       modelBaseModel: "Illustrious",
       positivePrompt: "scene",
-    }, objectInfo],
+    }, objectInfo, "Character reference \"Run character reference\" requires ComfyUI nodes"],
     ["Anima", {
       checkpointName: "pencil-xl-diffusion.safetensors",
       modelBaseModel: "Anima",
       modelStorageKind: "diffusion" as const,
       positivePrompt: "scene",
-    }, objectInfoWithAnima],
-  ] as const)("fails closed instead of silently disabling a strict selected character on %s", (_label, baseRequest, unavailableObjectInfo) => {
+    }, objectInfoWithAnima, "Anima character references require LuciferTC9527/ComfyUI-Anima_IP-Adapter"],
+  ] as const)("fails closed instead of silently disabling a strict selected character on %s", (
+    _label,
+    baseRequest,
+    unavailableObjectInfo,
+    expectedError,
+  ) => {
     const result = validateComfyUiRequestAgainstObjectInfo({
       ...baseRequest,
       strictCharacterReferences: true,
@@ -713,7 +756,7 @@ describe("ComfyUI object info helpers", () => {
       }],
     }, unavailableObjectInfo);
 
-    expect(result.errors.join(" ")).toContain("Character reference \"Run character reference\" requires ComfyUI nodes");
+    expect(result.errors.join(" ")).toContain(expectedError);
     expect(result.warnings).toEqual([]);
     expect(result.request.characterReferences?.[0]).toMatchObject({ id: "run-character-reference" });
     expect(result.request.characterReferences?.[0]?.enabled).toBeUndefined();
@@ -930,7 +973,7 @@ describe("ComfyUI object info helpers", () => {
     });
   });
 
-  it("blocks Anima character references when IPAdapter nodes are missing", () => {
+  it("blocks Anima character references when the dedicated plugin nodes are missing", () => {
     const result = validateComfyUiRequestAgainstObjectInfo(
       {
         checkpointName: "pencil-xl-diffusion.safetensors",
@@ -949,13 +992,110 @@ describe("ComfyUI object info helpers", () => {
     );
 
     expect(result.errors).toEqual([
-      "Character reference \"Hero\" requires ComfyUI nodes for Anima: LoadImage, IPAdapterAdvanced, IPAdapterUnifiedLoader. Install ComfyUI_IPAdapter_plus to use character references with Anima.",
+      "Anima character references require LuciferTC9527/ComfyUI-Anima_IP-Adapter. Missing ComfyUI nodes: LoadImage, AnimaIPAdapterLoader, AnimaIPAdapterApply. Install or update the plugin, then restart ComfyUI.",
     ]);
     expect(result.warnings).toEqual([]);
     expect(result.request.characterReferences?.[0]).toMatchObject({
       id: "hero",
     });
     expect(result.request.characterReferences?.[0]?.enabled).toBeUndefined();
+  });
+
+  it.each([
+    "AnimaIPAdapterLoader",
+    "AnimaIPAdapterApply",
+  ] as const)("reports a missing dedicated Anima character-reference %s node", (missingNode) => {
+    const incompleteObjectInfo: Record<string, unknown> = { ...objectInfoWithAnimaIpAdapter };
+    delete incompleteObjectInfo[missingNode];
+
+    const result = validateComfyUiRequestAgainstObjectInfo(
+      {
+        checkpointName: "pencil-xl-diffusion.safetensors",
+        modelBaseModel: "Anima",
+        modelStorageKind: "diffusion",
+        positivePrompt: "scene",
+        characterReferences: [{
+          id: "hero",
+          name: "Hero",
+          images: [{ imageName: "hero.png" }],
+        }],
+      },
+      incompleteObjectInfo,
+    );
+
+    expect(result.errors).toContain(
+      `Anima character references require LuciferTC9527/ComfyUI-Anima_IP-Adapter. Missing ComfyUI nodes: ${missingNode}. Install or update the plugin, then restart ComfyUI.`,
+    );
+  });
+
+  it.each([
+    ["AnimaIPAdapterLoader", "ip_adapter_name"],
+    ["AnimaIPAdapterLoader", "auto_download"],
+    ["AnimaIPAdapterApply", "model"],
+    ["AnimaIPAdapterApply", "ip_adapter"],
+    ["AnimaIPAdapterApply", "ref_image"],
+    ["AnimaIPAdapterApply", "strength"],
+    ["AnimaIPAdapterApply", "ref_image_size"],
+    ["AnimaIPAdapterApply", "siglip_layer"],
+    ["AnimaIPAdapterApply", "ip_cfg_scale"],
+    ["AnimaIPAdapterApply", "ip_cfg_separate"],
+    ["AnimaIPAdapterApply", "gray_null"],
+    ["AnimaIPAdapterApply", "use_lora"],
+  ] as const)("reports a missing required %s.%s input port", (classType, inputName) => {
+    const incompleteObjectInfo = structuredClone(objectInfoWithAnimaIpAdapter) as Record<string, {
+      input?: { required?: Record<string, unknown> };
+    }>;
+    delete incompleteObjectInfo[classType]?.input?.required?.[inputName];
+
+    const result = validateComfyUiRequestAgainstObjectInfo(
+      {
+        checkpointName: "pencil-xl-diffusion.safetensors",
+        modelBaseModel: "Anima",
+        modelStorageKind: "diffusion",
+        positivePrompt: "scene",
+        characterReferences: [{
+          id: "hero",
+          name: "Hero",
+          images: [{ imageName: "hero.png" }],
+        }],
+      },
+      incompleteObjectInfo,
+    );
+
+    expect(result.errors).toContain(`${classType}.${inputName} input is not available in ComfyUI object_info.`);
+  });
+
+  it("requires the exact Anima character-reference adapter filename", () => {
+    const objectInfoWithWrongAdapter = {
+      ...objectInfoWithAnimaIpAdapter,
+      AnimaIPAdapterLoader: {
+        input: {
+          required: {
+            ip_adapter_name: [["ip_adapter-Character_Reference.safetensors"], {}],
+            auto_download: ["BOOLEAN", {}],
+          },
+        },
+      },
+    };
+
+    const result = validateComfyUiRequestAgainstObjectInfo(
+      {
+        checkpointName: "pencil-xl-diffusion.safetensors",
+        modelBaseModel: "Anima",
+        modelStorageKind: "diffusion",
+        positivePrompt: "scene",
+        characterReferences: [{
+          id: "hero",
+          name: "Hero",
+          images: [{ imageName: "hero.png" }],
+        }],
+      },
+      objectInfoWithWrongAdapter,
+    );
+
+    expect(result.errors).toContain(
+      "Anima character-reference adapter is not available in ComfyUI: ip_adapter-Character_Reference-10.safetensors. Place the exact file in ComfyUI/models/ipadapter/ and restart ComfyUI.",
+    );
   });
 
   it("validates and normalizes Anima detailer add-ons before queueing", () => {

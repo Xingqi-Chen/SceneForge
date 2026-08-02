@@ -40,6 +40,11 @@ import {
   KREA2_STYLE_REFERENCE_MODEL_PATCH_NODE,
   KREA2_STYLE_REFERENCE_TEXT_ENCODE_NODE,
 } from "./krea2-style-reference";
+import {
+  ANIMA_CHARACTER_REFERENCE_APPLY_NODE,
+  ANIMA_CHARACTER_REFERENCE_LOADER_NODE,
+  ANIMA_CHARACTER_REFERENCE_MODEL_NAME,
+} from "./anima-character-reference";
 
 type ComfyUiObjectInfoNode = {
   input?: {
@@ -662,18 +667,55 @@ function validateAnimaCharacterReferenceNodes(
   objectInfo: unknown,
   errors: string[],
 ) {
-  for (const reference of references ?? []) {
-    if (reference.enabled === false) {
-      continue;
-    }
+  const enabledReferences = (references ?? []).filter((reference) => reference.enabled !== false);
+  if (enabledReferences.length === 0) return;
 
-    const missingNodes = getMissingCharacterReferenceNodes(reference, objectInfo);
-    if (missingNodes.length === 0) {
-      continue;
-    }
-
+  const requiredNodeClasses = [
+    "LoadImage",
+    ANIMA_CHARACTER_REFERENCE_LOADER_NODE,
+    ANIMA_CHARACTER_REFERENCE_APPLY_NODE,
+    ...(enabledReferences.some((reference) => reference.images.length > 1) ? ["ImageBatch"] : []),
+  ];
+  const missingNodes = requiredNodeClasses.filter((classType) => !hasNodeInfo(objectInfo, classType));
+  if (missingNodes.length > 0) {
     errors.push(
-      `Character reference "${reference.name}" requires ComfyUI nodes for Anima: ${missingNodes.join(", ")}. Install ComfyUI_IPAdapter_plus to use character references with Anima.`,
+      `Anima character references require LuciferTC9527/ComfyUI-Anima_IP-Adapter. Missing ComfyUI nodes: ${missingNodes.join(", ")}. Install or update the plugin, then restart ComfyUI.`,
+    );
+  }
+
+  validateRequiredInputs(objectInfo, "LoadImage", ["image"], errors);
+  if (enabledReferences.some((reference) => reference.images.length > 1)) {
+    validateRequiredInputs(objectInfo, "ImageBatch", ["image1", "image2"], errors);
+  }
+  validateRequiredInputs(
+    objectInfo,
+    ANIMA_CHARACTER_REFERENCE_LOADER_NODE,
+    ["ip_adapter_name", "auto_download"],
+    errors,
+  );
+  validateRequiredInputs(
+    objectInfo,
+    ANIMA_CHARACTER_REFERENCE_APPLY_NODE,
+    [
+      "model",
+      "ip_adapter",
+      "ref_image",
+      "strength",
+      "ref_image_size",
+      "siglip_layer",
+      "ip_cfg_scale",
+      "ip_cfg_separate",
+      "gray_null",
+      "use_lora",
+    ],
+    errors,
+  );
+
+  if (hasNodeInfo(objectInfo, ANIMA_CHARACTER_REFERENCE_LOADER_NODE) &&
+      !readInputOptions(objectInfo, ANIMA_CHARACTER_REFERENCE_LOADER_NODE, "ip_adapter_name")
+        .includes(ANIMA_CHARACTER_REFERENCE_MODEL_NAME)) {
+    errors.push(
+      `Anima character-reference adapter is not available in ComfyUI: ${ANIMA_CHARACTER_REFERENCE_MODEL_NAME}. Place the exact file in ComfyUI/models/ipadapter/ and restart ComfyUI.`,
     );
   }
 }
