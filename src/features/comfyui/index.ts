@@ -1,3 +1,4 @@
+export * from "./anima-character-reference";
 export * from "./client";
 export * from "./face-detailer";
 export * from "./history";

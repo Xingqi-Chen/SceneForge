@@ -562,7 +562,7 @@ export async function loadCivitaiRecommendationCandidates(
   };
 }
 
-async function createCivitaiEmbedding(request: LlmEmbeddingRequest): Promise<LlmEmbeddingResponse> {
+export async function createCivitaiEmbedding(request: LlmEmbeddingRequest): Promise<LlmEmbeddingResponse> {
   const client = createLiteLlmClient({
     baseUrl: process.env.LITELLM_BASE_URL ?? "",
     apiKey: process.env.LITELLM_API_KEY,

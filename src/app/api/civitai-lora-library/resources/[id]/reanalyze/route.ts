@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import { enrichCivitaiResource } from "@/features/civitai-lora-library/enrichment";
 import { normalizeCivitaiModelVersionResponse } from "@/features/civitai-lora-library/normalize";
+import { applyCivitaiResourceReanalysisToSqlite } from "@/features/civitai-lora-library/service";
 import type {
   CivitaiEnrichmentStatus,
   CivitaiResourceDetail,
@@ -11,8 +12,8 @@ import type {
 import {
   getCivitaiResourceDetailFromSqlite,
   openSceneForgeSqliteDatabase,
-  upsertCivitaiResourceToSqlite,
 } from "@/features/persistence/sqlite-storage";
+import { CivitaiIncrementalIndexError } from "@/features/persistence/civitai-embedding-index";
 
 export const runtime = "nodejs";
 
@@ -184,7 +185,7 @@ async function toReanalysisInput(resource: CivitaiResourceDetail): Promise<Civit
 
 export async function POST(_request: Request, context: { params: Promise<{ id: string }> }) {
   const { id } = await context.params;
-  const db = await openSceneForgeSqliteDatabase();
+  const db = await openSceneForgeSqliteDatabase(undefined, { allowExtensions: true });
 
   try {
     const resource = getCivitaiResourceDetailFromSqlite(db, id);
@@ -214,7 +215,7 @@ export async function POST(_request: Request, context: { params: Promise<{ id: s
 
 export async function PATCH(request: Request, context: { params: Promise<{ id: string }> }) {
   const { id } = await context.params;
-  const db = await openSceneForgeSqliteDatabase();
+  const db = await openSceneForgeSqliteDatabase(undefined, { allowExtensions: true });
 
   try {
     const resource = getCivitaiResourceDetailFromSqlite(db, id);
@@ -233,13 +234,17 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     const recommendations = sanitizeRecommendations(payload.recommendations);
     const enrichmentStatus = asEnrichmentStatus(payload.enrichmentStatus);
     const enrichmentError = asNullableText(payload.enrichmentError);
-    const updated = upsertCivitaiResourceToSqlite(db, {
-      ...toUpsertInput(resource),
-      usageGuide,
-      recommendations,
-      enrichmentStatus,
-      enrichmentError,
-    }).resource;
+    const updated = await applyCivitaiResourceReanalysisToSqlite({
+      currentResource: resource,
+      db,
+      updatedInput: {
+        ...toUpsertInput(resource),
+        usageGuide,
+        recommendations,
+        enrichmentStatus,
+        enrichmentError,
+      },
+    });
 
     return NextResponse.json({
       proposal: toProposal(resource, {
@@ -251,8 +256,17 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
       resource: getCivitaiResourceDetailFromSqlite(db, updated.id),
     });
   } catch (error) {
-    console.error("[SceneForge] [civitai-lora-library] failed to apply resource reanalysis", { error });
-    return errorResponse(error instanceof Error ? error.message : "Unable to apply Civitai resource reanalysis.", 500, error);
+    const status = error instanceof CivitaiIncrementalIndexError ? error.statusCode : 500;
+    console.error("[SceneForge] [civitai-lora-library] failed to apply resource reanalysis", {
+      errorName: error instanceof Error ? error.name : "unknown",
+      status,
+    });
+    return errorResponse(
+      error instanceof CivitaiIncrementalIndexError
+        ? error.message
+        : "Unable to apply Civitai resource reanalysis.",
+      status,
+    );
   } finally {
     db.close();
   }

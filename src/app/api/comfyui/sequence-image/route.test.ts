@@ -101,9 +101,37 @@ const objectInfoWithAnima = {
 
 const objectInfoWithAnimaAddons = {
   ...objectInfoWithAnima,
-  LoadImage: {},
-  IPAdapterAdvanced: {},
-  IPAdapterUnifiedLoader: {},
+  LoadImage: {
+    input: {
+      required: {
+        image: [["hero-reference.png"], {}],
+      },
+    },
+  },
+  AnimaIPAdapterLoader: {
+    input: {
+      required: {
+        ip_adapter_name: [["ip_adapter-Character_Reference-10.safetensors"], {}],
+        auto_download: ["BOOLEAN", {}],
+      },
+    },
+  },
+  AnimaIPAdapterApply: {
+    input: {
+      required: {
+        model: ["MODEL", {}],
+        ip_adapter: ["IPADAPTER", {}],
+        ref_image: ["IMAGE", {}],
+        strength: ["FLOAT", {}],
+        ref_image_size: ["INT", {}],
+        siglip_layer: ["INT", {}],
+        ip_cfg_scale: ["FLOAT", {}],
+        ip_cfg_separate: ["BOOLEAN", {}],
+        gray_null: ["BOOLEAN", {}],
+        use_lora: ["BOOLEAN", {}],
+      },
+    },
+  },
   ControlNetApplyAdvanced: {},
   ControlNetLoader: {
     input: {
@@ -621,15 +649,25 @@ describe("ComfyUI sequence image route", () => {
       },
     });
     expect(promptBodies[0].prompt["10"]).toMatchObject({
-      class_type: "IPAdapterUnifiedLoader",
+      class_type: "AnimaIPAdapterLoader",
       inputs: {
-        model: ["1", 0],
+        ip_adapter_name: "ip_adapter-Character_Reference-10.safetensors",
+        auto_download: false,
       },
     });
     expect(promptBodies[0].prompt["11"]).toMatchObject({
-      class_type: "IPAdapterAdvanced",
+      class_type: "AnimaIPAdapterApply",
       inputs: {
-        model: ["10", 0],
+        model: ["1", 0],
+        ip_adapter: ["10", 0],
+        ref_image: ["9", 0],
+        strength: 0.8,
+        ref_image_size: 512,
+        siglip_layer: -1,
+        ip_cfg_scale: 4,
+        ip_cfg_separate: false,
+        gray_null: false,
+        use_lora: true,
       },
     });
     expect(promptBodies[0].prompt["13"].inputs).toMatchObject({

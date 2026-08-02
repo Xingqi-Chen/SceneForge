@@ -338,6 +338,7 @@ export type GenerationDraft = Required<Omit<
   | "controlNet"
   | "controlNets"
   | "characterReferences"
+  | "strictCharacterReferences"
   | "krea2StyleReference"
   | "krea2StyleReferenceDescriptor"
   | "preview"

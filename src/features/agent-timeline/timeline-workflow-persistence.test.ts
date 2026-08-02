@@ -2238,6 +2238,78 @@ describe("timeline workflow persistence", () => {
     expect(serialized).not.toContain("private");
   });
 
+  it("persists only safe Run character-reference metadata and restores legacy records without character bytes", () => {
+    const workflow = createTimelineWorkflowState({
+      workflowId: "timeline-run-character-crafted",
+      sceneRequest: "A crafted Run character reference",
+      promptProfile: "illustrious",
+      settingsSnapshot: sanitizeRunSceneInputSettingsSnapshot({
+        characterReference: {
+          status: "ready",
+          strength: 0.8,
+          metadata: {
+            byteLength: 512,
+            contentType: "image/png",
+            filename: "hero.png",
+            storedFilename: "fedcba9876543210fedcba9876543210.png",
+            uploadedAt: "2026-07-19T00:00:00.000Z",
+          },
+        },
+        promptProfile: "illustrious",
+      }),
+    });
+    const raw = JSON.parse(serializeTimelineWorkflowRecord(createTimelineWorkflowRecord({
+      workflow,
+      sceneRequest: "A crafted Run character reference",
+      selectedPromptProfile: "illustrious",
+      selectedImageCount: 1,
+      selectedNodeId: "scene-input",
+    }))) as {
+      workflow: { nodes: Record<string, { result: { settingsSnapshot: Record<string, unknown> } }> };
+    };
+    const characterReference = raw.workflow.nodes["scene-input"]!.result.settingsSnapshot.characterReference as Record<string, unknown>;
+    characterReference.dataUrl = "data:image/png;base64,CHARACTER_SECRET";
+    characterReference.bytes = [1, 2, 3];
+    characterReference.cache = { path: "C:\\private\\hero-cache" };
+    characterReference.metadata = {
+      ...(characterReference.metadata as Record<string, unknown>),
+      bytes: [1, 2, 3],
+      filename: "..\\private\\hero.png",
+      url: "https://attacker.invalid/hero.png",
+    };
+
+    const restored = sanitizeTimelineWorkflowRecord(raw);
+    if (!restored || !isSingleImageTimelineWorkflowRecord(restored)) {
+      throw new Error("Expected a single-image timeline record.");
+    }
+    const restoredSettings = (restored.workflow.nodes["scene-input"].result as {
+      settingsSnapshot?: { characterReference?: { metadata?: Record<string, unknown>; strength?: number } };
+    }).settingsSnapshot;
+    expect(restoredSettings?.characterReference).toMatchObject({
+      status: "ready",
+      strength: 0.8,
+      metadata: {
+        storedFilename: "fedcba9876543210fedcba9876543210.png",
+        url: "/api/comfyui/sequence-references/fedcba9876543210fedcba9876543210.png",
+      },
+    });
+    expect(restoredSettings?.characterReference?.metadata).not.toHaveProperty("filename");
+    const serialized = JSON.stringify(restored);
+    expect(serialized).not.toContain("CHARACTER_SECRET");
+    expect(serialized).not.toContain("attacker.invalid");
+    expect(serialized).not.toContain("C:\\\\private");
+    expect(serialized).not.toContain('"bytes"');
+
+    delete raw.workflow.nodes["scene-input"]!.result.settingsSnapshot.characterReference;
+    const legacy = sanitizeTimelineWorkflowRecord(raw);
+    if (!legacy || !isSingleImageTimelineWorkflowRecord(legacy)) {
+      throw new Error("Expected a legacy single-image timeline record.");
+    }
+    expect((legacy.workflow.nodes["scene-input"].result as {
+      settingsSnapshot?: Record<string, unknown>;
+    }).settingsSnapshot).not.toHaveProperty("characterReference");
+  });
+
   it("preserves scene input source image data through workflow sanitization", () => {
     const sourceImageDataUrl = "data:image/png;base64,aGVsbG8=";
     let workflow = createTimelineWorkflowState({

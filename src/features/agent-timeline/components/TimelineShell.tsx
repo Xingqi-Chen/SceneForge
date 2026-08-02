@@ -59,13 +59,18 @@ import {
 } from "@/features/agent-timeline/generation-style-palette";
 import {
   createRunSceneInputSettingsSnapshot,
+  getKreaReferenceStrength,
   getRunSceneInputSettings,
   type RunSceneInputSettingsSnapshot,
 } from "@/features/agent-timeline/run-input-settings";
 import {
+  KREA_REFERENCE_DEFAULT_STRENGTH,
+  getCharacterReferenceBlockingIssue,
   getStyleReferenceBlockingIssue,
   getStyleReferenceContextMismatch,
+  sanitizeCharacterReferenceSnapshot,
   sanitizeStyleReferenceSnapshot,
+  type CharacterReferenceSnapshot,
   type StyleReferenceSnapshot,
 } from "@/features/agent-timeline/style-reference";
 import {
@@ -214,6 +219,7 @@ import { TimelineWorkflowProjectMenu } from "./TimelineWorkflowProjectMenu";
 import { TimelinePreviewWorkspace } from "./TimelinePreviewWorkspace";
 import { getTimelineNodeOutputText, timelineNodeContent } from "./timeline-node-content";
 import { GenerationDetailerSettingsEditor } from "./StoryPlanningPreview";
+import { CharacterReferencePanel } from "./CharacterReferencePanel";
 import { StyleReferencePanel } from "./StyleReferencePanel";
 
 type DraftMap = Partial<Record<TimelineNodeId, string>>;
@@ -1362,6 +1368,8 @@ export function TimelineShell() {
     useState<SelectedCivitaiResourcesPreview>(EMPTY_SELECTED_CIVITAI_RESOURCES);
   const [stylePalette, setStylePalette] = useState<GenerationStylePaletteSnapshot | undefined>();
   const [styleReference, setStyleReference] = useState<StyleReferenceSnapshot | undefined>();
+  const [characterReference, setCharacterReference] = useState<CharacterReferenceSnapshot | undefined>();
+  const [kreaReferenceStrength, setKreaReferenceStrength] = useState(KREA_REFERENCE_DEFAULT_STRENGTH);
   const [styleAdvice, setStyleAdvice] = useState<StylePaletteAdviceState>(EMPTY_STYLE_PALETTE_ADVICE);
   const [parametersOpen, setParametersOpen] = useState(false);
   const [workflow, setWorkflow] = useState<TimelineWorkflowState | null>(null);
@@ -1480,8 +1488,10 @@ export function TimelineShell() {
   function getComposerSettingsSnapshot(
     overrides: Partial<{
       automaticLocalRepair: boolean;
+      characterReference: CharacterReferenceSnapshot | undefined;
       detailers: GenerationDetailerSettingsSnapshot;
       finalRedrawPreset: TimelineFinalRedrawPreset;
+      kreaReferenceStrength: number | undefined;
       promptProfile: PromptProfileId;
       stylePalette: GenerationStylePaletteSnapshot | undefined;
       styleReference: StyleReferenceSnapshot | undefined;
@@ -1491,8 +1501,14 @@ export function TimelineShell() {
     const promptProfile = overrides.promptProfile ?? selectedPromptProfile;
     return createRunSceneInputSettingsSnapshot({
       automaticLocalRepair: overrides.automaticLocalRepair ?? automaticLocalRepair,
+      characterReference: "characterReference" in overrides ? overrides.characterReference : characterReference,
       detailers: overrides.detailers ?? detailers,
       finalRedrawPreset: overrides.finalRedrawPreset ?? finalRedrawPreset,
+      ...(promptProfile === "krea2" ? {
+        kreaReferenceStrength: "kreaReferenceStrength" in overrides
+          ? overrides.kreaReferenceStrength
+          : kreaReferenceStrength,
+      } : {}),
       promptProfile,
       stylePalette: "stylePalette" in overrides ? overrides.stylePalette : stylePalette,
       styleReference: "styleReference" in overrides ? overrides.styleReference : styleReference,
@@ -1580,6 +1596,8 @@ export function TimelineShell() {
     setFinalRedrawPreset(restoredSettings.finalRedrawPreset);
     setStylePalette(restoredSettings.stylePalette);
     setStyleReference(restoredSettings.styleReference);
+    setCharacterReference(restoredSettings.characterReference);
+    setKreaReferenceStrength(getKreaReferenceStrength(restoredSettings));
     setSelectedStyleCheckpointId(restoredSettings.stylePalette?.checkpointId ?? null);
     setSelectedStyleLoraIds(restoredSettings.stylePalette?.loras.map((lora) => lora.id) ?? []);
     setSelectedStyleResources(EMPTY_SELECTED_CIVITAI_RESOURCES);
@@ -2716,6 +2734,10 @@ export function TimelineShell() {
     if (blockingIssue) {
       return blockingIssue;
     }
+    const characterBlockingIssue = getCharacterReferenceBlockingIssue(characterReference);
+    if (characterBlockingIssue) {
+      return characterBlockingIssue;
+    }
     return getStyleReferenceContextMismatch(styleReference, {
       checkpointBaseModel: selectedStyleResources.checkpoint
         ? selectedStyleResources.checkpoint.baseModel ?? null
@@ -2740,6 +2762,35 @@ export function TimelineShell() {
       normalizedStyleReference
         ? "Run style reference changed. Parameter preview and downstream nodes are stale."
         : "Run style reference removed. Parameter preview and downstream nodes are stale.",
+    );
+  }
+
+  function handleCharacterReferenceChange(nextCharacterReference: CharacterReferenceSnapshot | undefined) {
+    if (rejectLegacyDirectMutation() || isRunningRef.current) {
+      return;
+    }
+    const normalizedCharacterReference = sanitizeCharacterReferenceSnapshot(nextCharacterReference);
+    setCharacterReference(normalizedCharacterReference);
+    commitComposerSettingChange(
+      getComposerSettingsSnapshot({ characterReference: normalizedCharacterReference }),
+      "parameter-recommendation",
+      normalizedCharacterReference
+        ? "Run character reference changed. Parameter preview and downstream nodes are stale."
+        : "Run character reference removed. Parameter preview and downstream nodes are stale.",
+    );
+  }
+
+  function handleKreaReferenceStrengthChange(nextStrength: number) {
+    if (rejectLegacyDirectMutation() || isRunningRef.current || selectedPromptProfile !== "krea2") {
+      return;
+    }
+    const normalizedStrength = Math.min(1, Math.max(0, Number(nextStrength.toFixed(2))));
+    if (normalizedStrength === kreaReferenceStrength) return;
+    setKreaReferenceStrength(normalizedStrength);
+    commitComposerSettingChange(
+      getComposerSettingsSnapshot({ kreaReferenceStrength: normalizedStrength }),
+      "parameter-recommendation",
+      "Shared Krea reference strength changed. Parameter preview and downstream nodes are stale.",
     );
   }
 
@@ -3433,6 +3484,7 @@ export function TimelineShell() {
             </>
           )}
           <StyleReferencePanel
+            characterReference={characterReference}
             checkpointId={selectedStyleCheckpointId}
             disabled={isRunning || isLegacyDirectReadOnly}
             nsfwEnabled={useEditorStore.getState().project.settings.supportsNsfw === true}
@@ -3442,6 +3494,16 @@ export function TimelineShell() {
             snapshot={styleReference}
             visualStyle={selectedVisualStyle}
             workflowLabel="Run"
+          />
+          <CharacterReferencePanel
+            disabled={isRunning || isLegacyDirectReadOnly}
+            kreaReferenceStrength={kreaReferenceStrength}
+            onChange={handleCharacterReferenceChange}
+            onKreaReferenceStrengthChange={handleKreaReferenceStrengthChange}
+            promptProfile={selectedPromptProfile}
+            selectedCheckpoint={selectedStyleResources.checkpoint}
+            snapshot={characterReference}
+            styleReference={styleReference}
           />
           <ComfyUiGenerationDialog
             activePrompt={sceneRequest || "Run generation parameter preview"}

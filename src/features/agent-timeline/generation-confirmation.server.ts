@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import type { TimelineWorkflowState } from "./types";
 import { resolveTimelineFinalGenerationPolicy, timelineFinalGenerationPolicy } from "./final-generation-policy";
 import { getRunSceneInputSettings } from "./run-input-settings";
+import { deriveTimelineConfirmedReferenceContext } from "./run-reference-context";
 
 const CONFIRMATION_CONTRACT_VERSION = 1;
 const CONFIRMATION_CONTRACT_DOMAIN = "sceneforge.timeline.single-image-generation-confirmation";
@@ -48,6 +49,7 @@ export function createTimelineGenerationConfirmationFingerprint(workflow: Timeli
     canvasBinding: workflow.nodes["canvas-binding"].result,
     resources: workflow.nodes["resource-recommendation"].result,
     parameters: workflow.nodes["parameter-recommendation"].result,
+    referenceContext: deriveTimelineConfirmedReferenceContext(workflow),
     finalPolicy: timelineFinalGenerationPolicy,
     resolvedFinalPolicy,
   });

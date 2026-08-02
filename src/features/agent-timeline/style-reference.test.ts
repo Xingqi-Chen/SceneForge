@@ -1,14 +1,19 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  CHARACTER_REFERENCE_DEFAULT_STRENGTH,
   STYLE_REFERENCE_IP_ADAPTER_DEFAULTS,
   appendStyleReferencePromptExactlyOnce,
+  buildCharacterReferenceSequenceCharacter,
   buildStyleReferenceSequenceCharacter,
+  createCharacterReferenceSnapshot,
   createStyleReferenceSnapshot,
+  getCharacterReferenceBlockingIssue,
   getStyleReferenceBlockingIssue,
   getStyleReferenceCapability,
   getStyleReferenceContextMismatch,
   parseStyleReferenceAnalysisContent,
+  sanitizeCharacterReferenceSnapshot,
   sanitizeStyleReferenceIpAdapterSettings,
   sanitizeStyleReferenceSnapshot,
 } from "./style-reference";
@@ -44,6 +49,54 @@ function readyReference(mode: "prompt-only" | "ipadapter" = "ipadapter") {
 }
 
 describe("workflow-neutral style reference contract", () => {
+  it("keeps Run character references byte-free and blocks ready records without safe storage metadata", () => {
+    const sanitized = sanitizeCharacterReferenceSnapshot({
+      status: "ready",
+      strength: 0.666,
+      bytes: [1, 2, 3],
+      dataUrl: "data:image/png;base64,CHARACTER_SECRET",
+      metadata: {
+        ...metadata,
+        bytes: [1, 2, 3],
+        filename: "C:\\private\\hero.png",
+        url: "https://attacker.invalid/hero.png",
+      },
+    });
+
+    expect(sanitized).toEqual({
+      status: "ready",
+      strength: 0.67,
+      metadata: {
+        byteLength: metadata.byteLength,
+        contentType: metadata.contentType,
+        storedFilename: metadata.storedFilename,
+        uploadedAt: metadata.uploadedAt,
+        url: `/api/comfyui/sequence-references/${metadata.storedFilename}`,
+      },
+    });
+    expect(JSON.stringify(sanitized)).not.toContain("CHARACTER_SECRET");
+    expect(JSON.stringify(sanitized)).not.toContain("attacker.invalid");
+    expect(JSON.stringify(sanitized)).not.toContain("C:\\\\private");
+
+    const missingStorage = sanitizeCharacterReferenceSnapshot({ status: "ready", strength: 0.4 });
+    expect(missingStorage).toEqual({
+      error: "Character reference storage is missing or invalid. Replace or remove the reference.",
+      status: "invalid",
+      strength: 0.4,
+    });
+    expect(getCharacterReferenceBlockingIssue(missingStorage)).toContain("storage is missing");
+    expect(createCharacterReferenceSnapshot({ metadata })).toMatchObject({
+      status: "ready",
+      strength: CHARACTER_REFERENCE_DEFAULT_STRENGTH,
+    });
+    expect(buildCharacterReferenceSequenceCharacter(sanitized, { id: "run-character-reference" })).toMatchObject({
+      id: "run-character-reference",
+      mode: "ipadapter",
+      weight: 0.67,
+      references: [{ storedFilename: metadata.storedFilename }],
+    });
+  });
+
   it("sanitizes storage metadata and drops bytes, data URLs, forged URLs, paths, and unknown fields", () => {
     const sanitized = sanitizeStyleReferenceSnapshot({
       ...readyReference(),

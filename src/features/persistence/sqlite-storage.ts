@@ -1453,11 +1453,13 @@ function mergeConflictingResourceRows(
   db: SceneForgeSqliteDatabase,
   targetResourceId: string,
   input: CivitaiResourceUpsertInput,
-): void {
+): string[] {
+  const mergedResourceIds: string[] = [];
   if (input.hash) {
     const hashConflictId = readTextColumn(findResourceRowByHash(db, input.hash), "id");
     if (hashConflictId && hashConflictId !== targetResourceId) {
       mergeCivitaiResourceRows(db, targetResourceId, hashConflictId);
+      mergedResourceIds.push(hashConflictId);
     }
   }
 
@@ -1465,8 +1467,11 @@ function mergeConflictingResourceRows(
     const versionConflictId = readTextColumn(findResourceRowByModelVersionId(db, input.civitaiModelVersionId), "id");
     if (versionConflictId && versionConflictId !== targetResourceId) {
       mergeCivitaiResourceRows(db, targetResourceId, versionConflictId);
+      mergedResourceIds.push(versionConflictId);
     }
   }
+
+  return mergedResourceIds;
 }
 
 function getResourceRowById(db: SceneForgeSqliteDatabase, id: string) {
@@ -1474,10 +1479,13 @@ function getResourceRowById(db: SceneForgeSqliteDatabase, id: string) {
     SELECT
       r.*,
       (
-        SELECT json_group_array(rc.category)
-        FROM civitai_resource_categories rc
-        WHERE rc.resource_id = r.id
-        ORDER BY rc.sort_order, rc.category
+        SELECT json_group_array(ordered_categories.category)
+        FROM (
+          SELECT rc.category
+          FROM civitai_resource_categories rc
+          WHERE rc.resource_id = r.id
+          ORDER BY rc.sort_order, rc.category
+        ) ordered_categories
       ) AS categories_json
     FROM civitai_resources r
     WHERE r.id = ?
@@ -1500,7 +1508,7 @@ export function findCivitaiResourceByUpsertInputFromSqlite(
 export function upsertCivitaiResourceToSqlite(
   db: SceneForgeSqliteDatabase,
   input: CivitaiResourceUpsertInput,
-): { resource: CivitaiResourceRecord; isNew: boolean } {
+): { resource: CivitaiResourceRecord; isNew: boolean; mergedResourceIds: string[] } {
   const existing = findExistingResource(db, input);
   const id = readTextColumn(existing, "id") ?? newId("civitai_res");
   const createdAt = readTextColumn(existing, "created_at") ?? nowIso();
@@ -1510,7 +1518,7 @@ export function upsertCivitaiResourceToSqlite(
   const normalizedVersionName = normalizeKeyText(input.versionName);
   const categories = input.categories.length > 0 ? input.categories : input.category ? [input.category] : [];
 
-  mergeConflictingResourceRows(db, id, input);
+  const mergedResourceIds = mergeConflictingResourceRows(db, id, input);
 
   db.prepare(`
     INSERT INTO civitai_resources (
@@ -1619,6 +1627,7 @@ export function upsertCivitaiResourceToSqlite(
   return {
     resource: mapResourceRow(getResourceRowById(db, id)),
     isNew: !readTextColumn(existing, "id"),
+    mergedResourceIds,
   };
 }
 
@@ -1836,10 +1845,13 @@ export function listCivitaiResourcesFromSqlite(
     SELECT
       r.*,
       (
-        SELECT json_group_array(rc.category)
-        FROM civitai_resource_categories rc
-        WHERE rc.resource_id = r.id
-        ORDER BY rc.sort_order, rc.category
+        SELECT json_group_array(ordered_categories.category)
+        FROM (
+          SELECT rc.category
+          FROM civitai_resource_categories rc
+          WHERE rc.resource_id = r.id
+          ORDER BY rc.sort_order, rc.category
+        ) ordered_categories
       ) AS categories_json,
       COUNT(DISTINCT iru.imported_image_id) AS imported_image_count,
       AVG(iru.weight) AS average_weight,
@@ -1862,10 +1874,13 @@ export function getCivitaiResourceDetailFromSqlite(
     SELECT
       r.*,
       (
-        SELECT json_group_array(rc.category)
-        FROM civitai_resource_categories rc
-        WHERE rc.resource_id = r.id
-        ORDER BY rc.sort_order, rc.category
+        SELECT json_group_array(ordered_categories.category)
+        FROM (
+          SELECT rc.category
+          FROM civitai_resource_categories rc
+          WHERE rc.resource_id = r.id
+          ORDER BY rc.sort_order, rc.category
+        ) ordered_categories
       ) AS categories_json,
       COUNT(DISTINCT iru.imported_image_id) AS imported_image_count,
       AVG(iru.weight) AS average_weight,

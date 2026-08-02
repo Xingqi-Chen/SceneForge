@@ -53,6 +53,7 @@ import {
 } from "./run-visual-style";
 import {
   appendStyleReferencePromptExactlyOnce,
+  getCharacterReferenceBlockingIssue,
   getStyleReferencePrompt,
   getStyleReferenceBlockingIssue,
   getStyleReferenceContextMismatch,
@@ -646,6 +647,7 @@ export function createTimelineParameterRecommendation({
   sourceImage,
   detailers,
   savedParameters,
+  characterReference,
   styleReference,
   visualStyle,
 }: {
@@ -660,6 +662,7 @@ export function createTimelineParameterRecommendation({
   sourceImage?: SceneInputTimelineResult["sourceImage"];
   detailers?: GenerationDetailerSettingsSnapshot;
   savedParameters?: SavedComfyUiGenerationParams | null;
+  characterReference?: ReturnType<typeof getSceneInputSettings>["characterReference"];
   styleReference?: StyleReferenceSnapshot;
   visualStyle?: RunVisualStyle;
 }): ParameterRecommendationTimelineResult {
@@ -786,6 +789,7 @@ export function createTimelineParameterRecommendation({
     negativeAdditions: splitPromptParts(baseNegativePrompt),
     negativePrompt: requestPreview.negativePrompt ?? "",
     requestPreview,
+    ...(characterReference ? { characterReference } : {}),
     ...(styleReference ? { styleReference } : {}),
     reason: savedParameters
       ? "Used generation parameters saved in the Run Scene Composer."
@@ -873,6 +877,10 @@ export function createTimelineT7NodeAdapters({
       if (styleReferenceIssue) {
         invalidTimelineInput(styleReferenceIssue);
       }
+      const characterReferenceIssue = getCharacterReferenceBlockingIssue(inputSettings.characterReference);
+      if (characterReferenceIssue) {
+        invalidTimelineInput(characterReferenceIssue);
+      }
       const styleReferenceMismatch = getStyleReferenceContextMismatch(inputSettings.styleReference, {
         checkpointBaseModel: resourceResult.checkpoint.resource.baseModel ?? promptProfile,
         checkpointId: resourceResult.checkpoint.resource.id,
@@ -920,6 +928,7 @@ export function createTimelineT7NodeAdapters({
           ),
           scenePrompt,
           savedParameters,
+          characterReference: inputSettings.characterReference,
           styleReference: inputSettings.styleReference,
           visualStyle: inputSettings.visualStyle,
           sourceDenoise: sourceImage ? getSceneInputSourceDenoise(context.workflow) : undefined,

@@ -20,7 +20,20 @@ export function normalizeComfyUiKrea2StyleReferenceDescriptor(
   if (value === undefined) return undefined;
   if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
   const record = value as Record<string, unknown>;
-  const keys = ["version", "referenceDigest", "loraName", "weight", "startPercent", "endPercent"];
+  const keys = ["version", "referenceDigest", "loraName", "weight", "startPercent", "endPercent", "references"];
+  const references = record.references === undefined
+    ? undefined
+    : Array.isArray(record.references) && record.references.length >= 1 && record.references.length <= 2
+      ? record.references.map((entry) => {
+          if (typeof entry !== "object" || entry === null || Array.isArray(entry)) return null;
+          const role = (entry as Record<string, unknown>).role;
+          const referenceDigest = (entry as Record<string, unknown>).referenceDigest;
+          return (role === "style" || role === "character") &&
+              typeof referenceDigest === "string" && /^sha256:[a-f0-9]{64}$/.test(referenceDigest)
+            ? { role, referenceDigest }
+            : null;
+        })
+      : null;
   if (Object.keys(record).some((key) => !keys.includes(key)) ||
       record.version !== 1 ||
       typeof record.referenceDigest !== "string" ||
@@ -29,7 +42,9 @@ export function normalizeComfyUiKrea2StyleReferenceDescriptor(
       !["weight", "startPercent", "endPercent"].every((key) =>
         typeof record[key] === "number" && Number.isFinite(record[key]) &&
         Number(record[key]) >= 0 && Number(record[key]) <= 1) ||
-      record.startPercent !== 0 || record.endPercent !== 1) {
+      record.startPercent !== 0 || record.endPercent !== 1 || references === null ||
+      references && (new Set(references.map((entry) => entry?.role)).size !== references.length ||
+        references.length === 2 && (references[0]?.role !== "style" || references[1]?.role !== "character"))) {
     return null;
   }
   return {
@@ -39,6 +54,7 @@ export function normalizeComfyUiKrea2StyleReferenceDescriptor(
     weight: record.weight as number,
     startPercent: 0,
     endPercent: 1,
+    ...(references ? { references: references as Array<{ role: "style" | "character"; referenceDigest: string }> } : {}),
   };
 }
 

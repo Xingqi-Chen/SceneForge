@@ -1,5 +1,6 @@
 import type { CivitaiClient } from "./client";
 import { createCivitaiClient } from "./client";
+import { createCivitaiEmbedding } from "./ai-recommendation";
 import { applyCivitaiEnrichment, enrichCivitaiResource } from "./enrichment";
 import {
   cacheCivitaiImageUrl,
@@ -21,12 +22,29 @@ import type {
   CivitaiParseIgnoredResource,
   CivitaiImportResult,
   CivitaiParsePreview,
+  CivitaiResourceDetail,
   CivitaiResourceRecord,
   CivitaiResolveStatus,
   CivitaiResourceUpsertInput,
   NormalizedCivitaiImage,
   NormalizedCivitaiImageResource,
 } from "./types";
+import type {
+  LlmEmbeddingRequest,
+  LlmEmbeddingResponse,
+} from "@/features/llm";
+import {
+  CIVITAI_INCREMENTAL_BASELINE_CHANGED_MESSAGE,
+  CivitaiIncrementalBaselineChangedError,
+  CivitaiIncrementalIndexError,
+  applyPreparedCivitaiIncrementalEmbeddingUpdate,
+  assertCivitaiIncrementalIndexBaselineUnchanged,
+  prepareCivitaiIncrementalEmbeddingUpdate,
+  type PreparedCivitaiIncrementalEmbeddingUpdate,
+} from "@/features/persistence/civitai-embedding-index";
+import {
+  buildCivitaiResourceSearchTextFromUpsertInput,
+} from "@/features/persistence/civitai-search-index";
 import type { SceneForgeSqliteDatabase } from "@/features/persistence/sqlite-storage";
 import {
   deleteImageResourceUsagesExceptFromSqlite,
@@ -40,6 +58,7 @@ import {
 const IMPORT_METADATA_MESSAGE =
   "已从 Civitai 图片公开元数据中识别资源；部分资源可能因隐藏元数据、权限限制或 API 返回不完整而无法解析。";
 const OFFICIAL_RESOURCE_CACHE_CONCURRENCY = 3;
+const CIVITAI_INCREMENTAL_BASELINE_COMMIT_ATTEMPTS = 2;
 
 export class CivitaiImageImportInputError extends Error {
   readonly statusCode = 400;
@@ -70,6 +89,51 @@ async function mapWithConcurrency<T, R>(
   );
 
   return results;
+}
+
+function runCivitaiSqliteTransaction<T>(
+  db: SceneForgeSqliteDatabase,
+  operation: () => T,
+): T {
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const result = operation();
+    db.exec("COMMIT");
+    return result;
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+async function commitPreparedCivitaiIncrementalUpdateWithRetry<T>(options: {
+  apply: (prepared: PreparedCivitaiIncrementalEmbeddingUpdate) => T;
+  db: SceneForgeSqliteDatabase;
+  initialPrepared: PreparedCivitaiIncrementalEmbeddingUpdate;
+  prepare: () => Promise<PreparedCivitaiIncrementalEmbeddingUpdate>;
+}): Promise<T> {
+  let prepared = options.initialPrepared;
+
+  for (let attempt = 0; attempt < CIVITAI_INCREMENTAL_BASELINE_COMMIT_ATTEMPTS; attempt += 1) {
+    try {
+      return runCivitaiSqliteTransaction(options.db, () => {
+        assertCivitaiIncrementalIndexBaselineUnchanged(options.db, prepared.baseline);
+        return options.apply(prepared);
+      });
+    } catch (error) {
+      const canRetry =
+        error instanceof CivitaiIncrementalBaselineChangedError &&
+        error.retryableWithSameInputs &&
+        attempt + 1 < CIVITAI_INCREMENTAL_BASELINE_COMMIT_ATTEMPTS;
+      if (!canRetry) {
+        throw error;
+      }
+    }
+
+    prepared = await options.prepare();
+  }
+
+  throw new CivitaiIncrementalBaselineChangedError();
 }
 
 type CivitaiResourceEnricher = typeof enrichCivitaiResource;
@@ -474,6 +538,7 @@ export async function parseCivitaiImageUrl(options: {
   db?: SceneForgeSqliteDatabase;
   imageUrl: string;
   client?: CivitaiClient;
+  createEmbedding?: (request: LlmEmbeddingRequest) => Promise<LlmEmbeddingResponse>;
   enricher?: CivitaiResourceEnricher;
 }): Promise<CivitaiParsePreview> {
   const imageId = parseCivitaiImageIdFromUrl(options.imageUrl);
@@ -536,6 +601,7 @@ export async function importCivitaiImageUrlToSqlite(options: {
   selectedOfficialImages?: SelectedOfficialImageRef[];
   selectedImportResourceKeys?: string[];
   client?: CivitaiClient;
+  createEmbedding?: (request: LlmEmbeddingRequest) => Promise<LlmEmbeddingResponse>;
   enricher?: CivitaiResourceEnricher;
   importedByUserId?: string | null;
 }): Promise<CivitaiImportResult> {
@@ -574,7 +640,20 @@ export async function importCivitaiImageUrlToSqlite(options: {
     throw new CivitaiImageImportInputError("请至少选择一个 LoRA 或 checkpoint/model 再导入。");
   }
 
-  const importedResources: CivitaiImportResult["resources"] = [];
+  const incrementalIndexSources = selectedNewResourcePreviews.map((preview) => ({
+    resourceKey: makePreviewResourceKey(preview),
+    resourceType: preview.upsertInput.resourceType as "model" | "lora",
+    searchText: buildCivitaiResourceSearchTextFromUpsertInput(preview.upsertInput),
+  }));
+  const prepareIndexUpdate = () =>
+    prepareCivitaiIncrementalEmbeddingUpdate(options.db, {
+      createEmbedding: options.createEmbedding ?? createCivitaiEmbedding,
+      model: process.env.LITELLM_CIVITAI_EMBEDDING_MODEL,
+      sources: incrementalIndexSources,
+    });
+  const preparedIndexUpdate =
+    incrementalIndexSources.length > 0 ? await prepareIndexUpdate() : null;
+
   const cachedImageUrl = await cacheCivitaiImageUrl(image.imageUrl, {
     cacheKey: `imported-image:${image.civitaiImageId}`,
     maxSize: 768,
@@ -618,14 +697,23 @@ export async function importCivitaiImageUrlToSqlite(options: {
   });
   await cleanupLegacyOriginalCachedImages();
 
-  options.db.exec("BEGIN IMMEDIATE");
-  try {
+  const commitImport = (
+    prepared: PreparedCivitaiIncrementalEmbeddingUpdate | null,
+  ): CivitaiImportResult => {
+    const importedResources: CivitaiImportResult["resources"] = [];
     const importedImage = upsertImportedCivitaiImageToSqlite(
       options.db,
       imageToImport,
       options.importedByUserId ?? null,
     );
     const importedResourceIds: string[] = [];
+    const indexedResources: Array<{
+      resourceId: string;
+      resourceKey: string;
+      resourceType: "model" | "lora";
+      searchText: string;
+    }> = [];
+    const obsoleteResourceIds: string[] = [];
     const linkResourceUsage = (
       resource: CivitaiResourceRecord,
       preview: (typeof previews)[number],
@@ -651,7 +739,14 @@ export async function importCivitaiImageUrlToSqlite(options: {
         continue;
       }
 
-      const { resource, isNew } = upsertCivitaiResourceToSqlite(options.db, preview.upsertInput);
+      const { resource, isNew, mergedResourceIds } = upsertCivitaiResourceToSqlite(options.db, preview.upsertInput);
+      indexedResources.push({
+        resourceId: resource.id,
+        resourceKey: makePreviewResourceKey(preview),
+        resourceType: preview.upsertInput.resourceType as "model" | "lora",
+        searchText: buildCivitaiResourceSearchTextFromUpsertInput(preview.upsertInput),
+      });
+      obsoleteResourceIds.push(...mergedResourceIds);
       linkResourceUsage(resource, preview, isNew);
     }
 
@@ -671,17 +766,86 @@ export async function importCivitaiImageUrlToSqlite(options: {
       });
     }
 
-    options.db.exec("COMMIT");
-    await cleanupUnreferencedCachedImages(new Set(listReferencedCivitaiLocalImageUrlsFromSqlite(options.db)));
+    if (prepared) {
+      applyPreparedCivitaiIncrementalEmbeddingUpdate(options.db, {
+        obsoleteResourceIds,
+        prepared,
+        resources: indexedResources,
+      });
+    }
+
     return {
       importedImage,
       resources: importedResources,
       message: IMPORT_METADATA_MESSAGE,
     };
-  } catch (error) {
-    options.db.exec("ROLLBACK");
-    throw error;
-  }
+  };
+
+  const result = preparedIndexUpdate
+    ? await commitPreparedCivitaiIncrementalUpdateWithRetry({
+        apply: commitImport,
+        db: options.db,
+        initialPrepared: preparedIndexUpdate,
+        prepare: prepareIndexUpdate,
+      })
+    : runCivitaiSqliteTransaction(options.db, () => commitImport(null));
+  await cleanupUnreferencedCachedImages(new Set(listReferencedCivitaiLocalImageUrlsFromSqlite(options.db)));
+  return result;
+}
+
+export async function applyCivitaiResourceReanalysisToSqlite(options: {
+  createEmbedding?: (request: LlmEmbeddingRequest) => Promise<LlmEmbeddingResponse>;
+  currentResource: CivitaiResourceDetail;
+  db: SceneForgeSqliteDatabase;
+  updatedInput: CivitaiResourceUpsertInput;
+}): Promise<CivitaiResourceRecord> {
+  const currentSearchText = buildCivitaiResourceSearchTextFromUpsertInput(options.currentResource);
+  const updatedSearchText = buildCivitaiResourceSearchTextFromUpsertInput(options.updatedInput);
+  const searchTextChanged = currentSearchText !== updatedSearchText;
+  const resourceKey = options.currentResource.id;
+  const incrementalIndexSources = searchTextChanged
+    ? [{
+        resourceKey,
+        resourceType: options.updatedInput.resourceType as "model" | "lora",
+        searchText: updatedSearchText,
+      }]
+    : [];
+  const prepareIndexUpdate = () =>
+    prepareCivitaiIncrementalEmbeddingUpdate(options.db, {
+      createEmbedding: options.createEmbedding ?? createCivitaiEmbedding,
+      model: process.env.LITELLM_CIVITAI_EMBEDDING_MODEL,
+      sources: incrementalIndexSources,
+    });
+  const prepared = await prepareIndexUpdate();
+
+  return commitPreparedCivitaiIncrementalUpdateWithRetry({
+    apply: (currentPrepared) => {
+      const { resource, mergedResourceIds } = upsertCivitaiResourceToSqlite(
+        options.db,
+        options.updatedInput,
+      );
+
+      if (searchTextChanged) {
+        applyPreparedCivitaiIncrementalEmbeddingUpdate(options.db, {
+          obsoleteResourceIds: mergedResourceIds,
+          prepared: currentPrepared,
+          resources: [{
+            resourceId: resource.id,
+            resourceKey,
+            resourceType: options.updatedInput.resourceType as "model" | "lora",
+            searchText: updatedSearchText,
+          }],
+        });
+      } else if (mergedResourceIds.length > 0) {
+        throw new CivitaiIncrementalIndexError(CIVITAI_INCREMENTAL_BASELINE_CHANGED_MESSAGE);
+      }
+
+      return resource;
+    },
+    db: options.db,
+    initialPrepared: prepared,
+    prepare: prepareIndexUpdate,
+  });
 }
 
 export { IMPORT_METADATA_MESSAGE };

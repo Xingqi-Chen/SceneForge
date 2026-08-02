@@ -8,6 +8,7 @@ import {
 } from "@/features/agent-timeline/generation-confirmation.server";
 import { resolveTimelineFinalGenerationPolicy } from "@/features/agent-timeline/final-generation-policy";
 import { getRunSceneInputSettings } from "@/features/agent-timeline/run-input-settings";
+import { deriveTimelineConfirmedReferenceContext } from "@/features/agent-timeline/run-reference-context";
 import {
   areTimelineNodeDependenciesSatisfied,
   confirmTimelineGeneration,
@@ -144,6 +145,7 @@ export async function POST(request: Request) {
           finalSteps: resolvedFinalPolicy.steps,
           finalDenoise: resolvedFinalPolicy.denoise,
           automaticLocalRepairAuthorized: settings.automaticLocalRepair,
+          referenceContext: deriveTimelineConfirmedReferenceContext(workflow) ?? undefined,
           visualStyle: settings.visualStyle,
         }) : workflow;
     if (stage && !areTimelineNodeDependenciesSatisfied(runnableWorkflow, stage)) {

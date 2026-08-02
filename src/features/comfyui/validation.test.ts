@@ -233,4 +233,35 @@ describe("Krea 2 ComfyUI request validation", () => {
       });
     }
   });
+
+  it("accepts explicit Krea style/character role images but rejects invalid adapter files before queueing", () => {
+    expect(validateComfyUiTextToImageRequest({
+      ...kreaRequest,
+      krea2StyleReference: {
+        styleImageName: "sceneforge-krea-style.png",
+        characterImageName: "sceneforge-krea-character.png",
+        weight: 0.8,
+      },
+    })).toMatchObject({
+      ok: true,
+      request: {
+        krea2StyleReference: {
+          styleImageName: "sceneforge-krea-style.png",
+          characterImageName: "sceneforge-krea-character.png",
+          weight: 0.8,
+        },
+      },
+    });
+
+    expect(validateComfyUiTextToImageRequest({
+      ...kreaRequest,
+      krea2StyleReference: {
+        characterImageName: "sceneforge-krea-character.png",
+        loraName: "unverified-reference.safetensors",
+      },
+    })).toMatchObject({
+      ok: false,
+      message: expect.stringContaining("verified krea2_style_reference.safetensors adapter file"),
+    });
+  });
 });

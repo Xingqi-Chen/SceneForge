@@ -13,6 +13,11 @@ import {
   upsertCivitaiResourceToSqlite,
   type SceneForgeSqliteDatabase,
 } from "@/features/persistence/sqlite-storage";
+import {
+  listCivitaiResourceEmbeddingInputs,
+  rebuildCivitaiEmbeddingIndex,
+} from "@/features/persistence/civitai-embedding-index";
+import { rebuildCivitaiSearchIndex } from "@/features/persistence/civitai-search-index";
 
 import { PATCH, POST } from "./route";
 
@@ -70,6 +75,7 @@ describe("Civitai resource reanalysis route", () => {
   let previousLogFile: string | undefined;
   let previousBaseUrl: string | undefined;
   let previousDefaultModel: string | undefined;
+  let previousEmbeddingModel: string | undefined;
 
   beforeEach(async () => {
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "sceneforge-civitai-reanalysis-"));
@@ -77,11 +83,13 @@ describe("Civitai resource reanalysis route", () => {
     previousLogFile = process.env.SCENEFORGE_LLM_LOG_FILE;
     previousBaseUrl = process.env.LITELLM_BASE_URL;
     previousDefaultModel = process.env.LITELLM_DEFAULT_MODEL;
+    previousEmbeddingModel = process.env.LITELLM_CIVITAI_EMBEDDING_MODEL;
     process.env.SCENEFORGE_SQLITE_FILE = path.join(tempDir, "sceneforge.sqlite");
     process.env.SCENEFORGE_LLM_LOG_FILE = path.join(tempDir, "llm-chat.jsonl");
     process.env.LITELLM_BASE_URL = "https://litellm.test";
     process.env.LITELLM_DEFAULT_MODEL = "test-model";
-    db = await openSceneForgeSqliteDatabase();
+    process.env.LITELLM_CIVITAI_EMBEDDING_MODEL = "test-embedding-model";
+    db = await openSceneForgeSqliteDatabase(undefined, { allowExtensions: true });
   });
 
   afterEach(async () => {
@@ -107,12 +115,18 @@ describe("Civitai resource reanalysis route", () => {
     } else {
       process.env.LITELLM_DEFAULT_MODEL = previousDefaultModel;
     }
+    if (previousEmbeddingModel === undefined) {
+      delete process.env.LITELLM_CIVITAI_EMBEDDING_MODEL;
+    } else {
+      process.env.LITELLM_CIVITAI_EMBEDDING_MODEL = previousEmbeddingModel;
+    }
     await fs.rm(tempDir, { recursive: true, force: true });
   });
 
   it("previews description reanalysis without overwriting the stored resource", async () => {
     const resource = upsertCivitaiResourceToSqlite(db, makeResourceInput()).resource;
-    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const fetchMock = vi.fn<typeof fetch>(async (input, _init) => {
+      void _init;
       const url = String(input);
       if (url === "https://civitai.com/api/v1/models/100") {
         return Response.json({
@@ -184,6 +198,22 @@ describe("Civitai resource reanalysis route", () => {
 
   it("applies a confirmed reanalysis overwrite", async () => {
     const resource = upsertCivitaiResourceToSqlite(db, makeResourceInput()).resource;
+    rebuildCivitaiSearchIndex(db);
+    rebuildCivitaiEmbeddingIndex(db, {
+      model: "test-embedding-model",
+      embeddings: listCivitaiResourceEmbeddingInputs(db).map((input) => ({
+        chunkFingerprint: input.chunkFingerprint,
+        chunkIndex: input.chunkIndex,
+        embedding: [1, 0],
+        resourceId: input.resourceId,
+        resourceType: input.resourceType,
+        sourceFingerprint: input.sourceFingerprint,
+      })),
+    });
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({
+      data: [{ index: 0, embedding: [0, 1] }],
+      model: "test-embedding-model",
+    })));
 
     const response = await PATCH(
       new Request("http://localhost/api/civitai-lora-library/resources/id/reanalyze", {
