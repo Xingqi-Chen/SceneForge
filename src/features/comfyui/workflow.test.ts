@@ -423,41 +423,103 @@ describe("ComfyUI workflow builder", () => {
     expect(result.workflow["10"].inputs.model).toEqual(["6", 0]);
   });
 
-  it.each([
-    ["character only", { characterImageName: "sceneforge-krea-character.png", weight: 0.72 }, ["sceneforge-krea-character.png"], false],
-    ["style only", { styleImageName: "sceneforge-krea-style.png", weight: 0.72 }, ["sceneforge-krea-style.png"], false],
-    ["style and character", {
-      styleImageName: "sceneforge-krea-style.png",
-      characterImageName: "sceneforge-krea-character.png",
-      weight: 0.72,
-    }, ["sceneforge-krea-style.png", "sceneforge-krea-character.png"], true],
-  ] as const)("maps Krea %s references to image1/image2 with one shared adapter patch", (_label, krea2StyleReference, imageNames, hasImage2) => {
+  it("builds Krea style-only conditioning without a second image or ReID nodes", () => {
     const result = buildBasicTextToImageWorkflow({
       checkpointName: "krea-2-turbo-unet.safetensors",
       modelBaseModel: "Krea 2",
       modelStorageKind: "diffusion",
       positivePrompt: "a quiet station",
       negativePrompt: "blur",
-      krea2StyleReference,
+      krea2StyleReference: { styleImageName: "sceneforge-krea-style.png", weight: 0.72 },
     });
     const loaders = Object.entries(result.workflow).filter(([, node]) => node.class_type === "LoadImage");
     const loras = Object.entries(result.workflow).filter(([, node]) => node.class_type === "LoraLoaderModelOnly");
-    const patches = Object.entries(result.workflow).filter(([, node]) => node.class_type === "Krea2OstrisEditModelPatch");
     const positive = Object.entries(result.workflow).find(([, node]) =>
       node.class_type === "TextEncodeKrea2OstrisEdit" && node.inputs.prompt === "a quiet station",
     );
 
-    expect(loaders.map(([, node]) => node.inputs.image)).toEqual(imageNames);
+    expect(loaders.map(([, node]) => node.inputs.image)).toEqual(["sceneforge-krea-style.png"]);
     expect(loras).toHaveLength(1);
     expect(loras[0]?.[1].inputs).toMatchObject({
       lora_name: "krea2_style_reference.safetensors",
       strength_model: 0.72,
     });
-    expect(patches).toHaveLength(1);
     expect(positive?.[1].inputs.image1).toEqual([loaders[0]?.[0], 0]);
-    expect(positive?.[1].inputs.image2).toEqual(hasImage2 ? [loaders[1]?.[0], 0] : undefined);
-    expect(result.nodeIds.styleReferenceCharacterImage).toBe(hasImage2 ? loaders[1]?.[0] : undefined);
+    expect(positive?.[1].inputs).not.toHaveProperty("image2");
+    expect(result.nodeIds).not.toHaveProperty("reIdReferenceImage");
+    expect(result.nodeIds).not.toHaveProperty("reIdLora");
     expect(Object.values(result.workflow).some((node) => node.class_type === "IPAdapterAdvanced")).toBe(false);
+  });
+
+  it.each([false, true])("builds the exact single-image Krea2 ReID graph for %s Preview", (preview) => {
+    const result = buildBasicTextToImageWorkflow({
+      checkpointName: "RedCraft_v4_fp8_scaled.safetensors",
+      modelBaseModel: "Krea 2",
+      modelStorageKind: "diffusion",
+      workflowProfile: "krea2",
+      positivePrompt: "a quiet station",
+      negativePrompt: "blur",
+      preview,
+      steps: preview ? 4 : 8,
+      cfg: preview ? 7 : 1,
+      samplerName: preview ? "dpmpp_2m" : "euler",
+      scheduler: preview ? "normal" : "simple",
+      krea2ReId: { imageName: "sceneforge-krea-reid.png" },
+      krea2ReIdDescriptor: {
+        version: 1,
+        referenceDigest: `sha256:${"a".repeat(64)}`,
+        loraName: "krea2_reid_rank32.safetensors",
+        strengthModel: 1,
+        kvCache: true,
+        imageCount: 1,
+      },
+    });
+    const loaders = Object.entries(result.workflow).filter(([, node]) => node.class_type === "LoadImage");
+    const loras = Object.entries(result.workflow).filter(([, node]) => node.class_type === "LoraLoaderModelOnly");
+    const patches = Object.entries(result.workflow).filter(([, node]) => node.class_type === "Krea2OstrisEditModelPatch");
+    const encoders = Object.entries(result.workflow).filter(([, node]) => node.class_type === "TextEncodeKrea2OstrisEdit");
+    const samplers = Object.entries(result.workflow).filter(([, node]) => node.class_type === "KSampler");
+
+    expect(loaders).toHaveLength(1);
+    expect(loaders[0]?.[1]).toMatchObject({ class_type: "LoadImage", inputs: { image: "sceneforge-krea-reid.png" } });
+    expect(loras).toHaveLength(1);
+    expect(loras[0]?.[1].inputs).toEqual({
+      model: [result.nodeIds.unetLoader, 0],
+      lora_name: "krea2_reid_rank32.safetensors",
+      strength_model: 1,
+    });
+    expect(patches).toHaveLength(1);
+    expect(patches[0]?.[1].inputs).toEqual({ model: [loras[0]?.[0], 0], kv_cache: true });
+    expect(encoders).toHaveLength(2);
+    expect(encoders.filter(([, node]) => node.inputs.image1 !== undefined)).toHaveLength(1);
+    expect(encoders.find(([, node]) => node.inputs.image1 !== undefined)?.[1].inputs.image1)
+      .toEqual([loaders[0]?.[0], 0]);
+    for (const [, encoder] of encoders) expect(encoder.inputs).not.toHaveProperty("image2");
+    expect(samplers).toHaveLength(1);
+    expect(samplers[0]?.[1].inputs).toMatchObject({
+      model: [patches[0]?.[0], 0],
+      steps: 8,
+      cfg: 1,
+      sampler_name: "euler",
+      scheduler: "simple",
+    });
+    expect(result.nodeIds).toMatchObject({
+      reIdReferenceImage: loaders[0]?.[0],
+      reIdLora: loras[0]?.[0],
+      reIdPatch: patches[0]?.[0],
+    });
+    expect(result.nodeIds).not.toHaveProperty("styleReferenceImage");
+    expect(Object.values(result.workflow).some((node) => node.class_type === "IPAdapterAdvanced")).toBe(false);
+  });
+
+  it("rejects legacy Krea character image2 transport instead of migrating it to ReID", () => {
+    expect(() => buildBasicTextToImageWorkflow({
+      checkpointName: "krea-2-turbo-unet.safetensors",
+      modelBaseModel: "Krea 2",
+      modelStorageKind: "diffusion",
+      positivePrompt: "a quiet station",
+      krea2StyleReference: { characterImageName: "legacy-character.png" },
+    })).toThrow("Legacy Krea character references cannot be reused");
   });
 
   it("builds the Anima img2img workflow from the Anima VAE", () => {

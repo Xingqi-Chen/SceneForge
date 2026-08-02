@@ -68,6 +68,7 @@ import {
   getCharacterReferenceBlockingIssue,
   getStyleReferenceBlockingIssue,
   getStyleReferenceContextMismatch,
+  isKrea2ReIdReferenceReady,
   sanitizeCharacterReferenceSnapshot,
   sanitizeStyleReferenceSnapshot,
   type CharacterReferenceSnapshot,
@@ -3280,7 +3281,9 @@ export function TimelineShell() {
       workflowProfile: typeof requestPreview.workflowProfile === "string"
         ? requestPreview.workflowProfile
         : selectedPromptProfile,
-    }, finalRedrawPreset);
+    }, finalRedrawPreset, {
+      krea2ReId: isKrea2ReIdReferenceReady(sanitizeCharacterReferenceSnapshot(characterReference)),
+    });
   }
 
   function renderFinalPolicyConfirmationSummary() {

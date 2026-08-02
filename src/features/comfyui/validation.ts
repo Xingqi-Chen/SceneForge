@@ -12,6 +12,7 @@ import type {
   ComfyUiInpaintUpscaleConfig,
   ComfyUiInpaintUpscaleMode,
   ComfyUiInpaintUpscaleStrategy,
+  ComfyUiKrea2ReIdConfig,
   ComfyUiKrea2StyleReferenceConfig,
   ComfyUiLoraInput,
   ComfyUiModelStorageKind,
@@ -63,6 +64,11 @@ import {
   KREA2_STYLE_REFERENCE_LORA_NAME,
   normalizeComfyUiKrea2StyleReferenceDescriptor,
 } from "./krea2-style-reference";
+import {
+  getComfyUiKrea2ReIdContextIssue,
+  KREA2_REID_LORA_NAME,
+  normalizeComfyUiKrea2ReIdDescriptor,
+} from "./krea2-reid";
 import { parseComfyUiImageDataUrl } from "./image-data-url";
 import { COMFYUI_ANIMA_CHARACTER_REFERENCE_ADAPTER } from "./anima-character-reference";
 
@@ -971,11 +977,10 @@ function normalizeKrea2StyleReference(value: unknown): ComfyUiKrea2StyleReferenc
 
   const legacyImageName = hasNonEmptyString(value.imageName) ? value.imageName.trim() : undefined;
   const styleImageName = hasNonEmptyString(value.styleImageName) ? value.styleImageName.trim() : legacyImageName;
-  const characterImageName = hasNonEmptyString(value.characterImageName) ? value.characterImageName.trim() : undefined;
-  if (!styleImageName && !characterImageName ||
+  if (!styleImageName ||
       value.imageName !== undefined && !hasNonEmptyString(value.imageName) ||
       value.styleImageName !== undefined && !hasNonEmptyString(value.styleImageName) ||
-      value.characterImageName !== undefined && !hasNonEmptyString(value.characterImageName)) {
+      value.characterImageName !== undefined) {
     return null;
   }
 
@@ -989,12 +994,20 @@ function normalizeKrea2StyleReference(value: unknown): ComfyUiKrea2StyleReferenc
   return {
     ...(legacyImageName ? { imageName: legacyImageName } : {}),
     ...(styleImageName ? { styleImageName } : {}),
-    ...(characterImageName ? { characterImageName } : {}),
     ...(hasNonEmptyString(value.loraName) ? { loraName: value.loraName.trim() } : {}),
     ...(weight !== undefined ? { weight } : {}),
     ...(startPercent !== undefined ? { startPercent } : {}),
     ...(endPercent !== undefined ? { endPercent } : {}),
   };
+}
+
+function normalizeKrea2ReId(value: unknown): ComfyUiKrea2ReIdConfig | null | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value) || Object.keys(value).some((key) => key !== "imageName") ||
+      !hasNonEmptyString(value.imageName)) {
+    return null;
+  }
+  return { imageName: value.imageName.trim() };
 }
 
 function getLegacyControlNetSvg(controlNet: ComfyUiControlNetConfig | undefined) {
@@ -1190,6 +1203,20 @@ export function validateComfyUiTextToImageRequest(value: unknown): ComfyUiTextTo
       message: "krea2StyleReferenceDescriptor must be a transport-free, verified Krea adapter identity.",
     };
   }
+  const krea2ReId = normalizeKrea2ReId(value.krea2ReId);
+  if (krea2ReId === null) {
+    return {
+      ok: false,
+      message: "krea2ReId must contain exactly one safe prepared image name.",
+    };
+  }
+  const krea2ReIdDescriptor = normalizeComfyUiKrea2ReIdDescriptor(value.krea2ReIdDescriptor);
+  if (krea2ReIdDescriptor === null) {
+    return {
+      ok: false,
+      message: "krea2ReIdDescriptor must contain the server-owned Krea2 ReID invariants.",
+    };
+  }
 
   const invalidCharacterReferenceTiming = characterReferences?.find((reference) =>
     reference.enabled !== false &&
@@ -1336,6 +1363,12 @@ export function validateComfyUiTextToImageRequest(value: unknown): ComfyUiTextTo
       message: "Krea style reference is available only for a compatible Krea 2 Turbo diffusion workflow.",
     };
   }
+  if ((krea2ReId || krea2ReIdDescriptor) && workflowProfile !== "krea2") {
+    return {
+      ok: false,
+      message: "Krea2 ReID is available only for a compatible Krea 2 diffusion workflow.",
+    };
+  }
 
   if (workflowProfile === "anima") {
     const enabledCharacterReferences = characterReferences?.filter((reference) => reference.enabled !== false) ?? [];
@@ -1382,6 +1415,10 @@ export function validateComfyUiTextToImageRequest(value: unknown): ComfyUiTextTo
     if (characterReferences?.some((reference) => reference.enabled !== false)) {
       return { ok: false, message: "Krea 2 Turbo does not support entity or character references." };
     }
+    if ((krea2ReId || krea2ReIdDescriptor) &&
+        (krea2StyleReference || krea2StyleReferenceDescriptor)) {
+      return { ok: false, message: "Krea2 ReID and the Krea style-image adapter cannot be active in the same request." };
+    }
     if (krea2StyleReference || krea2StyleReferenceDescriptor) {
       const contextIssue = getComfyUiKrea2StyleReferenceContextIssue({
         checkpointName: value.checkpointName.trim(),
@@ -1410,6 +1447,30 @@ export function validateComfyUiTextToImageRequest(value: unknown): ComfyUiTextTo
         (krea2StyleReference.startPercent ?? 0) !== krea2StyleReferenceDescriptor.startPercent ||
         (krea2StyleReference.endPercent ?? 1) !== krea2StyleReferenceDescriptor.endPercent)) {
       return { ok: false, message: "Krea style-reference transport settings do not match the signed adapter identity." };
+    }
+    if (krea2ReId || krea2ReIdDescriptor) {
+      const contextIssue = getComfyUiKrea2ReIdContextIssue({
+        checkpointName: value.checkpointName.trim(),
+        workflowProfile: isComfyUiTextToImageWorkflowProfileId(value.workflowProfile)
+          ? value.workflowProfile
+          : undefined,
+        modelBaseModel: getOptionalTrimmedStringValue(value.modelBaseModel),
+        modelStorageKind: isComfyUiModelStorageKind(value.modelStorageKind)
+          ? value.modelStorageKind
+          : undefined,
+      });
+      if (contextIssue) return { ok: false, message: contextIssue };
+      if ((typeof value.steps === "number" && value.steps !== 8) ||
+          (typeof value.cfg === "number" && value.cfg !== 1) ||
+          (typeof value.samplerName === "string" && value.samplerName.trim() !== "euler") ||
+          (typeof value.scheduler === "string" && value.scheduler.trim() !== "simple")) {
+        return { ok: false, message: "Krea2 ReID requires steps=8, cfg=1, sampler=euler, and scheduler=simple." };
+      }
+      if (Array.isArray(value.loras) && value.loras.some((lora) =>
+        isRecord(lora) && lora.loraName === KREA2_REID_LORA_NAME
+      )) {
+        return { ok: false, message: "The Krea2 ReID LoRA is server-owned and must not be supplied as a generic LoRA." };
+      }
     }
     if ((typeof value.width === "number" && value.width % 16 !== 0) ||
         (typeof value.height === "number" && value.height % 16 !== 0)) {
@@ -1458,6 +1519,8 @@ export function validateComfyUiTextToImageRequest(value: unknown): ComfyUiTextTo
         : undefined,
       krea2StyleReference,
       krea2StyleReferenceDescriptor,
+      krea2ReId,
+      krea2ReIdDescriptor,
       preview: typeof value.preview === "boolean" ? value.preview : undefined,
     },
   };
@@ -1468,6 +1531,13 @@ export function validateComfyUiInpaintRequest(value: unknown): ComfyUiInpaintVal
     return {
       ok: false,
       message: "Request body must be a JSON object.",
+    };
+  }
+
+  if (value.krea2ReId !== undefined || value.krea2ReIdDescriptor !== undefined) {
+    return {
+      ok: false,
+      message: "Krea2 ReID is limited to Preview and Final generation and is never allowed in Repair.",
     };
   }
 
@@ -2105,6 +2175,7 @@ export function resolveComfyUiTextToImageRequest(
   }).id;
   const isAnimaProfile = workflowProfile === "anima";
   const isKrea2Profile = workflowProfile === "krea2";
+  const hasKrea2ReId = isKrea2Profile && Boolean(request.krea2ReId || request.krea2ReIdDescriptor);
 
   return {
     checkpointName,
@@ -2132,10 +2203,12 @@ export function resolveComfyUiTextToImageRequest(
     width: request.width ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.width,
     height: request.height ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.height,
     seed: request.seed ?? createRandomSeed(),
-    steps: request.steps ?? (isKrea2Profile ? 8 : DEFAULT_TEXT_TO_IMAGE_REQUEST.steps),
-    cfg: request.cfg ?? (isKrea2Profile ? 1 : DEFAULT_TEXT_TO_IMAGE_REQUEST.cfg),
-    samplerName: getString(request.samplerName, DEFAULT_TEXT_TO_IMAGE_REQUEST.samplerName),
-    scheduler: getString(request.scheduler, isKrea2Profile ? "simple" : DEFAULT_TEXT_TO_IMAGE_REQUEST.scheduler),
+    steps: hasKrea2ReId ? 8 : request.steps ?? (isKrea2Profile ? 8 : DEFAULT_TEXT_TO_IMAGE_REQUEST.steps),
+    cfg: hasKrea2ReId ? 1 : request.cfg ?? (isKrea2Profile ? 1 : DEFAULT_TEXT_TO_IMAGE_REQUEST.cfg),
+    samplerName: hasKrea2ReId ? "euler" : getString(request.samplerName, DEFAULT_TEXT_TO_IMAGE_REQUEST.samplerName),
+    scheduler: hasKrea2ReId
+      ? "simple"
+      : getString(request.scheduler, isKrea2Profile ? "simple" : DEFAULT_TEXT_TO_IMAGE_REQUEST.scheduler),
     denoise: request.denoise ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.denoise,
     batchSize: isKrea2Profile ? 1 : request.imageName || request.sourceImageDataUrl ? 1 : request.batchSize ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.batchSize,
     latentImageNode: isAnimaProfile || isKrea2Profile ? "EmptyLatentImage" : request.latentImageNode ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.latentImageNode,
@@ -2160,14 +2233,16 @@ export function resolveComfyUiTextToImageRequest(
     ...(isKrea2Profile && request.krea2StyleReference
       ? {
           krea2StyleReference: {
-            imageName: (request.krea2StyleReference.styleImageName ??
-              request.krea2StyleReference.imageName ??
-              request.krea2StyleReference.characterImageName)!.trim(),
+            imageName: (() => {
+              const imageName = request.krea2StyleReference!.styleImageName ??
+                request.krea2StyleReference!.imageName;
+              if (!imageName) {
+                throw new Error("Legacy Krea character references cannot be reused as a style or ReID transport.");
+              }
+              return imageName.trim();
+            })(),
             ...(request.krea2StyleReference.styleImageName
               ? { styleImageName: request.krea2StyleReference.styleImageName.trim() }
-              : {}),
-            ...(request.krea2StyleReference.characterImageName
-              ? { characterImageName: request.krea2StyleReference.characterImageName.trim() }
               : {}),
             loraName: request.krea2StyleReference.loraName ?? KREA2_STYLE_REFERENCE_LORA_NAME,
             weight: request.krea2StyleReference.weight ?? 0.45,
@@ -2178,6 +2253,12 @@ export function resolveComfyUiTextToImageRequest(
       : {}),
     ...(isKrea2Profile && request.krea2StyleReferenceDescriptor
       ? { krea2StyleReferenceDescriptor: request.krea2StyleReferenceDescriptor }
+      : {}),
+    ...(isKrea2Profile && request.krea2ReId
+      ? { krea2ReId: { imageName: request.krea2ReId.imageName.trim() } }
+      : {}),
+    ...(isKrea2Profile && request.krea2ReIdDescriptor
+      ? { krea2ReIdDescriptor: request.krea2ReIdDescriptor }
       : {}),
   };
 }

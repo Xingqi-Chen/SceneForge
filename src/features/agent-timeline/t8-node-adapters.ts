@@ -19,6 +19,8 @@ import {
   getCharacterReferenceBlockingIssue,
   getStyleReferenceBlockingIssue,
   getStyleReferenceContextMismatch,
+  isCharacterReferenceReady,
+  isKrea2ReIdReferenceReady,
   isStyleReferenceReady,
   sanitizeCharacterReferenceSnapshot,
   sanitizeStyleReferenceSnapshot,
@@ -254,6 +256,12 @@ function assertStyleReferenceUsable(
   if (JSON.stringify(currentCharacter) !== JSON.stringify(reviewedCharacter)) {
     invalidComfyUiRequest("Run character reference changed after parameter review. Regenerate parameters before confirmation.");
   }
+  if (isKrea2 && isCharacterReferenceReady(currentCharacter) && !isKrea2ReIdReferenceReady(currentCharacter)) {
+    invalidComfyUiRequest("Legacy or generic Krea character references cannot be reused as ReID. Replace it through Krea2 ReID preparation.");
+  }
+  if (!isKrea2 && isKrea2ReIdReferenceReady(currentCharacter)) {
+    invalidComfyUiRequest("A prepared Krea2 ReID reference cannot be used by this non-Krea workflow. Remove or replace it.");
+  }
   if (isStyleReferenceReady(current)) {
     const stylePrompt = current.analysis.stylePrompt.trim();
     const hasStylePromptExactlyOnce = isKrea2
@@ -277,8 +285,10 @@ function assertStyleReferenceUsable(
 
   const expectedReferenceContext = deriveTimelineConfirmedReferenceContext(workflow);
   const confirmedReferenceContext = getConfirmedTimelineReferenceContext(workflow);
-  if (expectedReferenceContext && confirmedReferenceContext &&
-      JSON.stringify(expectedReferenceContext) !== JSON.stringify(confirmedReferenceContext)) {
+  if (expectedReferenceContext && expectedReferenceContext.references.length > 0 &&
+      (expectedReferenceContext.adapter === "krea2-reid" && !confirmedReferenceContext ||
+      confirmedReferenceContext &&
+        JSON.stringify(expectedReferenceContext) !== JSON.stringify(confirmedReferenceContext))) {
     invalidComfyUiRequest("Run reference settings changed after confirmation. Review and confirm the Run again.");
   }
 }
@@ -445,8 +455,8 @@ export function createTimelineFinalRequests(workflow: TimelineWorkflowState) {
   const formal = createConfirmedTimelineComfyUiRequest(workflow);
   const sceneInput = workflow.nodes["scene-input"].result;
   const settings = getRunSceneInputSettings(isRecord(sceneInput) ? sceneInput : {});
-  const finalPolicy = resolveTimelineFinalGenerationPolicy(formal, settings.finalRedrawPreset);
-  const policy = getTimelineBalancedGenerationPolicy(formal, settings.finalRedrawPreset);
+  const hasReId = isKrea2ReIdReferenceReady(sanitizeCharacterReferenceSnapshot(settings.characterReference));
+  const finalPolicy = resolveTimelineFinalGenerationPolicy(formal, settings.finalRedrawPreset, { krea2ReId: hasReId });
   const dimensions = resolveTimelineFinalDimensions({
     request: formal,
     sourceImage: getTimelineSourceImage(workflow),
@@ -528,8 +538,8 @@ export function createTimelineFinalRequests(workflow: TimelineWorkflowState) {
         imageWidth: dimensions.width,
         imageHeight: dimensions.height,
         seed: candidate.seed,
-        steps: policy.finalSteps ?? formal.steps,
-        denoise: policy.finalDenoise,
+        steps: finalPolicy.steps ?? formal.steps,
+        denoise: finalPolicy.denoise,
         batchSize: 1,
         preview: false,
       },

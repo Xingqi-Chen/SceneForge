@@ -132,7 +132,10 @@ export async function POST(request: Request) {
     const requestPreview = isRecord(parameterResult) && isRecord(parameterResult.requestPreview)
       ? parameterResult.requestPreview
       : {};
-    const resolvedFinalPolicy = resolveTimelineFinalGenerationPolicy(requestPreview, settings.finalRedrawPreset);
+    const resolvedFinalPolicy = resolveTimelineFinalGenerationPolicy(requestPreview, settings.finalRedrawPreset, {
+      krea2ReId: settings.characterReference?.kind === "krea2-reid" &&
+        settings.characterReference.status === "ready",
+    });
     const runnableWorkflow = action === "retry"
       ? retryTimelineGenerationFrom(workflow, retryNodeId as TimelineGenerationRetryNodeId)
       : action === "confirm" ? confirmTimelineGeneration(workflow, {

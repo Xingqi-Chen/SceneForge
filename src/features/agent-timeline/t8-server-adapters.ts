@@ -11,8 +11,10 @@ import {
   validateComfyUiRequestAgainstObjectInfo,
   validateComfyUiTextToImageRequest,
   buildComfyUiSequenceCharacterReference,
+  buildBasicTextToImageWorkflow,
   resolveComfyUiTextToImageWorkflowProfile,
   type ComfyUiSequenceCharacter,
+  type ComfyUiKrea2ReIdDescriptor,
   type ComfyUiKrea2StyleReferenceDescriptor,
   type ComfyUiTextToImageRequest,
 } from "@/features/comfyui";
@@ -39,6 +41,12 @@ import {
   getComfyUiKrea2StyleReferenceContextIssue,
   KREA2_STYLE_REFERENCE_LORA_NAME,
 } from "@/features/comfyui/krea2-style-reference";
+import {
+  getComfyUiKrea2ReIdContextIssue,
+  KREA2_REID_KV_CACHE,
+  KREA2_REID_LORA_NAME,
+  KREA2_REID_STRENGTH_MODEL,
+} from "@/features/comfyui/krea2-reid";
 import {
   getConfirmedTimelineReferenceContext,
   type TimelineConfirmedReferenceContext,
@@ -112,6 +120,7 @@ const recursiveFinalTransportFields = new Set([
   "clientId",
   "client_id",
   "krea2StyleReference",
+  "krea2ReId",
   "outputPrefix",
   "promptId",
   "prompt_id",
@@ -155,6 +164,10 @@ function createReferenceCharacters(referenceContext: TimelineConfirmedReferenceC
 function createKrea2StyleReferenceDescriptor(
   referenceContext: TimelineConfirmedReferenceContext,
 ): ComfyUiKrea2StyleReferenceDescriptor {
+  if (referenceContext.adapter !== "krea2-ostris" || referenceContext.references.length !== 1 ||
+      referenceContext.references[0]?.role !== "style") {
+    throw new Error("Confirmed Krea style context must contain exactly one style reference.");
+  }
   const references = referenceContext.references.map((reference) => ({
     role: reference.role,
     referenceDigest: digestTimelineSemanticValue({
@@ -179,13 +192,35 @@ function createKrea2StyleReferenceDescriptor(
   };
 }
 
+function createKrea2ReIdDescriptor(
+  referenceContext: TimelineConfirmedReferenceContext,
+): ComfyUiKrea2ReIdDescriptor {
+  const reference = referenceContext.references.find((item) => item.role === "character");
+  if (referenceContext.adapter !== "krea2-reid" || !reference) {
+    throw new Error("Confirmed Krea2 ReID context is missing its prepared character reference.");
+  }
+  return {
+    version: 1,
+    referenceDigest: digestTimelineSemanticValue({
+      byteLength: reference.byteLength,
+      contentType: reference.contentType,
+      storedFilename: reference.storedFilename,
+    }),
+    loraName: KREA2_REID_LORA_NAME,
+    strengthModel: KREA2_REID_STRENGTH_MODEL,
+    kvCache: KREA2_REID_KV_CACHE,
+    imageCount: 1,
+  };
+}
+
 function bindTimelineFinalSemanticRequest(
   request: ComfyUiTextToImageRequest,
   referenceContext: TimelineConfirmedReferenceContext,
 ) {
-  return request.workflowProfile === "krea2" && referenceContext.references.length > 0
-    ? { ...request, krea2StyleReferenceDescriptor: createKrea2StyleReferenceDescriptor(referenceContext) }
-    : request;
+  if (request.workflowProfile !== "krea2" || referenceContext.references.length === 0) return request;
+  return referenceContext.adapter === "krea2-reid"
+    ? { ...request, krea2ReIdDescriptor: createKrea2ReIdDescriptor(referenceContext) }
+    : { ...request, krea2StyleReferenceDescriptor: createKrea2StyleReferenceDescriptor(referenceContext) };
 }
 
 function deriveTimelineFinalRequestDigest(
@@ -207,15 +242,32 @@ function createKreaReferenceTransport(
   const style = referenceContext.references.find((reference) => reference.role === "style");
   const character = referenceContext.references.find((reference) => reference.role === "character");
   if (!style && !character) return request;
+  if (referenceContext.adapter === "krea2-reid") {
+    if (!character || style) throw new Error("Krea2 ReID requires exactly one prepared character reference.");
+    return {
+      ...request,
+      characterReferences: [],
+      krea2StyleReference: undefined,
+      krea2StyleReferenceDescriptor: undefined,
+      krea2ReIdDescriptor: createKrea2ReIdDescriptor(referenceContext),
+      krea2ReId: {
+        imageName: imageNames.character ?? `sceneforge-krea-reid-${character.storedFilename}`,
+      },
+      steps: 8,
+      cfg: 1,
+      samplerName: "euler",
+      scheduler: "simple",
+    };
+  }
+  if (!style || character) throw new Error("Krea style conditioning requires exactly one style reference.");
   return {
     ...request,
     characterReferences: [],
     krea2StyleReferenceDescriptor: createKrea2StyleReferenceDescriptor(referenceContext),
     krea2StyleReference: {
-      ...(style ? { styleImageName: imageNames.style ?? `sceneforge-krea-style-${style.storedFilename}` } : {}),
-      ...(character ? { characterImageName: imageNames.character ?? `sceneforge-krea-character-${character.storedFilename}` } : {}),
+      styleImageName: imageNames.style ?? `sceneforge-krea-style-${style.storedFilename}`,
       loraName: KREA2_STYLE_REFERENCE_LORA_NAME,
-      weight: style?.strength ?? character!.strength,
+      weight: style.strength,
       startPercent: 0,
       endPercent: 1,
     },
@@ -265,6 +317,14 @@ function preflightTimelineReferences(
       { errors: objectValidation.errors },
     ));
   }
+  try {
+    buildBasicTextToImageWorkflow(objectValidation.request);
+  } catch (error) {
+    throw new TimelineNodeExecutionError(createTimelineNodeError(
+      "comfyui_object_info_mismatch",
+      error instanceof Error ? error.message : "Krea2 ReID generated-graph validation failed.",
+    ));
+  }
 }
 
 async function applyTimelineReferences(
@@ -283,17 +343,23 @@ async function applyTimelineReferences(
   if (referenceContext.references.length === 0) return request;
   const isKrea2 = profile === "krea2";
   if (isKrea2) {
-    const contextIssue = getComfyUiKrea2StyleReferenceContextIssue(request);
+    const contextIssue = referenceContext.adapter === "krea2-reid"
+      ? getComfyUiKrea2ReIdContextIssue(request)
+      : getComfyUiKrea2StyleReferenceContextIssue(request);
     if (contextIssue) {
       throw new TimelineNodeExecutionError(createTimelineNodeError("comfyui_request_invalid", contextIssue));
     }
-    const descriptor = createKrea2StyleReferenceDescriptor(referenceContext);
-    if (request.krea2StyleReferenceDescriptor &&
-        digestTimelineSemanticValue(request.krea2StyleReferenceDescriptor) !==
+    const descriptor = referenceContext.adapter === "krea2-reid"
+      ? createKrea2ReIdDescriptor(referenceContext)
+      : createKrea2StyleReferenceDescriptor(referenceContext);
+    const requestDescriptor = referenceContext.adapter === "krea2-reid"
+      ? request.krea2ReIdDescriptor
+      : request.krea2StyleReferenceDescriptor;
+    if (requestDescriptor && digestTimelineSemanticValue(requestDescriptor) !==
           digestTimelineSemanticValue(descriptor)) {
       throw new TimelineNodeExecutionError(createTimelineNodeError(
         "comfyui_request_invalid",
-        "The Krea adapter identity does not match the confirmed Run reference context.",
+        "The Krea reference identity does not match the confirmed Run reference context.",
       ));
     }
   }
@@ -308,11 +374,12 @@ async function applyTimelineReferences(
       const byRole = new Map(uploaded.map((item) => [item.id?.replace("run-", "").replace("-reference", ""), item]));
       const styleImageName = byRole.get("style")?.references[0]?.imageName;
       const characterImageName = byRole.get("character")?.references[0]?.imageName;
-      if (!styleImageName && !characterImageName) throw new Error("Missing uploaded Krea reference image.");
-      return createKreaReferenceTransport({
-        ...request,
-        krea2StyleReferenceDescriptor: createKrea2StyleReferenceDescriptor(referenceContext),
-      }, referenceContext, { style: styleImageName, character: characterImageName });
+      const requiredImageName = referenceContext.adapter === "krea2-reid" ? characterImageName : styleImageName;
+      if (!requiredImageName) throw new Error("Missing uploaded Krea reference image.");
+      return createKreaReferenceTransport(request, referenceContext, {
+        style: styleImageName,
+        character: characterImageName,
+      });
     }
     const references = uploaded.map((item) => buildComfyUiSequenceCharacterReference(
       item,
@@ -391,6 +458,8 @@ async function queueAndStore(
   context: TimelineNodeExecutionContext,
   suffix: string,
 ) {
+  const hasKrea2ReId = request.krea2ReIdDescriptor !== undefined ||
+    getConfirmedReferenceContext(context).adapter === "krea2-reid";
   const validation = validateComfyUiTextToImageRequest(request);
   if (!validation.ok) {
     throw new TimelineNodeExecutionError(createTimelineNodeError(
@@ -423,6 +492,13 @@ async function queueAndStore(
     const image = await waitForStoredImage(client, queued.promptId, queued.outputNodeId);
     return { ...image, promptId: queued.promptId, warnings: objectValidation.warnings };
   } catch (error) {
+    if (hasKrea2ReId && error instanceof ComfyUiApiError) {
+      throw new TimelineNodeExecutionError(createTimelineNodeError(
+        "comfyui_upstream",
+        "ComfyUI rejected the locally validated Krea2 ReID request.",
+        { statusCode: error.statusCode },
+      ));
+    }
     throw toComfyError(error);
   }
 }

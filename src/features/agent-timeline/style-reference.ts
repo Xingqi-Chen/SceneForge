@@ -8,6 +8,18 @@ import {
 export type StyleReferenceMode = "prompt-only" | "ipadapter";
 export type StyleReferenceStatus = "pending" | "ready" | "failed" | "mismatch" | "invalid";
 export type CharacterReferenceStatus = "pending" | "ready" | "failed" | "invalid";
+export type CharacterReferenceKind = "generic" | "krea2-reid";
+export type Krea2ReIdPreparationChoice = "crop" | "original";
+
+export type Krea2ReIdPreparation = {
+  choice: Krea2ReIdPreparationChoice;
+  detector: "yunet-2023mar-int8";
+  detectorSha256: string;
+  faceDetected: boolean;
+  height: number;
+  version: 1;
+  width: number;
+};
 
 export type StyleReferenceMetadata = {
   byteLength: number;
@@ -57,7 +69,10 @@ export type StyleReferenceSnapshot = {
  */
 export type CharacterReferenceSnapshot = {
   error?: string;
+  /** Missing on legacy snapshots and therefore treated only as generic, never ReID. */
+  kind?: CharacterReferenceKind;
   metadata?: StyleReferenceMetadata;
+  reIdPreparation?: Krea2ReIdPreparation;
   status: CharacterReferenceStatus;
   strength: number;
 };
@@ -142,6 +157,31 @@ function normalizeMode(value: unknown): StyleReferenceMode {
 
 function normalizeCharacterReferenceStatus(value: unknown): CharacterReferenceStatus {
   return value === "pending" || value === "failed" || value === "invalid" ? value : "ready";
+}
+
+function sanitizeKrea2ReIdPreparation(value: unknown): Krea2ReIdPreparation | undefined {
+  if (!isRecord(value) || value.version !== 1 ||
+      value.choice !== "crop" && value.choice !== "original" ||
+      value.detector !== "yunet-2023mar-int8" ||
+      typeof value.detectorSha256 !== "string" || !/^[a-f0-9]{64}$/.test(value.detectorSha256) ||
+      typeof value.faceDetected !== "boolean") {
+    return undefined;
+  }
+  const width = positiveInteger(value.width);
+  const height = positiveInteger(value.height);
+  if (!width || !height || width * height > 384 * 384 ||
+      value.choice === "crop" && !value.faceDetected) {
+    return undefined;
+  }
+  return {
+    choice: value.choice,
+    detector: "yunet-2023mar-int8",
+    detectorSha256: value.detectorSha256,
+    faceDetected: value.faceDetected,
+    height,
+    version: 1,
+    width,
+  };
 }
 
 function invalidStyleReference(message: string): StyleReferenceSnapshot {
@@ -404,21 +444,28 @@ export function sanitizeCharacterReferenceSnapshot(value: unknown): CharacterRef
   }
 
   const status = normalizeCharacterReferenceStatus(value.status);
+  const kind: CharacterReferenceKind = value.kind === "krea2-reid" ? "krea2-reid" : "generic";
   const metadata = sanitizeStyleReferenceMetadata(value.metadata);
+  const reIdPreparation = kind === "krea2-reid" ? sanitizeKrea2ReIdPreparation(value.reIdPreparation) : undefined;
   const error = compactText(value.error, 600);
-  if (status === "ready" && !metadata) {
+  if (status === "ready" && (!metadata || kind === "krea2-reid" && !reIdPreparation)) {
     return {
-      error: "Character reference storage is missing or invalid. Replace or remove the reference.",
+      error: kind === "krea2-reid"
+        ? "Krea2 ReID prepared-reference storage is missing or invalid. Replace or remove the reference."
+        : "Character reference storage is missing or invalid. Replace or remove the reference.",
+      ...(kind === "krea2-reid" ? { kind } : {}),
       status: "invalid",
-      strength: numberZeroToOne(value.strength, CHARACTER_REFERENCE_DEFAULT_STRENGTH),
+      strength: kind === "krea2-reid" ? 1 : numberZeroToOne(value.strength, CHARACTER_REFERENCE_DEFAULT_STRENGTH),
     };
   }
 
   return {
     ...(error ? { error } : {}),
+    ...(kind === "krea2-reid" ? { kind } : {}),
     ...(metadata ? { metadata } : {}),
+    ...(reIdPreparation ? { reIdPreparation } : {}),
     status,
-    strength: numberZeroToOne(value.strength, CHARACTER_REFERENCE_DEFAULT_STRENGTH),
+    strength: kind === "krea2-reid" ? 1 : numberZeroToOne(value.strength, CHARACTER_REFERENCE_DEFAULT_STRENGTH),
   };
 }
 
@@ -436,10 +483,44 @@ export function createCharacterReferenceSnapshot({
   };
 }
 
+export function createKrea2ReIdReferenceSnapshot({
+  metadata,
+  preparation,
+}: {
+  metadata: StyleReferenceMetadata;
+  preparation: Krea2ReIdPreparation;
+}): CharacterReferenceSnapshot {
+  return sanitizeCharacterReferenceSnapshot({
+    kind: "krea2-reid",
+    metadata,
+    reIdPreparation: preparation,
+    status: "ready",
+    strength: 1,
+  }) ?? {
+    error: "Krea2 ReID reference is invalid.",
+    kind: "krea2-reid",
+    status: "invalid",
+    strength: 1,
+  };
+}
+
 export function isCharacterReferenceReady(
   value: CharacterReferenceSnapshot | undefined,
 ): value is CharacterReferenceSnapshot & { metadata: StyleReferenceMetadata } {
   return Boolean(value?.status === "ready" && value.metadata?.storedFilename);
+}
+
+export function isKrea2ReIdReferenceReady(
+  value: CharacterReferenceSnapshot | undefined,
+): value is CharacterReferenceSnapshot & {
+  kind: "krea2-reid";
+  metadata: StyleReferenceMetadata;
+  reIdPreparation: Krea2ReIdPreparation;
+} {
+  return Boolean(
+    value?.kind === "krea2-reid" && value.status === "ready" &&
+    value.metadata?.storedFilename && value.reIdPreparation,
+  );
 }
 
 export function getCharacterReferenceBlockingIssue(value: CharacterReferenceSnapshot | undefined) {

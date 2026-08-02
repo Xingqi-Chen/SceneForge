@@ -9,6 +9,7 @@ import {
 } from "./run-input-settings";
 import {
   isCharacterReferenceReady,
+  isKrea2ReIdReferenceReady,
   isStyleReferenceReady,
   getStyleReferenceCapability,
   sanitizeCharacterReferenceSnapshot,
@@ -24,8 +25,9 @@ export type TimelineReferenceRole = "style" | "character";
  * queue request; workflow persistence retains the managed storage identity.
  */
 export type TimelineConfirmedReferenceContext = {
-  version: 1;
-  adapter: "ipadapter" | "krea2-ostris";
+  /** Existing IP/style contexts remain v1; Krea2 ReID requires v2. */
+  version: 1 | 2;
+  adapter: "ipadapter" | "krea2-ostris" | "krea2-reid";
   references: Array<{
     role: TimelineReferenceRole;
     storedFilename: string;
@@ -105,9 +107,10 @@ export function createTimelineConfirmedReferenceContext({
   const characterReference = sanitizeCharacterReferenceSnapshot(settings.characterReference);
   const kreaStrength = getKreaReferenceStrength(settings);
   const references: TimelineConfirmedReferenceContext["references"] = [];
+  const hasKrea2ReId = isKrea2 && isKrea2ReIdReferenceReady(characterReference);
 
   if (isStyleReferenceReady(styleReference) && styleReference.mode === "ipadapter" &&
-      styleReferenceAdapterSupported !== false) {
+      styleReferenceAdapterSupported !== false && !hasKrea2ReId) {
     references.push({
       role: "style",
       storedFilename: styleReference.metadata.storedFilename,
@@ -116,19 +119,20 @@ export function createTimelineConfirmedReferenceContext({
       strength: isKrea2 ? kreaStrength : styleReference.ipAdapter?.weight ?? 0.45,
     });
   }
-  if (isCharacterReferenceReady(characterReference)) {
+  if (hasKrea2ReId || !isKrea2 && isCharacterReferenceReady(characterReference) &&
+      characterReference.kind !== "krea2-reid") {
     references.push({
       role: "character",
       storedFilename: characterReference.metadata.storedFilename,
       contentType: characterReference.metadata.contentType as TimelineConfirmedReferenceContext["references"][number]["contentType"],
       byteLength: characterReference.metadata.byteLength,
-      strength: isKrea2 ? kreaStrength : characterReference.strength,
+      strength: hasKrea2ReId ? 1 : characterReference.strength,
     });
   }
 
   return {
-    version: 1,
-    adapter: isKrea2 ? "krea2-ostris" : "ipadapter",
+    version: hasKrea2ReId ? 2 : 1,
+    adapter: hasKrea2ReId ? "krea2-reid" : isKrea2 ? "krea2-ostris" : "ipadapter",
     references,
     startPercent: 0,
     endPercent: 1,
@@ -150,8 +154,10 @@ export function deriveTimelineConfirmedReferenceContext(workflow: TimelineWorkfl
 export function sanitizeTimelineConfirmedReferenceContext(
   value: unknown,
 ): TimelineConfirmedReferenceContext | undefined {
-  if (!isRecord(value) || value.version !== 1 ||
-      (value.adapter !== "ipadapter" && value.adapter !== "krea2-ostris") ||
+  if (!isRecord(value) ||
+      (value.version !== 1 && value.version !== 2) ||
+      (value.adapter !== "ipadapter" && value.adapter !== "krea2-ostris" && value.adapter !== "krea2-reid") ||
+      (value.version === 2) !== (value.adapter === "krea2-reid") ||
       value.startPercent !== 0 || value.endPercent !== 1 || !Array.isArray(value.references) ||
       value.references.length > 2) {
     return undefined;
@@ -177,12 +183,14 @@ export function sanitizeTimelineConfirmedReferenceContext(
   });
   if (references.some((reference) => !reference) ||
       references.length === 2 && (references[0]?.role !== "style" || references[1]?.role !== "character") ||
-      value.adapter === "krea2-ostris" && references.length > 1 &&
-        references.some((reference) => reference?.strength !== references[0]?.strength)) {
+      value.adapter === "krea2-ostris" &&
+        (references.length > 1 || references.some((reference) => reference?.role !== "style")) ||
+      value.adapter === "krea2-reid" &&
+        (references.length !== 1 || references[0]?.role !== "character" || references[0]?.strength !== 1)) {
     return undefined;
   }
   return {
-    version: 1,
+    version: value.version,
     adapter: value.adapter,
     references: references as TimelineConfirmedReferenceContext["references"],
     startPercent: 0,

@@ -39,6 +39,12 @@ import {
   KREA2_STYLE_REFERENCE_TEXT_ENCODE_NODE,
 } from "./krea2-style-reference";
 import {
+  getComfyUiKrea2ReIdWorkflowIssues,
+  KREA2_REID_KV_CACHE,
+  KREA2_REID_LORA_NAME,
+  KREA2_REID_STRENGTH_MODEL,
+} from "./krea2-reid";
+import {
   ANIMA_CHARACTER_REFERENCE_APPLY_NODE,
   ANIMA_CHARACTER_REFERENCE_LOADER_NODE,
   COMFYUI_ANIMA_CHARACTER_REFERENCE_ADAPTER,
@@ -754,34 +760,34 @@ function buildKrea2TextToImageWorkflow(
   const builder = new ComfyUiWorkflowBuilder();
   const modelContext = addModelContextNodes({ builder, request: resolvedRequest });
   const styleReference = resolvedRequest.krea2StyleReference;
+  const reIdReference = resolvedRequest.krea2ReId;
   if (resolvedRequest.krea2StyleReferenceDescriptor && !styleReference) {
     throw new Error("Krea style-reference transport image is required for Final generation.");
   }
+  if (resolvedRequest.krea2ReIdDescriptor && !reIdReference) {
+    throw new Error("Krea2 ReID prepared-image transport is required for Preview and Final generation.");
+  }
+  if ((styleReference || resolvedRequest.krea2StyleReferenceDescriptor) &&
+      (reIdReference || resolvedRequest.krea2ReIdDescriptor)) {
+    throw new Error("Krea2 ReID and the Krea style-image adapter cannot be active in the same workflow.");
+  }
   let modelConnection = modelContext.modelConnection;
   let styleReferenceImage: string | undefined;
-  let styleReferenceCharacterImage: string | undefined;
   let styleReferenceLora: string | undefined;
   let styleReferencePatch: string | undefined;
+  let reIdReferenceImage: string | undefined;
+  let reIdLora: string | undefined;
+  let reIdPatch: string | undefined;
   if (styleReference) {
-    const styleImageName = styleReference.styleImageName ??
-      (styleReference.characterImageName ? undefined : styleReference.imageName);
-    const characterImageName = styleReference.characterImageName;
-    const image1Name = styleImageName ?? characterImageName;
+    const image1Name = styleReference.styleImageName ?? styleReference.imageName;
     if (!image1Name) {
-      throw new Error("Krea reference adapter requires at least one role image.");
+      throw new Error("Krea style adapter requires one style image.");
     }
     styleReferenceImage = builder.addNode(
       "LoadImage",
       { image: image1Name },
-      styleImageName ? "Load Krea Style Reference" : "Load Krea Character Reference",
+      "Load Krea Style Reference",
     );
-    if (styleImageName && characterImageName) {
-      styleReferenceCharacterImage = builder.addNode(
-        "LoadImage",
-        { image: characterImageName },
-        "Load Krea Character Reference",
-      );
-    }
     styleReferenceLora = builder.addNode(
       "LoraLoaderModelOnly",
       {
@@ -798,17 +804,38 @@ function buildKrea2TextToImageWorkflow(
     );
     modelConnection = builder.connect(styleReferencePatch, 0);
   }
-  const positivePrompt = styleReference
+  if (reIdReference) {
+    reIdReferenceImage = builder.addNode(
+      "LoadImage",
+      { image: reIdReference.imageName },
+      "Load Prepared Krea2 ReID Reference",
+    );
+    reIdLora = builder.addNode(
+      "LoraLoaderModelOnly",
+      {
+        model: modelConnection,
+        lora_name: KREA2_REID_LORA_NAME,
+        strength_model: KREA2_REID_STRENGTH_MODEL,
+      },
+      "Load Krea2 ReID Adapter",
+    );
+    reIdPatch = builder.addNode(
+      KREA2_STYLE_REFERENCE_MODEL_PATCH_NODE,
+      { model: builder.connect(reIdLora, 0), kv_cache: KREA2_REID_KV_CACHE },
+      "Patch Krea2 ReID Model",
+    );
+    modelConnection = builder.connect(reIdPatch, 0);
+  }
+  const positivePrompt = styleReference || reIdReference
     ? builder.addNode(
         KREA2_STYLE_REFERENCE_TEXT_ENCODE_NODE,
         {
           clip: modelContext.clipConnection,
           prompt: applyPromptPrefix(resolvedRequest.promptWrapper.positivePrefix, resolvedRequest.positivePrompt),
           vae: modelContext.vaeConnection,
-          image1: builder.connect(styleReferenceImage!, 0),
-          ...(styleReferenceCharacterImage ? { image2: builder.connect(styleReferenceCharacterImage, 0) } : {}),
+          image1: builder.connect((reIdReferenceImage ?? styleReferenceImage)!, 0),
         },
-        "Positive Krea Style Reference Prompt",
+        reIdReference ? "Positive Krea2 ReID Prompt" : "Positive Krea Style Reference Prompt",
       )
     : builder.addNode(
         "CLIPTextEncode",
@@ -818,14 +845,14 @@ function buildKrea2TextToImageWorkflow(
         },
         "Positive Krea Prompt",
       );
-  const negativePrompt = styleReference
+  const negativePrompt = styleReference || reIdReference
     ? builder.addNode(
         KREA2_STYLE_REFERENCE_TEXT_ENCODE_NODE,
         {
           clip: modelContext.clipConnection,
           prompt: applyPromptPrefix(resolvedRequest.promptWrapper.negativePrefix, resolvedRequest.negativePrompt),
         },
-        "Negative Krea Style Reference Prompt",
+        reIdReference ? "Negative Krea2 ReID Prompt" : "Negative Krea Style Reference Prompt",
       )
     : builder.addNode(
         "CLIPTextEncode",
@@ -955,8 +982,16 @@ function buildKrea2TextToImageWorkflow(
     "Save Krea 2 Image",
   );
 
+  const workflow = builder.toWorkflow();
+  if (reIdReference || resolvedRequest.krea2ReIdDescriptor) {
+    const issues = getComfyUiKrea2ReIdWorkflowIssues(workflow);
+    if (issues.length > 0) {
+      throw new Error(`Krea2 ReID workflow invariant failed: ${issues.join(" ")}`);
+    }
+  }
+
   return {
-    workflow: builder.toWorkflow(),
+    workflow,
     nodeIds: {
       ...modelContext.nodeIds,
       positivePrompt,
@@ -965,9 +1000,11 @@ function buildKrea2TextToImageWorkflow(
       ...(sourceImageScale ? { sourceImageScale } : {}),
       ...(vaeEncode ? { vaeEncode } : {}),
       ...(styleReferenceImage ? { styleReferenceImage } : {}),
-      ...(styleReferenceCharacterImage ? { styleReferenceCharacterImage } : {}),
       ...(styleReferenceLora ? { styleReferenceLora } : {}),
       ...(styleReferencePatch ? { styleReferencePatch } : {}),
+      ...(reIdReferenceImage ? { reIdReferenceImage } : {}),
+      ...(reIdLora ? { reIdLora } : {}),
+      ...(reIdPatch ? { reIdPatch } : {}),
       latentImage,
       sampler,
       vaeDecode,

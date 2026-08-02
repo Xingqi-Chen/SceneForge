@@ -69,6 +69,8 @@ export type ComfyUiTextToImageRequest = {
   strictCharacterReferences?: boolean;
   krea2StyleReference?: ComfyUiKrea2StyleReferenceConfig;
   krea2StyleReferenceDescriptor?: ComfyUiKrea2StyleReferenceDescriptor;
+  krea2ReId?: ComfyUiKrea2ReIdConfig;
+  krea2ReIdDescriptor?: ComfyUiKrea2ReIdDescriptor;
   preview?: boolean;
 };
 
@@ -310,6 +312,21 @@ export type ComfyUiKrea2StyleReferenceDescriptor = {
   }>;
 };
 
+/** Runtime-only prepared ReID transport. The ComfyUI input name is never persisted. */
+export type ComfyUiKrea2ReIdConfig = {
+  imageName: string;
+};
+
+/** Persistable, server-owned Krea2 ReID identity and fixed graph invariants. */
+export type ComfyUiKrea2ReIdDescriptor = {
+  version: 1;
+  referenceDigest: string;
+  loraName: "krea2_reid_rank32.safetensors";
+  strengthModel: 1;
+  kvCache: true;
+  imageCount: 1;
+};
+
 export type ComfyUiLoraInput = {
   loraName: string;
   strengthModel: number;
@@ -366,6 +383,8 @@ export type ResolvedComfyUiTextToImageRequest = {
     endPercent: number;
   };
   krea2StyleReferenceDescriptor?: ComfyUiKrea2StyleReferenceDescriptor;
+  krea2ReId?: ComfyUiKrea2ReIdConfig;
+  krea2ReIdDescriptor?: ComfyUiKrea2ReIdDescriptor;
 };
 
 export type ResolvedComfyUiInpaintRequest = {
@@ -548,6 +567,9 @@ export type BasicTextToImageNodeIds = {
   styleReferenceCharacterImage?: string;
   styleReferenceLora?: string;
   styleReferencePatch?: string;
+  reIdReferenceImage?: string;
+  reIdLora?: string;
+  reIdPatch?: string;
   latentImage: string;
   sampler: string;
   vaeDecode: string;

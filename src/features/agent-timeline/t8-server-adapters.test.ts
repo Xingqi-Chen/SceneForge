@@ -41,6 +41,7 @@ const comfyUiMocks = vi.hoisted(() => {
     DEFAULT_COMFYUI_FACE_DETAILER_DETECTOR_MODEL: "bbox/face_yolov8m.pt",
     DEFAULT_COMFYUI_HAND_DETAILER_DETECTOR_MODEL: "bbox/hand_yolov8s.pt",
     ComfyUiApiError: MockComfyUiApiError,
+    buildBasicTextToImageWorkflow: vi.fn(),
     buildComfyUiSequenceCharacterReference: vi.fn(),
     createComfyUiClient: vi.fn(),
     extractComfyUiHistoryImages: vi.fn(),
@@ -369,6 +370,113 @@ function createStyleReferenceWorkflow({
   });
 }
 
+function createKrea2ReIdWorkflow() {
+  const base = createGateReadyWorkflow();
+  const styleReference = {
+    status: "ready" as const,
+    mode: "ipadapter" as const,
+    metadata: {
+      byteLength: 512,
+      contentType: "image/png",
+      storedFilename: "0123456789abcdef0123456789abcdef.png",
+      uploadedAt: "2026-08-02T00:00:00.000Z",
+    },
+    analysis: {
+      analyzedAt: "2026-08-02T00:00:01.000Z",
+      stylePrompt: "soft gouache, cobalt shadows",
+      summary: "Soft gouache.",
+    },
+    ipAdapter: { weight: 0.8, startPercent: 0, endPercent: 1 },
+    settingsSnapshot: {
+      capturedAt: "2026-08-02T00:00:02.000Z",
+      checkpointBaseModel: "Krea 2",
+      checkpointId: "checkpoint-krea",
+      modeReason: "Krea adapter verified.",
+      promptProfile: "krea2" as const,
+      visualStyle: "anime" as const,
+    },
+  };
+  const characterReference = {
+    kind: "krea2-reid" as const,
+    status: "ready" as const,
+    strength: 1,
+    metadata: {
+      byteLength: 777,
+      contentType: "image/png",
+      storedFilename: "fedcba9876543210fedcba9876543210.png",
+      uploadedAt: "2026-08-02T00:00:03.000Z",
+    },
+    reIdPreparation: {
+      choice: "crop" as const,
+      detector: "yunet-2023mar-int8" as const,
+      detectorSha256: "a".repeat(64),
+      faceDetected: true,
+      height: 256,
+      version: 1 as const,
+      width: 256,
+    },
+  };
+  const sceneInput = base.nodes["scene-input"].result as Record<string, unknown>;
+  const parameters = base.nodes["parameter-recommendation"].result as {
+    requestPreview: Record<string, unknown>;
+  } & Record<string, unknown>;
+
+  return confirmWorkflow({
+    ...base,
+    nodes: {
+      ...base.nodes,
+      "scene-input": {
+        ...base.nodes["scene-input"],
+        result: {
+          ...sceneInput,
+          promptProfile: "krea2",
+          settingsSnapshot: {
+            characterReference,
+            finalRedrawPreset: "balanced",
+            promptProfile: "krea2",
+            styleReference,
+            visualStyle: "anime",
+          },
+        },
+      },
+      "resource-recommendation": {
+        ...base.nodes["resource-recommendation"],
+        result: {
+          checkpoint: {
+            resource: {
+              baseModel: "Krea 2",
+              id: "checkpoint-krea",
+              modelFileName: "RedCraft_v4_fp8_scaled.safetensors",
+              name: "RedCraft",
+            },
+          },
+          loras: [],
+        },
+      },
+      "parameter-recommendation": {
+        ...base.nodes["parameter-recommendation"],
+        result: {
+          ...parameters,
+          characterReference,
+          styleReference,
+          requestPreview: {
+            ...parameters.requestPreview,
+            cfg: 1,
+            checkpointName: "RedCraft_v4_fp8_scaled.safetensors",
+            modelBaseModel: "Krea 2",
+            modelStorageKind: "diffusion",
+            positivePrompt: "glass greenhouse pilot, soft gouache, cobalt shadows",
+            samplerName: "euler",
+            scheduler: "simple",
+            steps: 8,
+            workflowProfile: "krea2",
+          },
+        },
+      },
+    },
+  });
+}
+
 function prepareStyleReferenceValidation() {
   const getObjectInfo = vi.fn().mockResolvedValue({ CheckpointLoaderSimple: {} });
   comfyUiMocks.createComfyUiClient.mockReturnValue({ getObjectInfo });
@@ -386,6 +494,7 @@ function prepareStyleReferenceValidation() {
 }
 
 beforeEach(() => {
+  comfyUiMocks.buildBasicTextToImageWorkflow.mockReturnValue({ workflow: {}, nodeIds: {} });
   storeGeneratedImageMock.mockImplementation(async (bytes: Uint8Array) => ({
     byteLength: bytes.byteLength,
     contentType: "image/png",
@@ -1430,6 +1539,88 @@ describe("timeline T8 server adapters", () => {
       }),
       expect.anything(),
     );
+    expect(result.nodes["comfyui-execution"].status).toBe("error");
+  });
+
+  it("uploads and injects only the confirmed prepared ReID image while pausing style transport", async () => {
+    const getObjectInfo = vi.fn().mockResolvedValue({ Krea2OstrisEditModelPatch: {} });
+    comfyUiMocks.createComfyUiClient.mockReturnValue({ getObjectInfo });
+    comfyUiMocks.validateComfyUiTextToImageRequest.mockImplementation((request: unknown) => ({ ok: true, request }));
+    comfyUiMocks.validateComfyUiRequestAgainstObjectInfo
+      .mockReset()
+      .mockImplementationOnce((request: unknown) => ({ errors: [], request, warnings: [] }))
+      .mockImplementation((request: unknown) => ({
+        errors: ["Stop after the prepared ReID request was audited."],
+        request,
+        warnings: [],
+      }));
+    uploadSequenceCharacterReferencesMock.mockResolvedValue([{
+      id: "run-character-reference",
+      name: "Run character reference",
+      enabled: true,
+      mode: "ipadapter",
+      references: [{
+        id: "run-character-reference-image",
+        imageName: "sceneforge-krea-reid.png",
+        storedFilename: "fedcba9876543210fedcba9876543210.png",
+        weight: 1,
+      }],
+      weight: 1,
+      startPercent: 0,
+      endPercent: 1,
+    }]);
+
+    const result = await executeTimelineGraph(createKrea2ReIdWorkflow(), createTimelineT8ServerNodeAdapters());
+
+    expect(uploadSequenceCharacterReferencesMock).toHaveBeenCalledTimes(1);
+    expect(uploadSequenceCharacterReferencesMock.mock.calls[0]?.[2]).toEqual([
+      expect.objectContaining({
+        id: "run-character-reference",
+        references: [{
+          id: "run-character-reference-image",
+          storedFilename: "fedcba9876543210fedcba9876543210.png",
+        }],
+        weight: 1,
+      }),
+    ]);
+    const requests = comfyUiMocks.validateComfyUiRequestAgainstObjectInfo.mock.calls
+      .map((call) => call[0] as Record<string, unknown>);
+    expect(requests).toHaveLength(2);
+    expect(requests[0]).toMatchObject({
+      characterReferences: [],
+      cfg: 1,
+      checkpointName: "RedCraft_v4_fp8_scaled.safetensors",
+      krea2ReId: {
+        imageName: "sceneforge-krea-reid-fedcba9876543210fedcba9876543210.png",
+      },
+      krea2ReIdDescriptor: {
+        version: 1,
+        referenceDigest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+        loraName: "krea2_reid_rank32.safetensors",
+        strengthModel: 1,
+        kvCache: true,
+        imageCount: 1,
+      },
+      positivePrompt: "glass greenhouse pilot, soft gouache, cobalt shadows",
+      samplerName: "euler",
+      scheduler: "simple",
+      steps: 8,
+    });
+    expect(requests[1]).toMatchObject({
+      characterReferences: [],
+      krea2ReId: { imageName: "sceneforge-krea-reid.png" },
+      positivePrompt: "glass greenhouse pilot, soft gouache, cobalt shadows",
+    });
+    for (const request of requests) {
+      expect(request.krea2StyleReference).toBeUndefined();
+      expect(request.krea2StyleReferenceDescriptor).toBeUndefined();
+      expect(JSON.stringify(request)).not.toContain("krea2StyleReference");
+      expect(JSON.stringify(request).match(/soft gouache, cobalt shadows/g)).toHaveLength(1);
+    }
+    expect(comfyUiMocks.buildComfyUiSequenceCharacterReference).not.toHaveBeenCalled();
+    expect(comfyUiMocks.buildBasicTextToImageWorkflow).toHaveBeenCalledWith(expect.objectContaining({
+      krea2ReId: expect.any(Object),
+    }));
     expect(result.nodes["comfyui-execution"].status).toBe("error");
   });
 

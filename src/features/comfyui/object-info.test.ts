@@ -1351,6 +1351,26 @@ describe("ComfyUI object info helpers", () => {
       height: 1024,
     }, objectInfoWithKrea2)).toMatchObject({ errors: [] });
 
+    const redCraftRequest = {
+      ...validRequest,
+      checkpointName: "RedCraft_v4_fp8_scaled.safetensors",
+    };
+    const redCraftObjectInfo = {
+      ...objectInfoWithKrea2,
+      UNETLoader: {
+        input: {
+          required: {
+            unet_name: [["RedCraft_v4_fp8_scaled.safetensors"], {}],
+            weight_dtype: [["default"], {}],
+          },
+        },
+      },
+    };
+    expect(validateComfyUiRequestAgainstObjectInfo(redCraftRequest, redCraftObjectInfo)).toMatchObject({
+      errors: [],
+      request: { checkpointName: "RedCraft_v4_fp8_scaled.safetensors", workflowProfile: "krea2" },
+    });
+
     expect(
       validateComfyUiRequestAgainstObjectInfo(validRequest, {
         ...objectInfoWithKrea2,
@@ -1489,26 +1509,65 @@ describe("ComfyUI object info helpers", () => {
       "TextEncodeKrea2OstrisEdit.image1 input is not available in ComfyUI object_info.",
     ]));
 
-    const dualRequest = {
+    const reIdRequest = {
       ...request,
-      krea2StyleReference: {
-        styleImageName: "sceneforge-krea-style.png",
-        characterImageName: "sceneforge-krea-character.png",
-        weight: 0.8,
+      steps: 8,
+      cfg: 1,
+      samplerName: "euler",
+      scheduler: "simple",
+      krea2StyleReference: undefined,
+      krea2ReId: { imageName: "sceneforge-krea-reid.png" },
+      krea2ReIdDescriptor: {
+        version: 1 as const,
+        referenceDigest: `sha256:${"a".repeat(64)}`,
+        loraName: "krea2_reid_rank32.safetensors" as const,
+        strengthModel: 1 as const,
+        kvCache: true as const,
+        imageCount: 1 as const,
       },
     };
-    const dualCompatibleObjectInfo = {
+    const reIdCompatibleObjectInfo = {
       ...compatibleObjectInfo,
+      LoadImage: { input: { required: { image: [["sceneforge-krea-reid.png"], {}] } } },
+      LoraLoaderModelOnly: {
+        input: { required: {
+          model: ["MODEL", {}],
+          lora_name: [["krea2_reid_rank32.safetensors"], {}],
+          strength_model: ["FLOAT", {}],
+        } },
+      },
       TextEncodeKrea2OstrisEdit: {
         input: { required: {
-          clip: ["CLIP", {}], prompt: ["STRING", {}], vae: ["VAE", {}], image1: ["IMAGE", {}], image2: ["IMAGE", {}],
+          clip: ["CLIP", {}], prompt: ["STRING", {}], vae: ["VAE", {}], image1: ["IMAGE", {}],
         } },
       },
     };
-    expect(validateComfyUiRequestAgainstObjectInfo(dualRequest, dualCompatibleObjectInfo).errors).toEqual([]);
-    expect(validateComfyUiRequestAgainstObjectInfo(dualRequest, compatibleObjectInfo).errors).toEqual([
-      "TextEncodeKrea2OstrisEdit.image2 input is not available in ComfyUI object_info for dual style and character references.",
-    ]);
+    expect(validateComfyUiRequestAgainstObjectInfo(reIdRequest, reIdCompatibleObjectInfo).errors).toEqual([]);
+
+    const missing = validateComfyUiRequestAgainstObjectInfo(reIdRequest, {
+      ...reIdCompatibleObjectInfo,
+      LoraLoaderModelOnly: {
+        input: { required: {
+          model: ["MODEL", {}],
+          lora_name: [["krea2_style_reference.safetensors"], {}],
+        } },
+      },
+      TextEncodeKrea2OstrisEdit: {
+        input: { required: { clip: ["CLIP", {}], prompt: ["STRING", {}], vae: ["VAE", {}] } },
+      },
+      Krea2OstrisEditModelPatch: {
+        input: { required: { model: ["MODEL", {}] } },
+      },
+    }).errors;
+    expect(missing).toEqual(expect.arrayContaining([
+      "LoraLoaderModelOnly.strength_model input is not available in ComfyUI object_info.",
+      "TextEncodeKrea2OstrisEdit.image1 input is not available in ComfyUI object_info.",
+      "Krea2OstrisEditModelPatch.kv_cache input is not available in ComfyUI object_info.",
+      "Krea2 ReID adapter is not available in ComfyUI: krea2_reid_rank32.safetensors",
+    ]));
+
+    expect(validateComfyUiRequestAgainstObjectInfo({ ...reIdRequest, steps: 6 }, reIdCompatibleObjectInfo).errors)
+      .toContain("Krea2 ReID requires steps=8, cfg=1, sampler=euler, and scheduler=simple.");
   });
 
   it("keeps unknown diffusion models on the fallback checkpoint profile", () => {

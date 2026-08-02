@@ -40,6 +40,45 @@ const persistedBalancedKreaV2Policy = {
   family: "krea2",
   denoise: 0.45,
 } as const;
+const persistedKreaV4ReIdPolicy = resolveTimelineFinalGenerationPolicy(
+  { workflowProfile: "krea2" },
+  "balanced",
+  { krea2ReId: true },
+);
+const persistedKreaV4ReIdReference = {
+  kind: "krea2-reid" as const,
+  status: "ready" as const,
+  strength: 1,
+  metadata: {
+    byteLength: 777,
+    contentType: "image/png" as const,
+    storedFilename: "fedcba9876543210fedcba9876543210.png",
+    uploadedAt: "2026-08-02T00:00:00.000Z",
+    url: "/api/comfyui/sequence-references/fedcba9876543210fedcba9876543210.png",
+  },
+  reIdPreparation: {
+    choice: "crop" as const,
+    detector: "yunet-2023mar-int8" as const,
+    detectorSha256: "a".repeat(64),
+    faceDetected: true,
+    height: 256,
+    version: 1 as const,
+    width: 256,
+  },
+};
+const persistedKreaV4ReIdContext = {
+  version: 2 as const,
+  adapter: "krea2-reid" as const,
+  references: [{
+    role: "character" as const,
+    storedFilename: persistedKreaV4ReIdReference.metadata.storedFilename,
+    contentType: "image/png" as const,
+    byteLength: persistedKreaV4ReIdReference.metadata.byteLength,
+    strength: 1,
+  }],
+  startPercent: 0,
+  endPercent: 1,
+};
 
 function managedStoredImage(hex: string) {
   const filename = `${hex.repeat(32)}.png`;
@@ -273,6 +312,93 @@ function createPersistedStagedKreaV2Workflow(finalCount = 1) {
     finalDenoise: persistedBalancedKreaV2Policy.denoise,
   });
   delete gate.finalSteps;
+  return raw;
+}
+
+function createPersistedKreaV4ReIdWorkflow() {
+  const raw = JSON.parse(JSON.stringify(createPersistedV2GenerationWorkflow(1))) as TimelineWorkflowState;
+  raw.workflowId = "persisted-krea-v4-reid";
+  const sceneInput = raw.nodes["scene-input"].result as Record<string, unknown>;
+  sceneInput.promptProfile = "krea2";
+  sceneInput.settingsSnapshot = {
+    ...((sceneInput.settingsSnapshot as Record<string, unknown> | undefined) ?? {}),
+    characterReference: persistedKreaV4ReIdReference,
+    finalRedrawPreset: "balanced",
+    promptProfile: "krea2",
+  };
+  const parameters = raw.nodes["parameter-recommendation"].result as {
+    requestPreview: Record<string, unknown>;
+  } & Record<string, unknown>;
+  Object.assign(parameters, {
+    cfg: 1,
+    denoise: 1,
+    samplerName: "euler",
+    scheduler: "simple",
+    steps: 8,
+  });
+  parameters.requestPreview = {
+    ...parameters.requestPreview,
+    cfg: 1,
+    checkpointName: "RedCraft_v4_fp8_scaled.safetensors",
+    denoise: 1,
+    modelBaseModel: "Krea 2",
+    modelStorageKind: "diffusion",
+    positivePrompt: "persisted Krea v4 ReID scene",
+    samplerName: "euler",
+    scheduler: "simple",
+    steps: 8,
+    workflowProfile: "krea2",
+  };
+  const execution = raw.nodes["comfyui-execution"].result as {
+    finalPolicy: unknown;
+    finals: Array<{
+      finalPolicy: unknown;
+      finalRequestDigest?: string;
+      previewUpscale: { policyVersion: number };
+    }>;
+    referenceContext?: unknown;
+    request: Record<string, unknown>;
+  };
+  execution.finalPolicy = persistedKreaV4ReIdPolicy;
+  execution.referenceContext = persistedKreaV4ReIdContext;
+  execution.request = {
+    batchSize: 1,
+    cfg: 1,
+    checkpointName: "RedCraft_v4_fp8_scaled.safetensors",
+    denoise: persistedKreaV4ReIdPolicy.denoise,
+    krea2ReIdDescriptor: {
+      imageCount: 1,
+      kvCache: true,
+      loraName: "krea2_reid_rank32.safetensors",
+      referenceDigest: `sha256:${"d".repeat(64)}`,
+      strengthModel: 1,
+      version: 1,
+    },
+    modelBaseModel: "Krea 2",
+    modelStorageKind: "diffusion",
+    positivePrompt: "persisted Krea v4 ReID scene",
+    preview: false,
+    samplerName: "euler",
+    scheduler: "simple",
+    steps: 8,
+    workflowProfile: "krea2",
+    width: 1024,
+    height: 1024,
+  };
+  for (const final of execution.finals) {
+    final.finalPolicy = persistedKreaV4ReIdPolicy;
+    final.finalRequestDigest = `sha256:${"c".repeat(64)}`;
+    final.previewUpscale.policyVersion = persistedKreaV4ReIdPolicy.version;
+  }
+  const gate = raw.nodes["generation-gate"].result as Record<string, unknown>;
+  Object.assign(gate, {
+    finalPolicyVersion: persistedKreaV4ReIdPolicy.version,
+    finalRedrawPreset: persistedKreaV4ReIdPolicy.preset,
+    finalGenerationFamily: persistedKreaV4ReIdPolicy.family,
+    finalSteps: persistedKreaV4ReIdPolicy.steps,
+    finalDenoise: persistedKreaV4ReIdPolicy.denoise,
+    referenceContext: persistedKreaV4ReIdContext,
+  });
   return raw;
 }
 
@@ -1962,6 +2088,119 @@ describe("timeline workflow persistence", () => {
     expect(serialized).not.toContain("sceneforge-krea-style-transport.png");
     expect(serialized).not.toContain("PRIVATE_FINAL_SOURCE");
     expect(serialized).not.toContain("C:\\\\private");
+  });
+
+  it("round-trips a completed Krea v4 ReID policy, fallback, and signed reference gate", () => {
+    const serialized = serializeTimelineWorkflowRecord(createTimelineWorkflowRecord({
+      projectId: "t55-krea-v4-reid-round-trip",
+      name: "Krea v4 ReID round trip",
+      workflow: createPersistedKreaV4ReIdWorkflow(),
+      sceneRequest: "A persisted Krea v4 ReID scene",
+      selectedPromptProfile: "krea2",
+      selectedImageCount: 1,
+      selectedNodeId: "result-display",
+      outputDisplayModes: { "result-display": "visual" },
+    }));
+    const record = parseTimelineWorkflowRecordJson(serialized);
+
+    expect(record && isSingleImageTimelineWorkflowRecord(record)).toBe(true);
+    if (!record || !isSingleImageTimelineWorkflowRecord(record)) throw new Error("Expected a Run record.");
+    const restored = record.workflow;
+    const gate = restored.nodes["generation-gate"].result as Record<string, unknown>;
+    const execution = restored.nodes["comfyui-execution"].result as {
+      finalPolicy?: unknown;
+      finals: Array<{ finalPolicy?: unknown; previewUpscale?: unknown }>;
+      referenceContext?: unknown;
+    };
+    expect(restored.generationConfirmed).toBe(true);
+    expect(restored.nodes["comfyui-execution"].status).toBe("done");
+    expect(restored.nodes["result-display"].status).toBe("done");
+    expect(gate.referenceContext).toEqual(persistedKreaV4ReIdContext);
+    expect(execution.referenceContext).toEqual(persistedKreaV4ReIdContext);
+    expect(execution.finalPolicy).toEqual(persistedKreaV4ReIdPolicy);
+    expect(execution.finals).toEqual([
+      expect.objectContaining({
+        finalPolicy: persistedKreaV4ReIdPolicy,
+        previewUpscale: expect.objectContaining({
+          policyVersion: persistedKreaV4ReIdPolicy.version,
+          sourcePreview: expect.any(Object),
+          storedImage: expect.any(Object),
+        }),
+        status: "done",
+      }),
+    ]);
+
+    const tamperedRecord = JSON.parse(serialized) as {
+      workflow: TimelineWorkflowState;
+    };
+    const display = tamperedRecord.workflow.nodes["result-display"].result as {
+      fallbacks: Array<{ storedImage: unknown }>;
+    };
+    display.fallbacks[0]!.storedImage = managedStoredImage("b");
+    const tamperedReload = parseTimelineWorkflowRecordJson(JSON.stringify(tamperedRecord));
+    expect(tamperedReload && isSingleImageTimelineWorkflowRecord(tamperedReload)).toBe(true);
+    if (!tamperedReload || !isSingleImageTimelineWorkflowRecord(tamperedReload)) {
+      throw new Error("Expected the tampered Run record to sanitize fail-closed.");
+    }
+    expect(tamperedReload.workflow.nodes["result-display"]).toMatchObject({
+      status: "error",
+      error: { code: "image_storage_invalid", details: { recoverable: true } },
+    });
+  });
+
+  it("persists only the signed ReID descriptor and strips prepared transport, paths, bytes, and temporary names", () => {
+    const raw = JSON.parse(JSON.stringify(createPersistedV2GenerationWorkflow(1))) as TimelineWorkflowState;
+    const execution = raw.nodes["comfyui-execution"].result as {
+      finals: Array<Record<string, unknown>>;
+      request: Record<string, unknown>;
+    };
+    execution.finals[0]!.finalRequestDigest = `sha256:${"c".repeat(64)}`;
+    execution.request = {
+      checkpointName: "RedCraft_v4_fp8_scaled.safetensors",
+      modelBaseModel: "Krea 2",
+      modelStorageKind: "diffusion",
+      workflowProfile: "krea2",
+      positivePrompt: "persisted Krea ReID scene",
+      krea2ReId: {
+        imageName: "sceneforge-krea-reid-transient.png",
+        dataUrl: "data:image/png;base64,PRIVATE_REID",
+        bytes: [1, 2, 3],
+        path: "C:\\private\\prepared-reid.png",
+        tensor: [0.1, 0.2],
+        temporaryComfyUiName: "temp-reid.png",
+      },
+      krea2ReIdDescriptor: {
+        version: 1,
+        referenceDigest: `sha256:${"d".repeat(64)}`,
+        loraName: "krea2_reid_rank32.safetensors",
+        strengthModel: 1,
+        kvCache: true,
+        imageCount: 1,
+      },
+    };
+
+    const restored = sanitizeTimelineWorkflowState(raw) as TimelineWorkflowState;
+    const result = restored.nodes["comfyui-execution"].result as {
+      finals: Array<{ finalRequestDigest?: string }>;
+      request: Record<string, unknown>;
+    };
+    const serialized = JSON.stringify(result);
+
+    expect(result.finals[0]?.finalRequestDigest).toBe(`sha256:${"c".repeat(64)}`);
+    expect(result.request.krea2ReIdDescriptor).toEqual({
+      version: 1,
+      referenceDigest: `sha256:${"d".repeat(64)}`,
+      loraName: "krea2_reid_rank32.safetensors",
+      strengthModel: 1,
+      kvCache: true,
+      imageCount: 1,
+    });
+    expect(result.request).not.toHaveProperty("krea2ReId");
+    for (const secret of [
+      "PRIVATE_REID", "private", "prepared-reid", "temp-reid", '"tensor":', '"bytes":', '"dataUrl":', '"path":',
+    ]) {
+      expect(serialized).not.toContain(secret);
+    }
   });
 
   it("round-trips an active workflow record without preserving secrets", () => {

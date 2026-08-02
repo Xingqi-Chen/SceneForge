@@ -7,6 +7,7 @@ import {
   buildCharacterReferenceSequenceCharacter,
   buildStyleReferenceSequenceCharacter,
   createCharacterReferenceSnapshot,
+  createKrea2ReIdReferenceSnapshot,
   createStyleReferenceSnapshot,
   getCharacterReferenceBlockingIssue,
   getStyleReferenceBlockingIssue,
@@ -95,6 +96,70 @@ describe("workflow-neutral style reference contract", () => {
       weight: 0.67,
       references: [{ storedFilename: metadata.storedFilename }],
     });
+  });
+
+  it("persists only sanitized prepared ReID metadata and never upgrades legacy Krea character state", () => {
+    const prepared = createKrea2ReIdReferenceSnapshot({
+      metadata: {
+        ...metadata,
+        filename: "C:\\private\\identity.png",
+        url: "https://attacker.invalid/identity.png",
+      },
+      preparation: {
+        choice: "crop",
+        detector: "yunet-2023mar-int8",
+        detectorSha256: "a".repeat(64),
+        faceDetected: true,
+        height: 256,
+        version: 1,
+        width: 256,
+      },
+    });
+    const sanitized = sanitizeCharacterReferenceSnapshot({
+      ...prepared,
+      bytes: [1, 2, 3],
+      dataUrl: "data:image/png;base64,SECRET_REID",
+      path: "C:\\private\\identity.png",
+      tensor: [0.1, 0.2],
+      tempName: "comfy-temp.png",
+      reIdPreparation: {
+        ...prepared.reIdPreparation,
+        alternatePreview: "data:image/png;base64,ALTERNATE",
+        detectorPath: "C:\\models\\yunet.onnx",
+      },
+    });
+
+    expect(sanitized).toMatchObject({
+      kind: "krea2-reid",
+      status: "ready",
+      strength: 1,
+      metadata: {
+        storedFilename: metadata.storedFilename,
+        url: `/api/comfyui/sequence-references/${metadata.storedFilename}`,
+      },
+      reIdPreparation: {
+        choice: "crop",
+        detector: "yunet-2023mar-int8",
+        faceDetected: true,
+        height: 256,
+        version: 1,
+        width: 256,
+      },
+    });
+    const serialized = JSON.stringify(sanitized);
+    for (const secret of ["SECRET_REID", "ALTERNATE", "private", "yunet.onnx", "comfy-temp", "tensor"]) {
+      expect(serialized).not.toContain(secret);
+    }
+
+    const legacy = sanitizeCharacterReferenceSnapshot({
+      status: "ready",
+      strength: 0.8,
+      metadata,
+      reIdPreparation: prepared.reIdPreparation,
+    });
+    expect(legacy).toMatchObject({ status: "ready", strength: 0.8 });
+    expect(legacy).not.toHaveProperty("kind");
+    expect(legacy).not.toHaveProperty("reIdPreparation");
   });
 
   it("sanitizes storage metadata and drops bytes, data URLs, forged URLs, paths, and unknown fields", () => {

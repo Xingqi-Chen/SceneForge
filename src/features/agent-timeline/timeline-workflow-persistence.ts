@@ -43,7 +43,6 @@ import {
   type RunVisualStyle,
 } from "./run-visual-style";
 import {
-  getTimelineFinalGenerationPolicyVersion,
   isTimelineFinalRedrawPreset,
   resolveTimelineFinalDimensions,
   resolveTimelineFinalGenerationPolicy,
@@ -92,7 +91,9 @@ import {
   sanitizeTimelineRepairAttempt,
 } from "./final-repair";
 import { normalizeComfyUiKrea2StyleReferenceDescriptor } from "@/features/comfyui/krea2-style-reference";
+import { normalizeComfyUiKrea2ReIdDescriptor } from "@/features/comfyui/krea2-reid";
 import { sanitizeTimelineConfirmedReferenceContext } from "./run-reference-context";
+import { isKrea2ReIdReferenceReady, sanitizeCharacterReferenceSnapshot } from "./style-reference";
 
 export const TIMELINE_WORKFLOW_RECORD_KIND = "sceneforge-timeline-workflow" as const;
 export const TIMELINE_WORKFLOW_RECORD_VERSION = 1 as const;
@@ -102,6 +103,11 @@ export type TimelineWorkflowRecordState = TimelineWorkflowState | StoryWorkflowS
 export type TimelineWorkflowRecordNodeId = TimelineNodeId | StoryWorkflowNodeId;
 export type TimelineOutputDisplayMode = "json" | "visual";
 export type TimelineOutputDisplayModeMap = Partial<Record<TimelineWorkflowRecordNodeId, TimelineOutputDisplayMode>>;
+
+type PersistedFinalPolicyOptions = {
+  expectedFinalPolicyVersion?: number;
+  requireCurrentFinalPolicy?: boolean;
+};
 
 export type TimelineWorkflowRecord = {
   kind: typeof TIMELINE_WORKFLOW_RECORD_KIND;
@@ -263,7 +269,7 @@ function sanitizeTimelineNode(
   nodeId: TimelineNodeId,
   raw: unknown,
   fallbackUpdatedAt: string,
-  options: { requireCurrentFinalPolicy?: boolean } = {},
+  options: PersistedFinalPolicyOptions = {},
 ): TimelineNodeResult {
   if (!isRecord(raw)) {
     return {
@@ -712,10 +718,26 @@ function sanitizeSingleImageWorkflowState(raw: Record<string, unknown>): Timelin
   const isLegacyRepair = !("final-repair" in rawNodes) || !("repair-verification" in rawNodes);
   const rawGateNode = isRecord(rawNodes["generation-gate"]) ? rawNodes["generation-gate"] : {};
   const rawGateResult = isRecord(rawGateNode.result) ? rawGateNode.result : {};
-  const expectedFinalPolicyVersion = getTimelineFinalGenerationPolicyVersion(
-    isKrea2Workflow ? "krea2" : "fallback",
+  const rawParameterNode = isRecord(rawNodes["parameter-recommendation"])
+    ? rawNodes["parameter-recommendation"]
+    : {};
+  const rawParameterResult = isRecord(rawParameterNode.result) ? rawParameterNode.result : {};
+  const rawRequestPreview = isRecord(rawParameterResult.requestPreview) ? rawParameterResult.requestPreview : {};
+  const rawPolicySettings = getRunSceneInputSettings(isRecord(rawSceneInput) ? rawSceneInput : {});
+  const expectedFinalPolicy = resolveTimelineFinalGenerationPolicy(
+    { ...rawRequestPreview, ...(isKrea2Workflow ? { workflowProfile: "krea2" } : {}) },
+    rawPolicySettings.finalRedrawPreset,
+    {
+      krea2ReId: isKrea2ReIdReferenceReady(
+        sanitizeCharacterReferenceSnapshot(rawPolicySettings.characterReference),
+      ),
+    },
   );
-  const requireCurrentFinalPolicy = rawGateResult.finalPolicyVersion === expectedFinalPolicyVersion;
+  const requireCurrentFinalPolicy = rawGateResult.finalPolicyVersion === expectedFinalPolicy.version;
+  const finalPolicyOptions = {
+    expectedFinalPolicyVersion: expectedFinalPolicy.version,
+    requireCurrentFinalPolicy,
+  };
   const hasPersistedCompletedDisplay = isRecord(rawNodes["result-display"]) &&
     rawNodes["result-display"].status === "done";
   const rawResultDisplay = isRecord(rawNodes["result-display"]) &&
@@ -732,7 +754,7 @@ function sanitizeSingleImageWorkflowState(raw: Record<string, unknown>): Timelin
   const nodes = Object.fromEntries(
     definition.nodeIds.map((nodeId) => [
       nodeId,
-      sanitizeTimelineNode(nodeId, rawNodes[nodeId], updatedAt, { requireCurrentFinalPolicy }),
+      sanitizeTimelineNode(nodeId, rawNodes[nodeId], updatedAt, finalPolicyOptions),
     ]),
   ) as TimelineNodeMap;
   const persistedGateResult = nodes["generation-gate"].result;
@@ -882,6 +904,7 @@ function sanitizeSingleImageWorkflowState(raw: Record<string, unknown>): Timelin
       legacyVisualStyleUnassessed ? {} : { visualStyle: persistedVisualStyle },
     );
     reconcilePersistedGenerationLinkage(nodes, updatedAt, {
+      expectedFinalPolicyVersion: expectedFinalPolicy.version,
       requireCurrentFinalPolicy: isKrea2Workflow && !hasPersistedCompletedDisplay,
       ...(legacyVisualStyleUnassessed ? {} : { visualStyle: persistedVisualStyle }),
     });
@@ -1036,6 +1059,11 @@ function sanitizeSingleImageWorkflowState(raw: Record<string, unknown>): Timelin
   const resolvedFinalPolicy = resolveTimelineFinalGenerationPolicy(
     persistedRequestPreview,
     persistedSettings.finalRedrawPreset,
+    {
+      krea2ReId: isKrea2ReIdReferenceReady(
+        sanitizeCharacterReferenceSnapshot(persistedSettings.characterReference),
+      ),
+    },
   );
   const hasCurrentKrea2GatePolicy = !isKrea2Workflow || isRecord(gateResult) &&
     gateResult.finalPolicyVersion === resolvedFinalPolicy.version &&
@@ -1401,7 +1429,7 @@ function sanitizePreviewScoringResult(value: unknown) {
 
 function sanitizeFinalExecutionResult(
   value: unknown,
-  options: { requireCurrentFinalPolicy?: boolean } = {},
+  options: PersistedFinalPolicyOptions = {},
 ) {
   if (!isRecord(value) || !Array.isArray(value.finals)) return undefined;
   const finalCount = safeNonNegativeInteger(value.finalCount);
@@ -1416,6 +1444,17 @@ function sanitizeFinalExecutionResult(
     if (family === "krea2") {
       const currentSteps = timelineFinalGenerationPolicy.krea2StepsByPreset[preset];
       const currentDenoise = timelineFinalGenerationPolicy.denoiseByPreset[preset].krea2;
+      if (raw.version === timelineFinalGenerationPolicy.krea2ReIdVersion &&
+          raw.steps === 8 && raw.denoise === currentDenoise) {
+        return {
+          version: timelineFinalGenerationPolicy.krea2ReIdVersion,
+          resizeMode: timelineFinalGenerationPolicy.resizeMode,
+          preset,
+          family,
+          steps: 8,
+          denoise: currentDenoise,
+        };
+      }
       if (raw.version === timelineFinalGenerationPolicy.krea2Version &&
           raw.steps === currentSteps && raw.denoise === currentDenoise) {
         return {
@@ -1452,14 +1491,17 @@ function sanitizeFinalExecutionResult(
   const finalPolicy = sanitizeFinalPolicy(value.finalPolicy);
   const isCurrentFinalPolicy = (policy: ReturnType<typeof sanitizeFinalPolicy>) =>
     Boolean(policy && (policy.family === "krea2"
-      ? policy.version === timelineFinalGenerationPolicy.krea2Version &&
-        policy.steps === timelineFinalGenerationPolicy.krea2StepsByPreset[policy.preset]
+      ? policy.version === options.expectedFinalPolicyVersion &&
+        policy.steps === (policy.version === timelineFinalGenerationPolicy.krea2ReIdVersion
+          ? 8
+          : timelineFinalGenerationPolicy.krea2StepsByPreset[policy.preset])
       : policy.version === timelineFinalGenerationPolicy.version));
   const sanitizePreviewUpscale = (raw: unknown) => {
     if (!isRecord(raw) ||
         (raw.policyVersion !== 1 &&
           raw.policyVersion !== timelineFinalGenerationPolicy.version &&
-          raw.policyVersion !== timelineFinalGenerationPolicy.krea2Version) ||
+          raw.policyVersion !== timelineFinalGenerationPolicy.krea2Version &&
+          raw.policyVersion !== timelineFinalGenerationPolicy.krea2ReIdVersion) ||
         raw.resizeMode !== timelineFinalGenerationPolicy.resizeMode) return undefined;
     const width = safeNonNegativeInteger(raw.width);
     const height = safeNonNegativeInteger(raw.height);
@@ -1549,8 +1591,11 @@ function sanitizeFinalExecutionResult(
     const descriptor = normalizeComfyUiKrea2StyleReferenceDescriptor(
       rawRequest.krea2StyleReferenceDescriptor,
     );
+    const reIdDescriptor = normalizeComfyUiKrea2ReIdDescriptor(rawRequest.krea2ReIdDescriptor);
     delete rawRequest.krea2StyleReference;
     delete rawRequest.krea2StyleReferenceDescriptor;
+    delete rawRequest.krea2ReId;
+    delete rawRequest.krea2ReIdDescriptor;
     delete rawRequest.sourceImageDataUrl;
     delete rawRequest.imageName;
     delete rawRequest.outputPrefix;
@@ -1558,6 +1603,7 @@ function sanitizeFinalExecutionResult(
     return {
       ...(isRecord(sanitized) ? sanitized : {}),
       ...(descriptor ? { krea2StyleReferenceDescriptor: descriptor } : {}),
+      ...(reIdDescriptor ? { krea2ReIdDescriptor: reIdDescriptor } : {}),
     };
   })();
   const referenceContext = sanitizeTimelineConfirmedReferenceContext(value.referenceContext);
@@ -2401,7 +2447,7 @@ function createUntrustedPersistedFinal(link: PersistedFinalLink) {
 function reconcilePersistedFinalResult(
   value: unknown,
   expected: ReturnType<typeof getPersistedExpectedFinalLinks>,
-  options: { requireCurrentFinalPolicy?: boolean } = {},
+  options: PersistedFinalPolicyOptions = {},
 ) {
   if (!expected || !isRecord(value) || !Array.isArray(value.finals) ||
       value.finalCount !== expected.finalCount) return null;
@@ -2411,9 +2457,11 @@ function reconcilePersistedFinalResult(
   const currentPolicy = isRecord(value.finalPolicy) &&
     value.finalPolicy.resizeMode === timelineFinalGenerationPolicy.resizeMode &&
     (value.finalPolicy.family === "krea2"
-      ? value.finalPolicy.version === timelineFinalGenerationPolicy.krea2Version &&
+      ? value.finalPolicy.version === options.expectedFinalPolicyVersion &&
         isTimelineFinalRedrawPreset(value.finalPolicy.preset) &&
-        value.finalPolicy.steps === timelineFinalGenerationPolicy.krea2StepsByPreset[value.finalPolicy.preset] &&
+        value.finalPolicy.steps === (value.finalPolicy.version === timelineFinalGenerationPolicy.krea2ReIdVersion
+          ? 8
+          : timelineFinalGenerationPolicy.krea2StepsByPreset[value.finalPolicy.preset]) &&
         value.finalPolicy.denoise === timelineFinalGenerationPolicy.denoiseByPreset[value.finalPolicy.preset].krea2
       : value.finalPolicy.version === timelineFinalGenerationPolicy.version);
   const currentPolicyVersion = currentPolicy && isRecord(value.finalPolicy)
@@ -2515,7 +2563,7 @@ function resultDisplayMatchesFinals(display: unknown, finalResult: unknown) {
 function reconcilePersistedGenerationLinkage(
   nodes: TimelineNodeMap,
   updatedAt: string,
-  options: { requireCurrentFinalPolicy?: boolean; visualStyle?: RunVisualStyle } = {},
+  options: PersistedFinalPolicyOptions & { visualStyle?: RunVisualStyle } = {},
 ) {
   const expected = getPersistedExpectedFinalLinks(nodes);
   const finalNode = nodes["comfyui-execution"];

@@ -4,6 +4,27 @@ This log records dated implementation and documentation work. Keep entries conci
 
 ## 2026-08-02
 
+### T55 / Issue #183 Krea2 ReID character reference
+
+Summary:
+
+- Removed the filename-text heuristic from Krea workflow profile validation first; RedCraft and other metadata-valid Krea diffusion resources now rely on authoritative profile, storage-kind, and normalized Civitai base-model metadata.
+- Replaced the legacy Krea character/dual-image adapter path with a distinct, versioned ReID contract: exact user-installed `krea2_reid_rank32.safetensors`, strength 1.0, `kv_cache=true`, exactly one prepared `image1`, fixed Preview/Final sampling, generated-graph auditing, and no generic Krea reference or Repair fallback.
+- Added server-only `onnxruntime-node` preprocessing with the bundled checksum-verified OpenCV Zoo YuNet March 2023 INT8 asset. EXIF/RGB normalization, confidence 0.35, highest-confidence selection, pinned upstream head/shoulders crop math, and the 384×384 pixel budget feed a portal chooser; only the selected prepared PNG is stored.
+- Preserved the existing Krea style-image adapter independently. Active ReID pauses its transport without deleting state, keeps the analyzed style prompt exactly once, and restores compatible style conditioning when removed. Illustrious, Anima, prompt-only Krea, and style-only Krea contracts remain separate.
+- Added fail-closed request, `object_info`, exact-file, descriptor/version, generated-graph, confirmation, persistence, and queue-time checks. ReID Final uses policy v4 at 8 steps while retaining redraw denoise and compatible Final settings; Repair construction and inpaint validation strip/reject all ReID state.
+- Documented local setup, explicit consent/lawful-use UI, experimental Krea/FP8 warning, upstream repositories and licenses, ReID/YuNet checksums, prepared-only privacy boundary, and the absence of runtime model downloads or new environment variables.
+- Review iteration 2 aligned YuNet inference with the checksum-pinned model's strict `[1,3,640,640]` float32 metadata contract, restored the pinned floor/ceil source-bbox then Python-round crop ordering, bounded multipart parsing and rejected extra/spoofed image parts, and made Krea policy-v4 gate/final/fallback linkage survive persistence reconciliation.
+- The `onnxruntime-node` audit finding reaches `adm-zip` only through its package install helper; SceneForge request-time preprocessing loads the fixed bundled ONNX bytes directly and never accepts ZIP input. The install-time dependency risk remains documented rather than applying an unreviewed runtime downgrade.
+
+Validation during implementation:
+
+- The mandatory RedCraft-first `npm run typecheck` gate passed before ReID implementation began; the completed production update also passes `npm run typecheck`.
+- The full pre-Test-Gate Vitest run passed 1,969/1,980 tests. The 11 remaining failures are stale Krea dual-image, dual-context, legacy preflight, and old component-state fixtures intentionally superseded by Issue #183; the Test Gate owns replacing them with ReID coverage.
+- `npm run lint` passed with no errors and the existing 22 `<img>` optimization warnings. `npm run build` and `git diff --check` passed; the production route trace contains the bundled YuNet asset.
+- The bundled YuNet file checksum matched `321aa5a6afabf7ecc46a3d06bfab2b579dc96eb5c3be7edd365fa04502ad9294`, and the documented user-installed ReID weight checksum is `a80349faee4a2d80eff9a83820cd523c74cd0bbc6039cee21fa34b084d967944`.
+- Review iteration 2 directly loaded the bundled YuNet model and completed a real `session.run` with input `[1,3,640,640]`; all expected stride-8/16/32 classifier, objectness, bbox, and landmark tensors were returned, and production preprocessing completed against the real session. The focused preprocessing, runtime-contract, multipart, policy-v4 persistence, and documentation-contract suites passed 175/175 tests, followed by passing typecheck and production build.
+
 ### T53 / Issue #178 Anima Run character-reference adapter compatibility
 
 Summary:
