@@ -182,7 +182,7 @@ export function CharacterReferencePanel({
           <p className="mt-1 text-xs text-slate-500">Optional identity image for every Run Preview and Final. It remains separate from img2img and global style.</p>
         </div>
         <div className="flex gap-2">
-          <label className="inline-flex h-8 cursor-pointer items-center gap-2 rounded-md border border-indigo-200 px-3 text-xs font-medium text-indigo-700 hover:bg-indigo-50">
+          <label className="relative inline-flex h-8 cursor-pointer items-center gap-2 rounded-md border border-indigo-200 px-3 text-xs font-medium text-indigo-700 hover:bg-indigo-50">
             {busy ? <LoaderCircle className="size-3.5 animate-spin" /> : <ImageIcon className="size-3.5" />}
             {normalized ? "Replace" : "Upload"}
             <input
