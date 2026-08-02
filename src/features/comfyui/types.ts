@@ -319,7 +319,7 @@ export type ComfyUiKrea2ReIdConfig = {
 
 /** Persistable, server-owned Krea2 ReID identity and fixed graph invariants. */
 export type ComfyUiKrea2ReIdDescriptor = {
-  version: 1;
+  version: 2;
   referenceDigest: string;
   loraName: "krea2_reid_rank32.safetensors";
   strengthModel: 1;
@@ -568,8 +568,11 @@ export type BasicTextToImageNodeIds = {
   styleReferenceLora?: string;
   styleReferencePatch?: string;
   reIdReferenceImage?: string;
+  reIdReferenceScale?: string;
   reIdLora?: string;
   reIdPatch?: string;
+  reIdPositiveLatentMethod?: string;
+  reIdNegativeLatentMethod?: string;
   latentImage: string;
   sampler: string;
   vaeDecode: string;

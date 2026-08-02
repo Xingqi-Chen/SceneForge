@@ -62,12 +62,12 @@ const persistedKreaV4ReIdReference = {
     detectorSha256: "a".repeat(64),
     faceDetected: true,
     height: 256,
-    version: 1 as const,
+    version: 2 as const,
     width: 256,
   },
 };
 const persistedKreaV4ReIdContext = {
-  version: 2 as const,
+  version: 3 as never,
   adapter: "krea2-reid" as const,
   references: [{
     role: "character" as const,
@@ -317,7 +317,7 @@ function createPersistedStagedKreaV2Workflow(finalCount = 1) {
 
 function createPersistedKreaV4ReIdWorkflow() {
   const raw = JSON.parse(JSON.stringify(createPersistedV2GenerationWorkflow(1))) as TimelineWorkflowState;
-  raw.workflowId = "persisted-krea-v4-reid";
+  raw.workflowId = "persisted-krea-v5-reid";
   const sceneInput = raw.nodes["scene-input"].result as Record<string, unknown>;
   sceneInput.promptProfile = "krea2";
   sceneInput.settingsSnapshot = {
@@ -330,6 +330,7 @@ function createPersistedKreaV4ReIdWorkflow() {
     requestPreview: Record<string, unknown>;
   } & Record<string, unknown>;
   Object.assign(parameters, {
+    characterReference: persistedKreaV4ReIdReference,
     cfg: 1,
     denoise: 1,
     samplerName: "euler",
@@ -340,10 +341,13 @@ function createPersistedKreaV4ReIdWorkflow() {
     ...parameters.requestPreview,
     cfg: 1,
     checkpointName: "RedCraft_v4_fp8_scaled.safetensors",
+    clipName: "qwen3vl_4b_fp8_scaled.safetensors",
+    vaeName: "qwen_image_vae.safetensors",
+    unetWeightDtype: "default",
     denoise: 1,
     modelBaseModel: "Krea 2",
     modelStorageKind: "diffusion",
-    positivePrompt: "persisted Krea v4 ReID scene",
+    positivePrompt: "persisted Krea v5 ReID scene",
     samplerName: "euler",
     scheduler: "simple",
     steps: 8,
@@ -365,6 +369,9 @@ function createPersistedKreaV4ReIdWorkflow() {
     batchSize: 1,
     cfg: 1,
     checkpointName: "RedCraft_v4_fp8_scaled.safetensors",
+    clipName: "qwen3vl_4b_fp8_scaled.safetensors",
+    vaeName: "qwen_image_vae.safetensors",
+    unetWeightDtype: "default",
     denoise: persistedKreaV4ReIdPolicy.denoise,
     krea2ReIdDescriptor: {
       imageCount: 1,
@@ -372,11 +379,11 @@ function createPersistedKreaV4ReIdWorkflow() {
       loraName: "krea2_reid_rank32.safetensors",
       referenceDigest: `sha256:${"d".repeat(64)}`,
       strengthModel: 1,
-      version: 1,
+      version: 2,
     },
     modelBaseModel: "Krea 2",
     modelStorageKind: "diffusion",
-    positivePrompt: "persisted Krea v4 ReID scene",
+    positivePrompt: "persisted Krea v5 ReID scene",
     preview: false,
     samplerName: "euler",
     scheduler: "simple",
@@ -2090,12 +2097,12 @@ describe("timeline workflow persistence", () => {
     expect(serialized).not.toContain("C:\\\\private");
   });
 
-  it("round-trips a completed Krea v4 ReID policy, fallback, and signed reference gate", () => {
+  it("round-trips a completed Krea v5 ReID policy, fallback provenance, and signed v3 reference gate", () => {
     const serialized = serializeTimelineWorkflowRecord(createTimelineWorkflowRecord({
-      projectId: "t55-krea-v4-reid-round-trip",
-      name: "Krea v4 ReID round trip",
+      projectId: "t55-krea-v5-reid-round-trip",
+      name: "Krea v5 ReID round trip",
       workflow: createPersistedKreaV4ReIdWorkflow(),
-      sceneRequest: "A persisted Krea v4 ReID scene",
+      sceneRequest: "A persisted Krea v5 ReID scene",
       selectedPromptProfile: "krea2",
       selectedImageCount: 1,
       selectedNodeId: "result-display",
@@ -2148,6 +2155,73 @@ describe("timeline workflow persistence", () => {
     });
   });
 
+  it("invalidates continuable v1 ReID authorization instead of migrating it into the verified contract", () => {
+    const raw = createPersistedKreaV4ReIdWorkflow();
+    const gate = raw.nodes["generation-gate"].result as Record<string, unknown>;
+    gate.finalPolicyVersion = 4;
+    gate.finalDenoise = 0.18;
+    (gate.referenceContext as Record<string, unknown>).version = 2;
+    const sceneSettings = (raw.nodes["scene-input"].result as {
+      settingsSnapshot: { characterReference: { reIdPreparation: { version: number } } };
+    }).settingsSnapshot;
+    sceneSettings.characterReference.reIdPreparation.version = 1;
+    const reviewedCharacter = raw.nodes["parameter-recommendation"].result as {
+      characterReference: { reIdPreparation: { version: number } };
+    };
+    reviewedCharacter.characterReference.reIdPreparation.version = 1;
+    raw.nodes["comfyui-execution"] = {
+      ...raw.nodes["comfyui-execution"],
+      status: "blocked",
+      result: undefined,
+      error: undefined,
+    };
+    raw.nodes["result-display"] = {
+      ...raw.nodes["result-display"],
+      status: "blocked",
+      result: undefined,
+      error: undefined,
+    };
+
+    const restored = sanitizeTimelineWorkflowState(raw) as TimelineWorkflowState;
+    expect(restored.generationConfirmed).toBe(false);
+    expect(() => createTimelineFinalRequests(restored)).toThrow(/confirm|current.*policy|ReID/i);
+  });
+
+  it("keeps completed v1 ReID images historical but removes their authority to execute again", () => {
+    const raw = createPersistedKreaV4ReIdWorkflow();
+    const gate = raw.nodes["generation-gate"].result as Record<string, unknown>;
+    gate.finalPolicyVersion = 4;
+    gate.finalDenoise = 0.18;
+    (gate.referenceContext as Record<string, unknown>).version = 2;
+    const sceneSettings = (raw.nodes["scene-input"].result as {
+      settingsSnapshot: { characterReference: { reIdPreparation: { version: number } } };
+    }).settingsSnapshot;
+    sceneSettings.characterReference.reIdPreparation.version = 1;
+    const reviewedCharacter = raw.nodes["parameter-recommendation"].result as {
+      characterReference: { reIdPreparation: { version: number } };
+    };
+    reviewedCharacter.characterReference.reIdPreparation.version = 1;
+    const execution = raw.nodes["comfyui-execution"].result as {
+      finalPolicy: Record<string, unknown>;
+      finals: Array<{ finalPolicy: Record<string, unknown>; previewUpscale: { policyVersion: number } }>;
+      referenceContext: Record<string, unknown>;
+      request: { krea2ReIdDescriptor: { version: number } };
+    };
+    execution.finalPolicy.version = 4;
+    execution.finalPolicy.denoise = 0.18;
+    execution.referenceContext.version = 2;
+    execution.request.krea2ReIdDescriptor.version = 1;
+    execution.finals[0]!.finalPolicy.version = 4;
+    execution.finals[0]!.finalPolicy.denoise = 0.18;
+    execution.finals[0]!.previewUpscale.policyVersion = 4;
+
+    const restored = sanitizeTimelineWorkflowState(raw) as TimelineWorkflowState;
+    expect(restored.generationConfirmed).toBe(false);
+    expect(restored.nodes["result-display"]).toMatchObject({ status: "done" });
+    expect(restored.nodes["result-display"].result).toBeDefined();
+    expect(restored.nodes["comfyui-execution"]).toMatchObject({ status: "done" });
+  });
+
   it("persists only the signed ReID descriptor and strips prepared transport, paths, bytes, and temporary names", () => {
     const raw = JSON.parse(JSON.stringify(createPersistedV2GenerationWorkflow(1))) as TimelineWorkflowState;
     const execution = raw.nodes["comfyui-execution"].result as {
@@ -2157,6 +2231,9 @@ describe("timeline workflow persistence", () => {
     execution.finals[0]!.finalRequestDigest = `sha256:${"c".repeat(64)}`;
     execution.request = {
       checkpointName: "RedCraft_v4_fp8_scaled.safetensors",
+      clipName: "qwen3vl_4b_fp8_scaled.safetensors",
+      vaeName: "qwen_image_vae.safetensors",
+      unetWeightDtype: "default",
       modelBaseModel: "Krea 2",
       modelStorageKind: "diffusion",
       workflowProfile: "krea2",
@@ -2170,7 +2247,7 @@ describe("timeline workflow persistence", () => {
         temporaryComfyUiName: "temp-reid.png",
       },
       krea2ReIdDescriptor: {
-        version: 1,
+        version: 2,
         referenceDigest: `sha256:${"d".repeat(64)}`,
         loraName: "krea2_reid_rank32.safetensors",
         strengthModel: 1,
@@ -2188,7 +2265,7 @@ describe("timeline workflow persistence", () => {
 
     expect(result.finals[0]?.finalRequestDigest).toBe(`sha256:${"c".repeat(64)}`);
     expect(result.request.krea2ReIdDescriptor).toEqual({
-      version: 1,
+      version: 2,
       referenceDigest: `sha256:${"d".repeat(64)}`,
       loraName: "krea2_reid_rank32.safetensors",
       strengthModel: 1,

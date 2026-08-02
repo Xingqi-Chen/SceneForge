@@ -58,7 +58,7 @@ const krea2ReIdReference = {
     detectorSha256: "a".repeat(64),
     faceDetected: true,
     height: 256,
-    version: 1 as const,
+    version: 2 as const,
     width: 256,
   },
 };
@@ -109,7 +109,10 @@ describe("confirmed Run reference context", () => {
         bytes: [1, 2, 3],
       },
     }, {
-      checkpointName: "krea-2-turbo-unet.safetensors",
+      checkpointName: "RedCraft_v4_fp8_scaled.safetensors",
+      clipName: "qwen3vl_4b_fp8_scaled.safetensors",
+      vaeName: "qwen_image_vae.safetensors",
+      unetWeightDtype: "default",
       modelBaseModel: "Krea 2",
       modelStorageKind: "diffusion",
       positivePrompt: "a quiet station, soft gouache",
@@ -117,7 +120,7 @@ describe("confirmed Run reference context", () => {
     }));
 
     expect(context).toEqual({
-      version: 2,
+      version: 3,
       adapter: "krea2-reid",
       references: [
         {
@@ -164,9 +167,9 @@ describe("confirmed Run reference context", () => {
     });
   });
 
-  it("fails closed for tampered v2 ReID and legacy dual-image contexts while stripping transport fields", () => {
+  it("accepts only v3 ReID context and fails closed for v2 or legacy dual-image contexts", () => {
     const valid = {
-      version: 2,
+      version: 3,
       adapter: "krea2-reid",
       references: [{
         role: "character",
@@ -194,7 +197,7 @@ describe("confirmed Run reference context", () => {
     });
     expect(sanitizeTimelineConfirmedReferenceContext({
       ...valid,
-      version: 1,
+      version: 2,
     })).toBeUndefined();
     expect(sanitizeTimelineConfirmedReferenceContext({
       ...valid,

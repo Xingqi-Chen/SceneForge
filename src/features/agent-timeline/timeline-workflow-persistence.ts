@@ -724,6 +724,9 @@ function sanitizeSingleImageWorkflowState(raw: Record<string, unknown>): Timelin
   const rawParameterResult = isRecord(rawParameterNode.result) ? rawParameterNode.result : {};
   const rawRequestPreview = isRecord(rawParameterResult.requestPreview) ? rawParameterResult.requestPreview : {};
   const rawPolicySettings = getRunSceneInputSettings(isRecord(rawSceneInput) ? rawSceneInput : {});
+  const hasActiveKrea2ReId = isKrea2ReIdReferenceReady(
+    sanitizeCharacterReferenceSnapshot(rawPolicySettings.characterReference),
+  );
   const expectedFinalPolicy = resolveTimelineFinalGenerationPolicy(
     { ...rawRequestPreview, ...(isKrea2Workflow ? { workflowProfile: "krea2" } : {}) },
     rawPolicySettings.finalRedrawPreset,
@@ -734,6 +737,15 @@ function sanitizeSingleImageWorkflowState(raw: Record<string, unknown>): Timelin
     },
   );
   const requireCurrentFinalPolicy = rawGateResult.finalPolicyVersion === expectedFinalPolicy.version;
+  const rawReferenceContext = sanitizeTimelineConfirmedReferenceContext(rawGateResult.referenceContext);
+  const rawCharacterReference = isRecord(rawSettings.characterReference)
+    ? rawSettings.characterReference
+    : undefined;
+  const hasRawKrea2ReId = rawCharacterReference?.kind === "krea2-reid";
+  const hasCurrentPreparedReId = !hasRawKrea2ReId ||
+    isRecord(rawCharacterReference?.reIdPreparation) && rawCharacterReference.reIdPreparation.version === 2;
+  const hasCurrentReIdReferenceContext = !hasActiveKrea2ReId ||
+    rawReferenceContext?.version === 3 && rawReferenceContext.adapter === "krea2-reid";
   const finalPolicyOptions = {
     expectedFinalPolicyVersion: expectedFinalPolicy.version,
     requireCurrentFinalPolicy,
@@ -1073,10 +1085,13 @@ function sanitizeSingleImageWorkflowState(raw: Record<string, unknown>): Timelin
     gateResult.finalDenoise === resolvedFinalPolicy.denoise;
   const requiresReconfirmation = !legacyCompleted &&
     (isKrea2LegacyDirect || isLegacyWorkflow || raw.generationConfirmed === true && (
-      !hasConfirmationFingerprint || !hasCurrentKrea2GatePolicy ||
+      !hasConfirmationFingerprint || !hasCurrentKrea2GatePolicy || !hasCurrentReIdReferenceContext ||
+      !hasCurrentPreparedReId ||
       (!isKrea2Workflow && isRecord(gateResult) && gateResult.finalPolicyVersion === 1)
     ));
-  const generationConfirmed = visualStyleIdentityInvalidated || requiresReconfirmation
+  const historicalLegacyReId = legacyCompleted && hasRawKrea2ReId &&
+    (!hasCurrentPreparedReId || rawReferenceContext?.version !== 3 || rawGateResult.finalPolicyVersion !== expectedFinalPolicy.version);
+  const generationConfirmed = visualStyleIdentityInvalidated || requiresReconfirmation || historicalLegacyReId
     ? false
     : typeof raw.generationConfirmed === "boolean" ? raw.generationConfirmed : false;
   if (requiresReconfirmation || requiresVisualStyleMigration) {
@@ -1445,9 +1460,19 @@ function sanitizeFinalExecutionResult(
       const currentSteps = timelineFinalGenerationPolicy.krea2StepsByPreset[preset];
       const currentDenoise = timelineFinalGenerationPolicy.denoiseByPreset[preset].krea2;
       if (raw.version === timelineFinalGenerationPolicy.krea2ReIdVersion &&
-          raw.steps === 8 && raw.denoise === currentDenoise) {
+          raw.steps === 8 && raw.denoise === 1) {
         return {
           version: timelineFinalGenerationPolicy.krea2ReIdVersion,
+          resizeMode: timelineFinalGenerationPolicy.resizeMode,
+          preset,
+          family,
+          steps: 8,
+          denoise: 1,
+        };
+      }
+      if (raw.version === 4 && raw.steps === 8 && raw.denoise === currentDenoise) {
+        return {
+          version: 4,
           resizeMode: timelineFinalGenerationPolicy.resizeMode,
           preset,
           family,
@@ -1501,6 +1526,7 @@ function sanitizeFinalExecutionResult(
         (raw.policyVersion !== 1 &&
           raw.policyVersion !== timelineFinalGenerationPolicy.version &&
           raw.policyVersion !== timelineFinalGenerationPolicy.krea2Version &&
+          raw.policyVersion !== 4 &&
           raw.policyVersion !== timelineFinalGenerationPolicy.krea2ReIdVersion) ||
         raw.resizeMode !== timelineFinalGenerationPolicy.resizeMode) return undefined;
     const width = safeNonNegativeInteger(raw.width);
@@ -2462,7 +2488,9 @@ function reconcilePersistedFinalResult(
         value.finalPolicy.steps === (value.finalPolicy.version === timelineFinalGenerationPolicy.krea2ReIdVersion
           ? 8
           : timelineFinalGenerationPolicy.krea2StepsByPreset[value.finalPolicy.preset]) &&
-        value.finalPolicy.denoise === timelineFinalGenerationPolicy.denoiseByPreset[value.finalPolicy.preset].krea2
+        value.finalPolicy.denoise === (value.finalPolicy.version === timelineFinalGenerationPolicy.krea2ReIdVersion
+          ? 1
+          : timelineFinalGenerationPolicy.denoiseByPreset[value.finalPolicy.preset].krea2)
       : value.finalPolicy.version === timelineFinalGenerationPolicy.version);
   const currentPolicyVersion = currentPolicy && isRecord(value.finalPolicy)
     ? value.finalPolicy.version

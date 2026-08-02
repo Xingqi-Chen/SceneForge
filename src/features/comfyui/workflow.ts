@@ -41,7 +41,13 @@ import {
 import {
   getComfyUiKrea2ReIdWorkflowIssues,
   KREA2_REID_KV_CACHE,
+  KREA2_REID_LATENT_METHOD_NODE,
   KREA2_REID_LORA_NAME,
+  KREA2_REID_REFERENCE_LATENT_METHOD,
+  KREA2_REID_REFERENCE_MEGAPIXELS,
+  KREA2_REID_REFERENCE_RESOLUTION_STEPS,
+  KREA2_REID_REFERENCE_SCALE_NODE,
+  KREA2_REID_REFERENCE_UPSCALE_METHOD,
   KREA2_REID_STRENGTH_MODEL,
 } from "./krea2-reid";
 import {
@@ -776,6 +782,7 @@ function buildKrea2TextToImageWorkflow(
   let styleReferenceLora: string | undefined;
   let styleReferencePatch: string | undefined;
   let reIdReferenceImage: string | undefined;
+  let reIdReferenceScale: string | undefined;
   let reIdLora: string | undefined;
   let reIdPatch: string | undefined;
   if (styleReference) {
@@ -810,6 +817,16 @@ function buildKrea2TextToImageWorkflow(
       { image: reIdReference.imageName },
       "Load Prepared Krea2 ReID Reference",
     );
+    reIdReferenceScale = builder.addNode(
+      KREA2_REID_REFERENCE_SCALE_NODE,
+      {
+        image: builder.connect(reIdReferenceImage, 0),
+        upscale_method: KREA2_REID_REFERENCE_UPSCALE_METHOD,
+        megapixels: KREA2_REID_REFERENCE_MEGAPIXELS,
+        resolution_steps: KREA2_REID_REFERENCE_RESOLUTION_STEPS,
+      },
+      "Scale Prepared Krea2 ReID Reference",
+    );
     reIdLora = builder.addNode(
       "LoraLoaderModelOnly",
       {
@@ -833,7 +850,7 @@ function buildKrea2TextToImageWorkflow(
           clip: modelContext.clipConnection,
           prompt: applyPromptPrefix(resolvedRequest.promptWrapper.positivePrefix, resolvedRequest.positivePrompt),
           vae: modelContext.vaeConnection,
-          image1: builder.connect((reIdReferenceImage ?? styleReferenceImage)!, 0),
+          image1: builder.connect((reIdReferenceScale ?? styleReferenceImage)!, 0),
         },
         reIdReference ? "Positive Krea2 ReID Prompt" : "Positive Krea Style Reference Prompt",
       )
@@ -851,6 +868,10 @@ function buildKrea2TextToImageWorkflow(
         {
           clip: modelContext.clipConnection,
           prompt: applyPromptPrefix(resolvedRequest.promptWrapper.negativePrefix, resolvedRequest.negativePrompt),
+          ...(reIdReference ? {
+            vae: modelContext.vaeConnection,
+            image1: builder.connect(reIdReferenceScale!, 0),
+          } : {}),
         },
         reIdReference ? "Negative Krea2 ReID Prompt" : "Negative Krea Style Reference Prompt",
       )
@@ -862,11 +883,34 @@ function buildKrea2TextToImageWorkflow(
         },
         "Negative Krea Prompt",
       );
+  const positiveLatentMethod = reIdReference
+    ? builder.addNode(
+        KREA2_REID_LATENT_METHOD_NODE,
+        {
+          conditioning: builder.connect(positivePrompt, 0),
+          reference_latents_method: KREA2_REID_REFERENCE_LATENT_METHOD,
+        },
+        "Set Positive Krea2 ReID Reference Latent Method",
+      )
+    : undefined;
+  const negativeLatentMethod = reIdReference
+    ? builder.addNode(
+        KREA2_REID_LATENT_METHOD_NODE,
+        {
+          conditioning: builder.connect(negativePrompt, 0),
+          reference_latents_method: KREA2_REID_REFERENCE_LATENT_METHOD,
+        },
+        "Set Negative Krea2 ReID Reference Latent Method",
+      )
+    : undefined;
   let sourceImage: string | undefined;
   let sourceImageScale: string | undefined;
   let vaeEncode: string | undefined;
   let latentImage: string;
   let latentImageConnection: ComfyUiNodeConnection;
+  if (reIdReference && resolvedRequest.imageName) {
+    throw new Error("Krea2 ReID cannot use a Composer img2img source. Remove the source image before confirmation.");
+  }
   if (resolvedRequest.imageName) {
     sourceImage = builder.addNode(
       "LoadImage",
@@ -916,8 +960,8 @@ function buildKrea2TextToImageWorkflow(
       scheduler: resolvedRequest.scheduler,
       denoise: resolvedRequest.denoise,
       model: modelConnection,
-      positive: builder.connect(positivePrompt, 0),
-      negative: builder.connect(negativePrompt, 0),
+      positive: builder.connect(positiveLatentMethod ?? positivePrompt, 0),
+      negative: builder.connect(negativeLatentMethod ?? negativePrompt, 0),
       latent_image: latentImageConnection,
     },
     "KSampler",
@@ -1003,8 +1047,11 @@ function buildKrea2TextToImageWorkflow(
       ...(styleReferenceLora ? { styleReferenceLora } : {}),
       ...(styleReferencePatch ? { styleReferencePatch } : {}),
       ...(reIdReferenceImage ? { reIdReferenceImage } : {}),
+      ...(reIdReferenceScale ? { reIdReferenceScale } : {}),
       ...(reIdLora ? { reIdLora } : {}),
       ...(reIdPatch ? { reIdPatch } : {}),
+      ...(positiveLatentMethod ? { reIdPositiveLatentMethod: positiveLatentMethod } : {}),
+      ...(negativeLatentMethod ? { reIdNegativeLatentMethod: negativeLatentMethod } : {}),
       latentImage,
       sampler,
       vaeDecode,

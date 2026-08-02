@@ -33,7 +33,7 @@ export async function preflightKrea2ReferenceCapability({
       ? {
           krea2ReId: { imageName: "sceneforge-krea-reid-preflight.png" },
           krea2ReIdDescriptor: {
-            version: 1 as const,
+            version: 2 as const,
             referenceDigest: PREFLIGHT_REFERENCE_DIGEST,
             loraName: "krea2_reid_rank32.safetensors" as const,
             strengthModel: 1 as const,
@@ -65,7 +65,7 @@ export async function preflightKrea2ReferenceCapability({
   return {
     available: true,
     reason: mode === "reid"
-      ? "Krea2 ReID verified against the selected local Krea 2 diffusion model and ComfyUI graph."
+      ? "Experimental Krea2 ReID is available with the selected metadata-valid Krea diffusion model and local graph requirements. Upstream identity quality is not verified."
       : "Krea style-reference adapter verified for this local Krea 2 diffusion model.",
   };
 }

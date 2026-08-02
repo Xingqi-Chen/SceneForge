@@ -2195,3 +2195,17 @@ Validation:
 - `npm run build`
 - `git diff --check`
 - Chrome browser QA: Simple and Detailed desktop plus an 800x700 compact viewport kept document height equal to the viewport and top-level scroll at zero after chooser focus; Character, Style, and source-image controls remained stable.
+
+### T55 / Issue #183 Krea2 ReID graph and staged-generation correction
+
+Summary:
+
+- Corrected the ReID graph to use the rank-32 LoRA, pinned Ostris node topology, dual image/VAE encoders, distinct latent-method nodes, fixed sampler settings, and strict generated-graph auditing while preserving metadata-valid Krea diffusion selections and the configured local CLIP/VAE runtime.
+- Added exact-aspect, 16-aligned, at-most-1,048,576-pixel ReID Previews and policy-v5 same-seed formal Final rerenders from noise. Managed Preview upscales remain review/fallback artifacts but are not uploaded as Final sources.
+- Kept ReID visibly Experimental and upstream-unverified for FP8, RedCraft, and other metadata-valid Krea diffusion selections. Extra LoRAs and source img2img remain blocked; FaceDetailer pauses without changing saved state, HandDetailer stays compatible, and 12 GB/offload/OOM guidance never silently changes the selected model or resolution.
+- Advanced prepared reference and descriptor state to v2, confirmed reference context to v3, and ReID Final policy to v5. Continuable earlier ReID state is invalidated while completed images remain historical/read-only.
+
+Validation:
+
+- Pinned upstream workflow commit `121fb0183944f1befeb712d92e9ca07d0e282088` and Ostris node commit `7756566160c4a1b24bb1bd9f0ff3ced1a83d7547` inspected for exact nodes, ports, values, and conditioning topology.
+- Local `/object_info` confirms the required nodes, ports, configured FP8 Qwen3VL encoder and Qwen VAE, and ReID LoRA. Runtime capability is validated structurally without a separate Verified model tier; live four-seed identity QA remains a manual quality gate.

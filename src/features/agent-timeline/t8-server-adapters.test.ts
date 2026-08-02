@@ -405,6 +405,7 @@ function createKrea2ReIdWorkflow() {
       contentType: "image/png",
       storedFilename: "fedcba9876543210fedcba9876543210.png",
       uploadedAt: "2026-08-02T00:00:03.000Z",
+      url: "/api/comfyui/sequence-references/fedcba9876543210fedcba9876543210.png",
     },
     reIdPreparation: {
       choice: "crop" as const,
@@ -412,7 +413,7 @@ function createKrea2ReIdWorkflow() {
       detectorSha256: "a".repeat(64),
       faceDetected: true,
       height: 256,
-      version: 1 as const,
+      version: 2 as const,
       width: 256,
     },
   };
@@ -463,6 +464,9 @@ function createKrea2ReIdWorkflow() {
             ...parameters.requestPreview,
             cfg: 1,
             checkpointName: "RedCraft_v4_fp8_scaled.safetensors",
+            clipName: "qwen3vl_4b_fp8_scaled.safetensors",
+            vaeName: "qwen_image_vae.safetensors",
+            unetWeightDtype: "default",
             modelBaseModel: "Krea 2",
             modelStorageKind: "diffusion",
             positivePrompt: "glass greenhouse pilot, soft gouache, cobalt shadows",
@@ -1590,11 +1594,14 @@ describe("timeline T8 server adapters", () => {
       characterReferences: [],
       cfg: 1,
       checkpointName: "RedCraft_v4_fp8_scaled.safetensors",
+      clipName: "qwen3vl_4b_fp8_scaled.safetensors",
+      vaeName: "qwen_image_vae.safetensors",
+      unetWeightDtype: "default",
       krea2ReId: {
         imageName: "sceneforge-krea-reid-fedcba9876543210fedcba9876543210.png",
       },
       krea2ReIdDescriptor: {
-        version: 1,
+        version: 2,
         referenceDigest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
         loraName: "krea2_reid_rank32.safetensors",
         strengthModel: 1,

@@ -128,13 +128,21 @@ export async function POST(request: Request) {
   try {
     const sceneInput = workflow.nodes["scene-input"].result;
     const settings = getRunSceneInputSettings(isRecord(sceneInput) ? sceneInput : {});
+    const activeKrea2ReId = settings.characterReference?.kind === "krea2-reid" &&
+      settings.characterReference.status === "ready";
+    if (activeKrea2ReId && isRecord(sceneInput) && sceneInput.sourceImage !== undefined) {
+      return errorResponse(
+        "Krea2 ReID cannot be confirmed with a Composer img2img source. Remove the source image, then review and confirm again.",
+        409,
+        { code: "confirmation_required" },
+      );
+    }
     const parameterResult = workflow.nodes["parameter-recommendation"].result;
     const requestPreview = isRecord(parameterResult) && isRecord(parameterResult.requestPreview)
       ? parameterResult.requestPreview
       : {};
     const resolvedFinalPolicy = resolveTimelineFinalGenerationPolicy(requestPreview, settings.finalRedrawPreset, {
-      krea2ReId: settings.characterReference?.kind === "krea2-reid" &&
-        settings.characterReference.status === "ready",
+      krea2ReId: activeKrea2ReId,
     });
     const runnableWorkflow = action === "retry"
       ? retryTimelineGenerationFrom(workflow, retryNodeId as TimelineGenerationRetryNodeId)

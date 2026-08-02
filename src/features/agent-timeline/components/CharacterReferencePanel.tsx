@@ -6,6 +6,9 @@ import { createPortal } from "react-dom";
 
 import type { SelectedCivitaiResourcesPreview } from "@/features/civitai-lora-library";
 import {
+  KREA2_REID_LORA_NAME,
+} from "@/features/comfyui";
+import {
   CHARACTER_REFERENCE_DEFAULT_STRENGTH,
   createCharacterReferenceSnapshot,
   createKrea2ReIdReferenceSnapshot,
@@ -21,6 +24,8 @@ import type { PromptProfileId } from "@/shared/prompt-profile";
 
 type Props = {
   disabled?: boolean;
+  formalHeight?: number;
+  formalWidth?: number;
   kreaReferenceStrength: number;
   onChange: (snapshot: CharacterReferenceSnapshot | undefined) => void;
   onKreaReferenceStrengthChange: (strength: number) => void;
@@ -145,6 +150,8 @@ function NumberInput({ label, onChange, value }: { label: string; onChange: (val
 
 export function CharacterReferencePanel({
   disabled = false,
+  formalHeight,
+  formalWidth,
   kreaReferenceStrength,
   onChange,
   onKreaReferenceStrengthChange,
@@ -163,6 +170,7 @@ export function CharacterReferencePanel({
   const isKrea2 = promptProfile === "krea2";
   const normalized = sanitizeCharacterReferenceSnapshot(snapshot);
   const reIdReady = isKrea2ReIdReferenceReady(normalized);
+  const formalPixels = (formalWidth ?? 0) * (formalHeight ?? 0);
 
   useEffect(() => {
     if (!prepared) return;
@@ -307,16 +315,18 @@ export function CharacterReferencePanel({
                 <NumberInput label="Krea style-image strength" onChange={onKreaReferenceStrengthChange} value={kreaReferenceStrength} />
               </div>
             ) : null}
-            ReID is fixed at LoRA strength 1.0, 8 steps, CFG 1, Euler/simple, and one prepared image. While active it pauses—but does not delete—the Krea style-image adapter; the analyzed style prompt remains in the prompt exactly once.
-            <p className="mt-2 text-amber-800">Local graph validation does not certify upstream compatibility. Community Krea weights, including FP8 variants, may fail or produce different results.</p>
+            ReID is Experimental and upstream-unverified. It uses the selected metadata-valid Krea diffusion checkpoint with the configured local CLIP/VAE runtime, {KREA2_REID_LORA_NAME} at strength 1.0, 8 steps, CFG 1, Euler/simple, and one prepared image. While active it pauses, but does not delete, the Krea style-image adapter; the analyzed style prompt remains in the prompt exactly once.
+            {reIdReady && formalPixels > 1_048_576 ? <p className="mt-2 rounded border border-amber-200 bg-amber-50 p-2 text-amber-900">Formal {formalWidth}x{formalHeight} exceeds 1 MP. A 12 GB GPU may require ComfyUI model/CLIP offload. An OOM remains recoverable; SceneForge will not silently change the selected model or resize Final.</p> : null}
           </div>
         ) : normalized?.status === "ready" ? (
           <div className="mt-3 rounded-md border border-indigo-100 bg-indigo-50/40 p-3"><NumberInput label="Character strength" onChange={(strength) => onChange({ ...normalized, strength })} value={normalized.strength} /></div>
         ) : null}
         {busy && !prepared ? <p className="mt-3 text-xs text-indigo-700">Preparing character reference...</p> : null}
-        {reIdReady ? <p className="mt-3 text-xs text-emerald-700">Prepared {normalized.reIdPreparation.choice} is ready for Krea2 ReID.</p> : null}
+        {reIdReady ? <p className="mt-3 text-xs text-emerald-700">Prepared {normalized.reIdPreparation.choice} is ready for Krea2 ReID (Experimental).</p> : null}
         {!isKrea2 && normalized?.status === "ready" ? <p className="mt-3 text-xs text-emerald-700">{normalized.metadata?.filename ?? "Character reference"} is ready for identity conditioning.</p> : null}
         {styleReference?.mode === "ipadapter" && reIdReady ? <p className="mt-2 text-xs text-indigo-700">Krea style-image conditioning is paused until ReID is removed.</p> : null}
+        {reIdReady ? <p className="mt-2 text-xs text-indigo-700">FaceDetailer is paused while ReID is active and its saved setting will return when ReID is removed. HandDetailer remains compatible.</p> : null}
+        {reIdReady ? <p className="mt-2 text-xs text-amber-800">Composer source img2img is incompatible with active ReID and must be removed before confirmation.</p> : null}
         {error ? <p className="mt-3 rounded-md border border-rose-200 bg-rose-50 p-3 text-xs text-rose-700">{error}</p> : null}
         {normalized && normalized.status !== "ready" && !busy ? <p className="mt-3 rounded-md border border-rose-200 bg-rose-50 p-3 text-xs text-rose-700">{normalized.error ?? "Character reference is not ready."}</p> : null}
       </section>

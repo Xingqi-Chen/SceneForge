@@ -234,17 +234,21 @@ describe("Krea 2 ComfyUI request validation", () => {
     }
   });
 
-  it("accepts only the fixed single-image Krea2 ReID transport and server-owned descriptor", () => {
+  it("accepts FP8/RedCraft with only the fixed single-image ReID transport and server-owned descriptor", () => {
     const descriptor = {
-      version: 1 as const,
+      version: 2,
       referenceDigest: `sha256:${"a".repeat(64)}`,
       loraName: "krea2_reid_rank32.safetensors" as const,
       strengthModel: 1 as const,
       kvCache: true as const,
       imageCount: 1 as const,
-    };
+    } as const;
     const valid = validateComfyUiTextToImageRequest({
       ...kreaRequest,
+      checkpointName: "RedCraft_v4_fp8_scaled.safetensors",
+      clipName: "qwen3vl_4b_fp8_scaled.safetensors",
+      vaeName: "qwen_image_vae.safetensors",
+      unetWeightDtype: "default",
       steps: 8,
       cfg: 1,
       samplerName: "euler",
@@ -284,6 +288,10 @@ describe("Krea 2 ComfyUI request validation", () => {
     ]) {
       expect(validateComfyUiTextToImageRequest({
         ...kreaRequest,
+        checkpointName: "RedCraft_v4_fp8_scaled.safetensors",
+        clipName: "qwen3vl_4b_fp8_scaled.safetensors",
+        vaeName: "qwen_image_vae.safetensors",
+        unetWeightDtype: "default",
         steps: 8,
         cfg: 1,
         samplerName: "euler",
@@ -292,6 +300,23 @@ describe("Krea 2 ComfyUI request validation", () => {
         krea2ReIdDescriptor: descriptor,
         ...override,
       }), JSON.stringify(override)).toMatchObject({ ok: false });
+    }
+  });
+
+  it("keeps RedCraft and FP8 available for prompt-only and style Krea requests", () => {
+    for (const checkpointName of [
+      "RedCraft_v4_fp8_scaled.safetensors",
+      "krea-2-turbo-fp8.safetensors",
+    ]) {
+      expect(validateComfyUiTextToImageRequest({
+        ...kreaRequest,
+        checkpointName,
+      }), `${checkpointName} prompt-only`).toMatchObject({ ok: true });
+      expect(validateComfyUiTextToImageRequest({
+        ...kreaRequest,
+        checkpointName,
+        krea2StyleReference: { imageName: "style.png", weight: 0.6 },
+      }), `${checkpointName} style`).toMatchObject({ ok: true });
     }
   });
 
@@ -315,7 +340,7 @@ describe("Krea 2 ComfyUI request validation", () => {
     expect(validateComfyUiInpaintRequest({
       ...repair,
       krea2ReIdDescriptor: {
-        version: 1,
+        version: 2,
         referenceDigest: `sha256:${"a".repeat(64)}`,
         loraName: "krea2_reid_rank32.safetensors",
         strengthModel: 1,

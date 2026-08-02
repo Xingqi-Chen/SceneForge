@@ -454,6 +454,9 @@ describe("ComfyUI workflow builder", () => {
   it.each([false, true])("builds the exact single-image Krea2 ReID graph for %s Preview", (preview) => {
     const result = buildBasicTextToImageWorkflow({
       checkpointName: "RedCraft_v4_fp8_scaled.safetensors",
+      clipName: "qwen3vl_4b_fp8_scaled.safetensors",
+      vaeName: "qwen_image_vae.safetensors",
+      unetWeightDtype: "default",
       modelBaseModel: "Krea 2",
       modelStorageKind: "diffusion",
       workflowProfile: "krea2",
@@ -466,22 +469,31 @@ describe("ComfyUI workflow builder", () => {
       scheduler: preview ? "normal" : "simple",
       krea2ReId: { imageName: "sceneforge-krea-reid.png" },
       krea2ReIdDescriptor: {
-        version: 1,
+        version: 2,
         referenceDigest: `sha256:${"a".repeat(64)}`,
         loraName: "krea2_reid_rank32.safetensors",
         strengthModel: 1,
         kvCache: true,
         imageCount: 1,
-      },
+      } as never,
     });
     const loaders = Object.entries(result.workflow).filter(([, node]) => node.class_type === "LoadImage");
     const loras = Object.entries(result.workflow).filter(([, node]) => node.class_type === "LoraLoaderModelOnly");
     const patches = Object.entries(result.workflow).filter(([, node]) => node.class_type === "Krea2OstrisEditModelPatch");
     const encoders = Object.entries(result.workflow).filter(([, node]) => node.class_type === "TextEncodeKrea2OstrisEdit");
+    const preparedScales = Object.entries(result.workflow).filter(([, node]) => node.class_type === "ImageScaleToTotalPixels");
+    const latentMethods = Object.entries(result.workflow).filter(([, node]) => node.class_type === "FluxKontextMultiReferenceLatentMethod");
     const samplers = Object.entries(result.workflow).filter(([, node]) => node.class_type === "KSampler");
 
     expect(loaders).toHaveLength(1);
     expect(loaders[0]?.[1]).toMatchObject({ class_type: "LoadImage", inputs: { image: "sceneforge-krea-reid.png" } });
+    expect(preparedScales).toHaveLength(1);
+    expect(preparedScales[0]?.[1].inputs).toMatchObject({
+      image: [loaders[0]?.[0], 0],
+      upscale_method: "area",
+      megapixels: 0.140625,
+      resolution_steps: 16,
+    });
     expect(loras).toHaveLength(1);
     expect(loras[0]?.[1].inputs).toEqual({
       model: [result.nodeIds.unetLoader, 0],
@@ -491,10 +503,17 @@ describe("ComfyUI workflow builder", () => {
     expect(patches).toHaveLength(1);
     expect(patches[0]?.[1].inputs).toEqual({ model: [loras[0]?.[0], 0], kv_cache: true });
     expect(encoders).toHaveLength(2);
-    expect(encoders.filter(([, node]) => node.inputs.image1 !== undefined)).toHaveLength(1);
-    expect(encoders.find(([, node]) => node.inputs.image1 !== undefined)?.[1].inputs.image1)
-      .toEqual([loaders[0]?.[0], 0]);
-    for (const [, encoder] of encoders) expect(encoder.inputs).not.toHaveProperty("image2");
+    for (const [, encoder] of encoders) {
+      expect(encoder.inputs.image1).toEqual([preparedScales[0]?.[0], 0]);
+      expect(encoder.inputs.vae).toEqual([result.nodeIds.vaeLoader, 0]);
+      expect(encoder.inputs).not.toHaveProperty("image2");
+    }
+    expect(latentMethods).toHaveLength(2);
+    expect(latentMethods.map(([, node]) => node.inputs.reference_latents_method)).toEqual([
+      "index_timestep_zero",
+      "index_timestep_zero",
+    ]);
+    expect(new Set(latentMethods.map(([, node]) => (node.inputs.conditioning as [string, number])[0])).size).toBe(2);
     expect(samplers).toHaveLength(1);
     expect(samplers[0]?.[1].inputs).toMatchObject({
       model: [patches[0]?.[0], 0],
@@ -502,7 +521,12 @@ describe("ComfyUI workflow builder", () => {
       cfg: 1,
       sampler_name: "euler",
       scheduler: "simple",
+      positive: expect.arrayContaining([expect.any(String), 0]),
+      negative: expect.arrayContaining([expect.any(String), 0]),
     });
+    expect([samplers[0]?.[1].inputs.positive, samplers[0]?.[1].inputs.negative]).toEqual(expect.arrayContaining(
+      latentMethods.map(([id]) => [id, 0]),
+    ));
     expect(result.nodeIds).toMatchObject({
       reIdReferenceImage: loaders[0]?.[0],
       reIdLora: loras[0]?.[0],

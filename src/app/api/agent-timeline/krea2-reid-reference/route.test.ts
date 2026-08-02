@@ -287,7 +287,7 @@ describe("Krea2 ReID multipart API", () => {
         detectorSha256: "a".repeat(64),
         faceDetected: true,
         height,
-        version: 1,
+          version: 2,
         width,
       },
     });

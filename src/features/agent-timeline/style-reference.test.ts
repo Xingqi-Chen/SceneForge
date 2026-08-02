@@ -111,7 +111,7 @@ describe("workflow-neutral style reference contract", () => {
         detectorSha256: "a".repeat(64),
         faceDetected: true,
         height: 256,
-        version: 1,
+        version: 2,
         width: 256,
       },
     });
@@ -142,7 +142,7 @@ describe("workflow-neutral style reference contract", () => {
         detector: "yunet-2023mar-int8",
         faceDetected: true,
         height: 256,
-        version: 1,
+        version: 2,
         width: 256,
       },
     });
@@ -160,6 +160,15 @@ describe("workflow-neutral style reference contract", () => {
     expect(legacy).toMatchObject({ status: "ready", strength: 0.8 });
     expect(legacy).not.toHaveProperty("kind");
     expect(legacy).not.toHaveProperty("reIdPreparation");
+
+    expect(sanitizeCharacterReferenceSnapshot({
+      ...prepared,
+      reIdPreparation: { ...prepared.reIdPreparation, version: 1 },
+    })).toMatchObject({
+      kind: "krea2-reid",
+      status: "invalid",
+      error: expect.stringMatching(/replace|remove/i),
+    });
   });
 
   it("sanitizes storage metadata and drops bytes, data URLs, forged URLs, paths, and unknown fields", () => {

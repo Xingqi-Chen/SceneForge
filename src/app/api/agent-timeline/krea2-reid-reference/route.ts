@@ -178,7 +178,7 @@ export async function POST(request: Request) {
         detectorSha256: KREA2_REID_DETECTOR_SHA256,
         faceDetected: prepared.faceDetected,
         height: selected.height,
-        version: 1,
+        version: 2,
         width: selected.width,
       },
     });

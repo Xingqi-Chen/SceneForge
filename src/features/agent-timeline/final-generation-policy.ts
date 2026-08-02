@@ -7,7 +7,7 @@ export const timelineFinalGenerationPolicy = {
   // revision so the second-pass tuning does not invalidate unchanged profiles.
   version: 2,
   krea2Version: 3,
-  krea2ReIdVersion: 4,
+  krea2ReIdVersion: 5,
   resizeMode: "lanczos3-exact",
   defaultPreset: "balanced",
   denoiseByPreset: {
@@ -100,7 +100,9 @@ export function resolveTimelineFinalGenerationPolicy(
     resizeMode: timelineFinalGenerationPolicy.resizeMode,
     preset,
     family,
-    denoise: timelineFinalGenerationPolicy.denoiseByPreset[preset][family],
+    denoise: family === "krea2" && options.krea2ReId
+      ? 1
+      : timelineFinalGenerationPolicy.denoiseByPreset[preset][family],
     ...(family === "krea2"
       ? { steps: options.krea2ReId ? 8 : timelineFinalGenerationPolicy.krea2StepsByPreset[preset] }
       : {}),

@@ -192,6 +192,17 @@ function createKrea2StyleReferenceDescriptor(
   };
 }
 
+function isComfyUiOutOfMemoryError(error: ComfyUiApiError) {
+  let details = "";
+  try {
+    details = JSON.stringify(error.details);
+  } catch {
+    details = "";
+  }
+  return /(?:cuda|gpu|vram).{0,80}out of memory|out of memory.{0,80}(?:cuda|gpu|vram)|allocation on device|alloc(?:ation)? failed/i
+    .test(`${error.message} ${details}`);
+}
+
 function createKrea2ReIdDescriptor(
   referenceContext: TimelineConfirmedReferenceContext,
 ): ComfyUiKrea2ReIdDescriptor {
@@ -200,7 +211,7 @@ function createKrea2ReIdDescriptor(
     throw new Error("Confirmed Krea2 ReID context is missing its prepared character reference.");
   }
   return {
-    version: 1,
+    version: 2,
     referenceDigest: digestTimelineSemanticValue({
       byteLength: reference.byteLength,
       contentType: reference.contentType,
@@ -257,6 +268,10 @@ function createKreaReferenceTransport(
       cfg: 1,
       samplerName: "euler",
       scheduler: "simple",
+      denoise: 1,
+      imageName: undefined,
+      sourceImageDataUrl: undefined,
+      faceDetailer: { ...request.faceDetailer, enabled: false },
     };
   }
   if (!style || character) throw new Error("Krea style conditioning requires exactly one style reference.");
@@ -492,6 +507,15 @@ async function queueAndStore(
     const image = await waitForStoredImage(client, queued.promptId, queued.outputNodeId);
     return { ...image, promptId: queued.promptId, warnings: objectValidation.warnings };
   } catch (error) {
+    if (hasKrea2ReId && error instanceof ComfyUiApiError && isComfyUiOutOfMemoryError(error)) {
+      throw new TimelineNodeExecutionError(createTimelineNodeError(
+        "comfyui_upstream",
+        `Krea2 ReID ran out of GPU memory at ${request.width ?? "the requested"}x${request.height ?? "formal"}. ` +
+        "On a 12 GB GPU, enable ComfyUI model/CLIP offload and close competing GPU workloads, then retry. " +
+        "If it still fails, explicitly choose a smaller formal resolution and reconfirm; SceneForge did not change the selected model or resize the request.",
+        { recoverable: true, statusCode: error.statusCode },
+      ));
+    }
     if (hasKrea2ReId && error instanceof ComfyUiApiError) {
       throw new TimelineNodeExecutionError(createTimelineNodeError(
         "comfyui_upstream",
@@ -1123,6 +1147,23 @@ async function executeFinals(
     const previousRecord = previousByCandidate.get(item.candidateId);
     let previewUpscale: TimelinePreviewUpscaleArtifact | undefined;
     try {
+      if (referenceContext.adapter === "krea2-reid") {
+        const semanticValidation = validateComfyUiTextToImageRequest(semanticRequest);
+        if (!semanticValidation.ok) {
+          throw new TimelineNodeExecutionError(createTimelineNodeError(
+            "comfyui_request_invalid",
+            semanticValidation.message,
+            semanticValidation.details,
+          ));
+        }
+        const contextIssue = getComfyUiKrea2ReIdContextIssue(semanticRequest);
+        if (contextIssue) {
+          throw new TimelineNodeExecutionError(createTimelineNodeError(
+            "comfyui_request_invalid",
+            contextIssue,
+          ));
+        }
+      }
       previewUpscale = await preparePreviewUpscale(
         item.storedPreview,
         item.candidateId,
@@ -1139,12 +1180,15 @@ async function executeFinals(
         finals.push(previousRecord);
         continue;
       }
-      const request = {
-        ...semanticRequest,
-        sourceImageDataUrl: await storedImageDataUrl(previewUpscale.storedImage),
-      };
+      const request = referenceContext.adapter === "krea2-reid"
+        ? semanticRequest
+        : {
+            ...semanticRequest,
+            sourceImageDataUrl: await storedImageDataUrl(previewUpscale.storedImage),
+          };
       const result = await queueAndStore(client, await getObjectInfo(), request, context, `final-${item.candidateId}`);
-      if (haveSameManagedImageContent(result.storedImage, previewUpscale.storedImage)) {
+      if (referenceContext.adapter !== "krea2-reid" &&
+          haveSameManagedImageContent(result.storedImage, previewUpscale.storedImage)) {
         throw new TimelineNodeExecutionError(createTimelineNodeError(
           "comfyui_execution_failed",
           "Final generation returned the unchanged formal-size Preview fallback. Retry this selection.",

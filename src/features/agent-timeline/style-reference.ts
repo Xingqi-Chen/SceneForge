@@ -17,7 +17,7 @@ export type Krea2ReIdPreparation = {
   detectorSha256: string;
   faceDetected: boolean;
   height: number;
-  version: 1;
+  version: 2;
   width: number;
 };
 
@@ -160,7 +160,7 @@ function normalizeCharacterReferenceStatus(value: unknown): CharacterReferenceSt
 }
 
 function sanitizeKrea2ReIdPreparation(value: unknown): Krea2ReIdPreparation | undefined {
-  if (!isRecord(value) || value.version !== 1 ||
+  if (!isRecord(value) || value.version !== 2 ||
       value.choice !== "crop" && value.choice !== "original" ||
       value.detector !== "yunet-2023mar-int8" ||
       typeof value.detectorSha256 !== "string" || !/^[a-f0-9]{64}$/.test(value.detectorSha256) ||
@@ -179,7 +179,7 @@ function sanitizeKrea2ReIdPreparation(value: unknown): Krea2ReIdPreparation | un
     detectorSha256: value.detectorSha256,
     faceDetected: value.faceDetected,
     height,
-    version: 1,
+    version: 2,
     width,
   };
 }

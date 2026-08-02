@@ -42,7 +42,10 @@ import {
 } from "./krea2-style-reference";
 import {
   getComfyUiKrea2ReIdContextIssue,
+  KREA2_REID_LATENT_METHOD_NODE,
   KREA2_REID_LORA_NAME,
+  KREA2_REID_REFERENCE_LATENT_METHOD,
+  KREA2_REID_REFERENCE_SCALE_NODE,
 } from "./krea2-reid";
 import {
   ANIMA_CHARACTER_REFERENCE_APPLY_NODE,
@@ -790,6 +793,8 @@ function validateKrea2ReIdNodes(
     "LoraLoaderModelOnly",
     KREA2_STYLE_REFERENCE_TEXT_ENCODE_NODE,
     KREA2_STYLE_REFERENCE_MODEL_PATCH_NODE,
+    KREA2_REID_REFERENCE_SCALE_NODE,
+    KREA2_REID_LATENT_METHOD_NODE,
   ], errors);
   validateRequiredInputs(objectInfo, "LoadImage", ["image"], errors);
   validateRequiredInputs(objectInfo, "LoraLoaderModelOnly", ["model", "lora_name", "strength_model"], errors);
@@ -800,6 +805,34 @@ function validateKrea2ReIdNodes(
     errors,
   );
   validateRequiredInputs(objectInfo, KREA2_STYLE_REFERENCE_MODEL_PATCH_NODE, ["model", "kv_cache"], errors);
+  validateRequiredInputs(
+    objectInfo,
+    KREA2_REID_REFERENCE_SCALE_NODE,
+    ["image", "upscale_method", "megapixels", "resolution_steps"],
+    errors,
+  );
+  validateRequiredInputs(
+    objectInfo,
+    KREA2_REID_LATENT_METHOD_NODE,
+    ["conditioning", "reference_latents_method"],
+    errors,
+  );
+  validateRequiredOption(
+    objectInfo,
+    KREA2_REID_REFERENCE_SCALE_NODE,
+    "upscale_method",
+    "area",
+    "ImageScaleToTotalPixels area upscale method is required by the pinned Krea2 ReID workflow.",
+    errors,
+  );
+  validateRequiredOption(
+    objectInfo,
+    KREA2_REID_LATENT_METHOD_NODE,
+    "reference_latents_method",
+    KREA2_REID_REFERENCE_LATENT_METHOD,
+    "FluxKontextMultiReferenceLatentMethod index_timestep_zero is required by the pinned Krea2 ReID workflow.",
+    errors,
+  );
 
   if (!readInputOptions(objectInfo, "LoraLoaderModelOnly", "lora_name").includes(KREA2_REID_LORA_NAME)) {
     errors.push(`Krea2 ReID adapter is not available in ComfyUI: ${KREA2_REID_LORA_NAME}`);
@@ -807,8 +840,9 @@ function validateKrea2ReIdNodes(
   if ((request.steps !== undefined && request.steps !== 8) ||
       (request.cfg !== undefined && request.cfg !== 1) ||
       (request.samplerName !== undefined && request.samplerName !== "euler") ||
-      (request.scheduler !== undefined && request.scheduler !== "simple")) {
-    errors.push("Krea2 ReID requires steps=8, cfg=1, sampler=euler, and scheduler=simple.");
+      (request.scheduler !== undefined && request.scheduler !== "simple") ||
+      (request.denoise !== undefined && request.denoise !== 1)) {
+    errors.push("Krea2 ReID requires steps=8, cfg=1, sampler=euler, scheduler=simple, and denoise=1 from noise.");
   }
 }
 

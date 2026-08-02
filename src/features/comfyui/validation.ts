@@ -1217,6 +1217,7 @@ export function validateComfyUiTextToImageRequest(value: unknown): ComfyUiTextTo
       message: "krea2ReIdDescriptor must contain the server-owned Krea2 ReID invariants.",
     };
   }
+  const hasKrea2ReId = Boolean(krea2ReId || krea2ReIdDescriptor);
 
   const invalidCharacterReferenceTiming = characterReferences?.find((reference) =>
     reference.enabled !== false &&
@@ -1448,7 +1449,7 @@ export function validateComfyUiTextToImageRequest(value: unknown): ComfyUiTextTo
         (krea2StyleReference.endPercent ?? 1) !== krea2StyleReferenceDescriptor.endPercent)) {
       return { ok: false, message: "Krea style-reference transport settings do not match the signed adapter identity." };
     }
-    if (krea2ReId || krea2ReIdDescriptor) {
+    if (hasKrea2ReId) {
       const contextIssue = getComfyUiKrea2ReIdContextIssue({
         checkpointName: value.checkpointName.trim(),
         workflowProfile: isComfyUiTextToImageWorkflowProfileId(value.workflowProfile)
@@ -1460,16 +1461,18 @@ export function validateComfyUiTextToImageRequest(value: unknown): ComfyUiTextTo
           : undefined,
       });
       if (contextIssue) return { ok: false, message: contextIssue };
+      if (value.imageName !== undefined || value.sourceImageDataUrl !== undefined) {
+        return { ok: false, message: "Krea2 ReID cannot use a Composer img2img source. Remove the source image before confirmation." };
+      }
       if ((typeof value.steps === "number" && value.steps !== 8) ||
           (typeof value.cfg === "number" && value.cfg !== 1) ||
           (typeof value.samplerName === "string" && value.samplerName.trim() !== "euler") ||
-          (typeof value.scheduler === "string" && value.scheduler.trim() !== "simple")) {
-        return { ok: false, message: "Krea2 ReID requires steps=8, cfg=1, sampler=euler, and scheduler=simple." };
+          (typeof value.scheduler === "string" && value.scheduler.trim() !== "simple") ||
+          (typeof value.denoise === "number" && value.denoise !== 1)) {
+        return { ok: false, message: "Krea2 ReID requires steps=8, cfg=1, sampler=euler, scheduler=simple, and denoise=1 from noise." };
       }
-      if (Array.isArray(value.loras) && value.loras.some((lora) =>
-        isRecord(lora) && lora.loraName === KREA2_REID_LORA_NAME
-      )) {
-        return { ok: false, message: "The Krea2 ReID LoRA is server-owned and must not be supplied as a generic LoRA." };
+      if (Array.isArray(value.loras) && value.loras.length > 0) {
+        return { ok: false, message: `Experimental Krea2 ReID uses only the server-owned ${KREA2_REID_LORA_NAME}; remove additional LoRAs.` };
       }
     }
     if ((typeof value.width === "number" && value.width % 16 !== 0) ||
@@ -1509,7 +1512,9 @@ export function validateComfyUiTextToImageRequest(value: unknown): ComfyUiTextTo
       imageHeight: getOptionalNumber(value.imageHeight),
       promptWrapper,
       outputPrefix: value.outputPrefix?.trim(),
-      faceDetailer,
+      faceDetailer: hasKrea2ReId && faceDetailer
+        ? { ...faceDetailer, enabled: false }
+        : faceDetailer,
       handDetailer,
       controlNet,
       controlNets,
@@ -2209,7 +2214,7 @@ export function resolveComfyUiTextToImageRequest(
     scheduler: hasKrea2ReId
       ? "simple"
       : getString(request.scheduler, isKrea2Profile ? "simple" : DEFAULT_TEXT_TO_IMAGE_REQUEST.scheduler),
-    denoise: request.denoise ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.denoise,
+    denoise: hasKrea2ReId ? 1 : request.denoise ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.denoise,
     batchSize: isKrea2Profile ? 1 : request.imageName || request.sourceImageDataUrl ? 1 : request.batchSize ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.batchSize,
     latentImageNode: isAnimaProfile || isKrea2Profile ? "EmptyLatentImage" : request.latentImageNode ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.latentImageNode,
     sourceImageDataUrl: request.sourceImageDataUrl ?? "",
@@ -2221,7 +2226,9 @@ export function resolveComfyUiTextToImageRequest(
       negativePrefix: request.promptWrapper?.negativePrefix ?? DEFAULT_TEXT_TO_IMAGE_REQUEST.promptWrapper.negativePrefix,
     },
     outputPrefix: getString(request.outputPrefix, DEFAULT_TEXT_TO_IMAGE_REQUEST.outputPrefix),
-    faceDetailer: resolveDetailerConfig(request.faceDetailer, request, DEFAULT_TEXT_TO_IMAGE_REQUEST.faceDetailer),
+    faceDetailer: hasKrea2ReId
+      ? { ...resolveDetailerConfig(request.faceDetailer, request, DEFAULT_TEXT_TO_IMAGE_REQUEST.faceDetailer), enabled: false }
+      : resolveDetailerConfig(request.faceDetailer, request, DEFAULT_TEXT_TO_IMAGE_REQUEST.faceDetailer),
     handDetailer: resolveDetailerConfig(request.handDetailer, request, DEFAULT_TEXT_TO_IMAGE_REQUEST.handDetailer),
     controlNets: isKrea2Profile ? [] : resolveControlNetUnits(request),
     characterReferences: isKrea2Profile

@@ -1447,6 +1447,9 @@ export function TimelineShell() {
   );
   const sceneRequestIsUsable = sceneRequest.trim().length > 0;
   const isKrea2Profile = selectedPromptProfile === "krea2";
+  const composerReIdActive = isKrea2Profile && isKrea2ReIdReferenceReady(
+    sanitizeCharacterReferenceSnapshot(characterReference),
+  );
   const repairManualRecoveryPair = currentFinalRepair
     ? currentFinalRepair.pairs.find(isRepairManualRecoveryRequired)
     : undefined;
@@ -2330,6 +2333,14 @@ export function TimelineShell() {
       return;
     }
 
+    if (composerReIdActive && selectedSourceImage) {
+      setNotices((current) => ({
+        ...current,
+        "scene-input": "Krea2 ReID cannot use a Composer img2img source. Remove the source image before starting or confirming this Run.",
+      }));
+      return;
+    }
+
     const styleIssue = getCurrentStyleReferenceIssue();
     if (styleIssue) {
       setNotices((current) => ({ ...current, "scene-input": styleIssue }));
@@ -2591,6 +2602,14 @@ export function TimelineShell() {
   function handleSourceImageChange(event: ChangeEvent<HTMLInputElement>) {
     if (rejectLegacyDirectMutation()) {
       event.target.value = "";
+      return;
+    }
+    if (composerReIdActive) {
+      event.target.value = "";
+      setNotices((current) => ({
+        ...current,
+        "scene-input": "Composer source img2img is paused while Krea2 ReID is active. Remove ReID before uploading a source image.",
+      }));
       return;
     }
     const file = event.target.files?.[0];
@@ -3429,7 +3448,7 @@ export function TimelineShell() {
           {isKrea2Profile ? (
             <>
               <p className="mt-3 rounded-md border border-indigo-100 bg-white px-3 py-2 text-xs leading-relaxed text-indigo-800">
-                Krea 2 Turbo uses its fixed local UNet, CLIP, VAE, and optional model-only LoRAs for 4/4/6/8 scored previews, exact-K selection, and Preview-to-Final img2img redraw. Source img2img is supported. Paired review and explicit variant selection are available. One-shot Repair remains off by default and runs only when this local ComfyUI installation validates the Krea img2img/inpaint graph. The analyzed global style prompt is supported exactly once, and its optional reference adapter appears only after local Krea preflight. FaceDetailer and HandDetailer apply independently to Final and compatible Repair requests; Previews always remain Detailer-free. SceneForge checks their required nodes, inputs, samplers, detector models, and Krea model context before queueing.
+                Ordinary Krea 2 Turbo uses its fixed local UNet, CLIP, VAE, and optional model-only LoRAs for 4/4/6/8 scored previews, exact-K selection, and Preview-to-Final img2img redraw. Source img2img is supported without ReID. Experimental, upstream-unverified ReID instead uses the pinned upstream/community graph for 1 MP candidates and same-seed formal rerenders from noise; it ignores redraw strength and blocks Composer source img2img. Paired review and the managed Preview-upscale fallback remain available. One-shot Repair remains ReID-free. The analyzed global style prompt is supported exactly once. FaceDetailer and HandDetailer apply independently without ReID; active ReID pauses FaceDetailer while preserving its saved setting and keeps HandDetailer compatible. Previews remain Detailer-free.
               </p>
               {renderFinalRedrawStrengthControls()}
               <label className="mt-3 flex items-start gap-2 rounded-md border border-indigo-100 bg-white px-3 py-2 text-xs text-slate-700">
@@ -3455,6 +3474,7 @@ export function TimelineShell() {
                   layout="compact-strip"
                   onChange={handleDetailersChange}
                 />
+                {composerReIdActive ? <p className="mt-2 text-xs leading-relaxed text-indigo-700">ReID is active: FaceDetailer is paused without changing this saved control; HandDetailer can still run on Final. Removing ReID restores the saved FaceDetailer choice.</p> : null}
               </div>
             </>
           ) : (
@@ -3500,6 +3520,8 @@ export function TimelineShell() {
           />
           <CharacterReferencePanel
             disabled={isRunning || isLegacyDirectReadOnly}
+            formalHeight={savedStyleParameters?.height}
+            formalWidth={savedStyleParameters?.width}
             kreaReferenceStrength={kreaReferenceStrength}
             onChange={handleCharacterReferenceChange}
             onKreaReferenceStrengthChange={handleKreaReferenceStrengthChange}
@@ -3624,7 +3646,7 @@ export function TimelineShell() {
           />
           <Button
             className="ml-2 h-8 px-2 text-xs shadow-none"
-            disabled={isRunning || isLegacyDirectReadOnly}
+            disabled={isRunning || isLegacyDirectReadOnly || composerReIdActive}
             onClick={() => sourceImageInputRef.current?.click()}
             type="button"
             variant="secondary"
@@ -3632,6 +3654,7 @@ export function TimelineShell() {
             <ImageIcon className="size-3.5" />
             Upload source
           </Button>
+          {composerReIdActive ? <span className="text-xs text-amber-800">Source img2img unavailable while ReID is active.</span> : null}
         </div>
         <textarea
           className="min-h-28 w-full resize-none border-0 bg-white px-3 py-3 text-sm leading-relaxed text-slate-900 outline-none placeholder:text-slate-400"
@@ -4283,7 +4306,7 @@ export function TimelineShell() {
                       />
                       <Button
                         className="ml-2 h-8 px-2 text-xs shadow-none"
-                        disabled={isRunning || isLegacyDirectReadOnly}
+                        disabled={isRunning || isLegacyDirectReadOnly || composerReIdActive}
                         onClick={() => sourceImageInputRef.current?.click()}
                         type="button"
                         variant="secondary"
@@ -4291,6 +4314,7 @@ export function TimelineShell() {
                         <ImageIcon className="size-3.5" />
                         Upload source
                       </Button>
+                      {composerReIdActive ? <span className="text-xs text-amber-800">Source img2img unavailable while ReID is active.</span> : null}
                     </div>
                     <textarea
                       className="min-h-28 w-full resize-none border-0 bg-white px-3 py-3 text-sm leading-relaxed text-slate-900 outline-none placeholder:text-slate-400"

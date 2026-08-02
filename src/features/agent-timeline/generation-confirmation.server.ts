@@ -81,7 +81,7 @@ export function isTimelineGenerationConfirmationCurrent(workflow: TimelineWorkfl
   const persistedContextIsCanonical = canonicalPersistedContext !== null &&
     JSON.stringify(canonicalize(gate.referenceContext)) === canonicalPersistedContext;
   if (activeKrea2ReId && (
-    expectedReferenceContext?.version !== 2 ||
+    expectedReferenceContext?.version !== 3 ||
     expectedReferenceContext.adapter !== "krea2-reid" ||
     !persistedContextIsCanonical ||
     canonicalPersistedContext !== JSON.stringify(canonicalize(expectedReferenceContext))

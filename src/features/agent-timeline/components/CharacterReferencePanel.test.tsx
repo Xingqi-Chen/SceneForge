@@ -99,7 +99,15 @@ function Harness({ initialSnapshot }: { initialSnapshot?: CharacterReferenceSnap
   );
 }
 
-function KreaHarness() {
+function KreaHarness({
+  checkpoint = kreaCheckpoint,
+  formalHeight = 1536,
+  formalWidth = 1024,
+}: {
+  checkpoint?: typeof kreaCheckpoint;
+  formalHeight?: number;
+  formalWidth?: number;
+}) {
   const [displayMode, setDisplayMode] = useState<"simple" | "detailed">("simple");
   const [snapshot, setSnapshot] = useState<CharacterReferenceSnapshot>();
   return (
@@ -110,11 +118,13 @@ function KreaHarness() {
         Switch Krea mode
       </button>
       <CharacterReferencePanel
+        formalHeight={formalHeight}
+        formalWidth={formalWidth}
         kreaReferenceStrength={0.8}
         onChange={setSnapshot}
         onKreaReferenceStrengthChange={() => undefined}
         promptProfile="krea2"
-        selectedCheckpoint={kreaCheckpoint}
+        selectedCheckpoint={checkpoint}
         snapshot={snapshot}
         styleReference={kreaStyleReference}
       />
@@ -331,7 +341,7 @@ describe("CharacterReferencePanel", () => {
           detectorSha256: "a".repeat(64),
           faceDetected: true,
           height: 256,
-          version: 1,
+          version: 2,
           width: 384,
         },
       });
@@ -339,6 +349,9 @@ describe("CharacterReferencePanel", () => {
     const scrollTo = vi.spyOn(window, "scrollTo").mockImplementation(() => undefined);
     vi.stubGlobal("fetch", fetchMock);
     await act(async () => root.render(<KreaHarness />));
+
+    expect(container.textContent).toContain("Experimental");
+    expect(container.textContent).not.toContain("Verified setup");
 
     const anchoredInput = getFileInput();
     anchoredInput.focus();
@@ -381,9 +394,15 @@ describe("CharacterReferencePanel", () => {
     expect(container.querySelector('[data-testid="krea-snapshot"]')?.textContent).toBe("krea2-reid:ready");
     expect(document.body.querySelector('[role="dialog"]')).toBeNull();
     expect(document.body.style.overflow).toBe("");
-    expect(container.textContent).toContain("Prepared original is ready for Krea2 ReID");
+    expect(container.textContent).toMatch(/Prepared original is ready for Krea2 ReID.*Experimental/);
+    expect(container.textContent).not.toContain("Verified setup");
+    expect(container.textContent).toMatch(/upstream-unverified|not certified|not verified/i);
+    expect(container.textContent).toMatch(/12 GB|offload/i);
+    expect(container.textContent).toMatch(/out of memory|OOM/i);
+    expect(container.textContent).toMatch(/source img2img.*(?:blocked|unavailable|incompatible)/i);
+    expect(container.textContent).toMatch(/FaceDetailer.*paused.*(?:return|restored)/i);
+    expect(container.textContent).toMatch(/HandDetailer.*(?:remain|compatible)/i);
     expect(container.textContent).toContain("Krea style-image conditioning is paused until ReID is removed");
-    expect(container.textContent).toContain("Local graph validation does not certify upstream compatibility");
 
     const switchMode = Array.from(container.querySelectorAll("button"))
       .find((button) => button.textContent?.includes("Switch Krea mode"));

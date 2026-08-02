@@ -114,7 +114,7 @@ function KreaHarness({
       detectorSha256: "a".repeat(64),
       faceDetected: true,
       height: 256,
-      version: 1 as const,
+      version: 2 as const,
       width: 256,
     },
   } : undefined);

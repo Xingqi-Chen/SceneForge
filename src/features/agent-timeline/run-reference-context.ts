@@ -25,8 +25,8 @@ export type TimelineReferenceRole = "style" | "character";
  * queue request; workflow persistence retains the managed storage identity.
  */
 export type TimelineConfirmedReferenceContext = {
-  /** Existing IP/style contexts remain v1; Krea2 ReID requires v2. */
-  version: 1 | 2;
+  /** Existing IP/style contexts remain v1; the corrected Krea2 ReID contract requires v3. */
+  version: 1 | 3;
   adapter: "ipadapter" | "krea2-ostris" | "krea2-reid";
   references: Array<{
     role: TimelineReferenceRole;
@@ -131,7 +131,7 @@ export function createTimelineConfirmedReferenceContext({
   }
 
   return {
-    version: hasKrea2ReId ? 2 : 1,
+    version: hasKrea2ReId ? 3 : 1,
     adapter: hasKrea2ReId ? "krea2-reid" : isKrea2 ? "krea2-ostris" : "ipadapter",
     references,
     startPercent: 0,
@@ -155,9 +155,9 @@ export function sanitizeTimelineConfirmedReferenceContext(
   value: unknown,
 ): TimelineConfirmedReferenceContext | undefined {
   if (!isRecord(value) ||
-      (value.version !== 1 && value.version !== 2) ||
+      (value.version !== 1 && value.version !== 3) ||
       (value.adapter !== "ipadapter" && value.adapter !== "krea2-ostris" && value.adapter !== "krea2-reid") ||
-      (value.version === 2) !== (value.adapter === "krea2-reid") ||
+      (value.version === 3) !== (value.adapter === "krea2-reid") ||
       value.startPercent !== 0 || value.endPercent !== 1 || !Array.isArray(value.references) ||
       value.references.length > 2) {
     return undefined;

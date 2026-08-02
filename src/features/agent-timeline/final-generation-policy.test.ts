@@ -53,7 +53,7 @@ describe("timeline Final generation policy", () => {
     expect(timelineFinalGenerationPolicy).toMatchObject({
       version: 2,
       krea2Version: 3,
-      krea2ReIdVersion: 4,
+      krea2ReIdVersion: 5,
       defaultPreset: "balanced",
       denoiseByPreset: {
         conservative: { illustrious: 0.3, anima: 0.35, fallback: 0.35, krea2: 0.12 },
@@ -65,7 +65,7 @@ describe("timeline Final generation policy", () => {
   });
 
   it.each(["conservative", "balanced", "strong"] as const)(
-    "locks Krea2 ReID %s Final to policy v4 and eight steps while preserving preset denoise",
+    "locks Krea2 ReID %s Final to policy v5, denoise 1, and eight steps regardless of redraw preset",
     (preset) => {
       const ordinary = resolveTimelineFinalGenerationPolicy(
         { modelBaseModel: "Krea 2", workflowProfile: "krea2" },
@@ -77,7 +77,12 @@ describe("timeline Final generation policy", () => {
         { krea2ReId: true },
       );
 
-      expect(reId).toEqual({ ...ordinary, version: 4, steps: 8 });
+      expect(reId).toEqual({
+        ...ordinary,
+        version: 5,
+        steps: 8,
+        denoise: 1,
+      });
     },
   );
 });

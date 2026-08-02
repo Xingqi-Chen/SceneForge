@@ -1511,6 +1511,10 @@ describe("ComfyUI object info helpers", () => {
 
     const reIdRequest = {
       ...request,
+      checkpointName: "RedCraft_v4_fp8_scaled.safetensors",
+      clipName: "qwen3vl_4b_fp8_scaled.safetensors",
+      vaeName: "qwen_image_vae.safetensors",
+      unetWeightDtype: "default",
       steps: 8,
       cfg: 1,
       samplerName: "euler",
@@ -1518,17 +1522,38 @@ describe("ComfyUI object info helpers", () => {
       krea2StyleReference: undefined,
       krea2ReId: { imageName: "sceneforge-krea-reid.png" },
       krea2ReIdDescriptor: {
-        version: 1 as const,
+        version: 2,
         referenceDigest: `sha256:${"a".repeat(64)}`,
         loraName: "krea2_reid_rank32.safetensors" as const,
         strengthModel: 1 as const,
         kvCache: true as const,
         imageCount: 1 as const,
-      },
+      } as never,
     };
     const reIdCompatibleObjectInfo = {
       ...compatibleObjectInfo,
+      UNETLoader: {
+        input: { required: {
+          unet_name: [["RedCraft_v4_fp8_scaled.safetensors"], {}],
+          weight_dtype: [["default"], {}],
+        } },
+      },
+      CLIPLoader: {
+        input: { required: {
+          clip_name: [["qwen3vl_4b_fp8_scaled.safetensors"], {}],
+          type: [["krea2"], {}],
+        } },
+      },
+      VAELoader: { input: { required: { vae_name: [["qwen_image_vae.safetensors"], {}] } } },
       LoadImage: { input: { required: { image: [["sceneforge-krea-reid.png"], {}] } } },
+      ImageScaleToTotalPixels: {
+        input: { required: {
+          image: ["IMAGE", {}],
+          upscale_method: [["area"], {}],
+          megapixels: ["FLOAT", {}],
+          resolution_steps: ["INT", {}],
+        } },
+      },
       LoraLoaderModelOnly: {
         input: { required: {
           model: ["MODEL", {}],
@@ -1539,6 +1564,12 @@ describe("ComfyUI object info helpers", () => {
       TextEncodeKrea2OstrisEdit: {
         input: { required: {
           clip: ["CLIP", {}], prompt: ["STRING", {}], vae: ["VAE", {}], image1: ["IMAGE", {}],
+        } },
+      },
+      FluxKontextMultiReferenceLatentMethod: {
+        input: { required: {
+          conditioning: ["CONDITIONING", {}],
+          reference_latents_method: [["index_timestep_zero"], {}],
         } },
       },
     };
@@ -1558,16 +1589,20 @@ describe("ComfyUI object info helpers", () => {
       Krea2OstrisEditModelPatch: {
         input: { required: { model: ["MODEL", {}] } },
       },
+      FluxKontextMultiReferenceLatentMethod: {
+        input: { required: { conditioning: ["CONDITIONING", {}] } },
+      },
     }).errors;
     expect(missing).toEqual(expect.arrayContaining([
       "LoraLoaderModelOnly.strength_model input is not available in ComfyUI object_info.",
       "TextEncodeKrea2OstrisEdit.image1 input is not available in ComfyUI object_info.",
       "Krea2OstrisEditModelPatch.kv_cache input is not available in ComfyUI object_info.",
+      "FluxKontextMultiReferenceLatentMethod.reference_latents_method input is not available in ComfyUI object_info.",
       "Krea2 ReID adapter is not available in ComfyUI: krea2_reid_rank32.safetensors",
     ]));
 
     expect(validateComfyUiRequestAgainstObjectInfo({ ...reIdRequest, steps: 6 }, reIdCompatibleObjectInfo).errors)
-      .toContain("Krea2 ReID requires steps=8, cfg=1, sampler=euler, and scheduler=simple.");
+      .toContain("Krea2 ReID requires steps=8, cfg=1, sampler=euler, scheduler=simple, and denoise=1 from noise.");
   });
 
   it("keeps unknown diffusion models on the fallback checkpoint profile", () => {

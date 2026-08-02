@@ -145,7 +145,7 @@ describe("Run generation confirmation contract", () => {
     }
   });
 
-  it("binds prepared ReID identity, v2 reference context, and Krea policy v4 against tampering", () => {
+  it("binds prepared ReID identity, v3 reference context, and Krea policy v5 against tampering", () => {
     const characterReference = {
       kind: "krea2-reid" as const,
       status: "ready" as const,
@@ -163,12 +163,12 @@ describe("Run generation confirmation contract", () => {
         detectorSha256: "a".repeat(64),
         faceDetected: true,
         height: 256,
-        version: 1 as const,
+        version: 2 as const,
         width: 256,
       },
     };
     let workflow = createTimelineWorkflowState({
-      workflowId: "confirmation-krea-reid-v4",
+      workflowId: "confirmation-krea-reid-v5",
       promptProfile: "krea2",
       sceneRequest: "A greenhouse portrait",
       settingsSnapshot: {
@@ -179,7 +179,10 @@ describe("Run generation confirmation contract", () => {
     });
     workflow = setTimelineNodeManualResult(workflow, "parameter-recommendation", {
       requestPreview: {
-        checkpointName: "RedCraft_v4_fp8.safetensors",
+        checkpointName: "RedCraft_v4_fp8_scaled.safetensors",
+        clipName: "qwen3vl_4b_fp8_scaled.safetensors",
+        vaeName: "qwen_image_vae.safetensors",
+        unetWeightDtype: "default",
         modelBaseModel: "Krea 2",
         modelStorageKind: "diffusion",
         positivePrompt: "greenhouse portrait",
@@ -192,13 +195,13 @@ describe("Run generation confirmation contract", () => {
       confirmationFingerprint: fingerprint,
       confirmationRequired: false,
       confirmed: true,
-      finalDenoise: 0.18,
+      finalDenoise: 1,
       finalGenerationFamily: "krea2",
-      finalPolicyVersion: 4,
+      finalPolicyVersion: 5,
       finalRedrawPreset: "balanced",
       finalSteps: 8,
       referenceContext: {
-        version: 2,
+        version: 3 as never,
         adapter: "krea2-reid",
         references: [{
           role: "character",

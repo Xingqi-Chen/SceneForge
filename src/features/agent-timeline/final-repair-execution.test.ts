@@ -2081,7 +2081,7 @@ describe("T38C durable repair attempts", () => {
         },
         krea2ReId: { imageName: "transient-reid.png" },
         krea2ReIdDescriptor: {
-          version: 1,
+          version: 2,
           referenceDigest: `sha256:${"b".repeat(64)}`,
           loraName: "krea2_reid_rank32.safetensors",
           strengthModel: 1,
@@ -2198,7 +2198,7 @@ describe("T38C durable repair attempts", () => {
         },
         krea2ReId: { imageName: "transient-reid.png" },
         krea2ReIdDescriptor: {
-          version: 1,
+          version: 2,
           referenceDigest: `sha256:${"b".repeat(64)}`,
           loraName: "krea2_reid_rank32.safetensors",
           strengthModel: 1,

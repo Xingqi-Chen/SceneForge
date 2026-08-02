@@ -13,7 +13,9 @@ import {
   setTimelineNodeManualResult,
   type SceneInputTimelineResult,
 } from ".";
+import * as timelineExports from ".";
 import { deriveTimelineConfirmedReferenceContext } from "./run-reference-context";
+import { createTimelineGenerationConfirmationFingerprint } from "./generation-confirmation.server";
 
 function createConfirmedWorkflow(
   imageCount?: number,
@@ -114,6 +116,97 @@ const readyCharacterReference = {
     url: "/api/comfyui/sequence-references/fedcba9876543210fedcba9876543210.png",
   },
 };
+
+const readyKrea2ReIdReference = {
+  kind: "krea2-reid" as const,
+  status: "ready" as const,
+  strength: 1,
+  metadata: {
+    byteLength: 777,
+    contentType: "image/png",
+    storedFilename: "fedcba9876543210fedcba9876543210.png",
+    uploadedAt: "2026-08-02T00:00:03.000Z",
+    url: "/api/comfyui/sequence-references/fedcba9876543210fedcba9876543210.png",
+  },
+  reIdPreparation: {
+    choice: "crop" as const,
+    detector: "yunet-2023mar-int8" as const,
+    detectorSha256: "a".repeat(64),
+    faceDetected: true,
+    height: 256,
+    version: 2 as const,
+    width: 256,
+  },
+};
+
+function createKrea2ReIdWorkflow(
+  width: number,
+  height: number,
+  sourceImage?: SceneInputTimelineResult["sourceImage"],
+) {
+  let workflow = createConfirmedWorkflow(1, sourceImage, {
+    characterReference: readyKrea2ReIdReference,
+    detailers: {
+      faceDetailer: { enabled: true, detectorModelName: "bbox/face.pt", steps: 19 } as never,
+      handDetailer: { enabled: true, detectorModelName: "bbox/hand.pt", steps: 21 } as never,
+    },
+    finalRedrawPreset: "strong",
+    promptProfile: "krea2",
+  });
+  workflow = setTimelineNodeManualResult(workflow, "resource-recommendation", {
+    checkpoint: { resource: {
+      baseModel: "Krea 2",
+      id: "checkpoint-krea-reid",
+      modelFileName: "RedCraft_v4_fp8_scaled.safetensors",
+      modelStorageKind: "diffusion",
+      name: "Krea 2 Turbo INT8 ConvRot",
+    } },
+    loras: [],
+  });
+  workflow = setTimelineNodeManualResult(workflow, "parameter-recommendation", {
+    ...(workflow.nodes["parameter-recommendation"].result as object),
+    characterReference: readyKrea2ReIdReference,
+    width,
+    height,
+    seedPolicy: { mode: "fixed", seed: 700 },
+    requestPreview: {
+      batchSize: 1,
+      checkpointName: "RedCraft_v4_fp8_scaled.safetensors",
+      clipName: "qwen3vl_4b_fp8_scaled.safetensors",
+      vaeName: "qwen_image_vae.safetensors",
+      unetWeightDtype: "default",
+      cfg: 1,
+      denoise: 1,
+      modelBaseModel: "Krea 2",
+      modelStorageKind: "diffusion",
+      negativePrompt: "blur",
+      positivePrompt: "glass greenhouse pilot",
+      samplerName: "euler",
+      scheduler: "simple",
+      steps: 8,
+      workflowProfile: "krea2",
+      width,
+      height,
+    },
+  });
+  return workflow;
+}
+
+function confirmKrea2ReIdWorkflow(workflow: ReturnType<typeof createKrea2ReIdWorkflow>) {
+  return confirmTimelineGeneration(workflow, {
+    automaticLocalRepairAuthorized: false,
+    confirmationFingerprint: createTimelineGenerationConfirmationFingerprint(workflow),
+    confirmationRequired: false,
+    confirmed: true,
+    finalDenoise: 1,
+    finalGenerationFamily: "krea2",
+    finalPolicyVersion: 5,
+    finalRedrawPreset: "strong",
+    finalSteps: 8,
+    referenceContext: deriveTimelineConfirmedReferenceContext(workflow) ?? undefined,
+    visualStyle: "anime",
+  });
+}
 
 function createKreaArtStyleWorkflow(positivePrompt: string) {
   const styleReference = {
@@ -1181,6 +1274,139 @@ describe("timeline T8 ComfyUI request conversion", () => {
         details: { width, height, longestEdge: 768 },
       });
     }
+  });
+
+  it.each([
+    [1024, 1536, 832, 1248],
+    [1536, 1024, 1248, 832],
+    [1024, 1024, 1024, 1024],
+    [768, 768, 768, 768],
+  ])("uses the ReID one-megapixel exact-aspect aligned16 envelope for %ix%i", (
+    width,
+    height,
+    previewWidth,
+    previewHeight,
+  ) => {
+    const getTimelineReIdPreviewDimensions = (
+      timelineExports as unknown as {
+        getTimelineReIdPreviewDimensions: (width: number, height: number) => { width: number; height: number };
+      }
+    ).getTimelineReIdPreviewDimensions;
+    const dimensions = getTimelineReIdPreviewDimensions(width, height);
+
+    expect(dimensions).toEqual({ width: previewWidth, height: previewHeight });
+    expect(dimensions.width * dimensions.height).toBeLessThanOrEqual(1_048_576);
+    expect(dimensions.width * height).toBe(dimensions.height * width);
+    expect(dimensions.width % 16).toBe(0);
+    expect(dimensions.height % 16).toBe(0);
+  });
+
+  it("creates 832x1248 ReID previews and formal same-seed txt2img Final with FaceDetailer paused", () => {
+    let workflow = confirmKrea2ReIdWorkflow(createKrea2ReIdWorkflow(1024, 1536));
+    const previews = createTimelinePreviewRequests(workflow);
+
+    expect(previews).toHaveLength(4);
+    expect(previews.map(({ request }) => [request.width, request.height])).toEqual([
+      [832, 1248], [832, 1248], [832, 1248], [832, 1248],
+    ]);
+    expect(previews.map(({ seed }) => seed)).toEqual([700, 701, 702, 703]);
+    expect(previews.every(({ request }) =>
+      request.denoise === 1 &&
+      request.sourceImageDataUrl === undefined &&
+      request.faceDetailer?.enabled === false &&
+      request.handDetailer?.enabled === false
+    )).toBe(true);
+
+    workflow = setTimelineNodeManualResult(workflow, "preview-execution", {
+      baseSeed: 700,
+      candidateCount: 4,
+      finalCount: 1,
+      previewHeight: 1248,
+      previewWidth: 832,
+      previewSteps: 8,
+      candidates: previews.map(({ candidateId, index, seed }) => ({
+        candidateId,
+        index,
+        seed,
+        status: "done" as const,
+        storedImage: {
+          byteLength: index + 1,
+          contentType: "image/png",
+          filename: `${candidateId}.png`,
+          url: `/api/comfyui/generated-images/${candidateId}.png`,
+        },
+      })),
+      successfulCount: 4,
+      warnings: [],
+    });
+    workflow = setTimelineNodeManualResult(workflow, "preview-scoring", {
+      rubricVersion: 2,
+      visualStyle: "anime",
+      scores: previews.map(({ candidateId, index }) => ({
+        candidateId,
+        adherence: 100 - index,
+        composition: 100 - index,
+        anatomy: 100 - index,
+        style: 100 - index,
+        technical: 100 - index,
+        total: 100 - index,
+        criticalDefects: [],
+        eligible: true,
+        visualStyleMatch: true,
+        rank: index + 1,
+      })),
+      selectedCandidateIds: ["preview-1"],
+      selectionSource: "ai",
+    });
+
+    const [final] = createTimelineFinalRequests(workflow);
+    expect(final).toMatchObject({
+      candidateId: "preview-1",
+      seed: 700,
+      storedPreview: { filename: "preview-1.png" },
+      finalPolicy: {
+        version: 5,
+        family: "krea2",
+        steps: 8,
+        denoise: 1,
+      },
+      request: {
+        width: 1024,
+        height: 1536,
+        imageWidth: 1024,
+        imageHeight: 1536,
+        seed: 700,
+        steps: 8,
+        denoise: 1,
+        preview: false,
+        sourceImageDataUrl: undefined,
+        imageName: undefined,
+        faceDetailer: { enabled: false, detectorModelName: "bbox/face.pt", steps: 19 },
+        handDetailer: { enabled: true, detectorModelName: "bbox/hand.pt", steps: 21 },
+      },
+    });
+    expect(final?.request).not.toHaveProperty("sourceImage");
+
+    const settings = (workflow.nodes["scene-input"].result as {
+      settingsSnapshot: { detailers: { faceDetailer: { enabled: boolean }; handDetailer: { enabled: boolean } } };
+    }).settingsSnapshot;
+    expect(settings.detailers.faceDetailer.enabled).toBe(true);
+    expect(settings.detailers.handDetailer.enabled).toBe(true);
+  });
+
+  it("blocks active ReID with Composer source img2img before constructing any request", () => {
+    const sourceImage = {
+      dataUrl: "data:image/png;base64,aGVsbG8=",
+      filename: "composer-source.png",
+      height: 1536,
+      mimeType: "image/png" as const,
+      uploadedAt: "2026-08-02T00:00:00.000Z",
+      width: 1024,
+    };
+    const workflow = confirmKrea2ReIdWorkflow(createKrea2ReIdWorkflow(1024, 1536, sourceImage));
+
+    expect(() => createConfirmedTimelineComfyUiRequest(workflow)).toThrow(/ReID.*img2img|img2img.*ReID/i);
+    expect(() => createTimelinePreviewRequests(workflow)).toThrow(/ReID.*img2img|img2img.*ReID/i);
   });
 
   it.each([1, 2, 3, 4])("creates deterministic independent preview requests for txt2img K=%i", (imageCount) => {
