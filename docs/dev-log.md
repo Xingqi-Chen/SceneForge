@@ -2,6 +2,25 @@
 
 This log records dated implementation and documentation work. Keep entries concise and evidence-oriented.
 
+## 2026-08-02
+
+### T53 / Issue #178 Anima Run character-reference adapter compatibility
+
+Summary:
+
+- Replaced the incompatible generic `ComfyUI_IPAdapter_plus` graph for Anima character references with the dedicated `AnimaIPAdapterLoader` and `AnimaIPAdapterApply` contract from `LuciferTC9527/ComfyUI-Anima_IP-Adapter`.
+- Locked Anima to the exact `ip_adapter-Character_Reference-10.safetensors` adapter, disabled request-driven SigLIP2 downloads, mapped the 0-1 character strength with a 0.8 default, and fixed the verified 512px/SigLIP/IP-CFG/LoRA apply settings.
+- Added fail-closed Run preflight before reference upload and queueing for the dedicated node classes, every required input port, and the exact adapter file exposed by ComfyUI `object_info`.
+- Preserved generic IPAdapter behavior for Illustrious/default workflows and the existing Krea2 Ostris Edit path; Anima style references and FaceID remain outside this change.
+
+Final validation:
+
+- The focused Issue #178 suite passed 177 tests, the isolated Final/Repair suite passed 97 tests, and the full Vitest suite passed 1,975 tests across 155 files.
+- `npm run typecheck`, `npm run lint`, `npm run build`, and `git diff --check` passed; lint retained 22 existing `<img>` optimization warnings and no errors.
+- Live ComfyUI `object_info` confirmed both dedicated node classes, every required Loader/Apply port, and the exact adapter filename option.
+- A live 512x512 one-step Anima character-reference queue loaded 728 adapter keys, installed and patched all 28 Anima blocks, encoded `[1, 1024, 768]` SigLIP2 reference tokens at strength 0.8, and completed successfully.
+- Test Gate returned `PASS`; Review Gate returned `APPROVE` with no blocking findings.
+
 ## 2026-07-29
 
 ### T52 / Issue #175 Incremental Civitai recommendation indexing
@@ -2093,6 +2112,9 @@ Summary:
 Validation:
 
 - `npm run typecheck`
+- `npm test -- --run src/features/agent-timeline/style-reference.test.ts src/features/agent-timeline/t8-node-adapters.test.ts src/features/comfyui/workflow.test.ts src/features/comfyui/validation.test.ts src/features/comfyui/object-info.test.ts` (197 passed)
+- `npm run lint` (0 errors; existing image-element warnings)
+- `git diff --check`
 - `npm run lint` (passes with pre-existing warnings)
 - `npm run build`
 
@@ -2115,3 +2137,16 @@ Validation:
 - `npm run lint` (0 errors; 22 pre-existing warnings)
 - `npm run build`
 - `git diff --check`
+
+### T53 / Issue #178 Run character-reference adapters
+
+Summary:
+
+- Added one separately stored, byte-free Run character reference with normalized strength and shared Simple/Detailed Composer UI.
+- Captured ordered style/character identities and effective values in the signed confirmation context so Preview, Final, and Repair persistence cannot drift to later Composer settings.
+- Made non-Krea Run character IPAdapter injection strict, and added Krea-only dual-role Krea2OstrisEdit transport (`image1` style-or-character, optional `image2` character), shared strength, and preflight/queue checks.
+- Constrained confirmed style-reference context construction to the effective selected resource and resolved workflow profile, keeping crafted or legacy Anima, unsupported, and unknown `ipadapter` snapshots prompt-only.
+
+Validation:
+
+- `npm run typecheck`

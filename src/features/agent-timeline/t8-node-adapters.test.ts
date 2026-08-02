@@ -13,6 +13,7 @@ import {
   setTimelineNodeManualResult,
   type SceneInputTimelineResult,
 } from ".";
+import { deriveTimelineConfirmedReferenceContext } from "./run-reference-context";
 
 function createConfirmedWorkflow(
   imageCount?: number,
@@ -99,6 +100,18 @@ const readyStyleReference = {
     modeReason: "Illustrious supports IPAdapter.",
     promptProfile: "illustrious" as const,
     visualStyle: "anime" as const,
+  },
+};
+
+const readyCharacterReference = {
+  status: "ready" as const,
+  strength: 0.8,
+  metadata: {
+    byteLength: 512,
+    contentType: "image/png",
+    storedFilename: "fedcba9876543210fedcba9876543210.png",
+    uploadedAt: "2026-07-19T00:00:00.000Z",
+    url: "/api/comfyui/sequence-references/fedcba9876543210fedcba9876543210.png",
   },
 };
 
@@ -960,6 +973,54 @@ describe("timeline T8 ComfyUI request conversion", () => {
 
     expect(() => createConfirmedTimelineComfyUiRequest(removed)).toThrow(
       "changed after parameter review",
+    );
+  });
+
+  it("rejects a tampered confirmed character-reference context before any preview queue provider runs", async () => {
+    let workflow = createConfirmedWorkflow(1, undefined, {
+      promptProfile: "illustrious",
+      characterReference: readyCharacterReference,
+    });
+    workflow = setTimelineNodeManualResult(workflow, "parameter-recommendation", {
+      ...(workflow.nodes["parameter-recommendation"].result as object),
+      characterReference: readyCharacterReference,
+    });
+    const referenceContext = deriveTimelineConfirmedReferenceContext(workflow);
+    if (!referenceContext) throw new Error("Expected a reference context.");
+    workflow = confirmTimelineGeneration(workflow, {
+      confirmationRequired: false,
+      confirmed: true,
+      referenceContext,
+    });
+    const tampered = structuredClone(workflow);
+    const gate = tampered.nodes["generation-gate"].result as {
+      referenceContext: { references: Array<{ strength: number }> };
+    };
+    gate.referenceContext.references[0]!.strength = 0.2;
+    const executePreviews = vi.fn();
+    const adapters = createTimelineT8NodeAdapters({
+      executeFinals: vi.fn(),
+      executePreviews,
+      loadResultDisplay: vi.fn(),
+      scorePreviews: vi.fn(),
+    });
+
+    await expect(adapters["preview-execution"]?.({
+      dependencies: [],
+      nodeId: "preview-execution",
+      workflow: tampered,
+    })).rejects.toThrow("reference settings changed after confirmation");
+    expect(executePreviews).not.toHaveBeenCalled();
+  });
+
+  it("rejects a selected character reference missing from parameter review before building a queue request", () => {
+    const workflow = confirmTimelineGeneration(createConfirmedWorkflow(1, undefined, {
+      promptProfile: "illustrious",
+      characterReference: readyCharacterReference,
+    }));
+
+    expect(() => createConfirmedTimelineComfyUiRequest(workflow)).toThrow(
+      "Run character reference changed after parameter review",
     );
   });
 

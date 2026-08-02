@@ -64,6 +64,7 @@ import {
   normalizeComfyUiKrea2StyleReferenceDescriptor,
 } from "./krea2-style-reference";
 import { parseComfyUiImageDataUrl } from "./image-data-url";
+import { COMFYUI_ANIMA_CHARACTER_REFERENCE_ADAPTER } from "./anima-character-reference";
 
 export const COMFYUI_INPAINT_UPSCALE_MODEL_PRESETS = {
   "real-esrgan-x2": {
@@ -962,9 +963,19 @@ function normalizeKrea2StyleReference(value: unknown): ComfyUiKrea2StyleReferenc
   if (value === undefined) {
     return undefined;
   }
-  if (!isRecord(value) || !hasNonEmptyString(value.imageName) ||
+  if (!isRecord(value) ||
       !isOptionalString(value.loraName) || !isOptionalFiniteNumber(value.weight) ||
       !isOptionalFiniteNumber(value.startPercent) || !isOptionalFiniteNumber(value.endPercent)) {
+    return null;
+  }
+
+  const legacyImageName = hasNonEmptyString(value.imageName) ? value.imageName.trim() : undefined;
+  const styleImageName = hasNonEmptyString(value.styleImageName) ? value.styleImageName.trim() : legacyImageName;
+  const characterImageName = hasNonEmptyString(value.characterImageName) ? value.characterImageName.trim() : undefined;
+  if (!styleImageName && !characterImageName ||
+      value.imageName !== undefined && !hasNonEmptyString(value.imageName) ||
+      value.styleImageName !== undefined && !hasNonEmptyString(value.styleImageName) ||
+      value.characterImageName !== undefined && !hasNonEmptyString(value.characterImageName)) {
     return null;
   }
 
@@ -976,7 +987,9 @@ function normalizeKrea2StyleReference(value: unknown): ComfyUiKrea2StyleReferenc
   }
 
   return {
-    imageName: value.imageName.trim(),
+    ...(legacyImageName ? { imageName: legacyImageName } : {}),
+    ...(styleImageName ? { styleImageName } : {}),
+    ...(characterImageName ? { characterImageName } : {}),
     ...(hasNonEmptyString(value.loraName) ? { loraName: value.loraName.trim() } : {}),
     ...(weight !== undefined ? { weight } : {}),
     ...(startPercent !== undefined ? { startPercent } : {}),
@@ -1155,12 +1168,18 @@ export function validateComfyUiTextToImageRequest(value: unknown): ComfyUiTextTo
       message: "characterReferences must be an array of valid character reference values when provided.",
     };
   }
+  if (!isOptionalBoolean(value.strictCharacterReferences)) {
+    return {
+      ok: false,
+      message: "strictCharacterReferences must be a boolean when provided.",
+    };
+  }
 
   const krea2StyleReference = normalizeKrea2StyleReference(value.krea2StyleReference);
   if (krea2StyleReference === null) {
     return {
       ok: false,
-      message: "krea2StyleReference must contain a safe input image name and 0-to-1 adapter values when provided.",
+      message: "krea2StyleReference must contain one or two safe role image names and 0-to-1 adapter values when provided.",
     };
   }
   const krea2StyleReferenceDescriptor =
@@ -1318,6 +1337,44 @@ export function validateComfyUiTextToImageRequest(value: unknown): ComfyUiTextTo
     };
   }
 
+  if (workflowProfile === "anima") {
+    const enabledCharacterReferences = characterReferences?.filter((reference) => reference.enabled !== false) ?? [];
+    const unsupportedMode = enabledCharacterReferences.find((reference) =>
+      reference.mode !== undefined && reference.mode !== "ipadapter"
+    );
+    if (unsupportedMode) {
+      return {
+        ok: false,
+        message: `Anima character reference "${unsupportedMode.name}" supports only the dedicated IP-Adapter mode; Face and FaceID modes are not supported.`,
+      };
+    }
+    const maskedReference = enabledCharacterReferences.find((reference) => reference.maskImageName);
+    if (maskedReference) {
+      return {
+        ok: false,
+        message: `Anima character reference "${maskedReference.name}" does not support an IP-Adapter attention mask.`,
+      };
+    }
+    const unsupportedTiming = enabledCharacterReferences.find((reference) =>
+      (reference.startPercent ?? 0) !== 0 || (reference.endPercent ?? 1) !== 1
+    );
+    if (unsupportedTiming) {
+      return {
+        ok: false,
+        message: `Anima character reference "${unsupportedTiming.name}" supports only the full generation interval (startPercent=0, endPercent=1).`,
+      };
+    }
+    const invalidStrength = enabledCharacterReferences.find((reference) =>
+      reference.weight !== undefined && (reference.weight < 0 || reference.weight > 1)
+    );
+    if (invalidStrength) {
+      return {
+        ok: false,
+        message: `Anima character reference "${invalidStrength.name}" strength must be between 0 and 1.`,
+      };
+    }
+  }
+
   if (workflowProfile === "krea2") {
     if (controlNetUnitsForValidation.some((unit) => unit.enabled)) {
       return { ok: false, message: "Krea 2 Turbo does not support ControlNet." };
@@ -1396,6 +1453,9 @@ export function validateComfyUiTextToImageRequest(value: unknown): ComfyUiTextTo
       controlNet,
       controlNets,
       characterReferences,
+      strictCharacterReferences: typeof value.strictCharacterReferences === "boolean"
+        ? value.strictCharacterReferences
+        : undefined,
       krea2StyleReference,
       krea2StyleReferenceDescriptor,
       preview: typeof value.preview === "boolean" ? value.preview : undefined,
@@ -1924,7 +1984,10 @@ function resolveControlNetUnits(request: ComfyUiTextToImageRequest): ResolvedCom
     .map(toResolvedControlNetUnit);
 }
 
-function resolveCharacterReferences(request: ComfyUiTextToImageRequest): ResolvedComfyUiCharacterReferenceConfig[] {
+function resolveCharacterReferences(
+  request: ComfyUiTextToImageRequest,
+  defaultWeight = 0.45,
+): ResolvedComfyUiCharacterReferenceConfig[] {
   return (request.characterReferences ?? []).map((reference, referenceIndex) => {
     const id = getString(reference.id, `character-${referenceIndex + 1}`);
     const mode = reference.mode ?? "ipadapter";
@@ -1941,7 +2004,7 @@ function resolveCharacterReferences(request: ComfyUiTextToImageRequest): Resolve
         weight: image.weight ?? 1,
       })),
       maskImageName: getString(reference.maskImageName, ""),
-      weight: reference.weight ?? 0.45,
+      weight: reference.weight ?? defaultWeight,
       weightType: getString(reference.weightType, "linear"),
       combineEmbeds: reference.combineEmbeds ?? "concat",
       startPercent: reference.startPercent ?? 0,
@@ -2088,11 +2151,24 @@ export function resolveComfyUiTextToImageRequest(
     faceDetailer: resolveDetailerConfig(request.faceDetailer, request, DEFAULT_TEXT_TO_IMAGE_REQUEST.faceDetailer),
     handDetailer: resolveDetailerConfig(request.handDetailer, request, DEFAULT_TEXT_TO_IMAGE_REQUEST.handDetailer),
     controlNets: isKrea2Profile ? [] : resolveControlNetUnits(request),
-    characterReferences: isKrea2Profile ? [] : resolveCharacterReferences(request),
+    characterReferences: isKrea2Profile
+      ? []
+      : resolveCharacterReferences(
+          request,
+          isAnimaProfile ? COMFYUI_ANIMA_CHARACTER_REFERENCE_ADAPTER.defaultStrength : 0.45,
+        ),
     ...(isKrea2Profile && request.krea2StyleReference
       ? {
           krea2StyleReference: {
-            imageName: request.krea2StyleReference.imageName.trim(),
+            imageName: (request.krea2StyleReference.styleImageName ??
+              request.krea2StyleReference.imageName ??
+              request.krea2StyleReference.characterImageName)!.trim(),
+            ...(request.krea2StyleReference.styleImageName
+              ? { styleImageName: request.krea2StyleReference.styleImageName.trim() }
+              : {}),
+            ...(request.krea2StyleReference.characterImageName
+              ? { characterImageName: request.krea2StyleReference.characterImageName.trim() }
+              : {}),
             loraName: request.krea2StyleReference.loraName ?? KREA2_STYLE_REFERENCE_LORA_NAME,
             weight: request.krea2StyleReference.weight ?? 0.45,
             startPercent: request.krea2StyleReference.startPercent ?? 0,

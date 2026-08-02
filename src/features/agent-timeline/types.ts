@@ -16,7 +16,8 @@ import type { Krea2PromptSections } from "@/features/editor/ai-prompt/krea2-prom
 import type { TimelineWorkflowMode } from "./workflow-definitions";
 import type { RunSceneInputSettingsSnapshot } from "./run-input-settings";
 import type { TimelineFinalGenerationFamily, TimelineFinalRedrawPreset } from "./final-generation-policy";
-import type { StyleReferenceSnapshot } from "./style-reference";
+import type { CharacterReferenceSnapshot, StyleReferenceSnapshot } from "./style-reference";
+import type { TimelineConfirmedReferenceContext } from "./run-reference-context";
 import type { RunVisualStyle } from "./run-visual-style";
 
 export type AnimaPromptProfileOptions = {
@@ -269,6 +270,7 @@ export type ParameterRecommendationTimelineResult = {
   negativeAdditions: string[];
   negativePrompt: string;
   requestPreview: ComfyUiTextToImageRequest;
+  characterReference?: CharacterReferenceSnapshot;
   styleReference?: StyleReferenceSnapshot;
   reason: string;
   warnings: string[];
@@ -284,6 +286,7 @@ export type GenerationGateTimelineResult = {
   finalSteps?: number;
   finalDenoise?: number;
   automaticLocalRepairAuthorized?: boolean;
+  referenceContext?: TimelineConfirmedReferenceContext;
   visualStyle?: RunVisualStyle;
 };
 
@@ -466,6 +469,8 @@ export type ComfyUiExecutionTimelineResult = {
   number?: number;
   outputNodeId?: string;
   promptId?: string;
+  /** Immutable reference context captured at confirmation, never Composer state. */
+  referenceContext?: TimelineConfirmedReferenceContext;
   request: ComfyUiTextToImageRequest;
   warnings: string[];
 };

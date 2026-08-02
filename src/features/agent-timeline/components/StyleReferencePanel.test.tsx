@@ -271,6 +271,7 @@ describe("StyleReferencePanel", () => {
         checkpointName: "krea-2-turbo-unet.safetensors",
         modelBaseModel: "Krea 2",
         modelStorageKind: "diffusion",
+        hasCharacterReference: false,
       });
       return Response.json({
         available: true,
@@ -290,8 +291,8 @@ describe("StyleReferencePanel", () => {
       adapterCheckbox?.click();
       await Promise.resolve();
     });
-    expect(container.textContent).toContain("Krea reference timing is fixed to start_at 0 and end_at 1");
-    expect(Array.from(container.querySelectorAll('input[type="number"]'))).toHaveLength(1);
+    expect(container.textContent).toContain("Krea timing is fixed to start_at 0 and end_at 1");
+    expect(Array.from(container.querySelectorAll('input[type="number"]'))).toHaveLength(0);
   });
 
   it("preserves a restored Krea adapter selection while preflight is pending and restores readiness on success", async () => {

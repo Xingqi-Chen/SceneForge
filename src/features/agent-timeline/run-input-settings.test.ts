@@ -253,6 +253,45 @@ describe("Run scene input generation settings", () => {
     expect(JSON.stringify(settings.styleReference)).not.toContain("forged.invalid");
   });
 
+  it("round-trips only safe Run character-reference metadata and preserves legacy byte-free defaults", () => {
+    const settings = sanitizeRunSceneInputSettingsSnapshot({
+      characterReference: {
+        status: "ready",
+        strength: 0.666,
+        dataUrl: "data:image/png;base64,CHARACTER_SECRET",
+        metadata: {
+          byteLength: 512,
+          contentType: "image/png",
+          filename: "C:\\private\\hero.png",
+          storedFilename: "fedcba9876543210fedcba9876543210.png",
+          uploadedAt: "2026-07-19T00:00:00.000Z",
+          url: "https://attacker.invalid/hero.png",
+          bytes: [1, 2, 3],
+        },
+      },
+      kreaReferenceStrength: "0.864",
+    });
+
+    expect(settings).toMatchObject({
+      characterReference: {
+        status: "ready",
+        strength: 0.67,
+        metadata: {
+          storedFilename: "fedcba9876543210fedcba9876543210.png",
+          url: "/api/comfyui/sequence-references/fedcba9876543210fedcba9876543210.png",
+        },
+      },
+      kreaReferenceStrength: 0.86,
+    });
+    const serialized = JSON.stringify(settings);
+    expect(serialized).not.toContain("CHARACTER_SECRET");
+    expect(serialized).not.toContain("attacker.invalid");
+    expect(serialized).not.toContain("C:\\\\private");
+
+    expect(sanitizeRunSceneInputSettingsSnapshot({})).not.toHaveProperty("characterReference");
+    expect(sanitizeRunSceneInputSettingsSnapshot({})).not.toHaveProperty("kreaReferenceStrength");
+  });
+
   it("keeps FaceDetailer and HandDetailer independently configurable", () => {
     const detailers = sanitizeGenerationDetailerSettingsSnapshot({
       faceDetailer: {

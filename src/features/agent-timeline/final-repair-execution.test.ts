@@ -408,17 +408,16 @@ describe("T38C durable repair attempts", () => {
             name: "Character A",
             prompt: "preserve Character A",
             enabled: true,
-            mode: "faceid",
+            mode: "ipadapter",
             images: [
               { id: "character-a-front", imageName: "character-a-front.png", weight: 0.8 },
               { id: "character-a-side", imageName: "character-a-side.png", weight: 0.6 },
             ],
-            maskImageName: "character-a-mask.png",
             weight: 0.72,
             weightType: "linear",
             combineEmbeds: "concat",
-            startPercent: 0.05,
-            endPercent: 0.95,
+            startPercent: 0,
+            endPercent: 1,
             preset: "PLUS FACE (portraits)",
             loraStrength: 0.55,
             provider: "comfyui",
@@ -547,6 +546,41 @@ describe("T38C durable repair attempts", () => {
       )).not.toBe(fixture.attemptId);
     },
   );
+
+  it("binds immutable confirmed reference identities into Final and Repair attempt digests", async () => {
+    const fixture = await fullSemanticDigestFixture("semantic-confirmed-reference-context");
+    const withReferences = structuredClone(fixture.execution);
+    withReferences.referenceContext = {
+      version: 1,
+      adapter: "ipadapter",
+      references: [{
+        role: "character",
+        storedFilename: "fedcba9876543210fedcba9876543210.png",
+        contentType: "image/png",
+        byteLength: 512,
+        strength: 0.8,
+      }],
+      startPercent: 0,
+      endPercent: 1,
+    };
+    const tampered = structuredClone(withReferences);
+    tampered.referenceContext!.references[0]!.storedFilename = "00112233445566778899aabbccddeeff.png";
+
+    const confirmedDigest = deriveRepairBaseRequestDigest(withReferences, fixture.final)!;
+    expect(confirmedDigest).not.toBe(fixture.baseRequestDigest);
+    expect(deriveRepairBaseRequestDigest(tampered, fixture.final)).not.toBe(confirmedDigest);
+    expect(deriveRepairAttemptId(
+      "semantic-confirmed-reference-context",
+      fixture.final.candidateId,
+      fixture.parent,
+      confirmedDigest,
+    )).not.toBe(deriveRepairAttemptId(
+      "semantic-confirmed-reference-context",
+      fixture.final.candidateId,
+      fixture.parent,
+      deriveRepairBaseRequestDigest(tampered, fixture.final)!,
+    ));
+  });
 
   it("canonicalizes object-key order while excluding transient transport payload fields", async () => {
     const fixture = await fullSemanticDigestFixture("semantic-canonical-objects");

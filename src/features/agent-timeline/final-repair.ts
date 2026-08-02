@@ -225,6 +225,7 @@ export function deriveRepairBaseRequestDigest(
       height: final.previewUpscale.height,
       seed: final.seed,
     },
+    referenceContext: execution.referenceContext ?? null,
   });
 }
 
@@ -395,6 +396,7 @@ export function deriveRepairRequestDigest(
   return digestTimelineSemanticValue({
     version: 1,
     request: semanticRequest,
+    referenceContext: execution.referenceContext ?? null,
   });
 }
 

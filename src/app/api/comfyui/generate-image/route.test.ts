@@ -133,7 +133,13 @@ const objectInfoWithImg2Img = {
 
 const objectInfoWithAnimaAddons = {
   ...objectInfoWithAnima,
-  LoadImage: {},
+  LoadImage: {
+    input: {
+      required: {
+        image: [["hero-reference.png"], {}],
+      },
+    },
+  },
   ControlNetApplyAdvanced: {},
   ControlNetLoader: {
     input: {
@@ -143,8 +149,30 @@ const objectInfoWithAnimaAddons = {
     },
   },
   FaceDetailer: {},
-  IPAdapterAdvanced: {},
-  IPAdapterUnifiedLoader: {},
+  AnimaIPAdapterLoader: {
+    input: {
+      required: {
+        ip_adapter_name: [["ip_adapter-Character_Reference-10.safetensors"], {}],
+        auto_download: ["BOOLEAN", {}],
+      },
+    },
+  },
+  AnimaIPAdapterApply: {
+    input: {
+      required: {
+        model: ["MODEL", {}],
+        ip_adapter: ["IPADAPTER", {}],
+        ref_image: ["IMAGE", {}],
+        strength: ["FLOAT", {}],
+        ref_image_size: ["INT", {}],
+        siglip_layer: ["INT", {}],
+        ip_cfg_scale: ["FLOAT", {}],
+        ip_cfg_separate: ["BOOLEAN", {}],
+        gray_null: ["BOOLEAN", {}],
+        use_lora: ["BOOLEAN", {}],
+      },
+    },
+  },
   UltralyticsDetectorProvider: {
     input: {
       required: {
@@ -642,7 +670,7 @@ describe("ComfyUI generate image route", () => {
     });
   });
 
-  it("queues Anima character references through IPAdapter with Anima model context", async () => {
+  it("queues Anima character references through the dedicated Anima IP-Adapter graph", async () => {
     process.env.COMFYUI_BASE_URL = "http://comfyui.test";
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
       if (input === "http://comfyui.test/object_info") {
@@ -653,18 +681,25 @@ describe("ComfyUI generate image route", () => {
       const body = JSON.parse(String(init?.body));
       expect(Object.values(body.prompt).some((node) => (node as { class_type?: string }).class_type === "CheckpointLoaderSimple")).toBe(false);
       expect(body.prompt["7"]).toMatchObject({
-        class_type: "IPAdapterUnifiedLoader",
+        class_type: "AnimaIPAdapterLoader",
         inputs: {
-          model: ["1", 0],
-          preset: "PLUS (high strength)",
+          ip_adapter_name: "ip_adapter-Character_Reference-10.safetensors",
+          auto_download: false,
         },
       });
       expect(body.prompt["8"]).toMatchObject({
-        class_type: "IPAdapterAdvanced",
+        class_type: "AnimaIPAdapterApply",
         inputs: {
-          model: ["7", 0],
-          ipadapter: ["7", 1],
-          image: ["6", 0],
+          model: ["1", 0],
+          ip_adapter: ["7", 0],
+          ref_image: ["6", 0],
+          strength: 0.8,
+          ref_image_size: 512,
+          siglip_layer: -1,
+          ip_cfg_scale: 4,
+          ip_cfg_separate: false,
+          gray_null: false,
+          use_lora: true,
         },
       });
       expect(body.prompt["10"].inputs).toMatchObject({
