@@ -102,11 +102,11 @@ export function TimelinePreviewWorkspace({
               {candidate.storedImage ? (
                 <Image
                   alt={`Preview ${candidate.index + 1}`}
-                  className="aspect-square w-full object-cover"
-                  height={512}
+                  className="aspect-square w-full object-contain"
+                  height={previews.previewHeight}
                   src={candidate.storedImage.url}
                   unoptimized
-                  width={512}
+                  width={previews.previewWidth}
                 />
               ) : <div className="flex aspect-square items-center justify-center bg-slate-100 p-4 text-xs text-slate-500">{candidate.error?.message ?? "Preview failed"}</div>}
               <div className="grid gap-2 p-3 text-[11px] text-slate-600">
