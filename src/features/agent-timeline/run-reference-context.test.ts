@@ -42,6 +42,27 @@ const characterReference = {
   },
 };
 
+const krea2ReIdReference = {
+  kind: "krea2-reid" as const,
+  status: "ready" as const,
+  strength: 1,
+  metadata: {
+    byteLength: 777,
+    contentType: "image/png",
+    storedFilename: "fedcba9876543210fedcba9876543210.png",
+    uploadedAt: "2026-08-02T00:00:00.000Z",
+  },
+  reIdPreparation: {
+    choice: "crop" as const,
+    detector: "yunet-2023mar-int8" as const,
+    detectorSha256: "a".repeat(64),
+    faceDetected: true,
+    height: 256,
+    version: 2 as const,
+    width: 256,
+  },
+};
+
 function workflowWithRequest(settingsSnapshot: Record<string, unknown>, requestPreview: Record<string, unknown>) {
   let workflow: TimelineWorkflowState = createTimelineWorkflowState({
     workflowId: "run-reference-context",
@@ -75,7 +96,7 @@ describe("confirmed Run reference context", () => {
     });
   });
 
-  it("captures only managed identity metadata and shares the Krea strength across ordered roles", () => {
+  it("captures only the prepared ReID identity while pausing the stored Krea style adapter", () => {
     const context = deriveTimelineConfirmedReferenceContext(workflowWithRequest({
       promptProfile: "krea2",
       kreaReferenceStrength: 0.82,
@@ -84,11 +105,14 @@ describe("confirmed Run reference context", () => {
         dataUrl: "data:image/png;base64,STYLE_SECRET",
       },
       characterReference: {
-        ...characterReference,
+        ...krea2ReIdReference,
         bytes: [1, 2, 3],
       },
     }, {
-      checkpointName: "krea-2-turbo-unet.safetensors",
+      checkpointName: "RedCraft_v4_fp8_scaled.safetensors",
+      clipName: "qwen3vl_4b_fp8_scaled.safetensors",
+      vaeName: "qwen_image_vae.safetensors",
+      unetWeightDtype: "default",
       modelBaseModel: "Krea 2",
       modelStorageKind: "diffusion",
       positivePrompt: "a quiet station, soft gouache",
@@ -96,22 +120,15 @@ describe("confirmed Run reference context", () => {
     }));
 
     expect(context).toEqual({
-      version: 1,
-      adapter: "krea2-ostris",
+      version: 3,
+      adapter: "krea2-reid",
       references: [
         {
-          role: "style",
-          storedFilename: "0123456789abcdef0123456789abcdef.png",
-          contentType: "image/png",
-          byteLength: 321,
-          strength: 0.82,
-        },
-        {
           role: "character",
-          storedFilename: "fedcba9876543210fedcba9876543210.webp",
-          contentType: "image/webp",
-          byteLength: 654,
-          strength: 0.82,
+          storedFilename: "fedcba9876543210fedcba9876543210.png",
+          contentType: "image/png",
+          byteLength: 777,
+          strength: 1,
         },
       ],
       startPercent: 0,
@@ -121,8 +138,72 @@ describe("confirmed Run reference context", () => {
     expect(JSON.stringify(context)).not.toContain('"bytes"');
   });
 
-  it("fails closed for reordered and unequal Krea contexts while stripping byte-bearing transport fields", () => {
+  it("restores style-only context after ReID removal and never migrates a generic Krea character", () => {
+    const settings = {
+      promptProfile: "krea2" as const,
+      kreaReferenceStrength: 0.82,
+      styleReference,
+    };
+    const request = {
+      checkpointName: "RedCraft_v4_fp8.safetensors",
+      modelBaseModel: "Krea 2",
+      modelStorageKind: "diffusion" as const,
+      positivePrompt: "a quiet station, soft gouache",
+      workflowProfile: "krea2" as const,
+    };
+
+    expect(deriveTimelineConfirmedReferenceContext(workflowWithRequest(settings, request))).toMatchObject({
+      version: 1,
+      adapter: "krea2-ostris",
+      references: [{ role: "style", strength: 0.82 }],
+    });
+    expect(deriveTimelineConfirmedReferenceContext(workflowWithRequest({
+      ...settings,
+      characterReference,
+    }, request))).toMatchObject({
+      version: 1,
+      adapter: "krea2-ostris",
+      references: [{ role: "style" }],
+    });
+  });
+
+  it("accepts only v3 ReID context and fails closed for v2 or legacy dual-image contexts", () => {
     const valid = {
+      version: 3,
+      adapter: "krea2-reid",
+      references: [{
+        role: "character",
+        storedFilename: "fedcba9876543210fedcba9876543210.png",
+        contentType: "image/png",
+        byteLength: 777,
+        strength: 1,
+        bytes: [1, 2, 3],
+        dataUrl: "data:image/png;base64,SECRET",
+        path: "C:\\private\\reid.png",
+        temporaryComfyUiName: "transient.png",
+      }],
+      startPercent: 0,
+      endPercent: 1,
+    };
+    expect(sanitizeTimelineConfirmedReferenceContext(valid)).toEqual({
+      ...valid,
+      references: [{
+        role: "character",
+        storedFilename: "fedcba9876543210fedcba9876543210.png",
+        contentType: "image/png",
+        byteLength: 777,
+        strength: 1,
+      }],
+    });
+    expect(sanitizeTimelineConfirmedReferenceContext({
+      ...valid,
+      version: 2,
+    })).toBeUndefined();
+    expect(sanitizeTimelineConfirmedReferenceContext({
+      ...valid,
+      references: [{ ...valid.references[0], strength: 0.99 }],
+    })).toBeUndefined();
+    expect(sanitizeTimelineConfirmedReferenceContext({
       version: 1,
       adapter: "krea2-ostris",
       references: [
@@ -131,19 +212,6 @@ describe("confirmed Run reference context", () => {
       ],
       startPercent: 0,
       endPercent: 1,
-    };
-    expect(sanitizeTimelineConfirmedReferenceContext(valid)).toEqual(valid);
-    expect(sanitizeTimelineConfirmedReferenceContext({
-      ...valid,
-      references: [...valid.references].reverse(),
-    })).toBeUndefined();
-    expect(sanitizeTimelineConfirmedReferenceContext({
-      ...valid,
-      references: [{ ...valid.references[0], bytes: [1, 2, 3] }],
-    })).toEqual({ ...valid, references: [valid.references[0]] });
-    expect(sanitizeTimelineConfirmedReferenceContext({
-      ...valid,
-      references: [valid.references[0], { ...valid.references[1], strength: 0.4 }],
     })).toBeUndefined();
   });
 });

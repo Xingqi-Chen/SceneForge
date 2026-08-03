@@ -7,6 +7,7 @@ export const timelineFinalGenerationPolicy = {
   // revision so the second-pass tuning does not invalidate unchanged profiles.
   version: 2,
   krea2Version: 3,
+  krea2ReIdVersion: 5,
   resizeMode: "lanczos3-exact",
   defaultPreset: "balanced",
   denoiseByPreset: {
@@ -88,17 +89,22 @@ export function getTimelineFinalGenerationPolicyVersion(family: TimelineFinalGen
 export function resolveTimelineFinalGenerationPolicy(
   request: TimelineFinalModelContext,
   presetValue: unknown,
+  options: { krea2ReId?: boolean } = {},
 ) {
   const preset = sanitizeTimelineFinalRedrawPreset(presetValue);
   const family = getTimelineFinalGenerationFamily(request);
   return {
-    version: getTimelineFinalGenerationPolicyVersion(family),
+    version: family === "krea2" && options.krea2ReId
+      ? timelineFinalGenerationPolicy.krea2ReIdVersion
+      : getTimelineFinalGenerationPolicyVersion(family),
     resizeMode: timelineFinalGenerationPolicy.resizeMode,
     preset,
     family,
-    denoise: timelineFinalGenerationPolicy.denoiseByPreset[preset][family],
+    denoise: family === "krea2" && options.krea2ReId
+      ? 1
+      : timelineFinalGenerationPolicy.denoiseByPreset[preset][family],
     ...(family === "krea2"
-      ? { steps: timelineFinalGenerationPolicy.krea2StepsByPreset[preset] }
+      ? { steps: options.krea2ReId ? 8 : timelineFinalGenerationPolicy.krea2StepsByPreset[preset] }
       : {}),
   } as const;
 }

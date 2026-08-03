@@ -2079,6 +2079,15 @@ describe("T38C durable repair attempts", () => {
           startPercent: 0,
           endPercent: 1,
         },
+        krea2ReId: { imageName: "transient-reid.png" },
+        krea2ReIdDescriptor: {
+          version: 2,
+          referenceDigest: `sha256:${"b".repeat(64)}`,
+          loraName: "krea2_reid_rank32.safetensors",
+          strengthModel: 1,
+          kvCache: true,
+          imageCount: 1,
+        },
         faceDetailer: { enabled: true, detectorModelName: "bbox/face_yolov8s.pt" },
         handDetailer: { enabled: false, detectorModelName: "bbox/hand_yolov8s.pt" },
         samplerName: "euler",
@@ -2187,6 +2196,15 @@ describe("T38C durable repair attempts", () => {
           startPercent: 0,
           endPercent: 1,
         },
+        krea2ReId: { imageName: "transient-reid.png" },
+        krea2ReIdDescriptor: {
+          version: 2,
+          referenceDigest: `sha256:${"b".repeat(64)}`,
+          loraName: "krea2_reid_rank32.safetensors",
+          strengthModel: 1,
+          kvCache: true,
+          imageCount: 1,
+        },
         faceDetailer: { enabled: true, detectorModelName: "bbox/face_yolov8s.pt" },
         handDetailer: { enabled: false, detectorModelName: "bbox/hand_yolov8s.pt" },
         samplerName: "euler",
@@ -2247,6 +2265,11 @@ describe("T38C durable repair attempts", () => {
       workflowProfile: "krea2",
     }));
     expect(mocks.buildBasicInpaintWorkflow.mock.calls[0]?.[0]).not.toHaveProperty("krea2StyleReference");
+    expect(mocks.buildBasicInpaintWorkflow.mock.calls[0]?.[0]).not.toHaveProperty("krea2ReId");
+    expect(mocks.buildBasicInpaintWorkflow.mock.calls[0]?.[0]).not.toHaveProperty("krea2ReIdDescriptor");
+    expect(JSON.stringify(mocks.buildBasicInpaintWorkflow.mock.calls[0]?.[0])).not.toContain(
+      "krea2_reid_rank32.safetensors",
+    );
     expect(execution.request).not.toHaveProperty("imageName");
   });
 

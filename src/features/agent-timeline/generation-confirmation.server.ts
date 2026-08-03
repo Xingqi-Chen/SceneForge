@@ -3,7 +3,11 @@ import crypto from "node:crypto";
 import type { TimelineWorkflowState } from "./types";
 import { resolveTimelineFinalGenerationPolicy, timelineFinalGenerationPolicy } from "./final-generation-policy";
 import { getRunSceneInputSettings } from "./run-input-settings";
-import { deriveTimelineConfirmedReferenceContext } from "./run-reference-context";
+import {
+  deriveTimelineConfirmedReferenceContext,
+  sanitizeTimelineConfirmedReferenceContext,
+} from "./run-reference-context";
+import { isKrea2ReIdReferenceReady, sanitizeCharacterReferenceSnapshot } from "./style-reference";
 
 const CONFIRMATION_CONTRACT_VERSION = 1;
 const CONFIRMATION_CONTRACT_DOMAIN = "sceneforge.timeline.single-image-generation-confirmation";
@@ -33,7 +37,9 @@ function resolveWorkflowFinalPolicy(workflow: TimelineWorkflowState) {
     ? parameters.requestPreview
     : {};
   const settings = getRunSceneInputSettings(isRecord(sceneInput) ? sceneInput : {});
-  return resolveTimelineFinalGenerationPolicy(requestPreview, settings.finalRedrawPreset);
+  return resolveTimelineFinalGenerationPolicy(requestPreview, settings.finalRedrawPreset, {
+    krea2ReId: isKrea2ReIdReferenceReady(sanitizeCharacterReferenceSnapshot(settings.characterReference)),
+  });
 }
 
 export function createTimelineGenerationConfirmationFingerprint(workflow: TimelineWorkflowState) {
@@ -64,6 +70,27 @@ export function isTimelineGenerationConfirmationCurrent(workflow: TimelineWorkfl
   const resolvedFinalPolicy = resolveWorkflowFinalPolicy(workflow);
   const sceneInput = workflow.nodes["scene-input"].result;
   const settings = getRunSceneInputSettings(isRecord(sceneInput) ? sceneInput : {});
+  const activeKrea2ReId = isKrea2ReIdReferenceReady(
+    sanitizeCharacterReferenceSnapshot(settings.characterReference),
+  );
+  const expectedReferenceContext = deriveTimelineConfirmedReferenceContext(workflow);
+  const persistedReferenceContext = sanitizeTimelineConfirmedReferenceContext(gate.referenceContext);
+  const canonicalPersistedContext = persistedReferenceContext
+    ? JSON.stringify(canonicalize(persistedReferenceContext))
+    : null;
+  const persistedContextIsCanonical = canonicalPersistedContext !== null &&
+    JSON.stringify(canonicalize(gate.referenceContext)) === canonicalPersistedContext;
+  if (activeKrea2ReId && (
+    expectedReferenceContext?.version !== 3 ||
+    expectedReferenceContext.adapter !== "krea2-reid" ||
+    !persistedContextIsCanonical ||
+    canonicalPersistedContext !== JSON.stringify(canonicalize(expectedReferenceContext))
+  )) return false;
+  if (!activeKrea2ReId && gate.referenceContext !== undefined && (
+    !persistedContextIsCanonical ||
+    !expectedReferenceContext ||
+    canonicalPersistedContext !== JSON.stringify(canonicalize(expectedReferenceContext))
+  )) return false;
   if (gate.finalPolicyVersion !== resolvedFinalPolicy.version ||
       gate.finalRedrawPreset !== resolvedFinalPolicy.preset ||
       gate.finalGenerationFamily !== resolvedFinalPolicy.family ||

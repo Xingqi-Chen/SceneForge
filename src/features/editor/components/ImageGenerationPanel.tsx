@@ -341,6 +341,8 @@ export type GenerationDraft = Required<Omit<
   | "strictCharacterReferences"
   | "krea2StyleReference"
   | "krea2StyleReferenceDescriptor"
+  | "krea2ReId"
+  | "krea2ReIdDescriptor"
   | "preview"
   | "workflowProfile"
   | "modelBaseModel"

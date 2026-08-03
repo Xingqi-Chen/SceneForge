@@ -234,34 +234,123 @@ describe("Krea 2 ComfyUI request validation", () => {
     }
   });
 
-  it("accepts explicit Krea style/character role images but rejects invalid adapter files before queueing", () => {
-    expect(validateComfyUiTextToImageRequest({
+  it("accepts FP8/RedCraft with only the fixed single-image ReID transport and server-owned descriptor", () => {
+    const descriptor = {
+      version: 2,
+      referenceDigest: `sha256:${"a".repeat(64)}`,
+      loraName: "krea2_reid_rank32.safetensors" as const,
+      strengthModel: 1 as const,
+      kvCache: true as const,
+      imageCount: 1 as const,
+    } as const;
+    const valid = validateComfyUiTextToImageRequest({
       ...kreaRequest,
-      krea2StyleReference: {
-        styleImageName: "sceneforge-krea-style.png",
-        characterImageName: "sceneforge-krea-character.png",
-        weight: 0.8,
-      },
-    })).toMatchObject({
-      ok: true,
-      request: {
-        krea2StyleReference: {
-          styleImageName: "sceneforge-krea-style.png",
-          characterImageName: "sceneforge-krea-character.png",
-          weight: 0.8,
-        },
-      },
+      checkpointName: "RedCraft_v4_fp8_scaled.safetensors",
+      clipName: "qwen3vl_4b_fp8_scaled.safetensors",
+      vaeName: "qwen_image_vae.safetensors",
+      unetWeightDtype: "default",
+      steps: 8,
+      cfg: 1,
+      samplerName: "euler",
+      scheduler: "simple",
+      krea2ReId: { imageName: "sceneforge-krea-reid.png" },
+      krea2ReIdDescriptor: descriptor,
     });
 
-    expect(validateComfyUiTextToImageRequest({
-      ...kreaRequest,
-      krea2StyleReference: {
-        characterImageName: "sceneforge-krea-character.png",
-        loraName: "unverified-reference.safetensors",
+    expect(valid).toMatchObject({
+      ok: true,
+      request: {
+        characterReferences: undefined,
+        krea2ReId: { imageName: "sceneforge-krea-reid.png" },
+        krea2ReIdDescriptor: descriptor,
       },
-    })).toMatchObject({
-      ok: false,
-      message: expect.stringContaining("verified krea2_style_reference.safetensors adapter file"),
     });
+    expect(resolveComfyUiTextToImageRequest(valid.ok ? valid.request : kreaRequest)).toMatchObject({
+      steps: 8,
+      cfg: 1,
+      samplerName: "euler",
+      scheduler: "simple",
+      krea2ReId: { imageName: "sceneforge-krea-reid.png" },
+    });
+
+    for (const override of [
+      { krea2ReId: { imageName: "reid.png", image2: "second.png" } },
+      { krea2ReIdDescriptor: { ...descriptor, strengthModel: 0.8 } },
+      { krea2ReIdDescriptor: { ...descriptor, kvCache: false } },
+      { krea2ReIdDescriptor: { ...descriptor, imageCount: 2 } },
+      { steps: 6 },
+      { cfg: 2 },
+      { samplerName: "dpmpp_2m" },
+      { scheduler: "normal" },
+      { loras: [{ loraName: "krea2_reid_rank32.safetensors", strengthModel: 1 }] },
+      { krea2StyleReference: { imageName: "style.png" } },
+      { characterReferences: [{ enabled: true, name: "legacy", images: [{ imageName: "legacy.png" }] }] },
+    ]) {
+      expect(validateComfyUiTextToImageRequest({
+        ...kreaRequest,
+        checkpointName: "RedCraft_v4_fp8_scaled.safetensors",
+        clipName: "qwen3vl_4b_fp8_scaled.safetensors",
+        vaeName: "qwen_image_vae.safetensors",
+        unetWeightDtype: "default",
+        steps: 8,
+        cfg: 1,
+        samplerName: "euler",
+        scheduler: "simple",
+        krea2ReId: { imageName: "sceneforge-krea-reid.png" },
+        krea2ReIdDescriptor: descriptor,
+        ...override,
+      }), JSON.stringify(override)).toMatchObject({ ok: false });
+    }
+  });
+
+  it("keeps RedCraft and FP8 available for prompt-only and style Krea requests", () => {
+    for (const checkpointName of [
+      "RedCraft_v4_fp8_scaled.safetensors",
+      "krea-2-turbo-fp8.safetensors",
+    ]) {
+      expect(validateComfyUiTextToImageRequest({
+        ...kreaRequest,
+        checkpointName,
+      }), `${checkpointName} prompt-only`).toMatchObject({ ok: true });
+      expect(validateComfyUiTextToImageRequest({
+        ...kreaRequest,
+        checkpointName,
+        krea2StyleReference: { imageName: "style.png", weight: 0.6 },
+      }), `${checkpointName} style`).toMatchObject({ ok: true });
+    }
+  });
+
+  it("rejects every functional ReID field and adapter from Krea Repair", () => {
+    const repair = {
+      checkpointName: "RedCraft_v4_fp8.safetensors",
+      modelBaseModel: "Krea 2",
+      modelStorageKind: "diffusion" as const,
+      workflowProfile: "krea2" as const,
+      positivePrompt: "repair the hand",
+      imageName: "source.png",
+      maskImageName: "mask.png",
+      imageWidth: 1024,
+      imageHeight: 1024,
+    };
+
+    expect(validateComfyUiInpaintRequest({
+      ...repair,
+      krea2ReId: { imageName: "reid.png" },
+    })).toMatchObject({ ok: false, message: expect.stringContaining("never allowed in Repair") });
+    expect(validateComfyUiInpaintRequest({
+      ...repair,
+      krea2ReIdDescriptor: {
+        version: 2,
+        referenceDigest: `sha256:${"a".repeat(64)}`,
+        loraName: "krea2_reid_rank32.safetensors",
+        strengthModel: 1,
+        kvCache: true,
+        imageCount: 1,
+      },
+    })).toMatchObject({ ok: false, message: expect.stringContaining("never allowed in Repair") });
+    expect(validateComfyUiInpaintRequest({
+      ...repair,
+      loras: [{ loraName: "krea2_reid_rank32.safetensors", strengthModel: 1 }],
+    })).toMatchObject({ ok: false });
   });
 });

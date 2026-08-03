@@ -9,6 +9,7 @@ import {
   createStyleReferenceSnapshot,
   getStyleReferenceCapability,
   getStyleReferenceContextMismatch,
+  isKrea2ReIdReferenceReady,
   parseStyleReferenceAnalysisContent,
   sanitizeStyleReferenceIpAdapterSettings,
   sanitizeStyleReferenceMetadata,
@@ -205,10 +206,8 @@ async function analyzeReference({
 }
 
 async function preflightKreaReferenceBeforeUpload({
-  hasCharacterReference,
   selectedCheckpoint,
 }: {
-  hasCharacterReference: boolean;
   selectedCheckpoint: SelectedCivitaiResourcesPreview["checkpoint"];
 }) {
   if (!selectedCheckpoint?.baseModel || !selectedCheckpoint.modelFileName) {
@@ -221,8 +220,7 @@ async function preflightKreaReferenceBeforeUpload({
       checkpointName: selectedCheckpoint.modelFileName,
       modelBaseModel: selectedCheckpoint.baseModel,
       modelStorageKind: "diffusion",
-      hasStyleReference: true,
-      hasCharacterReference,
+      referenceMode: "style",
     }),
   });
   const payload: unknown = await response.json().catch(() => null);
@@ -288,6 +286,7 @@ export function StyleReferencePanel({
     promptProfile,
   });
   const isKrea2 = promptProfile === "krea2";
+  const reIdActive = isKrea2 && isKrea2ReIdReferenceReady(characterReference);
   const kreaAdapterPreflightKey = isKrea2 && selectedCheckpoint?.modelFileName && selectedCheckpoint.baseModel
     ? `${selectedCheckpoint.baseModel}\u0000${selectedCheckpoint.modelFileName}`
     : "";
@@ -301,6 +300,11 @@ export function StyleReferencePanel({
           status: "unavailable",
           reason: "Select a compatible local Krea 2 Turbo diffusion checkpoint before enabling its reference adapter.",
         }
+      : reIdActive
+        ? {
+            status: "available",
+            reason: "Krea style-image conditioning is paused while ReID is active. The analyzed style prompt remains active and the adapter selection is preserved.",
+          }
       : currentKreaAdapterPreflight
         ? {
             status: currentKreaAdapterPreflight.available ? "available" : "unavailable",
@@ -312,6 +316,7 @@ export function StyleReferencePanel({
           }, [
     currentKreaAdapterPreflight,
     isKrea2,
+    reIdActive,
     selectedCheckpoint,
   ]);
   const capability = kreaAdapterAvailability
@@ -343,7 +348,7 @@ export function StyleReferencePanel({
     (capability.mode === "ipadapter" || isKrea2 && snapshot?.mode === "ipadapter");
 
   useEffect(() => {
-    if (!isKrea2) {
+    if (!isKrea2 || reIdActive) {
       return;
     }
     if (!selectedCheckpoint?.modelFileName || !selectedCheckpoint.baseModel) {
@@ -358,7 +363,7 @@ export function StyleReferencePanel({
         checkpointName: selectedCheckpoint.modelFileName,
         modelBaseModel: selectedCheckpoint.baseModel,
         modelStorageKind: "diffusion",
-        hasCharacterReference: characterReference?.status === "ready",
+        referenceMode: "style",
       }),
     })
       .then(async (response) => {
@@ -385,7 +390,7 @@ export function StyleReferencePanel({
     return () => {
       cancelled = true;
     };
-  }, [characterReference?.status, isKrea2, kreaAdapterPreflightKey, selectedCheckpoint?.baseModel, selectedCheckpoint?.modelFileName]);
+  }, [isKrea2, kreaAdapterPreflightKey, reIdActive, selectedCheckpoint?.baseModel, selectedCheckpoint?.modelFileName]);
 
   useEffect(() => {
     if (mismatch && snapshot?.status === "ready") {
@@ -395,7 +400,20 @@ export function StyleReferencePanel({
       return;
     }
 
-    if (isKrea2 && snapshot?.mode === "ipadapter" && snapshot.analysis && snapshot.metadata &&
+    if (isKrea2 && reIdActive && snapshot?.mode === "ipadapter" && snapshot.analysis && snapshot.metadata &&
+        isKreaAdapterPreflightBlockingSnapshot(snapshot)) {
+      onChange({
+        ...snapshot,
+        error: undefined,
+        status: "ready",
+        settingsSnapshot: snapshot.settingsSnapshot
+          ? { ...snapshot.settingsSnapshot, modeReason: "Krea style-image adapter paused while ReID is active." }
+          : snapshot.settingsSnapshot,
+      });
+      return;
+    }
+
+    if (isKrea2 && !reIdActive && snapshot?.mode === "ipadapter" && snapshot.analysis && snapshot.metadata &&
         !mismatch && kreaAdapterAvailability) {
       const modeReason = kreaAdapterAvailability.reason;
       const settingsSnapshot = snapshot.settingsSnapshot
@@ -443,6 +461,7 @@ export function StyleReferencePanel({
     kreaAdapterAvailability,
     mismatch,
     onChange,
+    reIdActive,
     snapshot,
   ]);
 
@@ -498,7 +517,6 @@ export function StyleReferencePanel({
     try {
       if (isKrea2) {
         await preflightKreaReferenceBeforeUpload({
-          hasCharacterReference: characterReference?.status === "ready",
           selectedCheckpoint,
         });
       }
@@ -630,7 +648,7 @@ export function StyleReferencePanel({
           <label className="flex items-center gap-2 text-xs font-medium text-indigo-800">
             <input
               checked={snapshot.mode === "ipadapter"}
-              disabled={disabled}
+              disabled={disabled || reIdActive}
               onChange={(event) => updateAnalyzed({
                 error: undefined,
                 mode: event.target.checked ? "ipadapter" : "prompt-only",
@@ -652,7 +670,7 @@ export function StyleReferencePanel({
                   <NumberInput label="end_at" onChange={(endPercent) => updateAnalyzed({ ipAdapter: sanitizeStyleReferenceIpAdapterSettings({ ...ipAdapter, endPercent }) })} value={ipAdapter.endPercent} />
                 </> : null}
               </div>
-              {isKrea2 ? <p className="text-xs leading-relaxed text-slate-600">Krea timing is fixed to start_at 0 and end_at 1. Its shared reference strength is controlled with the Run character-reference setting.</p> : null}
+              {isKrea2 ? <p className="text-xs leading-relaxed text-slate-600">{reIdActive ? "The style-image adapter is paused until ReID is removed; this selection and its analyzed style prompt are preserved." : "Krea style timing is fixed to start_at 0 and end_at 1."}</p> : null}
             </>
           ) : null}
         </div>
