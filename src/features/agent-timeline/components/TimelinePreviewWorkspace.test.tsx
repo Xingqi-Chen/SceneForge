@@ -68,6 +68,42 @@ afterEach(() => {
 });
 
 describe("TimelinePreviewWorkspace", () => {
+  it.each([
+    { label: "portrait", previewHeight: 1248, previewWidth: 832 },
+    { label: "landscape", previewHeight: 832, previewWidth: 1248 },
+    { label: "square", previewHeight: 1024, previewWidth: 1024 },
+  ])("renders complete $label candidates with their intrinsic dimensions in a bounded square media box", ({
+    previewHeight,
+    previewWidth,
+  }) => {
+    act(() => root.render(
+      <TimelinePreviewWorkspace
+        previews={{ ...previews, previewHeight, previewWidth }}
+        scoring={scoring}
+      />,
+    ));
+
+    const images = Array.from(container.querySelectorAll<HTMLImageElement>("img"));
+    expect(images).toHaveLength(3);
+    images.forEach((image, index) => {
+      const candidate = previews.candidates[index]!;
+      const score = scoring.scores[index]!;
+      const candidateCard = image.closest("button");
+      expect(image.getAttribute("src")).toBe(candidate.storedImage!.url);
+      expect(image.getAttribute("width")).toBe(String(previewWidth));
+      expect(image.getAttribute("height")).toBe(String(previewHeight));
+      expect(image.classList).toContain("aspect-square");
+      expect(image.classList).toContain("w-full");
+      expect(image.classList).toContain("object-contain");
+      expect(image.classList).not.toContain("object-cover");
+      expect(image.className).not.toMatch(/(?:^|\s)(?:min-w-|w-screen|max-w-none|overflow-x-)/);
+      expect(candidateCard?.textContent).toContain(candidate.candidateId);
+      expect(candidateCard?.textContent).toContain(`#${score.rank}`);
+      expect(candidateCard?.textContent).toContain(`Adherence ${score.adherence}`);
+      expect(candidateCard?.textContent).toContain("Eligible");
+    });
+  });
+
   it("renders detailed ranking and all five score dimensions without mojibake", () => {
     act(() => root.render(
       <TimelinePreviewWorkspace previews={previews} scoring={scoring} />,
@@ -202,6 +238,35 @@ describe("TimelinePreviewWorkspace", () => {
     expect(mismatch?.textContent).toContain("Visual style mismatch · unavailable");
     act(() => mismatch?.click());
     expect(onRegenerate).not.toHaveBeenCalled();
+  });
+
+  it("keeps a failed candidate disabled with its existing error presentation", () => {
+    const failedPreviews: PreviewExecutionTimelineResult = {
+      ...previews,
+      candidates: previews.candidates.map((candidate) => candidate.candidateId === "preview-2"
+        ? {
+            candidateId: candidate.candidateId,
+            error: { code: "comfyui_execution_failed", message: "ComfyUI preview failed" },
+            index: candidate.index,
+            seed: candidate.seed,
+            status: "error" as const,
+          }
+        : candidate),
+      successfulCount: 2,
+    };
+    act(() => root.render(
+      <TimelinePreviewWorkspace previews={failedPreviews} scoring={scoring} />,
+    ));
+
+    const failedCandidate = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
+      (button) => button.textContent?.includes("preview-2"),
+    );
+    expect(failedCandidate?.disabled).toBe(true);
+    expect(failedCandidate?.classList).toContain("overflow-hidden");
+    expect(failedCandidate?.textContent).toContain("ComfyUI preview failed");
+    expect(failedCandidate?.textContent).toContain("#2");
+    expect(failedCandidate?.querySelector("img")).toBeNull();
+    expect(failedCandidate?.querySelector("div")?.classList).toContain("aspect-square");
   });
 });
 

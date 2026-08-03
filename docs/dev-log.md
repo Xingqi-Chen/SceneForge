@@ -2211,6 +2211,23 @@ Validation:
 
 - `npm run typecheck`
 
+### T57 / Issue #187 Run Preview candidate image presentation
+
+Summary:
+
+- Updated successful Preview candidate media to contain, rather than crop, the stored image within the existing responsive square card area.
+- Reused the validated Preview width and height as the Next Image intrinsic dimensions, preserving the complete aspect ratio for portrait, landscape, and square candidates without changing URLs or candidate behavior.
+
+Validation:
+
+- Preview and Timeline Shell focused suite (74 passed); Preview workspace component suite (9 passed)
+- Full Vitest suite (155 files, 1,979 tests passed)
+- `npm run build`
+- `npm run typecheck`
+- `npm run lint` (0 errors; 22 existing `no-img-element` warnings)
+- `git diff --check`
+- Browser QA at desktop and 390 x 844 confirmed complete 2:3 portrait containment, letterboxing, candidate selection behavior, regeneration gating, and no horizontal overflow.
+- Reviewer Gate: `APPROVE`; no blocking issues.
 ### T54 / Issue #181 Run reference-picker viewport stability
 
 Summary:
