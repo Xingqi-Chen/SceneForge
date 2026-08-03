@@ -4,6 +4,7 @@ export * from "./face-detailer";
 export * from "./history";
 export * from "./inpaint";
 export * from "./krea2-style-reference";
+export * from "./krea2-reid";
 export * from "./latent-image-node";
 export * from "./object-info";
 export * from "./openpose-skeleton";

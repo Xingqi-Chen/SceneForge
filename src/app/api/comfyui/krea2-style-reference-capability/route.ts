@@ -2,14 +2,10 @@ import { NextResponse } from "next/server";
 
 import {
   ComfyUiApiError,
-  createComfyUiClient,
-  validateComfyUiRequestAgainstObjectInfo,
-  validateComfyUiTextToImageRequest,
 } from "@/features/comfyui";
+import { preflightKrea2ReferenceCapability } from "@/features/comfyui/krea2-reference-capability.server";
 
 export const runtime = "nodejs";
-
-const DEFAULT_COMFYUI_BASE_URL = "http://127.0.0.1:8188";
 
 function readRequiredString(value: unknown) {
   return typeof value === "string" && value.trim() ? value.trim() : "";
@@ -33,8 +29,7 @@ export async function POST(request: Request) {
     : {};
   const checkpointName = readRequiredString(input.checkpointName);
   const modelBaseModel = readRequiredString(input.modelBaseModel);
-  const hasStyleReference = input.hasStyleReference !== false;
-  const hasCharacterReference = input.hasCharacterReference === true;
+  const mode = input.referenceMode === "reid" ? "reid" : "style";
   if (!checkpointName || !modelBaseModel || input.modelStorageKind !== "diffusion") {
     return NextResponse.json({
       available: false,
@@ -42,43 +37,8 @@ export async function POST(request: Request) {
     });
   }
 
-  const validation = validateComfyUiTextToImageRequest({
-    checkpointName,
-    modelBaseModel,
-    modelStorageKind: "diffusion",
-    workflowProfile: "krea2",
-    positivePrompt: "Krea style reference preflight",
-    width: 1024,
-    height: 1024,
-    steps: 8,
-    cfg: 1,
-    samplerName: "euler",
-    scheduler: "simple",
-    krea2StyleReference: {
-      ...(hasStyleReference ? { styleImageName: "sceneforge-krea-style-reference-preflight.png" } : {}),
-      ...(hasCharacterReference ? { characterImageName: "sceneforge-krea-character-reference-preflight.png" } : {}),
-    },
-  });
-  if (!validation.ok) {
-    return NextResponse.json({ available: false, reason: validation.message });
-  }
-
   try {
-    const client = createComfyUiClient({
-      baseUrl: process.env.COMFYUI_BASE_URL ?? DEFAULT_COMFYUI_BASE_URL,
-      apiKey: process.env.COMFYUI_API_KEY || undefined,
-    });
-    const objectInfo = await client.getObjectInfo();
-    const objectValidation = validateComfyUiRequestAgainstObjectInfo(validation.request, objectInfo);
-    return NextResponse.json(objectValidation.errors.length === 0
-      ? {
-          available: true,
-          reason: "Krea style-reference adapter verified for this local Krea 2 Turbo checkpoint.",
-        }
-      : {
-          available: false,
-          reason: objectValidation.errors.join(" "),
-        });
+    return NextResponse.json(await preflightKrea2ReferenceCapability({ checkpointName, mode, modelBaseModel }));
   } catch (error) {
     const reason = error instanceof ComfyUiApiError
       ? "ComfyUI is unavailable for Krea reference-adapter preflight. Reference upload and queueing remain blocked."

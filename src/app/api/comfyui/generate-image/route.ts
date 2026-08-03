@@ -3,6 +3,7 @@ import sharp from "sharp";
 
 import {
   ComfyUiApiError,
+  buildBasicTextToImageWorkflow,
   createComfyUiClient,
   createComfyUiTextToImagePreviewRequest,
   summarizeComfyUiErrorDetails,
@@ -50,6 +51,7 @@ function sanitizeReturnedRequest(request: ComfyUiTextToImageRequest) {
   return {
     ...request,
     sourceImageDataUrl: "",
+    krea2ReId: undefined,
     ...(request.controlNet
       ? {
           controlNet: {
@@ -133,6 +135,7 @@ export async function POST(request: Request) {
   if (!validation.ok) {
     return errorResponse(validation.message, 400, validation.details);
   }
+  const hasKrea2ReId = Boolean(validation.request.krea2ReId || validation.request.krea2ReIdDescriptor);
 
   try {
     const client = createComfyUiClient({
@@ -143,7 +146,15 @@ export async function POST(request: Request) {
     const generationRequest = validation.request.preview
       ? createComfyUiTextToImagePreviewRequest(validation.request)
       : validation.request;
-    const requestWithSourceImage = await uploadComfyUiTextToImageSourceImage(client, generationRequest);
+    const preflightObjectValidation = validateComfyUiRequestAgainstObjectInfo(generationRequest, objectInfo);
+    if (preflightObjectValidation.errors.length > 0) {
+      return errorResponse("ComfyUI request does not match the current ComfyUI model/node options.", 400, {
+        errors: preflightObjectValidation.errors,
+        warnings: preflightObjectValidation.warnings,
+      });
+    }
+    if (hasKrea2ReId) buildBasicTextToImageWorkflow(preflightObjectValidation.request);
+    const requestWithSourceImage = await uploadComfyUiTextToImageSourceImage(client, preflightObjectValidation.request);
     const objectValidation = validateComfyUiRequestAgainstObjectInfo(requestWithSourceImage, objectInfo);
 
     if (objectValidation.errors.length > 0) {
@@ -173,14 +184,15 @@ export async function POST(request: Request) {
       const message = makeComfyUiErrorMessage(error);
       console.error("[SceneForge] [comfyui] ComfyUI request failed", {
         statusCode: error.statusCode,
-        details: JSON.stringify(error.details),
+        ...(!hasKrea2ReId ? { details: JSON.stringify(error.details) } : {}),
         summary: message,
       });
 
       return errorResponse(message, error.statusCode ?? 500, error.details);
     }
 
-    console.error("[SceneForge] [comfyui] unexpected image generation failure", { error });
+    console.error("[SceneForge] [comfyui] unexpected image generation failure",
+      hasKrea2ReId ? { reId: true } : { error });
 
     return errorResponse("Unexpected ComfyUI request failure.", 500);
   }

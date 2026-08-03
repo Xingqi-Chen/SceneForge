@@ -70,11 +70,6 @@ export function getComfyUiKrea2StyleReferenceContextIssue(
     return "Krea style reference requires a Krea 2 diffusion-model request context.";
   }
 
-  const normalizedCheckpointName = request.checkpointName.toLowerCase().replace(/[^a-z0-9]+/g, "");
-  if (!normalizedCheckpointName.includes("krea2") || !normalizedCheckpointName.includes("turbo")) {
-    return "Krea style reference requires a compatible Krea 2 Turbo diffusion model.";
-  }
-
   return "";
 }
 

@@ -24,6 +24,7 @@ Use this file for reusable lessons that should shape future work. Do not add one
 - Prefer mocked fetchers for ComfyUI, Civitai, Tavily, and LiteLLM tests so CI and local validation do not require live services.
 - Prompt generation should remain deterministic unless an LLM call is explicitly part of the feature.
 - Review should lead with blocking risks: state corruption, path safety, client/server boundary leaks, missing regression tests, and documentation drift.
+- For experimental model-conditioning integrations, audit the upstream graph topology, exact connections, and fixed node values separately from model-selection policy. Structural compatibility does not establish identity quality, so the UI should avoid a verified-quality claim until representative live behavior has been evaluated.
 
 ## Editor Architecture
 

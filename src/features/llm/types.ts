@@ -20,6 +20,23 @@ export type LlmChatMessage = {
   content: LlmChatContent;
 };
 
+export type LlmJsonSchemaValue =
+  | boolean
+  | number
+  | string
+  | null
+  | readonly LlmJsonSchemaValue[]
+  | { readonly [key: string]: LlmJsonSchemaValue };
+
+export type LlmJsonSchemaResponseFormat = {
+  type: "json_schema";
+  json_schema: {
+    name: string;
+    strict: true;
+    schema: { [key: string]: LlmJsonSchemaValue };
+  };
+};
+
 export type LlmChatRequest = {
   model?: string;
   nsfw?: boolean;
@@ -42,6 +59,7 @@ export type LlmChatRequest = {
   messages: LlmChatMessage[];
   temperature?: number;
   maxTokens?: number;
+  responseFormat?: LlmJsonSchemaResponseFormat;
 };
 
 export type LlmTokenUsage = {

@@ -8,6 +8,10 @@ import type {
   LlmChatRole,
   LlmTokenUsage,
 } from "./types";
+import {
+  createStructuredOutputErrorDetails,
+  summarizeLlmResponseFormatForLog,
+} from "./run-scene-prompt-response-format";
 
 const LOG_TEXT_PREVIEW_MAX = 400;
 
@@ -52,6 +56,7 @@ export function summarizeLlmChatRequestForLog(request: LlmChatRequest): Record<s
     nsfw: request.nsfw,
     temperature: request.temperature,
     maxTokens: request.maxTokens,
+    responseFormat: summarizeLlmResponseFormatForLog(request.responseFormat),
     messageCount: request.messages.length,
     messages: request.messages.map((message: LlmChatMessage) => ({
       role: message.role,
@@ -403,6 +408,7 @@ export function createLiteLlmClient(options: LiteLlmClientOptions) {
           messages: request.messages,
           temperature: request.temperature,
           max_tokens: request.maxTokens,
+          ...(request.responseFormat ? { response_format: request.responseFormat } : {}),
           stream: true,
         }),
       });
@@ -419,7 +425,9 @@ export function createLiteLlmClient(options: LiteLlmClientOptions) {
         });
         throw new LiteLlmError("LiteLLM chat completion request failed.", {
           statusCode: response.status,
-          details: payload,
+          details: request.responseFormat
+            ? createStructuredOutputErrorDetails(request.responseFormat, response.status)
+            : payload,
         });
       }
 

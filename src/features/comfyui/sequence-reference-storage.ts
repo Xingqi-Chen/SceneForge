@@ -36,13 +36,18 @@ function assertInsideDirectory(root: string, target: string) {
   }
 }
 
-export function parseSequenceReferenceDataUrl(value: string) {
+export function parseSequenceReferenceDataUrl(value: string): {
+  bytes: Buffer;
+  contentType: "image/png" | "image/jpeg" | "image/webp";
+  extension: string;
+} {
   const match = /^data:(image\/(?:png|jpe?g|webp));base64,([A-Za-z0-9+/=]+)$/.exec(value.trim());
   if (!match) {
     throw new ComfyUiSequenceReferenceStorageError("Reference image must be a PNG, JPEG, or WEBP data URL.");
   }
 
-  const contentType = match[1] === "image/jpg" ? "image/jpeg" : match[1];
+  const contentType = (match[1] === "image/jpg" ? "image/jpeg" : match[1]) as
+    "image/png" | "image/jpeg" | "image/webp";
   const extension = CONTENT_TYPE_EXTENSIONS.get(contentType);
   if (!extension) {
     throw new ComfyUiSequenceReferenceStorageError("Unsupported reference image content type.", 415);
@@ -83,26 +88,37 @@ export function getSequenceReferenceUrl(filename: string) {
 
 export async function storeSequenceReferenceImage(dataUrl: string) {
   const parsed = parseSequenceReferenceDataUrl(dataUrl);
-  if (parsed.bytes.byteLength === 0) {
+  return storeSequenceReferenceBytes(parsed.bytes, parsed.contentType);
+}
+
+export async function storeSequenceReferenceBytes(
+  bytes: Uint8Array,
+  contentType: "image/png" | "image/jpeg" | "image/webp",
+) {
+  const extension = CONTENT_TYPE_EXTENSIONS.get(contentType);
+  if (!extension) {
+    throw new ComfyUiSequenceReferenceStorageError("Unsupported reference image content type.", 415);
+  }
+  if (bytes.byteLength === 0) {
     throw new ComfyUiSequenceReferenceStorageError("Reference image is empty.", 400);
   }
-  if (parsed.bytes.byteLength > MAX_SEQUENCE_REFERENCE_BYTES) {
+  if (bytes.byteLength > MAX_SEQUENCE_REFERENCE_BYTES) {
     throw new ComfyUiSequenceReferenceStorageError("Reference image is too large.", 413);
   }
 
-  const hash = crypto.createHash("sha256").update(parsed.bytes).digest("hex").slice(0, 32);
-  const filename = `${hash}.${parsed.extension}`;
+  const hash = crypto.createHash("sha256").update(bytes).digest("hex").slice(0, 32);
+  const filename = `${hash}.${extension}`;
   const filePath = getSequenceReferencePath(filename);
   if (!filePath) {
     throw new ComfyUiSequenceReferenceStorageError("Invalid reference image filename.");
   }
 
   await fs.mkdir(/*turbopackIgnore: true*/ path.dirname(filePath), { recursive: true });
-  await fs.writeFile(/*turbopackIgnore: true*/ filePath, parsed.bytes);
+  await fs.writeFile(/*turbopackIgnore: true*/ filePath, bytes);
 
   return {
-    byteLength: parsed.bytes.byteLength,
-    contentType: parsed.contentType,
+    byteLength: bytes.byteLength,
+    contentType,
     filename,
     url: getSequenceReferenceUrl(filename),
   };

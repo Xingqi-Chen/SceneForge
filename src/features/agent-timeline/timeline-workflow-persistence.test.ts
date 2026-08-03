@@ -40,6 +40,45 @@ const persistedBalancedKreaV2Policy = {
   family: "krea2",
   denoise: 0.45,
 } as const;
+const persistedKreaV4ReIdPolicy = resolveTimelineFinalGenerationPolicy(
+  { workflowProfile: "krea2" },
+  "balanced",
+  { krea2ReId: true },
+);
+const persistedKreaV4ReIdReference = {
+  kind: "krea2-reid" as const,
+  status: "ready" as const,
+  strength: 1,
+  metadata: {
+    byteLength: 777,
+    contentType: "image/png" as const,
+    storedFilename: "fedcba9876543210fedcba9876543210.png",
+    uploadedAt: "2026-08-02T00:00:00.000Z",
+    url: "/api/comfyui/sequence-references/fedcba9876543210fedcba9876543210.png",
+  },
+  reIdPreparation: {
+    choice: "crop" as const,
+    detector: "yunet-2023mar-int8" as const,
+    detectorSha256: "a".repeat(64),
+    faceDetected: true,
+    height: 256,
+    version: 2 as const,
+    width: 256,
+  },
+};
+const persistedKreaV4ReIdContext = {
+  version: 3 as never,
+  adapter: "krea2-reid" as const,
+  references: [{
+    role: "character" as const,
+    storedFilename: persistedKreaV4ReIdReference.metadata.storedFilename,
+    contentType: "image/png" as const,
+    byteLength: persistedKreaV4ReIdReference.metadata.byteLength,
+    strength: 1,
+  }],
+  startPercent: 0,
+  endPercent: 1,
+};
 
 function managedStoredImage(hex: string) {
   const filename = `${hex.repeat(32)}.png`;
@@ -274,6 +313,144 @@ function createPersistedStagedKreaV2Workflow(finalCount = 1) {
   });
   delete gate.finalSteps;
   return raw;
+}
+
+function createPersistedKreaV4ReIdWorkflow() {
+  const raw = JSON.parse(JSON.stringify(createPersistedV2GenerationWorkflow(1))) as TimelineWorkflowState;
+  raw.workflowId = "persisted-krea-v5-reid";
+  const sceneInput = raw.nodes["scene-input"].result as Record<string, unknown>;
+  sceneInput.promptProfile = "krea2";
+  sceneInput.settingsSnapshot = {
+    ...((sceneInput.settingsSnapshot as Record<string, unknown> | undefined) ?? {}),
+    characterReference: structuredClone(persistedKreaV4ReIdReference),
+    finalRedrawPreset: "balanced",
+    promptProfile: "krea2",
+  };
+  const parameters = raw.nodes["parameter-recommendation"].result as {
+    requestPreview: Record<string, unknown>;
+  } & Record<string, unknown>;
+  Object.assign(parameters, {
+    characterReference: structuredClone(persistedKreaV4ReIdReference),
+    cfg: 1,
+    denoise: 1,
+    samplerName: "euler",
+    scheduler: "simple",
+    steps: 8,
+  });
+  parameters.requestPreview = {
+    ...parameters.requestPreview,
+    cfg: 1,
+    checkpointName: "RedCraft_v4_fp8_scaled.safetensors",
+    clipName: "qwen3vl_4b_fp8_scaled.safetensors",
+    vaeName: "qwen_image_vae.safetensors",
+    unetWeightDtype: "default",
+    denoise: 1,
+    modelBaseModel: "Krea 2",
+    modelStorageKind: "diffusion",
+    positivePrompt: "persisted Krea v5 ReID scene",
+    samplerName: "euler",
+    scheduler: "simple",
+    steps: 8,
+    workflowProfile: "krea2",
+  };
+  const execution = raw.nodes["comfyui-execution"].result as {
+    finalPolicy: unknown;
+    finals: Array<{
+      finalPolicy: unknown;
+      finalRequestDigest?: string;
+      previewUpscale: { policyVersion: number };
+    }>;
+    referenceContext?: unknown;
+    request: Record<string, unknown>;
+  };
+  execution.finalPolicy = structuredClone(persistedKreaV4ReIdPolicy);
+  execution.referenceContext = structuredClone(persistedKreaV4ReIdContext);
+  execution.request = {
+    batchSize: 1,
+    cfg: 1,
+    checkpointName: "RedCraft_v4_fp8_scaled.safetensors",
+    clipName: "qwen3vl_4b_fp8_scaled.safetensors",
+    vaeName: "qwen_image_vae.safetensors",
+    unetWeightDtype: "default",
+    denoise: persistedKreaV4ReIdPolicy.denoise,
+    krea2ReIdDescriptor: {
+      imageCount: 1,
+      kvCache: true,
+      loraName: "krea2_reid_rank32.safetensors",
+      referenceDigest: `sha256:${"d".repeat(64)}`,
+      strengthModel: 1,
+      version: 2,
+    },
+    modelBaseModel: "Krea 2",
+    modelStorageKind: "diffusion",
+    positivePrompt: "persisted Krea v5 ReID scene",
+    preview: false,
+    samplerName: "euler",
+    scheduler: "simple",
+    steps: 8,
+    workflowProfile: "krea2",
+    width: 1024,
+    height: 1024,
+  };
+  for (const final of execution.finals) {
+    final.finalPolicy = structuredClone(persistedKreaV4ReIdPolicy);
+    final.finalRequestDigest = `sha256:${"c".repeat(64)}`;
+    final.previewUpscale.policyVersion = persistedKreaV4ReIdPolicy.version;
+  }
+  const gate = raw.nodes["generation-gate"].result as Record<string, unknown>;
+  Object.assign(gate, {
+    finalPolicyVersion: persistedKreaV4ReIdPolicy.version,
+    finalRedrawPreset: persistedKreaV4ReIdPolicy.preset,
+    finalGenerationFamily: persistedKreaV4ReIdPolicy.family,
+    finalSteps: persistedKreaV4ReIdPolicy.steps,
+    finalDenoise: persistedKreaV4ReIdPolicy.denoise,
+    referenceContext: structuredClone(persistedKreaV4ReIdContext),
+  });
+  setPersistedKreaV4ReIdDimensions(raw, {
+    formalHeight: 1024,
+    formalWidth: 1024,
+    previewHeight: 1024,
+    previewWidth: 1024,
+  });
+  return raw;
+}
+
+function setPersistedKreaV4ReIdDimensions(
+  workflow: TimelineWorkflowState,
+  dimensions: {
+    formalHeight: number;
+    formalWidth: number;
+    previewHeight: number;
+    previewWidth: number;
+  },
+) {
+  const parameters = workflow.nodes["parameter-recommendation"].result as {
+    height: number;
+    requestPreview: { height: number; width: number };
+    width: number;
+  };
+  parameters.height = dimensions.formalHeight;
+  parameters.width = dimensions.formalWidth;
+  parameters.requestPreview.height = dimensions.formalHeight;
+  parameters.requestPreview.width = dimensions.formalWidth;
+
+  const preview = workflow.nodes["preview-execution"].result as {
+    previewHeight: number;
+    previewWidth: number;
+  };
+  preview.previewHeight = dimensions.previewHeight;
+  preview.previewWidth = dimensions.previewWidth;
+
+  const execution = workflow.nodes["comfyui-execution"].result as {
+    finals: Array<{ previewUpscale: { height: number; width: number } }>;
+    request: { height: number; width: number };
+  };
+  execution.request.height = dimensions.formalHeight;
+  execution.request.width = dimensions.formalWidth;
+  for (const final of execution.finals) {
+    final.previewUpscale.height = dimensions.formalHeight;
+    final.previewUpscale.width = dimensions.formalWidth;
+  }
 }
 
 type MutablePersistedPreviewScore = Record<string, unknown>;
@@ -1962,6 +2139,353 @@ describe("timeline workflow persistence", () => {
     expect(serialized).not.toContain("sceneforge-krea-style-transport.png");
     expect(serialized).not.toContain("PRIVATE_FINAL_SOURCE");
     expect(serialized).not.toContain("C:\\\\private");
+  });
+
+  it("round-trips a completed Krea v5 ReID policy, fallback provenance, and signed v3 reference gate", () => {
+    const serialized = serializeTimelineWorkflowRecord(createTimelineWorkflowRecord({
+      projectId: "t55-krea-v5-reid-round-trip",
+      name: "Krea v5 ReID round trip",
+      workflow: createPersistedKreaV4ReIdWorkflow(),
+      sceneRequest: "A persisted Krea v5 ReID scene",
+      selectedPromptProfile: "krea2",
+      selectedImageCount: 1,
+      selectedNodeId: "result-display",
+      outputDisplayModes: { "result-display": "visual" },
+    }));
+    const record = parseTimelineWorkflowRecordJson(serialized);
+
+    expect(record && isSingleImageTimelineWorkflowRecord(record)).toBe(true);
+    if (!record || !isSingleImageTimelineWorkflowRecord(record)) throw new Error("Expected a Run record.");
+    const restored = record.workflow;
+    const gate = restored.nodes["generation-gate"].result as Record<string, unknown>;
+    const execution = restored.nodes["comfyui-execution"].result as {
+      finalPolicy?: unknown;
+      finals: Array<{ finalPolicy?: unknown; previewUpscale?: unknown }>;
+      referenceContext?: unknown;
+    };
+    expect(restored.nodes["preview-execution"]).toMatchObject({
+      status: "done",
+      result: { previewHeight: 1024, previewWidth: 1024 },
+    });
+    expect(restored.nodes["preview-scoring"].status).toBe("done");
+    expect(restored.generationConfirmed).toBe(true);
+    expect(restored.nodes["comfyui-execution"].status).toBe("done");
+    expect(restored.nodes["result-display"].status).toBe("done");
+    expect(gate.referenceContext).toEqual(persistedKreaV4ReIdContext);
+    expect(execution.referenceContext).toEqual(persistedKreaV4ReIdContext);
+    expect(execution.finalPolicy).toEqual(persistedKreaV4ReIdPolicy);
+    expect(execution.finals).toEqual([
+      expect.objectContaining({
+        finalPolicy: persistedKreaV4ReIdPolicy,
+        previewUpscale: expect.objectContaining({
+          policyVersion: persistedKreaV4ReIdPolicy.version,
+          sourcePreview: expect.any(Object),
+          storedImage: expect.any(Object),
+        }),
+        status: "done",
+      }),
+    ]);
+
+    const tamperedRecord = JSON.parse(serialized) as {
+      workflow: TimelineWorkflowState;
+    };
+    const display = tamperedRecord.workflow.nodes["result-display"].result as {
+      fallbacks: Array<{ storedImage: unknown }>;
+    };
+    display.fallbacks[0]!.storedImage = managedStoredImage("b");
+    const tamperedReload = parseTimelineWorkflowRecordJson(JSON.stringify(tamperedRecord));
+    expect(tamperedReload && isSingleImageTimelineWorkflowRecord(tamperedReload)).toBe(true);
+    if (!tamperedReload || !isSingleImageTimelineWorkflowRecord(tamperedReload)) {
+      throw new Error("Expected the tampered Run record to sanitize fail-closed.");
+    }
+    expect(tamperedReload.workflow.nodes["result-display"]).toMatchObject({
+      status: "error",
+      error: { code: "image_storage_invalid", details: { recoverable: true } },
+    });
+  });
+
+  it("round-trips the deterministic 832x1248 Preview for a confirmed 1024x1536 ReID Run", () => {
+    const workflow = createPersistedKreaV4ReIdWorkflow();
+    setPersistedKreaV4ReIdDimensions(workflow, {
+      formalHeight: 1536,
+      formalWidth: 1024,
+      previewHeight: 1248,
+      previewWidth: 832,
+    });
+    const serialized = serializeTimelineWorkflowRecord(createTimelineWorkflowRecord({
+      projectId: "t55-krea-v5-reid-portrait-preview",
+      name: "Krea v5 ReID portrait Preview",
+      workflow,
+      sceneRequest: "A persisted portrait Krea v5 ReID scene",
+      selectedPromptProfile: "krea2",
+      selectedImageCount: 1,
+      selectedNodeId: "preview-scoring",
+      outputDisplayModes: { "preview-scoring": "visual" },
+    }));
+    const record = parseTimelineWorkflowRecordJson(serialized);
+
+    expect(record && isSingleImageTimelineWorkflowRecord(record)).toBe(true);
+    if (!record || !isSingleImageTimelineWorkflowRecord(record)) throw new Error("Expected a portrait ReID Run record.");
+    expect(record.workflow.nodes["preview-execution"]).toMatchObject({
+      status: "done",
+      result: {
+        previewHeight: 1248,
+        previewWidth: 832,
+        successfulCount: 4,
+      },
+    });
+    expect(record.workflow.nodes["preview-scoring"]).toMatchObject({
+      status: "done",
+      result: { selectedCandidateIds: ["preview-1"] },
+    });
+    expect(record.workflow.nodes["comfyui-execution"].status).toBe("done");
+    expect(record.workflow.nodes["result-display"].status).toBe("done");
+    expect(createTimelineFinalRequests(record.workflow)).toMatchObject([{
+      candidateId: "preview-1",
+      request: { height: 1536, width: 1024 },
+    }]);
+  });
+
+  it("does not authorize oversized Preview persistence for an ordinary non-ReID Run", () => {
+    const raw = createPersistedV2GenerationWorkflow(1);
+    const preview = raw.nodes["preview-execution"].result as {
+      previewHeight: number;
+      previewWidth: number;
+    };
+    preview.previewHeight = 1024;
+    preview.previewWidth = 1024;
+
+    const restored = sanitizeTimelineWorkflowState(raw) as TimelineWorkflowState;
+    expect(restored.nodes["preview-execution"]).toMatchObject({
+      status: "error",
+      error: { code: "image_storage_invalid", details: { recoverable: true } },
+    });
+    expect(restored.nodes["preview-execution"].result).toBeUndefined();
+    expect(restored.nodes["preview-scoring"]).toMatchObject({
+      status: "error",
+      error: { code: "timeline_request_invalid", details: { recoverable: true } },
+    });
+  });
+
+  it.each([
+    ["wrong aspect ratio", { formalHeight: 1536, formalWidth: 1024, previewHeight: 1232, previewWidth: 832 }],
+    ["over-budget dimensions", { formalHeight: 1536, formalWidth: 1024, previewHeight: 1296, previewWidth: 864 }],
+    ["misaligned dimensions", { formalHeight: 1536, formalWidth: 1024, previewHeight: 1245, previewWidth: 830 }],
+    ["upscaled dimensions", { formalHeight: 768, formalWidth: 768, previewHeight: 1024, previewWidth: 1024 }],
+    ["smaller envelope-valid dimensions", { formalHeight: 1536, formalWidth: 1024, previewHeight: 1200, previewWidth: 800 }],
+  ] as const)("fails closed for forged current-ReID Preview %s", (_case, dimensions) => {
+    const raw = createPersistedKreaV4ReIdWorkflow();
+    setPersistedKreaV4ReIdDimensions(raw, dimensions);
+
+    const restored = sanitizeTimelineWorkflowState(raw) as TimelineWorkflowState;
+    expect(restored.nodes["preview-execution"]).toMatchObject({
+      status: "error",
+      error: { code: "image_storage_invalid", details: { recoverable: true } },
+    });
+    expect(restored.nodes["preview-execution"].result).toBeUndefined();
+    expect(restored.nodes["preview-scoring"]).toMatchObject({
+      status: "error",
+      error: { code: "timeline_request_invalid", details: { recoverable: true } },
+    });
+    expect(restored.nodes["preview-scoring"].result).toBeUndefined();
+  });
+
+  it.each([
+    ["legacy v2 reference context", (workflow: TimelineWorkflowState) => {
+      const gate = workflow.nodes["generation-gate"].result as {
+        referenceContext: { version: number };
+      };
+      gate.referenceContext.version = 2;
+    }],
+    ["incompatible final policy", (workflow: TimelineWorkflowState) => {
+      const gate = workflow.nodes["generation-gate"].result as { finalPolicyVersion: number };
+      gate.finalPolicyVersion = 4;
+    }],
+  ] as const)("does not authorize an oversized ReID Preview with %s", (_case, mutate) => {
+    const raw = createPersistedKreaV4ReIdWorkflow();
+    setPersistedKreaV4ReIdDimensions(raw, {
+      formalHeight: 1536,
+      formalWidth: 1024,
+      previewHeight: 1248,
+      previewWidth: 832,
+    });
+    mutate(raw);
+
+    const restored = sanitizeTimelineWorkflowState(raw) as TimelineWorkflowState;
+    expect(restored.generationConfirmed).toBe(false);
+    expect(restored.nodes["preview-execution"].status).toBe("blocked");
+    expect(restored.nodes["preview-execution"].result).toBeUndefined();
+    expect(restored.nodes["preview-scoring"].status).toBe("blocked");
+  });
+
+  it("applies the same deterministic ReID dimension validation to partial Preview results", () => {
+    const createPartialPreviewWorkflow = () => {
+      const raw = createPersistedKreaV4ReIdWorkflow();
+      setPersistedKreaV4ReIdDimensions(raw, {
+        formalHeight: 1536,
+        formalWidth: 1024,
+        previewHeight: 1248,
+        previewWidth: 832,
+      });
+      const partialResult = structuredClone(raw.nodes["preview-execution"].result);
+      raw.nodes["preview-execution"] = {
+        ...raw.nodes["preview-execution"],
+        status: "error",
+        result: undefined,
+        error: {
+          code: "comfyui_execution_failed",
+          message: "One or more Preview queues failed.",
+          details: { recoverable: true, partialResult },
+        },
+      };
+      return raw;
+    };
+
+    const valid = sanitizeTimelineWorkflowState(createPartialPreviewWorkflow()) as TimelineWorkflowState;
+    expect(valid.nodes["preview-execution"].error?.details).toMatchObject({
+      recoverable: true,
+      partialResult: { previewHeight: 1248, previewWidth: 832, successfulCount: 4 },
+    });
+
+    const forged = createPartialPreviewWorkflow();
+    const forgedPartial = (forged.nodes["preview-execution"].error?.details as {
+      partialResult: { previewHeight: number; previewWidth: number };
+    }).partialResult;
+    forgedPartial.previewHeight = 1200;
+    forgedPartial.previewWidth = 800;
+    const rejected = sanitizeTimelineWorkflowState(forged) as TimelineWorkflowState;
+    expect(rejected.nodes["preview-execution"].error?.details).toEqual({ recoverable: true });
+  });
+
+  it("invalidates continuable v1 ReID authorization instead of migrating it into the verified contract", () => {
+    const raw = createPersistedKreaV4ReIdWorkflow();
+    const gate = raw.nodes["generation-gate"].result as Record<string, unknown>;
+    gate.finalPolicyVersion = 4;
+    gate.finalDenoise = 0.18;
+    (gate.referenceContext as Record<string, unknown>).version = 2;
+    const sceneSettings = (raw.nodes["scene-input"].result as {
+      settingsSnapshot: { characterReference: { reIdPreparation: { version: number } } };
+    }).settingsSnapshot;
+    sceneSettings.characterReference.reIdPreparation.version = 1;
+    const reviewedCharacter = raw.nodes["parameter-recommendation"].result as {
+      characterReference: { reIdPreparation: { version: number } };
+    };
+    reviewedCharacter.characterReference.reIdPreparation.version = 1;
+    raw.nodes["comfyui-execution"] = {
+      ...raw.nodes["comfyui-execution"],
+      status: "blocked",
+      result: undefined,
+      error: undefined,
+    };
+    raw.nodes["result-display"] = {
+      ...raw.nodes["result-display"],
+      status: "blocked",
+      result: undefined,
+      error: undefined,
+    };
+
+    const restored = sanitizeTimelineWorkflowState(raw) as TimelineWorkflowState;
+    expect(restored.generationConfirmed).toBe(false);
+    expect(() => createTimelineFinalRequests(restored)).toThrow(/confirm|current.*policy|ReID/i);
+  });
+
+  it("keeps completed v1 ReID images historical but removes their authority to execute again", () => {
+    const raw = createPersistedKreaV4ReIdWorkflow();
+    const preview = raw.nodes["preview-execution"].result as {
+      previewHeight: number;
+      previewWidth: number;
+    };
+    preview.previewHeight = 768;
+    preview.previewWidth = 768;
+    const gate = raw.nodes["generation-gate"].result as Record<string, unknown>;
+    gate.finalPolicyVersion = 4;
+    gate.finalDenoise = 0.18;
+    (gate.referenceContext as Record<string, unknown>).version = 2;
+    const sceneSettings = (raw.nodes["scene-input"].result as {
+      settingsSnapshot: { characterReference: { reIdPreparation: { version: number } } };
+    }).settingsSnapshot;
+    sceneSettings.characterReference.reIdPreparation.version = 1;
+    const reviewedCharacter = raw.nodes["parameter-recommendation"].result as {
+      characterReference: { reIdPreparation: { version: number } };
+    };
+    reviewedCharacter.characterReference.reIdPreparation.version = 1;
+    const execution = raw.nodes["comfyui-execution"].result as {
+      finalPolicy: Record<string, unknown>;
+      finals: Array<{ finalPolicy: Record<string, unknown>; previewUpscale: { policyVersion: number } }>;
+      referenceContext: Record<string, unknown>;
+      request: { krea2ReIdDescriptor: { version: number } };
+    };
+    execution.finalPolicy.version = 4;
+    execution.finalPolicy.denoise = 0.18;
+    execution.referenceContext.version = 2;
+    execution.request.krea2ReIdDescriptor.version = 1;
+    execution.finals[0]!.finalPolicy.version = 4;
+    execution.finals[0]!.finalPolicy.denoise = 0.18;
+    execution.finals[0]!.previewUpscale.policyVersion = 4;
+
+    const restored = sanitizeTimelineWorkflowState(raw) as TimelineWorkflowState;
+    expect(restored.generationConfirmed).toBe(false);
+    expect(restored.nodes["result-display"]).toMatchObject({ status: "done" });
+    expect(restored.nodes["result-display"].result).toBeDefined();
+    expect(restored.nodes["comfyui-execution"]).toMatchObject({ status: "done" });
+  });
+
+  it("persists only the signed ReID descriptor and strips prepared transport, paths, bytes, and temporary names", () => {
+    const raw = JSON.parse(JSON.stringify(createPersistedV2GenerationWorkflow(1))) as TimelineWorkflowState;
+    const execution = raw.nodes["comfyui-execution"].result as {
+      finals: Array<Record<string, unknown>>;
+      request: Record<string, unknown>;
+    };
+    execution.finals[0]!.finalRequestDigest = `sha256:${"c".repeat(64)}`;
+    execution.request = {
+      checkpointName: "RedCraft_v4_fp8_scaled.safetensors",
+      clipName: "qwen3vl_4b_fp8_scaled.safetensors",
+      vaeName: "qwen_image_vae.safetensors",
+      unetWeightDtype: "default",
+      modelBaseModel: "Krea 2",
+      modelStorageKind: "diffusion",
+      workflowProfile: "krea2",
+      positivePrompt: "persisted Krea ReID scene",
+      krea2ReId: {
+        imageName: "sceneforge-krea-reid-transient.png",
+        dataUrl: "data:image/png;base64,PRIVATE_REID",
+        bytes: [1, 2, 3],
+        path: "C:\\private\\prepared-reid.png",
+        tensor: [0.1, 0.2],
+        temporaryComfyUiName: "temp-reid.png",
+      },
+      krea2ReIdDescriptor: {
+        version: 2,
+        referenceDigest: `sha256:${"d".repeat(64)}`,
+        loraName: "krea2_reid_rank32.safetensors",
+        strengthModel: 1,
+        kvCache: true,
+        imageCount: 1,
+      },
+    };
+
+    const restored = sanitizeTimelineWorkflowState(raw) as TimelineWorkflowState;
+    const result = restored.nodes["comfyui-execution"].result as {
+      finals: Array<{ finalRequestDigest?: string }>;
+      request: Record<string, unknown>;
+    };
+    const serialized = JSON.stringify(result);
+
+    expect(result.finals[0]?.finalRequestDigest).toBe(`sha256:${"c".repeat(64)}`);
+    expect(result.request.krea2ReIdDescriptor).toEqual({
+      version: 2,
+      referenceDigest: `sha256:${"d".repeat(64)}`,
+      loraName: "krea2_reid_rank32.safetensors",
+      strengthModel: 1,
+      kvCache: true,
+      imageCount: 1,
+    });
+    expect(result.request).not.toHaveProperty("krea2ReId");
+    for (const secret of [
+      "PRIVATE_REID", "private", "prepared-reid", "temp-reid", '"tensor":', '"bytes":', '"dataUrl":', '"path":',
+    ]) {
+      expect(serialized).not.toContain(secret);
+    }
   });
 
   it("round-trips an active workflow record without preserving secrets", () => {

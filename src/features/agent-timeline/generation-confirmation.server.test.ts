@@ -144,4 +144,98 @@ describe("Run generation confirmation contract", () => {
       expect(isTimelineGenerationConfirmationCurrent(staleWorkflow)).toBe(false);
     }
   });
+
+  it("binds prepared ReID identity, v3 reference context, and Krea policy v5 against tampering", () => {
+    const characterReference = {
+      kind: "krea2-reid" as const,
+      status: "ready" as const,
+      strength: 1,
+      metadata: {
+        byteLength: 777,
+        contentType: "image/png",
+        storedFilename: "fedcba9876543210fedcba9876543210.png",
+        uploadedAt: "2026-08-02T00:00:00.000Z",
+        url: "/api/comfyui/sequence-references/fedcba9876543210fedcba9876543210.png",
+      },
+      reIdPreparation: {
+        choice: "crop" as const,
+        detector: "yunet-2023mar-int8" as const,
+        detectorSha256: "a".repeat(64),
+        faceDetected: true,
+        height: 256,
+        version: 2 as const,
+        width: 256,
+      },
+    };
+    let workflow = createTimelineWorkflowState({
+      workflowId: "confirmation-krea-reid-v5",
+      promptProfile: "krea2",
+      sceneRequest: "A greenhouse portrait",
+      settingsSnapshot: {
+        characterReference,
+        finalRedrawPreset: "balanced",
+        promptProfile: "krea2",
+      },
+    });
+    workflow = setTimelineNodeManualResult(workflow, "parameter-recommendation", {
+      requestPreview: {
+        checkpointName: "RedCraft_v4_fp8_scaled.safetensors",
+        clipName: "qwen3vl_4b_fp8_scaled.safetensors",
+        vaeName: "qwen_image_vae.safetensors",
+        unetWeightDtype: "default",
+        modelBaseModel: "Krea 2",
+        modelStorageKind: "diffusion",
+        positivePrompt: "greenhouse portrait",
+        workflowProfile: "krea2",
+      },
+    });
+    const fingerprint = createTimelineGenerationConfirmationFingerprint(workflow);
+    workflow = confirmTimelineGeneration(workflow, {
+      automaticLocalRepairAuthorized: false,
+      confirmationFingerprint: fingerprint,
+      confirmationRequired: false,
+      confirmed: true,
+      finalDenoise: 1,
+      finalGenerationFamily: "krea2",
+      finalPolicyVersion: 5,
+      finalRedrawPreset: "balanced",
+      finalSteps: 8,
+      referenceContext: {
+        version: 3 as never,
+        adapter: "krea2-reid",
+        references: [{
+          role: "character",
+          storedFilename: characterReference.metadata.storedFilename,
+          contentType: "image/png",
+          byteLength: 777,
+          strength: 1,
+        }],
+        startPercent: 0,
+        endPercent: 1,
+      },
+      visualStyle: "anime",
+    });
+
+    expect(isTimelineGenerationConfirmationCurrent(workflow)).toBe(true);
+    for (const [label, mutate] of [
+      ["policy version", (copy: typeof workflow) => {
+        (copy.nodes["generation-gate"].result as Record<string, unknown>).finalPolicyVersion = 3;
+      }],
+      ["reference context version", (copy: typeof workflow) => {
+        (copy.nodes["generation-gate"].result as { referenceContext: { version: number } }).referenceContext.version = 1;
+      }],
+      ["reference strength", (copy: typeof workflow) => {
+        (copy.nodes["generation-gate"].result as { referenceContext: { references: Array<{ strength: number }> } })
+          .referenceContext.references[0]!.strength = 0.8;
+      }],
+      ["prepared choice", (copy: typeof workflow) => {
+        ((copy.nodes["scene-input"].result as { settingsSnapshot: { characterReference: { reIdPreparation: { choice: string } } } })
+          .settingsSnapshot.characterReference.reIdPreparation.choice = "original");
+      }],
+    ] as const) {
+      const tampered = structuredClone(workflow);
+      mutate(tampered);
+      expect(isTimelineGenerationConfirmationCurrent(tampered), label).toBe(false);
+    }
+  });
 });
