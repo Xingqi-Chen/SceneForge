@@ -2156,3 +2156,21 @@ Summary:
 Validation:
 
 - `npm run typecheck`
+
+### T54 / Issue #181 Run reference-picker viewport stability
+
+Summary:
+
+- Anchored the visually hidden Run character-reference file input to its visible Upload/Replace label so browser focus restoration cannot place it below the fixed-height app shell and scroll the top-level document.
+- Applied the same positioning boundary to the adjacent style-reference picker, which used the same latent document-relative layout pattern.
+- Preserved the native file input, accepted formats, upload/preflight states, focus semantics, and all reference state and generation behavior.
+
+Validation:
+
+- Focused component tests: 11/11 passed.
+- Full Vitest suite: 1,980/1,980 passed across 156 files.
+- `npm run typecheck`
+- `npm run lint`
+- `npm run build`
+- `git diff --check`
+- Chrome browser QA: Simple and Detailed desktop plus an 800x700 compact viewport kept document height equal to the viewport and top-level scroll at zero after chooser focus; Character, Style, and source-image controls remained stable.

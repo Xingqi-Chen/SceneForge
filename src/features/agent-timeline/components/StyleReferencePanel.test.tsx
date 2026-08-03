@@ -167,6 +167,45 @@ afterEach(async () => {
 });
 
 describe("StyleReferencePanel", () => {
+  it("contains the native accessible file input inside a positioned upload label", async () => {
+    const onChange = vi.fn();
+    await act(async () => root.render(
+      <StyleReferencePanel
+        checkpointId="checkpoint-a"
+        nsfwEnabled={false}
+        onChange={onChange}
+        promptProfile="illustrious"
+        selectedCheckpoint={{
+          id: "checkpoint-a", resourceType: "model", name: "Illustrious checkpoint", versionName: "v1",
+          baseModel: "Illustrious", creator: "creator", trainedWords: [], tags: [], categories: [],
+          usageGuide: null, descriptionSnippet: null, averageWeight: null, minWeight: null, maxWeight: null,
+          recommendations: [], previewImage: null, modelFileName: "illustrious.safetensors",
+          modelStorageKind: "checkpoint",
+        }}
+        workflowLabel="Run"
+      />,
+    ));
+
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement;
+    const label = input.closest("label");
+    expect(label).not.toBeNull();
+    expect(label?.classList.contains("relative")).toBe(true);
+    expect(label?.textContent).toContain("Upload");
+    expect(input.classList.contains("sr-only")).toBe(true);
+    expect(input.accept).toBe("image/png,image/jpeg,image/webp");
+    expect(input.disabled).toBe(false);
+    input.focus();
+    expect(document.activeElement).toBe(input);
+
+    await act(async () => {
+      Object.defineProperty(input, "files", { configurable: true, value: [] });
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+      await Promise.resolve();
+    });
+    expect(onChange).not.toHaveBeenCalled();
+    expect(document.body.contains(input)).toBe(true);
+  });
+
   it("shares upload, failed-analysis retry, replace, remove, and ready state across Composer modes", async () => {
     let uploadCount = 0;
     let analysisCount = 0;
