@@ -2,6 +2,21 @@
 
 This log records dated implementation and documentation work. Keep entries concise and evidence-oriented.
 
+## 2026-08-03
+
+### T55 / Issue #183 ReID Preview persistence correction
+
+- Corrected Run persistence so a currently confirmed Krea2 ReID policy-v5 workflow can restore its one-megapixel Preview dimensions instead of applying the ordinary longest-edge-768 limit.
+- ReID restoration is authorized only by a ready version-2 prepared reference, the sanitized version-3 ReID reference context, the complete current final-policy contract, a confirmation fingerprint, and matching valid formal dimensions. Restored ReID Preview dimensions must equal the deterministic largest size at or below 1,048,576 pixels that preserves the exact formal aspect ratio, stays 16-pixel aligned, and never upscales either axis.
+- Ordinary Preview restoration retains the existing longest-edge-768 behavior. Legacy, forged, or incompatible oversized records therefore still fail closed without weakening generated-image reference or path sanitization.
+
+Validation during implementation:
+
+- `npm run typecheck` passed.
+- Focused ESLint and `git diff --check` passed.
+- Test Gate updated the superseded 1024x1024 fixture, added current/ordinary/legacy/forged/partial-result regression coverage, and passed 162/162 persistence tests, 152/152 cross-module tests, and the full 2,053/2,053-test suite.
+- Typecheck, lint, production build, and `git diff --check` passed; reviewer-agent returned APPROVE with no blocking findings.
+
 ## 2026-08-02
 
 ### T55 / Issue #183 Krea2 ReID character reference

@@ -322,7 +322,7 @@ function createPersistedKreaV4ReIdWorkflow() {
   sceneInput.promptProfile = "krea2";
   sceneInput.settingsSnapshot = {
     ...((sceneInput.settingsSnapshot as Record<string, unknown> | undefined) ?? {}),
-    characterReference: persistedKreaV4ReIdReference,
+    characterReference: structuredClone(persistedKreaV4ReIdReference),
     finalRedrawPreset: "balanced",
     promptProfile: "krea2",
   };
@@ -330,7 +330,7 @@ function createPersistedKreaV4ReIdWorkflow() {
     requestPreview: Record<string, unknown>;
   } & Record<string, unknown>;
   Object.assign(parameters, {
-    characterReference: persistedKreaV4ReIdReference,
+    characterReference: structuredClone(persistedKreaV4ReIdReference),
     cfg: 1,
     denoise: 1,
     samplerName: "euler",
@@ -363,8 +363,8 @@ function createPersistedKreaV4ReIdWorkflow() {
     referenceContext?: unknown;
     request: Record<string, unknown>;
   };
-  execution.finalPolicy = persistedKreaV4ReIdPolicy;
-  execution.referenceContext = persistedKreaV4ReIdContext;
+  execution.finalPolicy = structuredClone(persistedKreaV4ReIdPolicy);
+  execution.referenceContext = structuredClone(persistedKreaV4ReIdContext);
   execution.request = {
     batchSize: 1,
     cfg: 1,
@@ -393,7 +393,7 @@ function createPersistedKreaV4ReIdWorkflow() {
     height: 1024,
   };
   for (const final of execution.finals) {
-    final.finalPolicy = persistedKreaV4ReIdPolicy;
+    final.finalPolicy = structuredClone(persistedKreaV4ReIdPolicy);
     final.finalRequestDigest = `sha256:${"c".repeat(64)}`;
     final.previewUpscale.policyVersion = persistedKreaV4ReIdPolicy.version;
   }
@@ -404,9 +404,53 @@ function createPersistedKreaV4ReIdWorkflow() {
     finalGenerationFamily: persistedKreaV4ReIdPolicy.family,
     finalSteps: persistedKreaV4ReIdPolicy.steps,
     finalDenoise: persistedKreaV4ReIdPolicy.denoise,
-    referenceContext: persistedKreaV4ReIdContext,
+    referenceContext: structuredClone(persistedKreaV4ReIdContext),
+  });
+  setPersistedKreaV4ReIdDimensions(raw, {
+    formalHeight: 1024,
+    formalWidth: 1024,
+    previewHeight: 1024,
+    previewWidth: 1024,
   });
   return raw;
+}
+
+function setPersistedKreaV4ReIdDimensions(
+  workflow: TimelineWorkflowState,
+  dimensions: {
+    formalHeight: number;
+    formalWidth: number;
+    previewHeight: number;
+    previewWidth: number;
+  },
+) {
+  const parameters = workflow.nodes["parameter-recommendation"].result as {
+    height: number;
+    requestPreview: { height: number; width: number };
+    width: number;
+  };
+  parameters.height = dimensions.formalHeight;
+  parameters.width = dimensions.formalWidth;
+  parameters.requestPreview.height = dimensions.formalHeight;
+  parameters.requestPreview.width = dimensions.formalWidth;
+
+  const preview = workflow.nodes["preview-execution"].result as {
+    previewHeight: number;
+    previewWidth: number;
+  };
+  preview.previewHeight = dimensions.previewHeight;
+  preview.previewWidth = dimensions.previewWidth;
+
+  const execution = workflow.nodes["comfyui-execution"].result as {
+    finals: Array<{ previewUpscale: { height: number; width: number } }>;
+    request: { height: number; width: number };
+  };
+  execution.request.height = dimensions.formalHeight;
+  execution.request.width = dimensions.formalWidth;
+  for (const final of execution.finals) {
+    final.previewUpscale.height = dimensions.formalHeight;
+    final.previewUpscale.width = dimensions.formalWidth;
+  }
 }
 
 type MutablePersistedPreviewScore = Record<string, unknown>;
@@ -2119,6 +2163,11 @@ describe("timeline workflow persistence", () => {
       finals: Array<{ finalPolicy?: unknown; previewUpscale?: unknown }>;
       referenceContext?: unknown;
     };
+    expect(restored.nodes["preview-execution"]).toMatchObject({
+      status: "done",
+      result: { previewHeight: 1024, previewWidth: 1024 },
+    });
+    expect(restored.nodes["preview-scoring"].status).toBe("done");
     expect(restored.generationConfirmed).toBe(true);
     expect(restored.nodes["comfyui-execution"].status).toBe("done");
     expect(restored.nodes["result-display"].status).toBe("done");
@@ -2155,6 +2204,159 @@ describe("timeline workflow persistence", () => {
     });
   });
 
+  it("round-trips the deterministic 832x1248 Preview for a confirmed 1024x1536 ReID Run", () => {
+    const workflow = createPersistedKreaV4ReIdWorkflow();
+    setPersistedKreaV4ReIdDimensions(workflow, {
+      formalHeight: 1536,
+      formalWidth: 1024,
+      previewHeight: 1248,
+      previewWidth: 832,
+    });
+    const serialized = serializeTimelineWorkflowRecord(createTimelineWorkflowRecord({
+      projectId: "t55-krea-v5-reid-portrait-preview",
+      name: "Krea v5 ReID portrait Preview",
+      workflow,
+      sceneRequest: "A persisted portrait Krea v5 ReID scene",
+      selectedPromptProfile: "krea2",
+      selectedImageCount: 1,
+      selectedNodeId: "preview-scoring",
+      outputDisplayModes: { "preview-scoring": "visual" },
+    }));
+    const record = parseTimelineWorkflowRecordJson(serialized);
+
+    expect(record && isSingleImageTimelineWorkflowRecord(record)).toBe(true);
+    if (!record || !isSingleImageTimelineWorkflowRecord(record)) throw new Error("Expected a portrait ReID Run record.");
+    expect(record.workflow.nodes["preview-execution"]).toMatchObject({
+      status: "done",
+      result: {
+        previewHeight: 1248,
+        previewWidth: 832,
+        successfulCount: 4,
+      },
+    });
+    expect(record.workflow.nodes["preview-scoring"]).toMatchObject({
+      status: "done",
+      result: { selectedCandidateIds: ["preview-1"] },
+    });
+    expect(record.workflow.nodes["comfyui-execution"].status).toBe("done");
+    expect(record.workflow.nodes["result-display"].status).toBe("done");
+    expect(createTimelineFinalRequests(record.workflow)).toMatchObject([{
+      candidateId: "preview-1",
+      request: { height: 1536, width: 1024 },
+    }]);
+  });
+
+  it("does not authorize oversized Preview persistence for an ordinary non-ReID Run", () => {
+    const raw = createPersistedV2GenerationWorkflow(1);
+    const preview = raw.nodes["preview-execution"].result as {
+      previewHeight: number;
+      previewWidth: number;
+    };
+    preview.previewHeight = 1024;
+    preview.previewWidth = 1024;
+
+    const restored = sanitizeTimelineWorkflowState(raw) as TimelineWorkflowState;
+    expect(restored.nodes["preview-execution"]).toMatchObject({
+      status: "error",
+      error: { code: "image_storage_invalid", details: { recoverable: true } },
+    });
+    expect(restored.nodes["preview-execution"].result).toBeUndefined();
+    expect(restored.nodes["preview-scoring"]).toMatchObject({
+      status: "error",
+      error: { code: "timeline_request_invalid", details: { recoverable: true } },
+    });
+  });
+
+  it.each([
+    ["wrong aspect ratio", { formalHeight: 1536, formalWidth: 1024, previewHeight: 1232, previewWidth: 832 }],
+    ["over-budget dimensions", { formalHeight: 1536, formalWidth: 1024, previewHeight: 1296, previewWidth: 864 }],
+    ["misaligned dimensions", { formalHeight: 1536, formalWidth: 1024, previewHeight: 1245, previewWidth: 830 }],
+    ["upscaled dimensions", { formalHeight: 768, formalWidth: 768, previewHeight: 1024, previewWidth: 1024 }],
+    ["smaller envelope-valid dimensions", { formalHeight: 1536, formalWidth: 1024, previewHeight: 1200, previewWidth: 800 }],
+  ] as const)("fails closed for forged current-ReID Preview %s", (_case, dimensions) => {
+    const raw = createPersistedKreaV4ReIdWorkflow();
+    setPersistedKreaV4ReIdDimensions(raw, dimensions);
+
+    const restored = sanitizeTimelineWorkflowState(raw) as TimelineWorkflowState;
+    expect(restored.nodes["preview-execution"]).toMatchObject({
+      status: "error",
+      error: { code: "image_storage_invalid", details: { recoverable: true } },
+    });
+    expect(restored.nodes["preview-execution"].result).toBeUndefined();
+    expect(restored.nodes["preview-scoring"]).toMatchObject({
+      status: "error",
+      error: { code: "timeline_request_invalid", details: { recoverable: true } },
+    });
+    expect(restored.nodes["preview-scoring"].result).toBeUndefined();
+  });
+
+  it.each([
+    ["legacy v2 reference context", (workflow: TimelineWorkflowState) => {
+      const gate = workflow.nodes["generation-gate"].result as {
+        referenceContext: { version: number };
+      };
+      gate.referenceContext.version = 2;
+    }],
+    ["incompatible final policy", (workflow: TimelineWorkflowState) => {
+      const gate = workflow.nodes["generation-gate"].result as { finalPolicyVersion: number };
+      gate.finalPolicyVersion = 4;
+    }],
+  ] as const)("does not authorize an oversized ReID Preview with %s", (_case, mutate) => {
+    const raw = createPersistedKreaV4ReIdWorkflow();
+    setPersistedKreaV4ReIdDimensions(raw, {
+      formalHeight: 1536,
+      formalWidth: 1024,
+      previewHeight: 1248,
+      previewWidth: 832,
+    });
+    mutate(raw);
+
+    const restored = sanitizeTimelineWorkflowState(raw) as TimelineWorkflowState;
+    expect(restored.generationConfirmed).toBe(false);
+    expect(restored.nodes["preview-execution"].status).toBe("blocked");
+    expect(restored.nodes["preview-execution"].result).toBeUndefined();
+    expect(restored.nodes["preview-scoring"].status).toBe("blocked");
+  });
+
+  it("applies the same deterministic ReID dimension validation to partial Preview results", () => {
+    const createPartialPreviewWorkflow = () => {
+      const raw = createPersistedKreaV4ReIdWorkflow();
+      setPersistedKreaV4ReIdDimensions(raw, {
+        formalHeight: 1536,
+        formalWidth: 1024,
+        previewHeight: 1248,
+        previewWidth: 832,
+      });
+      const partialResult = structuredClone(raw.nodes["preview-execution"].result);
+      raw.nodes["preview-execution"] = {
+        ...raw.nodes["preview-execution"],
+        status: "error",
+        result: undefined,
+        error: {
+          code: "comfyui_execution_failed",
+          message: "One or more Preview queues failed.",
+          details: { recoverable: true, partialResult },
+        },
+      };
+      return raw;
+    };
+
+    const valid = sanitizeTimelineWorkflowState(createPartialPreviewWorkflow()) as TimelineWorkflowState;
+    expect(valid.nodes["preview-execution"].error?.details).toMatchObject({
+      recoverable: true,
+      partialResult: { previewHeight: 1248, previewWidth: 832, successfulCount: 4 },
+    });
+
+    const forged = createPartialPreviewWorkflow();
+    const forgedPartial = (forged.nodes["preview-execution"].error?.details as {
+      partialResult: { previewHeight: number; previewWidth: number };
+    }).partialResult;
+    forgedPartial.previewHeight = 1200;
+    forgedPartial.previewWidth = 800;
+    const rejected = sanitizeTimelineWorkflowState(forged) as TimelineWorkflowState;
+    expect(rejected.nodes["preview-execution"].error?.details).toEqual({ recoverable: true });
+  });
+
   it("invalidates continuable v1 ReID authorization instead of migrating it into the verified contract", () => {
     const raw = createPersistedKreaV4ReIdWorkflow();
     const gate = raw.nodes["generation-gate"].result as Record<string, unknown>;
@@ -2189,6 +2391,12 @@ describe("timeline workflow persistence", () => {
 
   it("keeps completed v1 ReID images historical but removes their authority to execute again", () => {
     const raw = createPersistedKreaV4ReIdWorkflow();
+    const preview = raw.nodes["preview-execution"].result as {
+      previewHeight: number;
+      previewWidth: number;
+    };
+    preview.previewHeight = 768;
+    preview.previewWidth = 768;
     const gate = raw.nodes["generation-gate"].result as Record<string, unknown>;
     gate.finalPolicyVersion = 4;
     gate.finalDenoise = 0.18;

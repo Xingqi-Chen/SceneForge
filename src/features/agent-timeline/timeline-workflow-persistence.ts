@@ -109,6 +109,13 @@ type PersistedFinalPolicyOptions = {
   requireCurrentFinalPolicy?: boolean;
 };
 
+type PersistedPreviewExecutionOptions = {
+  krea2ReIdFormalDimensions?: {
+    height: number;
+    width: number;
+  };
+};
+
 export type TimelineWorkflowRecord = {
   kind: typeof TIMELINE_WORKFLOW_RECORD_KIND;
   version: typeof TIMELINE_WORKFLOW_RECORD_VERSION;
@@ -269,7 +276,7 @@ function sanitizeTimelineNode(
   nodeId: TimelineNodeId,
   raw: unknown,
   fallbackUpdatedAt: string,
-  options: PersistedFinalPolicyOptions = {},
+  options: PersistedFinalPolicyOptions & PersistedPreviewExecutionOptions = {},
 ): TimelineNodeResult {
   if (!isRecord(raw)) {
     return {
@@ -292,7 +299,7 @@ function sanitizeTimelineNode(
   if ((nodeId === "preview-execution" || nodeId === "comfyui-execution") &&
       isRecord(raw.error) && isRecord(raw.error.details)) {
     const partialResult = nodeId === "preview-execution"
-      ? sanitizePreviewExecutionResult(raw.error.details.partialResult)
+      ? sanitizePreviewExecutionResult(raw.error.details.partialResult, options)
       : sanitizeFinalExecutionResult(raw.error.details.partialResult, options);
     if (error) {
       const safeDetails = isRecord(error.details)
@@ -323,7 +330,7 @@ function sanitizeTimelineNode(
         message: ((raw.result as Record<string, unknown>).message as string).trim().slice(0, 500),
       }
     : nodeId === "preview-execution"
-    ? sanitizePreviewExecutionResult(raw.result)
+    ? sanitizePreviewExecutionResult(raw.result, options)
     : nodeId === "preview-scoring"
       ? sanitizePreviewScoringResult(raw.result)
     : nodeId === "comfyui-execution"
@@ -746,9 +753,29 @@ function sanitizeSingleImageWorkflowState(raw: Record<string, unknown>): Timelin
     isRecord(rawCharacterReference?.reIdPreparation) && rawCharacterReference.reIdPreparation.version === 2;
   const hasCurrentReIdReferenceContext = !hasActiveKrea2ReId ||
     rawReferenceContext?.version === 3 && rawReferenceContext.adapter === "krea2-reid";
+  const rawFormalWidth = safeNonNegativeInteger(rawParameterResult.width);
+  const rawFormalHeight = safeNonNegativeInteger(rawParameterResult.height);
+  const rawRequestWidth = safeNonNegativeInteger(rawRequestPreview.width);
+  const rawRequestHeight = safeNonNegativeInteger(rawRequestPreview.height);
+  const hasCurrentKrea2ReIdPolicy = hasActiveKrea2ReId && hasCurrentPreparedReId &&
+    hasCurrentReIdReferenceContext && expectedFinalPolicy.version === timelineFinalGenerationPolicy.krea2ReIdVersion &&
+    rawGateResult.confirmed === true && raw.generationConfirmed === true &&
+    typeof rawGateResult.confirmationFingerprint === "string" &&
+    /^hmac-sha256:[a-f0-9]{64}$/.test(rawGateResult.confirmationFingerprint) &&
+    rawGateResult.finalPolicyVersion === expectedFinalPolicy.version &&
+    rawGateResult.finalRedrawPreset === expectedFinalPolicy.preset &&
+    rawGateResult.finalGenerationFamily === expectedFinalPolicy.family &&
+    rawGateResult.finalSteps === expectedFinalPolicy.steps &&
+    rawGateResult.finalDenoise === expectedFinalPolicy.denoise &&
+    rawFormalWidth !== null && rawFormalHeight !== null &&
+    rawFormalWidth === rawRequestWidth && rawFormalHeight === rawRequestHeight &&
+    isValidKrea2FormalDimension(rawFormalWidth) && isValidKrea2FormalDimension(rawFormalHeight);
   const finalPolicyOptions = {
     expectedFinalPolicyVersion: expectedFinalPolicy.version,
     requireCurrentFinalPolicy,
+    ...(hasCurrentKrea2ReIdPolicy
+      ? { krea2ReIdFormalDimensions: { height: rawFormalHeight, width: rawFormalWidth } }
+      : {}),
   };
   const hasPersistedCompletedDisplay = isRecord(rawNodes["result-display"]) &&
     rawNodes["result-display"].status === "done";
@@ -1264,6 +1291,10 @@ function safeNonNegativeInteger(value: unknown) {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
 }
 
+function isValidKrea2FormalDimension(value: number) {
+  return value >= 16 && value <= 16_384 && value % 16 === 0;
+}
+
 function sanitizeTimelineSourceImageReference(value: unknown) {
   if (!isRecord(value) || !safeIdentifier(value.nodeId)) return null;
   const reference = normalizeComfyUiViewImageReference(value);
@@ -1274,7 +1305,58 @@ function sanitizeTimelineStoredImage(value: unknown) {
   return normalizeStoredGeneratedImageReference(value);
 }
 
-function sanitizePreviewExecutionResult(value: unknown) {
+function greatestCommonDivisor(left: number, right: number) {
+  let first = Math.abs(left);
+  let second = Math.abs(right);
+  while (second) {
+    const remainder = first % second;
+    first = second;
+    second = remainder;
+  }
+  return first;
+}
+
+function leastCommonMultiple(left: number, right: number) {
+  return (left / greatestCommonDivisor(left, right)) * right;
+}
+
+function getPersistedKrea2ReIdPreviewDimensions(formalWidth: number, formalHeight: number) {
+  const maximumPixels = 1_048_576;
+  const alignment = 16;
+  if (formalWidth * formalHeight <= maximumPixels) {
+    return { height: formalHeight, width: formalWidth };
+  }
+
+  const ratioDivisor = greatestCommonDivisor(formalWidth, formalHeight);
+  const ratioWidth = formalWidth / ratioDivisor;
+  const ratioHeight = formalHeight / ratioDivisor;
+  const widthAlignmentMultiplier = alignment / greatestCommonDivisor(ratioWidth, alignment);
+  const heightAlignmentMultiplier = alignment / greatestCommonDivisor(ratioHeight, alignment);
+  const alignmentMultiplier = leastCommonMultiple(widthAlignmentMultiplier, heightAlignmentMultiplier);
+  const maximumMultiplier = Math.floor(Math.sqrt(maximumPixels / (ratioWidth * ratioHeight)));
+  const multiplier = Math.floor(maximumMultiplier / alignmentMultiplier) * alignmentMultiplier;
+
+  return multiplier >= alignmentMultiplier
+    ? { height: ratioHeight * multiplier, width: ratioWidth * multiplier }
+    : null;
+}
+
+function hasValidPersistedPreviewDimensions(
+  previewWidth: number,
+  previewHeight: number,
+  options: PersistedPreviewExecutionOptions,
+) {
+  const formal = options.krea2ReIdFormalDimensions;
+  if (!formal) return previewWidth <= 768 && previewHeight <= 768;
+
+  const expected = getPersistedKrea2ReIdPreviewDimensions(formal.width, formal.height);
+  return expected !== null && previewWidth === expected.width && previewHeight === expected.height;
+}
+
+function sanitizePreviewExecutionResult(
+  value: unknown,
+  options: PersistedPreviewExecutionOptions = {},
+) {
   if (!isRecord(value) || !Array.isArray(value.candidates)) return undefined;
   const finalCount = safeNonNegativeInteger(value.finalCount);
   const candidateCount = safeNonNegativeInteger(value.candidateCount);
@@ -1283,8 +1365,9 @@ function sanitizePreviewExecutionResult(value: unknown) {
   const previewWidth = safeNonNegativeInteger(value.previewWidth);
   const previewSteps = safeNonNegativeInteger(value.previewSteps);
   if (!finalCount || finalCount > 4 || candidateCount !== expectedCandidateCount ||
-      value.candidates.length !== candidateCount || !previewHeight || previewHeight > 768 ||
-      !previewWidth || previewWidth > 768 || !previewSteps || previewSteps > 20) return undefined;
+      value.candidates.length !== candidateCount || !previewHeight || !previewWidth ||
+      !hasValidPersistedPreviewDimensions(previewWidth, previewHeight, options) ||
+      !previewSteps || previewSteps > 20) return undefined;
   const candidates = value.candidates.slice(0, candidateCount).map((entry, fallbackIndex) => {
     const raw = isRecord(entry) ? entry : {};
     const index = safeNonNegativeInteger(raw.index);
