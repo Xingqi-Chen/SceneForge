@@ -46,6 +46,17 @@ const KREA_ONLY_NEGATIVE_SUGGESTION_INSTRUCTION_SNIPPETS = [
   "do not invent negative content",
 ];
 
+function parseRequiredJsonExample(systemText: string) {
+  const prefix = "Required JSON example: ";
+  const line = systemText.split("\n").find((candidate) => candidate.startsWith(prefix));
+  expect(line).toBeDefined();
+  const exampleText = String(line).slice(prefix.length);
+
+  expect(exampleText).not.toContain("?");
+  expect(exampleText).not.toContain("illustrious|anima|krea2");
+  return JSON.parse(exampleText) as Record<string, unknown>;
+}
+
 describe("T5 timeline node adapters", () => {
   beforeEach(() => {
     useEditorStore.getState().setProject(createDefaultProject());
@@ -203,8 +214,25 @@ describe("T5 timeline node adapters", () => {
     const systemText = String(requests[0]?.messages[0]?.content);
     expect(systemText).toContain("Selected prompt profile: Illustrious (illustrious)");
     expect(systemText).toContain("include illustriousSections");
-    expect(systemText).toContain('"promptProfile":"illustrious|anima|krea2"');
+    expect(systemText).not.toContain('"promptProfile":"illustrious|anima|krea2"');
     expect(systemText).not.toContain("generic");
+    expect(parseRequiredJsonExample(systemText)).toMatchObject({
+      promptProfile: "illustrious",
+      negativeSuggestions: [],
+      style: [{ label: expect.any(String), prompt: expect.any(String) }],
+      camera: [{ label: expect.any(String), prompt: expect.any(String) }],
+      lighting: [{ label: expect.any(String), prompt: expect.any(String) }],
+      illustriousSections: expect.any(Object),
+    });
+    expect(parseRequiredJsonExample(systemText)).not.toHaveProperty("animaSections");
+    expect(parseRequiredJsonExample(systemText)).not.toHaveProperty("krea2Sections");
+    expect(requests[0]?.responseFormat).toMatchObject({
+      type: "json_schema",
+      json_schema: {
+        name: "sceneforge_run_scene_prompt_illustrious_v1",
+        strict: true,
+      },
+    });
     for (const snippet of KREA_ONLY_NEGATIVE_SUGGESTION_INSTRUCTION_SNIPPETS) {
       expect(systemText).not.toContain(snippet);
     }
@@ -421,6 +449,24 @@ describe("T5 timeline node adapters", () => {
     expect(requests[0]?.maxTokens).toBe(900);
     expect(systemText).toContain("Selected prompt profile: Anima (anima)");
     expect(systemText).toContain("include animaSections");
+    const example = parseRequiredJsonExample(systemText);
+    expect(example).toMatchObject({
+      promptProfile: "anima",
+      negativeSuggestions: [],
+      style: [{ label: expect.any(String), prompt: expect.any(String) }],
+      camera: [{ label: expect.any(String), prompt: expect.any(String) }],
+      lighting: [{ label: expect.any(String), prompt: expect.any(String) }],
+      animaSections: expect.any(Object),
+    });
+    expect(example).not.toHaveProperty("illustriousSections");
+    expect(example).not.toHaveProperty("krea2Sections");
+    expect(requests[0]?.responseFormat).toMatchObject({
+      type: "json_schema",
+      json_schema: {
+        name: "sceneforge_run_scene_prompt_anima_v1",
+        strict: true,
+      },
+    });
     for (const snippet of KREA_ONLY_NEGATIVE_SUGGESTION_INSTRUCTION_SNIPPETS) {
       expect(systemText).not.toContain(snippet);
     }
@@ -479,6 +525,32 @@ describe("T5 timeline node adapters", () => {
     expect(requests[0]?.maxTokens).toBe(1800);
     const systemText = String(requests[0]?.messages[0]?.content ?? "");
     expect(systemText).toContain("Selected prompt profile: Krea 2 Turbo (krea2)");
+    const example = parseRequiredJsonExample(systemText);
+    expect(example).toMatchObject({
+      promptProfile: "krea2",
+      negativeSuggestions: [],
+      style: [{ label: expect.any(String), prompt: expect.any(String) }],
+      camera: [{ label: expect.any(String), prompt: expect.any(String) }],
+      lighting: [{ label: expect.any(String), prompt: expect.any(String) }],
+      krea2Sections: {
+        subjectMood: expect.any(String),
+        subjectAttributesAndActions: expect.any(String),
+        environmentAndBackground: expect.any(String),
+        visualStyleAndMedium: expect.any(String),
+        lightingColorAndTexture: expect.any(String),
+        spatialCompositionAndFraming: expect.any(String),
+      },
+    });
+    expect(example).not.toHaveProperty("illustriousSections");
+    expect(example).not.toHaveProperty("animaSections");
+    expect(JSON.stringify(example)).not.toContain("selectedLoraTriggerWords");
+    expect(requests[0]?.responseFormat).toMatchObject({
+      type: "json_schema",
+      json_schema: {
+        name: "sceneforge_run_scene_prompt_krea2_v1",
+        strict: true,
+      },
+    });
     expect(systemText).toContain("must include environmentAndBackground");
     expect(systemText).toContain("roughly 160-240 English words");
     expect(systemText).toContain("guidance, not a hard limit");

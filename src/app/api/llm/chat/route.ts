@@ -1,9 +1,11 @@
 import { NextResponse } from "next/server";
 
 import {
+  createStructuredOutputErrorDetails,
   createLiteLlmClient,
   isLlmChatRequest,
   LiteLlmError,
+  summarizeLlmResponseFormatForLog,
   type LlmChatRequest,
 } from "../../../../features/llm";
 import { appendLlmLocalLog, serializeErrorForLlmLog } from "../../../../features/llm/llm-local-log";
@@ -157,6 +159,7 @@ export async function POST(request: Request) {
       model: resolvedRequest.model,
       temperature: resolvedRequest.temperature,
       maxTokens: resolvedRequest.maxTokens,
+      responseFormat: summarizeLlmResponseFormatForLog(resolvedRequest.responseFormat),
       messages: resolvedRequest.messages,
     },
   });
@@ -183,6 +186,10 @@ export async function POST(request: Request) {
     return NextResponse.json(completion);
   } catch (error) {
     if (error instanceof LiteLlmError) {
+      const structuredOutputDetails = resolvedRequest.responseFormat
+        ? createStructuredOutputErrorDetails(resolvedRequest.responseFormat, error.statusCode)
+        : undefined;
+      const safeDetails = structuredOutputDetails ?? error.details;
       await appendLlmLocalLog({
         requestId,
         timestamp: new Date().toISOString(),
@@ -191,16 +198,16 @@ export async function POST(request: Request) {
         payload: {
           error: serializeErrorForLlmLog(error),
           statusCode: error.statusCode,
-          details: error.details,
+          details: safeDetails,
         },
       });
 
       console.error("[SceneForge] [llm] LiteLLM request failed", {
         statusCode: error.statusCode,
-        details: error.details,
+        details: safeDetails,
       });
 
-      return errorResponse(error.message, error.statusCode ?? 500, error.details);
+      return errorResponse(error.message, error.statusCode ?? 500, safeDetails);
     }
 
     await appendLlmLocalLog({

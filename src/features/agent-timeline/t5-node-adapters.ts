@@ -1,4 +1,8 @@
-import type { LlmChatRequest, LlmChatResponse } from "@/features/llm";
+import {
+  getRunScenePromptResponseFormat,
+  type LlmChatRequest,
+  type LlmChatResponse,
+} from "@/features/llm";
 import { createDefaultStickFigurePoseV1, defaultCharacter } from "@/features/editor/store/defaults";
 import {
   buildStickFigurePoseGenerationMessages,
@@ -517,7 +521,7 @@ function buildScenePromptRequest(context: TimelineNodeExecutionContext): LlmChat
           `Selected prompt profile: ${formatPromptProfileLabel(sceneInput.promptProfile)} (${sceneInput.promptProfile}).`,
           buildRunVisualStyleLlmInstructions(visualStyle, sceneInput.promptProfile),
           profileInstructions,
-          'Required shape: {"promptProfile":"illustrious|anima|krea2","primaryCharacter":{"name":"...","identity":"...","publicFacts":["..."]},"sceneIntent":"...","styleTone":"...","setting":"...","sharedFacts":["..."],"positivePrompt":"...","negativeSuggestions":["..."],"style":[{"label":"...","prompt":"..."}],"camera":[{"label":"...","prompt":"..."}],"lighting":[{"label":"...","prompt":"..."}],"illustriousSections"?:{},"animaSections"?:{},"krea2Sections"?:{}}',
+          `Required JSON example: ${JSON.stringify(buildScenePromptResponseExample(sceneInput.promptProfile))}`,
         ].join("\n"),
       },
       {
@@ -539,13 +543,94 @@ function buildScenePromptRequest(context: TimelineNodeExecutionContext): LlmChat
     ],
     temperature: 0.35,
     maxTokens: sceneInput.promptProfile === "krea2" ? 1800 : 900,
+    responseFormat: getRunScenePromptResponseFormat(sceneInput.promptProfile),
   };
+}
+
+function buildScenePromptResponseExample(promptProfile: PromptProfileId) {
+  const common = {
+    promptProfile,
+    primaryCharacter: {
+      name: "Primary character",
+      identity: "A clearly described primary character",
+      publicFacts: ["Visible identity fact"],
+    },
+    sceneIntent: "The intended visible scene",
+    styleTone: "The intended visual tone",
+    setting: "The visible setting",
+    sharedFacts: ["A shared visible scene fact"],
+    positivePrompt: "A profile-compatible positive prompt",
+    negativeSuggestions: [],
+    style: [{ label: "Visual style", prompt: "A visible style treatment" }],
+    camera: [{ label: "Camera", prompt: "A clear camera and framing choice" }],
+    lighting: [{ label: "Lighting", prompt: "A visible lighting treatment" }],
+  };
+
+  if (promptProfile === "illustrious") {
+    return {
+      ...common,
+      illustriousSections: {
+        quality: [],
+        aestheticVersion: [],
+        rating: [],
+        artistStyle: [],
+        visualStyleAndMedium: ["anime illustration"],
+        styleLoraTriggers: [],
+        checkpointTriggerWords: [],
+        subjectIdentity: ["1girl"],
+        characterLoraTriggers: [],
+        unknownLoraTriggers: [],
+        appearancePhysicalTraits: ["clear character appearance"],
+        clothingAccessories: ["visible outfit"],
+        poseActionExpression: ["clear pose and expression"],
+        backgroundEnvironmentObjects: ["visible setting"],
+        spatialComposition: ["clear subject placement"],
+        cameraFraming: ["medium shot"],
+        lightingFocus: ["soft directional light"],
+        detailResolution: ["detailed image"],
+      },
+    };
+  }
+
+  if (promptProfile === "anima") {
+    return {
+      ...common,
+      animaSections: {
+        qualityMetaSafety: [],
+        subjectCount: ["1girl"],
+        character: ["clearly described character"],
+        source: [],
+        artist: [],
+        visualStyleAndMedium: ["anime illustration"],
+        general: ["visible action, setting, camera, and lighting"],
+      },
+    };
+  }
+
+  return {
+    ...common,
+    krea2Sections: {
+      subjectMood: "The primary subject and visible mood.",
+      subjectAttributesAndActions: "The subject's visible attributes and actions.",
+      environmentAndBackground: "The supported setting, environment, and background.",
+      visualStyleAndMedium: "The requested visual style and medium.",
+      lightingColorAndTexture: "The visible lighting, color, and texture treatment.",
+      spatialCompositionAndFraming: "The spatial composition, depth, and framing.",
+    },
+  };
+}
+
+function omitLegacyPseudoJsonShape(instructions: string) {
+  return instructions
+    .split("\n")
+    .filter((line) => !line.trimStart().startsWith("Shape:"))
+    .join("\n");
 }
 
 function buildPromptProfileSceneInstructions(promptProfile: PromptProfileId) {
   if (promptProfile === "illustrious") {
     return [
-      buildIllustriousAiResponseInstructions(),
+      omitLegacyPseudoJsonShape(buildIllustriousAiResponseInstructions()),
       "For this scene context response, set promptProfile to illustrious and include illustriousSections.",
       "Make positivePrompt a concise comma-separated booru tag summary, not a prose paragraph.",
       "Map visible subject, appearance, outfit, action, setting, spatial composition, camera, lighting, and detail into the closest illustriousSections keys.",
@@ -554,7 +639,7 @@ function buildPromptProfileSceneInstructions(promptProfile: PromptProfileId) {
 
   if (promptProfile === "anima") {
     return [
-      buildAnimaAiResponseInstructions(),
+      omitLegacyPseudoJsonShape(buildAnimaAiResponseInstructions()),
       "For this scene context response, set promptProfile to anima and include animaSections.",
       "Make positivePrompt detailed comma-separated anime image clauses, not Illustrious booru-only tags.",
       "Describe visible character identity, action, expression, environment, camera, and lighting as concise anime clauses.",

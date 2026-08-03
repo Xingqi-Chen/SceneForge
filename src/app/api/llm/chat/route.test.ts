@@ -6,6 +6,9 @@ const completeChatMock = vi.hoisted(() => vi.fn());
 const createLiteLlmClientMock = vi.hoisted(() => vi.fn(() => ({
   completeChat: completeChatMock,
 })));
+const appendLlmLocalLogMock = vi.hoisted(() => vi.fn(async (record: unknown) => {
+  void record;
+}));
 
 vi.mock("@/features/llm", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/features/llm")>();
@@ -19,11 +22,12 @@ vi.mock("@/features/llm/llm-local-log", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/features/llm/llm-local-log")>();
   return {
     ...actual,
-    appendLlmLocalLog: vi.fn(async () => undefined),
+    appendLlmLocalLog: appendLlmLocalLogMock,
   };
 });
 
 import { POST, resolveDefaultModel, resolveRequestModel } from "./route";
+import { getRunScenePromptResponseFormat, LiteLlmError } from "@/features/llm";
 
 const ENV_KEYS = [
   "LITELLM_DEFAULT_MODEL",
@@ -50,6 +54,8 @@ describe("LLM chat route model selection", () => {
   afterEach(() => {
     completeChatMock.mockReset();
     createLiteLlmClientMock.mockClear();
+    appendLlmLocalLogMock.mockClear();
+    vi.restoreAllMocks();
     for (const key of ENV_KEYS) {
       const value = previousEnv[key];
       if (value === undefined) {
@@ -247,6 +253,179 @@ describe("LLM chat route model selection", () => {
     });
     expect(createLiteLlmClientMock).not.toHaveBeenCalled();
     expect(completeChatMock).not.toHaveBeenCalled();
+  });
+
+  it("accepts and forwards an exact Run scene-prompt response format", async () => {
+    const responseFormat = getRunScenePromptResponseFormat("anima");
+    completeChatMock.mockResolvedValue({
+      role: "assistant",
+      content: "{}",
+    });
+
+    const response = await POST(new Request("http://localhost/api/llm/chat", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        purpose: "stable-diffusion-prompt-generation",
+        messages: [{ role: "user", content: "Generate a prompt" }],
+        responseFormat,
+      }),
+    }));
+
+    expect(response.status).toBe(200);
+    expect(createLiteLlmClientMock).toHaveBeenCalledTimes(1);
+    expect(completeChatMock).toHaveBeenCalledTimes(1);
+    expect(completeChatMock).toHaveBeenCalledWith(expect.objectContaining({
+      purpose: "stable-diffusion-prompt-generation",
+      model: "default-model",
+      responseFormat,
+    }));
+  });
+
+  it.each([
+    ["json_object", { type: "json_object" }],
+    ["arbitrary schema", {
+      type: "json_schema",
+      json_schema: {
+        name: "caller_authored",
+        strict: true,
+        schema: { type: "object" },
+      },
+    }],
+    ["malformed schema", {
+      type: "json_schema",
+      json_schema: { name: "sceneforge_run_scene_prompt_illustrious_v1" },
+    }],
+    ["mutated authorized schema", (() => {
+      const format = JSON.parse(JSON.stringify(getRunScenePromptResponseFormat("illustrious")));
+      format.json_schema.schema.additionalProperties = true;
+      return format;
+    })()],
+    ["cross-purpose authorized schema", getRunScenePromptResponseFormat("krea2")],
+  ])("rejects %s responseFormat before creating or calling the provider", async (label, responseFormat) => {
+    const response = await POST(new Request("http://localhost/api/llm/chat", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        purpose: label === "cross-purpose authorized schema"
+          ? "scene-prompt-reverse"
+          : "stable-diffusion-prompt-generation",
+        messages: [{ role: "user", content: "Generate a prompt" }],
+        responseFormat,
+      }),
+    }));
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { message: "Request body must include non-empty chat messages." },
+    });
+    expect(createLiteLlmClientMock).not.toHaveBeenCalled();
+    expect(completeChatMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps requests without responseFormat unchanged", async () => {
+    completeChatMock.mockResolvedValue({
+      role: "assistant",
+      content: "ordinary response",
+    });
+
+    const response = await POST(new Request("http://localhost/api/llm/chat", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        purpose: "scene-prompt-reverse",
+        messages: [{ role: "user", content: "Reverse a prompt" }],
+      }),
+    }));
+
+    expect(response.status).toBe(200);
+    expect(completeChatMock).toHaveBeenCalledTimes(1);
+    const forwarded = completeChatMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(forwarded).not.toHaveProperty("responseFormat");
+  });
+
+  it("returns one sanitized provider rejection without a second call or fallback", async () => {
+    const responseFormat = getRunScenePromptResponseFormat("krea2");
+    const sensitiveMarkers = [
+      "sk-private-route-key-marker",
+      "RAW_ROUTE_PROMPT_MARKER",
+      "route-provider.private.internal",
+      "route-private-model-v4",
+    ];
+    const fullSchema = JSON.stringify(responseFormat.json_schema.schema);
+    const rawDetails = {
+      error: {
+        message: `Provider ${sensitiveMarkers[2]} rejected ${sensitiveMarkers[3]}`,
+        apiKey: sensitiveMarkers[0],
+        rawPrompt: sensitiveMarkers[1],
+        request: {
+          model: sensitiveMarkers[3],
+          messages: [{ role: "user", content: sensitiveMarkers[1] }],
+          response_format: responseFormat,
+        },
+      },
+    };
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
+      void args;
+    });
+    completeChatMock.mockRejectedValue(new LiteLlmError(
+      "LiteLLM chat completion request failed.",
+      {
+        statusCode: 422,
+        details: rawDetails,
+      },
+    ));
+
+    const response = await POST(new Request("http://localhost/api/llm/chat", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        purpose: "stable-diffusion-prompt-generation",
+        messages: [{ role: "user", content: "Generate a prompt" }],
+        responseFormat,
+      }),
+    }));
+
+    expect(response.status).toBe(422);
+    const responseBody = await response.json();
+    expect(responseBody).toEqual({
+      error: {
+        message: "LiteLLM chat completion request failed.",
+        details: {
+          code: "structured_output_rejected",
+          upstreamStatus: 422,
+          responseFormat: {
+            type: "json_schema",
+            schemaName: "sceneforge_run_scene_prompt_krea2_v1",
+            strict: true,
+          },
+        },
+      },
+    });
+    expect(appendLlmLocalLogMock).toHaveBeenCalledTimes(2);
+    expect(appendLlmLocalLogMock.mock.calls[1]?.[0]).toMatchObject({
+      phase: "error",
+      payload: {
+        statusCode: 422,
+        details: responseBody.error.details,
+      },
+    });
+    expect(consoleErrorSpy).toHaveBeenCalledTimes(1);
+
+    const exposedBoundaryData = JSON.stringify({
+      responseBody,
+      logCalls: appendLlmLocalLogMock.mock.calls,
+      consoleErrorCalls: consoleErrorSpy.mock.calls,
+    });
+    for (const marker of sensitiveMarkers) {
+      expect(exposedBoundaryData).not.toContain(marker);
+    }
+    expect(exposedBoundaryData).not.toContain(fullSchema);
+    expect(exposedBoundaryData).not.toContain("rawPrompt");
+    expect(exposedBoundaryData).not.toContain("apiKey");
+    expect(exposedBoundaryData).not.toContain("response_format");
+    expect(createLiteLlmClientMock).toHaveBeenCalledTimes(1);
+    expect(completeChatMock).toHaveBeenCalledTimes(1);
   });
 
   it("still routes ordinary NSFW requests to the NSFW model", () => {

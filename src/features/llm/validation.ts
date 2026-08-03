@@ -6,6 +6,7 @@ import type {
   LlmImageContentPart,
   LlmTextContentPart,
 } from "./types";
+import { isAuthorizedRunScenePromptResponseFormat } from "./run-scene-prompt-response-format";
 
 const chatRoles = new Set<LlmChatRole>(["system", "user", "assistant"]);
 const imageDetails = new Set<NonNullable<LlmImageContentPart["image_url"]["detail"]>>([
@@ -85,6 +86,15 @@ function isOptionalPurpose(value: unknown): value is LlmChatRequest["purpose"] {
   );
 }
 
+function isAuthorizedResponseFormat(
+  value: unknown,
+  purpose: LlmChatRequest["purpose"],
+): value is LlmChatRequest["responseFormat"] {
+  if (value === undefined) return true;
+  return purpose === "stable-diffusion-prompt-generation" &&
+    isAuthorizedRunScenePromptResponseFormat(value);
+}
+
 export function isLlmChatRequest(value: unknown): value is LlmChatRequest {
   if (!isRecord(value)) {
     return false;
@@ -98,6 +108,7 @@ export function isLlmChatRequest(value: unknown): value is LlmChatRequest {
     isOptionalBoolean(value.nsfw) &&
     isOptionalPurpose(value.purpose) &&
     isOptionalNumber(value.temperature) &&
-    isOptionalNumber(value.maxTokens)
+    isOptionalNumber(value.maxTokens) &&
+    isAuthorizedResponseFormat(value.responseFormat, value.purpose as LlmChatRequest["purpose"])
   );
 }
