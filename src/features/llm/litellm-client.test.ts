@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { createLiteLlmClient, LiteLlmError } from "./litellm-client";
+import { getRunScenePromptResponseFormat } from "./run-scene-prompt-response-format";
 
 describe("createLiteLlmClient", () => {
   it("posts chat completions to a LiteLLM OpenAI-compatible endpoint", async () => {
@@ -57,6 +58,104 @@ describe("createLiteLlmClient", () => {
         totalTokens: 13,
       },
     });
+  });
+
+  it("forwards the authorized response format while preserving stream true", async () => {
+    const responseFormat = getRunScenePromptResponseFormat("krea2");
+    const fetcher = vi.fn<typeof fetch>(async (_input, init) => {
+      expect(JSON.parse(String(init?.body))).toEqual({
+        model: "scene-model",
+        messages: [{ role: "user", content: "Describe the scene" }],
+        response_format: responseFormat,
+        stream: true,
+      });
+
+      return new Response(
+        [
+          'data: {"id":"chatcmpl-schema","model":"scene-model","choices":[{"delta":{"role":"assistant","content":"{}"},"finish_reason":"stop"}]}',
+          "data: [DONE]",
+          "",
+        ].join("\n\n"),
+        { headers: { "content-type": "text/event-stream" } },
+      );
+    });
+    const client = createLiteLlmClient({
+      baseUrl: "http://localhost:4000",
+      defaultModel: "scene-model",
+      fetcher,
+    });
+
+    await expect(client.completeChat({
+      messages: [{ role: "user", content: "Describe the scene" }],
+      responseFormat,
+    })).resolves.toMatchObject({ content: "{}" });
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it("surfaces a sanitized provider rejection once without retry or fallback", async () => {
+    const responseFormat = getRunScenePromptResponseFormat("illustrious");
+    const sensitiveMarkers = [
+      "sk-private-upstream-key-marker",
+      "RAW_PRIVATE_PROMPT_MARKER",
+      "private-provider.internal",
+      "private-model-deployment-v9",
+    ];
+    const fullSchema = JSON.stringify(responseFormat.json_schema.schema);
+    const fetcher = vi.fn<typeof fetch>(async () => new Response(
+      JSON.stringify({
+        error: {
+          message: `Provider private-provider.internal rejected private-model-deployment-v9: ${sensitiveMarkers[1]}`,
+          apiKey: sensitiveMarkers[0],
+          request: {
+            model: sensitiveMarkers[3],
+            messages: [{ role: "user", content: sensitiveMarkers[1] }],
+            response_format: responseFormat,
+          },
+          provider: sensitiveMarkers[2],
+        },
+      }),
+      {
+        status: 422,
+        headers: { "content-type": "application/json" },
+      },
+    ));
+    const client = createLiteLlmClient({
+      baseUrl: "http://localhost:4000",
+      defaultModel: "scene-model",
+      fetcher,
+    });
+
+    const error = await client.completeChat({
+      messages: [{ role: "user", content: "Describe the scene" }],
+      responseFormat,
+    }).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(LiteLlmError);
+    expect(error).toMatchObject({
+      message: "LiteLLM chat completion request failed.",
+      statusCode: 422,
+    });
+    expect((error as LiteLlmError).details).toEqual({
+      code: "structured_output_rejected",
+      upstreamStatus: 422,
+      responseFormat: {
+        type: "json_schema",
+        schemaName: "sceneforge_run_scene_prompt_illustrious_v1",
+        strict: true,
+      },
+    });
+    const exposedError = JSON.stringify({
+      message: (error as Error).message,
+      details: (error as LiteLlmError).details,
+    });
+    for (const marker of sensitiveMarkers) {
+      expect(exposedError).not.toContain(marker);
+    }
+    expect(exposedError).not.toContain(fullSchema);
+    expect(exposedError).not.toContain("response_format");
+    expect(exposedError).not.toContain("messages");
+    expect(exposedError).not.toContain("apiKey");
+    expect(fetcher).toHaveBeenCalledTimes(1);
   });
 
   it("uses the configured default model when the request omits one", async () => {

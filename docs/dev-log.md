@@ -4,6 +4,25 @@ This log records dated implementation and documentation work. Keep entries conci
 
 ## 2026-08-02
 
+### T56 / Issue #185 Run scene-prompt strict JSON schema
+
+Summary:
+
+- Replaced the invalid profile-union pseudo-JSON shape with a genuinely parseable example containing only the selected Illustrious, Anima, or Krea 2 section.
+- Added three fixed, strict, closed OpenAI/LiteLLM `json_schema` response contracts. Common scene fields and label/prompt fragments are required; Krea requires its six model-authored prose sections and excludes the locally owned LoRA-trigger section.
+- Whitelisted the exact server-authored formats at the shared request-validation boundary, forwarded the accepted contract as `response_format`, and logged only its type, stable name, and strictness.
+- Preserved the existing purpose/model routing, `stream: true`, and response normalization. Structured-output provider rejection is sanitized independently at both the LiteLLM client and API route boundaries, exposes only the upstream status and response-format summary, and has no retry or fallback path.
+
+Validation:
+
+- Focused Vitest: 5 files, 61 tests passed.
+- Full Vitest: 156 files, 2,004 tests passed.
+- `npm run typecheck`
+- `npm run lint` (0 errors; 22 pre-existing `<img>` warnings)
+- `npm run build`
+- `git diff --check`, runtime-artifact scan, and credential-pattern scan
+- Live configured LiteLLM probe: strict `json_schema` with `stream: true` returned HTTP 200 and assembled into valid JSON; the existing streaming mode remains unchanged.
+
 ### T53 / Issue #178 Anima Run character-reference adapter compatibility
 
 Summary:
