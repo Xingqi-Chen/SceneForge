@@ -86,15 +86,38 @@ function createKreaSnapshot(mode: "ipadapter" | "prompt-only" = "prompt-only"): 
 }
 
 function KreaHarness({
+  withReId = false,
   initialMode = "prompt-only",
   withSnapshot = true,
 }: {
+  withReId?: boolean;
   initialMode?: "ipadapter" | "prompt-only";
   withSnapshot?: boolean;
 }) {
   const [snapshot, setSnapshot] = useState<StyleReferenceSnapshot | undefined>(
     withSnapshot ? createKreaSnapshot(initialMode) : undefined,
   );
+  const [characterReference, setCharacterReference] = useState(withReId ? {
+    kind: "krea2-reid" as const,
+    status: "ready" as const,
+    strength: 1,
+    metadata: {
+      byteLength: 777,
+      contentType: "image/png",
+      storedFilename: "fedcba9876543210fedcba9876543210.png",
+      uploadedAt: "2026-08-02T00:00:00.000Z",
+      url: "/api/comfyui/sequence-references/fedcba9876543210fedcba9876543210.png",
+    },
+    reIdPreparation: {
+      choice: "crop" as const,
+      detector: "yunet-2023mar-int8" as const,
+      detectorSha256: "a".repeat(64),
+      faceDetected: true,
+      height: 256,
+      version: 2 as const,
+      width: 256,
+    },
+  } : undefined);
 
   return <>
     <output data-testid="krea-snapshot-state">
@@ -103,7 +126,10 @@ function KreaHarness({
     <output data-testid="krea-blocking-issue">
       {getStyleReferenceBlockingIssue(snapshot, "Run")}
     </output>
+    <output data-testid="reid-state">{characterReference ? "ready" : "none"}</output>
+    <button onClick={() => setCharacterReference(undefined)} type="button">Remove ReID</button>
     <StyleReferencePanel
+      characterReference={characterReference}
       checkpointId="checkpoint-krea"
       nsfwEnabled={false}
       onChange={setSnapshot}
@@ -167,6 +193,45 @@ afterEach(async () => {
 });
 
 describe("StyleReferencePanel", () => {
+  it("contains the native accessible file input inside a positioned upload label", async () => {
+    const onChange = vi.fn();
+    await act(async () => root.render(
+      <StyleReferencePanel
+        checkpointId="checkpoint-a"
+        nsfwEnabled={false}
+        onChange={onChange}
+        promptProfile="illustrious"
+        selectedCheckpoint={{
+          id: "checkpoint-a", resourceType: "model", name: "Illustrious checkpoint", versionName: "v1",
+          baseModel: "Illustrious", creator: "creator", trainedWords: [], tags: [], categories: [],
+          usageGuide: null, descriptionSnippet: null, averageWeight: null, minWeight: null, maxWeight: null,
+          recommendations: [], previewImage: null, modelFileName: "illustrious.safetensors",
+          modelStorageKind: "checkpoint",
+        }}
+        workflowLabel="Run"
+      />,
+    ));
+
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement;
+    const label = input.closest("label");
+    expect(label).not.toBeNull();
+    expect(label?.classList.contains("relative")).toBe(true);
+    expect(label?.textContent).toContain("Upload");
+    expect(input.classList.contains("sr-only")).toBe(true);
+    expect(input.accept).toBe("image/png,image/jpeg,image/webp");
+    expect(input.disabled).toBe(false);
+    input.focus();
+    expect(document.activeElement).toBe(input);
+
+    await act(async () => {
+      Object.defineProperty(input, "files", { configurable: true, value: [] });
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+      await Promise.resolve();
+    });
+    expect(onChange).not.toHaveBeenCalled();
+    expect(document.body.contains(input)).toBe(true);
+  });
+
   it("shares upload, failed-analysis retry, replace, remove, and ready state across Composer modes", async () => {
     let uploadCount = 0;
     let analysisCount = 0;
@@ -271,7 +336,7 @@ describe("StyleReferencePanel", () => {
         checkpointName: "krea-2-turbo-unet.safetensors",
         modelBaseModel: "Krea 2",
         modelStorageKind: "diffusion",
-        hasCharacterReference: false,
+        referenceMode: "style",
       });
       return Response.json({
         available: true,
@@ -291,8 +356,40 @@ describe("StyleReferencePanel", () => {
       adapterCheckbox?.click();
       await Promise.resolve();
     });
-    expect(container.textContent).toContain("Krea timing is fixed to start_at 0 and end_at 1");
+    expect(container.textContent).toContain("Krea style timing is fixed to start_at 0 and end_at 1");
     expect(Array.from(container.querySelectorAll('input[type="number"]'))).toHaveLength(0);
+  });
+
+  it("pauses a selected Krea style adapter during ReID and restores it after removal without deleting style state", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => Response.json({
+      available: true,
+      reason: "Krea style-reference adapter verified for RedCraft.",
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await act(async () => root.render(<KreaHarness initialMode="ipadapter" withReId />));
+    await flush();
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(container.querySelector('[data-testid="krea-snapshot-state"]')?.textContent).toBe("ready:ipadapter");
+    expect(container.textContent).toContain("style-image adapter is paused until ReID is removed");
+    expect(container.textContent).toContain("soft gouache, cobalt shadows");
+    expect(getIpAdapterCheckbox()?.checked).toBe(true);
+    expect(getIpAdapterCheckbox()?.disabled).toBe(true);
+
+    await click("Remove ReID");
+    for (let index = 0; index < 8 && fetchMock.mock.calls.length < 1; index += 1) await flush();
+    for (let index = 0; index < 8 &&
+        container.querySelector('[data-testid="krea-snapshot-state"]')?.textContent !== "ready:ipadapter";
+      index += 1) await flush();
+
+    expect(container.querySelector('[data-testid="reid-state"]')?.textContent).toBe("none");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(container.querySelector('[data-testid="krea-snapshot-state"]')?.textContent).toBe("ready:ipadapter");
+    expect(container.textContent).toContain("Krea style-reference adapter verified for RedCraft");
+    expect(container.textContent).toContain("soft gouache, cobalt shadows");
+    expect(getIpAdapterCheckbox()?.checked).toBe(true);
+    expect(getIpAdapterCheckbox()?.disabled).toBe(false);
   });
 
   it("preserves a restored Krea adapter selection while preflight is pending and restores readiness on success", async () => {

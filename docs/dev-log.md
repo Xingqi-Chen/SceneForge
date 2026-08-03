@@ -2,6 +2,21 @@
 
 This log records dated implementation and documentation work. Keep entries concise and evidence-oriented.
 
+## 2026-08-03
+
+### T55 / Issue #183 ReID Preview persistence correction
+
+- Corrected Run persistence so a currently confirmed Krea2 ReID policy-v5 workflow can restore its one-megapixel Preview dimensions instead of applying the ordinary longest-edge-768 limit.
+- ReID restoration is authorized only by a ready version-2 prepared reference, the sanitized version-3 ReID reference context, the complete current final-policy contract, a confirmation fingerprint, and matching valid formal dimensions. Restored ReID Preview dimensions must equal the deterministic largest size at or below 1,048,576 pixels that preserves the exact formal aspect ratio, stays 16-pixel aligned, and never upscales either axis.
+- Ordinary Preview restoration retains the existing longest-edge-768 behavior. Legacy, forged, or incompatible oversized records therefore still fail closed without weakening generated-image reference or path sanitization.
+
+Validation during implementation:
+
+- `npm run typecheck` passed.
+- Focused ESLint and `git diff --check` passed.
+- Test Gate updated the superseded 1024x1024 fixture, added current/ordinary/legacy/forged/partial-result regression coverage, and passed 162/162 persistence tests, 152/152 cross-module tests, and the full 2,053/2,053-test suite.
+- Typecheck, lint, production build, and `git diff --check` passed; reviewer-agent returned APPROVE with no blocking findings.
+
 ## 2026-08-02
 
 ### T56 / Issue #185 Run scene-prompt strict JSON schema
@@ -22,6 +37,26 @@ Validation:
 - `npm run build`
 - `git diff --check`, runtime-artifact scan, and credential-pattern scan
 - Live configured LiteLLM probe: strict `json_schema` with `stream: true` returned HTTP 200 and assembled into valid JSON; the existing streaming mode remains unchanged.
+### T55 / Issue #183 Krea2 ReID character reference
+
+Summary:
+
+- Removed the filename-text heuristic from Krea workflow profile validation first; RedCraft and other metadata-valid Krea diffusion resources now rely on authoritative profile, storage-kind, and normalized Civitai base-model metadata.
+- Replaced the legacy Krea character/dual-image adapter path with a distinct, versioned ReID contract: exact user-installed `krea2_reid_rank32.safetensors`, strength 1.0, `kv_cache=true`, exactly one prepared `image1`, fixed Preview/Final sampling, generated-graph auditing, and no generic Krea reference or Repair fallback.
+- Added server-only `onnxruntime-node` preprocessing with the bundled checksum-verified OpenCV Zoo YuNet March 2023 INT8 asset. EXIF/RGB normalization, confidence 0.35, highest-confidence selection, pinned upstream head/shoulders crop math, and the 384×384 pixel budget feed a portal chooser; only the selected prepared PNG is stored.
+- Preserved the existing Krea style-image adapter independently. Active ReID pauses its transport without deleting state, keeps the analyzed style prompt exactly once, and restores compatible style conditioning when removed. Illustrious, Anima, prompt-only Krea, and style-only Krea contracts remain separate.
+- Added fail-closed request, `object_info`, exact-file, descriptor/version, generated-graph, confirmation, persistence, and queue-time checks. ReID Final uses policy v4 at 8 steps while retaining redraw denoise and compatible Final settings; Repair construction and inpaint validation strip/reject all ReID state.
+- Documented local setup, explicit consent/lawful-use UI, experimental Krea/FP8 warning, upstream repositories and licenses, ReID/YuNet checksums, prepared-only privacy boundary, and the absence of runtime model downloads or new environment variables.
+- Review iteration 2 aligned YuNet inference with the checksum-pinned model's strict `[1,3,640,640]` float32 metadata contract, restored the pinned floor/ceil source-bbox then Python-round crop ordering, bounded multipart parsing and rejected extra/spoofed image parts, and made Krea policy-v4 gate/final/fallback linkage survive persistence reconciliation.
+- The `onnxruntime-node` audit finding reaches `adm-zip` only through its package install helper; SceneForge request-time preprocessing loads the fixed bundled ONNX bytes directly and never accepts ZIP input. The install-time dependency risk remains documented rather than applying an unreviewed runtime downgrade.
+
+Validation during implementation:
+
+- The mandatory RedCraft-first `npm run typecheck` gate passed before ReID implementation began; the completed production update also passes `npm run typecheck`.
+- The full pre-Test-Gate Vitest run passed 1,969/1,980 tests. The 11 remaining failures are stale Krea dual-image, dual-context, legacy preflight, and old component-state fixtures intentionally superseded by Issue #183; the Test Gate owns replacing them with ReID coverage.
+- `npm run lint` passed with no errors and the existing 22 `<img>` optimization warnings. `npm run build` and `git diff --check` passed; the production route trace contains the bundled YuNet asset.
+- The bundled YuNet file checksum matched `321aa5a6afabf7ecc46a3d06bfab2b579dc96eb5c3be7edd365fa04502ad9294`, and the documented user-installed ReID weight checksum is `a80349faee4a2d80eff9a83820cd523c74cd0bbc6039cee21fa34b084d967944`.
+- Review iteration 2 directly loaded the bundled YuNet model and completed a real `session.run` with input `[1,3,640,640]`; all expected stride-8/16/32 classifier, objectness, bbox, and landmark tensors were returned, and production preprocessing completed against the real session. The focused preprocessing, runtime-contract, multipart, policy-v4 persistence, and documentation-contract suites passed 175/175 tests, followed by passing typecheck and production build.
 
 ### T53 / Issue #178 Anima Run character-reference adapter compatibility
 
@@ -2175,3 +2210,35 @@ Summary:
 Validation:
 
 - `npm run typecheck`
+
+### T54 / Issue #181 Run reference-picker viewport stability
+
+Summary:
+
+- Anchored the visually hidden Run character-reference file input to its visible Upload/Replace label so browser focus restoration cannot place it below the fixed-height app shell and scroll the top-level document.
+- Applied the same positioning boundary to the adjacent style-reference picker, which used the same latent document-relative layout pattern.
+- Preserved the native file input, accepted formats, upload/preflight states, focus semantics, and all reference state and generation behavior.
+
+Validation:
+
+- Focused component tests: 11/11 passed.
+- Full Vitest suite: 1,980/1,980 passed across 156 files.
+- `npm run typecheck`
+- `npm run lint`
+- `npm run build`
+- `git diff --check`
+- Chrome browser QA: Simple and Detailed desktop plus an 800x700 compact viewport kept document height equal to the viewport and top-level scroll at zero after chooser focus; Character, Style, and source-image controls remained stable.
+
+### T55 / Issue #183 Krea2 ReID graph and staged-generation correction
+
+Summary:
+
+- Corrected the ReID graph to use the rank-32 LoRA, pinned Ostris node topology, dual image/VAE encoders, distinct latent-method nodes, fixed sampler settings, and strict generated-graph auditing while preserving metadata-valid Krea diffusion selections and the configured local CLIP/VAE runtime.
+- Added exact-aspect, 16-aligned, at-most-1,048,576-pixel ReID Previews and policy-v5 same-seed formal Final rerenders from noise. Managed Preview upscales remain review/fallback artifacts but are not uploaded as Final sources.
+- Kept ReID visibly Experimental and upstream-unverified for FP8, RedCraft, and other metadata-valid Krea diffusion selections. Extra LoRAs and source img2img remain blocked; FaceDetailer pauses without changing saved state, HandDetailer stays compatible, and 12 GB/offload/OOM guidance never silently changes the selected model or resolution.
+- Advanced prepared reference and descriptor state to v2, confirmed reference context to v3, and ReID Final policy to v5. Continuable earlier ReID state is invalidated while completed images remain historical/read-only.
+
+Validation:
+
+- Pinned upstream workflow commit `121fb0183944f1befeb712d92e9ca07d0e282088` and Ostris node commit `7756566160c4a1b24bb1bd9f0ff3ced1a83d7547` inspected for exact nodes, ports, values, and conditioning topology.
+- Local `/object_info` confirms the required nodes, ports, configured FP8 Qwen3VL encoder and Qwen VAE, and ReID LoRA. Runtime capability is validated structurally without a separate Verified model tier; live four-seed identity QA remains a manual quality gate.

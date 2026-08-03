@@ -3,16 +3,15 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
-  createComfyUiClient: vi.fn(),
-  validateComfyUiRequestAgainstObjectInfo: vi.fn(),
-  validateComfyUiTextToImageRequest: vi.fn(),
+  preflightKrea2ReferenceCapability: vi.fn(),
 }));
 
 vi.mock("@/features/comfyui", () => ({
   ComfyUiApiError: class ComfyUiApiError extends Error {},
-  createComfyUiClient: mocks.createComfyUiClient,
-  validateComfyUiRequestAgainstObjectInfo: mocks.validateComfyUiRequestAgainstObjectInfo,
-  validateComfyUiTextToImageRequest: mocks.validateComfyUiTextToImageRequest,
+}));
+
+vi.mock("@/features/comfyui/krea2-reference-capability.server", () => ({
+  preflightKrea2ReferenceCapability: mocks.preflightKrea2ReferenceCapability,
 }));
 
 import { POST } from "./route";
@@ -20,54 +19,67 @@ import { POST } from "./route";
 describe("Krea reference-adapter capability route", () => {
   afterEach(() => vi.resetAllMocks());
 
-  it("performs a no-queue probe for the fixed dual-reference Krea graph and adapter context", async () => {
-    const getObjectInfo = vi.fn().mockResolvedValue({ TextEncodeKrea2OstrisEdit: {} });
-    mocks.createComfyUiClient.mockReturnValue({ getObjectInfo, generateImage: vi.fn() });
-    mocks.validateComfyUiTextToImageRequest.mockImplementation((request) => ({ ok: true, request }));
-    mocks.validateComfyUiRequestAgainstObjectInfo.mockReturnValue({ errors: [], warnings: [] });
+  it.each([
+    ["style", undefined],
+    ["reid", "reid"],
+  ] as const)("delegates a no-queue %s probe with authoritative model metadata", async (mode, referenceMode) => {
+    mocks.preflightKrea2ReferenceCapability.mockResolvedValue({
+      available: true,
+      reason: `${mode} graph verified`,
+    });
 
     const response = await POST(new Request("http://localhost/api/comfyui/krea2-style-reference-capability", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        checkpointName: "krea-2-turbo-unet.safetensors",
+        checkpointName: "RedCraft_v4_fp8_scaled.safetensors",
         modelBaseModel: "Krea 2",
         modelStorageKind: "diffusion",
-        hasCharacterReference: true,
+        ...(referenceMode ? { referenceMode } : {}),
       }),
     }));
 
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toMatchObject({ available: true });
-    expect(mocks.validateComfyUiTextToImageRequest).toHaveBeenCalledWith(expect.objectContaining({
-      checkpointName: "krea-2-turbo-unet.safetensors",
-      workflowProfile: "krea2",
-      krea2StyleReference: {
-        styleImageName: "sceneforge-krea-style-reference-preflight.png",
-        characterImageName: "sceneforge-krea-character-reference-preflight.png",
-      },
-    }));
-    expect(getObjectInfo).toHaveBeenCalledTimes(1);
-    expect(mocks.validateComfyUiRequestAgainstObjectInfo).toHaveBeenCalledTimes(1);
+    await expect(response.json()).resolves.toEqual({ available: true, reason: `${mode} graph verified` });
+    expect(mocks.preflightKrea2ReferenceCapability).toHaveBeenCalledWith({
+      checkpointName: "RedCraft_v4_fp8_scaled.safetensors",
+      mode,
+      modelBaseModel: "Krea 2",
+    });
   });
 
-  it("returns prompt-only availability when the local graph is incompatible and never queues", async () => {
-    const generateImage = vi.fn();
-    mocks.createComfyUiClient.mockReturnValue({ getObjectInfo: vi.fn().mockResolvedValue({}), generateImage });
-    mocks.validateComfyUiTextToImageRequest.mockImplementation((request) => ({ ok: true, request }));
-    mocks.validateComfyUiRequestAgainstObjectInfo.mockReturnValue({
-      errors: ["Krea2OstrisEditModelPatch node is not available in ComfyUI."], warnings: [],
-    });
-
+  it("fails before preflight when diffusion metadata is incomplete", async () => {
     const response = await POST(new Request("http://localhost/api/comfyui/krea2-style-reference-capability", {
-      method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ checkpointName: "krea-2-turbo-unet.safetensors", modelBaseModel: "Krea 2", modelStorageKind: "diffusion" }),
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        checkpointName: "Krea2_Turbo_Misleading.safetensors",
+        modelStorageKind: "diffusion",
+        referenceMode: "reid",
+      }),
+    }));
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({ available: false });
+    expect(mocks.preflightKrea2ReferenceCapability).not.toHaveBeenCalled();
+  });
+
+  it("returns fail-closed availability when local preflight throws", async () => {
+    mocks.preflightKrea2ReferenceCapability.mockRejectedValue(new Error("object_info unavailable"));
+    const response = await POST(new Request("http://localhost/api/comfyui/krea2-style-reference-capability", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        checkpointName: "RedCraft_v4.safetensors",
+        modelBaseModel: "Krea 2",
+        modelStorageKind: "diffusion",
+        referenceMode: "reid",
+      }),
     }));
 
     await expect(response.json()).resolves.toEqual({
       available: false,
-      reason: "Krea2OstrisEditModelPatch node is not available in ComfyUI.",
+      reason: "Krea reference-adapter preflight failed. Reference upload and queueing remain blocked.",
     });
-    expect(generateImage).not.toHaveBeenCalled();
   });
 });

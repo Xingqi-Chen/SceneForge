@@ -19,6 +19,8 @@ import {
   getCharacterReferenceBlockingIssue,
   getStyleReferenceBlockingIssue,
   getStyleReferenceContextMismatch,
+  isCharacterReferenceReady,
+  isKrea2ReIdReferenceReady,
   isStyleReferenceReady,
   sanitizeCharacterReferenceSnapshot,
   sanitizeStyleReferenceSnapshot,
@@ -183,6 +185,39 @@ export function getTimelinePreviewDimensions(width: number, height: number, long
   return { width: ratioWidth * multiplier, height: ratioHeight * multiplier };
 }
 
+const KREA2_REID_PREVIEW_MAX_PIXELS = 1_048_576;
+const KREA2_REID_PREVIEW_ALIGNMENT = 16;
+
+export function getTimelineReIdPreviewDimensions(width: number, height: number) {
+  if (![width, height].every((value) => Number.isSafeInteger(value) && value > 0)) {
+    invalidComfyUiRequest("Krea2 ReID Preview width and height must be positive integers.");
+  }
+  if (width % KREA2_REID_PREVIEW_ALIGNMENT !== 0 || height % KREA2_REID_PREVIEW_ALIGNMENT !== 0) {
+    invalidComfyUiRequest("Krea2 ReID Preview dimensions must be 16-pixel aligned.");
+  }
+  if (width * height <= KREA2_REID_PREVIEW_MAX_PIXELS) return { width, height };
+
+  const ratioDivisor = greatestCommonDivisor(width, height);
+  const ratioWidth = width / ratioDivisor;
+  const ratioHeight = height / ratioDivisor;
+  const widthAlignmentMultiplier = KREA2_REID_PREVIEW_ALIGNMENT /
+    greatestCommonDivisor(ratioWidth, KREA2_REID_PREVIEW_ALIGNMENT);
+  const heightAlignmentMultiplier = KREA2_REID_PREVIEW_ALIGNMENT /
+    greatestCommonDivisor(ratioHeight, KREA2_REID_PREVIEW_ALIGNMENT);
+  const alignmentMultiplier = leastCommonMultiple(widthAlignmentMultiplier, heightAlignmentMultiplier);
+  const maximumMultiplier = Math.floor(Math.sqrt(
+    KREA2_REID_PREVIEW_MAX_PIXELS / (ratioWidth * ratioHeight),
+  ));
+  const multiplier = Math.floor(maximumMultiplier / alignmentMultiplier) * alignmentMultiplier;
+  if (multiplier < alignmentMultiplier) {
+    invalidComfyUiRequest(
+      `Krea2 ReID Preview dimensions ${width}x${height} cannot preserve exact aspect ratio within ` +
+      "1,048,576 pixels while staying 16-pixel aligned.",
+    );
+  }
+  return { width: ratioWidth * multiplier, height: ratioHeight * multiplier };
+}
+
 function getTimelineSourceImage(workflow: TimelineWorkflowState) {
   const result = workflow.nodes["scene-input"].result;
   return isRecord(result) ? (result as Partial<SceneInputTimelineResult>).sourceImage : undefined;
@@ -254,6 +289,12 @@ function assertStyleReferenceUsable(
   if (JSON.stringify(currentCharacter) !== JSON.stringify(reviewedCharacter)) {
     invalidComfyUiRequest("Run character reference changed after parameter review. Regenerate parameters before confirmation.");
   }
+  if (isKrea2 && isCharacterReferenceReady(currentCharacter) && !isKrea2ReIdReferenceReady(currentCharacter)) {
+    invalidComfyUiRequest("Legacy or generic Krea character references cannot be reused as ReID. Replace it through Krea2 ReID preparation.");
+  }
+  if (!isKrea2 && isKrea2ReIdReferenceReady(currentCharacter)) {
+    invalidComfyUiRequest("A prepared Krea2 ReID reference cannot be used by this non-Krea workflow. Remove or replace it.");
+  }
   if (isStyleReferenceReady(current)) {
     const stylePrompt = current.analysis.stylePrompt.trim();
     const hasStylePromptExactlyOnce = isKrea2
@@ -277,8 +318,10 @@ function assertStyleReferenceUsable(
 
   const expectedReferenceContext = deriveTimelineConfirmedReferenceContext(workflow);
   const confirmedReferenceContext = getConfirmedTimelineReferenceContext(workflow);
-  if (expectedReferenceContext && confirmedReferenceContext &&
-      JSON.stringify(expectedReferenceContext) !== JSON.stringify(confirmedReferenceContext)) {
+  if (expectedReferenceContext && expectedReferenceContext.references.length > 0 &&
+      (expectedReferenceContext.adapter === "krea2-reid" && !confirmedReferenceContext ||
+      confirmedReferenceContext &&
+        JSON.stringify(expectedReferenceContext) !== JSON.stringify(confirmedReferenceContext))) {
     invalidComfyUiRequest("Run reference settings changed after confirmation. Review and confirm the Run again.");
   }
 }
@@ -319,6 +362,9 @@ export function createConfirmedTimelineComfyUiRequest(workflow: TimelineWorkflow
   const sceneInput = workflow.nodes["scene-input"].result;
   const detailers = getGenerationInputDetailers(isRecord(sceneInput) ? sceneInput : {});
   const inputSettings = getRunSceneInputSettings(isRecord(sceneInput) ? sceneInput : {});
+  const hasKrea2ReId = isKrea2ReIdReferenceReady(
+    sanitizeCharacterReferenceSnapshot(inputSettings.characterReference),
+  );
   const isKrea2 = inputSettings.promptProfile === "krea2" ||
     (isRecord(sceneInput) && sceneInput.promptProfile === "krea2") ||
     resolveComfyUiTextToImageWorkflowProfile(parameterResult.requestPreview).id === "krea2";
@@ -326,6 +372,11 @@ export function createConfirmedTimelineComfyUiRequest(workflow: TimelineWorkflow
   if (isKrea2) {
     const width = normalizeKrea2Dimension(parameterResult.requestPreview.width, "width");
     const height = normalizeKrea2Dimension(parameterResult.requestPreview.height, "height");
+    if (sourceImage && hasKrea2ReId) {
+      invalidComfyUiRequest(
+        "Krea2 ReID blocks Composer source img2img. Remove the source image before confirmation.",
+      );
+    }
     if (sourceImage && (sourceImage.width !== width || sourceImage.height !== height)) {
       invalidComfyUiRequest(
         "Krea 2 Turbo source img2img dimensions must exactly match the 16-pixel-aligned formal dimensions; regenerate parameters instead of rounding or stretching the source aspect ratio.",
@@ -351,7 +402,9 @@ export function createConfirmedTimelineComfyUiRequest(workflow: TimelineWorkflow
       scheduler: "simple",
       batchSize: 1,
       preview: false,
-      faceDetailer: detailers.faceDetailer,
+      faceDetailer: hasKrea2ReId
+        ? { ...detailers.faceDetailer, enabled: false }
+        : detailers.faceDetailer,
       handDetailer: detailers.handDetailer,
       controlNets: [],
       characterReferences: [],
@@ -380,12 +433,19 @@ export function createTimelinePreviewRequests(
   const parameterResult = getParameterRecommendationResult(workflow);
   const finalCount = getTimelineFinalImageCount(workflow);
   const candidateCount = getTimelinePreviewCandidateCount(finalCount);
-  const dimensions = getTimelinePreviewDimensions(
-    parameterResult.width,
-    parameterResult.height,
-    policy.previewLongestEdge,
-    formal.workflowProfile === "krea2" ? 16 : PREVIEW_DIMENSION_ALIGNMENT,
+  const sceneInput = workflow.nodes["scene-input"].result;
+  const settings = getRunSceneInputSettings(isRecord(sceneInput) ? sceneInput : {});
+  const hasKrea2ReId = isKrea2ReIdReferenceReady(
+    sanitizeCharacterReferenceSnapshot(settings.characterReference),
   );
+  const dimensions = hasKrea2ReId
+    ? getTimelineReIdPreviewDimensions(parameterResult.width, parameterResult.height)
+    : getTimelinePreviewDimensions(
+        parameterResult.width,
+        parameterResult.height,
+        policy.previewLongestEdge,
+        formal.workflowProfile === "krea2" ? 16 : PREVIEW_DIMENSION_ALIGNMENT,
+      );
   const baseSeed = materializeBaseSeed(
     workflow,
     parameterResult,
@@ -445,8 +505,8 @@ export function createTimelineFinalRequests(workflow: TimelineWorkflowState) {
   const formal = createConfirmedTimelineComfyUiRequest(workflow);
   const sceneInput = workflow.nodes["scene-input"].result;
   const settings = getRunSceneInputSettings(isRecord(sceneInput) ? sceneInput : {});
-  const finalPolicy = resolveTimelineFinalGenerationPolicy(formal, settings.finalRedrawPreset);
-  const policy = getTimelineBalancedGenerationPolicy(formal, settings.finalRedrawPreset);
+  const hasReId = isKrea2ReIdReferenceReady(sanitizeCharacterReferenceSnapshot(settings.characterReference));
+  const finalPolicy = resolveTimelineFinalGenerationPolicy(formal, settings.finalRedrawPreset, { krea2ReId: hasReId });
   const dimensions = resolveTimelineFinalDimensions({
     request: formal,
     sourceImage: getTimelineSourceImage(workflow),
@@ -528,8 +588,8 @@ export function createTimelineFinalRequests(workflow: TimelineWorkflowState) {
         imageWidth: dimensions.width,
         imageHeight: dimensions.height,
         seed: candidate.seed,
-        steps: policy.finalSteps ?? formal.steps,
-        denoise: policy.finalDenoise,
+        steps: finalPolicy.steps ?? formal.steps,
+        denoise: finalPolicy.denoise,
         batchSize: 1,
         preview: false,
       },

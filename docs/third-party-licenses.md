@@ -10,12 +10,13 @@ This inventory is generated from `package-lock.json` for open-source readiness r
 - Apache-2.0 AND LGPL-3.0-or-later AND MIT: 1
 - BlueOak-1.0.0: 2
 - BSD-2-Clause: 9
-- BSD-3-Clause: 4
+- BSD-3-Clause: 5
 - CC-BY-4.0: 1
 - CC0-1.0: 2
-- ISC: 21
+- ISC: 22
 - LGPL-3.0-or-later: 10
-- MIT: 484
+- MIT: 489
+- MIT OR CC0-1.0: 1
 - MIT-0: 2
 - MPL-2.0: 13
 - Python-2.0: 1
@@ -55,6 +56,11 @@ These entries are not necessarily blockers for source publication, but they shou
 - lightningcss-win32-arm64-msvc@1.32.0: MPL-2.0
 - lightningcss-win32-x64-msvc@1.32.0: MPL-2.0
 - webgl-constants@1.1.1: UNKNOWN
+
+## Bundled Model Asset
+
+- `src/features/agent-timeline/assets/face_detection_yunet_2023mar_int8.onnx` is the OpenCV Zoo YuNet March 2023 INT8 face detector, SHA-256 `321aa5a6afabf7ecc46a3d06bfab2b579dc96eb5c3be7edd365fa04502ad9294`, under the model-specific MIT license by Shiqi Yu. The complete notice is distributed beside the asset as `YUNET_LICENSE.txt`.
+- The Krea2 ReID LoRA is not bundled or downloaded. Users install `krea2_reid_rank32.safetensors` themselves after reviewing the Krea 2 Community License in the upstream `yijunwang2/krea2-reid` repository.
 
 ## Full Inventory
 
@@ -264,6 +270,7 @@ These entries are not necessarily blockers for source publication, but they shou
 | @vitest/snapshot | 4.1.5 | MIT |
 | @vitest/spy | 4.1.5 | MIT |
 | @vitest/utils | 4.1.5 | MIT |
+| adm-zip | 0.5.18 | MIT |
 | acorn | 8.16.0 | MIT |
 | acorn-jsx | 5.3.2 | MIT |
 | ajv | 6.15.0 | MIT |
@@ -388,6 +395,7 @@ These entries are not necessarily blockers for source publication, but they shou
 | get-symbol-description | 1.1.0 | MIT |
 | get-tsconfig | 4.14.0 | MIT |
 | glob-parent | 6.0.2 | ISC |
+| global-agent | 4.1.3 | BSD-3-Clause |
 | globals | 14.0.0 | MIT |
 | globalthis | 1.0.4 | MIT |
 | glsl-noise | 0.0.0 | MIT |
@@ -483,6 +491,7 @@ These entries are not necessarily blockers for source publication, but they shou
 | lucide-react | 1.14.0 | ISC |
 | maath | 0.10.8 | MIT |
 | magic-string | 0.30.21 | MIT |
+| matcher | 4.0.0 | MIT |
 | math-intrinsics | 1.1.0 | MIT |
 | mdn-data | 2.27.1 | CC0-1.0 |
 | merge2 | 1.4.1 | MIT |
@@ -499,6 +508,8 @@ These entries are not necessarily blockers for source publication, but they shou
 | next | 16.2.7 | MIT |
 | node-exports-info | 1.6.0 | MIT |
 | node-releases | 2.0.38 | MIT |
+| onnxruntime-common | 1.27.0 | MIT |
+| onnxruntime-node | 1.27.0 | MIT |
 | object-assign | 4.1.1 | MIT |
 | object-inspect | 1.13.4 | MIT |
 | object-keys | 1.1.1 | MIT |
@@ -554,6 +565,8 @@ These entries are not necessarily blockers for source publication, but they shou
 | saxes | 6.0.0 | ISC |
 | scheduler | 0.27.0 | MIT |
 | semver | 6.3.1 | ISC |
+| global-agent/node_modules/semver | 7.8.5 | ISC |
+| serialize-error | 8.1.0 | MIT |
 | set-function-length | 1.2.2 | MIT |
 | set-function-name | 2.0.2 | MIT |
 | set-proto | 1.0.0 | MIT |
@@ -619,6 +632,7 @@ These entries are not necessarily blockers for source publication, but they shou
 | typed-array-byte-length | 1.0.3 | MIT |
 | typed-array-byte-offset | 1.0.4 | MIT |
 | typed-array-length | 1.0.7 | MIT |
+| type-fest | 0.20.2 | MIT OR CC0-1.0 |
 | typescript | 5.9.3 | Apache-2.0 |
 | typescript-eslint | 8.59.1 | MIT |
 | unbox-primitive | 1.1.0 | MIT |

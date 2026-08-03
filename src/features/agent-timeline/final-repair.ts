@@ -143,6 +143,16 @@ function projectRepairSemanticValue(value: unknown, depth = 0): unknown {
   );
 }
 
+function createRepairFormalSemanticRequest(
+  formal: ComfyUiExecutionTimelineResult["request"],
+) {
+  const repairSemantic = { ...formal };
+  delete repairSemantic.krea2StyleReference;
+  delete repairSemantic.krea2ReId;
+  delete repairSemantic.krea2ReIdDescriptor;
+  return repairSemantic;
+}
+
 export function digestTimelineSemanticValue(value: unknown) {
   return `sha256:${sha256Hex(JSON.stringify(stableCanonicalValue(value)))}`;
 }
@@ -214,7 +224,9 @@ export function deriveRepairBaseRequestDigest(
   final: TimelineFinalExecutionRecord,
 ) {
   if (!final.previewUpscale) return null;
-  const validation = validateComfyUiTextToImageRequest(execution.request);
+  const validation = validateComfyUiTextToImageRequest(
+    createRepairFormalSemanticRequest(execution.request),
+  );
   if (!validation.ok) return null;
   const semanticRequest = projectRepairSemanticValue(validation.request);
   return digestTimelineSemanticValue({
@@ -238,8 +250,7 @@ export function createCanonicalRepairInpaintRequest(
   if (!final.previewUpscale) return null;
   const suffix = attemptId.slice(7, 31);
   const formal = execution.request;
-  const formalSemantic = { ...formal };
-  delete formalSemantic.krea2StyleReference;
+  const formalSemantic = createRepairFormalSemanticRequest(formal);
   const isKrea2 = formal.workflowProfile === "krea2";
   const krea2LocalRegion = formal.workflowProfile === "krea2"
     ? getKrea2RepairLocalRegion(diagnosis, final.previewUpscale.width, final.previewUpscale.height)

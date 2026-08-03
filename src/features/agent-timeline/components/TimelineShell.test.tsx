@@ -2535,12 +2535,11 @@ describe("TimelineShell", () => {
         expect(sourceButton.disabled).toBe(false);
         expect(container.textContent).toContain("Krea 2 Turbo uses its fixed local UNet");
         expect(container.textContent).toContain("4/4/6/8 scored previews, exact-K selection, and Preview-to-Final img2img redraw.");
-        expect(container.textContent).toContain("Paired review and explicit variant selection are available.");
-        expect(container.textContent).toContain("One-shot Repair remains off by default");
+        expect(container.textContent).toContain("Paired review and the managed Preview-upscale fallback remain available.");
+        expect(container.textContent).toContain("One-shot Repair remains ReID-free");
         expect(container.textContent).toContain("The analyzed global style prompt is supported exactly once");
-        expect(container.textContent).toContain("optional reference adapter appears only after local Krea preflight");
-        expect(container.textContent).toContain("FaceDetailer and HandDetailer apply independently to Final and compatible Repair requests; Previews always remain Detailer-free.");
-        expect(container.textContent).toContain("SceneForge checks their required nodes, inputs, samplers, detector models, and Krea model context before queueing.");
+        expect(container.textContent).toContain("Select a compatible local Krea 2 Turbo diffusion checkpoint before enabling its reference adapter.");
+        expect(container.textContent).toContain("FaceDetailer and HandDetailer apply independently without ReID; active ReID pauses FaceDetailer while preserving its saved setting and keeps HandDetailer compatible. Previews remain Detailer-free.");
         expect(container.textContent).toContain("Resolved Final: 4 steps, denoise 0.18 (krea2).");
         const strongRedraw = container.querySelector(
           'input[name="final-redraw-strength"][value="strong"]',
