@@ -1,6 +1,34 @@
-import type { LlmJsonSchemaResponseFormat, LlmJsonSchemaValue } from "./types";
+import type {
+  LlmChatRequest,
+  LlmJsonSchemaResponseFormat,
+  LlmJsonSchemaValue,
+  LlmResponsesRequest,
+} from "./types";
 
 export type RunScenePromptResponseProfile = "illustrious" | "anima" | "krea2";
+
+export type LlmResponsesOutputShapeDiagnostic =
+  | "message_content_missing"
+  | "message_noncompleted"
+  | "no_assistant_role"
+  | "no_message_item"
+  | "no_output_array"
+  | "no_output_text"
+  | "refusal"
+  | "response_noncompleted"
+  | "response_not_object";
+
+const responsesOutputShapeDiagnostics = new Set<LlmResponsesOutputShapeDiagnostic>([
+  "message_content_missing",
+  "message_noncompleted",
+  "no_assistant_role",
+  "no_message_item",
+  "no_output_array",
+  "no_output_text",
+  "refusal",
+  "response_noncompleted",
+  "response_not_object",
+]);
 
 const stringSchema = { type: "string" } as const;
 const stringArraySchema = {
@@ -195,6 +223,14 @@ export function isAuthorizedRunScenePromptResponseFormat(
   return canonical !== undefined && authorizedCanonicalFormats.has(canonical);
 }
 
+export function isAuthorizedRunScenePromptResponsesRequest(
+  value: LlmChatRequest,
+): value is LlmResponsesRequest {
+  return value.purpose === "stable-diffusion-prompt-generation" &&
+    value.responseFormat !== undefined &&
+    isAuthorizedRunScenePromptResponseFormat(value.responseFormat);
+}
+
 export function summarizeLlmResponseFormatForLog(
   value: LlmJsonSchemaResponseFormat | undefined,
 ): Record<string, LlmJsonSchemaValue> | undefined {
@@ -209,10 +245,30 @@ export function summarizeLlmResponseFormatForLog(
 export function createStructuredOutputErrorDetails(
   value: LlmJsonSchemaResponseFormat,
   upstreamStatus: number | undefined,
+  outputShape?: LlmResponsesOutputShapeDiagnostic,
 ): Record<string, LlmJsonSchemaValue> {
   return {
     code: "structured_output_rejected",
     upstreamStatus: upstreamStatus ?? 500,
     responseFormat: summarizeLlmResponseFormatForLog(value) ?? null,
+    ...(outputShape ? { outputShape } : {}),
   };
+}
+
+export function getLlmResponsesOutputShapeDiagnostic(
+  value: unknown,
+): LlmResponsesOutputShapeDiagnostic | undefined {
+  if (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    "outputShape" in value &&
+    responsesOutputShapeDiagnostics.has(
+      (value as { outputShape?: unknown }).outputShape as LlmResponsesOutputShapeDiagnostic,
+    )
+  ) {
+    return (value as { outputShape: LlmResponsesOutputShapeDiagnostic }).outputShape;
+  }
+
+  return undefined;
 }
