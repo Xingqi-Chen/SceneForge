@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   getRunScenePromptResponseFormat,
   isAuthorizedRunScenePromptResponseFormat,
+  isAuthorizedRunScenePromptResponsesRequest,
   summarizeLlmResponseFormatForLog,
   type RunScenePromptResponseProfile,
 } from "./run-scene-prompt-response-format";
@@ -189,6 +190,32 @@ describe("Run scene-prompt response formats", () => {
 
     expect(isAuthorizedRunScenePromptResponseFormat({ type: "json_object" })).toBe(false);
     expect(isAuthorizedRunScenePromptResponseFormat(null)).toBe(false);
+  });
+
+  it.each(profiles)("authorizes the exact %s contract only for Run scene-prompt requests", (profile) => {
+    const responseFormat = getRunScenePromptResponseFormat(profile);
+    const request = {
+      purpose: "stable-diffusion-prompt-generation" as const,
+      messages: [{ role: "user" as const, content: "Generate a prompt" }],
+      responseFormat,
+    };
+
+    expect(isAuthorizedRunScenePromptResponsesRequest(request)).toBe(true);
+    expect(isAuthorizedRunScenePromptResponsesRequest({
+      ...request,
+      purpose: "scene-prompt-reverse",
+    })).toBe(false);
+    expect(isAuthorizedRunScenePromptResponsesRequest({
+      ...request,
+      responseFormat: undefined,
+    })).toBe(false);
+
+    const mutated = JSON.parse(JSON.stringify(responseFormat));
+    mutated.json_schema.schema.additionalProperties = true;
+    expect(isAuthorizedRunScenePromptResponsesRequest({
+      ...request,
+      responseFormat: mutated,
+    })).toBe(false);
   });
 
   it("summarizes only type, stable name, and strictness for logs", () => {
