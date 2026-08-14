@@ -1,4 +1,4 @@
-import { createLiteLlmClient, LiteLlmError, type LlmChatRequest } from "@/features/llm";
+import { createLiteLlmClient, LiteLlmError, type LlmResponsesRequest } from "@/features/llm";
 
 import {
   parseRepairVerificationResponse,
@@ -132,7 +132,7 @@ export async function verifyFinalRepairs(
     }, context);
   }
   const client = createLiteLlmClient({ baseUrl, apiKey: process.env.LITELLM_API_KEY, defaultModel: model });
-  const request: LlmChatRequest = {
+  const request: LlmResponsesRequest = {
     model,
     purpose: "single-image-repair-verification" as const,
     nsfw,
@@ -143,10 +143,10 @@ export async function verifyFinalRepairs(
   let validationReason = "Repair verification schema was invalid.";
   let upstream: unknown;
   let terminalFailure: "malformed" | "upstream" = "malformed";
-  let nextRequest: LlmChatRequest = request;
+  let nextRequest: LlmResponsesRequest = request;
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
-      const response = await client.completeChat(nextRequest);
+      const response = await client.completeResponse(nextRequest);
       const parsed = parseRepairVerificationResponse(response.content, repair, review, visualStyle);
       if (parsed) return finishRepairVerification(parsed, context);
       validationReason = "Response did not cover the repaired pairs with the required closed schema.";

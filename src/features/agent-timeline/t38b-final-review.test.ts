@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const completeChatMock = vi.hoisted(() => vi.fn());
+const completeResponseMock = vi.hoisted(() => vi.fn());
+const completeChatFallbackMock = vi.hoisted(() => vi.fn());
 const createStoredImageVisionDataUrlMock = vi.hoisted(() => vi.fn(async (_stored, itemId: string) =>
   `data:image/jpeg;base64,TRANSIENT_${itemId}`));
 
@@ -14,7 +15,10 @@ vi.mock("@/features/llm", () => {
     }
   }
   return {
-    createLiteLlmClient: vi.fn(() => ({ completeChat: completeChatMock })),
+    createLiteLlmClient: vi.fn(() => ({
+      completeChat: completeChatFallbackMock,
+      completeResponse: completeResponseMock,
+    })),
     LiteLlmError,
   };
 });
@@ -194,7 +198,9 @@ function createContext(execution: ComfyUiExecutionTimelineResult, nsfw = false):
 }
 
 afterEach(() => {
-  completeChatMock.mockReset();
+  expect(completeChatFallbackMock).not.toHaveBeenCalled();
+  completeResponseMock.mockReset();
+  completeChatFallbackMock.mockReset();
   createStoredImageVisionDataUrlMock.mockClear();
   process.env = { ...originalEnv };
 });
@@ -340,7 +346,7 @@ describe("T38B Final review provider boundary", () => {
   it("sends all four pairs in one high-detail comparative request and persists no transient payload", async () => {
     process.env.LITELLM_BASE_URL = "http://litellm.test";
     process.env.LITELLM_VISION_MODEL = "vision-model";
-    completeChatMock.mockResolvedValue({ content: validResponse(4) });
+    completeResponseMock.mockResolvedValue({ content: validResponse(4) });
 
     const result = await reviewFinalExecution(createExecution(4), createContext(createExecution(4)));
 
@@ -348,16 +354,38 @@ describe("T38B Final review provider boundary", () => {
       expect.objectContaining({ candidateId: "preview-1" }),
       expect.objectContaining({ candidateId: "preview-4" }),
     ]) });
-    expect(completeChatMock).toHaveBeenCalledTimes(1);
-    const request = completeChatMock.mock.calls[0]?.[0] as {
+    expect(completeResponseMock).toHaveBeenCalledTimes(1);
+    const request = completeResponseMock.mock.calls[0]?.[0] as {
       model: string;
       purpose: string;
+      temperature: number;
+      maxTokens: number;
       messages: Array<{ content: Array<{ type: string; image_url?: { detail: string; url: string } }> }>;
     };
-    expect(request).toMatchObject({ model: "vision-model", purpose: "single-image-final-review" });
+    expect(request).toMatchObject({
+      model: "vision-model",
+      purpose: "single-image-final-review",
+      temperature: 0,
+      maxTokens: 4_000,
+    });
     const images = request.messages[0]!.content.filter((item) => item.type === "image_url");
     expect(images).toHaveLength(8);
     expect(images.every((item) => item.image_url?.detail === "high")).toBe(true);
+    expect(request.messages[0]!.content.slice(1)).toEqual(Array.from({ length: 4 }, (_, index) => {
+      const candidateId = `preview-${index + 1}`;
+      return [
+        { type: "text", text: `Pair ${candidateId} - Preview fallback` },
+        {
+          type: "image_url",
+          image_url: { url: `data:image/jpeg;base64,TRANSIENT_${candidateId}:preview-upscale`, detail: "high" },
+        },
+        { type: "text", text: `Pair ${candidateId} - Final` },
+        {
+          type: "image_url",
+          image_url: { url: `data:image/jpeg;base64,TRANSIENT_${candidateId}:final`, detail: "high" },
+        },
+      ];
+    }).flat());
     expect(createStoredImageVisionDataUrlMock).toHaveBeenCalledTimes(8);
     expect(JSON.stringify(result)).not.toContain("data:image");
     expect(JSON.stringify(result)).not.toContain("PRIVATE_");
@@ -368,14 +396,14 @@ describe("T38B Final review provider boundary", () => {
     process.env.LITELLM_BASE_URL = "http://litellm.test";
     process.env.LITELLM_VISION_MODEL = "vision-model";
     process.env.LITELLM_DEFAULT_MODEL = "default-model";
-    completeChatMock.mockResolvedValue({ content: validResponse(1) });
+    completeResponseMock.mockResolvedValue({ content: validResponse(1) });
     await reviewFinalExecution(createExecution(1), createContext(createExecution(1)));
-    expect(completeChatMock).toHaveBeenLastCalledWith(expect.objectContaining({ model: "vision-model", nsfw: false }));
+    expect(completeResponseMock).toHaveBeenLastCalledWith(expect.objectContaining({ model: "vision-model", nsfw: false }));
 
     delete process.env.LITELLM_VISION_MODEL;
-    completeChatMock.mockClear();
+    completeResponseMock.mockClear();
     await reviewFinalExecution(createExecution(1), createContext(createExecution(1)));
-    expect(completeChatMock).toHaveBeenLastCalledWith(expect.objectContaining({ model: "default-model", nsfw: false }));
+    expect(completeResponseMock).toHaveBeenLastCalledWith(expect.objectContaining({ model: "default-model", nsfw: false }));
   });
 
   it("requires the NSFW model and never falls back to ordinary models", async () => {
@@ -393,36 +421,36 @@ describe("T38B Final review provider boundary", () => {
         visualStyleMatch: { final: null, previewUpscale: true },
       }],
     });
-    expect(completeChatMock).not.toHaveBeenCalled();
+    expect(completeResponseMock).not.toHaveBeenCalled();
 
     process.env.LITELLM_NSFW_MODEL = "nsfw-vision";
-    completeChatMock.mockResolvedValue({ content: validResponse(1) });
+    completeResponseMock.mockResolvedValue({ content: validResponse(1) });
     await reviewFinalExecution(createExecution(1), createContext(createExecution(1), true));
-    expect(completeChatMock).toHaveBeenLastCalledWith(expect.objectContaining({ model: "nsfw-vision", nsfw: true }));
+    expect(completeResponseMock).toHaveBeenLastCalledWith(expect.objectContaining({ model: "nsfw-vision", nsfw: true }));
   });
 
   it("uses one safe schema repair and never makes a third provider call", async () => {
     process.env.LITELLM_BASE_URL = "http://litellm.test";
     process.env.LITELLM_VISION_MODEL = "vision-model";
-    completeChatMock
+    completeResponseMock
       .mockResolvedValueOnce({ content: "{\"pairs\":[],\"raw\":\"PRIVATE_RAW_RESPONSE\"}" })
       .mockResolvedValueOnce({ content: validResponse(1) });
 
     await expect(reviewFinalExecution(createExecution(1), createContext(createExecution(1)))).resolves.toMatchObject({ status: "reviewed" });
-    expect(completeChatMock).toHaveBeenCalledTimes(2);
-    expect(completeChatMock.mock.calls[1]?.[0]).toMatchObject({
+    expect(completeResponseMock).toHaveBeenCalledTimes(2);
+    expect(completeResponseMock.mock.calls[1]?.[0]).toMatchObject({
       messages: expect.arrayContaining([expect.objectContaining({
         role: "user",
         content: expect.stringContaining("Safe validation reason"),
       })]),
     });
-    expect(JSON.stringify(completeChatMock.mock.calls[1]?.[0])).not.toContain("PRIVATE_RAW_RESPONSE");
+    expect(JSON.stringify(completeResponseMock.mock.calls[1]?.[0])).not.toContain("PRIVATE_RAW_RESPONSE");
   });
 
   it("keeps Final unavailable after missing style validation exhausts the bounded repair", async () => {
     process.env.LITELLM_BASE_URL = "http://litellm.test";
     process.env.LITELLM_VISION_MODEL = "vision-model";
-    completeChatMock.mockResolvedValue({
+    completeResponseMock.mockResolvedValue({
       content: validResponse(1, { 0: { visualStyleMatch: undefined } }),
     });
 
@@ -438,34 +466,34 @@ describe("T38B Final review provider boundary", () => {
         visualStyleMatch: { final: null, previewUpscale: true },
       }],
     });
-    expect(completeChatMock).toHaveBeenCalledTimes(2);
+    expect(completeResponseMock).toHaveBeenCalledTimes(2);
   });
 
   it("separates terminal upstream and malformed-schema failures and redacts unsafe details", async () => {
     process.env.LITELLM_BASE_URL = "http://litellm.test";
     process.env.LITELLM_VISION_MODEL = "vision-model";
-    completeChatMock.mockRejectedValue(new LiteLlmError("PRIVATE_UPSTREAM data:image/png;base64,SECRET", { statusCode: 502 }));
+    completeResponseMock.mockRejectedValue(new LiteLlmError("PRIVATE_UPSTREAM data:image/png;base64,SECRET", { statusCode: 502 }));
 
     const upstream = await reviewFinalExecution(createExecution(1), createContext(createExecution(1)));
     expect(upstream).toMatchObject({ status: "failed", error: { code: "llm_upstream", details: { statusCode: 502 } } });
-    expect(completeChatMock).toHaveBeenCalledTimes(2);
+    expect(completeResponseMock).toHaveBeenCalledTimes(2);
     expect(JSON.stringify(upstream)).not.toContain("PRIVATE_UPSTREAM");
     expect(JSON.stringify(upstream)).not.toContain("data:image");
 
-    completeChatMock.mockReset().mockResolvedValue({ content: "{\"pairs\":[],\"raw\":\"PRIVATE_RAW_RESPONSE\"}" });
+    completeResponseMock.mockReset().mockResolvedValue({ content: "{\"pairs\":[],\"raw\":\"PRIVATE_RAW_RESPONSE\"}" });
     const malformed = await reviewFinalExecution(createExecution(1), createContext(createExecution(1)));
     expect(malformed).toMatchObject({
       status: "failed",
       error: { code: "llm_malformed_response", details: { recoverable: true, validationCode: "pair_coverage" } },
     });
-    expect(completeChatMock).toHaveBeenCalledTimes(2);
+    expect(completeResponseMock).toHaveBeenCalledTimes(2);
     expect(JSON.stringify(malformed)).not.toContain("PRIVATE_RAW_RESPONSE");
   });
 
   it("classifies upstream then malformed completion by the terminal schema failure without adding repair", async () => {
     process.env.LITELLM_BASE_URL = "http://litellm.test";
     process.env.LITELLM_VISION_MODEL = "vision-model";
-    completeChatMock
+    completeResponseMock
       .mockRejectedValueOnce(new TypeError("PRIVATE_FIRST_UPSTREAM data:image/png;base64,SECRET"))
       .mockResolvedValueOnce({ content: "{\"pairs\":[],\"raw\":\"PRIVATE_TERMINAL_RESPONSE\"}" });
 
@@ -478,8 +506,8 @@ describe("T38B Final review provider boundary", () => {
         details: { recoverable: true, validationCode: "pair_coverage" },
       },
     });
-    expect(completeChatMock).toHaveBeenCalledTimes(2);
-    expect(JSON.stringify(completeChatMock.mock.calls[1]?.[0])).not.toContain("Repair the schema");
+    expect(completeResponseMock).toHaveBeenCalledTimes(2);
+    expect(JSON.stringify(completeResponseMock.mock.calls[1]?.[0])).not.toContain("Repair the schema");
     expect(JSON.stringify(result)).not.toContain("PRIVATE_FIRST_UPSTREAM");
     expect(JSON.stringify(result)).not.toContain("PRIVATE_TERMINAL_RESPONSE");
     expect(JSON.stringify(result)).not.toContain("data:image");
@@ -488,7 +516,7 @@ describe("T38B Final review provider boundary", () => {
   it("classifies malformed completion then upstream failure by the terminal upstream attempt after one safe repair", async () => {
     process.env.LITELLM_BASE_URL = "http://litellm.test";
     process.env.LITELLM_VISION_MODEL = "vision-model";
-    completeChatMock
+    completeResponseMock
       .mockResolvedValueOnce({ content: "{\"pairs\":[],\"raw\":\"PRIVATE_FIRST_RESPONSE\"}" })
       .mockRejectedValueOnce(new LiteLlmError("PRIVATE_TERMINAL_UPSTREAM data:image/png;base64,SECRET", { statusCode: 503 }));
 
@@ -498,14 +526,14 @@ describe("T38B Final review provider boundary", () => {
       status: "failed",
       error: { code: "llm_upstream", details: { recoverable: true, statusCode: 503 } },
     });
-    expect(completeChatMock).toHaveBeenCalledTimes(2);
-    expect(completeChatMock.mock.calls[1]?.[0]).toMatchObject({
+    expect(completeResponseMock).toHaveBeenCalledTimes(2);
+    expect(completeResponseMock.mock.calls[1]?.[0]).toMatchObject({
       messages: expect.arrayContaining([expect.objectContaining({
         role: "user",
         content: expect.stringContaining("Safe validation reason"),
       })]),
     });
-    expect(JSON.stringify(completeChatMock.mock.calls[1]?.[0])).not.toContain("PRIVATE_FIRST_RESPONSE");
+    expect(JSON.stringify(completeResponseMock.mock.calls[1]?.[0])).not.toContain("PRIVATE_FIRST_RESPONSE");
     expect(JSON.stringify(result)).not.toContain("PRIVATE_FIRST_RESPONSE");
     expect(JSON.stringify(result)).not.toContain("PRIVATE_TERMINAL_UPSTREAM");
     expect(JSON.stringify(result)).not.toContain("data:image");
@@ -527,7 +555,7 @@ describe("T38B Final review provider boundary", () => {
         visualStyleMatch: { final: null, previewUpscale: true },
       }],
     });
-    expect(completeChatMock).not.toHaveBeenCalled();
+    expect(completeResponseMock).not.toHaveBeenCalled();
     expect(JSON.stringify(result)).not.toContain("PRIVATE");
     expect(JSON.stringify(result)).not.toContain("data:image");
   });
@@ -535,7 +563,7 @@ describe("T38B Final review provider boundary", () => {
   it("preserves an explicit user selection across review-only retry", async () => {
     process.env.LITELLM_BASE_URL = "http://litellm.test";
     process.env.LITELLM_VISION_MODEL = "vision-model";
-    completeChatMock.mockResolvedValue({ content: validResponse(1) });
+    completeResponseMock.mockResolvedValue({ content: validResponse(1) });
     const execution = createExecution(1);
     const context = createContext(execution);
     const previousPairs = getCompletedFinalReviewPairs(execution).map((pair) => ({
@@ -563,6 +591,6 @@ describe("T38B Final review provider boundary", () => {
       defaultVariant: "final",
       userSelectedVariant: "preview-upscale",
     });
-    expect(completeChatMock).toHaveBeenCalledTimes(1);
+    expect(completeResponseMock).toHaveBeenCalledTimes(1);
   });
 });

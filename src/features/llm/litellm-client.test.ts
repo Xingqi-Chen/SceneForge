@@ -264,6 +264,75 @@ describe("createLiteLlmClient", () => {
     expect(fetcher).toHaveBeenCalledTimes(1);
   });
 
+  it("preserves multimodal message, part, and image byte order for schema-free Responses requests", async () => {
+    const firstImage = "data:image/jpeg;base64,AAECAwQ=";
+    const secondImage = "data:image/png;base64,+/8AAQ==";
+    const fetcher = vi.fn<typeof fetch>(async (input, init) => {
+      expect(input).toBe("http://localhost:4000/v1/responses");
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      expect(body).toEqual({
+        model: "vision-model",
+        input: [
+          { role: "system", content: "Inspect images in their labeled order." },
+          {
+            role: "user",
+            content: [
+              { type: "input_text", text: "Candidate A" },
+              { type: "input_image", image_url: firstImage, detail: "high" },
+              { type: "input_text", text: "Candidate B" },
+              { type: "input_image", image_url: secondImage, detail: "high" },
+              { type: "input_text", text: "Compare A before B." },
+            ],
+          },
+          { role: "system", content: "Return JSON only." },
+        ],
+        temperature: 0,
+        max_output_tokens: 4_000,
+        stream: false,
+        store: false,
+      });
+      expect(body).not.toHaveProperty("text");
+
+      return new Response(JSON.stringify({
+        id: "resp-vision-1",
+        model: "vision-model",
+        status: "completed",
+        output: [{
+          type: "message",
+          role: "assistant",
+          status: "completed",
+          content: [{ type: "output_text", text: "{\"winner\":\"A\"}" }],
+        }],
+      }), { headers: { "content-type": "application/json" } });
+    });
+    const client = createLiteLlmClient({
+      baseUrl: "http://localhost:4000",
+      defaultModel: "vision-model",
+      fetcher,
+    });
+
+    await expect(client.completeResponse({
+      purpose: "single-image-final-review",
+      messages: [
+        { role: "system", content: "Inspect images in their labeled order." },
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "Candidate A" },
+            { type: "image_url", image_url: { url: firstImage, detail: "high" } },
+            { type: "text", text: "Candidate B" },
+            { type: "image_url", image_url: { url: secondImage, detail: "high" } },
+            { type: "text", text: "Compare A before B." },
+          ],
+        },
+        { role: "system", content: "Return JSON only." },
+      ],
+      temperature: 0,
+      maxTokens: 4_000,
+    })).resolves.toMatchObject({ content: "{\"winner\":\"A\"}" });
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps all Responses console logs metadata-only", async () => {
     const responseFormat = getRunScenePromptResponseFormat("krea2");
     const sentinels = [
@@ -405,6 +474,7 @@ describe("createLiteLlmClient", () => {
 
   it.each([
     ["empty output", { status: "completed", output: [] }, "no_message_item"],
+    ["noncompleted response status", { status: "incomplete", output: [] }, "response_noncompleted"],
     ["refusal", {
       status: "completed",
       output: [{
@@ -440,6 +510,15 @@ describe("createLiteLlmClient", () => {
       output: [{
         type: "message",
         role: "assistant",
+        content: [{ type: "output_text", text: "RAW_SCHEMA_FREE_MARKER" }],
+      }],
+    }, "message_noncompleted"],
+    ["noncompleted message status", {
+      status: "completed",
+      output: [{
+        type: "message",
+        role: "assistant",
+        status: "in_progress",
         content: [{ type: "output_text", text: "RAW_SCHEMA_FREE_MARKER" }],
       }],
     }, "message_noncompleted"],
@@ -519,13 +598,109 @@ describe("createLiteLlmClient", () => {
     expect(fetcher).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    ["refusal", [responsesSseEvent("response.output_item.done", {
+      type: "response.output_item.done",
+      output_index: 0,
+      item: {
+        type: "message",
+        role: "assistant",
+        status: "completed",
+        content: [{ type: "refusal", refusal: "RAW_SCHEMA_FREE_SSE_MARKER" }],
+      },
+    })]],
+    ["incomplete item", [responsesSseEvent("response.output_item.done", {
+      type: "response.output_item.done",
+      output_index: 0,
+      item: {
+        type: "message",
+        role: "assistant",
+        status: "in_progress",
+        content: [{ type: "output_text", text: "RAW_SCHEMA_FREE_SSE_MARKER" }],
+      },
+    })]],
+    ["duplicate assistant items", [0, 1].map((outputIndex) => responsesSseEvent("response.output_item.done", {
+      type: "response.output_item.done",
+      output_index: outputIndex,
+      item: {
+        type: "message",
+        role: "assistant",
+        status: "completed",
+        content: [{ type: "output_text", text: `RAW_SCHEMA_FREE_SSE_MARKER_${outputIndex}` }],
+      },
+    }))],
+    ["malformed sibling", [responsesSseEvent("response.output_item.done", {
+      type: "response.output_item.done",
+      output_index: 0,
+      item: {
+        type: "message",
+        role: "assistant",
+        status: "completed",
+        content: [{ type: "output_text", text: "RAW_SCHEMA_FREE_SSE_MARKER" }, null],
+      },
+    })]],
+    ["Chat-shaped terminal", []],
+  ] as const)("fails closed for schema-free forced SSE %s", async (label, itemEvents) => {
+    const consoleInfo = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    const terminal = label === "Chat-shaped terminal"
+      ? { status: "completed", choices: [{ message: { role: "assistant", content: "RAW_SCHEMA_FREE_SSE_MARKER" } }] }
+      : { status: "completed", output: [] };
+    const stream = [
+      ...itemEvents,
+      responsesSseEvent("response.completed", {
+        type: "response.completed",
+        response: terminal,
+      }),
+    ].join("");
+    const fetcher = vi.fn<typeof fetch>(async () => new Response(stream, {
+      headers: { "content-type": "text/event-stream" },
+    }));
+    const client = createLiteLlmClient({
+      baseUrl: "http://localhost:4000",
+      defaultModel: "vision-model",
+      fetcher,
+    });
+
+    try {
+      const error = await client.completeResponse({
+        purpose: "single-image-final-review",
+        messages: [{
+          role: "user",
+          content: [
+            { type: "text", text: "RAW_SCHEMA_FREE_SSE_PROMPT" },
+            {
+              type: "image_url",
+              image_url: { url: "data:image/jpeg;base64,RAW_SCHEMA_FREE_SSE_BYTES", detail: "high" },
+            },
+          ],
+        }],
+      }).catch((caught: unknown) => caught);
+
+      expect(error).toBeInstanceOf(LiteLlmError);
+      const exposed = JSON.stringify({ error, logs: consoleInfo.mock.calls });
+      expect(exposed).not.toContain("RAW_SCHEMA_FREE_SSE_MARKER");
+      expect(exposed).not.toContain("RAW_SCHEMA_FREE_SSE_PROMPT");
+      expect(exposed).not.toContain("RAW_SCHEMA_FREE_SSE_BYTES");
+      expect(exposed).not.toContain("data:image");
+      expect(fetcher).toHaveBeenCalledTimes(1);
+    } finally {
+      consoleInfo.mockRestore();
+    }
+  });
+
   it("sanitizes a schema-free provider rejection without retry or Chat fallback", async () => {
     const consoleInfo = vi.spyOn(console, "info").mockImplementation(() => undefined);
     const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({
       error: {
         message: "RAW_SCHEMA_FREE_PROVIDER_BODY",
         apiKey: "sk-schema-free-private-key",
-        request: { model: "private-provider-model", input: "RAW_SCHEMA_FREE_PROMPT" },
+        request: {
+          model: "private-provider-model",
+          input: "RAW_SCHEMA_FREE_PROMPT",
+          image: "data:image/png;base64,RAW_SCHEMA_FREE_PROVIDER_BYTES",
+          path: "C:\\private\\provider-path",
+          stack: "RAW_SCHEMA_FREE_PROVIDER_STACK",
+        },
       },
     }), {
       status: 502,
@@ -562,6 +737,10 @@ describe("createLiteLlmClient", () => {
         "sk-schema-free-private-key",
         "sk-private-client-key",
         "private-provider-model",
+        "RAW_SCHEMA_FREE_PROVIDER_BYTES",
+        "RAW_SCHEMA_FREE_PROVIDER_STACK",
+        "provider-path",
+        "data:image",
       ]) {
         expect(exposed).not.toContain(secret);
       }
