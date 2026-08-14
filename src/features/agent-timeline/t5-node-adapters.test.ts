@@ -9,6 +9,11 @@ import { bindPrimaryTimelineCharacterToEditorStore } from "./editor-canvas-bindi
 import { executeTimelineGraph } from "./graph";
 import { completeTimelineNode, createTimelineWorkflowState } from "./state";
 import {
+  buildRunStyleAdviceLlmRequest,
+  isAuthorizedRunPlanningResponsesApiRequest,
+  type RunPlanningResponsesNodeId,
+} from "./run-planning-responses";
+import {
   createTimelineT5NodeAdapters,
   normalizeCharacterTagsTimelineResult,
   normalizeScenePromptTimelineResult,
@@ -591,6 +596,10 @@ describe("T5 timeline node adapters", () => {
 
   it("preserves node 2 primary identity when node 3 returns conflicting character identity", async () => {
     const requests: LlmChatRequest[] = [];
+    const runPlanningRequests: Array<{
+      nodeId: RunPlanningResponsesNodeId;
+      request: LlmChatRequest;
+    }> = [];
     const bindings: TimelineCanvasBindingInput[] = [];
     const completeChat = async (request: LlmChatRequest): Promise<LlmChatResponse> => {
       requests.push(request);
@@ -662,6 +671,10 @@ describe("T5 timeline node adapters", () => {
       {
         ...createTimelineT5NodeAdapters({
           completeChat,
+          completeRunPlanningResponse: async (nodeId, request) => {
+            runPlanningRequests.push({ nodeId, request });
+            return completeChat(request);
+          },
           bindCanvas: (input) => {
             bindings.push(input);
             return {
@@ -718,6 +731,16 @@ describe("T5 timeline node adapters", () => {
       new Set(["prompt-tag-reverse", "stick-figure-pose-generation"]),
     );
     expect(requests).toHaveLength(3);
+    expect(runPlanningRequests.map(({ nodeId }) => nodeId).sort()).toEqual([
+      "character-action",
+      "character-tags",
+    ]);
+    for (const runPlanningRequest of runPlanningRequests) {
+      expect(isAuthorizedRunPlanningResponsesApiRequest({
+        ...runPlanningRequest,
+        request: { ...runPlanningRequest.request, nsfw: false },
+      })).toBe(true);
+    }
     const characterTagRequest = requests.find((request) => request.purpose === "prompt-tag-reverse");
     const characterTagSystemText = String(characterTagRequest?.messages[0]?.content ?? "");
     const characterTagUserText = String(characterTagRequest?.messages[1]?.content ?? "");
@@ -805,6 +828,68 @@ describe("T5 timeline node adapters", () => {
     expect(result.nodes["resource-recommendation"].status).toBe("done");
     expect(result.nodes["parameter-recommendation"].status).toBe("done");
     expect(result.nodes["generation-gate"].status).toBe("blocked");
+  });
+
+  it("authorizes exact Run style advice and rejects transport-spill or prompt mutations", () => {
+    const request = buildRunStyleAdviceLlmRequest({
+      baseNegativePrompt: "blurry, watermark",
+      finalPositivePrompt: "solo courier, neon station, wet pavement",
+      referenceResolution: { width: 1216, height: 832 },
+      selectedResources: {
+        checkpoint: {
+          id: "checkpoint-a",
+          name: "Cyber Checkpoint",
+          modelFileName: "Cyber Checkpoint.safetensors",
+          resourceType: "model",
+          versionName: "v1",
+          baseModel: "Illustrious",
+          creator: "tester",
+          trainedWords: [],
+          tags: ["anime"],
+          categories: [],
+          usageGuide: null,
+          descriptionSnippet: "Local anime checkpoint",
+          averageWeight: null,
+          minWeight: null,
+          maxWeight: null,
+          recommendations: [],
+          previewImage: null,
+        },
+        loras: [],
+      },
+      visualStyle: "anime",
+    });
+    const exact = { nodeId: "style-advice" as const, request };
+
+    expect(isAuthorizedRunPlanningResponsesApiRequest(exact)).toBe(true);
+
+    const clone = () => JSON.parse(JSON.stringify(exact)) as Record<string, unknown> & {
+      request: Record<string, unknown> & { messages: Array<Record<string, unknown>> };
+    };
+    const mutations: Array<(payload: ReturnType<typeof clone>) => void> = [
+      (payload) => { payload.nodeId = "character-tags"; },
+      (payload) => { payload.request.purpose = "scene-prompt-reverse"; },
+      (payload) => { payload.request.temperature = 0.26; },
+      (payload) => { payload.request.maxTokens = 901; },
+      (payload) => { payload.request.messages.reverse(); },
+      (payload) => { payload.request.messages[0].content += " MUTATED"; },
+      (payload) => {
+        const user = JSON.parse(String(payload.request.messages[1].content));
+        user.extra = "spill";
+        payload.request.messages[1].content = JSON.stringify(user);
+      },
+      (payload) => { payload.request.nsfw = false; },
+      (payload) => { payload.request.model = "caller-model"; },
+      (payload) => { payload.request.responseFormat = { type: "json_object" }; },
+      (payload) => { payload.request.extra = true; },
+      (payload) => { payload.extra = true; },
+    ];
+
+    for (const mutate of mutations) {
+      const payload = clone();
+      mutate(payload);
+      expect(isAuthorizedRunPlanningResponsesApiRequest(payload)).toBe(false);
+    }
   });
 
   it("preserves parsed prompt tag metadata through Node 3 and editor binding", async () => {

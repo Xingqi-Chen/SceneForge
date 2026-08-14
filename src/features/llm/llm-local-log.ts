@@ -3,6 +3,11 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 
 import type { LlmChatRequest, LlmChatResponse } from "./types";
+import {
+  summarizeLlmResponsesCompletionForLog,
+  summarizeLlmResponsesErrorForLog,
+  summarizeLlmResponsesRequestForLog,
+} from "./litellm-client";
 
 const DEFAULT_LLM_LOG_DIR = path.join(/*turbopackIgnore: true*/ process.cwd(), "data", "logs", "llm");
 const IMAGE_DATA_URL_PATTERN = /^data:image\//i;
@@ -21,6 +26,7 @@ export type LlmLocalLogCategory =
 
 export type LlmLocalLogRecord = {
   category?: LlmLocalLogCategory;
+  privacy?: "responses-safe";
   requestId: string;
   timestamp: string;
   phase: "request" | "response" | "error";
@@ -53,6 +59,7 @@ export type LlmChatLocalLogEntry =
       requestId: string;
       route: string;
       timestamp?: string;
+      transport?: "chat" | "responses";
     }
   | {
       category?: LlmLocalLogCategory;
@@ -62,6 +69,7 @@ export type LlmChatLocalLogEntry =
       requestId: string;
       route: string;
       timestamp?: string;
+      transport?: "chat" | "responses";
     }
   | {
       category?: LlmLocalLogCategory;
@@ -73,6 +81,7 @@ export type LlmChatLocalLogEntry =
       route: string;
       statusCode?: number;
       timestamp?: string;
+      transport?: "chat" | "responses";
     };
 
 function isDisabledConfigValue(value: string) {
@@ -249,6 +258,14 @@ export async function appendLlmLocalLog(record: LlmLocalLogRecord) {
       }
     }
   } catch (error) {
+    if (record.privacy === "responses-safe") {
+      console.error("[SceneForge] [llm] failed to write local Responses log", {
+        callType: "responses",
+        status: "write_failed",
+      });
+      return;
+    }
+
     console.error("[SceneForge] [llm] failed to write local LLM log", {
       filePath: target.filePath,
       error: serializeErrorForLlmLog(error),
@@ -262,19 +279,25 @@ export async function appendLlmChatLocalLog(entry: LlmChatLocalLogEntry) {
   if (entry.phase === "request") {
     await appendLlmLocalLog({
       category: entry.category,
+      ...(entry.transport === "responses" ? { privacy: "responses-safe" as const } : {}),
       requestId: entry.requestId,
       timestamp,
       phase: "request",
       route: entry.route,
-      payload: {
-        ...entry.context,
-        purpose: entry.request.purpose,
-        nsfw: entry.request.nsfw,
-        model: entry.request.model,
-        temperature: entry.request.temperature,
-        maxTokens: entry.request.maxTokens,
-        messages: entry.request.messages,
-      },
+      payload: entry.transport === "responses"
+        ? {
+            ...entry.context,
+            ...summarizeLlmResponsesRequestForLog(entry.request),
+          }
+        : {
+            ...entry.context,
+            purpose: entry.request.purpose,
+            nsfw: entry.request.nsfw,
+            model: entry.request.model,
+            temperature: entry.request.temperature,
+            maxTokens: entry.request.maxTokens,
+            messages: entry.request.messages,
+          },
     });
 
     return;
@@ -283,14 +306,20 @@ export async function appendLlmChatLocalLog(entry: LlmChatLocalLogEntry) {
   if (entry.phase === "response") {
     await appendLlmLocalLog({
       category: entry.category,
+      ...(entry.transport === "responses" ? { privacy: "responses-safe" as const } : {}),
       requestId: entry.requestId,
       timestamp,
       phase: "response",
       route: entry.route,
-      payload: {
-        ...entry.context,
-        completion: entry.completion,
-      },
+      payload: entry.transport === "responses"
+        ? {
+            ...entry.context,
+            ...summarizeLlmResponsesCompletionForLog(entry.completion),
+          }
+        : {
+            ...entry.context,
+            completion: entry.completion,
+          },
     });
 
     return;
@@ -298,15 +327,21 @@ export async function appendLlmChatLocalLog(entry: LlmChatLocalLogEntry) {
 
   await appendLlmLocalLog({
     category: entry.category,
+    ...(entry.transport === "responses" ? { privacy: "responses-safe" as const } : {}),
     requestId: entry.requestId,
     timestamp,
     phase: "error",
     route: entry.route,
-    payload: {
-      ...entry.context,
-      error: serializeErrorForLlmLog(entry.error),
-      ...(entry.statusCode !== undefined ? { statusCode: entry.statusCode } : {}),
-      ...(entry.details !== undefined ? { details: entry.details } : {}),
-    },
+    payload: entry.transport === "responses"
+      ? {
+          ...entry.context,
+          ...summarizeLlmResponsesErrorForLog(entry.error),
+        }
+      : {
+          ...entry.context,
+          error: serializeErrorForLlmLog(entry.error),
+          ...(entry.statusCode !== undefined ? { statusCode: entry.statusCode } : {}),
+          ...(entry.details !== undefined ? { details: entry.details } : {}),
+        },
   });
 }

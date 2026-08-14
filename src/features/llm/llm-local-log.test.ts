@@ -6,7 +6,9 @@ import path from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { appendLlmLocalLog } from "./llm-local-log";
+import { getRunScenePromptResponseFormat } from "./run-scene-prompt-response-format";
+import { LiteLlmError } from "./litellm-client";
+import { appendLlmChatLocalLog, appendLlmLocalLog } from "./llm-local-log";
 
 describe("appendLlmLocalLog", () => {
   const previousLogFile = process.env.SCENEFORGE_LLM_LOG_FILE;
@@ -256,5 +258,129 @@ describe("appendLlmLocalLog", () => {
     expect(content).toContain("[redacted image data URL]");
     expect(content).toContain('"detail":"high"');
     expect(content).toContain('"detail":"low"');
+  });
+
+  it("writes Responses request, completion, and error logs as metadata only", async () => {
+    const logFile = path.join(tempDir, "responses-safe.jsonl");
+    process.env.SCENEFORGE_LLM_LOG_FILE = logFile;
+    const responseFormat = getRunScenePromptResponseFormat("krea2");
+    const request = {
+      purpose: "stable-diffusion-prompt-generation" as const,
+      model: "SENTINEL_RESPONSES_MODEL",
+      messages: [{
+        role: "user" as const,
+        content: [
+          { type: "text" as const, text: "SENTINEL_RESPONSES_PROMPT" },
+          {
+            type: "image_url" as const,
+            image_url: {
+              url: "data:image/png;base64,SENTINEL_RESPONSES_BASE64",
+              detail: "high" as const,
+            },
+          },
+        ],
+      }],
+      responseFormat,
+    };
+
+    await appendLlmChatLocalLog({
+      phase: "request",
+      request,
+      requestId: "responses-safe-request",
+      route: "/api/llm/chat",
+      timestamp: "2026-08-14T00:00:00.000Z",
+      transport: "responses",
+    });
+    await appendLlmChatLocalLog({
+      completion: {
+        id: "SENTINEL_RESPONSE_ID",
+        model: "SENTINEL_RESPONSE_MODEL",
+        role: "assistant",
+        content: "SENTINEL_RESPONSES_RAW_OUTPUT",
+      },
+      phase: "response",
+      requestId: "responses-safe-response",
+      route: "/api/llm/chat",
+      timestamp: "2026-08-14T00:00:01.000Z",
+      transport: "responses",
+    });
+    await appendLlmChatLocalLog({
+      error: new LiteLlmError("SENTINEL_PROVIDER_ERROR", {
+        statusCode: 502,
+        details: {
+          upstreamStatus: 502,
+          rawProviderPayload: "SENTINEL_PROVIDER_PAYLOAD",
+          apiKey: "sk-sentinel-provider-key",
+          schema: responseFormat.json_schema.schema,
+          stack: "C:\\sentinel-private-path\\route.ts:1",
+        },
+      }),
+      phase: "error",
+      requestId: "responses-safe-error",
+      route: "/api/llm/chat",
+      statusCode: 502,
+      timestamp: "2026-08-14T00:00:02.000Z",
+      transport: "responses",
+    });
+
+    const content = await fs.readFile(logFile, "utf8");
+    for (const sentinel of [
+      "SENTINEL_RESPONSES_MODEL",
+      "SENTINEL_RESPONSES_PROMPT",
+      "SENTINEL_RESPONSES_BASE64",
+      "SENTINEL_RESPONSE_ID",
+      "SENTINEL_RESPONSE_MODEL",
+      "SENTINEL_RESPONSES_RAW_OUTPUT",
+      "SENTINEL_PROVIDER_ERROR",
+      "SENTINEL_PROVIDER_PAYLOAD",
+      "sk-sentinel-provider-key",
+      "sentinel-private-path",
+      responseFormat.json_schema.name,
+      JSON.stringify(responseFormat.json_schema.schema),
+    ]) {
+      expect(content).not.toContain(sentinel);
+    }
+    expect(content).not.toContain("data:image");
+    expect(content).not.toContain('"model"');
+    expect(content).not.toContain('"messages"');
+    expect(content).not.toContain('"stack"');
+    expect(content).toContain('"callType":"responses"');
+    expect(content).toContain('"contentChars":29');
+  });
+
+  it("keeps ordinary Chat local request and completion detail unchanged", async () => {
+    const logFile = path.join(tempDir, "chat-detailed.jsonl");
+    process.env.SCENEFORGE_LLM_LOG_FILE = logFile;
+
+    await appendLlmChatLocalLog({
+      phase: "request",
+      request: {
+        purpose: "scene-prompt-reverse",
+        model: "SENTINEL_CHAT_MODEL",
+        messages: [{ role: "user", content: "SENTINEL_CHAT_PROMPT" }],
+      },
+      requestId: "chat-request",
+      route: "/api/llm/chat",
+      timestamp: "2026-08-14T00:00:00.000Z",
+    });
+    await appendLlmChatLocalLog({
+      completion: {
+        id: "SENTINEL_CHAT_ID",
+        model: "SENTINEL_CHAT_RESPONSE_MODEL",
+        role: "assistant",
+        content: "SENTINEL_CHAT_RAW_OUTPUT",
+      },
+      phase: "response",
+      requestId: "chat-response",
+      route: "/api/llm/chat",
+      timestamp: "2026-08-14T00:00:01.000Z",
+    });
+
+    const content = await fs.readFile(logFile, "utf8");
+    expect(content).toContain("SENTINEL_CHAT_MODEL");
+    expect(content).toContain("SENTINEL_CHAT_PROMPT");
+    expect(content).toContain("SENTINEL_CHAT_ID");
+    expect(content).toContain("SENTINEL_CHAT_RESPONSE_MODEL");
+    expect(content).toContain("SENTINEL_CHAT_RAW_OUTPUT");
   });
 });

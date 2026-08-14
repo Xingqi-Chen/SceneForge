@@ -7,10 +7,19 @@ import {
   isAuthorizedRunScenePromptResponsesRequest,
   isLlmChatRequest,
   LiteLlmError,
+  summarizeLlmResponsesCompletionForLog,
+  summarizeLlmResponsesErrorForLog,
+  summarizeLlmResponsesRequestForLog,
   summarizeLlmResponseFormatForLog,
   type LlmChatRequest,
 } from "../../../../features/llm";
 import { appendLlmLocalLog, serializeErrorForLlmLog } from "../../../../features/llm/llm-local-log";
+import {
+  resolveDefaultModel,
+  resolveRequestModel,
+} from "../../../../features/llm/model-routing.server";
+
+export { resolveDefaultModel, resolveRequestModel } from "../../../../features/llm/model-routing.server";
 
 export const runtime = "nodejs";
 
@@ -36,89 +45,6 @@ function errorResponse(message: string, status: number, details?: unknown, code?
     },
     { status },
   );
-}
-
-function resolvePurposeDefaultModel(payload: LlmChatRequest) {
-  if (payload.purpose === "prompt-library-classification") {
-    return process.env.LITELLM_CLASSIFICATION_MODEL || process.env.LITELLM_DEFAULT_MODEL;
-  }
-
-  if (payload.purpose === "scene-prompt-reverse" || payload.purpose === "prompt-tag-reverse") {
-    return process.env.LITELLM_DEFAULT_MODEL;
-  }
-
-  if (payload.purpose === "stick-figure-pose-generation") {
-    return process.env.LITELLM_POSE_MODEL || process.env.LITELLM_DEFAULT_MODEL;
-  }
-
-  if (payload.purpose === "civitai-resource-enrichment") {
-    return process.env.LITELLM_DEFAULT_MODEL;
-  }
-
-  if (payload.purpose === "civitai-combination-recommendation") {
-    return process.env.LITELLM_CIVITAI_RECOMMENDATION_MODEL || process.env.LITELLM_DEFAULT_MODEL;
-  }
-
-  if (payload.purpose === "stable-diffusion-prompt-generation") {
-    return process.env.LITELLM_DEFAULT_MODEL;
-  }
-
-  if (payload.purpose === "story-style-reference-analysis") {
-    return process.env.LITELLM_VISION_MODEL || process.env.LITELLM_DEFAULT_MODEL;
-  }
-
-  if (payload.purpose === "single-image-preview-scoring") {
-    return process.env.LITELLM_DEFAULT_MODEL;
-  }
-
-  if (payload.purpose === "comic-sequence-storyboard") {
-    return process.env.LITELLM_DEFAULT_MODEL;
-  }
-
-  if (payload.purpose === "comfyui-generation-diagnosis") {
-    return process.env.LITELLM_COMFYUI_DIAGNOSIS_MODEL || process.env.LITELLM_DEFAULT_MODEL;
-  }
-
-  if (payload.purpose === "comfyui-inpaint-diagnosis") {
-    return process.env.LITELLM_COMFYUI_DIAGNOSIS_MODEL || process.env.LITELLM_DEFAULT_MODEL;
-  }
-
-  return process.env.LITELLM_DEFAULT_MODEL;
-}
-
-function isVisionPurposeWithExplicitRouting(payload: LlmChatRequest) {
-  return payload.purpose === "story-style-reference-analysis" ||
-    payload.purpose === "single-image-preview-scoring";
-}
-
-export function resolveDefaultModel(payload: LlmChatRequest) {
-  if (isVisionPurposeWithExplicitRouting(payload)) {
-    return resolvePurposeDefaultModel(payload);
-  }
-
-  if (payload.nsfw === true) {
-    return process.env.LITELLM_NSFW_MODEL || resolvePurposeDefaultModel(payload);
-  }
-
-  return resolvePurposeDefaultModel(payload);
-}
-
-export function resolveRequestModel(payload: LlmChatRequest) {
-  const defaultModel = resolveDefaultModel(payload);
-
-  if (payload.purpose === "single-image-preview-scoring") {
-    return defaultModel;
-  }
-
-  if (isVisionPurposeWithExplicitRouting(payload)) {
-    return payload.model ?? defaultModel;
-  }
-
-  if (payload.nsfw === true && process.env.LITELLM_NSFW_MODEL) {
-    return process.env.LITELLM_NSFW_MODEL;
-  }
-
-  return payload.model ?? defaultModel;
 }
 
 export async function POST(request: Request) {
@@ -149,21 +75,25 @@ export async function POST(request: Request) {
     ...chatRequest,
     model: resolveRequestModel(chatRequest),
   };
+  const useResponses = Boolean(isAuthorizedRunScenePromptResponsesRequest(resolvedRequest));
 
   await appendLlmLocalLog({
+    ...(useResponses ? { privacy: "responses-safe" as const } : {}),
     requestId,
     timestamp: new Date().toISOString(),
     phase: "request",
     route: "/api/llm/chat",
-    payload: {
-      purpose: resolvedRequest.purpose,
-      nsfw: resolvedRequest.nsfw,
-      model: resolvedRequest.model,
-      temperature: resolvedRequest.temperature,
-      maxTokens: resolvedRequest.maxTokens,
-      responseFormat: summarizeLlmResponseFormatForLog(resolvedRequest.responseFormat),
-      messages: resolvedRequest.messages,
-    },
+    payload: useResponses
+      ? summarizeLlmResponsesRequestForLog(resolvedRequest)
+      : {
+          purpose: resolvedRequest.purpose,
+          nsfw: resolvedRequest.nsfw,
+          model: resolvedRequest.model,
+          temperature: resolvedRequest.temperature,
+          maxTokens: resolvedRequest.maxTokens,
+          responseFormat: summarizeLlmResponseFormatForLog(resolvedRequest.responseFormat),
+          messages: resolvedRequest.messages,
+        },
   });
 
   try {
@@ -173,18 +103,19 @@ export async function POST(request: Request) {
       defaultModel,
     });
 
-    const completion = isAuthorizedRunScenePromptResponsesRequest(resolvedRequest)
+    const completion = useResponses
       ? await client.completeResponse(resolvedRequest)
       : await client.completeChat(resolvedRequest);
 
     await appendLlmLocalLog({
+      ...(useResponses ? { privacy: "responses-safe" as const } : {}),
       requestId,
       timestamp: new Date().toISOString(),
       phase: "response",
       route: "/api/llm/chat",
-      payload: {
-        completion,
-      },
+      payload: useResponses
+        ? summarizeLlmResponsesCompletionForLog(completion)
+        : { completion },
     });
 
     return NextResponse.json(completion);
@@ -199,36 +130,58 @@ export async function POST(request: Request) {
         : undefined;
       const safeDetails = structuredOutputDetails ?? error.details;
       await appendLlmLocalLog({
+        ...(useResponses ? { privacy: "responses-safe" as const } : {}),
         requestId,
         timestamp: new Date().toISOString(),
         phase: "error",
         route: "/api/llm/chat",
-        payload: {
-          error: serializeErrorForLlmLog(error),
-          statusCode: error.statusCode,
-          details: safeDetails,
-        },
+        payload: useResponses
+          ? {
+              ...summarizeLlmResponsesErrorForLog(error),
+              details: safeDetails,
+            }
+          : {
+              error: serializeErrorForLlmLog(error),
+              statusCode: error.statusCode,
+              details: safeDetails,
+            },
       });
 
-      console.error("[SceneForge] [llm] LiteLLM request failed", {
-        statusCode: error.statusCode,
-        details: safeDetails,
-      });
+      console.error(
+        "[SceneForge] [llm] LiteLLM request failed",
+        useResponses
+          ? {
+              ...summarizeLlmResponsesErrorForLog(error),
+              details: safeDetails,
+            }
+          : {
+              statusCode: error.statusCode,
+              details: safeDetails,
+            },
+      );
 
       return errorResponse(error.message, error.statusCode ?? 500, safeDetails);
     }
 
     await appendLlmLocalLog({
+      ...(useResponses ? { privacy: "responses-safe" as const } : {}),
       requestId,
       timestamp: new Date().toISOString(),
       phase: "error",
       route: "/api/llm/chat",
-      payload: {
-        error: serializeErrorForLlmLog(error),
-      },
+      payload: useResponses
+        ? summarizeLlmResponsesErrorForLog(error)
+        : { error: serializeErrorForLlmLog(error) },
     });
 
-    console.error("[SceneForge] [llm] unexpected LLM proxy failure", error);
+    if (useResponses) {
+      console.error(
+        "[SceneForge] [llm] unexpected LLM proxy failure",
+        summarizeLlmResponsesErrorForLog(error),
+      );
+    } else {
+      console.error("[SceneForge] [llm] unexpected LLM proxy failure", error);
+    }
 
     return errorResponse("Unexpected LLM request failure.", 500);
   }

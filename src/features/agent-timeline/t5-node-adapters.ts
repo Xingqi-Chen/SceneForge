@@ -80,6 +80,10 @@ export type TimelineCanvasBinder = (
 
 export type TimelineT5NodeAdapterOptions = {
   completeChat: TimelineCompleteChat;
+  completeRunPlanningResponse?: (
+    nodeId: "character-tags" | "character-action",
+    request: LlmChatRequest,
+  ) => Promise<LlmChatResponse>;
   bindCanvas?: TimelineCanvasBinder;
   getCurrentPose?: () => StickFigurePoseV1;
 };
@@ -800,6 +804,7 @@ function createTemporaryCanvasBindingResult(
 export function createTimelineT5NodeAdapters({
   bindCanvas,
   completeChat,
+  completeRunPlanningResponse = (_nodeId, request) => completeChat(request),
   getCurrentPose = createDefaultStickFigurePoseV1,
 }: TimelineT5NodeAdapterOptions): TimelineNodeAdapters {
   return {
@@ -816,12 +821,12 @@ export function createTimelineT5NodeAdapters({
         }),
     }),
     "character-tags": createLlmTimelineNodeAdapter({
-      completeChat,
+      completeChat: (request) => completeRunPlanningResponse("character-tags", request),
       buildRequest: buildCharacterTagsRequest,
       parseResponse: (response) => normalizeCharacterTagsTimelineResult(response.content),
     }),
     "character-action": createLlmTimelineNodeAdapter({
-      completeChat,
+      completeChat: (request) => completeRunPlanningResponse("character-action", request),
       buildRequest: (context) => buildCharacterActionRequest(context, getCurrentPose()),
       parseResponse: (response, context) =>
         parseCharacterActionResponse(response, getCurrentPose(), context),

@@ -2283,3 +2283,25 @@ Validation:
 
 - Pinned upstream workflow commit `121fb0183944f1befeb712d92e9ca07d0e282088` and Ostris node commit `7756566160c4a1b24bb1bd9f0ff3ced1a83d7547` inspected for exact nodes, ports, values, and conditioning topology.
 - Local `/object_info` confirms the required nodes, ports, configured FP8 Qwen3VL encoder and Qwen VAE, and ReID LoRA. Runtime capability is validated structurally without a separate Verified model tier; live four-seed identity QA remains a manual quality gate.
+
+### T59 / Issue #192 Single-image Run planning Responses transport
+
+Summary:
+
+- Generalized the shared LiteLLM Responses request type and mapper so schema-free calls omit `text.format` while strict Run Scene Prompt schema authorization remains unchanged.
+- Migrated Run Character Tags, Character Action, conditional Parameter Recommendation Style Advice, and the LLM completion stage of Run Civitai resource recommendation to `/v1/responses` with `store: false`, `stream: false`, no Chat fallback, and the existing JSON/forced-SSE decoder.
+- Added dedicated Run-only API boundaries. Text planning requires a closed node/purpose/prompt/payload/temperature/token contract and forbids client model or transport selection; Run Civitai recommendation uses a separate route and server-only Responses executor while the original Civitai Library route remains Chat.
+- Preserved prompts, local parsers, model and NSFW routing, token and temperature settings, embeddings/BM25/RRF retrieval, validation, graph retry/re-entry, stale propagation, persistence, and downstream artifacts.
+- Tightened canonical Responses normalization to require exactly one non-empty `output_text` content item in the sole completed assistant message. Unknown, malformed, refusal, annotation-like, or additional sibling content parts now fail closed in both final JSON and forced-SSE recovery.
+- Applied metadata-only console and local logging to every authorized Responses path, including Issue #190 Scene Prompt. Responses logs omit prompt/completion bodies, model routing, schema bodies, data URLs, credentials, provider payloads, stack traces, and filesystem paths while ordinary Chat logging remains unchanged.
+- Closed the Run resource route error contract to stable status/classification fields so recommendation output, checkpoint ids, summarized internal errors, database details, and provider details cannot cross the client or server-log boundary.
+
+Validation:
+
+- `npm run typecheck`
+- Final focused LLM, route, TimelineShell, adapter, logging, and Civitai evidence: 237 tests passed; the full suite passed 2,201 tests across 164 files.
+- Real adapter contract probe: Character Tags, Character Action, and Style Advice requests all passed the new allowlist.
+- Schema-free transport probe confirmed `store: false`, `stream: false`, `max_output_tokens`, omitted `text.format`, and fail-closed refusal/multiple-message/multiple-text handling.
+- `npm run lint` (0 errors; 22 existing `no-img-element` warnings)
+- `npm run build`
+- `git diff --check`

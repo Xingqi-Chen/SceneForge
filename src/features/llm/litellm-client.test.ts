@@ -219,6 +219,358 @@ describe("createLiteLlmClient", () => {
     expect(fetcher).toHaveBeenCalledTimes(1);
   });
 
+  it("maps a schema-free request without a text format and still disables streaming and storage", async () => {
+    const fetcher = vi.fn<typeof fetch>(async (input, init) => {
+      expect(input).toBe("http://localhost:4000/v1/responses");
+      expect(JSON.parse(String(init?.body))).toEqual({
+        model: "planning-model",
+        input: [
+          { role: "system", content: "Return concise planning text." },
+          { role: "user", content: "Plan the character action." },
+        ],
+        temperature: 0.25,
+        max_output_tokens: 900,
+        stream: false,
+        store: false,
+      });
+
+      return new Response(JSON.stringify({
+        id: "resp-planning-1",
+        model: "planning-model",
+        status: "completed",
+        output: [{
+          type: "message",
+          role: "assistant",
+          status: "completed",
+          content: [{ type: "output_text", text: "planned action" }],
+        }],
+      }), { headers: { "content-type": "application/json" } });
+    });
+    const client = createLiteLlmClient({
+      baseUrl: "http://localhost:4000",
+      defaultModel: "planning-model",
+      fetcher,
+    });
+
+    await expect(client.completeResponse({
+      purpose: "stick-figure-pose-generation",
+      messages: [
+        { role: "system", content: "Return concise planning text." },
+        { role: "user", content: "Plan the character action." },
+      ],
+      temperature: 0.25,
+      maxTokens: 900,
+    })).resolves.toMatchObject({ content: "planned action" });
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps all Responses console logs metadata-only", async () => {
+    const responseFormat = getRunScenePromptResponseFormat("krea2");
+    const sentinels = [
+      "SENTINEL_RESPONSES_PROMPT",
+      "SENTINEL_RESPONSES_RAW_OUTPUT",
+      "sentinel-private-model-id",
+      responseFormat.json_schema.name,
+      JSON.stringify(responseFormat.json_schema.schema),
+      "SENTINEL_BASE64_BYTES",
+      "sk-sentinel-responses-key",
+    ];
+    const consoleInfo = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({
+      id: "resp-private-id",
+      model: "sentinel-private-model-id",
+      status: "completed",
+      output: [{
+        type: "message",
+        role: "assistant",
+        status: "completed",
+        content: [{ type: "output_text", text: "SENTINEL_RESPONSES_RAW_OUTPUT" }],
+      }],
+    }), { headers: { "content-type": "application/json" } }));
+    const client = createLiteLlmClient({
+      baseUrl: "http://localhost:4000",
+      apiKey: "sk-sentinel-responses-key",
+      defaultModel: "sentinel-private-model-id",
+      fetcher,
+    });
+
+    try {
+      await expect(client.completeResponse({
+        purpose: "stable-diffusion-prompt-generation",
+        messages: [{
+          role: "user",
+          content: [
+            { type: "text", text: "SENTINEL_RESPONSES_PROMPT" },
+            {
+              type: "image_url",
+              image_url: { url: "data:image/png;base64,SENTINEL_BASE64_BYTES", detail: "high" },
+            },
+          ],
+        }],
+        responseFormat,
+      })).resolves.toMatchObject({ content: "SENTINEL_RESPONSES_RAW_OUTPUT" });
+
+      const serializedLogs = JSON.stringify(consoleInfo.mock.calls);
+      for (const sentinel of sentinels) {
+        expect(serializedLogs).not.toContain(sentinel);
+      }
+      expect(serializedLogs).not.toContain("data:image");
+      expect(serializedLogs).not.toContain("resp-private-id");
+    } finally {
+      consoleInfo.mockRestore();
+    }
+  });
+
+  it.each([
+    ["malformed primitive sibling", null, "message_content_invalid"],
+    ["unknown sibling", { type: "annotation", text: "SENTINEL_UNKNOWN_SIBLING" }, "message_content_invalid"],
+    ["refusal sibling", { type: "refusal", refusal: "SENTINEL_REFUSAL_SIBLING" }, "refusal"],
+    ["additional text sibling", { type: "output_text", text: "SENTINEL_SECOND_TEXT" }, "multiple_output_text"],
+    ["empty output_text sibling", { type: "output_text", text: "" }, "message_content_invalid"],
+  ] as const)("rejects JSON output_text with a %s", async (_label, sibling, outputShape) => {
+    const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({
+      status: "completed",
+      output: [{
+        type: "message",
+        role: "assistant",
+        status: "completed",
+        content: [
+          { type: "output_text", text: "VALID_TEXT_MUST_NOT_ESCAPE" },
+          sibling,
+        ],
+      }],
+    }), { headers: { "content-type": "application/json" } }));
+    const client = createLiteLlmClient({
+      baseUrl: "http://localhost:4000",
+      defaultModel: "planning-model",
+      fetcher,
+    });
+
+    await expect(client.completeResponse({
+      purpose: "prompt-tag-reverse",
+      messages: [{ role: "user", content: "Plan tags" }],
+    })).rejects.toMatchObject({
+      statusCode: 502,
+      details: { upstreamStatus: 502, outputShape },
+    });
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["malformed primitive sibling", null],
+    ["unknown sibling", { type: "annotation", text: "SENTINEL_UNKNOWN_SIBLING" }],
+    ["refusal sibling", { type: "refusal", refusal: "SENTINEL_REFUSAL_SIBLING" }],
+    ["additional text sibling", { type: "output_text", text: "SENTINEL_SECOND_TEXT" }],
+  ] as const)("rejects forced-SSE output_text with a %s", async (_label, sibling) => {
+    const consoleInfo = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    const stream = [
+      responsesSseEvent("response.output_item.done", {
+        type: "response.output_item.done",
+        output_index: 0,
+        item: {
+          type: "message",
+          role: "assistant",
+          status: "completed",
+          content: [
+            { type: "output_text", text: "VALID_TEXT_MUST_NOT_ESCAPE" },
+            sibling,
+          ],
+        },
+      }),
+      responsesSseEvent("response.completed", {
+        type: "response.completed",
+        response: { status: "completed", output: [] },
+      }),
+    ].join("");
+    try {
+      const { completion, fetcher } = completeFromResponsesSse(stream);
+
+      await expect(completion).rejects.toBeInstanceOf(LiteLlmError);
+      expect(fetcher).toHaveBeenCalledTimes(1);
+      const rejectionLog = consoleInfo.mock.calls.find(
+        (call) => call[0] === "[SceneForge] [llm] inbound LiteLLM Responses shape rejected",
+      );
+      expect(rejectionLog?.[1]).toEqual({
+        contentType: "text/event-stream",
+        payloadKind: "responses-event-stream",
+        reason: "terminal_item_invalid",
+      });
+      const serialized = JSON.stringify(rejectionLog);
+      expect(serialized).not.toContain("VALID_TEXT_MUST_NOT_ESCAPE");
+      expect(serialized).not.toContain("SENTINEL_");
+    } finally {
+      consoleInfo.mockRestore();
+    }
+  });
+
+  it.each([
+    ["empty output", { status: "completed", output: [] }, "no_message_item"],
+    ["refusal", {
+      status: "completed",
+      output: [{
+        type: "message",
+        role: "assistant",
+        status: "completed",
+        content: [{ type: "refusal", refusal: "RAW_SCHEMA_FREE_MARKER" }],
+      }],
+    }, "refusal"],
+    ["multiple assistant messages", {
+      status: "completed",
+      output: [0, 1].map((index) => ({
+        type: "message",
+        role: "assistant",
+        status: "completed",
+        content: [{ type: "output_text", text: `RAW_SCHEMA_FREE_MARKER_${index}` }],
+      })),
+    }, "multiple_assistant_messages"],
+    ["multiple output text parts", {
+      status: "completed",
+      output: [{
+        type: "message",
+        role: "assistant",
+        status: "completed",
+        content: [
+          { type: "output_text", text: "RAW_SCHEMA_FREE_MARKER_0" },
+          { type: "output_text", text: "RAW_SCHEMA_FREE_MARKER_1" },
+        ],
+      }],
+    }, "multiple_output_text"],
+    ["missing message status", {
+      status: "completed",
+      output: [{
+        type: "message",
+        role: "assistant",
+        content: [{ type: "output_text", text: "RAW_SCHEMA_FREE_MARKER" }],
+      }],
+    }, "message_noncompleted"],
+    ["Chat-shaped output", {
+      id: "chatcmpl-wrong-shape",
+      choices: [{ message: { role: "assistant", content: "RAW_SCHEMA_FREE_MARKER" } }],
+    }, "response_noncompleted"],
+  ] as const)("fails closed for schema-free %s without exposing raw output", async (_label, payload, outputShape) => {
+    const consoleInfo = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify(payload), {
+      headers: { "content-type": "application/json" },
+    }));
+    const client = createLiteLlmClient({
+      baseUrl: "http://localhost:4000",
+      defaultModel: "planning-model",
+      fetcher,
+    });
+
+    try {
+      const error = await client.completeResponse({
+        purpose: "prompt-tag-reverse",
+        messages: [{ role: "user", content: "Plan tags" }],
+      }).catch((caught: unknown) => caught);
+
+      expect(error).toBeInstanceOf(LiteLlmError);
+      expect((error as LiteLlmError).details).toEqual({
+        upstreamStatus: 502,
+        outputShape,
+      });
+      expect(JSON.stringify({ error, logs: consoleInfo.mock.calls })).not.toContain("RAW_SCHEMA_FREE_MARKER");
+      expect(fetcher).toHaveBeenCalledTimes(1);
+    } finally {
+      consoleInfo.mockRestore();
+    }
+  });
+
+  it("recovers schema-free forced SSE only from one canonical completed output item", async () => {
+    const stream = [
+      responsesSseEvent("response.output_text.delta", {
+        type: "response.output_text.delta",
+        output_index: 0,
+        content_index: 0,
+        delta: "DELTA_MUST_NOT_BE_USED",
+      }),
+      responsesSseEvent("response.output_item.done", {
+        type: "response.output_item.done",
+        output_index: 0,
+        item: {
+          type: "message",
+          role: "assistant",
+          status: "completed",
+          content: [{ type: "output_text", text: "CANONICAL_SCHEMA_FREE_OUTPUT" }],
+        },
+      }),
+      responsesSseEvent("response.completed", {
+        type: "response.completed",
+        response: { id: "resp-empty", status: "completed", output: [] },
+      }),
+      "data: [DONE]\n\n",
+    ].join("");
+    const fetcher = vi.fn<typeof fetch>(async () => new Response(stream, {
+      headers: { "content-type": "text/event-stream" },
+    }));
+    const client = createLiteLlmClient({
+      baseUrl: "http://localhost:4000",
+      defaultModel: "planning-model",
+      fetcher,
+    });
+
+    await expect(client.completeResponse({
+      purpose: "prompt-tag-reverse",
+      messages: [{ role: "user", content: "Plan tags" }],
+    })).resolves.toMatchObject({
+      id: "resp-empty",
+      content: "CANONICAL_SCHEMA_FREE_OUTPUT",
+    });
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it("sanitizes a schema-free provider rejection without retry or Chat fallback", async () => {
+    const consoleInfo = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({
+      error: {
+        message: "RAW_SCHEMA_FREE_PROVIDER_BODY",
+        apiKey: "sk-schema-free-private-key",
+        request: { model: "private-provider-model", input: "RAW_SCHEMA_FREE_PROMPT" },
+      },
+    }), {
+      status: 502,
+      headers: { "content-type": "application/json" },
+    }));
+    const client = createLiteLlmClient({
+      baseUrl: "http://localhost:4000",
+      apiKey: "sk-private-client-key",
+      defaultModel: "planning-model",
+      fetcher,
+    });
+
+    try {
+      const error = await client.completeResponse({
+        purpose: "prompt-tag-reverse",
+        messages: [{ role: "user", content: "PRIVATE_SCHEMA_FREE_REQUEST" }],
+      }).catch((caught: unknown) => caught);
+
+      expect(error).toBeInstanceOf(LiteLlmError);
+      expect(error).toMatchObject({
+        message: "LiteLLM Responses request failed.",
+        statusCode: 502,
+        details: { upstreamStatus: 502 },
+      });
+      const exposed = JSON.stringify({
+        message: (error as Error).message,
+        details: (error as LiteLlmError).details,
+        logs: consoleInfo.mock.calls,
+      });
+      for (const secret of [
+        "RAW_SCHEMA_FREE_PROVIDER_BODY",
+        "RAW_SCHEMA_FREE_PROMPT",
+        "PRIVATE_SCHEMA_FREE_REQUEST",
+        "sk-schema-free-private-key",
+        "sk-private-client-key",
+        "private-provider-model",
+      ]) {
+        expect(exposed).not.toContain(secret);
+      }
+      expect(fetcher).toHaveBeenCalledTimes(1);
+    } finally {
+      consoleInfo.mockRestore();
+    }
+  });
+
   it.each(["text/plain", "missing"] as const)(
     "accepts valid Responses JSON when Content-Type is %s",
     async (contentType) => {

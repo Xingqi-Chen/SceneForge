@@ -11,7 +11,7 @@ import {
   getCivitaiResourceConfiguredDownloadPath,
   makeCivitaiResourceTargetFileName,
 } from "@/features/civitai-lora-library";
-import type { LlmChatRequest } from "@/features/llm";
+import { LiteLlmError, type LlmChatRequest } from "@/features/llm";
 import {
   openSceneForgeSqliteDatabase,
   saveCivitaiLibrarySettingsToSqlite,
@@ -26,7 +26,9 @@ import {
 } from "@/features/persistence/civitai-embedding-index";
 
 const mockCompleteChat = vi.hoisted(() => vi.fn());
+const mockCompleteResponse = vi.hoisted(() => vi.fn());
 const mockCreateEmbedding = vi.hoisted(() => vi.fn());
+const appendLlmLocalLogMock = vi.hoisted(() => vi.fn(async () => undefined));
 
 vi.mock("@/features/llm", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/features/llm")>();
@@ -35,19 +37,21 @@ vi.mock("@/features/llm", async (importOriginal) => {
     ...actual,
     createLiteLlmClient: vi.fn(() => ({
       completeChat: mockCompleteChat,
+      completeResponse: mockCompleteResponse,
       createEmbedding: mockCreateEmbedding,
     })),
   };
 });
 
 vi.mock("@/features/llm/llm-local-log", () => ({
-  appendLlmLocalLog: vi.fn(async () => undefined),
+  appendLlmLocalLog: appendLlmLocalLogMock,
   serializeErrorForLlmLog: vi.fn((error: unknown) => ({
     message: error instanceof Error ? error.message : String(error),
   })),
 }));
 
 import { POST } from "./route";
+import { POST as POST_RUN_RECOMMENDATION } from "@/app/api/agent-timeline/run-resource-recommendation/route";
 
 function makeResourceInput(
   resourceType: "lora" | "model",
@@ -106,7 +110,9 @@ describe("Civitai AI recommendation route", () => {
 
   beforeEach(async () => {
     mockCompleteChat.mockReset();
+    mockCompleteResponse.mockReset();
     mockCreateEmbedding.mockReset();
+    appendLlmLocalLogMock.mockClear();
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "sceneforge-civitai-ai-rec-"));
     previousSqliteFile = process.env.SCENEFORGE_SQLITE_FILE;
     previousEmbeddingModel = process.env.LITELLM_CIVITAI_EMBEDDING_MODEL;
@@ -171,6 +177,185 @@ describe("Civitai AI recommendation route", () => {
       }),
     });
   }
+
+  it("uses Responses only for the exact Run boundary while preserving the Library Chat transport", async () => {
+    const checkpoint = upsertCivitaiResourceToSqlite(
+      db,
+      makeResourceInput("model", "Cyber Checkpoint"),
+    ).resource;
+    await markDownloaded(checkpoint);
+    rebuildCivitaiSearchIndex(db);
+    rebuildTestEmbeddingIndex();
+    const completion = {
+      role: "assistant" as const,
+      content: JSON.stringify({
+        checkpointId: checkpoint.id,
+        checkpointReason: "Matches the requested effect.",
+        loras: [],
+        recommendationReason: "Selected the available local checkpoint.",
+        overallEffect: "Cinematic anime portrait.",
+      }),
+    };
+    mockCompleteResponse.mockResolvedValue(completion);
+    mockCompleteChat.mockResolvedValue(completion);
+
+    const runResponse = await POST_RUN_RECOMMENDATION(new Request(
+      "http://localhost/api/agent-timeline/run-resource-recommendation",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          desiredEffect: "SENTINEL_RUN_CIVITAI_PROMPT",
+          maxLoras: 3,
+          promptProfile: "illustrious",
+          visualStyle: "anime",
+        }),
+      },
+    ));
+
+    expect(runResponse.status).toBe(200);
+    expect(mockCompleteResponse).toHaveBeenCalledTimes(1);
+    expect(mockCompleteChat).not.toHaveBeenCalled();
+    expect(mockCompleteResponse.mock.calls[0]?.[0]).toMatchObject({
+      purpose: "civitai-combination-recommendation",
+      nsfw: false,
+      maxTokens: 1000,
+    });
+    expect(mockCompleteResponse.mock.calls[0]?.[0]).not.toHaveProperty("responseFormat");
+    const runLogs = JSON.stringify(appendLlmLocalLogMock.mock.calls);
+    expect(runLogs).not.toContain("SENTINEL_RUN_CIVITAI_PROMPT");
+    expect(runLogs).not.toContain(checkpoint.id);
+    expect(runLogs).not.toContain(completion.content);
+    expect(runLogs).not.toContain("Cyber Checkpoint");
+    expect(runLogs).toContain('"privacy":"responses-safe"');
+    expect(runLogs).toContain('"callType":"responses"');
+
+    appendLlmLocalLogMock.mockClear();
+
+    const libraryResponse = await POST(new Request(
+      "http://localhost/api/civitai-lora-library/ai-recommendation",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          desiredEffect: "cyber neon courier",
+          maxLoras: 3,
+          promptProfile: "illustrious",
+        }),
+      },
+    ));
+
+    expect(libraryResponse.status).toBe(200);
+    expect(mockCompleteResponse).toHaveBeenCalledTimes(1);
+    expect(mockCompleteChat).toHaveBeenCalledTimes(1);
+    expect(mockCreateEmbedding).toHaveBeenCalledTimes(2);
+    const libraryLogs = JSON.stringify(appendLlmLocalLogMock.mock.calls);
+    expect(libraryLogs).toContain("cyber neon courier");
+    expect(libraryLogs).toContain(checkpoint.id);
+  });
+
+  it.each([
+    ["extra field", {
+      desiredEffect: "cyber neon courier",
+      maxLoras: 3,
+      promptProfile: "illustrious",
+      visualStyle: "anime",
+      nsfw: true,
+    }],
+    ["wrong LoRA limit", {
+      desiredEffect: "cyber neon courier",
+      maxLoras: 2,
+      promptProfile: "illustrious",
+      visualStyle: "anime",
+    }],
+    ["missing visual style", {
+      desiredEffect: "cyber neon courier",
+      maxLoras: 3,
+      promptProfile: "illustrious",
+    }],
+    ["invalid prompt profile", {
+      desiredEffect: "cyber neon courier",
+      maxLoras: 3,
+      promptProfile: "generic",
+      visualStyle: "anime",
+    }],
+  ])("rejects Run recommendation %s before ranking, embeddings, or LLM", async (_label, body) => {
+    const response = await POST_RUN_RECOMMENDATION(new Request(
+      "http://localhost/api/agent-timeline/run-resource-recommendation",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      },
+    ));
+
+    expect(response.status).toBe(400);
+    expect(mockCreateEmbedding).not.toHaveBeenCalled();
+    expect(mockCompleteResponse).not.toHaveBeenCalled();
+    expect(mockCompleteChat).not.toHaveBeenCalled();
+  });
+
+  it("sanitizes Run Civitai provider failures in both the route response and local Responses log", async () => {
+    const checkpoint = upsertCivitaiResourceToSqlite(
+      db,
+      makeResourceInput("model", "Cyber Checkpoint"),
+    ).resource;
+    await markDownloaded(checkpoint);
+    rebuildCivitaiSearchIndex(db);
+    rebuildTestEmbeddingIndex();
+    mockCompleteResponse.mockRejectedValue(new LiteLlmError("SENTINEL_CIVITAI_PROVIDER_ERROR", {
+      statusCode: 502,
+      details: {
+        upstreamStatus: 502,
+        rawProviderBody: "SENTINEL_CIVITAI_PROVIDER_BODY",
+        checkpointId: "SENTINEL_CIVITAI_CHECKPOINT_ID",
+        apiKey: "sk-sentinel-civitai-key",
+        stack: "C:\\sentinel-civitai-path\\provider.ts:1",
+      },
+    }));
+
+    const response = await POST_RUN_RECOMMENDATION(new Request(
+      "http://localhost/api/agent-timeline/run-resource-recommendation",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          desiredEffect: "SENTINEL_CIVITAI_REQUEST_PROMPT",
+          maxLoras: 3,
+          promptProfile: "illustrious",
+          visualStyle: "anime",
+        }),
+      },
+    ));
+    const body = await response.json();
+
+    expect(response.status).toBe(500);
+    expect(body).toEqual({
+      error: {
+        message: "Unable to recommend local Civitai resources.",
+        details: {
+          code: "run_resource_recommendation_failed",
+          classification: "request_failed",
+        },
+      },
+    });
+    const exposed = JSON.stringify({ body, logs: appendLlmLocalLogMock.mock.calls });
+    for (const sentinel of [
+      "SENTINEL_CIVITAI_PROVIDER_ERROR",
+      "SENTINEL_CIVITAI_PROVIDER_BODY",
+      "SENTINEL_CIVITAI_CHECKPOINT_ID",
+      "SENTINEL_CIVITAI_REQUEST_PROMPT",
+      "sk-sentinel-civitai-key",
+      "sentinel-civitai-path",
+    ]) {
+      expect(exposed).not.toContain(sentinel);
+    }
+    expect(exposed).not.toContain(checkpoint.id);
+    expect(exposed).toContain('"privacy":"responses-safe"');
+    expect(exposed).toContain('"callType":"responses"');
+    expect(mockCompleteResponse).toHaveBeenCalledTimes(1);
+    expect(mockCompleteChat).not.toHaveBeenCalled();
+  });
 
   it("returns an actionable error when the Civitai FTS index is missing", async () => {
     const response = await POST(
