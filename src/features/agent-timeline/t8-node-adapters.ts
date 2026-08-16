@@ -9,6 +9,11 @@ import {
   resolveTimelineFinalDimensions,
 } from "./final-generation-policy";
 import { getGenerationInputDetailers } from "./generation-detailers";
+import {
+  getExactAspectAlignedPreviewDimensions,
+  greatestCommonDivisor,
+  leastCommonMultiple,
+} from "./preview-dimensions";
 import { getRunSceneInputSettings } from "./run-input-settings";
 import {
   createTimelineNodeError,
@@ -141,39 +146,12 @@ export function getTimelinePreviewCandidateCount(finalCount: number) {
   return Math.min(8, Math.max(4, normalizeTimelineImageCount(finalCount) * 2));
 }
 
-function greatestCommonDivisor(left: number, right: number) {
-  let first = left;
-  let second = right;
-  while (second !== 0) {
-    const remainder = first % second;
-    first = second;
-    second = remainder;
-  }
-  return first;
-}
-
-function leastCommonMultiple(left: number, right: number) {
-  return (left / greatestCommonDivisor(left, right)) * right;
-}
-
 export function getTimelinePreviewDimensions(width: number, height: number, longestEdge = 768, alignment = PREVIEW_DIMENSION_ALIGNMENT) {
   if (![width, height, longestEdge, alignment].every((value) => Number.isSafeInteger(value) && value > 0)) {
     invalidComfyUiRequest("Preview width, height, longest-edge limit, and alignment must be positive integers.");
   }
-  if (Math.max(width, height) <= longestEdge) {
-    return { width, height };
-  }
-
-  const ratioDivisor = greatestCommonDivisor(width, height);
-  const ratioWidth = width / ratioDivisor;
-  const ratioHeight = height / ratioDivisor;
-  const widthAlignmentMultiplier = alignment / greatestCommonDivisor(ratioWidth, alignment);
-  const heightAlignmentMultiplier = alignment / greatestCommonDivisor(ratioHeight, alignment);
-  const alignmentMultiplier = leastCommonMultiple(widthAlignmentMultiplier, heightAlignmentMultiplier);
-  const maximumMultiplier = Math.floor(longestEdge / Math.max(ratioWidth, ratioHeight));
-  const multiplier = Math.floor(maximumMultiplier / alignmentMultiplier) * alignmentMultiplier;
-
-  if (multiplier < alignmentMultiplier) {
+  const dimensions = getExactAspectAlignedPreviewDimensions(width, height, longestEdge, alignment);
+  if (!dimensions) {
     invalidComfyUiRequest(
       `Preview dimensions ${width}x${height} cannot be downscaled to an exact-aspect, ` +
       `${alignment}-pixel-aligned size within longest edge ${longestEdge}. ` +
@@ -181,8 +159,7 @@ export function getTimelinePreviewDimensions(width: number, height: number, long
       { height, longestEdge, width },
     );
   }
-
-  return { width: ratioWidth * multiplier, height: ratioHeight * multiplier };
+  return dimensions;
 }
 
 const KREA2_REID_PREVIEW_MAX_PIXELS = 1_048_576;

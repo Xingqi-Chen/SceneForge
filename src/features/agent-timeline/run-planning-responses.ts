@@ -4,6 +4,7 @@ import { buildStylePaletteAdviceMessages } from "@/features/editor/ai-prompt/sty
 import { isLlmChatRequest, type LlmChatRequest, type LlmResponsesRequest } from "@/features/llm";
 import type { SelectedCivitaiResourcesPreview } from "@/features/civitai-lora-library/types";
 import { buildCharacterTextPromptTagMessages } from "@/features/prompt-engine/prompt-library/character-image-prompt-tags";
+import { normalizePromptProfileId, type PromptProfileId } from "@/shared/prompt-profile";
 
 import { buildRunVisualStyleLlmInstructions } from "./run-visual-style";
 import type { RunVisualStyle } from "./run-visual-style";
@@ -15,22 +16,43 @@ export type RunPlanningResponsesApiRequest = {
   request: LlmChatRequest;
 };
 
+const KREA_STYLE_ADVICE_RESOLUTION_INSTRUCTIONS = [
+  "Krea 2 resolution contract: parameterSuggestions.resolution is required in WIDTHxHEIGHT form.",
+  "WIDTH and HEIGHT must each be exact base-10 integers from 16 through 16384 inclusive and divisible by 16.",
+  "For Krea 2 img2img, return exactly the uploaded source WIDTHxHEIGHT supplied in the preset description; never round, resize, crop, pad, stretch, substitute dimensions, or change its aspect ratio.",
+  "For Krea 2 txt2img, choose a resolution that satisfies this contract; SceneForge may deterministically normalize a positive-integer recommendation for exact-aspect Preview compatibility.",
+].join("\n");
+
+const KREA_TXT2IMG_ADVICE_DESCRIPTION =
+  "Timeline prompt used for Krea 2 txt2img model parameter advice. Return a resolution that satisfies the Krea 2 resolution contract.";
+
+function buildKreaImg2ImgAdviceDescription(referenceResolution: { height: number; width: number }) {
+  return `Timeline prompt used for Krea 2 img2img model parameter advice. Return exactly the uploaded source image dimensions ${referenceResolution.width}x${referenceResolution.height}; do not resize, crop, pad, stretch, substitute dimensions, or change its aspect ratio.`;
+}
+
 export function buildRunStyleAdviceLlmRequest({
   baseNegativePrompt,
   finalPositivePrompt,
+  promptProfile,
   referenceResolution,
   selectedResources,
   visualStyle,
 }: {
   baseNegativePrompt: string;
   finalPositivePrompt: string;
+  promptProfile?: PromptProfileId;
   referenceResolution?: { height: number; width: number };
   selectedResources: SelectedCivitaiResourcesPreview;
   visualStyle: RunVisualStyle;
 }): LlmChatRequest {
-  const description = referenceResolution
-    ? `Timeline prompt used for img2img model parameter advice. Use the uploaded source image dimensions ${referenceResolution.width}x${referenceResolution.height} as the reference resolution.`
-    : "Timeline prompt used for model parameter advice.";
+  const isKrea2Profile = normalizePromptProfileId(promptProfile) === "krea2";
+  const description = isKrea2Profile
+    ? referenceResolution
+      ? buildKreaImg2ImgAdviceDescription(referenceResolution)
+      : KREA_TXT2IMG_ADVICE_DESCRIPTION
+    : referenceResolution
+      ? `Timeline prompt used for img2img model parameter advice. Use the uploaded source image dimensions ${referenceResolution.width}x${referenceResolution.height} as the reference resolution.`
+      : "Timeline prompt used for model parameter advice.";
   const messages = buildStylePaletteAdviceMessages({
     artistPrompts: [],
     preset: {
@@ -44,7 +66,11 @@ export function buildRunStyleAdviceLlmRequest({
   }).map((message, index) => index === 0 && typeof message.content === "string"
     ? {
         ...message,
-        content: `${message.content}\n${buildRunVisualStyleLlmInstructions(visualStyle)}`,
+        content: [
+          message.content,
+          buildRunVisualStyleLlmInstructions(visualStyle),
+          ...(isKrea2Profile ? [KREA_STYLE_ADVICE_RESOLUTION_INSTRUCTIONS] : []),
+        ].join("\n"),
       }
     : message);
 
@@ -76,11 +102,25 @@ const characterActionSystemPrompt = typeof characterActionSystemContent === "str
   ? characterActionSystemContent
   : undefined;
 
-const styleAdviceSystemPrompts = new Set(
+const standardStyleAdviceSystemPrompts = new Set(
   ["anime", "photoreal"].map((visualStyle) => {
     const content = buildRunStyleAdviceLlmRequest({
       baseNegativePrompt: "Run negative prompt",
       finalPositivePrompt: "Run positive prompt",
+      promptProfile: "illustrious",
+      selectedResources: { checkpoint: null, loras: [] },
+      visualStyle: visualStyle as RunVisualStyle,
+    }).messages[0]?.content;
+    return typeof content === "string" ? content : "";
+  }),
+);
+
+const kreaStyleAdviceSystemPrompts = new Set(
+  ["anime", "photoreal"].map((visualStyle) => {
+    const content = buildRunStyleAdviceLlmRequest({
+      baseNegativePrompt: "Run negative prompt",
+      finalPositivePrompt: "Run positive prompt",
+      promptProfile: "krea2",
       selectedResources: { checkpoint: null, loras: [] },
       visualStyle: visualStyle as RunVisualStyle,
     }).messages[0]?.content;
@@ -210,7 +250,27 @@ function isCharacterActionUserPayload(value: unknown) {
     hasExactPoseMap(currentPose.poles, characterPosePoleIds);
 }
 
-function isStyleAdviceUserPayload(value: unknown) {
+function isValidKreaAdviceDescription(value: string) {
+  if (value === KREA_TXT2IMG_ADVICE_DESCRIPTION) {
+    return true;
+  }
+
+  const match = /^Timeline prompt used for Krea 2 img2img model parameter advice\. Return exactly the uploaded source image dimensions (\d+)x(\d+); do not resize, crop, pad, stretch, substitute dimensions, or change its aspect ratio\.$/.exec(value);
+  if (!match) {
+    return false;
+  }
+
+  return match.slice(1).every((axis) => {
+    const dimension = Number(axis);
+    return String(dimension) === axis &&
+      Number.isInteger(dimension) &&
+      dimension >= 16 &&
+      dimension <= 16_384 &&
+      dimension % 16 === 0;
+  });
+}
+
+function isStyleAdviceUserPayload(value: unknown, promptProfile: "krea2" | "standard") {
   const payload = parseJsonRecord(value);
   if (!payload || !hasOnlyKeys(payload, ["artistPrompt", "civitaiResources", "preset"])) {
     return false;
@@ -231,10 +291,12 @@ function isStyleAdviceUserPayload(value: unknown) {
   return payload.preset.id === "portrait" &&
     payload.preset.label === "Timeline render prompt" &&
     typeof description === "string" &&
-    (
-      description === "Timeline prompt used for model parameter advice." ||
-      /^Timeline prompt used for img2img model parameter advice\. Use the uploaded source image dimensions \d+x\d+ as the reference resolution\.$/.test(description)
-    ) &&
+    (promptProfile === "krea2"
+      ? isValidKreaAdviceDescription(description)
+      : (
+          description === "Timeline prompt used for model parameter advice." ||
+          /^Timeline prompt used for img2img model parameter advice\. Use the uploaded source image dimensions \d+x\d+ as the reference resolution\.$/.test(description)
+        )) &&
     typeof payload.preset.positive === "string" &&
     typeof payload.preset.negative === "string";
 }
@@ -275,16 +337,21 @@ export function isAuthorizedRunPlanningResponsesApiRequest(
   }
 
   if (value.nodeId === "style-advice") {
+    const systemPrompt = request.messages[0]?.content;
+    const promptProfile = typeof systemPrompt === "string" && kreaStyleAdviceSystemPrompts.has(systemPrompt)
+      ? "krea2"
+      : typeof systemPrompt === "string" && standardStyleAdviceSystemPrompts.has(systemPrompt)
+        ? "standard"
+        : null;
     return request.nsfw === undefined &&
       request.purpose === "stable-diffusion-prompt-generation" &&
       request.temperature === 0.25 &&
       request.maxTokens === 900 &&
       request.messages.length === 2 &&
       request.messages[0]?.role === "system" &&
-      typeof request.messages[0].content === "string" &&
-      styleAdviceSystemPrompts.has(request.messages[0].content) &&
+      promptProfile !== null &&
       request.messages[1]?.role === "user" &&
-      isStyleAdviceUserPayload(request.messages[1].content);
+      isStyleAdviceUserPayload(request.messages[1].content, promptProfile);
   }
 
   return false;

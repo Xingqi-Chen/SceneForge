@@ -2,6 +2,16 @@
 
 This log records dated implementation and documentation work. Keep entries concise and evidence-oriented.
 
+## 2026-08-16
+
+### T62 / Issue #200 Krea Style Advice dimension contract
+
+- Propagated the trusted Run prompt profile into Style Advice request construction and added exact-authorized Krea Anime/Photoreal system-prompt variants without changing the Illustrious, Anima, Story, or editor advice prompts.
+- Required Krea advice to return integer `WIDTHxHEIGHT` dimensions in 16–16384 with both axes divisible by 16. Source img2img additionally prohibits rounding, resizing, cropping, padding, stretching, dimension substitution, or aspect-ratio changes.
+- Added a complete-domain deterministic normalization for positive-integer source-less, unsaved Krea AI advice. It minimizes squared relative axis error with the specified aspect, area, non-enlargement, Preview-area, width, and height tie-breaks, exposes changed dimensions in the existing reason, and shares Node 9's pure exact-aspect 16-aligned Preview feasibility calculation.
+- Hardened the Krea resolution-string boundary so only a whole unsigned integer pair can enter normalization. Exact negative axes remain invalid, and malformed signed strings cannot become positive through the shared tolerant parser's unsigned substring matching.
+- Added local validation of ordinary Krea source dimensions before any Style Advice provider call and required valid sources to be requested at their exact uploaded dimensions. Source and saved dimensions remain unmodified and fail closed; saved-parameter bypass, fixed Krea sampling, and local positive-prompt authority remain unchanged.
+
 ## 2026-08-04
 
 ### T58 / Issue #190 Run Scene Prompt Responses transport

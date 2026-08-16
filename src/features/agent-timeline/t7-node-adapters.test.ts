@@ -24,6 +24,7 @@ import type {
 } from "./types";
 import type { PromptProfileId } from "@/shared/prompt-profile";
 import type { SavedComfyUiGenerationParams } from "@/shared/types";
+import { getKrea2PreviewDimensions } from "./preview-dimensions";
 
 function makeResource(
   resourceType: "model" | "lora",
@@ -1321,6 +1322,7 @@ describe("T7 timeline adapters", () => {
     ) as ParameterRecommendationTimelineResult;
 
     expect(styleAdviceRequest).toMatchObject({
+      promptProfile: "illustrious",
       referenceResolution: {
         height: 1024,
         width: 1536,
@@ -1600,6 +1602,7 @@ describe("T7 timeline adapters", () => {
           "the courier stands at the center of the frame, krea_style",
         baseNegativePrompt:
           "low quality, bad hands, live-action human photography, documentary photograph, photographic skin texture",
+        promptProfile: "krea2",
         visualStyle: "anime",
         selectedResources: expect.objectContaining({
           checkpoint: expect.objectContaining({ id: "checkpoint-krea" }),
@@ -1640,6 +1643,99 @@ describe("T7 timeline adapters", () => {
         strengthClip: 0.54,
       },
     ]);
+  });
+
+  it("passes exact aligned Krea source dimensions and profile to Style Advice", async () => {
+    const resourceResult = makeKreaResourceResult();
+    const adviseStyle = vi.fn(() => null);
+    let workflow = createTimelineWorkflowState({
+      promptProfile: "krea2",
+      sceneRequest: "A source-guided Krea courier",
+      sourceDenoise: 0.42,
+      sourceImage: {
+        dataUrl: "data:image/png;base64,c291cmNl",
+        filename: "source.png",
+        height: 832,
+        mimeType: "image/png",
+        uploadedAt: "2026-07-26T00:00:00.000Z",
+        width: 1216,
+      },
+    });
+    workflow = completeTimelineNode(workflow, "scene-prompt", makeKreaScenePrompt(), "ai");
+    workflow = completeTimelineNode(workflow, "resource-recommendation", resourceResult, "ai");
+    const adapter = createTimelineT7NodeAdapters({
+      adviseStyle,
+      loadResourceCandidates: () => resourceResult.candidates,
+      loadSamplerOptions: () => ({ samplers: ["euler"], schedulers: ["simple"] }),
+      recommendResources: vi.fn(),
+    })["parameter-recommendation"];
+
+    const adapterResult = await adapter?.({
+      dependencies: [workflow.nodes["scene-prompt"], workflow.nodes["resource-recommendation"]],
+      nodeId: "parameter-recommendation",
+      workflow,
+    });
+    const result = (
+      adapterResult && typeof adapterResult === "object" && "value" in adapterResult
+        ? adapterResult.value
+        : adapterResult
+    ) as ParameterRecommendationTimelineResult;
+
+    expect(adviseStyle).toHaveBeenCalledTimes(1);
+    expect(adviseStyle).toHaveBeenCalledWith(
+      expect.objectContaining({
+        promptProfile: "krea2",
+        referenceResolution: { width: 1216, height: 832 },
+      }),
+      expect.any(Object),
+    );
+    expect(result).toMatchObject({
+      width: 1216,
+      height: 832,
+      denoise: 0.42,
+      requestPreview: {
+        width: 1216,
+        height: 832,
+        imageWidth: 1216,
+        imageHeight: 832,
+      },
+    });
+  });
+
+  it.each([
+    ["non-aligned width", 1000, 1024],
+    ["below-minimum height", 1024, 15],
+    ["above-maximum width", 16_400, 1024],
+  ])("rejects a Krea source with %s before Style Advice", async (_label, width, height) => {
+    const resourceResult = makeKreaResourceResult();
+    const adviseStyle = vi.fn();
+    let workflow = createTimelineWorkflowState({
+      promptProfile: "krea2",
+      sceneRequest: "An invalid source-guided Krea courier",
+      sourceImage: {
+        dataUrl: "data:image/png;base64,c291cmNl",
+        filename: "invalid-source.png",
+        height,
+        mimeType: "image/png",
+        uploadedAt: "2026-07-26T00:00:00.000Z",
+        width,
+      },
+    });
+    workflow = completeTimelineNode(workflow, "scene-prompt", makeKreaScenePrompt(), "ai");
+    workflow = completeTimelineNode(workflow, "resource-recommendation", resourceResult, "ai");
+    const adapter = createTimelineT7NodeAdapters({
+      adviseStyle,
+      loadResourceCandidates: () => resourceResult.candidates,
+      loadSamplerOptions: () => ({ samplers: ["euler"], schedulers: ["simple"] }),
+      recommendResources: vi.fn(),
+    })["parameter-recommendation"];
+
+    await expect(adapter?.({
+      dependencies: [workflow.nodes["scene-prompt"], workflow.nodes["resource-recommendation"]],
+      nodeId: "parameter-recommendation",
+      workflow,
+    })).rejects.toThrow(/Krea 2 Turbo (width|height) must be an exact 16-pixel-aligned integer/);
+    expect(adviseStyle).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -1827,28 +1923,13 @@ describe("T7 timeline adapters", () => {
     });
   });
 
-  it("rejects non-16-aligned Krea source, saved, and AI-advised dimensions without rounding", () => {
+  it("rejects non-16-aligned Krea source and saved dimensions without rounding", () => {
     const resourceResult = makeKreaResourceResult();
     const common = {
       resourceResult,
       scenePrompt: makeKreaScenePrompt(),
       canvasBinding: null,
       samplerOptions: { samplers: ["euler"], schedulers: ["simple"] },
-    };
-    const invalidAdvice = {
-      prompt: "ignored",
-      parameterSuggestionReason: "Invalid dimensions.",
-      overallEffect: "Invalid.",
-      parseWarning: null,
-      parameterSuggestions: {
-        cfgScale: 1,
-        loraWeights: [],
-        negativePromptAdditions: "",
-        resolution: "1000x1024",
-        sampler: "euler",
-        scheduler: "simple",
-        steps: 8,
-      },
     };
 
     expect(() => createTimelineParameterRecommendation({
@@ -1866,10 +1947,159 @@ describe("T7 timeline adapters", () => {
       ...common,
       savedParameters: makeSavedKreaParameters({ width: 1000, height: 1024 }),
     })).toThrow(/Krea 2 Turbo width must be an exact 16-pixel-aligned integer/);
+  });
+
+  it("normalizes only source-less unsaved Krea AI advice and records the dimension change", () => {
+    const resourceResult = makeKreaResourceResult();
+    const common = {
+      resourceResult,
+      scenePrompt: makeKreaScenePrompt(),
+      canvasBinding: null,
+      samplerOptions: { samplers: ["euler"], schedulers: ["simple"] },
+    };
+    const aiAdvice = {
+      prompt: "ignored",
+      parameterSuggestionReason: "AI selected a portrait resolution.",
+      overallEffect: "Portrait framing.",
+      parseWarning: null,
+      parameterSuggestions: {
+        cfgScale: 1,
+        loraWeights: [],
+        negativePromptAdditions: "",
+        resolution: "1328x1952",
+        sampler: "euler",
+        scheduler: "simple",
+        steps: 8,
+      },
+    };
+
+    const normalized = createTimelineParameterRecommendation({ ...common, aiAdvice });
+    expect(normalized).toMatchObject({
+      width: 1344,
+      height: 1968,
+      requestPreview: { width: 1344, height: 1968 },
+    });
+    expect(normalized.reason).toContain("1328x1952");
+    expect(normalized.reason).toContain("1344x1968");
+
+    const feasible = createTimelineParameterRecommendation({
+      ...common,
+      aiAdvice: {
+        ...aiAdvice,
+        parameterSuggestions: { ...aiAdvice.parameterSuggestions, resolution: "1216x832" },
+      },
+    });
+    expect(feasible).toMatchObject({
+      width: 1216,
+      height: 832,
+      requestPreview: { width: 1216, height: 832 },
+    });
+    expect(feasible.reason).not.toContain("normalized the advised Krea resolution");
+
+    expect(createTimelineParameterRecommendation({
+      ...common,
+      aiAdvice,
+      savedParameters: makeSavedKreaParameters({ width: 1328, height: 1952 }),
+    })).toMatchObject({ width: 1328, height: 1952 });
+    expect(createTimelineParameterRecommendation({
+      ...common,
+      aiAdvice,
+      sourceImage: {
+        dataUrl: "data:image/png;base64,c291cmNl",
+        filename: "authoritative-source.png",
+        height: 1952,
+        mimeType: "image/png",
+        uploadedAt: "2026-07-26T00:00:00.000Z",
+        width: 1328,
+      },
+    })).toMatchObject({ width: 1328, height: 1952 });
+  });
+
+  it("does not fabricate normalized Krea dimensions from missing, unparseable, or non-positive AI advice", () => {
+    const resourceResult = makeKreaResourceResult();
+    const common = {
+      resourceResult,
+      scenePrompt: makeKreaScenePrompt(),
+      canvasBinding: null,
+      samplerOptions: { samplers: ["euler"], schedulers: ["simple"] },
+    };
+    const advice = (resolution: unknown) => ({
+      prompt: "ignored",
+      parameterSuggestionReason: "AI returned unusable dimensions.",
+      overallEffect: "Fallback behavior.",
+      parseWarning: null,
+      parameterSuggestions: {
+        cfgScale: 1,
+        loraWeights: [],
+        negativePromptAdditions: "",
+        resolution,
+        sampler: "euler",
+        scheduler: "simple",
+        steps: 8,
+      },
+    });
+
+    for (const resolution of [
+      undefined,
+      "not-a-resolution",
+      "+1328x1952",
+      "1328x+1952",
+      "1328 by 1952",
+    ]) {
+      const result = createTimelineParameterRecommendation({ ...common, aiAdvice: advice(resolution) });
+      expect(result).toMatchObject({ width: 1024, height: 1024 });
+      expect(result.reason).not.toContain("normalized the advised Krea resolution");
+    }
+
     expect(() => createTimelineParameterRecommendation({
       ...common,
-      aiAdvice: invalidAdvice,
+      aiAdvice: advice("-1328x1952"),
     })).toThrow(/Krea 2 Turbo width must be an exact 16-pixel-aligned integer/);
+    expect(() => createTimelineParameterRecommendation({
+      ...common,
+      aiAdvice: advice("1328x-1952"),
+    })).toThrow(/Krea 2 Turbo height must be an exact 16-pixel-aligned integer/);
+
+    const suffixMalformed = createTimelineParameterRecommendation({
+      ...common,
+      aiAdvice: advice("1328x1952px"),
+    });
+    expect(suffixMalformed).toMatchObject({ width: 1328, height: 1952 });
+    expect(suffixMalformed.reason).not.toContain("normalized the advised Krea resolution");
+    expect(getKrea2PreviewDimensions(suffixMalformed.width, suffixMalformed.height)).toBeNull();
+
+    for (const resolution of [
+      { width: 0, height: 1024 },
+      { width: -16, height: 1024 },
+      { width: 1024, height: 0 },
+      { width: 1024, height: -16 },
+    ]) {
+      expect(() => createTimelineParameterRecommendation({
+        ...common,
+        aiAdvice: advice(resolution),
+      })).toThrow(/Krea 2 Turbo (width|height) must be an exact 16-pixel-aligned integer/);
+    }
+
+    const standardCheckpoint = makeResource(
+      "model",
+      "checkpoint-standard",
+      "Standard Checkpoint",
+      "Illustrious",
+    );
+    const standardResult: ResourceRecommendationTimelineResult = {
+      checkpoint: { resource: standardCheckpoint, reason: "Standard model." },
+      loras: [],
+      candidates: { checkpoints: [makeCandidate(standardCheckpoint)], loras: [] },
+      recommendationReason: "Standard recommendation.",
+      overallEffect: "Standard render.",
+      warnings: [],
+    };
+    expect(createTimelineParameterRecommendation({
+      ...common,
+      resourceResult: standardResult,
+      scenePrompt: makeScenePrompt("illustrious"),
+      aiAdvice: advice("-1328x1952"),
+    })).toMatchObject({ width: 1328, height: 1952 });
   });
 
   it("does not format an assembled Anima prompt a second time in the request preview", () => {

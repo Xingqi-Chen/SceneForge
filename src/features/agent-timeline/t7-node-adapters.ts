@@ -43,6 +43,7 @@ import {
   createSavedParametersFromGenerationStylePalette,
   type GenerationStylePaletteSnapshot,
 } from "./generation-style-palette";
+import { normalizeKrea2AiDimensions } from "./preview-dimensions";
 import { getRunSceneInputSettings } from "./run-input-settings";
 import {
   appendRunVisualStyleNegativeGuidance,
@@ -104,6 +105,7 @@ export type TimelineSamplerOptionsProvider = (
 export type TimelineStyleAdviceRequest = {
   baseNegativePrompt: string;
   finalPositivePrompt: string;
+  promptProfile: PromptProfileId;
   referenceResolution?: {
     height: number;
     width: number;
@@ -583,6 +585,48 @@ function normalizeKrea2RenderDimension(value: unknown, fallback: number, label: 
   return dimension;
 }
 
+function getKrea2AiAdviceDimensions(
+  parameterSuggestions: unknown,
+  parsed: { height?: number; width?: number } | null,
+) {
+  const parsedDimensions = {
+    height: parsed?.height,
+    width: parsed?.width,
+    canNormalize: true,
+  };
+  if (!isRecord(parameterSuggestions) || typeof parameterSuggestions.resolution !== "string") {
+    return parsedDimensions;
+  }
+  if (["width", "imageWidth", "height", "imageHeight"].some((key) => key in parameterSuggestions)) {
+    return parsedDimensions;
+  }
+
+  const resolution = parameterSuggestions.resolution.trim();
+  const exactUnsigned = /^(\d+)\s*[x×]\s*(\d+)$/.exec(resolution);
+  if (exactUnsigned) {
+    return {
+      width: Number(exactUnsigned[1]),
+      height: Number(exactUnsigned[2]),
+      canNormalize: true,
+    };
+  }
+
+  const exactSigned = /^([+-]?\d+)\s*[x×]\s*([+-]?\d+)$/.exec(resolution);
+  if (exactSigned && (exactSigned[1].startsWith("-") || exactSigned[2].startsWith("-"))) {
+    return {
+      width: Number(exactSigned[1]),
+      height: Number(exactSigned[2]),
+      canNormalize: false,
+    };
+  }
+
+  if (/[+-]\s*\d/.test(resolution)) {
+    return { width: undefined, height: undefined, canNormalize: false };
+  }
+
+  return { ...parsedDimensions, canNormalize: false };
+}
+
 function makeSeedPolicy(requestSeed: number | undefined): TimelineSeedPolicy {
   return typeof requestSeed === "number" && Number.isSafeInteger(requestSeed) && requestSeed >= 0
     ? { mode: "fixed", seed: requestSeed }
@@ -691,15 +735,40 @@ export function createTimelineParameterRecommendation({
       baseNegativePrompt,
     );
   const parsedAiAdvice = parseComfyUiAiGenerationParameters(resolvedAiAdvice.parameterSuggestions);
+  const krea2AiAdviceDimensions = getKrea2AiAdviceDimensions(
+    resolvedAiAdvice.parameterSuggestions,
+    parsedAiAdvice,
+  );
+  const normalizedKrea2AiDimensions = isKrea2Profile && !sourceImage && !savedParameters &&
+      krea2AiAdviceDimensions.canNormalize &&
+      Number.isSafeInteger(krea2AiAdviceDimensions.width) && (krea2AiAdviceDimensions.width ?? 0) > 0 &&
+      Number.isSafeInteger(krea2AiAdviceDimensions.height) && (krea2AiAdviceDimensions.height ?? 0) > 0
+    ? normalizeKrea2AiDimensions(
+        krea2AiAdviceDimensions.width as number,
+        krea2AiAdviceDimensions.height as number,
+      )
+    : null;
+  const krea2AiDimensionAdjustment = normalizedKrea2AiDimensions &&
+      (normalizedKrea2AiDimensions.width !== krea2AiAdviceDimensions.width ||
+        normalizedKrea2AiDimensions.height !== krea2AiAdviceDimensions.height)
+    ? {
+        advisedHeight: krea2AiAdviceDimensions.height as number,
+        advisedWidth: krea2AiAdviceDimensions.width as number,
+        normalizedHeight: normalizedKrea2AiDimensions.height,
+        normalizedWidth: normalizedKrea2AiDimensions.width,
+      }
+    : null;
   const krea2Dimensions = isKrea2Profile
     ? {
         width: normalizeKrea2RenderDimension(
-          sourceImage?.width ?? savedParameters?.width ?? parsedAiAdvice?.width,
+          sourceImage?.width ?? savedParameters?.width ??
+            normalizedKrea2AiDimensions?.width ?? krea2AiAdviceDimensions.width,
           1024,
           "width",
         ),
         height: normalizeKrea2RenderDimension(
-          sourceImage?.height ?? savedParameters?.height ?? parsedAiAdvice?.height,
+          sourceImage?.height ?? savedParameters?.height ??
+            normalizedKrea2AiDimensions?.height ?? krea2AiAdviceDimensions.height,
           1024,
           "height",
         ),
@@ -791,14 +860,18 @@ export function createTimelineParameterRecommendation({
     requestPreview,
     ...(characterReference ? { characterReference } : {}),
     ...(styleReference ? { styleReference } : {}),
-    reason: savedParameters
+    reason: `${savedParameters
       ? "Used generation parameters saved in the Run Scene Composer."
       : aiAdvice
       ? (aiAdvice.parameterSuggestionReason.trim() ||
         "Used AI Style Advice with local resource metadata to create a ComfyUI text-to-image request preview.")
       : settings.parameterSource === "ai"
         ? "Used local resource metadata and prompt context to create a ComfyUI text-to-image request preview."
-      : "Used conservative ComfyUI defaults because no model-specific parameter metadata was available.",
+      : "Used conservative ComfyUI defaults because no model-specific parameter metadata was available."}${
+        krea2AiDimensionAdjustment
+          ? ` SceneForge normalized the advised Krea resolution ${krea2AiDimensionAdjustment.advisedWidth}x${krea2AiDimensionAdjustment.advisedHeight} to ${krea2AiDimensionAdjustment.normalizedWidth}x${krea2AiDimensionAdjustment.normalizedHeight} for exact-aspect 16-pixel Preview compatibility.`
+          : ""
+      }`,
     warnings: request.samplerName !== samplerName || request.scheduler !== scheduler
       ? ["Sampler or scheduler suggestion was normalized to an available option."]
       : [],
@@ -873,6 +946,10 @@ export function createTimelineT7NodeAdapters({
         inputSettings.visualStyle,
       );
       const sourceImage = getSceneInputSourceImage(context.workflow);
+      if (promptProfile === "krea2" && sourceImage) {
+        normalizeKrea2RenderDimension(sourceImage.width, 1024, "width");
+        normalizeKrea2RenderDimension(sourceImage.height, 1024, "height");
+      }
       const styleReferenceIssue = getStyleReferenceBlockingIssue(inputSettings.styleReference, "Run");
       if (styleReferenceIssue) {
         invalidTimelineInput(styleReferenceIssue);
@@ -899,6 +976,7 @@ export function createTimelineT7NodeAdapters({
             {
               baseNegativePrompt,
               finalPositivePrompt,
+              promptProfile,
               ...(sourceImage
                 ? {
                     referenceResolution: {

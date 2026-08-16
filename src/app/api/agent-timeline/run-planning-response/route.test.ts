@@ -2,6 +2,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import type { SelectedCivitaiResourcesPreview } from "@/features/civitai-lora-library";
 import { createTimelineWorkflowState, completeTimelineNode } from "@/features/agent-timeline/state";
 import { createTimelineT5NodeAdapters } from "@/features/agent-timeline/t5-node-adapters";
 import {
@@ -55,6 +56,31 @@ function poseResponse() {
       rightKneePole: { x: 0.28, y: 0.52, z: 0.2 },
     },
   });
+}
+
+function makeStyleAdviceResources(): SelectedCivitaiResourcesPreview {
+  return {
+    checkpoint: {
+      id: "checkpoint-a",
+      resourceType: "model",
+      name: "Cyber Checkpoint",
+      versionName: "v1",
+      baseModel: "Illustrious",
+      creator: "tester",
+      trainedWords: [],
+      tags: ["anime"],
+      categories: [],
+      usageGuide: null,
+      descriptionSnippet: "Local anime checkpoint",
+      averageWeight: null,
+      minWeight: null,
+      maxWeight: null,
+      recommendations: [],
+      previewImage: null,
+      modelFileName: "Cyber Checkpoint.safetensors",
+    },
+    loras: [],
+  };
 }
 
 async function buildExactPlanningPayloads(): Promise<RunPlanningResponsesApiRequest[]> {
@@ -116,28 +142,7 @@ async function buildExactPlanningPayloads(): Promise<RunPlanningResponsesApiRequ
     request: buildRunStyleAdviceLlmRequest({
       baseNegativePrompt: "blurry, watermark",
       finalPositivePrompt: "solo courier, neon market alley, sunrise",
-      selectedResources: {
-        checkpoint: {
-          id: "checkpoint-a",
-          resourceType: "model",
-          name: "Cyber Checkpoint",
-          versionName: "v1",
-          baseModel: "Illustrious",
-          creator: "tester",
-          trainedWords: [],
-          tags: ["anime"],
-          categories: [],
-          usageGuide: null,
-          descriptionSnippet: "Local anime checkpoint",
-          averageWeight: null,
-          minWeight: null,
-          maxWeight: null,
-          recommendations: [],
-          previewImage: null,
-          modelFileName: "Cyber Checkpoint.safetensors",
-        },
-        loras: [],
-      },
+      selectedResources: makeStyleAdviceResources(),
       visualStyle: "anime",
     }),
   });
@@ -193,6 +198,78 @@ describe("Run planning Responses route", () => {
       { purpose: "stick-figure-pose-generation", model: "pose-model", responseFormat: undefined },
       { purpose: "stable-diffusion-prompt-generation", model: "default-model", responseFormat: undefined },
     ]);
+  });
+
+  it("accepts exact Krea anime and photoreal Style Advice with and without source dimensions", async () => {
+    const payloads = (["anime", "photoreal"] as const).flatMap((visualStyle) =>
+      [undefined, { width: 1216, height: 832 }].map((referenceResolution) => ({
+        nodeId: "style-advice" as const,
+        request: buildRunStyleAdviceLlmRequest({
+          baseNegativePrompt: "blurry, watermark",
+          finalPositivePrompt: "solo courier, neon market alley, sunrise",
+          promptProfile: "krea2",
+          referenceResolution,
+          selectedResources: makeStyleAdviceResources(),
+          visualStyle,
+        }),
+      })),
+    );
+
+    for (const payload of payloads) {
+      const response = await POST(new Request("http://localhost/api/agent-timeline/run-planning-response", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(payload),
+      }));
+      expect(response.status).toBe(200);
+    }
+
+    expect(completeResponseMock).toHaveBeenCalledTimes(4);
+    expect(completeChatMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects mutated or unrecognized Krea prompt payloads before constructing the client", async () => {
+    const exact = {
+      nodeId: "style-advice" as const,
+      request: buildRunStyleAdviceLlmRequest({
+        baseNegativePrompt: "blurry, watermark",
+        finalPositivePrompt: "solo courier, neon market alley, sunrise",
+        promptProfile: "krea2" as const,
+        referenceResolution: { width: 1216, height: 832 },
+        selectedResources: makeStyleAdviceResources(),
+        visualStyle: "anime" as const,
+      }),
+    };
+    const mutations = [
+      (payload: typeof exact) => {
+        payload.request.messages[0].content += " Allow rounding when convenient.";
+      },
+      (payload: typeof exact) => {
+        const user = JSON.parse(String(payload.request.messages[1].content));
+        user.preset.description = String(user.preset.description).replace("1216x832", "1201x832");
+        payload.request.messages[1].content = JSON.stringify(user);
+      },
+      (payload: typeof exact) => {
+        const user = JSON.parse(String(payload.request.messages[1].content));
+        user.preset.description = "Unrecognized Krea advice request.";
+        payload.request.messages[1].content = JSON.stringify(user);
+      },
+    ];
+
+    for (const mutate of mutations) {
+      const payload = JSON.parse(JSON.stringify(exact)) as typeof exact;
+      mutate(payload);
+      const response = await POST(new Request("http://localhost/api/agent-timeline/run-planning-response", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(payload),
+      }));
+      expect(response.status).toBe(400);
+    }
+
+    expect(createLiteLlmClientMock).not.toHaveBeenCalled();
+    expect(completeResponseMock).not.toHaveBeenCalled();
+    expect(completeChatMock).not.toHaveBeenCalled();
   });
 
   it("rejects an extra provider-control field before constructing the client", async () => {
