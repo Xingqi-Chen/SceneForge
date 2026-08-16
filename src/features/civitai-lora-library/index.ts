@@ -5,6 +5,7 @@ export * from "./client";
 export * from "./download";
 export * from "./enrichment";
 export * from "./image-url";
+export * from "./image-resource-selection";
 export * from "./normalize";
 export * from "./parsing";
 export * from "./settings";

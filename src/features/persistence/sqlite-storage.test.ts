@@ -25,6 +25,7 @@ import {
   listReferencedArtistStringLocalImageUrlsFromSqlite,
   loadCivitaiLibrarySettingsFromSqlite,
   listCivitaiImageCacheReferencesFromSqlite,
+  listImportedImageLoraUsagesFromSqlite,
   listImportedImagesFromSqlite,
   listReferencedCivitaiLocalImageUrlsFromSqlite,
   listProjectSummariesFromSqlite,
@@ -701,6 +702,9 @@ describe("sqlite persistence support", () => {
     expect(getImportedImageDetailFromSqlite(db, importedImage.id)?.usages.map((usage) => usage.resource.name)).toEqual([
       "Light Filter",
       "Scene Checkpoint",
+    ]);
+    expect(listImportedImageLoraUsagesFromSqlite(db, importedImage.id).map((usage) => usage.resource.name)).toEqual([
+      "Light Filter",
     ]);
     const updatedImageDetail = updateImportedImageLoraUsageWeightsFromSqlite(db, importedImage.id, [
       { usageId: loraUsage.id, weight: 0.65 },

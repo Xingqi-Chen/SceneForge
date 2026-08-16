@@ -2000,6 +2000,26 @@ export function getImportedImageFromSqlite(
   return mapImportedImageRow(row);
 }
 
+export function listImportedImageLoraUsagesFromSqlite(
+  db: SceneForgeSqliteDatabase,
+  importedImageId: string,
+): Array<ImageResourceUsageRecord & { resource: CivitaiResourceRecord }> {
+  return db.prepare(`
+    SELECT iru.*
+    FROM image_resource_usages iru
+    INNER JOIN civitai_resources r ON r.id = iru.resource_id
+    WHERE iru.imported_image_id = ?
+      AND r.resource_type = 'lora'
+    ORDER BY iru.created_at ASC, iru.rowid ASC
+  `).all(importedImageId).map((usageRow) => {
+    const usage = mapUsageRow(usageRow);
+    return {
+      ...usage,
+      resource: mapResourceRow(getResourceRowById(db, usage.resourceId)),
+    };
+  });
+}
+
 export function getImportedImageDetailFromSqlite(
   db: SceneForgeSqliteDatabase,
   importedImageId: string,

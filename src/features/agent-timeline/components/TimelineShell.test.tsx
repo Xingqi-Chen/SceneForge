@@ -2404,6 +2404,7 @@ describe("TimelineShell", () => {
           "anime",
           "photoreal",
         ]);
+        expect(getButtonByText("Select by image")).toBeDefined();
       } finally {
         globalThis.fetch = originalFetch;
       }

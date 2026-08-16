@@ -144,6 +144,30 @@ describe("Run scene input generation settings", () => {
     });
   });
 
+  it("persists a large ordered user-selected LoRA stack without truncation or image metadata", () => {
+    const loraIds = [
+      "lora-8",
+      "lora-3",
+      "lora-6",
+      "lora-1",
+      "lora-7",
+      "lora-2",
+      "lora-5",
+      "lora-4",
+    ];
+    const stylePalette = createGenerationStylePaletteSnapshot({
+      checkpointId: "checkpoint-current",
+      loraIds,
+    });
+
+    const persisted = sanitizeRunSceneInputSettingsSnapshot({ stylePalette });
+
+    expect(persisted.stylePalette?.checkpointId).toBe("checkpoint-current");
+    expect(persisted.stylePalette?.loras.map(({ id }) => id)).toEqual(loraIds);
+    expect(persisted.stylePalette?.loras).toHaveLength(8);
+    expect(JSON.stringify(persisted.stylePalette)).not.toMatch(/importedImage|imageId|imageBytes/);
+  });
+
   it("defaults legacy records to both detailers disabled", () => {
     const settings = sanitizeRunSceneInputSettingsSnapshot(undefined);
 

@@ -282,6 +282,24 @@ export type ImportedImageDetail = ImportedImageListItem & {
   usages: Array<ImageResourceUsageRecord & { resource: CivitaiResourceRecord }>;
 };
 
+export type CivitaiImageResourceSelectionWarningReason =
+  | "base_model_mismatch"
+  | "duplicate_usage"
+  | "not_ready";
+
+export type CivitaiImageResourceSelectionWarning = {
+  resourceId: string;
+  resourceName: string;
+  reason: CivitaiImageResourceSelectionWarningReason;
+  message: string;
+};
+
+export type CivitaiImageResourceSelectionResult = {
+  checkpointId: string;
+  loraIds: string[];
+  warnings: CivitaiImageResourceSelectionWarning[];
+};
+
 export type CivitaiResourceDetail = CivitaiResourceListItem & {
   usages: Array<ImageResourceUsageRecord & { importedImage: ImportedImageRecord }>;
   commonCheckpoints: Array<{ resourceId: string; name: string; count: number }>;
