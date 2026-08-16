@@ -62,6 +62,10 @@ export type LlmChatRequest = {
   responseFormat?: LlmJsonSchemaResponseFormat;
 };
 
+export type LlmResponsesRequest = Omit<LlmChatRequest, "responseFormat"> & {
+  responseFormat: LlmJsonSchemaResponseFormat;
+};
+
 export type LlmTokenUsage = {
   promptTokens?: number;
   completionTokens?: number;

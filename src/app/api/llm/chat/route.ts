@@ -3,6 +3,8 @@ import { NextResponse } from "next/server";
 import {
   createStructuredOutputErrorDetails,
   createLiteLlmClient,
+  getLlmResponsesOutputShapeDiagnostic,
+  isAuthorizedRunScenePromptResponsesRequest,
   isLlmChatRequest,
   LiteLlmError,
   summarizeLlmResponseFormatForLog,
@@ -171,7 +173,9 @@ export async function POST(request: Request) {
       defaultModel,
     });
 
-    const completion = await client.completeChat(resolvedRequest);
+    const completion = isAuthorizedRunScenePromptResponsesRequest(resolvedRequest)
+      ? await client.completeResponse(resolvedRequest)
+      : await client.completeChat(resolvedRequest);
 
     await appendLlmLocalLog({
       requestId,
@@ -187,7 +191,11 @@ export async function POST(request: Request) {
   } catch (error) {
     if (error instanceof LiteLlmError) {
       const structuredOutputDetails = resolvedRequest.responseFormat
-        ? createStructuredOutputErrorDetails(resolvedRequest.responseFormat, error.statusCode)
+        ? createStructuredOutputErrorDetails(
+            resolvedRequest.responseFormat,
+            error.statusCode,
+            getLlmResponsesOutputShapeDiagnostic(error.details),
+          )
         : undefined;
       const safeDetails = structuredOutputDetails ?? error.details;
       await appendLlmLocalLog({

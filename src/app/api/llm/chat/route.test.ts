@@ -3,8 +3,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const completeChatMock = vi.hoisted(() => vi.fn());
+const completeResponseMock = vi.hoisted(() => vi.fn());
 const createLiteLlmClientMock = vi.hoisted(() => vi.fn(() => ({
   completeChat: completeChatMock,
+  completeResponse: completeResponseMock,
 })));
 const appendLlmLocalLogMock = vi.hoisted(() => vi.fn(async (record: unknown) => {
   void record;
@@ -53,6 +55,7 @@ describe("LLM chat route model selection", () => {
 
   afterEach(() => {
     completeChatMock.mockReset();
+    completeResponseMock.mockReset();
     createLiteLlmClientMock.mockClear();
     appendLlmLocalLogMock.mockClear();
     vi.restoreAllMocks();
@@ -255,9 +258,11 @@ describe("LLM chat route model selection", () => {
     expect(completeChatMock).not.toHaveBeenCalled();
   });
 
-  it("accepts and forwards an exact Run scene-prompt response format", async () => {
-    const responseFormat = getRunScenePromptResponseFormat("anima");
-    completeChatMock.mockResolvedValue({
+  it.each(["illustrious", "anima", "krea2"] as const)(
+    "routes the exact %s Run scene-prompt response format through Responses",
+    async (profile) => {
+    const responseFormat = getRunScenePromptResponseFormat(profile);
+    completeResponseMock.mockResolvedValue({
       role: "assistant",
       content: "{}",
     });
@@ -274,12 +279,13 @@ describe("LLM chat route model selection", () => {
 
     expect(response.status).toBe(200);
     expect(createLiteLlmClientMock).toHaveBeenCalledTimes(1);
-    expect(completeChatMock).toHaveBeenCalledTimes(1);
-    expect(completeChatMock).toHaveBeenCalledWith(expect.objectContaining({
+    expect(completeResponseMock).toHaveBeenCalledTimes(1);
+    expect(completeResponseMock).toHaveBeenCalledWith(expect.objectContaining({
       purpose: "stable-diffusion-prompt-generation",
       model: "default-model",
       responseFormat,
     }));
+    expect(completeChatMock).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -321,6 +327,7 @@ describe("LLM chat route model selection", () => {
     });
     expect(createLiteLlmClientMock).not.toHaveBeenCalled();
     expect(completeChatMock).not.toHaveBeenCalled();
+    expect(completeResponseMock).not.toHaveBeenCalled();
   });
 
   it("keeps requests without responseFormat unchanged", async () => {
@@ -340,6 +347,7 @@ describe("LLM chat route model selection", () => {
 
     expect(response.status).toBe(200);
     expect(completeChatMock).toHaveBeenCalledTimes(1);
+    expect(completeResponseMock).not.toHaveBeenCalled();
     const forwarded = completeChatMock.mock.calls[0]?.[0] as Record<string, unknown>;
     expect(forwarded).not.toHaveProperty("responseFormat");
   });
@@ -368,8 +376,8 @@ describe("LLM chat route model selection", () => {
     const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
       void args;
     });
-    completeChatMock.mockRejectedValue(new LiteLlmError(
-      "LiteLLM chat completion request failed.",
+    completeResponseMock.mockRejectedValue(new LiteLlmError(
+      "LiteLLM Responses request failed.",
       {
         statusCode: 422,
         details: rawDetails,
@@ -390,7 +398,7 @@ describe("LLM chat route model selection", () => {
     const responseBody = await response.json();
     expect(responseBody).toEqual({
       error: {
-        message: "LiteLLM chat completion request failed.",
+        message: "LiteLLM Responses request failed.",
         details: {
           code: "structured_output_rejected",
           upstreamStatus: 422,
@@ -425,7 +433,70 @@ describe("LLM chat route model selection", () => {
     expect(exposedBoundaryData).not.toContain("apiKey");
     expect(exposedBoundaryData).not.toContain("response_format");
     expect(createLiteLlmClientMock).toHaveBeenCalledTimes(1);
-    expect(completeChatMock).toHaveBeenCalledTimes(1);
+    expect(completeResponseMock).toHaveBeenCalledTimes(1);
+    expect(completeChatMock).not.toHaveBeenCalled();
+  });
+
+  it("preserves only an allowlisted Responses output-shape diagnostic at the route boundary", async () => {
+    const responseFormat = getRunScenePromptResponseFormat("anima");
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    completeResponseMock.mockRejectedValue(new LiteLlmError(
+      "LiteLLM Responses output did not include completed assistant text.",
+      {
+        statusCode: 502,
+        details: {
+          outputShape: "no_message_item",
+          rawPayload: "RAW_ROUTE_OUTPUT_MARKER",
+          credentials: "sk-route-output-marker",
+          schema: responseFormat.json_schema.schema,
+        },
+      },
+    ));
+
+    const response = await POST(new Request("http://localhost/api/llm/chat", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        purpose: "stable-diffusion-prompt-generation",
+        messages: [{ role: "user", content: "Generate a prompt" }],
+        responseFormat,
+      }),
+    }));
+
+    expect(response.status).toBe(502);
+    const responseBody = await response.json();
+    expect(responseBody).toEqual({
+      error: {
+        message: "LiteLLM Responses output did not include completed assistant text.",
+        details: {
+          code: "structured_output_rejected",
+          upstreamStatus: 502,
+          responseFormat: {
+            type: "json_schema",
+            schemaName: "sceneforge_run_scene_prompt_anima_v1",
+            strict: true,
+          },
+          outputShape: "no_message_item",
+        },
+      },
+    });
+    expect(appendLlmLocalLogMock.mock.calls[1]?.[0]).toMatchObject({
+      phase: "error",
+      payload: {
+        statusCode: 502,
+        details: responseBody.error.details,
+      },
+    });
+    const exposedBoundaryData = JSON.stringify({
+      responseBody,
+      logCalls: appendLlmLocalLogMock.mock.calls,
+      consoleErrorCalls: consoleErrorSpy.mock.calls,
+    });
+    expect(exposedBoundaryData).not.toContain("RAW_ROUTE_OUTPUT_MARKER");
+    expect(exposedBoundaryData).not.toContain("sk-route-output-marker");
+    expect(exposedBoundaryData).not.toContain(JSON.stringify(responseFormat.json_schema.schema));
+    expect(completeResponseMock).toHaveBeenCalledTimes(1);
+    expect(completeChatMock).not.toHaveBeenCalled();
   });
 
   it("still routes ordinary NSFW requests to the NSFW model", () => {

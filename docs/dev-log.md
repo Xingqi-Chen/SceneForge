@@ -2,6 +2,30 @@
 
 This log records dated implementation and documentation work. Keep entries concise and evidence-oriented.
 
+## 2026-08-04
+
+### T58 / Issue #190 Run Scene Prompt Responses transport
+
+Summary:
+
+- Added a shared server-side LiteLLM Responses method that maps existing messages and token intent to `input` and `max_output_tokens`, maps the authorized strict schema to `text.format`, disables streaming, and sets `store: false`.
+- Kept `POST /api/llm/chat` unchanged for callers while routing only exact-whitelisted Illustrious, Anima, and Krea 2 single-image Scene Prompt requests through `/v1/responses`; every other request remains on Chat Completions.
+- Accepted only completed assistant `output_text` from a completed Responses result. Reasoning, tool, metadata, refusal, incomplete, failed, empty, malformed, and provider-error payloads cannot become Scene Prompt JSON and do not trigger Chat fallback or parser repair.
+- Added a fail-closed compatibility decoder for LiteLLM proxies that ignore `stream: false`: only the final full response inside an official `response.completed` SSE event is normalized. Standard `id`/`retry` fields and one final post-completion `[DONE]` terminator are tolerated; delta assembly, Chat SSE, early/trailing terminators, failure/incomplete/error events, malformed streams, and streams without completion are rejected with enum-only shape diagnostics.
+- Narrowed the live-proxy compatibility boundary after a sanitized shape probe: when a completed SSE snapshot explicitly returns `output: []`, SceneForge can restore exactly one uniquely indexed, complete canonical assistant message from `response.output_item.done`. Non-message items and every delta/content-part/output-text completion event remain ignored; missing, invalid, duplicate-index, or multiple terminal message candidates fail closed with safe enum diagnostics.
+- Added bounded output-shape diagnostics to the existing sanitized structured-error details and local error log so completed responses can report only a safe normalization category without exposing response keys, raw type strings, output text, ids, models, schemas, or provider data.
+- Preserved the existing model/NSFW selection, prompts, token budgets, strict schemas, downstream parsing, safe response contract, and summarized response-format logging.
+
+Validation during implementation:
+
+- Focused Responses/route suite: 3 files, 109 tests passed.
+- Full Vitest suite: 162 files, 2,159 tests passed.
+- `npm run typecheck` passed.
+- `npm run lint` passed with 0 errors and 22 existing `<img>` warnings.
+- `npm run build` and `git diff --check` passed.
+- Live Anima validation confirmed `scene-prompt` completed through the forced-SSE proxy path, downstream planning completed, and four Preview candidates were generated. A later Preview Scoring interruption was caused by workflow-away hot reload rather than the Responses transport.
+- Reviewer Gate returned `APPROVE` after completed assistant messages were tightened to require explicit `status: "completed"`.
+
 ## 2026-08-03
 
 ### T55 / Issue #183 ReID Preview persistence correction
