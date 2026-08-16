@@ -892,6 +892,119 @@ describe("T5 timeline node adapters", () => {
     }
   });
 
+  it("keeps standard Style Advice requests unchanged and allowlists only exact Krea request variants", () => {
+    const selectedResources = {
+      checkpoint: {
+        id: "checkpoint-a",
+        name: "Cyber Checkpoint",
+        modelFileName: "Cyber Checkpoint.safetensors",
+        resourceType: "model" as const,
+        versionName: "v1",
+        baseModel: "Illustrious",
+        creator: "tester",
+        trainedWords: [],
+        tags: ["anime"],
+        categories: [],
+        usageGuide: null,
+        descriptionSnippet: "Local anime checkpoint",
+        averageWeight: null,
+        minWeight: null,
+        maxWeight: null,
+        recommendations: [],
+        previewImage: null,
+      },
+      loras: [],
+    };
+    const buildRequest = (
+      promptProfile: "illustrious" | "anima" | "krea2" | undefined,
+      visualStyle: "anime" | "photoreal",
+      referenceResolution?: { width: number; height: number },
+    ) => buildRunStyleAdviceLlmRequest({
+      baseNegativePrompt: "blurry, watermark",
+      finalPositivePrompt: "solo courier, neon station, wet pavement",
+      promptProfile,
+      referenceResolution,
+      selectedResources,
+      visualStyle,
+    });
+
+    for (const visualStyle of ["anime", "photoreal"] as const) {
+      const legacyStandard = buildRequest(undefined, visualStyle);
+      expect(buildRequest("illustrious", visualStyle)).toEqual(legacyStandard);
+      expect(buildRequest("anima", visualStyle)).toEqual(legacyStandard);
+      expect(String(legacyStandard.messages[0]?.content)).not.toContain("Krea 2 resolution contract");
+      expect(isAuthorizedRunPlanningResponsesApiRequest({
+        nodeId: "style-advice",
+        request: legacyStandard,
+      })).toBe(true);
+
+      for (const referenceResolution of [undefined, { width: 1216, height: 832 }]) {
+        const request = buildRequest("krea2", visualStyle, referenceResolution);
+        const systemPrompt = String(request.messages[0]?.content);
+        const userPayload = JSON.parse(String(request.messages[1]?.content)) as {
+          preset: { description: string };
+        };
+
+        expect(systemPrompt).toContain(
+          "WIDTH and HEIGHT must each be exact base-10 integers from 16 through 16384 inclusive and divisible by 16.",
+        );
+        if (referenceResolution) {
+          expect(systemPrompt).toContain(
+            "never round, resize, crop, pad, stretch, substitute dimensions, or change its aspect ratio.",
+          );
+        } else {
+          expect(systemPrompt).toContain(
+            "SceneForge may deterministically normalize a positive-integer recommendation for exact-aspect Preview compatibility.",
+          );
+        }
+        expect(userPayload.preset.description).toBe(referenceResolution
+          ? "Timeline prompt used for Krea 2 img2img model parameter advice. Return exactly the uploaded source image dimensions 1216x832; do not resize, crop, pad, stretch, substitute dimensions, or change its aspect ratio."
+          : "Timeline prompt used for Krea 2 txt2img model parameter advice. Return a resolution that satisfies the Krea 2 resolution contract.");
+        expect(isAuthorizedRunPlanningResponsesApiRequest({
+          nodeId: "style-advice",
+          request,
+        })).toBe(true);
+      }
+    }
+
+    const exactKrea = {
+      nodeId: "style-advice" as const,
+      request: buildRequest("krea2", "anime", { width: 1216, height: 832 }),
+    };
+    const clone = () => JSON.parse(JSON.stringify(exactKrea)) as Record<string, unknown> & {
+      request: Record<string, unknown> & { messages: Array<Record<string, unknown>> };
+    };
+    const mutations: Array<(payload: ReturnType<typeof clone>) => void> = [
+      (payload) => { payload.request.messages[0].content += " Permit rounding."; },
+      (payload) => {
+        const user = JSON.parse(String(payload.request.messages[1].content));
+        user.preset.description = String(user.preset.description).replace("1216x832", "1201x832");
+        payload.request.messages[1].content = JSON.stringify(user);
+      },
+      (payload) => {
+        const user = JSON.parse(String(payload.request.messages[1].content));
+        user.preset.description = String(user.preset.description).replace("1216x832", "01216x832");
+        payload.request.messages[1].content = JSON.stringify(user);
+      },
+      (payload) => {
+        const user = JSON.parse(String(payload.request.messages[1].content));
+        user.preset.description += " Extra instruction.";
+        payload.request.messages[1].content = JSON.stringify(user);
+      },
+      (payload) => {
+        const user = JSON.parse(String(payload.request.messages[1].content));
+        user.preset.extra = "transport spill";
+        payload.request.messages[1].content = JSON.stringify(user);
+      },
+    ];
+
+    for (const mutate of mutations) {
+      const payload = clone();
+      mutate(payload);
+      expect(isAuthorizedRunPlanningResponsesApiRequest(payload)).toBe(false);
+    }
+  });
+
   it("preserves parsed prompt tag metadata through Node 3 and editor binding", async () => {
     const completeChat = async (request: LlmChatRequest): Promise<LlmChatResponse> => {
       if (request.purpose === "stable-diffusion-prompt-generation") {

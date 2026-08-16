@@ -822,12 +822,14 @@ async function recommendTimelineResourcesViaApi({
 async function loadTimelineStyleAdviceViaApi({
   baseNegativePrompt,
   finalPositivePrompt,
+  promptProfile,
   referenceResolution,
   selectedResources,
   visualStyle,
 }: {
   baseNegativePrompt: string;
   finalPositivePrompt: string;
+  promptProfile: PromptProfileId;
   referenceResolution?: {
     height: number;
     width: number;
@@ -844,6 +846,7 @@ async function loadTimelineStyleAdviceViaApi({
     buildRunStyleAdviceLlmRequest({
       baseNegativePrompt,
       finalPositivePrompt,
+      promptProfile,
       referenceResolution,
       selectedResources,
       visualStyle,
