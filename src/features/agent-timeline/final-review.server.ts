@@ -146,7 +146,7 @@ export async function reviewFinalExecution(
         }
       : request;
     try {
-      const response = await client.completeChat(attemptRequest);
+      const response = await client.completeResponse(attemptRequest);
       try {
         return parseFinalReviewResponse(response.content, pairs, settings.visualStyle);
       } catch (error) {

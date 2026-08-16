@@ -2305,3 +2305,17 @@ Validation:
 - `npm run lint` (0 errors; 22 existing `no-img-element` warnings)
 - `npm run build`
 - `git diff --check`
+
+### T59 / Issue #193 Single-image Run Vision Responses transport
+
+Summary:
+
+- Migrated Preview Scoring, Final Review, eligible-pair Repair diagnosis, and Repair Verification from Chat Completions to the shared LiteLLM Responses method for every initial and bounded retry call.
+- Reused the strict completed-output and forced-SSE decoder from Issues #190/#192 with `store: false`, `stream: false`, no Chat fallback, and metadata-only logging.
+- Preserved multimodal message/text/image order, exact transient data URL strings, `detail: high`, existing JPEG preparation, prompts, local parsers, model and NSFW routing, token and temperature settings, error classification, and provider-call bounds.
+- Left Story, Editor, Composer Style Reference, Civitai Library, ComfyUI, persistence, Repair eligibility/mask/SAM2, and generated-asset behavior unchanged.
+
+Implementation validation:
+
+- Final focused Vision, repair, and Responses suites passed 448 tests across 10 files; the full suite passed 2,209 tests across 164 files, with typecheck, lint, build, and diff checks also passing.
+- Live configured LiteLLM Vision/NSFW and complete single-image Run validation remain environment-dependent follow-up.

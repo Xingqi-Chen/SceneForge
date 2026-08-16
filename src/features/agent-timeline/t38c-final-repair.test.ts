@@ -4,7 +4,8 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import sharp from "sharp";
 
-const completeChatMock = vi.hoisted(() => vi.fn());
+const completeResponseMock = vi.hoisted(() => vi.fn());
+const completeChatFallbackMock = vi.hoisted(() => vi.fn());
 const createStoredImageVisionDataUrlMock = vi.hoisted(() => vi.fn(async (_stored, itemId: string) =>
   `data:image/jpeg;base64,TRANSIENT_${itemId}`));
 
@@ -18,7 +19,10 @@ vi.mock("@/features/llm", () => {
     }
   }
   return {
-    createLiteLlmClient: vi.fn(() => ({ completeChat: completeChatMock })),
+    createLiteLlmClient: vi.fn(() => ({
+      completeChat: completeChatFallbackMock,
+      completeResponse: completeResponseMock,
+    })),
     LiteLlmError,
   };
 });
@@ -320,7 +324,9 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  completeChatMock.mockReset();
+  expect(completeChatFallbackMock).not.toHaveBeenCalled();
+  completeResponseMock.mockReset();
+  completeChatFallbackMock.mockReset();
   createStoredImageVisionDataUrlMock.mockClear();
   process.env = { ...originalEnv };
   await fs.rm(repairAttemptRoot, { force: true, recursive: true });
@@ -476,7 +482,7 @@ describe("T38C one-shot local repair", () => {
       completed: true,
       pairs: [{ status: "skipped", skipReason: "repair-disabled" }],
     });
-    expect(completeChatMock).not.toHaveBeenCalled();
+    expect(completeResponseMock).not.toHaveBeenCalled();
     expect(createStoredImageVisionDataUrlMock).not.toHaveBeenCalled();
   });
 
@@ -491,7 +497,7 @@ describe("T38C one-shot local repair", () => {
 
     expect(result.pairs[0]).toBe(previous.pairs[0]);
     expect(result.pairs).toHaveLength(1);
-    expect(completeChatMock).not.toHaveBeenCalled();
+    expect(completeResponseMock).not.toHaveBeenCalled();
     expect(createStoredImageVisionDataUrlMock).not.toHaveBeenCalled();
   });
 
@@ -510,7 +516,7 @@ describe("T38C one-shot local repair", () => {
     );
 
     expect(result.pairs[0]).toMatchObject({ status: "skipped", skipReason: "parent-mismatch" });
-    expect(completeChatMock).not.toHaveBeenCalled();
+    expect(completeResponseMock).not.toHaveBeenCalled();
     expect(createStoredImageVisionDataUrlMock).not.toHaveBeenCalled();
   });
 
@@ -860,7 +866,7 @@ describe("T38C Repair verification provider boundary", () => {
       status: "skipped",
       pairs: [],
     });
-    expect(completeChatMock).not.toHaveBeenCalled();
+    expect(completeResponseMock).not.toHaveBeenCalled();
     expect(createStoredImageVisionDataUrlMock).not.toHaveBeenCalled();
   });
 
@@ -871,29 +877,54 @@ describe("T38C Repair verification provider boundary", () => {
       ...repair(),
       pairs: [{ ...repair().pairs[0]!, status: "skipped", storedImage: undefined, skipReason: "no-supported-finding" }],
     }, review(), context())).resolves.toMatchObject({ status: "skipped", pairs: [] });
-    expect(completeChatMock).not.toHaveBeenCalled();
+    expect(completeResponseMock).not.toHaveBeenCalled();
     expect(createStoredImageVisionDataUrlMock).not.toHaveBeenCalled();
   });
 
   it("verifies every Preview/Final/Repair triple in one bounded high-detail request", async () => {
     process.env.LITELLM_BASE_URL = "http://litellm.test";
     process.env.LITELLM_VISION_MODEL = "vision-model";
-    completeChatMock.mockResolvedValue({ content: verificationResponse() });
+    completeResponseMock.mockResolvedValue({ content: verificationResponse() });
 
     const result = await verifyFinalRepairs(repair(), review(), context());
 
     expect(result).toMatchObject({ status: "verified", pairs: [{ candidateId: "preview-1", recommended: true }] });
-    expect(completeChatMock).toHaveBeenCalledTimes(1);
-    const request = completeChatMock.mock.calls[0]?.[0] as {
+    expect(completeResponseMock).toHaveBeenCalledTimes(1);
+    const request = completeResponseMock.mock.calls[0]?.[0] as {
       model: string;
       purpose: string;
       nsfw: boolean;
+      temperature: number;
+      maxTokens: number;
       messages: Array<{ content: Array<{ type: string; image_url?: { detail: string; url: string } }> }>;
     };
-    expect(request).toMatchObject({ model: "vision-model", purpose: "single-image-repair-verification", nsfw: false });
+    expect(request).toMatchObject({
+      model: "vision-model",
+      purpose: "single-image-repair-verification",
+      nsfw: false,
+      temperature: 0,
+      maxTokens: 4_000,
+    });
     const images = request.messages[0]!.content.filter((item) => item.type === "image_url");
     expect(images).toHaveLength(3);
     expect(images.every((item) => item.image_url?.detail === "high")).toBe(true);
+    expect(request.messages[0]!.content.slice(1)).toEqual([
+      { type: "text", text: "Pair preview-1; targets: contact, object-count - Preview" },
+      {
+        type: "image_url",
+        image_url: { url: "data:image/jpeg;base64,TRANSIENT_preview-1:preview-upscale", detail: "high" },
+      },
+      { type: "text", text: "Pair preview-1 - Final" },
+      {
+        type: "image_url",
+        image_url: { url: "data:image/jpeg;base64,TRANSIENT_preview-1:final", detail: "high" },
+      },
+      { type: "text", text: "Pair preview-1 - Repair" },
+      {
+        type: "image_url",
+        image_url: { url: "data:image/jpeg;base64,TRANSIENT_preview-1:repair", detail: "high" },
+      },
+    ]);
     expect(createStoredImageVisionDataUrlMock).toHaveBeenCalledTimes(3);
     expect(JSON.stringify(result)).not.toContain("data:image");
     expect(JSON.stringify(result)).not.toContain("PRIVATE_");
@@ -902,7 +933,7 @@ describe("T38C Repair verification provider boundary", () => {
   it("keeps a style-mismatched Repair unverified and unavailable for promotion", async () => {
     process.env.LITELLM_BASE_URL = "http://litellm.test";
     process.env.LITELLM_VISION_MODEL = "vision-model";
-    completeChatMock.mockResolvedValue({
+    completeResponseMock.mockResolvedValue({
       content: verificationResponse({ visualStyleMatch: false }),
     });
 
@@ -917,13 +948,13 @@ describe("T38C Repair verification provider boundary", () => {
         recommended: false,
       }],
     });
-    expect(completeChatMock).toHaveBeenCalledTimes(1);
+    expect(completeResponseMock).toHaveBeenCalledTimes(1);
   });
 
   it("fails closed after bounded repair when Repair style verification is missing", async () => {
     process.env.LITELLM_BASE_URL = "http://litellm.test";
     process.env.LITELLM_VISION_MODEL = "vision-model";
-    completeChatMock.mockResolvedValue({
+    completeResponseMock.mockResolvedValue({
       content: verificationResponse({ visualStyleMatch: undefined }),
     });
 
@@ -939,19 +970,19 @@ describe("T38C Repair verification provider boundary", () => {
         },
       },
     });
-    expect(completeChatMock).toHaveBeenCalledTimes(2);
+    expect(completeResponseMock).toHaveBeenCalledTimes(2);
   });
 
   it("uses one safe schema repair, redacts raw completions, and never makes a third call", async () => {
     process.env.LITELLM_BASE_URL = "http://litellm.test";
     process.env.LITELLM_VISION_MODEL = "vision-model";
-    completeChatMock.mockResolvedValue({ content: "{\"pairs\":[],\"raw\":\"PRIVATE_RAW_RESPONSE\"}" });
+    completeResponseMock.mockResolvedValue({ content: "{\"pairs\":[],\"raw\":\"PRIVATE_RAW_RESPONSE\"}" });
 
     const result = await verifyFinalRepairs(repair(), review(), context());
 
     expect(result).toMatchObject({ status: "failed", error: { code: "llm_malformed_response", details: { recoverable: true } } });
-    expect(completeChatMock).toHaveBeenCalledTimes(2);
-    const repairedRequest = JSON.stringify(completeChatMock.mock.calls[1]?.[0]);
+    expect(completeResponseMock).toHaveBeenCalledTimes(2);
+    const repairedRequest = JSON.stringify(completeResponseMock.mock.calls[1]?.[0]);
     expect(repairedRequest).toContain("Repair the schema only");
     expect(repairedRequest).not.toContain("PRIVATE_RAW_RESPONSE");
     expect(JSON.stringify(result)).not.toContain("PRIVATE_RAW_RESPONSE");
@@ -960,7 +991,7 @@ describe("T38C Repair verification provider boundary", () => {
   it("clears an in-memory Repair selection when verification exhausts its retry", async () => {
     process.env.LITELLM_BASE_URL = "http://litellm.test";
     process.env.LITELLM_VISION_MODEL = "vision-model";
-    completeChatMock.mockResolvedValue({ content: "{\"pairs\":[]}" });
+    completeResponseMock.mockResolvedValue({ content: "{\"pairs\":[]}" });
     const verificationContext = context();
     verificationContext.workflow.nodes["final-review"].result = {
       ...review(),
@@ -969,7 +1000,7 @@ describe("T38C Repair verification provider boundary", () => {
 
     await expect(verifyFinalRepairs(repair(), review(), verificationContext)).resolves.toMatchObject({ status: "failed" });
 
-    expect(completeChatMock).toHaveBeenCalledTimes(2);
+    expect(completeResponseMock).toHaveBeenCalledTimes(2);
     expect((verificationContext.workflow.nodes["final-review"].result as FinalReviewTimelineResult).pairs[0])
       .toMatchObject({ userSelectedVariant: "preview-upscale" });
   });
@@ -977,14 +1008,14 @@ describe("T38C Repair verification provider boundary", () => {
   it("retries an upstream failure with the same request instead of inventing a schema-repair instruction", async () => {
     process.env.LITELLM_BASE_URL = "http://litellm.test";
     process.env.LITELLM_VISION_MODEL = "vision-model";
-    completeChatMock
+    completeResponseMock
       .mockRejectedValueOnce(new TypeError("PRIVATE_NETWORK_FAILURE"))
       .mockResolvedValueOnce({ content: verificationResponse() });
 
     await expect(verifyFinalRepairs(repair(), review(), context())).resolves.toMatchObject({ status: "verified" });
-    expect(completeChatMock).toHaveBeenCalledTimes(2);
-    expect(JSON.stringify(completeChatMock.mock.calls[1]?.[0])).not.toContain("Repair the schema only");
-    expect(JSON.stringify(completeChatMock.mock.calls[1]?.[0])).not.toContain("PRIVATE_NETWORK_FAILURE");
+    expect(completeResponseMock).toHaveBeenCalledTimes(2);
+    expect(JSON.stringify(completeResponseMock.mock.calls[1]?.[0])).not.toContain("Repair the schema only");
+    expect(JSON.stringify(completeResponseMock.mock.calls[1]?.[0])).not.toContain("PRIVATE_NETWORK_FAILURE");
   });
 
   it("requires the NSFW model and never falls back to ordinary routing", async () => {
@@ -1000,12 +1031,12 @@ describe("T38C Repair verification provider boundary", () => {
         details: { recoverable: true },
       },
     });
-    expect(completeChatMock).not.toHaveBeenCalled();
+    expect(completeResponseMock).not.toHaveBeenCalled();
 
     process.env.LITELLM_NSFW_MODEL = "nsfw-vision";
-    completeChatMock.mockResolvedValue({ content: verificationResponse() });
+    completeResponseMock.mockResolvedValue({ content: verificationResponse() });
     await verifyFinalRepairs(repair(), review(), context(true));
-    expect(completeChatMock).toHaveBeenLastCalledWith(expect.objectContaining({ model: "nsfw-vision", nsfw: true }));
+    expect(completeResponseMock).toHaveBeenLastCalledWith(expect.objectContaining({ model: "nsfw-vision", nsfw: true }));
   });
 
   it("redacts image-preparation and upstream failures", async () => {
@@ -1017,14 +1048,14 @@ describe("T38C Repair verification provider boundary", () => {
     expect(imageFailure).toMatchObject({ status: "failed", error: { code: "image_storage_failed" } });
     expect(JSON.stringify(imageFailure)).not.toContain("PRIVATE");
     expect(JSON.stringify(imageFailure)).not.toContain("data:image");
-    expect(completeChatMock).not.toHaveBeenCalled();
+    expect(completeResponseMock).not.toHaveBeenCalled();
 
     createStoredImageVisionDataUrlMock.mockImplementation(async (_stored, itemId: string) =>
       `data:image/jpeg;base64,TRANSIENT_${itemId}`);
-    completeChatMock.mockRejectedValue(new Error("PRIVATE_UPSTREAM data:image/png;base64,SECRET"));
+    completeResponseMock.mockRejectedValue(new Error("PRIVATE_UPSTREAM data:image/png;base64,SECRET"));
     const upstream = await verifyFinalRepairs(repair(), review(), context());
     expect(upstream).toMatchObject({ status: "failed", error: { code: "llm_upstream" } });
-    expect(completeChatMock).toHaveBeenCalledTimes(2);
+    expect(completeResponseMock).toHaveBeenCalledTimes(2);
     expect(JSON.stringify(upstream)).not.toContain("PRIVATE_UPSTREAM");
     expect(JSON.stringify(upstream)).not.toContain("data:image");
   });

@@ -1,7 +1,8 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import sharp from "sharp";
 
-const completeChatMock = vi.hoisted(() => vi.fn());
+const completeResponseMock = vi.hoisted(() => vi.fn());
+const completeChatFallbackMock = vi.hoisted(() => vi.fn());
 const readFileMock = vi.hoisted(() => vi.fn());
 const getGeneratedImagePathMock = vi.hoisted(() => vi.fn((filename: string) => `C:\\safe\\${filename}`));
 const storeGeneratedImageMock = vi.hoisted(() => vi.fn());
@@ -20,7 +21,10 @@ vi.mock("@/features/llm", () => {
     }
   }
   return {
-    createLiteLlmClient: vi.fn(() => ({ completeChat: completeChatMock })),
+    createLiteLlmClient: vi.fn(() => ({
+      completeChat: completeChatFallbackMock,
+      completeResponse: completeResponseMock,
+    })),
     LiteLlmError,
   };
 });
@@ -176,7 +180,9 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  completeChatMock.mockReset();
+  expect(completeChatFallbackMock).not.toHaveBeenCalled();
+  completeResponseMock.mockReset();
+  completeChatFallbackMock.mockReset();
   readFileMock.mockReset().mockResolvedValue(smallPngBytes);
   getGeneratedImagePathMock.mockClear();
   storeGeneratedImageMock.mockClear();
@@ -190,11 +196,11 @@ describe("T37 structured preview scoring", () => {
     const workflow = createScoringWorkflow();
     const storedBefore = JSON.stringify(workflow.nodes["preview-execution"].result);
     readFileMock.mockResolvedValueOnce(oversizedPngBytes).mockResolvedValue(smallPngBytes);
-    completeChatMock.mockResolvedValue({ content: validResponse() });
+    completeResponseMock.mockResolvedValue({ content: validResponse() });
 
     await score(workflow);
 
-    const request = completeChatMock.mock.calls[0]?.[0] as {
+    const request = completeResponseMock.mock.calls[0]?.[0] as {
       messages: Array<{ content: Array<{ type: string; image_url?: { url: string; detail: string } }> }>;
     };
     const images = request.messages[0]!.content.filter((item) => item.type === "image_url");
@@ -224,18 +230,25 @@ describe("T37 structured preview scoring", () => {
       style: 90 - index,
       technical: 90 - index,
     }));
-    completeChatMock.mockResolvedValue({ content: JSON.stringify({ candidates }) });
+    completeResponseMock.mockResolvedValue({ content: JSON.stringify({ candidates }) });
 
     const result = await score(createScoringWorkflow({ candidateCount: 8, finalCount: 4 })) as PreviewScoringTimelineResultV2;
 
     expect(result.selectedCandidateIds).toEqual(["preview-1", "preview-2", "preview-3", "preview-4"]);
-    expect(completeChatMock).toHaveBeenCalledTimes(1);
-    const request = completeChatMock.mock.calls[0]?.[0] as {
+    expect(completeResponseMock).toHaveBeenCalledTimes(1);
+    const request = completeResponseMock.mock.calls[0]?.[0] as {
+      temperature: number;
+      maxTokens: number;
       messages: Array<{ content: Array<{ type: string; text?: string; image_url?: { url: string } }> }>;
     };
     const content = request.messages[0]!.content;
+    expect(request).toMatchObject({ temperature: 0, maxTokens: 4_000 });
     expect(content.filter((item) => item.type === "image_url")).toHaveLength(8);
     expect(content.filter((item) => item.type === "text" && item.text?.startsWith("Candidate ID:"))).toHaveLength(8);
+    expect(content.slice(1).map((item) => item.type)).toEqual(Array.from({ length: 8 }, () => ["text", "image_url"]).flat());
+    expect(content.slice(1).filter((item) => item.type === "text").map((item) => item.text)).toEqual(
+      Array.from({ length: 8 }, (_, index) => `Candidate ID: preview-${index + 1}`),
+    );
     expect(readFileMock).toHaveBeenCalledTimes(8);
     expect(storeGeneratedImageMock).not.toHaveBeenCalled();
   });
@@ -255,7 +268,7 @@ describe("T37 structured preview scoring", () => {
     expect(exposed).not.toContain("PRIVATE");
     expect(exposed).not.toContain("SECRET_BYTES");
     expect(exposed).not.toContain("data:image");
-    expect(completeChatMock).not.toHaveBeenCalled();
+    expect(completeResponseMock).not.toHaveBeenCalled();
     expect(storeGeneratedImageMock).not.toHaveBeenCalled();
   });
 
@@ -273,13 +286,13 @@ describe("T37 structured preview scoring", () => {
     expect(exposed).not.toContain("PRIVATE_BYTES");
     expect(exposed).not.toContain("SECRET");
     expect(exposed).not.toContain("data:image");
-    expect(completeChatMock).not.toHaveBeenCalled();
+    expect(completeResponseMock).not.toHaveBeenCalled();
     expect(storeGeneratedImageMock).not.toHaveBeenCalled();
   });
 
   it("computes fixed local weights and resolves ties by composition then candidate order", async () => {
     process.env.LITELLM_VISION_MODEL = "vision-model";
-    completeChatMock.mockResolvedValue({ content: validResponse() });
+    completeResponseMock.mockResolvedValue({ content: validResponse() });
 
     await expect(score(createScoringWorkflow())).resolves.toMatchObject({
       rubricVersion: 2,
@@ -295,7 +308,7 @@ describe("T37 structured preview scoring", () => {
 
   it("sorts by the unrounded weighted total before the displayed two-decimal total", async () => {
     process.env.LITELLM_VISION_MODEL = "vision-model";
-    completeChatMock.mockResolvedValue({ content: JSON.stringify({
+    completeResponseMock.mockResolvedValue({ content: JSON.stringify({
       candidates: [
         {
           candidateId: "preview-1",
@@ -349,7 +362,7 @@ describe("T37 structured preview scoring", () => {
       style: 100,
       technical: 100,
     });
-    completeChatMock.mockResolvedValue({ content: JSON.stringify({ candidates }) });
+    completeResponseMock.mockResolvedValue({ content: JSON.stringify({ candidates }) });
 
     await expect(score(createScoringWorkflow({ finalCount: 2 }))).resolves.toMatchObject({
       visualStyle: "anime",
@@ -366,7 +379,7 @@ describe("T37 structured preview scoring", () => {
     const candidates = JSON.parse(validResponse()).candidates as Array<Record<string, unknown>>;
     candidates[0]!.visualStyleMatch = false;
     candidates[1]!.visualStyleMatch = false;
-    completeChatMock.mockResolvedValue({ content: JSON.stringify({ candidates }) });
+    completeResponseMock.mockResolvedValue({ content: JSON.stringify({ candidates }) });
 
     await expect(score(createScoringWorkflow({ finalCount: 2 }))).rejects.toMatchObject({
       code: "timeline_request_invalid",
@@ -377,13 +390,13 @@ describe("T37 structured preview scoring", () => {
         visualStyle: "anime",
       },
     });
-    expect(completeChatMock).toHaveBeenCalledTimes(1);
+    expect(completeResponseMock).toHaveBeenCalledTimes(1);
   });
 
   it("fails closed after the bounded repair when visualStyleMatch is missing", async () => {
     const candidates = JSON.parse(validResponse()).candidates as Array<Record<string, unknown>>;
     delete candidates[0]!.visualStyleMatch;
-    completeChatMock.mockResolvedValue({ content: JSON.stringify({ candidates }) });
+    completeResponseMock.mockResolvedValue({ content: JSON.stringify({ candidates }) });
 
     await expect(score(createScoringWorkflow())).rejects.toMatchObject({
       code: "llm_malformed_response",
@@ -392,7 +405,7 @@ describe("T37 structured preview scoring", () => {
         validationCode: "visual_style_match_missing",
       },
     });
-    expect(completeChatMock).toHaveBeenCalledTimes(2);
+    expect(completeResponseMock).toHaveBeenCalledTimes(2);
   });
 
   it.each([
@@ -411,7 +424,7 @@ describe("T37 structured preview scoring", () => {
       ({ candidateId, criticalDefects: [], adherence: "NaN", composition: 1, anatomy: 1, style: 1, technical: 1 })) })],
   ])("fails closed after retrying a %s response once", async (_case, content) => {
     process.env.LITELLM_VISION_MODEL = "vision-model";
-    completeChatMock.mockResolvedValue({ content });
+    completeResponseMock.mockResolvedValue({ content });
 
     await expect(score(createScoringWorkflow())).rejects.toMatchObject({
       code: "llm_malformed_response",
@@ -422,8 +435,8 @@ describe("T37 structured preview scoring", () => {
         validationReason: expect.any(String),
       },
     });
-    expect(completeChatMock).toHaveBeenCalledTimes(2);
-    expect(completeChatMock.mock.calls[1]?.[0]).toMatchObject({
+    expect(completeResponseMock).toHaveBeenCalledTimes(2);
+    expect(completeResponseMock.mock.calls[1]?.[0]).toMatchObject({
       messages: expect.arrayContaining([expect.objectContaining({
         role: "user",
         content: expect.stringContaining("Repair the response schema"),
@@ -440,16 +453,16 @@ describe("T37 structured preview scoring", () => {
     process.env.LITELLM_VISION_MODEL = "vision-model";
     const candidates = JSON.parse(validResponse()).candidates as Array<Record<string, unknown>>;
     Object.assign(candidates[0]!, override);
-    completeChatMock.mockResolvedValue({ content: JSON.stringify({ candidates }) });
+    completeResponseMock.mockResolvedValue({ content: JSON.stringify({ candidates }) });
 
     const error = await score(createScoringWorkflow()).catch((caught: unknown) => caught);
     expect(error).toMatchObject({
       code: "llm_malformed_response",
       details: { recoverable: true, validationCode },
     });
-    expect(completeChatMock).toHaveBeenCalledTimes(2);
+    expect(completeResponseMock).toHaveBeenCalledTimes(2);
     expect(JSON.stringify(error)).not.toContain("SECRET_CATEGORY");
-    expect(JSON.stringify(completeChatMock.mock.calls[1]?.[0])).not.toContain("SECRET_CATEGORY");
+    expect(JSON.stringify(completeResponseMock.mock.calls[1]?.[0])).not.toContain("SECRET_CATEGORY");
   });
 
   it("extracts one JSON object from wrapper prose and markdown and accepts numeric strings", async () => {
@@ -459,7 +472,7 @@ describe("T37 structured preview scoring", () => {
       candidate.adherence = String(candidate.adherence);
       candidate.composition = ` ${candidate.composition} `;
     }
-    completeChatMock.mockResolvedValue({
+    completeResponseMock.mockResolvedValue({
       content: `Here is the comparison:\n\n\`\`\`json\n${JSON.stringify({ candidates })}\n\`\`\`\nDone.`,
     });
 
@@ -467,18 +480,18 @@ describe("T37 structured preview scoring", () => {
       rubricVersion: 2,
       selectedCandidateIds: ["preview-2", "preview-1"],
     });
-    expect(completeChatMock).toHaveBeenCalledTimes(1);
+    expect(completeResponseMock).toHaveBeenCalledTimes(1);
   });
 
   it("requires exactly one JSON object even when both objects are individually valid", async () => {
     process.env.LITELLM_VISION_MODEL = "vision-model";
-    completeChatMock.mockResolvedValue({ content: `${validResponse()}\n${validResponse()}` });
+    completeResponseMock.mockResolvedValue({ content: `${validResponse()}\n${validResponse()}` });
 
     await expect(score(createScoringWorkflow())).rejects.toMatchObject({
       code: "llm_malformed_response",
       details: { validationCode: "json_object_count", recoverable: true },
     });
-    expect(completeChatMock).toHaveBeenCalledTimes(2);
+    expect(completeResponseMock).toHaveBeenCalledTimes(2);
   });
 
   it("normalizes exact defect categories, accepts legacy objects, deduplicates, and derives eligibility locally", async () => {
@@ -493,7 +506,7 @@ describe("T37 structured preview scoring", () => {
       eligible: true,
     });
     Object.assign(candidates[1]!, { eligible: false });
-    completeChatMock.mockResolvedValue({ content: JSON.stringify({ candidates }) });
+    completeResponseMock.mockResolvedValue({ content: JSON.stringify({ candidates }) });
 
     const result = await score(createScoringWorkflow()) as PreviewScoringTimelineResultV2;
     expect(result.scores.find((item) => item.candidateId === "preview-3")).toMatchObject({
@@ -527,7 +540,7 @@ describe("T37 structured preview scoring", () => {
       style: 100,
       technical: 100,
     });
-    completeChatMock.mockResolvedValue({ content: JSON.stringify({ candidates }) });
+    completeResponseMock.mockResolvedValue({ content: JSON.stringify({ candidates }) });
 
     const result = await score(createScoringWorkflow()) as PreviewScoringTimelineResultV2;
     expect(result.scores.find((item) => item.candidateId === "preview-3")).toMatchObject({
@@ -548,7 +561,7 @@ describe("T37 structured preview scoring", () => {
         criticalDefects: ["spatial_physical_contradiction"],
       });
     }
-    completeChatMock.mockResolvedValue({ content: JSON.stringify({ candidates }) });
+    completeResponseMock.mockResolvedValue({ content: JSON.stringify({ candidates }) });
 
     await expect(score(workflow)).resolves.toMatchObject({
       eligibleCount: 1,
@@ -556,7 +569,7 @@ describe("T37 structured preview scoring", () => {
       selectedCandidateIds: ["preview-1", "preview-2"],
       selectionWarning: expect.stringContaining("1 annotated fallback candidate was selected"),
     });
-    expect(completeChatMock).toHaveBeenCalledTimes(1);
+    expect(completeResponseMock).toHaveBeenCalledTimes(1);
     expect(workflow.nodes["preview-execution"].result).toMatchObject({ successfulCount: 3 });
   });
 
@@ -564,7 +577,7 @@ describe("T37 structured preview scoring", () => {
     process.env.LITELLM_VISION_MODEL = "vision-model";
     const candidates = JSON.parse(validResponse()).candidates as Array<Record<string, unknown>>;
     for (const candidate of candidates) candidate.criticalDefects = ["anatomy_or_structure"];
-    completeChatMock.mockResolvedValue({ content: JSON.stringify({ candidates }) });
+    completeResponseMock.mockResolvedValue({ content: JSON.stringify({ candidates }) });
 
     await expect(score(createScoringWorkflow({ finalCount: 2 }))).resolves.toMatchObject({
       eligibleCount: 0,
@@ -577,23 +590,23 @@ describe("T37 structured preview scoring", () => {
         { candidateId: "preview-3", eligible: false, rank: 3 },
       ],
     });
-    expect(completeChatMock).toHaveBeenCalledTimes(1);
+    expect(completeResponseMock).toHaveBeenCalledTimes(1);
   });
 
   it("adds a safe schema-repair instruction on the only retry and then succeeds", async () => {
     process.env.LITELLM_VISION_MODEL = "vision-model";
-    completeChatMock
+    completeResponseMock
       .mockResolvedValueOnce({ content: "{}" })
       .mockResolvedValueOnce({ content: validResponse() });
 
     await expect(score(createScoringWorkflow())).resolves.toMatchObject({
       selectedCandidateIds: ["preview-2", "preview-1"],
     });
-    expect(completeChatMock).toHaveBeenCalledTimes(2);
-    expect(completeChatMock.mock.calls[1]?.[0]).not.toEqual(completeChatMock.mock.calls[0]?.[0]);
-    expect(completeChatMock.mock.calls[1]?.[0]).toMatchObject({
+    expect(completeResponseMock).toHaveBeenCalledTimes(2);
+    expect(completeResponseMock.mock.calls[1]?.[0]).not.toEqual(completeResponseMock.mock.calls[0]?.[0]);
+    expect(completeResponseMock.mock.calls[1]?.[0]).toMatchObject({
       messages: [
-        completeChatMock.mock.calls[0]?.[0].messages[0],
+        completeResponseMock.mock.calls[0]?.[0].messages[0],
         {
           role: "user",
           content: expect.stringContaining("Scoring response must include a candidates array"),
@@ -604,7 +617,7 @@ describe("T37 structured preview scoring", () => {
 
   it("reports upstream Vision failures separately from schema failures", async () => {
     process.env.LITELLM_VISION_MODEL = "vision-model";
-    completeChatMock.mockRejectedValue(new LiteLlmError("PRIVATE upstream detail", { statusCode: 502 }));
+    completeResponseMock.mockRejectedValue(new LiteLlmError("PRIVATE upstream detail", { statusCode: 502 }));
 
     const error = await score(createScoringWorkflow()).catch((caught: unknown) => caught);
     expect(error).toMatchObject({
@@ -612,14 +625,14 @@ describe("T37 structured preview scoring", () => {
       details: { recoverable: true, statusCode: 502 },
     });
     expect(JSON.stringify(error)).not.toContain("PRIVATE upstream detail");
-    expect(completeChatMock).toHaveBeenCalledTimes(2);
-    expect(completeChatMock.mock.calls[1]?.[0]).toEqual(completeChatMock.mock.calls[0]?.[0]);
-    expect(JSON.stringify(completeChatMock.mock.calls)).not.toContain("Repair the response schema");
+    expect(completeResponseMock).toHaveBeenCalledTimes(2);
+    expect(completeResponseMock.mock.calls[1]?.[0]).toEqual(completeResponseMock.mock.calls[0]?.[0]);
+    expect(JSON.stringify(completeResponseMock.mock.calls)).not.toContain("Repair the response schema");
   });
 
   it("retries a generic network failure once without leaking its message or adding schema repair", async () => {
     process.env.LITELLM_VISION_MODEL = "vision-model";
-    completeChatMock.mockRejectedValue(new TypeError("PRIVATE network endpoint detail"));
+    completeResponseMock.mockRejectedValue(new TypeError("PRIVATE network endpoint detail"));
 
     const error = await score(createScoringWorkflow()).catch((caught: unknown) => caught);
     expect(error).toMatchObject({
@@ -628,22 +641,22 @@ describe("T37 structured preview scoring", () => {
     });
     expect((error as { details?: unknown }).details).not.toHaveProperty("statusCode");
     expect(JSON.stringify(error)).not.toContain("PRIVATE network endpoint detail");
-    expect(completeChatMock).toHaveBeenCalledTimes(2);
-    expect(completeChatMock.mock.calls[1]?.[0]).toEqual(completeChatMock.mock.calls[0]?.[0]);
-    expect(JSON.stringify(completeChatMock.mock.calls)).not.toContain("Repair the response schema");
+    expect(completeResponseMock).toHaveBeenCalledTimes(2);
+    expect(completeResponseMock.mock.calls[1]?.[0]).toEqual(completeResponseMock.mock.calls[0]?.[0]);
+    expect(JSON.stringify(completeResponseMock.mock.calls)).not.toContain("Repair the response schema");
   });
 
   it("classifies malformed then network failure as upstream after two attempts", async () => {
     process.env.LITELLM_VISION_MODEL = "vision-model";
-    completeChatMock
+    completeResponseMock
       .mockResolvedValueOnce({ content: "{}" })
       .mockRejectedValueOnce(new TypeError("PRIVATE terminal network detail"));
 
     const error = await score(createScoringWorkflow()).catch((caught: unknown) => caught);
     expect(error).toMatchObject({ code: "llm_upstream", details: { recoverable: true } });
     expect(JSON.stringify(error)).not.toContain("PRIVATE terminal network detail");
-    expect(completeChatMock).toHaveBeenCalledTimes(2);
-    expect(completeChatMock.mock.calls[1]?.[0]).toMatchObject({
+    expect(completeResponseMock).toHaveBeenCalledTimes(2);
+    expect(completeResponseMock.mock.calls[1]?.[0]).toMatchObject({
       messages: expect.arrayContaining([expect.objectContaining({
         role: "user",
         content: expect.stringContaining("Repair the response schema"),
@@ -653,7 +666,7 @@ describe("T37 structured preview scoring", () => {
 
   it("classifies network then malformed response as malformed without a third repair attempt", async () => {
     process.env.LITELLM_VISION_MODEL = "vision-model";
-    completeChatMock
+    completeResponseMock
       .mockRejectedValueOnce(new TypeError("PRIVATE transient network detail"))
       .mockResolvedValueOnce({ content: "{}" });
 
@@ -664,23 +677,24 @@ describe("T37 structured preview scoring", () => {
       details: { recoverable: true, validationCode: expect.any(String) },
     });
     expect(JSON.stringify(error)).not.toContain("PRIVATE transient network detail");
-    expect(completeChatMock).toHaveBeenCalledTimes(2);
-    expect(completeChatMock.mock.calls[1]?.[0]).toEqual(completeChatMock.mock.calls[0]?.[0]);
-    expect(JSON.stringify(completeChatMock.mock.calls)).not.toContain("Repair the response schema");
+    expect(completeResponseMock).toHaveBeenCalledTimes(2);
+    expect(completeResponseMock.mock.calls[1]?.[0]).toEqual(completeResponseMock.mock.calls[0]?.[0]);
+    expect(JSON.stringify(completeResponseMock.mock.calls)).not.toContain("Repair the response schema");
   });
 
   it("uses only the default model for ordinary previews even when Vision and NSFW overrides are configured", async () => {
     process.env.LITELLM_VISION_MODEL = "vision-model";
     process.env.LITELLM_NSFW_MODEL = "nsfw-model";
     process.env.LITELLM_DEFAULT_MODEL = "default-model";
-    completeChatMock.mockResolvedValue({ content: validResponse() });
+    completeResponseMock.mockResolvedValue({ content: validResponse() });
     await score(createScoringWorkflow());
-    expect(completeChatMock).toHaveBeenLastCalledWith(expect.objectContaining({
+    expect(completeResponseMock).toHaveBeenLastCalledWith(expect.objectContaining({
       model: "default-model",
       nsfw: false,
+      temperature: 0,
       maxTokens: 4_000,
     }));
-    const request = completeChatMock.mock.calls.at(-1)?.[0] as {
+    const request = completeResponseMock.mock.calls.at(-1)?.[0] as {
       messages: Array<{ content: Array<{ type: string; text?: string; image_url?: { detail?: string } }> }>;
     };
     expect(request.messages[0]!.content.filter((item) => item.type === "image_url").every((item) =>
@@ -703,9 +717,9 @@ describe("T37 structured preview scoring", () => {
     process.env.LITELLM_NSFW_MODEL = "nsfw-vision-model";
     process.env.LITELLM_VISION_MODEL = "ordinary-vision-model";
     process.env.LITELLM_DEFAULT_MODEL = "default-model";
-    completeChatMock.mockResolvedValue({ content: validResponse() });
+    completeResponseMock.mockResolvedValue({ content: validResponse() });
     await score(createScoringWorkflow({ nsfw: true }));
-    expect(completeChatMock).toHaveBeenLastCalledWith(expect.objectContaining({
+    expect(completeResponseMock).toHaveBeenLastCalledWith(expect.objectContaining({
       model: "default-model",
       nsfw: true,
       purpose: "single-image-preview-scoring",
@@ -716,11 +730,11 @@ describe("T37 structured preview scoring", () => {
     process.env.LITELLM_NSFW_MODEL = "nsfw-vision-model";
     process.env.LITELLM_VISION_MODEL = "ordinary-vision-model";
     process.env.LITELLM_DEFAULT_MODEL = "default-model";
-    completeChatMock.mockResolvedValue({ content: validResponse() });
+    completeResponseMock.mockResolvedValue({ content: validResponse() });
 
     await score(createScoringWorkflow({ promptProfile: "krea2" }));
 
-    expect(completeChatMock).toHaveBeenLastCalledWith(expect.objectContaining({
+    expect(completeResponseMock).toHaveBeenLastCalledWith(expect.objectContaining({
       model: "default-model",
       nsfw: false,
       purpose: "single-image-preview-scoring",
@@ -740,7 +754,7 @@ describe("T37 structured preview scoring", () => {
       message: expect.stringContaining("LITELLM_DEFAULT_MODEL"),
       details: { recoverable: true },
     });
-    expect(completeChatMock).not.toHaveBeenCalled();
+    expect(completeResponseMock).not.toHaveBeenCalled();
     expect(readFileMock).not.toHaveBeenCalled();
   });
 });

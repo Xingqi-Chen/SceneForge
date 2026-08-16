@@ -1068,9 +1068,9 @@ async function scorePreviews(
           ],
         }
       : request;
-    let completion: Awaited<ReturnType<typeof client.completeChat>>;
+    let completion: Awaited<ReturnType<typeof client.completeResponse>>;
     try {
-      completion = await client.completeChat(attemptRequest);
+      completion = await client.completeResponse(attemptRequest);
     } catch (error) {
       lastFailure = "upstream";
       lastUpstreamError = error;

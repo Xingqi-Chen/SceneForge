@@ -17,7 +17,8 @@ const mocks = vi.hoisted(() => ({
     };
   }),
   buildSam2MaskWorkflow: vi.fn(),
-  completeChat: vi.fn(),
+  completeChatFallback: vi.fn(),
+  completeResponse: vi.fn(),
   getHistory: vi.fn(),
   getObjectInfo: vi.fn(),
   paths: new Map<string, string>(),
@@ -31,7 +32,10 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("@/features/llm", () => ({
-  createLiteLlmClient: vi.fn(() => ({ completeChat: mocks.completeChat })),
+  createLiteLlmClient: vi.fn(() => ({
+    completeChat: mocks.completeChatFallback,
+    completeResponse: mocks.completeResponse,
+  })),
 }));
 
 vi.mock("@/features/comfyui", async (importOriginal) => ({
@@ -285,7 +289,8 @@ beforeEach(async () => {
   failRepairStorageOnQueueNumber = null;
   repairStorageFailureMessage = null;
   mocks.paths.clear();
-  mocks.completeChat.mockReset().mockResolvedValue({
+  mocks.completeChatFallback.mockReset();
+  mocks.completeResponse.mockReset().mockResolvedValue({
     content: JSON.stringify({
       repairTarget: { cardinality: "single", locality: "localized", regionCount: 1 },
       mask: { coordinateUnit: "normalized", shapes: [{ type: "polygon", points: [
@@ -324,6 +329,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  expect(mocks.completeChatFallback).not.toHaveBeenCalled();
   vi.unstubAllGlobals();
   delete process.env.SCENEFORGE_REPAIR_ATTEMPTS_DIR;
   delete process.env.COMFYUI_API_KEY;
@@ -811,7 +817,7 @@ describe("T38C durable repair attempts", () => {
         details: { recoverable: false, stage: "checkpoint-read" },
       },
     });
-    expect(mocks.completeChat).not.toHaveBeenCalled();
+    expect(mocks.completeResponse).not.toHaveBeenCalled();
     expect(mocks.getHistory).not.toHaveBeenCalled();
     expect(mocks.getObjectInfo).not.toHaveBeenCalled();
     expect(mocks.uploadImage).not.toHaveBeenCalled();
@@ -851,7 +857,7 @@ describe("T38C durable repair attempts", () => {
       attempt: checkpoint.attempt,
       storedImage: checkpoint.attempt.storedImage,
     });
-    expect(mocks.completeChat).not.toHaveBeenCalled();
+    expect(mocks.completeResponse).not.toHaveBeenCalled();
     expect(mocks.getObjectInfo).not.toHaveBeenCalled();
     expect(mocks.getHistory).not.toHaveBeenCalled();
     expect(mocks.queuePrompt).not.toHaveBeenCalled();
@@ -988,7 +994,7 @@ describe("T38C durable repair attempts", () => {
           details: { recoverable: false, stage: "attempt-identity" },
         },
       });
-      expect(mocks.completeChat).not.toHaveBeenCalled();
+      expect(mocks.completeResponse).not.toHaveBeenCalled();
       expect(mocks.getHistory).not.toHaveBeenCalled();
       expect(mocks.getObjectInfo).not.toHaveBeenCalled();
       expect(mocks.uploadImage).not.toHaveBeenCalled();
@@ -1048,7 +1054,7 @@ describe("T38C durable repair attempts", () => {
           details: { recoverable: false, stage: "attempt-identity" },
         },
       });
-      expect(mocks.completeChat).not.toHaveBeenCalled();
+      expect(mocks.completeResponse).not.toHaveBeenCalled();
       expect(mocks.getHistory).not.toHaveBeenCalled();
       expect(mocks.getObjectInfo).not.toHaveBeenCalled();
       expect(mocks.uploadImage).not.toHaveBeenCalled();
@@ -1363,7 +1369,7 @@ describe("T38C durable repair attempts", () => {
     });
     expect(result.pairs[0]?.attempt).toBeUndefined();
     expect(result.pairs[0]?.retryStage).toBeUndefined();
-    expect(mocks.completeChat).not.toHaveBeenCalled();
+    expect(mocks.completeResponse).not.toHaveBeenCalled();
     expect(mocks.getObjectInfo).not.toHaveBeenCalled();
     expect(mocks.uploadImage).not.toHaveBeenCalled();
     expect(mocks.queuePrompt).not.toHaveBeenCalled();
@@ -1508,7 +1514,7 @@ describe("T38C durable repair attempts", () => {
     };
     const review: FinalReviewTimelineResult = { reviewVersion: 1, status: "reviewed", pairs: [item.review] };
     const executionContext = context("diagnosis-outcome-unknown");
-    mocks.completeChat.mockRejectedValueOnce(new Error("connection lost after diagnosis request"));
+    mocks.completeResponse.mockRejectedValueOnce(new Error("connection lost after diagnosis request"));
 
     const interrupted = await repairFinalExecution(execution, review, executionContext);
     const resumed = await repairFinalExecution(execution, review, executionContext);
@@ -1527,7 +1533,7 @@ describe("T38C durable repair attempts", () => {
       },
     });
     expect(resumed.pairs[0]?.retryStage).toBeUndefined();
-    expect(mocks.completeChat).toHaveBeenCalledTimes(1);
+    expect(mocks.completeResponse).toHaveBeenCalledTimes(1);
     expect(mocks.getObjectInfo).not.toHaveBeenCalled();
     expect(mocks.queuePrompt).not.toHaveBeenCalled();
   });
@@ -1559,7 +1565,28 @@ describe("T38C durable repair attempts", () => {
       mask: { provenance: "structured-diagnosis" },
       attempt: { status: "stored" },
     });
-    expect(mocks.completeChat).toHaveBeenCalledTimes(1);
+    expect(mocks.completeResponse).toHaveBeenCalledTimes(1);
+    expect(mocks.completeResponse).toHaveBeenCalledWith(expect.objectContaining({
+      model: "vision-model",
+      purpose: "single-image-repair-diagnosis",
+      nsfw: false,
+      temperature: 0,
+      maxTokens: 2_000,
+      messages: [
+        expect.objectContaining({ role: "system", content: expect.any(String) }),
+        {
+          role: "user",
+          content: [
+            expect.objectContaining({ type: "text", text: expect.any(String) }),
+            {
+              type: "image_url",
+              image_url: { url: "data:image/jpeg;base64,TRANSIENT", detail: "high" },
+            },
+          ],
+        },
+        expect.objectContaining({ role: "system", content: expect.any(String) }),
+      ],
+    }));
     expect(mocks.queuePrompt).toHaveBeenCalledTimes(1);
   });
 
@@ -1588,7 +1615,7 @@ describe("T38C durable repair attempts", () => {
       mask: { provenance: "structured-diagnosis" },
       attempt: { status: "stored", promptId: "repair-prompt-1" },
     });
-    expect(mocks.completeChat).toHaveBeenCalledTimes(1);
+    expect(mocks.completeResponse).toHaveBeenCalledTimes(1);
     expect(mocks.queuePrompt).toHaveBeenCalledTimes(1);
     expect(mocks.getHistory).toHaveBeenCalledTimes(2);
     expect(mocks.storeGeneratedImage).toHaveBeenCalledTimes(2);
@@ -1605,7 +1632,7 @@ describe("T38C durable repair attempts", () => {
     };
     const review: FinalReviewTimelineResult = { reviewVersion: 1, status: "reviewed", pairs: [item.review] };
     const executionContext = context("sam2-outcome-unknown");
-    mocks.completeChat.mockResolvedValueOnce({
+    mocks.completeResponse.mockResolvedValueOnce({
       content: JSON.stringify({
         repairTarget: { cardinality: "single", locality: "localized", regionCount: 1 },
         mask: { coordinateUnit: "normalized", shapes: [{
@@ -1642,7 +1669,7 @@ describe("T38C durable repair attempts", () => {
     });
     expect(interrupted.pairs[0]?.retryStage).toBeUndefined();
     expect(resumed.pairs[0]?.retryStage).toBeUndefined();
-    expect(mocks.completeChat).toHaveBeenCalledTimes(1);
+    expect(mocks.completeResponse).toHaveBeenCalledTimes(1);
     expect(mocks.queuePrompt).toHaveBeenCalledTimes(1);
     expect(mocks.getHistory).not.toHaveBeenCalled();
   });
@@ -1702,7 +1729,7 @@ describe("T38C durable repair attempts", () => {
         mask: { provenance: "sam2-refinement", refinement: { status: "applied" } },
         attempt: { status: "stored" },
       });
-      expect(mocks.completeChat).not.toHaveBeenCalled();
+      expect(mocks.completeResponse).not.toHaveBeenCalled();
       expect(mocks.queuePrompt).toHaveBeenCalledTimes(1);
       expect(mocks.queuePrompt.mock.calls[0]?.[1]).toMatchObject({
         clientId: expect.stringContaining("-repair"),
@@ -1761,7 +1788,7 @@ describe("T38C durable repair attempts", () => {
     const recovered = await repairFinalExecution(execution, review, executionContext, failed);
     expect(recovered.pairs[0]).toMatchObject({ status: "repaired", attempt: { status: "stored" } });
     expect(mocks.queuePrompt).toHaveBeenCalledTimes(1);
-    expect(mocks.completeChat).toHaveBeenCalledWith(expect.objectContaining({ purpose: "single-image-repair-diagnosis" }));
+    expect(mocks.completeResponse).toHaveBeenCalledWith(expect.objectContaining({ purpose: "single-image-repair-diagnosis" }));
     expect(mocks.getObjectInfo).toHaveBeenCalledTimes(1);
     expect(mocks.uploadImage).toHaveBeenCalledTimes(2);
     expect(mocks.getHistory).toHaveBeenCalled();
@@ -2033,6 +2060,7 @@ describe("T38C durable repair attempts", () => {
     const resumed = await repairFinalExecution(execution, review, executionContext, partial);
     expect(resumed.pairs.map((pair) => pair.status)).toEqual(["repaired", "repaired"]);
     expect(resumed.pairs[0]).toBe(partial.pairs[0]);
+    expect(mocks.completeResponse).toHaveBeenCalledTimes(2);
     expect(mocks.queuePrompt).toHaveBeenCalledTimes(2);
   });
 
@@ -2117,7 +2145,7 @@ describe("T38C durable repair attempts", () => {
         status: "skipped",
       }],
     });
-    expect(mocks.completeChat).not.toHaveBeenCalled();
+    expect(mocks.completeResponse).not.toHaveBeenCalled();
     expect(mocks.queuePrompt).not.toHaveBeenCalled();
     expect(mocks.uploadImage).not.toHaveBeenCalled();
   });
@@ -2169,7 +2197,7 @@ describe("T38C durable repair attempts", () => {
       skipReason: "comfyui-unavailable",
       status: "skipped",
     })]);
-    expect(mocks.completeChat).not.toHaveBeenCalled();
+    expect(mocks.completeResponse).not.toHaveBeenCalled();
     expect(mocks.uploadImage).not.toHaveBeenCalled();
     expect(mocks.queuePrompt).not.toHaveBeenCalled();
     expect(mocks.buildBasicInpaintWorkflow).not.toHaveBeenCalled();
@@ -2232,7 +2260,7 @@ describe("T38C durable repair attempts", () => {
       },
     }, item.final);
     const executionContext = context("krea-repair-once");
-    mocks.completeChat.mockResolvedValueOnce({
+    mocks.completeResponse.mockResolvedValueOnce({
       content: JSON.stringify({
         repairTarget: { cardinality: "single", locality: "localized", regionCount: 1 },
         mask: { coordinateUnit: "normalized", shapes: [{ type: "polygon", points: [
@@ -2275,7 +2303,7 @@ describe("T38C durable repair attempts", () => {
 
   it("rejects separated target declarations before object_info, uploads, or queue", async () => {
     const item = await candidate("preview-1", 1);
-    mocks.completeChat.mockResolvedValueOnce({ content: JSON.stringify({
+    mocks.completeResponse.mockResolvedValueOnce({ content: JSON.stringify({
       repairTarget: { cardinality: "multiple", locality: "separated", regionCount: 2 },
       mask: { shapes: [] },
     }) });
@@ -2292,7 +2320,7 @@ describe("T38C durable repair attempts", () => {
 
   it("rejects a missing diagnosis target before object_info, uploads, or queue", async () => {
     const item = await candidate("preview-1", 1);
-    mocks.completeChat.mockResolvedValueOnce({ content: JSON.stringify({
+    mocks.completeResponse.mockResolvedValueOnce({ content: JSON.stringify({
       repairTarget: { cardinality: "missing", locality: "localized", regionCount: 0 },
       mask: { shapes: [] },
     }) });

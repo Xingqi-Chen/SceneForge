@@ -620,7 +620,7 @@ async function diagnoseRepair(
     role: "system",
     content: "For this bounded automatic repair, the JSON must also include repairTarget: {cardinality: single|missing|ambiguous|multiple, locality: localized|separated|global, regionCount: non-negative integer}. Use single/localized/1 only for exactly one natural local region. Never collapse separated defects into one mask.",
   });
-  const response = await client.completeChat({
+  const response = await client.completeResponse({
     model,
     purpose: "single-image-repair-diagnosis",
     nsfw,
