@@ -2335,3 +2335,4 @@ Implementation validation:
 - Read-only local API/SQLite checks confirmed an image whose own checkpoint was not ready still resolved against the selected ready checkpoint, preserved that checkpoint, selected only eligible same-base LoRAs, and returned no absolute paths.
 - Production-build browser QA confirmed the expanded three-column desktop gallery and the 390 px one-column layout render large complete 4:3 `object-contain` previews with reachable scrolling and controls.
 - Review fix loop 1 added an AbortController plus synchronous context invalidation for the A→B→A checkpoint race. The 14-test selector suite, typecheck, scoped ESLint, and diff-check passed after the fix, and Review Gate returned APPROVE.
+- GitHub CI passed and PR #198 merged into `master`; Issue #197 closed.
