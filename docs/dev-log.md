@@ -2319,3 +2319,19 @@ Implementation validation:
 
 - Final focused Vision, repair, and Responses suites passed 448 tests across 10 files; the full suite passed 2,209 tests across 164 files, with typecheck, lint, build, and diff checks also passing.
 - Live configured LiteLLM Vision/NSFW and complete single-image Run validation remain environment-dependent follow-up.
+
+### T61 / Issue #197 Run Civitai image-based resource selection
+
+Summary:
+
+- Added a Run-only By image mode to the shared Civitai selector, reusing imported-image search and metadata cards with thumbnail fallbacks, loading/empty/error/retry states, and safe per-LoRA warnings. Image mode expands the dialog for a responsive one-to-three-column gallery and shows complete images in larger 4:3 `object-contain` previews instead of small cropped thumbnails. The entry stays unavailable until the current ready checkpoint exposes base-model metadata, and checkpoint/base-model changes reload the filtered gallery while invalidating stale responses.
+- Added a pure ordered selection rule and thin server route over persisted image-resource usages. The server validates the supplied current checkpoint context and the image-level base model, ignores all image checkpoint/model usages, reads only LoRA usages, and selects every deduplicated ready exact-base-model LoRA in stable usage order without a count limit. A valid zero-LoRA result clears the prior LoRA stack while keeping the checkpoint.
+- Kept failures atomic and made identical checkpoint plus identical ordered LoRA ids a no-op before the existing Run resource invalidation path. Changed selections still clear saved parameters and Style Advice, stale resource recommendation downstream, and cancel confirmation through the existing Composer mutation.
+- Did not add downloads, checksum verification, external calls, prompt-profile authority, image-checkpoint adoption, prompt/weight/parameter copying, setting changes, image-id persistence, schema changes, or Story/Editor picker behavior.
+
+Implementation validation:
+
+- Final Test Gate passed 142 focused tests across 8 files and 2,241 full-suite tests across 167 files. `npm run typecheck`, `npm run lint` (0 errors and 22 existing `no-img-element` warnings), `npm run build`, and `git diff --check` passed.
+- Read-only local API/SQLite checks confirmed an image whose own checkpoint was not ready still resolved against the selected ready checkpoint, preserved that checkpoint, selected only eligible same-base LoRAs, and returned no absolute paths.
+- Production-build browser QA confirmed the expanded three-column desktop gallery and the 390 px one-column layout render large complete 4:3 `object-contain` previews with reachable scrolling and controls.
+- Review fix loop 1 added an AbortController plus synchronous context invalidation for the A→B→A checkpoint race. The 14-test selector suite, typecheck, scoped ESLint, and diff-check passed after the fix, and Review Gate returned APPROVE.

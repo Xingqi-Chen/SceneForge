@@ -770,6 +770,7 @@ describe("StoryPlanningPreview", () => {
       await Promise.resolve();
       await Promise.resolve();
     });
+    expect(container.textContent).not.toContain("Select by image");
 
     const textarea = container.querySelector("textarea") as HTMLTextAreaElement | null;
 

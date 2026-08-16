@@ -58,6 +58,8 @@ npm run build
 
 The MVP starts with a Scene Composer, a start button, and a settings entry point. The Composer can optionally select ready local checkpoint/LoRA resources, save supported ComfyUI parameters with user-triggered AI Style Advice, configure independent FaceDetailer and HandDetailer settings, and attach an img2img source. After the user submits the scene request, SceneForge expands a vertical timeline:
 
+Run resource selection supports both direct resource picking and checkpoint-filtered visual LoRA selection from the imported Civitai image library. Select a ready checkpoint with base-model metadata first; the image gallery then shows only imported images with that same image-level base model. Selecting an image keeps the current checkpoint, ignores any checkpoint/model usages attached to the image, and atomically replaces the prior LoRA stack with every deduplicated ready LoRA whose base model exactly matches the checkpoint in persisted usage order. A valid image with no eligible LoRAs clears the prior LoRAs, and this user-driven path has no three-LoRA limit. Unavailable or incompatible LoRAs are skipped with safe warnings. Image selection does not download or checksum-verify files, call external services, copy prompt or generation parameters, change NSFW/profile settings, or persist the imported-image ID.
+
 1. Scene prompt inference.
 2. Character tag inference.
 3. Character action and 3D pose inference.

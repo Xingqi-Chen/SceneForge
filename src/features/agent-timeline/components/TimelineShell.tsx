@@ -2711,6 +2711,14 @@ export function TimelineShell() {
   }
 
   function handleStyleResourceSelection(selection: { checkpointId: string | null; loraIds: string[] }) {
+    if (
+      selection.checkpointId === selectedStyleCheckpointId &&
+      selection.loraIds.length === selectedStyleLoraIds.length &&
+      selection.loraIds.every((id, index) => id === selectedStyleLoraIds[index])
+    ) {
+      return;
+    }
+
     if (rejectLegacyDirectMutation() || isRunningRef.current) {
       return;
     }
@@ -3454,6 +3462,7 @@ export function TimelineShell() {
           </div>
           <StylePaletteCivitaiResourceSelector
             disabled={isRunning || isLegacyDirectReadOnly}
+            enableImageSelection
             onSelectedResourcesChange={(resources) => {
               if (!isRunningRef.current && !isLegacyDirectReadOnly) {
                 setSelectedStyleResources(resources);

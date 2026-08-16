@@ -1,11 +1,13 @@
 "use client";
 
-import { Check, Loader2, Plus, Search, X } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Check, ImageIcon, Loader2, Plus, Search, X } from "lucide-react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import type {
+  CivitaiImageResourceSelectionResult,
   CivitaiResourceListItem,
+  ImportedImageListItem,
   SelectedCivitaiResourcePreview,
   SelectedCivitaiResourcesPreview,
 } from "@/features/civitai-lora-library";
@@ -19,6 +21,7 @@ import type { PromptProfileId } from "@/shared/prompt-profile";
 
 type LoadStatus = "idle" | "loading" | "success" | "error";
 type CivitaiPickerKind = "checkpoint" | "lora";
+type CivitaiPickerMode = "image" | "resource";
 
 type CivitaiResourcesResponse = {
   items: CivitaiResourceListItem[];
@@ -31,6 +34,7 @@ export type StylePaletteCivitaiResourceSelection = {
 
 export type StylePaletteCivitaiResourceSelectorProps = {
   disabled?: boolean;
+  enableImageSelection?: boolean;
   selectedCheckpointId: string | null;
   selectedLoraIds: string[];
   onSelectionChange: (selection: StylePaletteCivitaiResourceSelection) => void;
@@ -82,6 +86,28 @@ function buildSelectedCivitaiResourcesQuery(checkpointId: string | null, loraIds
   }
 
   return params.toString();
+}
+
+function isCivitaiImageResourceSelectionResult(value: unknown): value is CivitaiImageResourceSelectionResult {
+  if (
+    !isRecord(value) ||
+    typeof value.checkpointId !== "string" ||
+    !value.checkpointId.trim() ||
+    !Array.isArray(value.loraIds) ||
+    !value.loraIds.every((id) => typeof id === "string" && Boolean(id.trim())) ||
+    new Set(value.loraIds).size !== value.loraIds.length ||
+    !Array.isArray(value.warnings)
+  ) {
+    return false;
+  }
+
+  return value.warnings.every((entry) => (
+      isRecord(entry) &&
+      typeof entry.resourceId === "string" &&
+      typeof entry.resourceName === "string" &&
+      (entry.reason === "base_model_mismatch" || entry.reason === "duplicate_usage" || entry.reason === "not_ready") &&
+      typeof entry.message === "string"
+  ));
 }
 
 function compact(value: string, max = 180) {
@@ -218,6 +244,76 @@ function CivitaiPickerResourceCard({
         {active ? "Remove" : resource.resourceType === "model" ? "Select" : "Add"}
       </Button>
     </div>
+  );
+}
+
+function ImportedImageThumbnail({ image }: { image: ImportedImageListItem }) {
+  const [failedImageUrl, setFailedImageUrl] = useState<string | null>(null);
+
+  if (!image.imageUrl || failedImageUrl === image.imageUrl) {
+    return (
+      <div className="flex aspect-[4/3] w-full items-center justify-center bg-slate-100 text-slate-400">
+        <ImageIcon className="size-8" />
+        <span className="sr-only">Image preview unavailable</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="aspect-[4/3] w-full overflow-hidden bg-slate-100">
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        alt={`Civitai image ${image.civitaiImageId}`}
+        className="h-full w-full object-contain"
+        decoding="async"
+        loading="lazy"
+        onError={() => setFailedImageUrl(image.imageUrl)}
+        src={image.imageUrl}
+      />
+    </div>
+  );
+}
+
+function CivitaiPickerImageCard({
+  disabled,
+  image,
+  onSelect,
+  resolving,
+}: {
+  disabled: boolean;
+  image: ImportedImageListItem;
+  onSelect: () => void;
+  resolving: boolean;
+}) {
+  return (
+    <button
+      className="overflow-hidden rounded-md border border-slate-200 bg-white text-left transition hover:border-indigo-200 hover:bg-indigo-50/30 disabled:cursor-wait disabled:opacity-70"
+      disabled={disabled}
+      onClick={onSelect}
+      type="button"
+    >
+      <ImportedImageThumbnail image={image} />
+      <div className="space-y-1.5 p-2">
+        <div className="flex items-center justify-between gap-2">
+          <p className="truncate text-xs font-semibold text-slate-900">Image #{image.civitaiImageId}</p>
+          {resolving ? <Loader2 className="size-3.5 shrink-0 animate-spin text-indigo-600" /> : null}
+        </div>
+        <p className="truncate text-[11px] text-slate-500">{image.baseModel ?? "unknown base model"}</p>
+        <div className="flex flex-wrap gap-1">
+          <span className="rounded-full bg-indigo-50 px-1.5 py-0.5 text-[10px] text-indigo-700">
+            {image.loraCount} LoRA
+          </span>
+          <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-600">
+            {image.checkpointCount} checkpoint
+          </span>
+          <span className={`rounded-full px-1.5 py-0.5 text-[10px] ${
+            image.nsfw ? "bg-rose-50 text-rose-700" : "bg-emerald-50 text-emerald-700"
+          }`}>
+            {image.nsfw ? `NSFW${image.nsfwLevel === null ? "" : ` ${image.nsfwLevel}`}` : "SFW / unknown"}
+          </span>
+        </div>
+      </div>
+    </button>
   );
 }
 
@@ -363,6 +459,7 @@ function CompactResourceRow({
 
 export function StylePaletteCivitaiResourceSelector({
   disabled = false,
+  enableImageSelection = false,
   onSelectionChange,
   onSelectedResourcesChange,
   pickerLayout = "inline",
@@ -377,13 +474,27 @@ export function StylePaletteCivitaiResourceSelector({
   const [selectedCivitaiStatus, setSelectedCivitaiStatus] = useState<LoadStatus>("idle");
   const [selectedCivitaiError, setSelectedCivitaiError] = useState("");
   const [civitaiPickerOpen, setCivitaiPickerOpen] = useState(false);
+  const [civitaiPickerMode, setCivitaiPickerMode] = useState<CivitaiPickerMode>("resource");
   const [civitaiPickerKind, setCivitaiPickerKind] = useState<CivitaiPickerKind>("checkpoint");
   const [civitaiPickerQuery, setCivitaiPickerQuery] = useState("");
   const [civitaiPickerItems, setCivitaiPickerItems] = useState<CivitaiResourceListItem[]>([]);
   const [civitaiPickerStatus, setCivitaiPickerStatus] = useState<LoadStatus>("idle");
   const [civitaiPickerError, setCivitaiPickerError] = useState("");
+  const [civitaiPickerImages, setCivitaiPickerImages] = useState<ImportedImageListItem[]>([]);
+  const [civitaiPickerImagesContextKey, setCivitaiPickerImagesContextKey] = useState("");
+  const [civitaiImagePickerStatus, setCivitaiImagePickerStatus] = useState<LoadStatus>("idle");
+  const [civitaiImagePickerError, setCivitaiImagePickerError] = useState("");
+  const [civitaiImagePickerFeedback, setCivitaiImagePickerFeedback] = useState("");
+  const [civitaiImagePickerWarnings, setCivitaiImagePickerWarnings] = useState<string[]>([]);
+  const [civitaiImagePickerRetryKey, setCivitaiImagePickerRetryKey] = useState(0);
+  const [resolvingCivitaiImage, setResolvingCivitaiImage] = useState<{
+    contextKey: string;
+    imageId: string;
+  } | null>(null);
   const onSelectionChangeRef = useRef(onSelectionChange);
   const onSelectedResourcesChangeRef = useRef(onSelectedResourcesChange);
+  const imageSelectionAbortControllerRef = useRef<AbortController | null>(null);
+  const imageSelectionRequestIdRef = useRef(0);
   const selectedLoraIdsKey = selectedLoraIds.join(",");
   const selectedLoraIdSet = useMemo(() => new Set(selectedLoraIds), [selectedLoraIds]);
   const selectedResourceCards = useMemo(() => selectedCivitaiResourceCards(selectedResources), [selectedResources]);
@@ -392,6 +503,23 @@ export function StylePaletteCivitaiResourceSelector({
   const runSummaryGrid = compactSelectedResources && summaryLayout === "run-grid";
   const selectedCheckpointBaseModel =
     selectedResources.checkpoint?.id === selectedCheckpointId ? (selectedResources.checkpoint.baseModel ?? null) : null;
+  const imagePickerAvailable = Boolean(
+    enableImageSelection && selectedCheckpointId && selectedCheckpointBaseModel?.trim(),
+  );
+  const imageSelectionContextKey = imagePickerAvailable
+    ? `${selectedCheckpointId}\u0000${normalizeBaseModel(selectedCheckpointBaseModel)}`
+    : "";
+  const imageSelectionContextKeyRef = useRef(imageSelectionContextKey);
+  const imagePickerActive = imagePickerAvailable && civitaiPickerMode === "image";
+  const visibleCivitaiPickerImages = civitaiPickerImagesContextKey === imageSelectionContextKey
+    ? civitaiPickerImages
+    : [];
+  const visibleCivitaiImagePickerStatus = civitaiPickerImagesContextKey === imageSelectionContextKey
+    ? civitaiImagePickerStatus
+    : "loading";
+  const resolvingCivitaiImageId = resolvingCivitaiImage?.contextKey === imageSelectionContextKey
+    ? resolvingCivitaiImage.imageId
+    : null;
   const loraPickerMissingBaseModel =
     civitaiPickerKind === "lora" && Boolean(selectedCheckpointId) && !selectedCheckpointBaseModel;
   const visibleCivitaiPickerItems = civitaiPickerItems.filter((resource) => {
@@ -414,14 +542,128 @@ export function StylePaletteCivitaiResourceSelector({
     onSelectedResourcesChangeRef.current = onSelectedResourcesChange;
   }, [onSelectedResourcesChange]);
 
+  useLayoutEffect(() => {
+    const contextChanged = imageSelectionContextKeyRef.current !== imageSelectionContextKey;
+    imageSelectionContextKeyRef.current = imageSelectionContextKey;
+    if (contextChanged) {
+      imageSelectionRequestIdRef.current += 1;
+      imageSelectionAbortControllerRef.current?.abort();
+      imageSelectionAbortControllerRef.current = null;
+      setResolvingCivitaiImage(null);
+    }
+  }, [imageSelectionContextKey]);
+
+  useEffect(() => () => {
+    imageSelectionRequestIdRef.current += 1;
+    imageSelectionAbortControllerRef.current?.abort();
+    imageSelectionAbortControllerRef.current = null;
+  }, []);
+
   function openCivitaiPicker(kind: CivitaiPickerKind) {
     if (disabled) {
       return;
     }
 
+    setCivitaiPickerMode("resource");
     setCivitaiPickerKind(kind);
     setCivitaiPickerQuery("");
     setCivitaiPickerOpen((current) => (current && civitaiPickerKind === kind ? false : true));
+  }
+
+  function openCivitaiImagePicker() {
+    if (disabled || !imagePickerAvailable) {
+      return;
+    }
+
+    setCivitaiPickerMode("image");
+    setCivitaiPickerQuery("");
+    setCivitaiImagePickerError("");
+    setCivitaiImagePickerFeedback("");
+    setCivitaiImagePickerWarnings([]);
+    setCivitaiPickerOpen((current) => (current && civitaiPickerMode === "image" ? false : true));
+  }
+
+  async function handleSelectCivitaiImage(image: ImportedImageListItem) {
+    if (
+      disabled ||
+      !imagePickerAvailable ||
+      !selectedCheckpointId ||
+      !selectedCheckpointBaseModel ||
+      resolvingCivitaiImageId
+    ) {
+      return;
+    }
+
+    const requestContextKey = imageSelectionContextKey;
+    const requestCheckpointId = selectedCheckpointId;
+    const requestCheckpointBaseModel = selectedCheckpointBaseModel;
+    const requestId = imageSelectionRequestIdRef.current + 1;
+    const controller = new AbortController();
+    imageSelectionAbortControllerRef.current?.abort();
+    imageSelectionAbortControllerRef.current = controller;
+    imageSelectionRequestIdRef.current = requestId;
+    setResolvingCivitaiImage({ contextKey: requestContextKey, imageId: image.id });
+    setCivitaiImagePickerError("");
+    setCivitaiImagePickerFeedback("");
+    setCivitaiImagePickerWarnings([]);
+
+    try {
+      const payload: unknown = await fetchJson<unknown>(
+        `/api/civitai-lora-library/imported-images/${encodeURIComponent(image.id)}/resource-selection?checkpointId=${encodeURIComponent(requestCheckpointId)}&checkpointBaseModel=${encodeURIComponent(requestCheckpointBaseModel)}`,
+        { signal: controller.signal },
+      );
+      if (
+        controller.signal.aborted ||
+        imageSelectionAbortControllerRef.current !== controller ||
+        imageSelectionRequestIdRef.current !== requestId ||
+        imageSelectionContextKeyRef.current !== requestContextKey
+      ) {
+        return;
+      }
+      if (!isCivitaiImageResourceSelectionResult(payload)) {
+        throw new Error("Image resource selection returned an invalid response.");
+      }
+      if (payload.checkpointId !== requestCheckpointId) {
+        throw new Error("Image resource selection did not preserve the current checkpoint.");
+      }
+
+      const unchanged = requestCheckpointId === payload.checkpointId &&
+        selectedLoraIds.length === payload.loraIds.length &&
+        selectedLoraIds.every((id, index) => id === payload.loraIds[index]);
+      if (!unchanged) {
+        onSelectionChangeRef.current({
+          checkpointId: payload.checkpointId,
+          loraIds: payload.loraIds,
+        });
+      }
+
+      setCivitaiImagePickerWarnings(payload.warnings.map((entry) => entry.message));
+      setCivitaiImagePickerFeedback(
+        unchanged
+          ? "This image already matches the current ordered resource selection. No Run settings changed."
+          : `Kept the current checkpoint and selected ${payload.loraIds.length} LoRA${payload.loraIds.length === 1 ? "" : "s"} from the image.`,
+      );
+    } catch (error) {
+      if (
+        controller.signal.aborted ||
+        imageSelectionAbortControllerRef.current !== controller ||
+        imageSelectionRequestIdRef.current !== requestId ||
+        imageSelectionContextKeyRef.current !== requestContextKey
+      ) {
+        return;
+      }
+      setCivitaiImagePickerError(
+        error instanceof Error ? error.message : "Unable to select resources from this imported image.",
+      );
+    } finally {
+      if (
+        imageSelectionAbortControllerRef.current === controller &&
+        imageSelectionRequestIdRef.current === requestId
+      ) {
+        imageSelectionAbortControllerRef.current = null;
+        setResolvingCivitaiImage(null);
+      }
+    }
   }
 
   function handleToggleCheckpoint(resource: CivitaiResourceListItem) {
@@ -587,7 +829,7 @@ export function StylePaletteCivitaiResourceSelector({
   }, [disabled, selectedCheckpointId, selectedLoraIdsKey]);
 
   useEffect(() => {
-    if (disabled || !civitaiPickerOpen) {
+    if (disabled || !civitaiPickerOpen || imagePickerActive) {
       return;
     }
 
@@ -661,8 +903,95 @@ export function StylePaletteCivitaiResourceSelector({
     civitaiPickerOpen,
     civitaiPickerQuery,
     disabled,
+    imagePickerActive,
     promptProfile,
     readyOnly,
+    selectedCheckpointBaseModel,
+    selectedCheckpointId,
+  ]);
+
+  useEffect(() => {
+    if (
+      disabled ||
+      !civitaiPickerOpen ||
+      !imagePickerActive ||
+      !selectedCheckpointId ||
+      !selectedCheckpointBaseModel
+    ) {
+      return;
+    }
+
+    const controller = new AbortController();
+    const requestContextKey = imageSelectionContextKey;
+    const requestBaseModel = selectedCheckpointBaseModel;
+
+    async function loadCivitaiPickerImages() {
+      setCivitaiImagePickerStatus("loading");
+      setCivitaiImagePickerError("");
+
+      try {
+        const params = new URLSearchParams({
+          nsfw: "all",
+          resourceCount: "all",
+        });
+        params.set("baseModel", requestBaseModel);
+        if (civitaiPickerQuery.trim()) {
+          params.set("query", civitaiPickerQuery.trim());
+        }
+
+        const payload: unknown = await fetchJson<unknown>(
+          `/api/civitai-lora-library/imported-images?${params.toString()}`,
+          { signal: controller.signal },
+        );
+        if (!isRecord(payload) || !Array.isArray(payload.items)) {
+          throw new Error("Imported image list returned an invalid response.");
+        }
+        if (
+          controller.signal.aborted ||
+          imageSelectionContextKeyRef.current !== requestContextKey
+        ) {
+          return;
+        }
+
+        setCivitaiPickerImages(
+          (payload.items as ImportedImageListItem[]).filter((image) => (
+            sameBaseModel(image.baseModel, requestBaseModel)
+          )),
+        );
+        setCivitaiPickerImagesContextKey(requestContextKey);
+        setCivitaiImagePickerStatus("success");
+      } catch (error) {
+        if (
+          controller.signal.aborted ||
+          imageSelectionContextKeyRef.current !== requestContextKey
+        ) {
+          return;
+        }
+
+        setCivitaiPickerImages([]);
+        setCivitaiPickerImagesContextKey(requestContextKey);
+        setCivitaiImagePickerStatus("error");
+        setCivitaiImagePickerError(
+          error instanceof Error ? error.message : "Unable to load imported Civitai images.",
+        );
+      }
+    }
+
+    const timeout = window.setTimeout(() => {
+      void loadCivitaiPickerImages();
+    }, 160);
+
+    return () => {
+      controller.abort();
+      window.clearTimeout(timeout);
+    };
+  }, [
+    civitaiImagePickerRetryKey,
+    civitaiPickerOpen,
+    civitaiPickerQuery,
+    disabled,
+    imagePickerActive,
+    imageSelectionContextKey,
     selectedCheckpointBaseModel,
     selectedCheckpointId,
   ]);
@@ -686,18 +1015,58 @@ export function StylePaletteCivitaiResourceSelector({
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
             <p className="text-[11px] font-bold uppercase tracking-wider text-indigo-700">
-              {civitaiPickerKind === "checkpoint" ? "Checkpoint Quick Select" : "LoRA Quick Select"}
+              {imagePickerActive
+                ? "Select resources by imported image"
+                : civitaiPickerKind === "checkpoint"
+                  ? "Checkpoint Quick Select"
+                  : "LoRA Quick Select"}
             </p>
             <p className="mt-1 text-[11px] leading-relaxed text-slate-500">
-              {civitaiPickerKind === "checkpoint"
-                ? "Select a checkpoint first; switching checkpoint keeps already selected LoRAs with the same base model."
-                : selectedCheckpointBaseModel
-                  ? `Only LoRAs with base model ${selectedCheckpointBaseModel} are shown.`
-                  : "Select a checkpoint with base model metadata before choosing LoRAs."}
+              {imagePickerActive
+                ? `Keep the current checkpoint and replace its LoRA stack from imported ${selectedCheckpointBaseModel} examples.`
+                : civitaiPickerKind === "checkpoint"
+                  ? "Select a checkpoint first; switching checkpoint keeps already selected LoRAs with the same base model."
+                  : selectedCheckpointBaseModel
+                    ? `Only LoRAs with base model ${selectedCheckpointBaseModel} are shown.`
+                    : "Select a checkpoint with base model metadata before choosing LoRAs."}
             </p>
           </div>
-          <div className="flex items-center gap-2">
-            <div className="flex rounded-md border border-indigo-100 bg-indigo-50 p-0.5">
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            {enableImageSelection ? (
+              <div className="flex rounded-md border border-indigo-100 bg-indigo-50 p-0.5">
+                <button
+                  className={`h-7 rounded px-2 text-[11px] font-medium ${
+                    !imagePickerActive ? "bg-white text-indigo-700 shadow-sm" : "text-slate-500"
+                  }`}
+                  onClick={() => {
+                    setCivitaiPickerMode("resource");
+                    setCivitaiPickerQuery("");
+                  }}
+                  type="button"
+                >
+                  By resource
+                </button>
+                <button
+                  className={`h-7 rounded px-2 text-[11px] font-medium disabled:cursor-not-allowed disabled:opacity-50 ${
+                    imagePickerActive ? "bg-white text-indigo-700 shadow-sm" : "text-slate-500"
+                  }`}
+                  disabled={!imagePickerAvailable}
+                  onClick={() => {
+                    setCivitaiPickerMode("image");
+                    setCivitaiPickerQuery("");
+                    setCivitaiImagePickerError("");
+                    setCivitaiImagePickerFeedback("");
+                    setCivitaiImagePickerWarnings([]);
+                  }}
+                  title={imagePickerAvailable ? "Choose LoRAs from a matching imported image" : "Select a checkpoint with base-model metadata first"}
+                  type="button"
+                >
+                  By image
+                </button>
+              </div>
+            ) : null}
+            {!imagePickerActive ? (
+              <div className="flex rounded-md border border-indigo-100 bg-indigo-50 p-0.5">
               <button
                 className={`h-7 rounded px-2 text-[11px] font-medium ${
                   civitaiPickerKind === "checkpoint" ? "bg-white text-indigo-700 shadow-sm" : "text-slate-500"
@@ -723,7 +1092,8 @@ export function StylePaletteCivitaiResourceSelector({
               >
                 LoRA
               </button>
-            </div>
+              </div>
+            ) : null}
             {pickerLayout === "dialog" ? (
               <button
                 aria-label="Close Civitai resource picker"
@@ -742,14 +1112,20 @@ export function StylePaletteCivitaiResourceSelector({
             className="h-8 w-full rounded-md border border-slate-200 bg-white pl-8 pr-2 text-xs text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-indigo-300 focus:ring-2 focus:ring-indigo-100"
             onChange={(event) => setCivitaiPickerQuery(event.target.value)}
             placeholder={
-              civitaiPickerKind === "checkpoint"
+              imagePickerActive
+                ? "Search image ID, prompts, username, resources, or tags"
+                : civitaiPickerKind === "checkpoint"
                 ? "Search checkpoint name, version, creator, or base model"
                 : "Search LoRA name, trained words, version, or creator"
             }
             value={civitaiPickerQuery}
           />
         </div>
-        {civitaiPickerStatus === "success" ? (
+        {imagePickerActive && visibleCivitaiImagePickerStatus === "success" ? (
+          <p className="mt-2 text-[11px] leading-relaxed text-slate-500">
+            Showing {visibleCivitaiPickerImages.length} imported image{visibleCivitaiPickerImages.length === 1 ? "" : "s"}
+          </p>
+        ) : !imagePickerActive && civitaiPickerStatus === "success" ? (
           <p className="mt-2 text-[11px] leading-relaxed text-slate-500">
             Showing {visibleCivitaiPickerItems.length} selectable
             {civitaiPickerKind === "checkpoint" ? " checkpoint" : " LoRA"}
@@ -763,51 +1139,113 @@ export function StylePaletteCivitaiResourceSelector({
             : "mt-3 min-h-[min(45vh,520px)] max-h-[min(45vh,520px)] space-y-2 overflow-y-auto overscroll-contain pr-1"
         }
       >
-        {civitaiPickerStatus === "loading" && visibleCivitaiPickerItems.length === 0 ? (
-          <p className="rounded-md bg-indigo-50 px-3 py-2 text-xs leading-relaxed text-indigo-700">
-            <Loader2 className="mr-1.5 inline size-3.5 animate-spin" />
-            Loading Civitai resources...
-          </p>
-        ) : null}
-        {civitaiPickerStatus === "error" && civitaiPickerError ? (
-          <p className="rounded-md bg-rose-50 px-3 py-2 text-xs leading-relaxed text-rose-700">
-            {civitaiPickerError}
-          </p>
-        ) : null}
-        {civitaiPickerKind === "lora" && !selectedCheckpointId ? (
-          <p className="rounded-md bg-slate-50 px-3 py-2 text-xs leading-relaxed text-slate-500">
-            Select a checkpoint before choosing compatible LoRAs.
-          </p>
-        ) : null}
-        {loraPickerMissingBaseModel ? (
-          <p className="rounded-md bg-slate-50 px-3 py-2 text-xs leading-relaxed text-slate-500">
-            Selected checkpoint has no base model metadata. Choose a checkpoint with a base model before selecting LoRA resources.
-          </p>
-        ) : null}
-        {visibleCivitaiPickerItems.map((resource) => (
-          <CivitaiPickerResourceCard
-            active={
-              resource.resourceType === "model"
-                ? selectedCheckpointId === resource.id
-                : selectedLoraIdSet.has(resource.id)
-            }
-            key={resource.id}
-            onToggle={() =>
-              resource.resourceType === "model"
-                ? handleToggleCheckpoint(resource)
-                : handleToggleLora(resource)
-            }
-            resource={resource}
-          />
-        ))}
-        {civitaiPickerStatus === "success" &&
-        visibleCivitaiPickerItems.length === 0 &&
-        selectedCheckpointId &&
-        (civitaiPickerKind !== "lora" || Boolean(selectedCheckpointBaseModel)) ? (
-          <p className="rounded-md bg-slate-50 px-3 py-2 text-xs leading-relaxed text-slate-500">
-            No matching Civitai resources for the current filters.
-          </p>
-        ) : null}
+        {imagePickerActive ? (
+          <>
+            {civitaiImagePickerFeedback ? (
+              <p className="rounded-md bg-emerald-50 px-3 py-2 text-xs leading-relaxed text-emerald-700">
+                {civitaiImagePickerFeedback}
+              </p>
+            ) : null}
+            {civitaiImagePickerWarnings.length > 0 ? (
+              <div className="rounded-md bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-800">
+                <p className="font-semibold">Some LoRAs were skipped:</p>
+                <ul className="mt-1 list-disc space-y-0.5 pl-4">
+                  {civitaiImagePickerWarnings.map((message, index) => (
+                    <li key={`${message}:${index}`}>{message}</li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+            {visibleCivitaiImagePickerStatus === "loading" && visibleCivitaiPickerImages.length === 0 ? (
+              <p className="rounded-md bg-indigo-50 px-3 py-2 text-xs leading-relaxed text-indigo-700">
+                <Loader2 className="mr-1.5 inline size-3.5 animate-spin" />
+                Loading imported Civitai images...
+              </p>
+            ) : null}
+            {civitaiImagePickerError ? (
+              <div className="flex flex-wrap items-center justify-between gap-2 rounded-md bg-rose-50 px-3 py-2 text-xs leading-relaxed text-rose-700">
+                <span>{civitaiImagePickerError}</span>
+                {civitaiImagePickerStatus === "error" ? (
+                  <Button
+                    className="h-7 border-rose-200 bg-white px-2 text-[11px] text-rose-700 hover:bg-rose-50"
+                    onClick={() => setCivitaiImagePickerRetryKey((current) => current + 1)}
+                    size="sm"
+                    type="button"
+                    variant="secondary"
+                  >
+                    Retry
+                  </Button>
+                ) : null}
+              </div>
+            ) : null}
+            {visibleCivitaiImagePickerStatus === "success" && visibleCivitaiPickerImages.length === 0 ? (
+              <p className="rounded-md bg-slate-50 px-3 py-2 text-xs leading-relaxed text-slate-500">
+                No imported {selectedCheckpointBaseModel} Civitai images match this search.
+              </p>
+            ) : null}
+            {visibleCivitaiPickerImages.length > 0 ? (
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+                {visibleCivitaiPickerImages.map((image) => (
+                  <CivitaiPickerImageCard
+                    disabled={Boolean(resolvingCivitaiImageId)}
+                    image={image}
+                    key={image.id}
+                    onSelect={() => void handleSelectCivitaiImage(image)}
+                    resolving={resolvingCivitaiImageId === image.id}
+                  />
+                ))}
+              </div>
+            ) : null}
+          </>
+        ) : (
+          <>
+            {civitaiPickerStatus === "loading" && visibleCivitaiPickerItems.length === 0 ? (
+              <p className="rounded-md bg-indigo-50 px-3 py-2 text-xs leading-relaxed text-indigo-700">
+                <Loader2 className="mr-1.5 inline size-3.5 animate-spin" />
+                Loading Civitai resources...
+              </p>
+            ) : null}
+            {civitaiPickerStatus === "error" && civitaiPickerError ? (
+              <p className="rounded-md bg-rose-50 px-3 py-2 text-xs leading-relaxed text-rose-700">
+                {civitaiPickerError}
+              </p>
+            ) : null}
+            {civitaiPickerKind === "lora" && !selectedCheckpointId ? (
+              <p className="rounded-md bg-slate-50 px-3 py-2 text-xs leading-relaxed text-slate-500">
+                Select a checkpoint before choosing compatible LoRAs.
+              </p>
+            ) : null}
+            {loraPickerMissingBaseModel ? (
+              <p className="rounded-md bg-slate-50 px-3 py-2 text-xs leading-relaxed text-slate-500">
+                Selected checkpoint has no base model metadata. Choose a checkpoint with a base model before selecting LoRA resources.
+              </p>
+            ) : null}
+            {visibleCivitaiPickerItems.map((resource) => (
+              <CivitaiPickerResourceCard
+                active={
+                  resource.resourceType === "model"
+                    ? selectedCheckpointId === resource.id
+                    : selectedLoraIdSet.has(resource.id)
+                }
+                key={resource.id}
+                onToggle={() =>
+                  resource.resourceType === "model"
+                    ? handleToggleCheckpoint(resource)
+                    : handleToggleLora(resource)
+                }
+                resource={resource}
+              />
+            ))}
+            {civitaiPickerStatus === "success" &&
+            visibleCivitaiPickerItems.length === 0 &&
+            selectedCheckpointId &&
+            (civitaiPickerKind !== "lora" || Boolean(selectedCheckpointBaseModel)) ? (
+              <p className="rounded-md bg-slate-50 px-3 py-2 text-xs leading-relaxed text-slate-500">
+                No matching Civitai resources for the current filters.
+              </p>
+            ) : null}
+          </>
+        )}
       </div>
     </div>
   ) : null;
@@ -843,12 +1281,26 @@ export function StylePaletteCivitaiResourceSelector({
             <Search className="size-3.5" />
             Select LoRA
           </Button>
+          {enableImageSelection ? (
+            <Button
+              className="h-8 rounded-md border-indigo-100 bg-white px-2 text-[11px] font-medium text-indigo-700 hover:bg-indigo-50"
+              disabled={disabled || !imagePickerAvailable}
+              onClick={openCivitaiImagePicker}
+              size="sm"
+              title={imagePickerAvailable ? "Choose LoRAs from a matching imported image" : "Select a checkpoint with base-model metadata first"}
+              type="button"
+              variant="secondary"
+            >
+              <ImageIcon className="size-3.5" />
+              Select by image
+            </Button>
+          ) : null}
         </div>
       </div>
       <div className={denseSelectedResources ? "flex flex-col gap-2" : "flex flex-col gap-3"}>
         {pickerLayout === "dialog" && !disabled && civitaiPickerOpen ? (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/30 p-4 backdrop-blur-sm">
-            <div className="w-full max-w-3xl">{pickerContent}</div>
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/30 p-2 backdrop-blur-sm sm:p-4">
+            <div className={`w-full ${imagePickerActive ? "max-w-6xl" : "max-w-3xl"}`}>{pickerContent}</div>
           </div>
         ) : pickerContent}
         <div
