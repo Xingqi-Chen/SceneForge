@@ -204,6 +204,103 @@ function toResponsesTokenUsage(usage: LiteLlmResponsesPayload["usage"]): LlmToke
   };
 }
 
+export function summarizeLlmResponsesRequestForLog(
+  request: LlmResponsesRequest,
+): Record<string, unknown> {
+  let textPartCount = 0;
+  let imagePartCount = 0;
+  let textChars = 0;
+  let imageUrlChars = 0;
+
+  for (const message of request.messages) {
+    if (typeof message.content === "string") {
+      textPartCount += 1;
+      textChars += message.content.length;
+      continue;
+    }
+
+    for (const part of message.content) {
+      if (part.type === "text") {
+        textPartCount += 1;
+        textChars += part.text.length;
+      } else {
+        imagePartCount += 1;
+        imageUrlChars += part.image_url.url.length;
+      }
+    }
+  }
+
+  return {
+    callType: "responses",
+    purpose: getSafeResponsesLogPurpose(request.purpose),
+    messageCount: request.messages.length,
+    textPartCount,
+    imagePartCount,
+    textChars,
+    imageUrlChars,
+    ...(typeof request.maxTokens === "number" && Number.isFinite(request.maxTokens)
+      ? { maxOutputTokens: request.maxTokens }
+      : {}),
+    structuredOutput: request.responseFormat !== undefined,
+  };
+}
+
+function getSafeResponsesLogPurpose(purpose: LlmChatRequest["purpose"]) {
+  switch (purpose) {
+    case "prompt-library-classification":
+    case "scene-prompt-reverse":
+    case "prompt-tag-reverse":
+    case "stick-figure-pose-generation":
+    case "comic-sequence-storyboard":
+    case "civitai-resource-enrichment":
+    case "civitai-combination-recommendation":
+    case "stable-diffusion-prompt-generation":
+    case "story-style-reference-analysis":
+    case "single-image-preview-scoring":
+    case "single-image-final-review":
+    case "single-image-repair-diagnosis":
+    case "single-image-repair-verification":
+    case "comfyui-generation-diagnosis":
+    case "comfyui-inpaint-diagnosis":
+      return purpose;
+    default:
+      return "unspecified";
+  }
+}
+
+function getSafeTokenUsageForLog(usage: LlmTokenUsage | undefined) {
+  if (!usage) return undefined;
+
+  const promptTokens = typeof usage.promptTokens === "number" && Number.isFinite(usage.promptTokens)
+    ? usage.promptTokens
+    : undefined;
+  const completionTokens = typeof usage.completionTokens === "number" && Number.isFinite(usage.completionTokens)
+    ? usage.completionTokens
+    : undefined;
+  const totalTokens = typeof usage.totalTokens === "number" && Number.isFinite(usage.totalTokens)
+    ? usage.totalTokens
+    : undefined;
+
+  return {
+    ...(promptTokens !== undefined ? { promptTokens } : {}),
+    ...(completionTokens !== undefined ? { completionTokens } : {}),
+    ...(totalTokens !== undefined ? { totalTokens } : {}),
+  };
+}
+
+export function summarizeLlmResponsesCompletionForLog(
+  completion: LlmChatResponse,
+): Record<string, unknown> {
+  return {
+    callType: "responses",
+    status: "completed",
+    role: completion.role,
+    contentChars: completion.content.length,
+    finishReason: completion.finishReason === "stop" ? "stop" : completion.finishReason ? "other" : "missing",
+    usage: getSafeTokenUsageForLog(completion.usage),
+  };
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -300,6 +397,35 @@ function getResponsesSseFailureReason(error: unknown): ResponsesSseFailureReason
   return "read_failed";
 }
 
+export function summarizeLlmResponsesErrorForLog(error: unknown): Record<string, unknown> {
+  const rawStatusCode = error instanceof LiteLlmError ? error.statusCode : undefined;
+  const statusCode = typeof rawStatusCode === "number" && Number.isInteger(rawStatusCode) &&
+      rawStatusCode >= 400 && rawStatusCode <= 599
+    ? rawStatusCode
+    : undefined;
+  const details = error instanceof LiteLlmError && isRecord(error.details)
+    ? error.details
+    : undefined;
+  const upstreamStatus = typeof details?.upstreamStatus === "number" && Number.isInteger(details.upstreamStatus) &&
+      details.upstreamStatus >= 400 && details.upstreamStatus <= 599
+    ? details.upstreamStatus
+    : undefined;
+  const outputShape = getLlmResponsesOutputShapeDiagnostic(details);
+  const reason = details && responsesSseFailureReasons.has(details.reason as ResponsesSseFailureReason)
+    ? details.reason as ResponsesSseFailureReason
+    : undefined;
+
+  return {
+    callType: "responses",
+    status: "failed",
+    errorKind: error instanceof LiteLlmError ? "upstream" : "unexpected",
+    ...(statusCode !== undefined ? { statusCode } : {}),
+    ...(upstreamStatus !== undefined ? { upstreamStatus } : {}),
+    ...(outputShape ? { outputShape } : {}),
+    ...(reason ? { reason } : {}),
+  };
+}
+
 type ParsedResponsesSseEvent =
   | { kind: "done" }
   | { kind: "event"; payload: Record<string, unknown> };
@@ -310,17 +436,17 @@ function isCanonicalCompletedAssistantMessage(item: unknown): item is Record<str
     item.type !== "message" ||
     item.role !== "assistant" ||
     item.status !== "completed" ||
-    !Array.isArray(item.content)
+    !Array.isArray(item.content) ||
+    item.content.length !== 1
   ) {
     return false;
   }
 
-  return item.content.some((part) => (
-    isRecord(part) &&
+  const [part] = item.content;
+  return isRecord(part) &&
     part.type === "output_text" &&
     typeof part.text === "string" &&
-    part.text.trim().length > 0
-  ));
+    part.text.trim().length > 0;
 }
 
 function parseResponsesSseEvent(event: string): ParsedResponsesSseEvent | null {
@@ -579,7 +705,8 @@ function normalizeLiteLlmResponse(payload: unknown): LlmChatResponse {
     });
   }
 
-  const outputText: string[] = [];
+  let content: string | undefined;
+  let assistantMessageCount = 0;
   let hasAssistantMessage = false;
   let hasCompletedMessage = false;
   let hasMessageContent = false;
@@ -601,25 +728,47 @@ function normalizeLiteLlmResponse(payload: unknown): LlmChatResponse {
       continue;
     }
     hasAssistantMessage = true;
+    assistantMessageCount += 1;
 
     if (!Array.isArray(item.content)) {
       continue;
     }
     hasMessageContent = true;
 
-    for (const part of item.content) {
-      if (!isRecord(part)) {
-        continue;
-      }
+    if (item.content.some((part) => isRecord(part) && part.type === "refusal")) {
+      refused = true;
+      continue;
+    }
 
-      if (part.type === "refusal") {
-        refused = true;
-        continue;
-      }
+    const validOutputTextParts = item.content.filter((part) => (
+      isRecord(part) &&
+      part.type === "output_text" &&
+      typeof part.text === "string" &&
+      part.text.trim().length > 0
+    ));
 
-      if (part.type === "output_text" && typeof part.text === "string") {
-        outputText.push(part.text);
-      }
+    if (validOutputTextParts.length > 1) {
+      throw new LiteLlmError("LiteLLM Responses output included multiple completed assistant text parts.", {
+        statusCode: 502,
+        details: { outputShape: "multiple_output_text" satisfies LlmResponsesOutputShapeDiagnostic },
+      });
+    }
+
+    if (item.content.length !== 1) {
+      throw new LiteLlmError("LiteLLM Responses output included invalid assistant message content.", {
+        statusCode: 502,
+        details: { outputShape: "message_content_invalid" satisfies LlmResponsesOutputShapeDiagnostic },
+      });
+    }
+
+    const [part] = item.content;
+    if (
+      isRecord(part) &&
+      part.type === "output_text" &&
+      typeof part.text === "string" &&
+      part.text.trim().length > 0
+    ) {
+      content = part.text;
     }
   }
 
@@ -630,8 +779,14 @@ function normalizeLiteLlmResponse(payload: unknown): LlmChatResponse {
     });
   }
 
-  const content = outputText.join("");
-  if (!content.trim()) {
+  if (assistantMessageCount > 1) {
+    throw new LiteLlmError("LiteLLM Responses output included multiple completed assistant messages.", {
+      statusCode: 502,
+      details: { outputShape: "multiple_assistant_messages" satisfies LlmResponsesOutputShapeDiagnostic },
+    });
+  }
+
+  if (!content?.trim()) {
     const outputShape: LlmResponsesOutputShapeDiagnostic = !hasMessageItem
       ? "no_message_item"
       : !hasCompletedMessage
@@ -872,10 +1027,10 @@ export function createLiteLlmClient(options: LiteLlmClientOptions) {
         });
       }
 
-      console.info("[SceneForge] [llm] outbound LiteLLM Responses request", {
-        ...summarizeLlmChatRequestForLog(request),
-        resolvedModel: model,
-      });
+      console.info(
+        "[SceneForge] [llm] outbound LiteLLM Responses request",
+        summarizeLlmResponsesRequestForLog(request),
+      );
 
       let response: Response;
       try {
@@ -890,14 +1045,18 @@ export function createLiteLlmClient(options: LiteLlmClientOptions) {
             input: toResponsesInput(request.messages),
             temperature: request.temperature,
             max_output_tokens: request.maxTokens,
-            text: {
-              format: {
-                type: request.responseFormat.type,
-                name: request.responseFormat.json_schema.name,
-                strict: request.responseFormat.json_schema.strict,
-                schema: request.responseFormat.json_schema.schema,
-              },
-            },
+            ...(request.responseFormat
+              ? {
+                  text: {
+                    format: {
+                      type: request.responseFormat.type,
+                      name: request.responseFormat.json_schema.name,
+                      strict: request.responseFormat.json_schema.strict,
+                      schema: request.responseFormat.json_schema.schema,
+                    },
+                  },
+                }
+              : {}),
             stream: false,
             store: false,
           }),
@@ -905,7 +1064,9 @@ export function createLiteLlmClient(options: LiteLlmClientOptions) {
       } catch {
         throw new LiteLlmError("LiteLLM Responses request failed.", {
           statusCode: 502,
-          details: createStructuredOutputErrorDetails(request.responseFormat, 502),
+          details: request.responseFormat
+            ? createStructuredOutputErrorDetails(request.responseFormat, 502)
+            : { upstreamStatus: 502 },
         });
       }
 
@@ -947,10 +1108,12 @@ export function createLiteLlmClient(options: LiteLlmClientOptions) {
               : response.ok
                 ? 502
                 : response.status,
-            details: createStructuredOutputErrorDetails(
-              request.responseFormat,
-              response.ok ? 502 : response.status,
-            ),
+            details: request.responseFormat
+              ? createStructuredOutputErrorDetails(
+                  request.responseFormat,
+                  response.ok ? 502 : response.status,
+                )
+              : { upstreamStatus: response.ok ? 502 : response.status },
           },
         );
       }
@@ -961,7 +1124,9 @@ export function createLiteLlmClient(options: LiteLlmClientOptions) {
         });
         throw new LiteLlmError("LiteLLM Responses request failed.", {
           statusCode: response.status,
-          details: createStructuredOutputErrorDetails(request.responseFormat, response.status),
+          details: request.responseFormat
+            ? createStructuredOutputErrorDetails(request.responseFormat, response.status)
+            : { upstreamStatus: response.status },
         });
       }
 
@@ -978,25 +1143,25 @@ export function createLiteLlmClient(options: LiteLlmClientOptions) {
           });
           throw new LiteLlmError(error.message, {
             statusCode: error.statusCode,
-            details: createStructuredOutputErrorDetails(
-              request.responseFormat,
-              error.statusCode,
-              outputShape,
-            ),
+            details: request.responseFormat
+              ? createStructuredOutputErrorDetails(
+                  request.responseFormat,
+                  error.statusCode,
+                  outputShape,
+                )
+              : {
+                  upstreamStatus: error.statusCode ?? 502,
+                  ...(outputShape ? { outputShape } : {}),
+                },
           });
         }
         throw error;
       }
 
-      console.info("[SceneForge] [llm] inbound LiteLLM Responses completion", {
-        id: completion.id,
-        model: completion.model,
-        role: completion.role,
-        contentChars: completion.content.length,
-        contentPreview: truncateForLog(completion.content, 280),
-        finishReason: completion.finishReason,
-        usage: completion.usage,
-      });
+      console.info(
+        "[SceneForge] [llm] inbound LiteLLM Responses completion",
+        summarizeLlmResponsesCompletionForLog(completion),
+      );
 
       return completion;
     },

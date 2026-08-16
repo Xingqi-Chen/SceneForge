@@ -288,6 +288,45 @@ describe("LLM chat route model selection", () => {
     expect(completeChatMock).not.toHaveBeenCalled();
   });
 
+  it("keeps the generic Run Scene Prompt Responses local-log payload metadata-only", async () => {
+    const responseFormat = getRunScenePromptResponseFormat("krea2");
+    process.env.LITELLM_DEFAULT_MODEL = "SENTINEL_SCENE_RESPONSES_MODEL";
+    completeResponseMock.mockResolvedValue({
+      id: "SENTINEL_SCENE_RESPONSE_ID",
+      model: "SENTINEL_SCENE_RESPONSE_MODEL",
+      role: "assistant",
+      content: "SENTINEL_SCENE_RAW_OUTPUT",
+    });
+
+    const response = await POST(new Request("http://localhost/api/llm/chat", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        purpose: "stable-diffusion-prompt-generation",
+        messages: [{ role: "user", content: "SENTINEL_SCENE_PROMPT" }],
+        responseFormat,
+      }),
+    }));
+
+    expect(response.status).toBe(200);
+    expect(completeResponseMock).toHaveBeenCalledTimes(1);
+    expect(completeChatMock).not.toHaveBeenCalled();
+    const logs = JSON.stringify(appendLlmLocalLogMock.mock.calls);
+    for (const sentinel of [
+      "SENTINEL_SCENE_RESPONSES_MODEL",
+      "SENTINEL_SCENE_RESPONSE_ID",
+      "SENTINEL_SCENE_RESPONSE_MODEL",
+      "SENTINEL_SCENE_RAW_OUTPUT",
+      "SENTINEL_SCENE_PROMPT",
+      JSON.stringify(responseFormat.json_schema.schema),
+      responseFormat.json_schema.name,
+    ]) {
+      expect(logs).not.toContain(sentinel);
+    }
+    expect(logs).toContain('"privacy":"responses-safe"');
+    expect(logs).toContain('"callType":"responses"');
+  });
+
   it.each([
     ["json_object", { type: "json_object" }],
     ["arbitrary schema", {
@@ -350,6 +389,36 @@ describe("LLM chat route model selection", () => {
     expect(completeResponseMock).not.toHaveBeenCalled();
     const forwarded = completeChatMock.mock.calls[0]?.[0] as Record<string, unknown>;
     expect(forwarded).not.toHaveProperty("responseFormat");
+    const logs = JSON.stringify(appendLlmLocalLogMock.mock.calls);
+    expect(logs).toContain("Reverse a prompt");
+    expect(logs).toContain("ordinary response");
+    expect(logs).toContain("default-model");
+  });
+
+  it.each([
+    "prompt-tag-reverse",
+    "stick-figure-pose-generation",
+    "stable-diffusion-prompt-generation",
+    "comic-sequence-storyboard",
+    "story-style-reference-analysis",
+  ] as const)("keeps generic %s calls on Chat when they do not cross a Run-only boundary", async (purpose) => {
+    completeChatMock.mockResolvedValue({
+      role: "assistant",
+      content: "ordinary response",
+    });
+
+    const response = await POST(new Request("http://localhost/api/llm/chat", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        purpose,
+        messages: [{ role: "user", content: "Generic non-Run request" }],
+      }),
+    }));
+
+    expect(response.status).toBe(200);
+    expect(completeChatMock).toHaveBeenCalledTimes(1);
+    expect(completeResponseMock).not.toHaveBeenCalled();
   });
 
   it("returns one sanitized provider rejection without a second call or fallback", async () => {

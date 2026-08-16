@@ -80,6 +80,11 @@ import {
   normalizeScenePromptTimelineResult,
   type TimelineCanvasBindingInput,
 } from "@/features/agent-timeline/t5-node-adapters";
+import type {
+  RunPlanningResponsesApiRequest,
+  RunPlanningResponsesNodeId,
+} from "@/features/agent-timeline/run-planning-responses";
+import { buildRunStyleAdviceLlmRequest } from "@/features/agent-timeline/run-planning-responses";
 import { createTimelineT7NodeAdapters } from "@/features/agent-timeline/t7-node-adapters";
 import {
   createTimelinePreviewSelectionFallbackMetadata,
@@ -126,10 +131,6 @@ import {
   makeCivitaiResourceTargetFileName,
 } from "@/features/civitai-lora-library/resource-files";
 import { parseCivitaiAiPromptResponse } from "@/features/editor/ai-prompt/civitai-ai-context";
-import {
-  buildStylePaletteAdviceMessages,
-  type StylePalettePromptPreset,
-} from "@/features/editor/ai-prompt/style-palette-prompts";
 import {
   bindPrimaryTimelineCharacterToEditorStore,
   createTimelinePromptTagSuggestions,
@@ -395,6 +396,45 @@ async function completeTimelineChatViaApi(
     headers: {
       "content-type": "application/json",
     },
+    body: JSON.stringify(requestBody),
+  });
+  const payload: unknown = await response.json();
+
+  if (!response.ok) {
+    throw new LiteLlmError(getLlmProxyErrorMessage(payload), {
+      statusCode: response.status,
+      details: payload,
+    });
+  }
+
+  if (!isLlmChatResponse(payload)) {
+    throw new LiteLlmError("LLM response did not include usable chat content.", {
+      statusCode: 502,
+      details: payload,
+    });
+  }
+
+  return payload;
+}
+
+async function completeRunPlanningResponseViaApi(
+  nodeId: RunPlanningResponsesNodeId,
+  request: LlmChatRequest,
+  options: { applyProjectNsfw?: boolean } = {},
+): Promise<LlmChatResponse> {
+  const supportsNsfw = useEditorStore.getState().project.settings.supportsNsfw === true;
+  const requestBody: RunPlanningResponsesApiRequest = {
+    nodeId,
+    request: {
+      ...request,
+      ...(options.applyProjectNsfw === false
+        ? {}
+        : { nsfw: supportsNsfw || request.nsfw === true }),
+    },
+  };
+  const response = await fetch("/api/agent-timeline/run-planning-response", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
     body: JSON.stringify(requestBody),
   });
   const payload: unknown = await response.json();
@@ -758,7 +798,7 @@ async function recommendTimelineResourcesViaApi({
   promptProfile: PromptProfileId;
   visualStyle: RunVisualStyle;
 }) {
-  const response = await fetch("/api/civitai-lora-library/ai-recommendation", {
+  const response = await fetch("/api/agent-timeline/run-resource-recommendation", {
     method: "POST",
     headers: {
       "content-type": "application/json",
@@ -799,31 +839,15 @@ async function loadTimelineStyleAdviceViaApi({
     return null;
   }
 
-  const preset: StylePalettePromptPreset = {
-    id: "portrait",
-    label: "Timeline render prompt",
-    description: referenceResolution
-      ? `Timeline prompt used for img2img model parameter advice. Use the uploaded source image dimensions ${referenceResolution.width}x${referenceResolution.height} as the reference resolution.`
-      : "Timeline prompt used for model parameter advice.",
-    positive: finalPositivePrompt,
-    negative: baseNegativePrompt,
-  };
-  const response = await completeTimelineChatViaApi(
-    {
-      purpose: "stable-diffusion-prompt-generation",
-      messages: buildStylePaletteAdviceMessages({
-        artistPrompts: [],
-        preset,
-        resources: selectedResources,
-      }).map((message, index) => index === 0 && typeof message.content === "string"
-        ? {
-            ...message,
-            content: `${message.content}\n${buildRunVisualStyleLlmInstructions(visualStyle)}`,
-          }
-        : message),
-      temperature: 0.25,
-      maxTokens: 900,
-    },
+  const response = await completeRunPlanningResponseViaApi(
+    "style-advice",
+    buildRunStyleAdviceLlmRequest({
+      baseNegativePrompt,
+      finalPositivePrompt,
+      referenceResolution,
+      selectedResources,
+      visualStyle,
+    }),
     { applyProjectNsfw: false },
   );
 
@@ -2021,6 +2045,19 @@ export function TimelineShell() {
               }
 
               const response = await completeTimelineChatViaApi(request);
+
+              if (!isCurrentRun(runId)) {
+                throw new Error("Timeline run was superseded.");
+              }
+
+              return response;
+            },
+            completeRunPlanningResponse: async (nodeId, request) => {
+              if (!isCurrentRun(runId)) {
+                throw new Error("Timeline run was superseded.");
+              }
+
+              const response = await completeRunPlanningResponseViaApi(nodeId, request);
 
               if (!isCurrentRun(runId)) {
                 throw new Error("Timeline run was superseded.");

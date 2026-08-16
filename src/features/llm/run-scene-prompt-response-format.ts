@@ -8,8 +8,11 @@ import type {
 export type RunScenePromptResponseProfile = "illustrious" | "anima" | "krea2";
 
 export type LlmResponsesOutputShapeDiagnostic =
+  | "message_content_invalid"
   | "message_content_missing"
   | "message_noncompleted"
+  | "multiple_assistant_messages"
+  | "multiple_output_text"
   | "no_assistant_role"
   | "no_message_item"
   | "no_output_array"
@@ -19,8 +22,11 @@ export type LlmResponsesOutputShapeDiagnostic =
   | "response_not_object";
 
 const responsesOutputShapeDiagnostics = new Set<LlmResponsesOutputShapeDiagnostic>([
+  "message_content_invalid",
   "message_content_missing",
   "message_noncompleted",
+  "multiple_assistant_messages",
+  "multiple_output_text",
   "no_assistant_role",
   "no_message_item",
   "no_output_array",

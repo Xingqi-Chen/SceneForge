@@ -795,7 +795,13 @@ function createPoseResponse() {
 }
 
 function getFetchPurpose(init: RequestInit | undefined) {
-  return typeof init?.body === "string" ? (JSON.parse(init.body) as { purpose?: string }).purpose : undefined;
+  if (typeof init?.body !== "string") return undefined;
+
+  const body = JSON.parse(init.body) as {
+    purpose?: string;
+    request?: { purpose?: string };
+  };
+  return body.request?.purpose ?? body.purpose;
 }
 
 function getFetchUrl(input: RequestInfo | URL) {
@@ -812,7 +818,7 @@ function getFetchBody(init?: RequestInit) {
 
 function isStyleAdviceRequest(init?: RequestInit) {
   const body = getFetchBody(init);
-  const systemContent = body?.messages?.[0]?.content;
+  const systemContent = (body?.request ?? body)?.messages?.[0]?.content;
 
   return typeof systemContent === "string" && systemContent.includes("style palette assistant");
 }
@@ -1041,7 +1047,7 @@ function mockT5Fetch() {
       return createTimelineSettingsResponse();
     }
 
-    if (url === "/api/llm/chat" && isStyleAdviceRequest(init)) {
+    if (url === "/api/agent-timeline/run-planning-response" && isStyleAdviceRequest(init)) {
       return createStyleAdviceResponse();
     }
 
@@ -1051,7 +1057,7 @@ function mockT5Fetch() {
       });
     }
 
-    if (url === "/api/civitai-lora-library/ai-recommendation") {
+    if (url === "/api/agent-timeline/run-resource-recommendation") {
       return createTimelineRecommendationResponse();
     }
 
@@ -1078,7 +1084,7 @@ function mockT5FetchWithDeferredPose() {
       return createTimelineSettingsResponse();
     }
 
-    if (url === "/api/llm/chat" && isStyleAdviceRequest(init)) {
+    if (url === "/api/agent-timeline/run-planning-response" && isStyleAdviceRequest(init)) {
       return createStyleAdviceResponse();
     }
 
@@ -1088,7 +1094,7 @@ function mockT5FetchWithDeferredPose() {
       });
     }
 
-    if (url === "/api/civitai-lora-library/ai-recommendation") {
+    if (url === "/api/agent-timeline/run-resource-recommendation") {
       return createTimelineRecommendationResponse();
     }
 
@@ -1125,7 +1131,7 @@ function mockT5FetchWithDeferredPrompt() {
       return createTimelineSettingsResponse();
     }
 
-    if (url === "/api/llm/chat" && isStyleAdviceRequest(init)) {
+    if (url === "/api/agent-timeline/run-planning-response" && isStyleAdviceRequest(init)) {
       return createStyleAdviceResponse();
     }
 
@@ -1135,7 +1141,7 @@ function mockT5FetchWithDeferredPrompt() {
       });
     }
 
-    if (url === "/api/civitai-lora-library/ai-recommendation") {
+    if (url === "/api/agent-timeline/run-resource-recommendation") {
       return createTimelineRecommendationResponse();
     }
 
@@ -3520,14 +3526,36 @@ describe("TimelineShell", () => {
         .filter(isTimelineExecutionFetchUrl);
       expect(fetchUrls).toEqual([
         "/api/llm/chat",
-        "/api/llm/chat",
-        "/api/llm/chat",
+        "/api/agent-timeline/run-planning-response",
+        "/api/agent-timeline/run-planning-response",
         "/api/civitai-lora-library/resources?resourceType=model&category=all&downloaded=ready&promptProfile=illustrious",
         "/api/civitai-lora-library/resources?resourceType=lora&category=all&downloaded=ready&promptProfile=illustrious",
-        "/api/civitai-lora-library/ai-recommendation",
+        "/api/agent-timeline/run-resource-recommendation",
         "/api/comfyui/sampler-options",
-        "/api/llm/chat",
+        "/api/agent-timeline/run-planning-response",
       ]);
+      const runPlanningBodies = fetchMock.mock.calls
+        .filter(([input]) => String(input) === "/api/agent-timeline/run-planning-response")
+        .map(([, init]) => typeof init?.body === "string" ? JSON.parse(init.body) : null);
+      const runPlanningCalls = runPlanningBodies.map((body) => ({
+        nodeId: body?.nodeId,
+        purpose: body?.request?.purpose,
+      }));
+      expect(runPlanningCalls).toHaveLength(3);
+      expect(runPlanningCalls).toEqual(expect.arrayContaining([
+        { nodeId: "character-tags", purpose: "prompt-tag-reverse" },
+        { nodeId: "character-action", purpose: "stick-figure-pose-generation" },
+        { nodeId: "style-advice", purpose: "stable-diffusion-prompt-generation" },
+      ]));
+      expect(runPlanningBodies.every((body) => body?.request?.responseFormat === undefined)).toBe(true);
+      const runRecommendationBody = fetchMock.mock.calls
+        .find(([input]) => String(input) === "/api/agent-timeline/run-resource-recommendation")?.[1]?.body;
+      expect(JSON.parse(String(runRecommendationBody))).toEqual({
+        desiredEffect: expect.any(String),
+        maxLoras: 3,
+        promptProfile: "illustrious",
+        visualStyle: "anime",
+      });
       expect(fetchUrls).not.toContain("/api/comfyui/generate-image");
       expect(fetchUrls).not.toContain("/api/comfyui/generated-images");
       expect(window.localStorage.length).toBe(0);
@@ -4295,20 +4323,27 @@ describe("TimelineShell", () => {
         .map(([input]) => String(input))
         .filter(isTimelineExecutionFetchUrl)).toEqual([
         "/api/llm/chat",
-        "/api/llm/chat",
-        "/api/llm/chat",
+        "/api/agent-timeline/run-planning-response",
+        "/api/agent-timeline/run-planning-response",
         "/api/civitai-lora-library/resources?resourceType=model&category=all&downloaded=ready&promptProfile=illustrious",
         "/api/civitai-lora-library/resources?resourceType=lora&category=all&downloaded=ready&promptProfile=illustrious",
-        "/api/civitai-lora-library/ai-recommendation",
+        "/api/agent-timeline/run-resource-recommendation",
         "/api/comfyui/sampler-options",
-        "/api/llm/chat",
+        "/api/agent-timeline/run-planning-response",
       ]);
 
-      const llmBodies = fetchMock.mock.calls
+      const chatBodies = fetchMock.mock.calls
         .filter(([input]) => String(input) === "/api/llm/chat")
         .map(([, init]) => typeof init?.body === "string" ? JSON.parse(init.body) : null);
+      const runPlanningBodies = fetchMock.mock.calls
+        .filter(([input]) => String(input) === "/api/agent-timeline/run-planning-response")
+        .map(([, init]) => typeof init?.body === "string" ? JSON.parse(init.body) : null);
+      const llmBodies = [
+        ...chatBodies,
+        ...runPlanningBodies.map((body) => body?.request),
+      ];
       const recommendationBody = fetchMock.mock.calls
-        .find(([input]) => String(input) === "/api/civitai-lora-library/ai-recommendation")?.[1]?.body;
+        .find(([input]) => String(input) === "/api/agent-timeline/run-resource-recommendation")?.[1]?.body;
       const styleAdviceBody = llmBodies.find((body) =>
         String(body?.messages?.[0]?.content ?? "").includes("style palette assistant"),
       );

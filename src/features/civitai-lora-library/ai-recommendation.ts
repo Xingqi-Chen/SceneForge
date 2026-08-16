@@ -1,5 +1,8 @@
 import {
   createLiteLlmClient,
+  summarizeLlmResponsesCompletionForLog,
+  summarizeLlmResponsesErrorForLog,
+  summarizeLlmResponsesRequestForLog,
   type LlmChatMessage,
   type LlmChatRequest,
   type LlmChatResponse,
@@ -841,22 +844,28 @@ export function validateCivitaiCombinationRecommendation({
   };
 }
 
-async function completeRecommendationChat(chatRequest: LlmChatRequest): Promise<LlmChatResponse> {
+async function completeRecommendation(
+  chatRequest: LlmChatRequest,
+  transport: "chat" | "responses",
+): Promise<LlmChatResponse> {
   const requestId = createLlmLogRequestId();
 
   await appendLlmLocalLog({
+    ...(transport === "responses" ? { privacy: "responses-safe" as const } : {}),
     requestId,
     timestamp: new Date().toISOString(),
     phase: "request",
     route: "civitai-lora-library/ai-recommendation",
-    payload: {
-      purpose: chatRequest.purpose,
-      nsfw: chatRequest.nsfw,
-      model: chatRequest.model,
-      temperature: chatRequest.temperature,
-      maxTokens: chatRequest.maxTokens,
-      messages: chatRequest.messages,
-    },
+    payload: transport === "responses"
+      ? summarizeLlmResponsesRequestForLog(chatRequest)
+      : {
+          purpose: chatRequest.purpose,
+          nsfw: chatRequest.nsfw,
+          model: chatRequest.model,
+          temperature: chatRequest.temperature,
+          maxTokens: chatRequest.maxTokens,
+          messages: chatRequest.messages,
+        },
   });
 
   try {
@@ -867,30 +876,46 @@ async function completeRecommendationChat(chatRequest: LlmChatRequest): Promise<
         ? process.env.LITELLM_NSFW_MODEL
         : process.env.LITELLM_CIVITAI_RECOMMENDATION_MODEL || process.env.LITELLM_DEFAULT_MODEL,
     });
-    const completion = await client.completeChat(chatRequest);
+    const completion = transport === "responses"
+      ? await client.completeResponse(chatRequest)
+      : await client.completeChat(chatRequest);
 
     await appendLlmLocalLog({
+      ...(transport === "responses" ? { privacy: "responses-safe" as const } : {}),
       requestId,
       timestamp: new Date().toISOString(),
       phase: "response",
       route: "civitai-lora-library/ai-recommendation",
-      payload: { completion },
+      payload: transport === "responses"
+        ? summarizeLlmResponsesCompletionForLog(completion)
+        : { completion },
     });
 
     return completion;
   } catch (error) {
     await appendLlmLocalLog({
+      ...(transport === "responses" ? { privacy: "responses-safe" as const } : {}),
       requestId,
       timestamp: new Date().toISOString(),
       phase: "error",
       route: "civitai-lora-library/ai-recommendation",
-      payload: {
-        error: serializeErrorForLlmLog(error),
-      },
+      payload: transport === "responses"
+        ? summarizeLlmResponsesErrorForLog(error)
+        : {
+            error: serializeErrorForLlmLog(error),
+          },
     });
 
     throw error;
   }
+}
+
+function completeRecommendationChat(chatRequest: LlmChatRequest) {
+  return completeRecommendation(chatRequest, "chat");
+}
+
+function completeRunRecommendationResponse(chatRequest: LlmChatRequest) {
+  return completeRecommendation(chatRequest, "responses");
 }
 
 function normalizeMaxLoras(value: number | undefined) {
@@ -974,4 +999,13 @@ export async function recommendCivitaiResourceCombination({
 
     throw new CivitaiAiRecommendationError("AI 推荐失败，请稍后重试。", 500, summarizeError(error));
   }
+}
+
+export async function recommendRunCivitaiResourceCombination(
+  options: Omit<Parameters<typeof recommendCivitaiResourceCombination>[0], "completeChat">,
+) {
+  return recommendCivitaiResourceCombination({
+    ...options,
+    completeChat: completeRunRecommendationResponse,
+  });
 }
