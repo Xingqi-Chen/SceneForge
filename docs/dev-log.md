@@ -11,6 +11,7 @@ This log records dated implementation and documentation work. Keep entries conci
 - Added a complete-domain deterministic normalization for positive-integer source-less, unsaved Krea AI advice. It minimizes squared relative axis error with the specified aspect, area, non-enlargement, Preview-area, width, and height tie-breaks, exposes changed dimensions in the existing reason, and shares Node 9's pure exact-aspect 16-aligned Preview feasibility calculation.
 - Hardened the Krea resolution-string boundary so only a whole unsigned integer pair can enter normalization. Exact negative axes remain invalid, and malformed signed strings cannot become positive through the shared tolerant parser's unsigned substring matching.
 - Added local validation of ordinary Krea source dimensions before any Style Advice provider call and required valid sources to be requested at their exact uploaded dimensions. Source and saved dimensions remain unmodified and fail closed; saved-parameter bypass, fixed Krea sampling, and local positive-prompt authority remain unchanged.
+- Merged PR #201 and closed Issue #200 after GitHub CI passed lint, typecheck, the full test suite, and the production build.
 
 ## 2026-08-04
 
