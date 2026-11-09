@@ -28,6 +28,33 @@ function usage({
 describe("resolveCivitaiImageResourceSelection", () => {
   const checkpoint = { id: "checkpoint-current", baseModel: "Illustrious" };
 
+  it.each(["Krea 2", " KREA_2_TURBO "])("selects ready mixed aliases for %s without changing the checkpoint or usage order", (baseModel) => {
+    const result = resolveCivitaiImageResourceSelection({
+      checkpoint: { id: "official-krea-checkpoint", baseModel },
+      usages: [
+        usage({ id: "image-checkpoint", resourceType: "model", baseModel: "Krea 2 Turbo" }),
+        usage({ id: "mrpopo-full-potential-v3", name: "Mrpopo Full Potential v3.0", baseModel: "Krea 2 Turbo" }),
+        usage({ id: "standard-lora", baseModel: "krea2" }),
+        usage({ id: "mrpopo-full-potential-v3", baseModel: "Krea_2_Turbo" }),
+        usage({ id: "unready-turbo", baseModel: "Krea 2 Turbo", ready: false }),
+        usage({ id: "missing-base", baseModel: null }),
+        usage({ id: "other-family", baseModel: "Anima" }),
+        usage({ id: "unknown-krea", baseModel: "Krea 2 Pro" }),
+        usage({ id: "compact-turbo", baseModel: "Krea2Turbo" }),
+      ],
+    });
+
+    expect(result.checkpointId).toBe("official-krea-checkpoint");
+    expect(result.loraIds).toEqual(["mrpopo-full-potential-v3", "standard-lora", "compact-turbo"]);
+    expect(result.warnings.map(({ resourceId, reason }) => ({ resourceId, reason }))).toEqual([
+      { resourceId: "mrpopo-full-potential-v3", reason: "duplicate_usage" },
+      { resourceId: "unready-turbo", reason: "not_ready" },
+      { resourceId: "missing-base", reason: "base_model_mismatch" },
+      { resourceId: "other-family", reason: "base_model_mismatch" },
+      { resourceId: "unknown-krea", reason: "base_model_mismatch" },
+    ]);
+  });
+
   it("ignores zero, multiple, unready, and mismatched image checkpoint usages", () => {
     const withoutImageModels = resolveCivitaiImageResourceSelection({
       checkpoint,

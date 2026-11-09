@@ -652,7 +652,7 @@ export function buildCivitaiCombinationRecommendationMessages({
         `Select exactly one checkpoint id and 0-${maxLoras} LoRA ids. Prefer fewer LoRAs when the effect can be achieved cleanly.`,
         "Use candidate metadata, observed weights, Civitai recommendations, and common pairings to choose a compatible combination.",
         ...profileInstructions,
-        "Only pair LoRAs with the same baseModel as the selected checkpoint; Anima checkpoints may only use Anima LoRAs.",
+        "Only pair LoRAs with the same baseModel as the selected checkpoint; Krea 2 and Krea 2 Turbo are the same krea2 compatibility family, including case and space/hyphen/underscore spelling variants. Do not merge other Krea versions or suffixes. Anima checkpoints may only use Anima LoRAs.",
         "Return JSON ONLY. No markdown fences, no commentary.",
         "Write checkpointReason, LoRA reasons, recommendationReason, and overallEffect in Simplified Chinese.",
         "suggestedWeight must be a number between 0 and 2, or null when uncertain.",

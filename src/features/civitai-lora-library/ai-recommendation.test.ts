@@ -68,6 +68,30 @@ function makeDetail(overrides: Partial<CivitaiResourceDetail> = {}): CivitaiReso
 }
 
 describe("Civitai AI recommendation helpers", () => {
+  it.each(["Krea 2", " KREA_2_TURBO "])("accepts ready candidate aliases for %s while excluding unknown Krea and other families", (baseModel) => {
+    const checkpointCandidates = rankCivitaiRecommendationCandidates([
+      makeDetail({ id: "krea-checkpoint", resourceType: "model", baseModel }),
+    ], "portrait");
+    const loraCandidates = rankCivitaiRecommendationCandidates([
+      makeDetail({ id: "turbo", baseModel: "Krea 2 Turbo" }),
+      makeDetail({ id: "standard", baseModel: "Krea2" }),
+      makeDetail({ id: "unknown", baseModel: "Krea 2 Pro" }),
+      makeDetail({ id: "anima", baseModel: "Anima" }),
+      makeDetail({ id: "missing-base", baseModel: null }),
+    ], "portrait");
+    const result = validateCivitaiCombinationRecommendation({
+      checkpointCandidates, loraCandidates, maxLoras: 5,
+      parsed: {
+        checkpointId: "krea-checkpoint", checkpointReason: "family checkpoint",
+        loras: ["turbo", "unknown", "standard", "anima", "missing-base"].map((id) => ({ id, suggestedWeight: 0.7, reason: "candidate" })),
+        recommendationReason: "family aliases", overallEffect: "portrait",
+      },
+    });
+    expect(result.checkpoint?.resource.id).toBe("krea-checkpoint");
+    expect(result.loras.map(({ resource }) => resource.id)).toEqual(["turbo", "standard"]);
+    expect(result.loras.map(({ resource }) => resource.baseModel)).toEqual(["Krea 2 Turbo", "Krea2"]);
+    expect(result.warnings).toHaveLength(3);
+  });
   it("ranks local candidates with keyword matching and trims LLM payload fields", () => {
     const cyber = makeDetail({ id: "cyber", importedImageCount: 1 });
     const portrait = makeDetail({
