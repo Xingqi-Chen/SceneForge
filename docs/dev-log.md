@@ -4,6 +4,13 @@ This log records dated implementation and documentation work. Keep entries conci
 
 ## 2026-11-09
 
+### T64 / Issue #205 Krea 2 compatibility aliases
+
+- Canonicalized only known Krea 2/Krea 2 Turbo base-model labels and case/whitespace/hyphen/underscore variants to the `krea2` comparison key, tightening the prior Krea prefix detector to exclude unknown suffixes and generations.
+- Replaced duplicated picker comparison logic with the shared helper. Existing server image selection and recommendation compatibility now use the same bidirectional alias rule, with matching recommendation guidance.
+- Applied Krea family filtering at read time to imported-image and resource lists, preserving all other SQL filters, aggregates, ordering, raw metadata, normalized dedup keys, and search-index text. Existing imported rows need no mutation, reimport, or rebuild.
+- Updated README and product/technical contracts. Readiness, checkpoint identity, ordered LoRA selection, duplicate/skip warnings, empty clearing, stale-response guards, no-op behavior, and Story availability remain unchanged. Test Gate records automated and live read-only validation.
+
 ### T63 / Issue #203 Responses-only LLM generation
 
 - Routed every text/multimodal generation call and compatibility `completeChat` method through the shared `/v1/responses` executor, retaining configured endpoints, credentials, models, purpose/NSFW routing, normalized results, strict completed-output/SSE decoding, and bounded retry limits. Embeddings remain unchanged.

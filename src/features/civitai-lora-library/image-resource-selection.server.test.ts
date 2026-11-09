@@ -164,6 +164,49 @@ describe("selectImportedImageResourcesFromSqlite", () => {
     expect(listImageLoraUsagesMock).toHaveBeenCalledWith(db, "image-current");
   });
 
+  it.each([
+    ["Krea 2", "Krea 2 Turbo"],
+    ["Krea_2_Turbo", "Krea2"],
+  ])("accepts existing image 147820382 across %s / %s labels and keeps readiness checks", async (checkpointBaseModel, imageBaseModel) => {
+    const current = resource("official-krea-checkpoint", "model", { baseModel: checkpointBaseModel });
+    getCheckpointMock.mockReturnValue(current);
+    getImageMock.mockReturnValue({ id: "image-147820382", civitaiImageId: 147820382, baseModel: imageBaseModel });
+    const mrpopo = resource("mrpopo-full-potential-v3", "lora", { name: "Mrpopo Full Potential v3.0", baseModel: "Krea 2 Turbo" });
+    listImageLoraUsagesMock.mockReturnValue([
+      { resource: mrpopo },
+      { resource: resource("standard-ready", "lora", { baseModel: "Krea 2" }) },
+      { resource: mrpopo },
+      { resource: resource("missing-file", "lora", { baseModel: "Krea2Turbo" }) },
+      { resource: resource("unready", "lora", { baseModel: "Krea_2" }) },
+      { resource: resource("wrong-family", "lora", { baseModel: "Anima" }) },
+      { resource: resource("unknown-variant", "lora", { baseModel: "Krea 2 Pro" }) },
+    ]);
+    getDownloadStatusMock.mockImplementation(async (entry: CivitaiResourceRecord) => entry.id === "missing-file" ? "missing" : entry.id === "unready" ? "not-ready" : "ready");
+
+    const result = await select({ checkpointBaseModel: imageBaseModel, checkpointId: current.id, importedImageId: "image-147820382" });
+
+    expect(result.checkpointId).toBe(current.id);
+    expect(result.loraIds).toEqual([mrpopo.id, "standard-ready"]);
+    expect(result.warnings.map(({ resourceId, reason }) => ({ resourceId, reason }))).toEqual([
+      { resourceId: mrpopo.id, reason: "duplicate_usage" },
+      { resourceId: "missing-file", reason: "not_ready" },
+      { resourceId: "unready", reason: "not_ready" },
+      { resourceId: "wrong-family", reason: "base_model_mismatch" },
+      { resourceId: "unknown-variant", reason: "base_model_mismatch" },
+    ]);
+    expect(getDownloadStatusMock.mock.calls.filter(([entry]) => entry.id === mrpopo.id)).toHaveLength(1);
+    expect(getImageMock).toHaveBeenCalledWith(db, "image-147820382");
+    expect(JSON.stringify(result)).not.toContain("C:\\private");
+    expect(current.baseModel).toBe(checkpointBaseModel);
+    expect(mrpopo.baseModel).toBe("Krea 2 Turbo");
+  });
+
+  it.each(["Krea 2 Pro", "Krea 3", "Anima"])("still rejects stale non-family checkpoint context %s", async (baseModel) => {
+    getCheckpointMock.mockReturnValue(resource("krea-checkpoint", "model", { baseModel: "Krea 2" }));
+    await expect(select({ checkpointBaseModel: baseModel })).rejects.toMatchObject({ code: "checkpoint_context_mismatch", statusCode: 409 });
+    expect(getImageMock).not.toHaveBeenCalled();
+  });
+
   it("treats zero eligible LoRAs as a successful empty replacement", async () => {
     listImageLoraUsagesMock.mockReturnValue([
       { resource: resource("lora-not-ready", "lora") },

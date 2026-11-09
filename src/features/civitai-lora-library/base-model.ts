@@ -1,7 +1,8 @@
 import type { PromptProfileId } from "@/shared/prompt-profile";
 
 export function normalizeCivitaiBaseModel(value: string | null | undefined) {
-  return value?.trim().toLocaleLowerCase() ?? "";
+  const normalized = value?.trim().toLocaleLowerCase() ?? "";
+  return isKrea2CivitaiBaseModel(normalized) ? "krea2" : normalized;
 }
 
 export function isSameCivitaiBaseModel(left: string | null | undefined, right: string | null | undefined) {
@@ -15,7 +16,8 @@ export function isAnimaCivitaiBaseModel(value: string | null | undefined) {
 }
 
 export function isKrea2CivitaiBaseModel(value: string | null | undefined) {
-  return /^krea\s*[-_ ]?2(?:\s|$)/i.test((value ?? "").trim());
+  // Compatibility aliases only; unknown future suffixes or generations stay separate.
+  return /^krea[\s_-]*2(?:[\s_-]*turbo)?$/i.test((value ?? "").trim());
 }
 
 export function isCivitaiBaseModelCompatibleWithPromptProfile(

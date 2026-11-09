@@ -172,6 +172,82 @@ afterEach(() => {
 });
 
 describe("StylePaletteCivitaiResourceSelector", () => {
+  it.each([
+    ["Krea 2", "Krea 2 Turbo"],
+    ["Krea_2_Turbo", "Krea2"],
+  ])("shows alias images and preserves checkpoint selection for %s / %s", async (checkpointBase, imageBase) => {
+    const current = createSelectedResource({ id: "official-krea-checkpoint", name: "Official Krea checkpoint", resourceType: "model", baseModel: checkpointBase });
+    const mrpopo = createSelectedResource({ id: "mrpopo", name: "Mrpopo Full Potential v3.0", baseModel: "Krea 2 Turbo" });
+    const image = createImportedImage({ id: "image-147820382", civitaiImageId: 147820382, baseModel: imageBase });
+    const onSelectionChange = vi.fn();
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith("/api/civitai-lora-library/selected-resources?")) return jsonResponse({ checkpoint: current, loras: [mrpopo] });
+      if (url.startsWith("/api/civitai-lora-library/imported-images?")) return jsonResponse({ items: [
+        image, createImportedImage({ id: "other", civitaiImageId: 88888, baseModel: "Anima" }),
+        createImportedImage({ id: "unknown", civitaiImageId: 99999, baseModel: "Krea 2 Pro" }),
+      ] });
+      if (url.includes("/resource-selection?")) return jsonResponse({ checkpointId: current.id, loraIds: [mrpopo.id, "standard-lora"], warnings: [] });
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    act(() => root.render(<StylePaletteCivitaiResourceSelector enableImageSelection readyOnly pickerLayout="dialog" onSelectionChange={onSelectionChange} selectedCheckpointId={current.id} selectedLoraIds={[mrpopo.id]} />));
+    await flushTimer();
+    expect(container.textContent).toContain("Mrpopo Full Potential v3.0");
+    act(() => findButton("Select by image", container)?.click());
+    await flushTimer(180);
+    expect(document.body.textContent).toContain("Image #147820382");
+    expect(document.body.textContent).not.toContain("Image #88888");
+    expect(document.body.textContent).not.toContain("Image #99999");
+    expect(document.body.textContent).toContain(imageBase);
+    const imageButton = Array.from(document.body.querySelectorAll("button")).find((button) => button.textContent?.includes("Image #147820382"));
+    expect(imageButton).toBeDefined();
+    act(() => imageButton?.click());
+    await flushTimer();
+    expect(onSelectionChange).toHaveBeenCalledExactlyOnceWith({ checkpointId: current.id, loraIds: [mrpopo.id, "standard-lora"] });
+    const urls = fetchMock.mock.calls.map(([input]) => new URL(String(input), "http://localhost"));
+    expect(urls.find((url) => url.pathname.endsWith("/imported-images"))?.searchParams.get("baseModel")).toBe(checkpointBase);
+    const selectionUrl = urls.find((url) => url.pathname.endsWith("/resource-selection"));
+    expect(selectionUrl?.searchParams.get("checkpointBaseModel")).toBe(checkpointBase);
+    expect(selectionUrl?.searchParams.get("checkpointId")).toBe(current.id);
+  });
+
+  it.each([
+    ["Krea 2", "Krea 2 Turbo"],
+    ["Krea 2 Turbo", "Krea2"],
+  ])("shows and selects compatible alias LoRAs for %s / %s", async (checkpointBase, loraBase) => {
+    const current = createSelectedResource({ id: "krea-checkpoint", resourceType: "model", baseModel: checkpointBase });
+    const compatible = createSelectedResource({ id: "compatible-turbo", name: "Compatible alias LoRA", baseModel: loraBase });
+    const onSelectionChange = vi.fn();
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith("/api/civitai-lora-library/selected-resources?")) return jsonResponse({ checkpoint: current, loras: [] });
+      if (url.startsWith("/api/civitai-lora-library/resources?")) return jsonResponse({ items: [
+        createResourceListItem(compatible),
+        createResourceListItem(createSelectedResource({ id: "unknown-krea", name: "Unknown Krea LoRA", baseModel: "Krea 2 Pro" })),
+        createResourceListItem(createSelectedResource({ id: "anima", name: "Anima LoRA", baseModel: "Anima" })),
+      ] });
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    act(() => root.render(<StylePaletteCivitaiResourceSelector readyOnly pickerLayout="dialog" onSelectionChange={onSelectionChange} selectedCheckpointId={current.id} selectedLoraIds={[]} />));
+    await flushTimer();
+    const addLora = findButton("Add LoRA", container) ?? findButton("Select LoRA", container);
+    expect(addLora).toBeDefined();
+    act(() => addLora?.click());
+    await flushTimer(180);
+    expect(document.body.textContent).toContain("Compatible alias LoRA");
+    expect(document.body.textContent).not.toContain("Unknown Krea LoRA");
+    expect(document.body.textContent).not.toContain("Anima LoRA");
+    const add = findButton("Add");
+    expect(add).toBeDefined();
+    act(() => add?.click());
+    expect(onSelectionChange).toHaveBeenCalledExactlyOnceWith({ checkpointId: current.id, loraIds: [compatible.id] });
+    const listUrl = fetchMock.mock.calls.map(([input]) => new URL(String(input), "http://localhost")).find((url) => url.pathname.endsWith("/resources"));
+    expect(listUrl?.searchParams.get("baseModel")).toBe(checkpointBase);
+    expect(listUrl?.searchParams.get("downloaded")).toBe("ready");
+  });
+
   it("keeps compact selected rows removable and preserves the dialog default density", async () => {
     const selectedResources: SelectedCivitaiResourcesPreview = {
       checkpoint,
@@ -792,11 +868,12 @@ describe("StylePaletteCivitaiResourceSelector", () => {
     expect(onSelectionChange).not.toHaveBeenCalled();
   });
 
-  it("ignores a stale image-selection response after checkpoint context changes", async () => {
+  it.each([["Illustrious", "Anima"], ["Krea 2", "Krea 2 Turbo"]])("ignores stale image selections after switching from %s to %s checkpoints", async (initialBase, nextBase) => {
+    const checkpoint = createSelectedResource({ id: "checkpoint-initial", resourceType: "model", baseModel: initialBase });
     const checkpointAnima = createSelectedResource({
       id: "checkpoint-anima",
       name: "Anima Checkpoint",
-      baseModel: "Anima",
+      baseModel: nextBase,
       resourceType: "model",
     });
     const oldSelection = deferred<Response>();
@@ -809,13 +886,13 @@ describe("StylePaletteCivitaiResourceSelector", () => {
           : jsonResponse({ checkpoint, loras: [] });
       }
       if (url.startsWith("/api/civitai-lora-library/imported-images?")) {
-        return url.includes("baseModel=Anima")
+        return new URL(url, "http://localhost").searchParams.get("baseModel") === nextBase
           ? jsonResponse({ items: [createImportedImage({
               id: "image-anima",
               civitaiImageId: 22222,
-              baseModel: "Anima",
+              baseModel: nextBase,
             })] })
-          : jsonResponse({ items: [createImportedImage()] });
+          : jsonResponse({ items: [createImportedImage({ baseModel: initialBase })] });
       }
       if (url.includes("/resource-selection?")) {
         return oldSelection.promise;

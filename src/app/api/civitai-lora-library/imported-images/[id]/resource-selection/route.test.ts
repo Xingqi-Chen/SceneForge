@@ -92,6 +92,25 @@ describe("imported-image resource selection route", () => {
     expect(openDatabaseMock).not.toHaveBeenCalled();
   });
 
+  it.each(["Krea 2", "Krea 2 Turbo", " KREA_2_TURBO "])("forwards raw checkpoint alias %s and returns ordered alias LoRAs with the checkpoint intact", async (baseModel) => {
+    selectResourcesMock.mockResolvedValue({
+      checkpointId: "official-krea-checkpoint", loraIds: ["mrpopo-full-potential-v3", "standard-krea-lora"], warnings: [],
+    });
+    const url = new URL("http://localhost/api/image/resource-selection");
+    url.searchParams.set("checkpointId", "official-krea-checkpoint");
+    url.searchParams.set("checkpointBaseModel", baseModel);
+    const response = await GET(new Request(url), context("image-147820382"));
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      checkpointId: "official-krea-checkpoint", loraIds: ["mrpopo-full-potential-v3", "standard-krea-lora"], warnings: [],
+    });
+    expect(selectResourcesMock).toHaveBeenCalledExactlyOnceWith({
+      checkpointBaseModel: baseModel.trim(), checkpointId: "official-krea-checkpoint", db, importedImageId: "image-147820382",
+    });
+    expect(db.close).toHaveBeenCalledOnce();
+  });
+
   it("returns safe typed validation failures and closes storage", async () => {
     selectResourcesMock.mockRejectedValue(new CivitaiImageResourceSelectionError(
       "The selected checkpoint changed. Reload the image gallery and try again.",

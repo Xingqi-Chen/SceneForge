@@ -16,6 +16,7 @@ import type {
   ArtistStringReferenceImageRecord,
 } from "@/features/artist-string-library/types";
 import { getOfficialPreviewImage } from "@/features/civitai-lora-library/normalize";
+import { isKrea2CivitaiBaseModel } from "@/features/civitai-lora-library/base-model";
 import { sanitizeCivitaiLibrarySettingsPayload } from "@/features/civitai-lora-library/settings";
 import type {
   CivitaiLibrarySettings,
@@ -1748,8 +1749,9 @@ export function listImportedImagesFromSqlite(
 ): ImportedImageListItem[] {
   const where: string[] = [];
   const values: SqlitePrimitive[] = [];
+  const filterKrea2Family = isKrea2CivitaiBaseModel(filters.baseModel);
 
-  if (filters.baseModel) {
+  if (filters.baseModel && !filterKrea2Family) {
     where.push("img.base_model = ?");
     values.push(filters.baseModel);
   }
@@ -1798,7 +1800,9 @@ export function listImportedImagesFromSqlite(
     GROUP BY img.id
     ${having}
     ORDER BY img.imported_at DESC
-  `).all(...values).map(mapImportedImageListRow);
+  `).all(...values).map(mapImportedImageListRow)
+    // Apply known aliases at read time so persisted labels and dedup keys stay intact.
+    .filter((image) => !filterKrea2Family || isKrea2CivitaiBaseModel(image.baseModel));
 }
 
 export function listCivitaiResourcesFromSqlite(
@@ -1807,6 +1811,7 @@ export function listCivitaiResourcesFromSqlite(
 ): CivitaiResourceListItem[] {
   const where = ["r.resource_type = ?"];
   const values: SqlitePrimitive[] = [filters.resourceType === "model" ? "model" : "lora"];
+  const filterKrea2Family = isKrea2CivitaiBaseModel(filters.baseModel);
 
   if (values[0] === "lora" && filters.category && filters.category !== "all") {
     where.push(`EXISTS (
@@ -1817,7 +1822,7 @@ export function listCivitaiResourcesFromSqlite(
     values.push(filters.category);
   }
 
-  if (filters.baseModel) {
+  if (filters.baseModel && !filterKrea2Family) {
     where.push("r.base_model = ?");
     values.push(filters.baseModel);
   }
@@ -1863,7 +1868,8 @@ export function listCivitaiResourcesFromSqlite(
     GROUP BY r.id
     ${having}
     ORDER BY imported_image_count DESC, r.updated_at DESC
-  `).all(...values).map(mapResourceListRow);
+  `).all(...values).map(mapResourceListRow)
+    .filter((resource) => !filterKrea2Family || isKrea2CivitaiBaseModel(resource.baseModel));
 }
 
 export function getCivitaiResourceDetailFromSqlite(

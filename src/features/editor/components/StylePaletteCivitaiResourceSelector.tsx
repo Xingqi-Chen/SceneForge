@@ -11,6 +11,10 @@ import type {
   SelectedCivitaiResourcePreview,
   SelectedCivitaiResourcesPreview,
 } from "@/features/civitai-lora-library";
+import {
+  isSameCivitaiBaseModel,
+  normalizeCivitaiBaseModel,
+} from "@/features/civitai-lora-library/base-model";
 import { getCivitaiImageVariantUrl } from "@/features/civitai-lora-library/image-url";
 import {
   getCivitaiModelStorageKind,
@@ -157,16 +161,6 @@ function previewFromCivitaiListItem(resource: CivitaiResourceListItem): Selected
     modelFileName: makeCivitaiResourceTargetFileName(resource),
     ...(resource.resourceType === "model" ? { modelStorageKind: getCivitaiModelStorageKind(resource) } : {}),
   };
-}
-
-function normalizeBaseModel(value: string | null | undefined) {
-  return value?.trim().toLocaleLowerCase() ?? "";
-}
-
-function sameBaseModel(left: string | null | undefined, right: string | null | undefined) {
-  const normalizedLeft = normalizeBaseModel(left);
-  const normalizedRight = normalizeBaseModel(right);
-  return Boolean(normalizedLeft && normalizedRight && normalizedLeft === normalizedRight);
 }
 
 function CivitaiPickerResourceCard({
@@ -507,7 +501,7 @@ export function StylePaletteCivitaiResourceSelector({
     enableImageSelection && selectedCheckpointId && selectedCheckpointBaseModel?.trim(),
   );
   const imageSelectionContextKey = imagePickerAvailable
-    ? `${selectedCheckpointId}\u0000${normalizeBaseModel(selectedCheckpointBaseModel)}`
+    ? `${selectedCheckpointId}\u0000${normalizeCivitaiBaseModel(selectedCheckpointBaseModel)}`
     : "";
   const imageSelectionContextKeyRef = useRef(imageSelectionContextKey);
   const imagePickerActive = imagePickerAvailable && civitaiPickerMode === "image";
@@ -530,7 +524,7 @@ export function StylePaletteCivitaiResourceSelector({
     return (
       resource.resourceType === "lora" &&
       Boolean(selectedCheckpointBaseModel) &&
-      sameBaseModel(resource.baseModel, selectedCheckpointBaseModel)
+      isSameCivitaiBaseModel(resource.baseModel, selectedCheckpointBaseModel)
     );
   });
 
@@ -683,7 +677,7 @@ export function StylePaletteCivitaiResourceSelector({
 
     const checkpointPreview = previewFromCivitaiListItem(resource);
     const compatibleLoraIds = selectedResources.loras
-      .filter((lora) => sameBaseModel(lora.baseModel, resource.baseModel))
+      .filter((lora) => isSameCivitaiBaseModel(lora.baseModel, resource.baseModel))
       .map((lora) => lora.id);
     const compatibleLoras = selectedResources.loras.filter((lora) => compatibleLoraIds.includes(lora.id));
 
@@ -732,7 +726,7 @@ export function StylePaletteCivitaiResourceSelector({
       return;
     }
 
-    if (!sameBaseModel(resource.baseModel, selectedCheckpointBaseModel)) {
+    if (!isSameCivitaiBaseModel(resource.baseModel, selectedCheckpointBaseModel)) {
       return;
     }
 
@@ -955,7 +949,7 @@ export function StylePaletteCivitaiResourceSelector({
 
         setCivitaiPickerImages(
           (payload.items as ImportedImageListItem[]).filter((image) => (
-            sameBaseModel(image.baseModel, requestBaseModel)
+            isSameCivitaiBaseModel(image.baseModel, requestBaseModel)
           )),
         );
         setCivitaiPickerImagesContextKey(requestContextKey);
