@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
-import type { LlmChatRequest, LlmChatResponse } from "./types";
+import type { LlmResponsesRequest, LlmChatResponse } from "./types";
 import {
   summarizeLlmResponsesCompletionForLog,
   summarizeLlmResponsesErrorForLog,
@@ -55,7 +55,7 @@ export type LlmChatLocalLogEntry =
       category?: LlmLocalLogCategory;
       context?: Record<string, unknown>;
       phase: "request";
-      request: LlmChatRequest;
+      request: LlmResponsesRequest;
       requestId: string;
       route: string;
       timestamp?: string;
@@ -93,7 +93,7 @@ export function createLlmLocalLogRequestId() {
 }
 
 export function inferLlmLocalLogCategory(route: string): LlmLocalLogCategory {
-  if (route === "/api/llm/chat") {
+  if (route === "/api/llm/chat" || route === "/api/llm/responses") {
     return "chat";
   }
 
@@ -273,75 +273,33 @@ export async function appendLlmLocalLog(record: LlmLocalLogRecord) {
   }
 }
 
+/** Compatibility helper: all generation logs follow the Responses metadata policy. */
 export async function appendLlmChatLocalLog(entry: LlmChatLocalLogEntry) {
-  const timestamp = entry.timestamp ?? new Date().toISOString();
-
-  if (entry.phase === "request") {
-    await appendLlmLocalLog({
-      category: entry.category,
-      ...(entry.transport === "responses" ? { privacy: "responses-safe" as const } : {}),
-      requestId: entry.requestId,
-      timestamp,
-      phase: "request",
-      route: entry.route,
-      payload: entry.transport === "responses"
-        ? {
-            ...entry.context,
-            ...summarizeLlmResponsesRequestForLog(entry.request),
-          }
-        : {
-            ...entry.context,
-            purpose: entry.request.purpose,
-            nsfw: entry.request.nsfw,
-            model: entry.request.model,
-            temperature: entry.request.temperature,
-            maxTokens: entry.request.maxTokens,
-            messages: entry.request.messages,
-          },
-    });
-
-    return;
+  const context: Record<string, string> = {};
+  for (const key of ["workflowId", "storyId", "nodeId"] as const) {
+    const value = entry.context?.[key];
+    if (typeof value === "string" && value.length > 0 && value.length <= 1024) {
+      context[`${key}Hash`] = createHash("sha256").update(value).digest("hex").slice(0, 16);
+    }
   }
-
-  if (entry.phase === "response") {
-    await appendLlmLocalLog({
-      category: entry.category,
-      ...(entry.transport === "responses" ? { privacy: "responses-safe" as const } : {}),
-      requestId: entry.requestId,
-      timestamp,
-      phase: "response",
-      route: entry.route,
-      payload: entry.transport === "responses"
-        ? {
-            ...entry.context,
-            ...summarizeLlmResponsesCompletionForLog(entry.completion),
-          }
-        : {
-            ...entry.context,
-            completion: entry.completion,
-          },
-    });
-
-    return;
+  const nodeId = entry.context?.runPlanningNodeId;
+  if (nodeId === "character-tags" || nodeId === "character-action" || nodeId === "style-advice") {
+    context.runPlanningNodeId = nodeId;
   }
-
+  const attempt = entry.context?.attempt;
+  if (attempt === "initial" || attempt === "repair") context.attempt = attempt;
+  const summary = entry.phase === "request"
+    ? summarizeLlmResponsesRequestForLog(entry.request)
+    : entry.phase === "response"
+      ? summarizeLlmResponsesCompletionForLog(entry.completion)
+      : summarizeLlmResponsesErrorForLog(entry.error);
   await appendLlmLocalLog({
     category: entry.category,
-    ...(entry.transport === "responses" ? { privacy: "responses-safe" as const } : {}),
+    privacy: "responses-safe",
     requestId: entry.requestId,
-    timestamp,
-    phase: "error",
+    timestamp: entry.timestamp ?? new Date().toISOString(),
+    phase: entry.phase,
     route: entry.route,
-    payload: entry.transport === "responses"
-      ? {
-          ...entry.context,
-          ...summarizeLlmResponsesErrorForLog(entry.error),
-        }
-      : {
-          ...entry.context,
-          error: serializeErrorForLlmLog(entry.error),
-          ...(entry.statusCode !== undefined ? { statusCode: entry.statusCode } : {}),
-          ...(entry.details !== undefined ? { details: entry.details } : {}),
-        },
+    payload: { ...context, ...summary },
   });
 }

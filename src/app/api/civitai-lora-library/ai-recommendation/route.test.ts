@@ -178,7 +178,7 @@ describe("Civitai AI recommendation route", () => {
     });
   }
 
-  it("uses Responses only for the exact Run boundary while preserving the Library Chat transport", async () => {
+  it("uses Responses for both Run and Library recommendations with metadata-only logs", async () => {
     const checkpoint = upsertCivitaiResourceToSqlite(
       db,
       makeResourceInput("model", "Cyber Checkpoint"),
@@ -197,7 +197,6 @@ describe("Civitai AI recommendation route", () => {
       }),
     };
     mockCompleteResponse.mockResolvedValue(completion);
-    mockCompleteChat.mockResolvedValue(completion);
 
     const runResponse = await POST_RUN_RECOMMENDATION(new Request(
       "http://localhost/api/agent-timeline/run-resource-recommendation",
@@ -246,12 +245,15 @@ describe("Civitai AI recommendation route", () => {
     ));
 
     expect(libraryResponse.status).toBe(200);
-    expect(mockCompleteResponse).toHaveBeenCalledTimes(1);
-    expect(mockCompleteChat).toHaveBeenCalledTimes(1);
+    expect(mockCompleteResponse).toHaveBeenCalledTimes(2);
+    expect(mockCompleteChat).not.toHaveBeenCalled();
     expect(mockCreateEmbedding).toHaveBeenCalledTimes(2);
     const libraryLogs = JSON.stringify(appendLlmLocalLogMock.mock.calls);
-    expect(libraryLogs).toContain("cyber neon courier");
-    expect(libraryLogs).toContain(checkpoint.id);
+    expect(libraryLogs).not.toContain("cyber neon courier");
+    expect(libraryLogs).not.toContain(checkpoint.id);
+    expect(libraryLogs).not.toContain(completion.content);
+    expect(libraryLogs).toContain('"privacy":"responses-safe"');
+    expect(libraryLogs).toContain('"callType":"responses"');
   });
 
   it.each([
@@ -369,6 +371,7 @@ describe("Civitai AI recommendation route", () => {
     expect(response.status).toBe(409);
     expect(payload.error.message).toContain("npm run civitai:reindex");
     expect(mockCompleteChat).not.toHaveBeenCalled();
+    expect(mockCompleteResponse).not.toHaveBeenCalled();
   });
 
   it("returns an error before calling the LLM when no checkpoint exists", async () => {
@@ -388,6 +391,7 @@ describe("Civitai AI recommendation route", () => {
     expect(response.status).toBe(400);
     expect(payload.error.message).toContain("checkpoint");
     expect(mockCompleteChat).not.toHaveBeenCalled();
+    expect(mockCompleteResponse).not.toHaveBeenCalled();
   });
 
   it("returns an actionable error when the Civitai embedding index is missing", async () => {
@@ -411,6 +415,7 @@ describe("Civitai AI recommendation route", () => {
     expect(readCivitaiEmbeddingIndexMetadata(db)).toBeNull();
     expect(mockCreateEmbedding).not.toHaveBeenCalled();
     expect(mockCompleteChat).not.toHaveBeenCalled();
+    expect(mockCompleteResponse).not.toHaveBeenCalled();
   });
 
   it("returns an actionable error when query embedding generation fails", async () => {
@@ -434,6 +439,7 @@ describe("Civitai AI recommendation route", () => {
     expect(response.status).toBe(409);
     expect(payload.error.message).toContain("npm run civitai:reindex-embeddings");
     expect(mockCompleteChat).not.toHaveBeenCalled();
+    expect(mockCompleteResponse).not.toHaveBeenCalled();
   });
 
   it("sanitizes query text before creating a recommendation embedding", async () => {
@@ -448,7 +454,7 @@ describe("Civitai AI recommendation route", () => {
     const unpairedLowSurrogate = String.fromCharCode(0xdd27);
     const unpairedHighSurrogate = String.fromCharCode(0xd83d);
 
-    mockCompleteChat.mockResolvedValue({
+    mockCompleteResponse.mockResolvedValue({
       content: JSON.stringify({
         checkpointId: checkpoint.id,
         checkpointReason: "Matches the requested effect.",
@@ -468,7 +474,7 @@ describe("Civitai AI recommendation route", () => {
       }),
     );
     const embeddingRequest = mockCreateEmbedding.mock.calls[0]?.[0];
-    const chatRequest = mockCompleteChat.mock.calls[0]?.[0] as LlmChatRequest | undefined;
+    const chatRequest = mockCompleteResponse.mock.calls[0]?.[0] as LlmChatRequest | undefined;
     const chatContent = chatRequest?.messages.map((message) => message.content).join("\n") ?? "";
 
     expect(response.status).toBe(200);
@@ -505,6 +511,7 @@ describe("Civitai AI recommendation route", () => {
     expect(payload.error.message).toContain("npm run civitai:reindex-embeddings");
     expect(mockCreateEmbedding).not.toHaveBeenCalled();
     expect(mockCompleteChat).not.toHaveBeenCalled();
+    expect(mockCompleteResponse).not.toHaveBeenCalled();
   });
 
   it("returns BM25 reindex remediation when the FTS index is stale before embedding readiness", async () => {
@@ -534,6 +541,7 @@ describe("Civitai AI recommendation route", () => {
     expect(payload.error.message).toContain("npm run civitai:reindex before npm run civitai:reindex-embeddings");
     expect(mockCreateEmbedding).not.toHaveBeenCalled();
     expect(mockCompleteChat).not.toHaveBeenCalled();
+    expect(mockCompleteResponse).not.toHaveBeenCalled();
   });
 
   it("uses the NSFW model for NSFW recommendation requests", async () => {
@@ -546,7 +554,7 @@ describe("Civitai AI recommendation route", () => {
     rebuildTestEmbeddingIndex();
     process.env.LITELLM_NSFW_MODEL = "nsfw-model";
 
-    mockCompleteChat.mockResolvedValue({
+    mockCompleteResponse.mockResolvedValue({
       content: JSON.stringify({
         checkpointId: checkpoint.id,
         checkpointReason: "Matches the requested effect.",
@@ -564,7 +572,7 @@ describe("Civitai AI recommendation route", () => {
         body: JSON.stringify({ desiredEffect: "cinematic portrait", maxLoras: 3, nsfw: true }),
       }),
     );
-    const request = mockCompleteChat.mock.calls[0]?.[0];
+    const request = mockCompleteResponse.mock.calls[0]?.[0];
 
     expect(response.status).toBe(200);
     expect(request.nsfw).toBe(true);
@@ -586,7 +594,7 @@ describe("Civitai AI recommendation route", () => {
     rebuildCivitaiSearchIndex(db);
     rebuildTestEmbeddingIndex();
 
-    mockCompleteChat.mockResolvedValue({
+    mockCompleteResponse.mockResolvedValue({
       content: JSON.stringify({
         checkpointId: checkpoint.id,
         checkpointReason: "这个 checkpoint 适合作为霓虹写实基底。",
@@ -608,7 +616,7 @@ describe("Civitai AI recommendation route", () => {
       }),
     );
     const payload = await response.json();
-    const request = mockCompleteChat.mock.calls[0]?.[0];
+    const request = mockCompleteResponse.mock.calls[0]?.[0];
     const userContent = JSON.parse(request.messages[1].content);
 
     expect(response.status).toBe(200);
@@ -655,7 +663,7 @@ describe("Civitai AI recommendation route", () => {
     rebuildCivitaiSearchIndex(db);
     rebuildTestEmbeddingIndex();
 
-    mockCompleteChat.mockResolvedValue({
+    mockCompleteResponse.mockResolvedValue({
       content: JSON.stringify({
         checkpointId: checkpoint.id,
         checkpointReason: "Best BM25 checkpoint match.",
@@ -673,7 +681,7 @@ describe("Civitai AI recommendation route", () => {
         body: JSON.stringify({ desiredEffect: "cyberpunk neon rain reflections", maxLoras: 3 }),
       }),
     );
-    const request = mockCompleteChat.mock.calls[0]?.[0];
+    const request = mockCompleteResponse.mock.calls[0]?.[0];
     const userContent = JSON.parse(request.messages[1].content);
 
     expect(response.status).toBe(200);
@@ -731,7 +739,7 @@ describe("Civitai AI recommendation route", () => {
     rebuildCivitaiSearchIndex(db);
     rebuildTestEmbeddingIndex();
 
-    mockCompleteChat.mockResolvedValue({
+    mockCompleteResponse.mockResolvedValue({
       content: JSON.stringify({
         checkpointId: animaCheckpoint.id,
         checkpointReason: "Anima checkpoint matches the selected profile.",
@@ -756,7 +764,7 @@ describe("Civitai AI recommendation route", () => {
       }),
     );
     const payload = await response.json();
-    const request = mockCompleteChat.mock.calls[0]?.[0];
+    const request = mockCompleteResponse.mock.calls[0]?.[0];
     const userContent = JSON.parse(request.messages[1].content);
 
     expect(response.status).toBe(200);
@@ -802,7 +810,7 @@ describe("Civitai AI recommendation route", () => {
     rebuildCivitaiSearchIndex(db);
     rebuildTestEmbeddingIndex();
 
-    mockCompleteChat.mockResolvedValue({
+    mockCompleteResponse.mockResolvedValue({
       content: JSON.stringify({
         checkpointId: sdxlCheckpoint.id,
         checkpointReason: "SDXL remains available when no prompt profile is provided.",
@@ -824,7 +832,7 @@ describe("Civitai AI recommendation route", () => {
       }),
     );
     const payload = await response.json();
-    const request = mockCompleteChat.mock.calls[0]?.[0];
+    const request = mockCompleteResponse.mock.calls[0]?.[0];
     const userContent = JSON.parse(request.messages[1].content);
 
     expect(response.status).toBe(200);
@@ -852,5 +860,6 @@ describe("Civitai AI recommendation route", () => {
     expect(response.status).toBe(400);
     expect(payload.error.message).toBe("Invalid promptProfile.");
     expect(mockCompleteChat).not.toHaveBeenCalled();
+    expect(mockCompleteResponse).not.toHaveBeenCalled();
   });
 });

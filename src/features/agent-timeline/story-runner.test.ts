@@ -317,20 +317,23 @@ describe("runStoryPlanning", () => {
     expect(records.map((record) => record.phase)).toEqual(["request", "response", "request", "error"]);
     expect(records.every((record) => record.category === "story-planning")).toBe(true);
     expect(records.every((record) => record.route === "agent-timeline/story-planning")).toBe(true);
-    expect(records.map((record) => record.payload.nodeId)).toEqual([
-      "story-bible",
-      "story-bible",
-      "story-outline",
-      "story-outline",
-    ]);
-    expect(records.every((record) => record.payload.workflowId === "workflow-log")).toBe(true);
-    expect(records.every((record) => record.payload.storyId === "story-log")).toBe(true);
-    expect(records[3]?.payload.error).toMatchObject({
-      message: "outline failed",
-      name: "LiteLlmError",
-    });
+    const nodeHashes = records.map((record) => record.payload.nodeIdHash);
+    expect(nodeHashes[0]).toMatch(/^[a-f0-9]{16}$/);
+    expect(nodeHashes[2]).toMatch(/^[a-f0-9]{16}$/);
+    expect(nodeHashes[0]).toBe(nodeHashes[1]);
+    expect(nodeHashes[2]).toBe(nodeHashes[3]);
+    expect(nodeHashes[0]).not.toBe(nodeHashes[2]);
+    expect(records.every((record) => /^[a-f0-9]{16}$/.test(String(record.payload.workflowIdHash)))).toBe(true);
+    expect(new Set(records.map((record) => record.payload.workflowIdHash)).size).toBe(1);
+    expect(new Set(records.map((record) => record.payload.storyIdHash)).size).toBe(1);
+    expect(records.every((record) => /^[a-f0-9]{16}$/.test(String(record.payload.storyIdHash)))).toBe(true);
+    expect(records[3]?.payload).toMatchObject({ callType: "responses", status: "failed", errorKind: "upstream" });
     expect(records[3]?.payload.statusCode).toBe(429);
-    expect(records[3]?.payload.details).toEqual({ error: "rate limited" });
+    for (const marker of ["story-bible", "story-outline", "workflow-log", "story-log", "outline failed", "rate limited", "A test story for logs."]) {
+      expect(logContent).not.toContain(marker);
+    }
+    expect(logContent).not.toContain('"messages"');
+    expect(logContent).not.toContain('"completion"');
   });
 
   it("continues Story planning when local LLM log writes fail", async () => {

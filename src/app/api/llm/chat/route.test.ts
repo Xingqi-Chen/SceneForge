@@ -12,8 +12,8 @@ const appendLlmLocalLogMock = vi.hoisted(() => vi.fn(async (record: unknown) => 
   void record;
 }));
 
-vi.mock("@/features/llm", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@/features/llm")>();
+vi.mock("@/features/llm/litellm-client", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/features/llm/litellm-client")>();
   return {
     ...actual,
     createLiteLlmClient: createLiteLlmClientMock,
@@ -362,15 +362,15 @@ describe("LLM chat route model selection", () => {
 
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toMatchObject({
-      error: { message: "Request body must include non-empty chat messages." },
+      error: { message: "Request body must include valid Responses input or legacy messages without conflicting options." },
     });
     expect(createLiteLlmClientMock).not.toHaveBeenCalled();
     expect(completeChatMock).not.toHaveBeenCalled();
     expect(completeResponseMock).not.toHaveBeenCalled();
   });
 
-  it("keeps requests without responseFormat unchanged", async () => {
-    completeChatMock.mockResolvedValue({
+  it("routes schema-free legacy requests through Responses with metadata-only logs", async () => {
+    completeResponseMock.mockResolvedValue({
       role: "assistant",
       content: "ordinary response",
     });
@@ -385,14 +385,15 @@ describe("LLM chat route model selection", () => {
     }));
 
     expect(response.status).toBe(200);
-    expect(completeChatMock).toHaveBeenCalledTimes(1);
-    expect(completeResponseMock).not.toHaveBeenCalled();
-    const forwarded = completeChatMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(completeResponseMock).toHaveBeenCalledTimes(1);
+    expect(completeChatMock).not.toHaveBeenCalled();
+    const forwarded = completeResponseMock.mock.calls[0]?.[0] as Record<string, unknown>;
     expect(forwarded).not.toHaveProperty("responseFormat");
     const logs = JSON.stringify(appendLlmLocalLogMock.mock.calls);
-    expect(logs).toContain("Reverse a prompt");
-    expect(logs).toContain("ordinary response");
-    expect(logs).toContain("default-model");
+    expect(logs).not.toContain("Reverse a prompt");
+    expect(logs).not.toContain("ordinary response");
+    expect(logs).not.toContain("default-model");
+    expect(logs).toContain('"privacy":"responses-safe"');
   });
 
   it.each([
@@ -401,8 +402,8 @@ describe("LLM chat route model selection", () => {
     "stable-diffusion-prompt-generation",
     "comic-sequence-storyboard",
     "story-style-reference-analysis",
-  ] as const)("keeps generic %s calls on Chat when they do not cross a Run-only boundary", async (purpose) => {
-    completeChatMock.mockResolvedValue({
+  ] as const)("routes schema-free generic %s calls through Responses", async (purpose) => {
+    completeResponseMock.mockResolvedValue({
       role: "assistant",
       content: "ordinary response",
     });
@@ -417,8 +418,8 @@ describe("LLM chat route model selection", () => {
     }));
 
     expect(response.status).toBe(200);
-    expect(completeChatMock).toHaveBeenCalledTimes(1);
-    expect(completeResponseMock).not.toHaveBeenCalled();
+    expect(completeResponseMock).toHaveBeenCalledTimes(1);
+    expect(completeChatMock).not.toHaveBeenCalled();
   });
 
   it("returns one sanitized provider rejection without a second call or fallback", async () => {
@@ -484,7 +485,8 @@ describe("LLM chat route model selection", () => {
       phase: "error",
       payload: {
         statusCode: 422,
-        details: responseBody.error.details,
+        callType: "responses",
+        status: "failed",
       },
     });
     expect(consoleErrorSpy).toHaveBeenCalledTimes(1);
@@ -536,7 +538,7 @@ describe("LLM chat route model selection", () => {
     const responseBody = await response.json();
     expect(responseBody).toEqual({
       error: {
-        message: "LiteLLM Responses output did not include completed assistant text.",
+        message: "LiteLLM Responses request failed.",
         details: {
           code: "structured_output_rejected",
           upstreamStatus: 502,
@@ -553,7 +555,8 @@ describe("LLM chat route model selection", () => {
       phase: "error",
       payload: {
         statusCode: 502,
-        details: responseBody.error.details,
+        callType: "responses",
+        status: "failed",
       },
     });
     const exposedBoundaryData = JSON.stringify({

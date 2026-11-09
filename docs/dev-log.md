@@ -2,6 +2,15 @@
 
 This log records dated implementation and documentation work. Keep entries concise and evidence-oriented.
 
+## 2026-11-09
+
+### T63 / Issue #203 Responses-only LLM generation
+
+- Routed every text/multimodal generation call and compatibility `completeChat` method through the shared `/v1/responses` executor, retaining configured endpoints, credentials, models, purpose/NSFW routing, normalized results, strict completed-output/SSE decoding, and bounded retry limits. Embeddings remain unchanged.
+- Added the canonical `/api/llm/responses` route with a shared handler for `/api/llm/chat`, native string or message-item input, instructions, token budgets, and generic `text.format` schemas with optional description/strictness. Kept the legacy Run response-format whitelist, rejected conflicting native/legacy options, and serialized only supported upstream fields.
+- Removed dead Chat request/response and stream parsing. Made all generation console/local logs metadata-only, including Civitai direct calls and default Story/Suggest wrappers, while retaining hashed Story correlation and fixed Run/attempt classifications.
+- Updated README, environment configuration comments, and product/technical integration contracts. Automated validation is recorded by the Test Gate; no live provider calls were made for this change.
+
 ## 2026-08-16
 
 ### T62 / Issue #200 Krea Style Advice dimension contract

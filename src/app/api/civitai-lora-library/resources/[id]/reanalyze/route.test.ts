@@ -156,11 +156,13 @@ describe("Civitai resource reanalysis route", () => {
       return Response.json({
           id: "chatcmpl-test",
           model: "test-model",
-          choices: [
+          status: "completed",
+          output: [
             {
-              message: {
-                role: "assistant",
-                content: JSON.stringify({
+              type: "message",
+              role: "assistant",
+              status: "completed",
+              content: [{ type: "output_text", text: JSON.stringify({
                   usageGuide: "New portrait detail usage.",
                   categories: ["detail"],
                   triggerWords: ["new_token"],
@@ -168,9 +170,7 @@ describe("Civitai resource reanalysis route", () => {
                   aiNsfwLevel: "sfw",
                   aiNsfwConfidence: 0.9,
                   aiNsfwReason: "No sensitive content.",
-                }),
-              },
-              finish_reason: "stop",
+                }) }],
             },
           ],
         });
@@ -180,12 +180,12 @@ describe("Civitai resource reanalysis route", () => {
     const response = await POST(new Request("http://localhost/api/civitai-lora-library/resources/id/reanalyze"), routeContext(resource.id));
     const payload = await response.json();
     const stored = getCivitaiResourceDetailFromSqlite(db, resource.id);
-    const llmRequest = JSON.parse(fetchMock.mock.calls[1]?.[1]?.body as string) as { messages: Array<{ content: string }> };
+    const llmRequest = JSON.parse(fetchMock.mock.calls[1]?.[1]?.body as string) as { input: Array<{ content: string }> };
 
     expect(response.status).toBe(200);
     expect(fetchMock.mock.calls[0]?.[0]).toBe("https://civitai.com/api/v1/models/100");
-    expect(llmRequest.messages[1]?.content).toContain("Long model page description");
-    expect(llmRequest.messages[1]?.content).not.toContain("Short about this version note");
+    expect(llmRequest.input[1]?.content).toContain("Long model page description");
+    expect(llmRequest.input[1]?.content).not.toContain("Short about this version note");
     expect(payload).toMatchObject({
       resourceId: resource.id,
       usageGuide: "New portrait detail usage.",

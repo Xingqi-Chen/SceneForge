@@ -1,5 +1,12 @@
-import { createLiteLlmClient, type LlmChatMessage, type LlmChatRequest } from "@/features/llm";
-import { appendLlmLocalLog, serializeErrorForLlmLog } from "@/features/llm/llm-local-log";
+import {
+  createLiteLlmClient,
+  summarizeLlmResponsesCompletionForLog,
+  summarizeLlmResponsesErrorForLog,
+  summarizeLlmResponsesRequestForLog,
+  type LlmChatMessage,
+  type LlmChatRequest,
+} from "@/features/llm";
+import { appendLlmLocalLog } from "@/features/llm/llm-local-log";
 
 import { classifyCivitaiLora } from "./classification";
 import type {
@@ -381,25 +388,12 @@ export async function enrichCivitaiResource(
   };
 
   await appendLlmLocalLog({
+    privacy: "responses-safe",
     requestId,
     timestamp: new Date().toISOString(),
     phase: "request",
     route: "civitai-lora-library/enrichment",
-    payload: {
-      purpose: chatRequest.purpose,
-      model: chatRequest.model,
-      temperature: chatRequest.temperature,
-      maxTokens: chatRequest.maxTokens,
-      resource: {
-        resourceType: input.resourceType,
-        civitaiModelId: input.civitaiModelId,
-        civitaiModelVersionId: input.civitaiModelVersionId,
-        name: input.name,
-        versionName: input.versionName,
-        baseModel: input.baseModel,
-      },
-      messages: chatRequest.messages,
-    },
+    payload: summarizeLlmResponsesRequestForLog(chatRequest),
   });
 
   try {
@@ -411,13 +405,12 @@ export async function enrichCivitaiResource(
     const completion = await client.completeChat(chatRequest);
 
     await appendLlmLocalLog({
+      privacy: "responses-safe",
       requestId,
       timestamp: new Date().toISOString(),
       phase: "response",
       route: "civitai-lora-library/enrichment",
-      payload: {
-        completion,
-      },
+      payload: summarizeLlmResponsesCompletionForLog(completion),
     });
 
     const enrichment = parseCivitaiResourceEnrichmentContent(completion.content, fallbackCategories);
@@ -429,13 +422,12 @@ export async function enrichCivitaiResource(
     };
   } catch (error) {
     await appendLlmLocalLog({
+      privacy: "responses-safe",
       requestId,
       timestamp: new Date().toISOString(),
       phase: "error",
       route: "civitai-lora-library/enrichment",
-      payload: {
-        error: serializeErrorForLlmLog(error),
-      },
+      payload: summarizeLlmResponsesErrorForLog(error),
     });
 
     return fallbackEnrichment(input, "ai_failed", summarizeError(error));
