@@ -231,7 +231,7 @@ export function isAuthorizedRunScenePromptResponseFormat(
 
 export function isAuthorizedRunScenePromptResponsesRequest(
   value: LlmChatRequest,
-): value is LlmResponsesRequest {
+): value is LlmChatRequest & LlmResponsesRequest {
   return value.purpose === "stable-diffusion-prompt-generation" &&
     value.responseFormat !== undefined &&
     isAuthorizedRunScenePromptResponseFormat(value.responseFormat);

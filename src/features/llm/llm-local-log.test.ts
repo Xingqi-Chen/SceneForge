@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { getRunScenePromptResponseFormat } from "./run-scene-prompt-response-format";
 import { LiteLlmError } from "./litellm-client";
@@ -348,7 +348,7 @@ describe("appendLlmLocalLog", () => {
     expect(content).toContain('"contentChars":29');
   });
 
-  it("keeps ordinary Chat local request and completion detail unchanged", async () => {
+  it("keeps legacy callers metadata-only even when transport is omitted", async () => {
     const logFile = path.join(tempDir, "chat-detailed.jsonl");
     process.env.SCENEFORGE_LLM_LOG_FILE = logFile;
 
@@ -377,10 +377,79 @@ describe("appendLlmLocalLog", () => {
     });
 
     const content = await fs.readFile(logFile, "utf8");
-    expect(content).toContain("SENTINEL_CHAT_MODEL");
-    expect(content).toContain("SENTINEL_CHAT_PROMPT");
-    expect(content).toContain("SENTINEL_CHAT_ID");
-    expect(content).toContain("SENTINEL_CHAT_RESPONSE_MODEL");
-    expect(content).toContain("SENTINEL_CHAT_RAW_OUTPUT");
+    expect(content).not.toContain("SENTINEL_CHAT_MODEL");
+    expect(content).not.toContain("SENTINEL_CHAT_PROMPT");
+    expect(content).not.toContain("SENTINEL_CHAT_ID");
+    expect(content).not.toContain("SENTINEL_CHAT_RESPONSE_MODEL");
+    expect(content).not.toContain("SENTINEL_CHAT_RAW_OUTPUT");
+    expect(content).toContain('"callType":"responses"');
+  });
+
+  it.each(["character-tags", "character-action", "style-advice", "unknown-private-node"])("preserves only allowed node metadata for %s and hashes Story correlation", async (runPlanningNodeId) => {
+    const logFile = path.join(tempDir, "safe-context.jsonl");
+    process.env.SCENEFORGE_LLM_LOG_FILE = logFile;
+    const context = {
+      workflowId: "PRIVATE_WORKFLOW_C:\\private-folder",
+      storyId: "PRIVATE_STORY_PROMPT",
+      nodeId: "PRIVATE_NODE_OUTPUT",
+      runPlanningNodeId,
+      attempt: "repair",
+      arbitraryPrompt: "PRIVATE_CONTEXT_PROMPT",
+      apiKey: "sk-private-context-key",
+      schema: { description: "PRIVATE_CONTEXT_SCHEMA" },
+    };
+
+    const base = { context, requestId: "safe-context", route: "/api/llm/responses" };
+    await appendLlmChatLocalLog({
+      ...base, phase: "request", request: { input: "PRIVATE_INPUT", instructions: "PRIVATE_INSTRUCTIONS" },
+    });
+    await appendLlmChatLocalLog({
+      ...base, phase: "response", completion: { role: "assistant", content: "PRIVATE_OUTPUT" },
+    });
+    await appendLlmChatLocalLog({
+      ...base, phase: "error", error: new Error("PRIVATE_ERROR C:\\private-folder"), details: { raw: "PRIVATE_DETAILS" },
+    });
+
+    const content = await fs.readFile(logFile, "utf8");
+    const records = content.trim().split("\n").map((line) => JSON.parse(line) as { category: string; payload: Record<string, unknown> });
+    expect(records.every((record) => record.category === "chat")).toBe(true);
+    for (const key of ["workflowIdHash", "storyIdHash", "nodeIdHash"]) {
+      expect(records[0].payload[key]).toMatch(/^[a-f0-9]{16}$/);
+      expect(new Set(records.map((record) => record.payload[key])).size).toBe(1);
+    }
+    expect(records.every((record) => record.payload.attempt === "repair")).toBe(true);
+    if (runPlanningNodeId === "unknown-private-node") {
+      expect(records.every((record) => !("runPlanningNodeId" in record.payload))).toBe(true);
+      expect(content).not.toContain(runPlanningNodeId);
+    } else {
+      expect(records.every((record) => record.payload.runPlanningNodeId === runPlanningNodeId)).toBe(true);
+    }
+    expect(content).not.toContain("PRIVATE_");
+    expect(content).not.toContain("private-folder");
+    expect(content).not.toContain("sk-private-context-key");
+    expect(content).not.toContain('"details"');
+    expect(content).not.toContain('"stack"');
+  });
+
+  it("suppresses filesystem paths and raw errors when a legacy caller log cannot be written", async () => {
+    const blockedPath = path.join(tempDir, "PRIVATE_BLOCKED_PATH");
+    await fs.writeFile(blockedPath, "not a directory", "utf8");
+    process.env.SCENEFORGE_LLM_LOG_FILE = path.join(blockedPath, "log.jsonl");
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      await appendLlmChatLocalLog({
+        phase: "request", requestId: "write-failure", route: "/api/llm/chat",
+        request: { messages: [{ role: "user", content: "PRIVATE_PROMPT" }] },
+      });
+      expect(error).toHaveBeenCalledExactlyOnceWith("[SceneForge] [llm] failed to write local Responses log", {
+        callType: "responses", status: "write_failed",
+      });
+      const logged = JSON.stringify(error.mock.calls);
+      expect(logged).not.toContain(tempDir);
+      expect(logged).not.toContain("PRIVATE_");
+      expect(logged).not.toContain("ENOTDIR");
+    } finally {
+      error.mockRestore();
+    }
   });
 });

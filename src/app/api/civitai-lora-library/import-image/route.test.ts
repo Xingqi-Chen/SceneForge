@@ -64,14 +64,16 @@ async function importFetchImplementation(input: RequestInfo | URL): Promise<Resp
       },
     });
   }
-  if (url === "https://litellm.test/v1/chat/completions") {
+  if (url === "https://litellm.test/v1/responses") {
     return Response.json({
       id: "chatcmpl-route",
       model: "test-chat-model",
-      choices: [{
-        message: {
-          role: "assistant",
-          content: JSON.stringify({
+      status: "completed",
+      output: [{
+        type: "message",
+        role: "assistant",
+        status: "completed",
+        content: [{ type: "output_text", text: JSON.stringify({
             usageGuide: "Use for neon portraits.",
             categories: ["style"],
             triggerWords: ["route_neon"],
@@ -79,9 +81,7 @@ async function importFetchImplementation(input: RequestInfo | URL): Promise<Resp
             aiNsfwLevel: "sfw",
             aiNsfwConfidence: 0.99,
             aiNsfwReason: "No sensitive content.",
-          }),
-        },
-        finish_reason: "stop",
+          }) }],
       }],
     });
   }
@@ -336,7 +336,7 @@ describe("Civitai import-image route", () => {
     expect(fetchMock.mock.calls.map(([input]) => String(input))).toEqual([
       "https://civitai.com/api/v1/images?imageId=135795968&nsfw=X",
       "https://civitai.com/api/v1/model-versions/200",
-      "https://litellm.test/v1/chat/completions",
+      "https://litellm.test/v1/responses",
     ]);
   });
 });

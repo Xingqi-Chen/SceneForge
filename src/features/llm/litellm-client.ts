@@ -1,81 +1,23 @@
 import type {
-  LlmChatContent,
   LlmChatMessage,
   LlmChatRequest,
   LlmChatResponse,
   LlmEmbeddingRequest,
   LlmEmbeddingResponse,
-  LlmChatRole,
   LlmResponsesRequest,
   LlmTokenUsage,
 } from "./types";
+import { isLlmResponsesRequest } from "./validation";
 import {
   createStructuredOutputErrorDetails,
   getLlmResponsesOutputShapeDiagnostic,
-  summarizeLlmResponseFormatForLog,
+  isAuthorizedRunScenePromptResponseFormat,
   type LlmResponsesOutputShapeDiagnostic,
 } from "./run-scene-prompt-response-format";
 
-const LOG_TEXT_PREVIEW_MAX = 400;
-
-function truncateForLog(text: string, max = LOG_TEXT_PREVIEW_MAX): string {
-  if (text.length <= max) {
-    return text;
-  }
-
-  return `${text.slice(0, max)}…`;
-}
-
-function summarizeContentForLog(content: LlmChatContent): string | Array<Record<string, unknown>> {
-  if (typeof content === "string") {
-    return truncateForLog(content);
-  }
-
-  return content.map((part) => {
-    if (part.type === "text") {
-      return {
-        type: "text",
-        length: part.text.length,
-        preview: truncateForLog(part.text, 320),
-      };
-    }
-
-    return {
-      type: "image_url",
-      detail: part.image_url.detail ?? "auto",
-      dataUrlChars: part.image_url.url.length,
-    };
-  });
-}
-
-/** Safe structured summary for logs (no raw image bytes). */
+/** Compatibility name for the metadata-only Responses summary. */
 export function summarizeLlmChatRequestForLog(request: LlmChatRequest): Record<string, unknown> {
-  const redactContent = request.purpose === "single-image-preview-scoring" ||
-    request.purpose === "single-image-final-review" ||
-    request.purpose === "single-image-repair-diagnosis" ||
-    request.purpose === "single-image-repair-verification";
-  return {
-    model: request.model ?? "(default)",
-    nsfw: request.nsfw,
-    temperature: request.temperature,
-    maxTokens: request.maxTokens,
-    responseFormat: summarizeLlmResponseFormatForLog(request.responseFormat),
-    messageCount: request.messages.length,
-    messages: request.messages.map((message: LlmChatMessage) => ({
-      role: message.role,
-      content: redactContent
-        ? typeof message.content === "string"
-          ? { type: "text", length: message.content.length }
-          : message.content.map((part) => part.type === "text"
-              ? { type: "text", length: part.text.length }
-              : {
-                  type: "image_url",
-                  detail: part.image_url.detail ?? "auto",
-                  dataUrlChars: part.image_url.url.length,
-                })
-        : summarizeContentForLog(message.content),
-    })),
-  };
+  return summarizeLlmResponsesRequestForLog(request);
 }
 
 type Fetcher = typeof fetch;
@@ -92,23 +34,10 @@ type LiteLlmErrorOptions = {
   details?: unknown;
 };
 
-type LiteLlmChoice = {
-  message?: {
-    role?: string;
-    content?: string;
-  };
-  finish_reason?: string;
-};
-
-type LiteLlmChatCompletion = {
-  id?: string;
-  model?: string;
-  choices?: LiteLlmChoice[];
-  usage?: {
-    prompt_tokens?: number;
-    completion_tokens?: number;
-    total_tokens?: number;
-  };
+type LiteLlmEmbeddingUsage = {
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  total_tokens?: number;
 };
 
 type LiteLlmEmbeddingItem = {
@@ -120,7 +49,7 @@ type LiteLlmEmbeddingPayload = {
   id?: string;
   model?: string;
   data?: LiteLlmEmbeddingItem[];
-  usage?: LiteLlmChatCompletion["usage"];
+  usage?: LiteLlmEmbeddingUsage;
 };
 
 type LiteLlmResponsesPayload = {
@@ -133,25 +62,6 @@ type LiteLlmResponsesPayload = {
     output_tokens?: number;
     total_tokens?: number;
   };
-};
-
-type LiteLlmStreamChoice = {
-  delta?: {
-    role?: string;
-    content?: string | null;
-  };
-  message?: {
-    role?: string;
-    content?: string;
-  };
-  finish_reason?: string | null;
-};
-
-type LiteLlmStreamChunk = {
-  id?: string;
-  model?: string;
-  choices?: LiteLlmStreamChoice[];
-  usage?: LiteLlmChatCompletion["usage"];
 };
 
 export class LiteLlmError extends Error {
@@ -176,11 +86,7 @@ function normalizeLiteLlmBaseUrl(baseUrl: string) {
   return normalizedBaseUrl.endsWith("/v1") ? normalizedBaseUrl : `${normalizedBaseUrl}/v1`;
 }
 
-function isLlmChatRole(value: string | undefined): value is LlmChatRole {
-  return value === "system" || value === "user" || value === "assistant";
-}
-
-function toTokenUsage(usage: LiteLlmChatCompletion["usage"]): LlmTokenUsage | undefined {
+function toTokenUsage(usage: LiteLlmEmbeddingUsage | undefined): LlmTokenUsage | undefined {
   if (!usage) {
     return undefined;
   }
@@ -212,20 +118,25 @@ export function summarizeLlmResponsesRequestForLog(
   let textChars = 0;
   let imageUrlChars = 0;
 
-  for (const message of request.messages) {
-    if (typeof message.content === "string") {
-      textPartCount += 1;
-      textChars += message.content.length;
-      continue;
-    }
-
-    for (const part of message.content) {
-      if (part.type === "text") {
+  const input = request.input ?? toResponsesInput(request.messages ?? []);
+  if (typeof input === "string") {
+    textPartCount = 1;
+    textChars = input.length;
+  } else {
+    for (const message of input) {
+      if (typeof message.content === "string") {
         textPartCount += 1;
-        textChars += part.text.length;
-      } else {
-        imagePartCount += 1;
-        imageUrlChars += part.image_url.url.length;
+        textChars += message.content.length;
+        continue;
+      }
+      for (const part of message.content) {
+        if (part.type === "input_text") {
+          textPartCount += 1;
+          textChars += part.text.length;
+        } else {
+          imagePartCount += 1;
+          imageUrlChars += part.image_url.length;
+        }
       }
     }
   }
@@ -233,15 +144,16 @@ export function summarizeLlmResponsesRequestForLog(
   return {
     callType: "responses",
     purpose: getSafeResponsesLogPurpose(request.purpose),
-    messageCount: request.messages.length,
+    messageCount: typeof input === "string" ? 1 : input.length,
     textPartCount,
     imagePartCount,
     textChars,
     imageUrlChars,
-    ...(typeof request.maxTokens === "number" && Number.isFinite(request.maxTokens)
-      ? { maxOutputTokens: request.maxTokens }
+    ...(typeof (request.max_output_tokens ?? request.maxTokens) === "number" && Number.isFinite(request.max_output_tokens ?? request.maxTokens)
+      ? { maxOutputTokens: request.max_output_tokens ?? request.maxTokens }
       : {}),
-    structuredOutput: request.responseFormat !== undefined,
+    ...(request.instructions !== undefined ? { instructionsChars: request.instructions.length } : {}),
+    structuredOutput: request.responseFormat !== undefined || request.text?.format.type === "json_schema",
   };
 }
 
@@ -336,6 +248,55 @@ function toResponsesInput(messages: LlmChatMessage[]) {
               detail: part.image_url.detail ?? "auto",
             }),
   }));
+}
+
+function sanitizeResponsesInput(request: LlmResponsesRequest) {
+  if (request.input === undefined) return toResponsesInput(request.messages);
+  if (typeof request.input === "string") return request.input;
+  return request.input.map((message) => ({
+    ...(message.type ? { type: message.type } : {}),
+    role: message.role,
+    content: typeof message.content === "string" ? message.content : message.content.map((part) => (
+      part.type === "input_text"
+        ? { type: part.type, text: part.text }
+        : { type: part.type, image_url: part.image_url, ...(part.detail ? { detail: part.detail } : {}) }
+    )),
+  }));
+}
+
+function getResponsesText(request: LlmResponsesRequest) {
+  if (request.responseFormat) {
+    const format = request.responseFormat.json_schema;
+    return { format: { type: "json_schema", name: format.name, schema: format.schema, strict: format.strict } };
+  }
+  const format = request.text?.format;
+  if (!format) return undefined;
+  return { format: format.type === "json_schema"
+    ? {
+        type: format.type,
+        name: format.name,
+        schema: format.schema,
+        ...(format.description !== undefined ? { description: format.description } : {}),
+        ...(format.strict !== undefined ? { strict: format.strict } : {}),
+      }
+    : { type: format.type } };
+}
+
+function getResponsesErrorDetails(
+  request: LlmResponsesRequest,
+  upstreamStatus: number,
+  outputShape?: LlmResponsesOutputShapeDiagnostic,
+) {
+  if (request.responseFormat && isAuthorizedRunScenePromptResponseFormat(request.responseFormat)) {
+    return createStructuredOutputErrorDetails(request.responseFormat, upstreamStatus, outputShape);
+  }
+  return {
+    ...(request.responseFormat || request.text?.format.type === "json_schema"
+      ? { code: "structured_output_rejected" }
+      : {}),
+    upstreamStatus,
+    ...(outputShape ? { outputShape } : {}),
+  };
 }
 
 type ResponsesSseFailureReason =
@@ -822,34 +783,6 @@ async function parseJsonResponse(response: Response): Promise<unknown> {
   return response.text();
 }
 
-function normalizeLiteLlmCompletion(payload: unknown): LlmChatResponse {
-  const completion = payload as LiteLlmChatCompletion;
-  const firstChoice = completion.choices?.[0];
-  const content = firstChoice?.message?.content;
-
-  if (typeof content !== "string") {
-    console.info("[SceneForge] [llm] inbound LiteLLM malformed completion", {
-      id: completion.id,
-      model: completion.model,
-    });
-    throw new LiteLlmError("LiteLLM response did not include a chat message.", {
-      statusCode: 502,
-      details: payload,
-    });
-  }
-
-  const role = isLlmChatRole(firstChoice?.message?.role) ? firstChoice.message.role : "assistant";
-
-  return {
-    id: completion.id,
-    model: completion.model,
-    content,
-    role,
-    finishReason: firstChoice?.finish_reason,
-    usage: toTokenUsage(completion.usage),
-  };
-}
-
 function normalizeEmbedding(value: unknown): number[] {
   if (!Array.isArray(value)) {
     throw new LiteLlmError("LiteLLM embedding response included a malformed vector.", {
@@ -890,297 +823,30 @@ function normalizeLiteLlmEmbedding(payload: unknown): LlmEmbeddingResponse {
   };
 }
 
-function applyStreamChunk(
-  chunk: LiteLlmStreamChunk,
-  current: {
-    content: string;
-    finishReason?: string;
-    id?: string;
-    model?: string;
-    role: LlmChatRole;
-    usage?: LlmTokenUsage;
-  },
-) {
-  const firstChoice = chunk.choices?.[0];
-  const deltaRole = firstChoice?.delta?.role ?? firstChoice?.message?.role;
-  const deltaContent = firstChoice?.delta?.content ?? firstChoice?.message?.content;
-
-  if (chunk.id) {
-    current.id = chunk.id;
-  }
-
-  if (chunk.model) {
-    current.model = chunk.model;
-  }
-
-  if (isLlmChatRole(deltaRole)) {
-    current.role = deltaRole;
-  }
-
-  if (typeof deltaContent === "string") {
-    current.content += deltaContent;
-  }
-
-  if (typeof firstChoice?.finish_reason === "string") {
-    current.finishReason = firstChoice.finish_reason;
-  }
-
-  current.usage = toTokenUsage(chunk.usage) ?? current.usage;
-}
-
-function processSseEvent(
-  event: string,
-  current: {
-    content: string;
-    finishReason?: string;
-    id?: string;
-    model?: string;
-    role: LlmChatRole;
-    usage?: LlmTokenUsage;
-  },
-) {
-  const dataLines = event
-    .split(/\r?\n/)
-    .filter((line) => line.startsWith("data:"))
-    .map((line) => line.replace(/^data:\s?/, "").trim())
-    .filter(Boolean);
-
-  for (const data of dataLines) {
-    if (data === "[DONE]") {
-      continue;
-    }
-
-    try {
-      applyStreamChunk(JSON.parse(data) as LiteLlmStreamChunk, current);
-    } catch (error) {
-      throw new LiteLlmError("LiteLLM stream included an invalid JSON chunk.", {
-        statusCode: 502,
-        details: {
-          chunk: data,
-          error: error instanceof Error ? error.message : String(error),
-        },
-      });
-    }
-  }
-}
-
-async function parseStreamResponse(response: Response): Promise<LlmChatResponse> {
-  if (!response.body) {
-    throw new LiteLlmError("LiteLLM streaming response did not include a response body.", { statusCode: 502 });
-  }
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  const current: {
-    content: string;
-    finishReason?: string;
-    id?: string;
-    model?: string;
-    role: LlmChatRole;
-    usage?: LlmTokenUsage;
-  } = {
-    content: "",
-    role: "assistant",
-  };
-  let buffer = "";
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) {
-      break;
-    }
-
-    buffer += decoder.decode(value, { stream: true });
-    const events = buffer.split(/\r?\n\r?\n/);
-    buffer = events.pop() ?? "";
-
-    for (const event of events) {
-      processSseEvent(event, current);
-    }
-  }
-
-  buffer += decoder.decode();
-  if (buffer.trim()) {
-    processSseEvent(buffer, current);
-  }
-
-  if (!current.content && !current.id) {
-    throw new LiteLlmError("LiteLLM stream did not include a chat message.", {
-      statusCode: 502,
-    });
-  }
-
-  return current;
-}
-
 export function createLiteLlmClient(options: LiteLlmClientOptions) {
   const baseUrl = normalizeLiteLlmBaseUrl(options.baseUrl);
   const fetcher = options.fetcher ?? fetch;
 
-  return {
-    async completeResponse(request: LlmResponsesRequest): Promise<LlmChatResponse> {
-      const model = request.model ?? options.defaultModel;
+  async function completeResponse(request: LlmResponsesRequest): Promise<LlmChatResponse> {
+    if (!isLlmResponsesRequest(request, false)) {
+      throw new LiteLlmError("Invalid Responses input or conflicting native and legacy options.", { statusCode: 400 });
+    }
+    const model = request.model ?? options.defaultModel;
 
-      if (!model) {
-        throw new LiteLlmError("LLM model is required. Pass model in the request or set LITELLM_DEFAULT_MODEL.", {
-          statusCode: 400,
-        });
-      }
-
-      console.info(
-        "[SceneForge] [llm] outbound LiteLLM Responses request",
-        summarizeLlmResponsesRequestForLog(request),
-      );
-
-      let response: Response;
-      try {
-        response = await fetcher(`${baseUrl}/responses`, {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            ...(options.apiKey ? { authorization: `Bearer ${options.apiKey}` } : {}),
-          },
-          body: JSON.stringify({
-            model,
-            input: toResponsesInput(request.messages),
-            temperature: request.temperature,
-            max_output_tokens: request.maxTokens,
-            ...(request.responseFormat
-              ? {
-                  text: {
-                    format: {
-                      type: request.responseFormat.type,
-                      name: request.responseFormat.json_schema.name,
-                      strict: request.responseFormat.json_schema.strict,
-                      schema: request.responseFormat.json_schema.schema,
-                    },
-                  },
-                }
-              : {}),
-            stream: false,
-            store: false,
-          }),
-        });
-      } catch {
-        throw new LiteLlmError("LiteLLM Responses request failed.", {
-          statusCode: 502,
-          details: request.responseFormat
-            ? createStructuredOutputErrorDetails(request.responseFormat, 502)
-            : { upstreamStatus: 502 },
-        });
-      }
-
-      const contentTypeKind = getContentTypeKind(response.headers.get("content-type"));
-      let payload: unknown;
-      try {
-        if (contentTypeKind === "text/event-stream") {
-          if (!response.ok) {
-            throw new LiteLlmError("LiteLLM Responses request failed.", {
-              statusCode: response.status,
-            });
-          }
-          payload = await parseResponsesSseResponse(response);
-        } else if (contentTypeKind === "json") {
-          payload = await response.json();
-        } else {
-          const textPayload = await response.text();
-          payload = JSON.parse(textPayload) as unknown;
-        }
-      } catch (error) {
-        console.info("[SceneForge] [llm] inbound LiteLLM Responses shape rejected", {
-          contentType: contentTypeKind,
-          payloadKind: contentTypeKind === "text/event-stream"
-            ? "responses-event-stream"
-            : contentTypeKind === "json"
-              ? "unparsed"
-              : "string",
-          ...(contentTypeKind === "text/event-stream"
-            ? { reason: getResponsesSseFailureReason(error) }
-            : {}),
-        });
-        throw new LiteLlmError(
-          error instanceof LiteLlmError
-            ? error.message
-            : "LiteLLM Responses request returned malformed data.",
-          {
-            statusCode: error instanceof LiteLlmError
-              ? error.statusCode
-              : response.ok
-                ? 502
-                : response.status,
-            details: request.responseFormat
-              ? createStructuredOutputErrorDetails(
-                  request.responseFormat,
-                  response.ok ? 502 : response.status,
-                )
-              : { upstreamStatus: response.ok ? 502 : response.status },
-          },
-        );
-      }
-      if (!response.ok) {
-        console.info("[SceneForge] [llm] inbound LiteLLM Responses error", {
-          httpStatus: response.status,
-          detailsType: typeof payload,
-        });
-        throw new LiteLlmError("LiteLLM Responses request failed.", {
-          statusCode: response.status,
-          details: request.responseFormat
-            ? createStructuredOutputErrorDetails(request.responseFormat, response.status)
-            : { upstreamStatus: response.status },
-        });
-      }
-
-      let completion: LlmChatResponse;
-      try {
-        completion = normalizeLiteLlmResponse(payload);
-      } catch (error) {
-        if (error instanceof LiteLlmError) {
-          const outputShape = getLlmResponsesOutputShapeDiagnostic(error.details);
-          console.info("[SceneForge] [llm] inbound LiteLLM Responses shape rejected", {
-            contentType: contentTypeKind,
-            payloadKind: getPayloadKind(payload),
-            ...(outputShape ? { outputShape } : {}),
-          });
-          throw new LiteLlmError(error.message, {
-            statusCode: error.statusCode,
-            details: request.responseFormat
-              ? createStructuredOutputErrorDetails(
-                  request.responseFormat,
-                  error.statusCode,
-                  outputShape,
-                )
-              : {
-                  upstreamStatus: error.statusCode ?? 502,
-                  ...(outputShape ? { outputShape } : {}),
-                },
-          });
-        }
-        throw error;
-      }
-
-      console.info(
-        "[SceneForge] [llm] inbound LiteLLM Responses completion",
-        summarizeLlmResponsesCompletionForLog(completion),
-      );
-
-      return completion;
-    },
-
-    async completeChat(request: LlmChatRequest): Promise<LlmChatResponse> {
-      const model = request.model ?? options.defaultModel;
-
-      if (!model) {
-        throw new LiteLlmError("LLM model is required. Pass model in the request or set LITELLM_DEFAULT_MODEL.", {
-          statusCode: 400,
-        });
-      }
-
-      console.info("[SceneForge] [llm] outbound LiteLLM chat completion", {
-        ...summarizeLlmChatRequestForLog(request),
-        resolvedModel: model,
+    if (!model) {
+      throw new LiteLlmError("LLM model is required. Pass model in the request or set LITELLM_DEFAULT_MODEL.", {
+        statusCode: 400,
       });
+    }
 
-      const response = await fetcher(`${baseUrl}/chat/completions`, {
+    console.info(
+      "[SceneForge] [llm] outbound LiteLLM Responses request",
+      summarizeLlmResponsesRequestForLog(request),
+    );
+
+    let response: Response;
+    try {
+      response = await fetcher(`${baseUrl}/responses`, {
         method: "POST",
         headers: {
           "content-type": "application/json",
@@ -1188,52 +854,106 @@ export function createLiteLlmClient(options: LiteLlmClientOptions) {
         },
         body: JSON.stringify({
           model,
-          messages: request.messages,
+          input: sanitizeResponsesInput(request),
+          instructions: request.instructions,
           temperature: request.temperature,
-          max_tokens: request.maxTokens,
-          ...(request.responseFormat ? { response_format: request.responseFormat } : {}),
-          stream: true,
+          max_output_tokens: request.max_output_tokens ?? request.maxTokens,
+          ...(getResponsesText(request) ? { text: getResponsesText(request) } : {}),
+          stream: false,
+          store: false,
         }),
       });
+    } catch {
+      throw new LiteLlmError("LiteLLM Responses request failed.", {
+        statusCode: 502,
+        details: getResponsesErrorDetails(request, 502),
+      });
+    }
 
-      const contentType = response.headers.get("content-type");
-      const payload = response.ok && contentType?.includes("text/event-stream")
-        ? null
-        : await parseJsonResponse(response);
+    const contentTypeKind = getContentTypeKind(response.headers.get("content-type"));
+    let payload: unknown;
+    try {
+      if (contentTypeKind === "text/event-stream") {
+        if (!response.ok) {
+          throw new LiteLlmError("LiteLLM Responses request failed.", {
+            statusCode: response.status,
+          });
+        }
+        payload = await parseResponsesSseResponse(response);
+      } else if (contentTypeKind === "json") {
+        payload = await response.json();
+      } else {
+        const textPayload = await response.text();
+        payload = JSON.parse(textPayload) as unknown;
+      }
+    } catch (error) {
+      console.info("[SceneForge] [llm] inbound LiteLLM Responses shape rejected", {
+        contentType: contentTypeKind,
+        payloadKind: contentTypeKind === "text/event-stream"
+          ? "responses-event-stream"
+          : contentTypeKind === "json"
+            ? "unparsed"
+            : "string",
+        ...(contentTypeKind === "text/event-stream"
+          ? { reason: getResponsesSseFailureReason(error) }
+          : {}),
+      });
+      throw new LiteLlmError(
+        error instanceof LiteLlmError
+          ? error.message
+          : "LiteLLM Responses request returned malformed data.",
+        {
+          statusCode: error instanceof LiteLlmError
+            ? error.statusCode
+            : response.ok
+              ? 502
+              : response.status,
+          details: getResponsesErrorDetails(request, response.ok ? 502 : response.status),
+        },
+      );
+    }
+    if (!response.ok) {
+      console.info("[SceneForge] [llm] inbound LiteLLM Responses error", {
+        httpStatus: response.status,
+        detailsType: typeof payload,
+      });
+      throw new LiteLlmError("LiteLLM Responses request failed.", {
+        statusCode: response.status,
+        details: getResponsesErrorDetails(request, response.status),
+      });
+    }
 
-      if (!response.ok) {
-        console.info("[SceneForge] [llm] inbound LiteLLM error response", {
-          httpStatus: response.status,
-          detailsType: typeof payload,
+    let completion: LlmChatResponse;
+    try {
+      completion = normalizeLiteLlmResponse(payload);
+    } catch (error) {
+      if (error instanceof LiteLlmError) {
+        const outputShape = getLlmResponsesOutputShapeDiagnostic(error.details);
+        console.info("[SceneForge] [llm] inbound LiteLLM Responses shape rejected", {
+          contentType: contentTypeKind,
+          payloadKind: getPayloadKind(payload),
+          ...(outputShape ? { outputShape } : {}),
         });
-        throw new LiteLlmError("LiteLLM chat completion request failed.", {
-          statusCode: response.status,
-          details: request.responseFormat
-            ? createStructuredOutputErrorDetails(request.responseFormat, response.status)
-            : payload,
+        throw new LiteLlmError(error.message, {
+          statusCode: error.statusCode,
+          details: getResponsesErrorDetails(request, error.statusCode ?? 502, outputShape),
         });
       }
+      throw error;
+    }
 
-      const completion = contentType?.includes("text/event-stream")
-        ? await parseStreamResponse(response)
-        : normalizeLiteLlmCompletion(payload);
+    console.info(
+      "[SceneForge] [llm] inbound LiteLLM Responses completion",
+      summarizeLlmResponsesCompletionForLog(completion),
+    );
 
-      console.info("[SceneForge] [llm] inbound LiteLLM chat completion", {
-        id: completion.id,
-        model: completion.model,
-        role: completion.role,
-        contentChars: completion.content.length,
-        ...(request.purpose === "single-image-preview-scoring" || request.purpose === "single-image-final-review" ||
-          request.purpose === "single-image-repair-diagnosis" ||
-          request.purpose === "single-image-repair-verification"
-          ? { contentRedacted: true }
-          : { contentPreview: truncateForLog(completion.content, 280) }),
-        finishReason: completion.finishReason,
-        usage: completion.usage,
-      });
+    return completion;
+  }
+  return {
+    completeResponse,
 
-      return completion;
-    },
+    // A closed-over function keeps this compatibility alias safe when passed unbound.
+    completeChat: (request: LlmChatRequest) => completeResponse(request),
 
     async createEmbedding(request: LlmEmbeddingRequest): Promise<LlmEmbeddingResponse> {
       const model = request.model ?? options.defaultModel;

@@ -29,9 +29,9 @@ function completeFromResponsesSse(streamText: string) {
 }
 
 describe("createLiteLlmClient", () => {
-  it("posts chat completions to a LiteLLM OpenAI-compatible endpoint", async () => {
+  it("maps the completeChat compatibility call to Responses and preserves the application result", async () => {
     const fetcher: typeof fetch = async (input, init) => {
-      expect(input).toBe("http://localhost:4000/v1/chat/completions");
+      expect(input).toBe("http://localhost:4000/v1/responses");
       expect(init?.method).toBe("POST");
       expect(init?.headers).toMatchObject({
         "content-type": "application/json",
@@ -39,21 +39,23 @@ describe("createLiteLlmClient", () => {
       });
       expect(JSON.parse(String(init?.body))).toEqual({
         model: "scene-model",
-        messages: [{ role: "user", content: "Describe the scene" }],
+        input: [{ role: "user", content: "Describe the scene" }],
         temperature: 0.2,
-        max_tokens: 128,
-        stream: true,
+        max_output_tokens: 128,
+        stream: false,
+        store: false,
       });
 
       return new Response(
-        [
-          'data: {"id":"chatcmpl-1","model":"scene-model","choices":[{"delta":{"role":"assistant","content":"A quiet "},"finish_reason":null}]}',
-          'data: {"id":"chatcmpl-1","model":"scene-model","choices":[{"delta":{"content":"forest scene."},"finish_reason":"stop"}],"usage":{"prompt_tokens":8,"completion_tokens":5,"total_tokens":13}}',
-          "data: [DONE]",
-          "",
-        ].join("\n\n"),
+        JSON.stringify({
+          id: "resp-1",
+          model: "scene-model",
+          status: "completed",
+          output: [{ type: "message", role: "assistant", status: "completed", content: [{ type: "output_text", text: "A quiet forest scene." }] }],
+          usage: { input_tokens: 8, output_tokens: 5, total_tokens: 13 },
+        }),
         {
-          headers: { "content-type": "text/event-stream" },
+          headers: { "content-type": "application/json" },
         },
       );
     };
@@ -72,7 +74,7 @@ describe("createLiteLlmClient", () => {
         maxTokens: 128,
       }),
     ).resolves.toEqual({
-      id: "chatcmpl-1",
+      id: "resp-1",
       model: "scene-model",
       content: "A quiet forest scene.",
       role: "assistant",
@@ -85,23 +87,23 @@ describe("createLiteLlmClient", () => {
     });
   });
 
-  it("forwards the authorized response format while preserving stream true", async () => {
+  it("maps the legacy response format to Responses text.format and disables streaming and storage", async () => {
     const responseFormat = getRunScenePromptResponseFormat("krea2");
     const fetcher = vi.fn<typeof fetch>(async (_input, init) => {
       expect(JSON.parse(String(init?.body))).toEqual({
         model: "scene-model",
-        messages: [{ role: "user", content: "Describe the scene" }],
-        response_format: responseFormat,
-        stream: true,
+        input: [{ role: "user", content: "Describe the scene" }],
+        text: { format: { type: "json_schema", ...responseFormat.json_schema } },
+        stream: false,
+        store: false,
       });
 
       return new Response(
-        [
-          'data: {"id":"chatcmpl-schema","model":"scene-model","choices":[{"delta":{"role":"assistant","content":"{}"},"finish_reason":"stop"}]}',
-          "data: [DONE]",
-          "",
-        ].join("\n\n"),
-        { headers: { "content-type": "text/event-stream" } },
+        JSON.stringify({
+          status: "completed",
+          output: [{ type: "message", role: "assistant", status: "completed", content: [{ type: "output_text", text: "{}" }] }],
+        }),
+        { headers: { "content-type": "application/json" } },
       );
     });
     const client = createLiteLlmClient({
@@ -1746,7 +1748,7 @@ describe("createLiteLlmClient", () => {
 
     expect(error).toBeInstanceOf(LiteLlmError);
     expect(error).toMatchObject({
-      message: "LiteLLM chat completion request failed.",
+      message: "LiteLLM Responses request failed.",
       statusCode: 422,
     });
     expect((error as LiteLlmError).details).toEqual({
@@ -1778,7 +1780,8 @@ describe("createLiteLlmClient", () => {
 
       return new Response(
         JSON.stringify({
-          choices: [{ message: { role: "assistant", content: "ok" } }],
+          status: "completed",
+          output: [{ type: "message", role: "assistant", status: "completed", content: [{ type: "output_text", text: "ok" }] }],
         }),
         {
           headers: { "content-type": "application/json" },
@@ -1797,7 +1800,7 @@ describe("createLiteLlmClient", () => {
     });
   });
 
-  it("forwards multimodal chat content unchanged", async () => {
+  it("maps multimodal legacy content to ordered Responses input parts", async () => {
     const content = [
       { type: "text" as const, text: "Use this prompt preview and canvas image." },
       {
@@ -1809,11 +1812,15 @@ describe("createLiteLlmClient", () => {
       },
     ];
     const fetcher: typeof fetch = async (_input, init) => {
-      expect(JSON.parse(String(init?.body)).messages).toEqual([{ role: "user", content }]);
+      expect(JSON.parse(String(init?.body)).input).toEqual([{ role: "user", content: [
+        { type: "input_text", text: content[0].text },
+        { type: "input_image", image_url: "data:image/png;base64,abc123", detail: "auto" },
+      ] }]);
 
       return new Response(
         JSON.stringify({
-          choices: [{ message: { role: "assistant", content: "polished prompt" } }],
+          status: "completed",
+          output: [{ type: "message", role: "assistant", status: "completed", content: [{ type: "output_text", text: "polished prompt" }] }],
         }),
         {
           headers: { "content-type": "application/json" },

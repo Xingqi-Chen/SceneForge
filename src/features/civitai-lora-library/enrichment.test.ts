@@ -212,11 +212,13 @@ describe("Civitai resource enrichment", () => {
         Response.json({
           id: "chatcmpl-test",
           model: "test-model",
-          choices: [
+          status: "completed",
+          output: [
             {
-              message: {
-                role: "assistant",
-                content: JSON.stringify({
+              type: "message",
+              role: "assistant",
+              status: "completed",
+              content: [{ type: "output_text", text: JSON.stringify({
                   usageGuide: "适合写实细节。",
                   categories: ["style"],
                   triggerWords: ["example"],
@@ -224,14 +226,12 @@ describe("Civitai resource enrichment", () => {
                   aiNsfwLevel: "sfw",
                   aiNsfwConfidence: 0.9,
                   aiNsfwReason: "描述中未出现敏感内容。",
-                }),
-              },
-              finish_reason: "stop",
+                }) }],
             },
           ],
           usage: {
-            prompt_tokens: 10,
-            completion_tokens: 12,
+            input_tokens: 10,
+            output_tokens: 12,
             total_tokens: 22,
           },
         }),
@@ -249,19 +249,23 @@ describe("Civitai resource enrichment", () => {
     expect(logLines.map((line) => line.phase)).toEqual(["request", "response"]);
     expect(logLines.every((line) => line.route === "civitai-lora-library/enrichment")).toBe(true);
     expect(logLines[0]?.payload).toMatchObject({
+      callType: "responses",
       purpose: "civitai-resource-enrichment",
-      model: "test-model",
-      resource: {
-        resourceType: "lora",
-        civitaiModelId: 1,
-        civitaiModelVersionId: 2,
-        name: "Example LoRA",
-      },
+      messageCount: 2,
+      maxOutputTokens: 900,
+      structuredOutput: false,
     });
-    expect(logLines[1]?.payload.completion).toMatchObject({
-      id: "chatcmpl-test",
-      model: "test-model",
+    expect(logLines[1]?.payload).toMatchObject({
+      callType: "responses",
+      status: "completed",
+      role: "assistant",
+      usage: { promptTokens: 10, completionTokens: 12, totalTokens: 22 },
     });
+    const logs = JSON.stringify(logLines);
+    for (const marker of ["Example LoRA", "test-model", "chatcmpl-test", "usageGuide", "triggerWords", "recommendations"]) {
+      expect(logs).not.toContain(marker);
+    }
+    expect(vi.mocked(fetch).mock.calls[0]?.[0]).toBe("https://litellm.test/v1/responses");
   });
 
   it("writes an error log when direct enrichment receives an invalid LLM response", async () => {
@@ -269,12 +273,13 @@ describe("Civitai resource enrichment", () => {
       "fetch",
       vi.fn(async () =>
         Response.json({
-          choices: [
+          status: "completed",
+          output: [
             {
-              message: {
-                role: "assistant",
-                content: "not json",
-              },
+              type: "message",
+              role: "assistant",
+              status: "completed",
+              content: [{ type: "output_text", text: "not json" }],
             },
           ],
         }),
@@ -289,8 +294,12 @@ describe("Civitai resource enrichment", () => {
 
     expect(result.status).toBe("ai_failed");
     expect(logLines.map((line) => line.phase)).toEqual(["request", "response", "error"]);
-    expect(logLines[2]?.payload.error).toMatchObject({
-      name: "SyntaxError",
+    expect(logLines[2]?.payload).toMatchObject({
+      callType: "responses",
+      status: "failed",
+      errorKind: "unexpected",
     });
+    expect(JSON.stringify(logLines)).not.toContain("not json");
+    expect(JSON.stringify(logLines)).not.toContain("stack");
   });
 });

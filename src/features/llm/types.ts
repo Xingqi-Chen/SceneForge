@@ -37,7 +37,7 @@ export type LlmJsonSchemaResponseFormat = {
   };
 };
 
-export type LlmChatRequest = {
+export type LlmGenerationOptions = {
   model?: string;
   nsfw?: boolean;
   purpose?:
@@ -56,15 +56,43 @@ export type LlmChatRequest = {
     | "single-image-repair-verification"
     | "comfyui-generation-diagnosis"
     | "comfyui-inpaint-diagnosis";
-  messages: LlmChatMessage[];
   temperature?: number;
   maxTokens?: number;
   responseFormat?: LlmJsonSchemaResponseFormat;
+  instructions?: string;
+  max_output_tokens?: number;
+  text?: { format: LlmResponsesTextFormat };
 };
 
-export type LlmResponsesRequest = Omit<LlmChatRequest, "responseFormat"> & {
-  responseFormat?: LlmJsonSchemaResponseFormat;
+export type LlmResponsesTextFormat =
+  | { type: "text" | "json_object" }
+  | {
+      type: "json_schema";
+      name: string;
+      schema: { [key: string]: LlmJsonSchemaValue };
+      description?: string;
+      strict?: boolean;
+    };
+
+export type LlmResponsesMessage = {
+  type?: "message";
+  role: LlmChatRole | "developer";
+  content: string | Array<
+    | { type: "input_text"; text: string }
+    | { type: "input_image"; image_url: string; detail?: "auto" | "low" | "high" }
+  >;
 };
+
+/** Compatibility input; generation always uses the Responses transport. */
+export type LlmChatRequest = LlmGenerationOptions & {
+  messages: LlmChatMessage[];
+  input?: never;
+};
+
+export type LlmResponsesRequest = LlmGenerationOptions & (
+  | { input: string | LlmResponsesMessage[]; messages?: never }
+  | { messages: LlmChatMessage[]; input?: never }
+);
 
 export type LlmTokenUsage = {
   promptTokens?: number;

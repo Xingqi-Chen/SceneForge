@@ -29,7 +29,7 @@ SceneForge currently includes reusable capabilities that the timeline MVP should
 - 3D stick-figure character controls, pose presets, and prompt export support.
 - Prompt library and prompt binding workflows for scene, object, character, and body-part targets.
 - Local project save/load through Next.js API routes backed by local disk storage.
-- LiteLLM-compatible chat support for AI-assisted prompt and recommendation flows.
+- OpenAI Responses-compatible generation for all AI-assisted prompt, text/image analysis, and recommendation flows, preserving configured endpoints, credentials, models, routing, and existing application response shapes. Native string/message input and JSON schemas are supported alongside legacy request adapters; generation logs retain metadata only and embeddings keep their existing transport.
 - ComfyUI workflow generation, generated image history, inpainting, sequence references, control image helpers, and diagnostic helpers.
 - Civitai resource discovery, selected checkpoints/LoRAs, import image parsing, download support, cache repair, and recommendation helpers. Parse preview never calls the embedding provider or mutates recommendation indexes. Confirmed import incrementally embeds only new selected resources against a healthy compatible baseline, while existing resources remain link-only; confirmed reanalysis embeds only when deterministic recommendation search text changes. The first new resource can bootstrap indexes only in a genuinely empty model/LoRA library. Nonempty missing, stale, legacy, or configuration-incompatible indexes require the explicit full-rebuild commands.
 - Artist string library resources and selection.

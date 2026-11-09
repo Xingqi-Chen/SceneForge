@@ -9,7 +9,7 @@ import {
   type LlmEmbeddingRequest,
   type LlmEmbeddingResponse,
 } from "@/features/llm";
-import { appendLlmLocalLog, serializeErrorForLlmLog } from "@/features/llm/llm-local-log";
+import { appendLlmLocalLog } from "@/features/llm/llm-local-log";
 import {
   getCivitaiResourceDetailFromSqlite,
   loadCivitaiLibrarySettingsFromSqlite,
@@ -846,26 +846,16 @@ export function validateCivitaiCombinationRecommendation({
 
 async function completeRecommendation(
   chatRequest: LlmChatRequest,
-  transport: "chat" | "responses",
 ): Promise<LlmChatResponse> {
   const requestId = createLlmLogRequestId();
 
   await appendLlmLocalLog({
-    ...(transport === "responses" ? { privacy: "responses-safe" as const } : {}),
+    privacy: "responses-safe",
     requestId,
     timestamp: new Date().toISOString(),
     phase: "request",
     route: "civitai-lora-library/ai-recommendation",
-    payload: transport === "responses"
-      ? summarizeLlmResponsesRequestForLog(chatRequest)
-      : {
-          purpose: chatRequest.purpose,
-          nsfw: chatRequest.nsfw,
-          model: chatRequest.model,
-          temperature: chatRequest.temperature,
-          maxTokens: chatRequest.maxTokens,
-          messages: chatRequest.messages,
-        },
+    payload: summarizeLlmResponsesRequestForLog(chatRequest),
   });
 
   try {
@@ -876,34 +866,26 @@ async function completeRecommendation(
         ? process.env.LITELLM_NSFW_MODEL
         : process.env.LITELLM_CIVITAI_RECOMMENDATION_MODEL || process.env.LITELLM_DEFAULT_MODEL,
     });
-    const completion = transport === "responses"
-      ? await client.completeResponse(chatRequest)
-      : await client.completeChat(chatRequest);
+    const completion = await client.completeResponse(chatRequest);
 
     await appendLlmLocalLog({
-      ...(transport === "responses" ? { privacy: "responses-safe" as const } : {}),
+      privacy: "responses-safe",
       requestId,
       timestamp: new Date().toISOString(),
       phase: "response",
       route: "civitai-lora-library/ai-recommendation",
-      payload: transport === "responses"
-        ? summarizeLlmResponsesCompletionForLog(completion)
-        : { completion },
+      payload: summarizeLlmResponsesCompletionForLog(completion),
     });
 
     return completion;
   } catch (error) {
     await appendLlmLocalLog({
-      ...(transport === "responses" ? { privacy: "responses-safe" as const } : {}),
+      privacy: "responses-safe",
       requestId,
       timestamp: new Date().toISOString(),
       phase: "error",
       route: "civitai-lora-library/ai-recommendation",
-      payload: transport === "responses"
-        ? summarizeLlmResponsesErrorForLog(error)
-        : {
-            error: serializeErrorForLlmLog(error),
-          },
+      payload: summarizeLlmResponsesErrorForLog(error),
     });
 
     throw error;
@@ -911,11 +893,11 @@ async function completeRecommendation(
 }
 
 function completeRecommendationChat(chatRequest: LlmChatRequest) {
-  return completeRecommendation(chatRequest, "chat");
+  return completeRecommendation(chatRequest);
 }
 
 function completeRunRecommendationResponse(chatRequest: LlmChatRequest) {
-  return completeRecommendation(chatRequest, "responses");
+  return completeRecommendation(chatRequest);
 }
 
 function normalizeMaxLoras(value: number | undefined) {

@@ -1,6 +1,8 @@
-import type { LlmChatRequest } from "./types";
+import type { LlmGenerationOptions } from "./types";
 
-function resolvePurposeDefaultModel(payload: LlmChatRequest) {
+type ModelRoutingOptions = Pick<LlmGenerationOptions, "model" | "nsfw" | "purpose">;
+
+function resolvePurposeDefaultModel(payload: ModelRoutingOptions) {
   if (payload.purpose === "prompt-library-classification") {
     return process.env.LITELLM_CLASSIFICATION_MODEL || process.env.LITELLM_DEFAULT_MODEL;
   }
@@ -47,12 +49,12 @@ function resolvePurposeDefaultModel(payload: LlmChatRequest) {
   return process.env.LITELLM_DEFAULT_MODEL;
 }
 
-function isVisionPurposeWithExplicitRouting(payload: LlmChatRequest) {
+function isVisionPurposeWithExplicitRouting(payload: ModelRoutingOptions) {
   return payload.purpose === "story-style-reference-analysis" ||
     payload.purpose === "single-image-preview-scoring";
 }
 
-export function resolveDefaultModel(payload: LlmChatRequest) {
+export function resolveDefaultModel<T extends ModelRoutingOptions>(payload: T) {
   if (isVisionPurposeWithExplicitRouting(payload)) {
     return resolvePurposeDefaultModel(payload);
   }
@@ -64,7 +66,7 @@ export function resolveDefaultModel(payload: LlmChatRequest) {
   return resolvePurposeDefaultModel(payload);
 }
 
-export function resolveRequestModel(payload: LlmChatRequest) {
+export function resolveRequestModel<T extends ModelRoutingOptions>(payload: T) {
   const defaultModel = resolveDefaultModel(payload);
 
   if (payload.purpose === "single-image-preview-scoring") {

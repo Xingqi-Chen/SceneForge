@@ -1,6 +1,11 @@
 import { randomUUID } from "node:crypto";
 
-import { createLiteLlmClient, LiteLlmError, type LlmChatRequest } from "@/features/llm";
+import {
+  createLiteLlmClient,
+  LiteLlmError,
+  summarizeLlmResponsesErrorForLog,
+  type LlmChatRequest,
+} from "@/features/llm";
 import {
   appendLlmChatLocalLog,
   serializeErrorForLlmLog,
@@ -189,7 +194,7 @@ async function requestCandidates(
     });
     console.error("[SceneForge] [timeline] empty Run suggestion LLM request failed", {
       attempt,
-      error: serializeErrorForLlmLog(error),
+      error: summarizeLlmResponsesErrorForLog(error),
     });
     throw new RunSceneSuggestionError(
       "llm_unavailable",

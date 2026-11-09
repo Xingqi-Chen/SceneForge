@@ -29,7 +29,8 @@ describe("repair diagnosis logging privacy", () => {
     const fetcher = vi.fn(async () => new Response(JSON.stringify({
       id: "repair-diagnosis-1",
       model: "vision-model",
-      choices: [{ message: { role: "assistant", content: "PRIVATE_DIAGNOSIS_COMPLETION" } }],
+      status: "completed",
+      output: [{ type: "message", role: "assistant", status: "completed", content: [{ type: "output_text", text: "PRIVATE_DIAGNOSIS_COMPLETION" }] }],
     }), { status: 200, headers: { "content-type": "application/json" } }));
     const client = createLiteLlmClient({ baseUrl: "http://litellm.test", defaultModel: "vision-model", fetcher });
     await client.completeChat(request);
@@ -38,6 +39,7 @@ describe("repair diagnosis logging privacy", () => {
     expect(serializedLogs).not.toContain("PRIVATE_REPAIR_TARGET");
     expect(serializedLogs).not.toContain("PRIVATE_IMAGE");
     expect(serializedLogs).not.toContain("PRIVATE_DIAGNOSIS_COMPLETION");
-    expect(serializedLogs).toContain("contentRedacted");
+    expect(serializedLogs).toContain('"callType":"responses"');
+    expect(fetcher).toHaveBeenCalledWith("http://litellm.test/v1/responses", expect.any(Object));
   });
 });

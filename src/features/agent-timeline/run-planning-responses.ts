@@ -167,7 +167,7 @@ function parseJsonRecord(value: unknown): Record<string, unknown> | null {
 function hasExactTextMessages(
   request: LlmChatRequest,
   systemPrompt: string | undefined,
-): request is LlmResponsesRequest {
+): request is LlmChatRequest & LlmResponsesRequest {
   return typeof systemPrompt === "string" &&
     request.messages.length === 2 &&
     request.messages[0]?.role === "system" &&

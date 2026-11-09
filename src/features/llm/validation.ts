@@ -4,6 +4,9 @@ import type {
   LlmChatRequest,
   LlmChatRole,
   LlmImageContentPart,
+  LlmResponsesRequest,
+  LlmResponsesMessage,
+  LlmResponsesTextFormat,
   LlmTextContentPart,
 } from "./types";
 import { isAuthorizedRunScenePromptResponseFormat } from "./run-scene-prompt-response-format";
@@ -95,20 +98,91 @@ function isAuthorizedResponseFormat(
     isAuthorizedRunScenePromptResponseFormat(value);
 }
 
-export function isLlmChatRequest(value: unknown): value is LlmChatRequest {
-  if (!isRecord(value)) {
-    return false;
-  }
-
-  return (
-    Array.isArray(value.messages) &&
-    value.messages.length > 0 &&
-    value.messages.every(isChatMessage) &&
-    isOptionalString(value.model) &&
+function hasValidCommonOptions(value: Record<string, unknown>, authorizeLegacyFormat: boolean) {
+  return isOptionalString(value.model) &&
     isOptionalBoolean(value.nsfw) &&
     isOptionalPurpose(value.purpose) &&
     isOptionalNumber(value.temperature) &&
     isOptionalNumber(value.maxTokens) &&
-    isAuthorizedResponseFormat(value.responseFormat, value.purpose as LlmChatRequest["purpose"])
-  );
+    (value.max_output_tokens === undefined || (
+      typeof value.max_output_tokens === "number" && Number.isInteger(value.max_output_tokens) &&
+      value.max_output_tokens > 0
+    )) &&
+    (value.instructions === undefined || typeof value.instructions === "string") &&
+    !(value.maxTokens !== undefined && value.max_output_tokens !== undefined) &&
+    !(value.responseFormat !== undefined && value.text !== undefined) &&
+    (authorizeLegacyFormat
+      ? isAuthorizedResponseFormat(value.responseFormat, value.purpose as LlmChatRequest["purpose"])
+      : value.responseFormat === undefined || (
+          isRecord(value.responseFormat) && value.responseFormat.type === "json_schema" &&
+          isRecord(value.responseFormat.json_schema) &&
+          isLlmResponsesTextFormat({ ...value.responseFormat.json_schema, type: "json_schema" })
+        )) &&
+    (value.text === undefined || (isRecord(value.text) && isLlmResponsesTextFormat(value.text.format)));
+}
+
+// JSON schemas stay data: reject functions, non-finite numbers, cycles, and excessive nesting.
+function isJsonValue(value: unknown, ancestors = new Set<object>(), depth = 0): boolean {
+  if (value === null || typeof value === "string" || typeof value === "boolean") return true;
+  if (typeof value === "number") return Number.isFinite(value);
+  if (typeof value !== "object" || depth > 64 || ancestors.has(value)) return false;
+  if (!Array.isArray(value) && Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null) {
+    return false;
+  }
+  const nextAncestors = new Set(ancestors).add(value);
+  return Object.values(value).every((entry) => isJsonValue(entry, nextAncestors, depth + 1));
+}
+
+export function isLlmResponsesTextFormat(value: unknown): value is LlmResponsesTextFormat {
+  if (!isRecord(value)) return false;
+  if (value.type === "text" || value.type === "json_object") return true;
+  return value.type === "json_schema" && typeof value.name === "string" &&
+    /^[a-zA-Z0-9_-]{1,64}$/.test(value.name) &&
+    isRecord(value.schema) && isJsonValue(value.schema) &&
+    (value.description === undefined || typeof value.description === "string") &&
+    isOptionalBoolean(value.strict);
+}
+
+function isNativeImageUrl(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  if (value.startsWith("data:image/")) return true;
+  if (!/^https?:\/\//i.test(value) || value.trim() !== value) return false;
+  try {
+    const url = new URL(value);
+    return (url.protocol === "http:" || url.protocol === "https:") && url.hostname.length > 0;
+  } catch {
+    return false;
+  }
+}
+
+function isResponsesMessage(value: unknown): value is LlmResponsesMessage {
+  if (!isRecord(value) || (value.type !== undefined && value.type !== "message")) return false;
+  if (value.role !== "developer" && !chatRoles.has(value.role as LlmChatRole)) return false;
+  if (typeof value.content === "string") return value.content.trim().length > 0;
+  return Array.isArray(value.content) && value.content.length > 0 && value.content.every((part) => {
+    if (!isRecord(part)) return false;
+    if (part.type === "input_text") return typeof part.text === "string" && part.text.trim().length > 0;
+    return part.type === "input_image" && isNativeImageUrl(part.image_url) &&
+      (part.detail === undefined || imageDetails.has(part.detail as NonNullable<LlmImageContentPart["image_url"]["detail"]>));
+  });
+}
+
+/** The API keeps the legacy schema whitelist; trusted server callers can use their own schemas. */
+export function isLlmResponsesRequest(value: unknown, authorizeLegacyFormat = true): value is LlmResponsesRequest {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  if (!hasValidCommonOptions(value, authorizeLegacyFormat)) return false;
+  if (value.input !== undefined) {
+    if (value.messages !== undefined) return false;
+    return typeof value.input === "string"
+      ? value.input.trim().length > 0
+      : Array.isArray(value.input) && value.input.length > 0 && value.input.every(isResponsesMessage);
+  }
+  return Array.isArray(value.messages) && value.messages.length > 0 && value.messages.every(isChatMessage);
+}
+
+export function isLlmChatRequest(value: unknown): value is LlmChatRequest {
+  return isRecord(value) && value.input === undefined && isLlmResponsesRequest(value);
 }
